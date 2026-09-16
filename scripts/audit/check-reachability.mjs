@@ -19,6 +19,8 @@
 //   node scripts/audit/check-reachability.mjs --json          # machine readable
 //   node scripts/audit/check-reachability.mjs --digest        # the row-set digest
 //   node scripts/audit/check-reachability.mjs --self-test     # prove the scanners
+//   node scripts/audit/check-reachability.mjs --seed-baseline   # (re)write the baseline
+//   node scripts/audit/check-reachability.mjs --gate             # fail on NEW rows only
 
 import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
@@ -923,6 +925,57 @@ SELF_TEST_CASES.push({
   },
 })
 
+// ------------------------------------------------------------ gate self-tests
+// A row the baseline does not have is the ONLY failure. The baseline below holds
+// every current row but one, so `added` must be exactly that row: this pins both
+// directions at once -- a new row IS reported, and the baseline's own rows are
+// NOT (returning `current` wholesale, or the whole row set, fails it).
+SELF_TEST_CASES.push({
+  name: "gate: a row the baseline does not have is the ONLY failure",
+  expect: ["unused-export\t@i-harness/alpha#Orphan\tpackages/alpha/src/index.ts"],
+  run(root) {
+    const current = scanUnusedExports(indexTree(root)).map(rowKey)
+    const present = current[0]
+    // Baseline holds every row BUT one: the reported failure must be exactly
+    // the missing one, and a removed row must never be reported as a failure.
+    const baseline = { rows: current.filter((k) => k !== present) }
+    const { added } = gateDiff(current, baseline, { entries: [] })
+    return added
+  },
+})
+
+// The ratchet half: a baseline row that is GONE is progress. Mutating `added` to
+// include `removed` -- the "gate on the count, not on new rows" defect, which
+// reddens exactly when someone does the work -- fails this case and only this one.
+SELF_TEST_CASES.push({
+  name: "gate: an identical row set passes, and a removed row is not a failure",
+  expect: [],
+  run(root) {
+    const current = scanUnusedExports(indexTree(root)).map(rowKey)
+    const baseline = { rows: [...current, "unused-export\t@i-harness/alpha#SinceRemoved\tpackages/alpha/src/index.ts"] }
+    const { added } = gateDiff(current, baseline, { entries: [] })
+    return added
+  },
+})
+
+// The allowlist is keyed on `kind<TAB>subject` alone, so allowlisting a row
+// exempts it wherever the row is found -- evidence is what moves under
+// refactoring, so an entry carrying it would silently stop exempting. This case
+// is what pins that ruling: comparing the allowlist keys against the FULL row
+// keys (`allowed.has(k)`, the obvious implementation) matches no entry at all,
+// leaving the allowlist inert, and that is the mutation this case fails on.
+SELF_TEST_CASES.push({
+  name: "gate: a row the ALLOWLIST names never fails, even when it is new",
+  expect: [],
+  run(root) {
+    const current = scanUnusedExports(indexTree(root)).map(rowKey)
+    const first = current[0]
+    const allowlist = { entries: [{ key: first.split("\t").slice(0, 2).join("\t"), reason: "test", dated: "2026-09-15" }] }
+    const { added } = gateDiff(current, { rows: current.filter((k) => k !== first) }, allowlist)
+    return added
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
@@ -1005,6 +1058,45 @@ function findingsDigest(findings) {
   return createHash("sha256").update(text, "utf8").digest("hex")
 }
 
+// ------------------------------------------------------------ baseline + gate
+const BASELINE_DEFAULT = join(ROOT, "scripts/audit/reachability-baseline.json")
+const ALLOWLIST_DEFAULT = join(ROOT, "scripts/audit/reachability-allowlist.json")
+
+/** A missing optional data file is not an error here: `--allowlist` is legal to
+ *  omit, and `--gate` reports the missing BASELINE itself rather than crashing
+ *  with a stack trace a caller could mistake for a scan failure. */
+function loadJsonIfPresent(path) {
+  if (!existsSync(path)) return undefined
+  try {
+    return JSON.parse(readFileSync(path, "utf8"))
+  } catch (err) {
+    throw new Error(`reachability: ${path} is not valid JSON: ${err.message}`)
+  }
+}
+
+/** Rows that must fail the gate: present now, in neither the baseline nor the
+ *  allowlist. Rows that DISAPPEARED are progress and never fail -- the roadmap
+ *  is explicit that the gate fails on new orphans, never on a low count, and a
+ *  gate that reddens when work is done gets switched off within a week. */
+function gateDiff(current, baseline, allowlist) {
+  const known = new Set(baseline?.rows ?? [])
+  const allowed = new Set((allowlist?.entries ?? []).map((e) => e.key))
+  const added = current.filter((k) => !known.has(k) && !allowed.has(allowlistKey(k)))
+  const removed = [...known].filter((k) => !current.includes(k))
+  return { added: added.slice().sort(), removed: removed.slice().sort() }
+}
+
+/** The allowlist's key for a row, which is `kind<TAB>subject` -- deliberately
+ *  NOT the full row key the baseline and digest use. Evidence is the part that
+ *  moves when a file is refactored, so an entry keyed on all three fields
+ *  silently stops exempting the moment a path shifts, which is worse than no
+ *  entry. Comparing a `kind<TAB>subject` entry against a full row key (the
+ *  obvious `allowed.has(k)`) therefore never matches ANY entry: the allowlist
+ *  becomes inert and looks harmless while exempting nothing. */
+function allowlistKey(k) {
+  return k.split("\t").slice(0, 2).join("\t")
+}
+
 // ----------------------------------------------------------------------- main
 /** `statSync` that answers instead of throwing, so a missing path and a path
  *  that is not a directory are both simply "not a directory". */
@@ -1037,6 +1129,51 @@ function main() {
     return 2
   }
   const findings = SCANNERS.flatMap((s) => s(files))
+
+  const baselinePath = resolve(argVal("--baseline", BASELINE_DEFAULT))
+  const allowlistPath = resolve(argVal("--allowlist", ALLOWLIST_DEFAULT))
+  const current = findings.map(rowKey)
+
+  if (args.includes("--seed-baseline")) {
+    const payload = {
+      seededAt: new Date().toISOString().slice(0, 10),
+      digest: findingsDigest(findings),
+      count: current.length,
+      rows: current.slice().sort(),
+    }
+    writeFileSync(baselinePath, `${JSON.stringify(payload, null, 2)}\n`)
+    console.log(`reachability: seeded ${payload.count} row(s) into ${baselinePath}`)
+    console.log(`reachability: digest ${payload.digest}`)
+    return 0
+  }
+
+  if (args.includes("--gate")) {
+    let baseline
+    try {
+      baseline = loadJsonIfPresent(baselinePath)
+    } catch (err) {
+      console.error(err.message)
+      return 2
+    }
+    if (baseline === undefined) {
+      console.error(`reachability: no baseline at ${baselinePath} -- seed one with --seed-baseline`)
+      return 2
+    }
+    const allowlist = loadJsonIfPresent(allowlistPath)
+    const { added, removed } = gateDiff(current, baseline, allowlist)
+    console.log(`reachability: ${current.length} row(s) now; baseline seeded ${baseline.seededAt} with ${baseline.count} (digest ${baseline.digest})`)
+    if (removed.length > 0) {
+      console.log(`reachability: ${removed.length} baseline row(s) no longer present (progress, not a failure):`)
+      for (const k of removed) console.log(`  gone ${k}`)
+    }
+    if (added.length > 0) {
+      console.error(`reachability: ${added.length} NEW row(s) -- the gate fails:`)
+      for (const k of added) console.error(`  new  ${k}`)
+      return 1
+    }
+    console.log("reachability: gate PASS -- no new rows")
+    return 0
+  }
 
   // The digest alone, so a caller can compare identities without parsing rows.
   if (args.includes("--digest")) {
