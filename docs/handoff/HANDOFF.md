@@ -14,9 +14,9 @@
 | Repo | `D:\I-harness-main` on the original workstation; any clone works |
 | Remote | `https://github.com/ivankwanpn/I-harness` — **authoritative** |
 | Branch | **`m64`** — the live branch. `m62` is its ancestor and is finished; `m63` was retired (see §0.1) |
-| HEAD | **`a5e4bb0e`** is the revision **these measurements were taken at**; the guide itself has been updated since (`7bb848ae`), and every later commit moves HEAD again. **Run `git rev-parse HEAD origin/m64` rather than trusting this row** — that is the lesson §0.2 records, applied to this table. |
+| HEAD | **`a686d9e1`** is the revision the **M2-era** figures below were measured at; the M62/M1-era figures were measured at `a5e4bb0e`, and every commit since moves HEAD again. **Run `git rev-parse HEAD origin/m64` rather than trusting this row** — that is the lesson §0.2 records, applied to this table. |
 | Sync / tree | `HEAD == origin/m64`, working tree **clean** |
-| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** (documentation and comments only — no behaviour changed) — 50 commits after `3e0e2536`, 104 after `origin/main` |
+| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** + **M2, the reachability gate** (§0.3) — at `a686d9e1`: **61** commits after `3e0e2536`, **115** after `origin/main` (and 2 behind it). The count rises by one per commit, so **re-run it** (§0.2's lesson) |
 
 **This document is not a snapshot of the tip; it is the orientation guide, and §5's baselines are the M62 baseline plus a tip section.** Two things follow, and the second is the one that bites:
 
@@ -34,7 +34,7 @@ On **2026-09-14 two machines continued from the same commit** (`62711537`), and 
 
 | Ref | Commit | What it actually is |
 |---|---|---|
-| `origin/m64` | `a5e4bb0e` | **The branch to take over from.** 104 commits ahead of `origin/main`, 2 behind. Holds the M62 sandbox milestone, M1 Phase A/B, and the 2026-09-15 review cycle. |
+| `origin/m64` | the M2-era tip, `a686d9e1` (measured; **this guide's own commits are later — `git rev-parse origin/m64` is the authority**) | **The branch to take over from.** 115 commits ahead of `origin/main`, 2 behind, measured at `a686d9e1`. Holds the M62 sandbox milestone, M1 Phase A/B, the 2026-09-15 review cycle, and **M2 the reachability gate** (§0.3). |
 | `origin/m62` | `ddd88a15` | The **finished** milestone branch. An ancestor of `m64` — nothing on it is missing from `m64`. |
 | `origin/main` | `f39d4870` | The integration point. Contains the milestones **only as far as `62711537`** — it does **not** have the M62 sandbox work, M1, or the review cycle. |
 | `origin/m63` | *retired* | Was `main` + one docs commit. **Deleted 2026-09-15** — and see the correction below: it was our mistake, not an empty branch. |
@@ -49,13 +49,13 @@ On **2026-09-14 two machines continued from the same commit** (`62711537`), and 
 **Verify the whole picture yourself (four commands):**
 
 ```bash
-git rev-list --count origin/main..origin/m64                    # 104 = m64 is ahead of main
+git rev-list --count origin/main..origin/m64                    # 115 at a686d9e1; it only grows -- re-run it
 git ls-tree origin/main packages/sandbox/src/call-policy.ts     # empty = main lacks the sandbox work
 git merge-base --is-ancestor 3e0e2536 origin/main; echo $?      # 1 = main lacks the M62 code state
 git ls-remote --heads origin | grep m63                         # empty = m63 retired
 ```
 
-**Still open, and it is the human's call, not an agent's:** `main` is **104 commits behind** and contains neither the M62 sandbox milestone nor M1. The merge is one command in a conflict-free direction — `m64` has never touched the one file `main`'s two unique commits touch (`docs/audit/2026-09-11-ih-takeover-handoff.md`), so nothing in the merge overlaps:
+**Still open, and it is the human's call, not an agent's:** `main` is **115 commits behind** (at `a686d9e1`) and contains neither the M62 sandbox milestone, M1, nor M2. The merge is one command in a conflict-free direction — `m64` has never touched the one file `main`'s two unique commits touch (`docs/audit/2026-09-11-ih-takeover-handoff.md`), so nothing in the merge overlaps:
 
 ```bash
 git switch main && git merge --no-ff origin/m64 && git push origin main
@@ -146,6 +146,33 @@ none by reading. Five false "corrections" shipped during this cycle, every one c
 you touch a document that cites a number, a line, or a revision, **re-derive it in the tree you are
 standing in**, and date the correction so the next reader can tell what moved.
 
+### 0.3 M2 — the reachability gate — delivered, reviewed, and wired
+
+M1 found the "declared but unreachable" orphans **once**; M2 keeps them found. The instrument gained a
+**baseline + ratchet** that fails **only on rows new relative to a committed baseline**, never on a low
+count, plus a **dated, reasoned allowlist**, a machine-computed **digest**, and a **per-class tally that
+states how strong each class's evidence is**. Wired as `pnpm verify:reachability`.
+
+**Its own record is tracked and clone-visible: `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md`** —
+read that for the milestone (what shipped, the completion evidence, the review verdicts, the deferred
+register, what M2 does *not* establish, and the traps a later edit will hit). It exists because §4 below
+records that the 2026-09-15 cycle's history once lived only in a gitignored ledger; M2's ledger is likewise
+gitignored, so this is the repair applied to it.
+
+Three things worth knowing before you touch it:
+
+- **The completion definition is met and measured.** A fresh `git archive HEAD` reproduces the readings; a
+  deliberately added orphan fails the gate (performed on the real tree, reverted byte-exactly, and
+  re-runnable as a `--self-test` case); both data files are dated and reasoned, and the gate refuses to run
+  on an exemption missing either.
+- **What it does not prove** is the part people over-read: it proves something in the non-test tree
+  **mentions a name** — never that the symbol is reachable or the call correct (roadmap `:126`) — and it
+  inherits `:102`. A falling count proves nothing without the digest and `--self-test`.
+- **Four items the baseline document's §7 asks for were ruled out of M2's scope** — the from-less local
+  re-export blind spot, the entry-only blind spot in both shapes, argument routing, and a declarative flag
+  table — because each moves the row set, the digest or the precision sample. They are named in §7 below and
+  in the M2 record, so "M2 is done" is not read as "the reachability question is closed".
+
 ---
 
 ## 1. There are TWO checkouts. Do not confuse them — it has already happened once.
@@ -173,7 +200,7 @@ Also harness-side, and worth knowing if a goal dies mid-run: `STREAM_CLOSED` is 
 
 ## 3. What was just delivered, and where its evidence is
 
-**This section describes the M62 goal, whose code state is `3e0e2536`.** The milestone that *followed* it — M1 Phase A/B, which wired seven "unreachable" declarations to production paths and gave `sandbox/mode` its first producer — has its own record: `docs/handoff/2026-09-15-m1-phase-b-handoff.md` (task table, rulings, deferred minors, and the review ledger from §0.2 above). Read that one for the state of the tree; read this one for how the repo behaves.
+**This section describes the M62 goal, whose code state is `3e0e2536`.** The milestone that *followed* it — M1 Phase A/B, which wired seven "unreachable" declarations to production paths and gave `sandbox/mode` its first producer — has its own record: `docs/handoff/2026-09-15-m1-phase-b-handoff.md` (task table, rulings, deferred minors, and the review ledger from §0.2 above). The milestone after *that* — **M2, the reachability gate** — has `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md`. Read those two for the state of the tree; read this one for how the repo behaves.
 
 The goal was to implement the backend permission/sandbox design **in the order it specifies**:
 
@@ -247,6 +274,7 @@ node scripts/audit/check-thresholds.mjs                 # expect: ALL THRESHOLDS
 node scripts/audit/verify-citations.mjs --all-problems  # CLEAN TREE ONLY — see §6
 node scripts/audit/check-reachability.mjs               # expect: 731 ts files, 523 finding(s)
 node scripts/audit/check-reachability.mjs --gate        # expect: gate PASS -- no new rows
+node scripts/audit/check-reachability.mjs --self-test   # expect: 36/36 ok
 pnpm test                                               # -r --no-bail, then the tui quarantine
 ```
 
@@ -262,14 +290,16 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 
 **Hint for a first session:** run the four gates once *before* changing anything, and compare against the baselines below. If a number differs on a fresh machine, you have learned something about the machine before you have muddied it with your own edits.
 
-**The tip baseline — measured at `a5e4bb0e` on a clean tree. Compare your gates against THIS row:**
+**The tip baseline — the M1-era readings measured at `a5e4bb0e`, the M2-era ones at `a686d9e1`, both on a clean tree. Compare your gates against THIS row:**
 
 - typecheck **exit 0**, every package.
 - thresholds: **ALL THRESHOLDS PASS**.
 - citations: **8680 resolved / 0 missing / 51 problems**, of which exactly **3 are `BLANK_LINE`** (all pre-existing).
-- reachability instrument: **731 ts files, 523 finding(s)** — the figure Phase B publishes, reproduced here.
+- reachability instrument: **731 ts files, 523 finding(s)** — the figure Phase B publishes, reproduced here, and unchanged by M2.
+- reachability **gate** (M2, `a686d9e1`): `--gate` **exit 0 `PASS`**, `--self-test` **36/36 ok**, `--digest` **`5acf81aa…786`**, `pnpm verify:reachability` **exit 0**.
 - full suite: **every package green except `session-executor`** — the known-red WSL-`bash` pair only (86 passed / 2 failed of 88), unchanged across this cycle.
 - What the 2026-09-15 cycle changed in the tree: **docs, the audit corpus, and comments only.** No behaviour.
+- What M2 changed in the tree: **the audit tool, two audit data files, the wiring, and docs.** No scanner rule moved — the row set and the digest are byte-identical before and after — and **no product behaviour changed**.
 
 **The M62 baseline, measured at `d682a50b` — kept because the corrections below were computed against it:**
 
@@ -309,9 +339,10 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 
 ## 7. Not done — the honest list
 
-**Outstanding as of `a5e4bb0e`, and whose call each one is:**
+**Outstanding as of `a686d9e1`, and whose call each one is:**
 
-- **`main` is 104 commits behind** and contains neither the M62 sandbox milestone nor M1. The merge is the **human's decision** (repo discipline, `d309e68e`); the one-line command is in §0.1.
+- **`main` is 115 commits behind** (at `a686d9e1`) and contains neither the M62 sandbox milestone, M1, nor M2. The merge is the **human's decision** (repo discipline, `d309e68e`); the one-line command is in §0.1.
+- **The four reachability follow-throughs M2 deliberately did not take** — the baseline document's §7 raises them and the final review ruled them out of M2's completion definition (`:125`), because each moves the row set, the digest or the precision sample and so needs its own milestone: the **from-less local re-export blind spot** (measured scope: 68 entries, 6 packages, 39 re-exportable names, **0** of them in the row set), the **entry-only blind spot** in both of its shapes, **argument routing** (invisible to all five classes by construction), and a **declarative flag table**. Named here and in `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md` so that "M2 is done" is not read as "the reachability question is closed".
 - **M1's completion definition is met by an explicit, scoped carve-out**, not silently: the two remaining `still-holds` rows (the `sandbox/mode` pair) are declared deliberate and outside M1's list. The scope and its basis are in `2026-09-15-m1-phase-b-handoff.md` §2.
 - **The deferred-minors roll-up is triaged**: of 33 accumulated minors exactly **one** was must-fix (the parked Task 5 ruling's documentation remedy) and it landed in `d693cd7d`; the rest ship as-is with written reasons.
 - **The "Phase A was already cleared" premise behind the final review's scoping is unverifiable from this repository** — Phase A's own final review left no tracked artifact. It is recorded as such rather than assumed.
@@ -359,4 +390,4 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 - The performance figure is withdrawn; no replacement measurement exists, and **IH has no benchmarking harness** (dsh does).
 - On the harness side I verified only the code paths cited in §1 (`sse.ts:39`, `retry-policy.ts:18-24`, the pinning test). I did not reproduce the `STREAM_CLOSED` failure itself — nor the `0xC0000409` web-server crash in §7.
 - **The 2026-09-15 review cycle's verdicts cannot be independently re-derived from this repository.** Three of M1's four task reviews ran **without an implementer report** (that session's ledger was gitignored and never published), so "did the implementer do what it said it did" is permanently unverifiable there; what *was* independently re-measured — the tally, the digest and its rule, the two-row delta, the frozen-path and instrument constraints, and every gate number — is recorded with its commands in `2026-09-15-m1-phase-b-handoff.md` §2 and in this session's ledger.
-- Everything in §5 is a **snapshot**: the M62 row was true at `3e0e2536`, the tip row at `a5e4bb0e`. Re-run before relying on either.
+- Everything in §5 is a **snapshot**: the M62 row was true at `3e0e2536`, the tip row at `a686d9e1` (its M2 section), with the earlier M1-era readings taken at `a5e4bb0e`. Re-run before relying on any of them.
