@@ -243,9 +243,18 @@ function loadJsonIfPresent(path) {
 function gateDiff(current, baseline, allowlist) {
   const known = new Set(baseline?.rows ?? [])
   const allowed = new Set((allowlist?.entries ?? []).map((e) => e.key))
-  const added = current.filter((k) => !known.has(k) && !allowed.has(k))
+  const added = current.filter((k) => !known.has(k) && !allowed.has(allowlistKey(k)))
   const removed = [...known].filter((k) => !current.includes(k))
   return { added: added.slice().sort(), removed: removed.slice().sort() }
+}
+
+/** The allowlist's key for a row, which is `kind<TAB>subject` -- deliberately
+ *  NOT the full row key the baseline and digest use. Comparing a
+ *  `kind<TAB>subject` entry against a full row key (the obvious
+ *  `allowed.has(k)`) never matches ANY entry, so the allowlist would be inert
+ *  while looking harmless. */
+function allowlistKey(k) {
+  return k.split("\t").slice(0, 2).join("\t")
 }
 ```
 
@@ -321,15 +330,26 @@ node scripts/audit/check-reachability.mjs --gate
 
 Expected: the seed reports **523 rows** and digest `5acf81aa…`; the gate prints `gate PASS -- no new rows` and exits 0. Confirm the file's `count` is 523 and its `digest` equals `node scripts/audit/check-reachability.mjs --digest`.
 
-- [ ] **Step 6: Prove the ratchet does NOT fire on progress**
+- [ ] **Step 6: Prove the ratchet does NOT fire on progress (a removed row is not a failure)**
 
-Run:
+> **This step was INVERTED when the plan was written; Task 2's execution measured it and it is corrected
+> here.** Deleting a row from the baseline copy does not produce `gone`: the row is still in the scan, so
+> it is *absent from the baseline* and the gate correctly fails `1 NEW row(s)` with **exit 1**. A `gone …`
+> line requires a baseline row the CURRENT scan no longer emits. Simulate progress from the baseline side
+> instead — copy the baseline **outside the repo** and ADD a row that no scan emits:
 
 ```powershell
-node scripts/audit/check-reachability.mjs --gate --baseline $env:TEMP/probe-baseline.json
+Copy-Item scripts/audit/reachability-baseline.json $env:TEMP\probe-baseline.json
+node -e "const fs=require('node:fs');const p=process.env.TEMP+'/probe-baseline.json';const j=JSON.parse(fs.readFileSync(p,'utf8'));j.rows.push('unused-export\tFAKE#Gone\tpackages/fake/src/index.ts');fs.writeFileSync(p,JSON.stringify(j,null,2)+'\n')"
+node scripts/audit/check-reachability.mjs --gate --baseline $env:TEMP\probe-baseline.json
 ```
 
-No — do this instead, which needs no invented file: copy the seeded baseline to `$env:TEMP`, delete one row from the copy with an editor or `node -e`, and run `--gate --baseline <copy>`. Expected: exit 0, and one `gone …` line. Revert nothing; the copy is outside the repo.
+Expected: exit **0**, `gate PASS -- no new rows`, and one `gone unused-export<TAB>FAKE#Gone<TAB>packages/fake/src/index.ts`
+line. Nothing in the repo is modified — the copy lives outside it.
+
+The end-to-end form of the same proof (seed a baseline from `--self-test`'s own fixture, then actually
+*fix* the orphan by adding a production consumer: rows 12 → 11, one `gone …`, exit 0) is recorded in
+`.superpowers/sdd/2026-09-15-m2-reachability-gate/task-2-report.md`.
 
 - [ ] **Step 7: Commit**
 
@@ -337,6 +357,23 @@ No — do this instead, which needs no invented file: copy the seeded baseline t
 git add scripts/audit/check-reachability.mjs scripts/audit/reachability-baseline.json
 git commit -m "feat(audit): a ratchet gate that fails on new reachability rows only"
 ```
+
+**Measured after execution (2026-09-16), so Task 3 and Task 4 do not inherit the errors this section carried:**
+
+1. **The `gateDiff` body above was defective and is corrected in place.** Its `added` filter compared a
+   two-field allowlist key against a full three-field row key, so **no allowlist entry could ever match** —
+   the allowlist would have been inert while looking harmless. Task 2's own Step 1 case 3 caught it
+   (measured `21/22`; the case read `expected []` / `got [unused-export @i-harness/alpha#Orphan
+   packages/alpha/src/index.ts]`). The shipped fix is the `allowlistKey` helper now shown above. Mutation
+   M1 — reverting it to `allowed.has(k)` — re-reddens exactly that one case and nothing else.
+   **Task 3 and Task 4 must not "simplify" it back.**
+2. **Step 6's expectation was inverted; it is corrected inside that step**, with the measurement that
+   falsified it.
+3. **`--gate` wraps only the BASELINE read in `try`/`catch`.** `const allowlist = loadJsonIfPresent(allowlistPath)`
+   sits outside it, so a malformed `reachability-allowlist.json` escapes as an uncaught throw with a stack
+   trace and **exit 1** — the code this milestone reserves for "new rows". Measured: `--gate --allowlist
+   <malformed file>` dies inside `loadJsonIfPresent`. Task 3 creates that file and must wrap its read and
+   return 2.
 
 ---
 
