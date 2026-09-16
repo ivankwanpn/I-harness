@@ -27,19 +27,15 @@
 //   node scripts/audit/check-reachability.mjs --self-test     # prove the scanners
 //   node scripts/audit/check-reachability.mjs --seed-baseline   # (re)write the baseline
 //   node scripts/audit/check-reachability.mjs --gate             # fail on NEW rows only
+//   node scripts/audit/check-reachability.mjs --digest --json    # --digest wins: digest only, no JSON
 
-import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
 import { tmpdir } from "node:os"
 import { createHash } from "node:crypto"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const args = process.argv.slice(2)
-const argVal = (name, dflt) => {
-  const i = args.indexOf(name)
-  return i >= 0 && args[i + 1] ? args[i + 1] : dflt
-}
-const AS_JSON = args.includes("--json")
 
 /** A synthetic tree the scanners can be pointed at. Kept in TEMP, not in the repo:
  *  the repo has no script fixtures, and one inline self-test is the established
@@ -396,10 +392,14 @@ function withoutReExportStatements(text) {
  *      `export { X }` list (no `from`) has no module to attribute it to, so
  *      `originOf` credits the ENTRY -- which leaves the file that DECLARES X
  *      inside the used-scan, where its own declaration satisfies the word test.
- *      Such a name can never be reported. Measured 2026-09-16 on this tree: 68
- *      entries, 6 carrying a from-less list, 39 names (`tui-core` 31, `fs-lock`
- *      2, `sandbox-policy` 2, `session-persistence` 2, `attachment` 1,
- *      `core-agent` 1), and 0 of the 39 appears in the row set. */
+ *      Such a name is unreportable by this scanner **for the 39 names measured
+ *      below**, and the rule is not general: whether the declaring file is left
+ *      inside the used-scan depends on how the name reaches the entry, so a
+ *      name can be unreportable here and reportable elsewhere. Measured
+ *      2026-09-16 on this tree: 68 entries, 6 carrying a from-less list, 39
+ *      names (`tui-core` 31, `fs-lock` 2, `sandbox-policy` 2,
+ *      `session-persistence` 2, `attachment` 1, `core-agent` 1), and 0 of the
+ *      39 appears in the row set. */
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
@@ -948,8 +948,10 @@ SELF_TEST_CASES.push({
 // no mention anywhere, the scanner emits `@i-harness/beta#BetaThing` and this
 // case fails (measured, red-first, before the comment was added).
 //
-// This is not hypothetical in the real tree.
-// `docs/audit/2026-09-15-reachability-baseline.md:805` records §6.2's row as a REAL
+// This is not hypothetical in the real tree. §6.2 of the baseline document
+// (`docs/audit/2026-09-15-reachability-baseline.md §6.2 — line 841 as of the
+// 2026-09-16 revision`; the stable anchor is the section, and the line is a dated
+// secondary because this document is edited) records that row as a REAL
 // finding -- `packages/preset/src/index.ts:30` declares and exports `mountPreset` and
 // no production file calls it -- while the scanner emits no
 // `@i-harness/preset#mountPreset` row at all (measured: the package's only row
@@ -976,10 +978,22 @@ SELF_TEST_CASES.push({
 const SELF_TEST_PUBLISHED_FINDINGS = [
   { kind: "unused-export", subject: "@i-harness/b#Two", evidence: "packages/b/src/index.ts" },
   { kind: "unused-export", subject: "@i-harness/a#One", evidence: "packages/a/src/index.ts" },
+  // The THIRD row is what makes the SORT convention visible, and it is the only
+  // reason it is here. The two rows above order identically byte-wise and under
+  // `localeCompare`, so a `.sort()` -> `.sort((a, b) => a.localeCompare(b))`
+  // mutation of `rowsDigest` survived every case (measured: 25/25, exit 0, at
+  // M2's HEAD ba656320 -- while that mutant's digest over THIS repository's 523
+  // rows is 13e9469f662f5737c37532d1e71d6b06fc2f134bb86784a3c267878aeaa6a5b6, not
+  // the published 5acf81aa…). This
+  // row's evidence path capitalises `packages/A/`, and `A` (0x41) sorts before
+  // `a` (0x61) byte-wise while ICU collation puts the lowercase subject first:
+  // the two conventions give different digests for this fixture and the same
+  // digest for the two-row one.
+  { kind: "unused-export", subject: "@i-harness/A#Upper", evidence: "packages/A/src/index.ts" },
 ]
 
 // The expectation is the LITERAL hex for this fixture, derived with `node -e`
-// and `node:crypto` on 2026-09-15 -- independently of `findingsDigest`. Writing
+// and `node:crypto` on 2026-09-16 -- independently of `findingsDigest`. Writing
 // `expect: [findingsDigest(SELF_TEST_PUBLISHED_FINDINGS)]` instead would evaluate
 // the function under test on BOTH sides, so the case could not fail on a wrong
 // digest; and because `expect` is evaluated at module scope, the missing
@@ -987,16 +1001,18 @@ const SELF_TEST_PUBLISHED_FINDINGS = [
 // uncaught ReferenceError at this line, no `FAIL <name>` and no `self-test: N/M`
 // line at all, which is why the red state is written this way.
 //
-// Counterfactuals for this fixture, measured the same way: dropping the trailing
-// newline gives 0a57ff1961367076db6f3d7a0792a91f12a789a2321a259e2f429c6366b72746
-// and joining with CRLF gives
-// 98574259ffcefb60979fd2b16d1e99319fda8992b187a06fbea31bab2f3743b4, so both
-// conventions are pinned here. Sort order is NOT pinned by this fixture (its two
-// lines sort identically byte-wise and under `localeCompare`); the real tree's
-// 523 rows are what discriminate those, and Step 5 of this task proves it.
+// Counterfactuals for this fixture, measured the same way on 2026-09-16: the
+// byte-wise sort gives a2064cbc3cba49342cce8ac2899f11b7a876f3960aef644c943b42e3e97e875c
+// and `localeCompare` gives
+// 0df72bbc55c09f33ab5d0ca17dba31fcd3a2cda62a2c4d2cada7488d2451ceb1, so the sort
+// convention is pinned here too; dropping the trailing newline gives
+// a41d1798c5c57206e29cfca374bf86e30cb0e498b8631ffb09a66b572922aed2 and joining
+// with CRLF gives
+// 4b3f098b71cc4bd40de8113259b39a49c74723b0891668b1507028e07fa01679, so those two
+// conventions are pinned as well.
 SELF_TEST_CASES.push({
-  name: "digest: the published M1 digest is reproduced from the findings",
-  expect: ["9695a7fcca9f70dc227bb29d6983d89d30eec3ce0bb20adb69c85505282e4703"],
+  name: "digest: the published row-set digest is reproduced from the findings",
+  expect: ["a2064cbc3cba49342cce8ac2899f11b7a876f3960aef644c943b42e3e97e875c"],
   run() {
     return [findingsDigest(SELF_TEST_PUBLISHED_FINDINGS)]
   },
@@ -1098,6 +1114,325 @@ SELF_TEST_CASES.push({
   },
 })
 
+// ------------------------------------------------------ CLI wiring self-tests
+// Every case above tests a FUNCTION. Until these, nothing tested the CALL SITE:
+// measured on the committed blob at `ba656320`, deleting the whole `--gate`
+// block, the whole `--digest` block, the allowlist read inside `--gate`, or the
+// stale-disposition check each left `--self-test` at a full pass, because no case
+// ever called `main()` -- the harness only ever called a scanner. These cases
+// drive `main(argv)` over the fixture with real data files in TEMP and assert on
+// BOTH its exit code and what it printed, so the call sites are pinned by the
+// same suite that pins the rules.
+
+/** The digest rule, implemented a SECOND time so that these cases' expectations
+ *  are not derived from the function under test: sha256 over the row keys sorted
+ *  byte-wise, LF-joined, every line newline-terminated -- the convention the
+ *  baseline document section 2.1 publishes as counterfactuals. */
+function independentRowsDigest(rows) {
+  return createHash("sha256").update(rows.slice().sort().map((l) => `${l}\n`).join(""), "utf8").digest("hex")
+}
+
+/** `main(argv)` with stdout and stderr captured, so a case can assert on what the
+ *  CLI SAID as well as what it returned. The streams are restored in a
+ *  `finally`, so a throwing case cannot leave the harness mute. */
+function captureMain(argv) {
+  const out = []
+  const err = []
+  const log = console.log
+  const error = console.error
+  console.log = (...a) => out.push(a.join(" "))
+  console.error = (...a) => err.push(a.join(" "))
+  try {
+    return { code: main(argv), out, err }
+  } finally {
+    console.log = log
+    console.error = error
+  }
+}
+
+/** Every row the five scanners emit over the fixture, as canonical sorted keys --
+ *  the same scanners and the same `rowKey` `main` uses, so a baseline built from
+ *  these holds exactly the fixture's live row set. */
+function fixtureRowKeys(root) {
+  return SCANNERS.flatMap((s) => s(indexTree(root))).map(rowKey).slice().sort()
+}
+
+/** Write a JSON data file into the case's fixture dir and return its path. */
+function writeJsonFile(path, value) {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`)
+  return path
+}
+
+/** A self-consistent baseline for `rows`, written into the case's fixture dir.
+ *  `count` and `digest` are computed by the SECOND implementation above, so a
+ *  case that feeds this to `--gate` also pins the digest convention. */
+function writeFixtureBaseline(root, rows, name) {
+  return writeJsonFile(join(root, `${name}-baseline.json`), {
+    seededAt: "2026-09-16",
+    reason: "a self-test fixture baseline, written by the case that needs it",
+    count: rows.length,
+    digest: independentRowsDigest(rows),
+    rows,
+  })
+}
+
+/** Drive the real `--gate` over the fixture with the given baseline rows and
+ *  allowlist, and hand back its exit code plus everything it printed. */
+function gateCli(root, rows, allowlist, name) {
+  return captureMain([
+    "--gate", "--root", root,
+    "--baseline", writeFixtureBaseline(root, rows, name),
+    "--allowlist", writeJsonFile(join(root, `${name}-allowlist.json`), allowlist),
+  ])
+}
+
+// `count` and `digest` are what the gate's own summary line PUBLISHES, so they
+// are the baseline's identity; before this check a file whose `rows` were the
+// live set but whose count/digest were invented printed `with 999 (digest
+// deadbeef)` and returned 0. A wrong SHAPE is the same class one step further:
+// `{}`, `{"rows":[]}` and `{"rows":"abc"}` all came back through exit 1, the code
+// reserved for "new rows". Mutation that reddens this case: deleting the
+// `baselineProblems` call from `--gate`, which turns the five refusals into
+// 0 / 0 / 1 / 1 / 1 / 0.
+SELF_TEST_CASES.push({
+  name: "cli: a baseline whose count/digest do not describe its own rows is refused",
+  expect: ["consistent=0", "count=2", "deadbeef=2", "emptyRows=2", "noDigest=2", "notAnObject=2", "stringRows=2"],
+  run(root) {
+    const rows = fixtureRowKeys(root)
+    const al = writeJsonFile(join(root, "shape-allowlist.json"), { entries: [] })
+    const gate = (label, baseline) => {
+      const p = writeJsonFile(join(root, `shape-${label}.json`), baseline)
+      return `${label}=${captureMain(["--gate", "--root", root, "--baseline", p, "--allowlist", al]).code}`
+    }
+    return [
+      gate("count", { rows, count: 999, digest: independentRowsDigest(rows) }),
+      gate("deadbeef", { rows, count: rows.length, digest: "deadbeef" }),
+      gate("notAnObject", {}),
+      gate("emptyRows", { rows: [] }),
+      gate("stringRows", { rows: "abc" }),
+      gate("noDigest", { rows, count: rows.length }),
+      gate("consistent", { rows, count: rows.length, digest: independentRowsDigest(rows) }),
+    ]
+  },
+})
+
+// A write that cannot land used to escape as an 18-line ENOENT stack trace and
+// exit 1 -- the code a shell pipeline reads as "1 = new rows", which is exactly
+// the false read this gate exists to prevent. Mutation that reddens this case:
+// removing the `try`/`catch` around `writeFileSync`.
+SELF_TEST_CASES.push({
+  name: "cli: a seed whose baseline cannot be written is a usage error, not a stack trace",
+  expect: ["code=2", "stderrLines=1"],
+  run(root) {
+    const r = captureMain(["--seed-baseline", "--root", root, "--baseline", join(root, "no-such-dir", "baseline.json")])
+    return [`code=${r.code}`, `stderrLines=${r.err.length}`]
+  },
+})
+
+// `--seed-baseline --gate` used to seed, print two seed lines and exit 0 without
+// ever gating: a parsed-but-ignored flag combination, the very defect the
+// allowlist files against `tui --yes`. Mutation that reddens this case: deleting
+// the refusal, which then seeds the target and returns 0.
+SELF_TEST_CASES.push({
+  name: "cli: --seed-baseline --gate is refused rather than silently seeding",
+  expect: ["code=2", "target=absent"],
+  run(root) {
+    const target = join(root, "combined-seed.json")
+    const r = captureMain(["--seed-baseline", "--gate", "--root", root, "--baseline", target])
+    return [`code=${r.code}`, `target=${existsSync(target) ? "written" : "absent"}`]
+  },
+})
+
+// The seed guard's RULE, stated once so every direction is pinned: a seed is
+// refused only when the tree being scanned is not this repository AND the path it
+// would write IS this repository's committed baseline. Raw-string comparison
+// refused valid spellings of this tree (`d:\i-harness-main`, a trailing
+// separator, `\\?\D:\...`, a junction) and still let `--root <foreign>
+// --baseline <the named baseline>` replace the committed 523-row file with a
+// foreign tree's rows and exit 0. Every alias below is spelled so that it differs
+// from the canonical string but resolves to it -- `join(ROOT, "..")` is NOT one,
+// because `path.join` normalises it away. Mutation that reddens this case:
+// comparing `root !== ROOT` and `baselinePath === BASELINE_DEFAULT` as raw
+// strings, which makes the three alias readings `yes`.
+SELF_TEST_CASES.push({
+  name: "seed guard: only a foreign tree writing THIS repository's baseline is refused",
+  expect: ["baselineAlias=yes", "foreignNamed=no", "foreignRepo=yes", "rootCaseAlias=no", "rootSlashAlias=no", "sameRepo=no"],
+  run(root) {
+    const named = join(ROOT, "scripts", "audit", "reachability-baseline.json")
+    const slash = named.split("\\").join("/")
+    const bare = ROOT + "/"
+    const lowerDrive = ROOT[0].toLowerCase() + ROOT.slice(1)
+    const yes = (v) => (v ? "yes" : "no")
+    return [
+      `sameRepo=${yes(seedWouldClobberRepoBaseline(ROOT, BASELINE_DEFAULT))}`,
+      `rootSlashAlias=${yes(seedWouldClobberRepoBaseline(bare, named))}`,
+      `rootCaseAlias=${yes(seedWouldClobberRepoBaseline(lowerDrive, named))}`,
+      `baselineAlias=${yes(seedWouldClobberRepoBaseline(root, slash))}`,
+      `foreignRepo=${yes(seedWouldClobberRepoBaseline(root, BASELINE_DEFAULT))}`,
+      `foreignNamed=${yes(seedWouldClobberRepoBaseline(root, join(root, "named.json")))}`,
+    ]
+  },
+})
+
+// The same rule through the real CLI, both directions. The committed baseline is
+// restored in a `finally`, so that even with the guard removed a self-test run
+// leaves the tree exactly as it found it: a test must never be able to damage
+// the artifact it protects. Mutation that reddens this case: deleting the
+// `seedWouldClobberRepoBaseline` call from `main`, which then writes the fixture
+// rows into this repository's baseline and returns 0.
+SELF_TEST_CASES.push({
+  name: "cli: the seed guard refuses the clobbering shape and still allows a named target",
+  expect: ["foreignNamed=allowed", "foreignRepo=refused", "namedFile=written"],
+  run(root) {
+    const named = join(root, "seed-named.json")
+    const allowed = captureMain(["--seed-baseline", "--root", root, "--baseline", named]).code
+    const saved = readFileSync(BASELINE_DEFAULT)
+    let refused
+    try {
+      refused = captureMain(["--seed-baseline", "--root", root, "--baseline", BASELINE_DEFAULT]).code
+    } finally {
+      writeFileSync(BASELINE_DEFAULT, saved)
+    }
+    return [
+      `foreignNamed=${allowed === 0 ? "allowed" : `code ${allowed}`}`,
+      `foreignRepo=${refused === 2 ? "refused" : `code ${refused}`}`,
+      `namedFile=${existsSync(named) ? "written" : "absent"}`,
+    ]
+  },
+})
+
+// A valid-JSON WRONG-SHAPE allowlist (`{"entries":3}`, `{"entries":[null]}`, a
+// top-level `[null]` -- `Array#entries` is a METHOD) used to escape as an
+// uncaught TypeError with a stack trace AND exit 1, the code reserved for "new
+// rows". Mutation that reddens this case: deleting the `allowlistProblems` call
+// from `--gate`, which then reports all four wrong shapes as 0 (the gate reads
+// them as an empty allowlist and passes).
+SELF_TEST_CASES.push({
+  name: "cli: a wrong-shape allowlist is a configuration error, not a scan failure",
+  expect: ["entriesArray=2", "entriesNumber=2", "entryNull=2", "topLevelArray=2", "wellShaped=0"],
+  run(root) {
+    const rows = fixtureRowKeys(root)
+    const gate = (label, allowlist) => {
+      const al = writeJsonFile(join(root, `shape-al-${label}.json`), allowlist)
+      const bl = writeFixtureBaseline(root, rows, `shape-al-${label}`)
+      return `${label}=${captureMain(["--gate", "--root", root, "--baseline", bl, "--allowlist", al]).code}`
+    }
+    return [
+      gate("entriesNumber", { entries: 3 }),
+      gate("entryNull", { entries: [null] }),
+      gate("topLevelArray", [null]),
+      gate("entriesArray", { entries: { a: 1 } }),
+      gate("wellShaped", { entries: [] }),
+    ]
+  },
+})
+
+// The allowlist's price, clause by clause. The suite used to pin only the
+// CONJUNCTION -- an entry with neither field -- so dropping `!e.dated`, dropping
+// `!e.reason` or dropping the `.trim() === ""` test each left every case green
+// (measured: 25/25). `noRow` was not priced at all. Mutations that redden this
+// case: any one of those three clauses deleted, or `staleNoRowEntries` returning
+// `[]`.
+SELF_TEST_CASES.push({
+  name: "gate: each allowlist price clause is enforced on its own, for entries and noRow",
+  expect: ["blank=blank", "both=both", "noDate=nodate", "noReason=noreason", "noRowNoDate=nr", "ok="],
+  run() {
+    const one = (entry) => staleAllowlistEntries({ entries: [entry] }).join(",")
+    const nr = (entry) => staleNoRowEntries({ noRow: [entry] }).join(",")
+    return [
+      `both=${one({ key: "both" })}`,
+      `noDate=${one({ key: "nodate", reason: "why" })}`,
+      `noReason=${one({ key: "noreason", dated: "2026-09-15" })}`,
+      `blank=${one({ key: "blank", dated: "2026-09-15", reason: "   " })}`,
+      `ok=${one({ key: "ok", dated: "2026-09-15", reason: "why" })}`,
+      `noRowNoDate=${nr({ item: "nr", reason: "why" })}`,
+    ]
+  },
+})
+
+// The same price through the real CLI for the allowlist's OTHER half: a `noRow`
+// disposition without a date gated at exit 0, so the roadmap's "基線與 allowlist
+// 都帶日期與理由" was machine-enforced for 24 of the 37 committed keys and taken
+// on trust for the other 13. Mutation that reddens this case: deleting the
+// `staleNoRowEntries` half of the refusal in `--gate`.
+SELF_TEST_CASES.push({
+  name: "cli: a noRow disposition without a date is refused like an entries key",
+  expect: ["noRowDated=0", "noRowNoDate=2"],
+  run(root) {
+    const rows = fixtureRowKeys(root)
+    const withNoRow = (label, noRow) => `${label}=${gateCli(root, rows, { entries: [], noRow }, label).code}`
+    return [
+      withNoRow("noRowNoDate", [{ item: "x", reason: "why" }]),
+      withNoRow("noRowDated", [{ item: "x", reason: "why", dated: "2026-09-15" }]),
+    ]
+  },
+})
+
+// The wiring the review measured as unpinned in every direction. The baseline
+// below holds every fixture row BUT one, so the only new row IS the one the
+// allowlist names -- which is what makes the three readings mean three different
+// things: the allowlist read is what turns `1` into `0`, and the stale check is
+// what turns `0` back into `2` BEFORE the exemption is honoured. Mutations that
+// redden this case, each measured separately: deleting the `loadJsonIfPresent`
+// call for the allowlist (`allowlisted=1`), deleting the stale check
+// (`staleButNamed=0`), or deleting the whole `--gate` block (all three read `0`
+// off the human table).
+SELF_TEST_CASES.push({
+  name: "cli: --gate exempts exactly the row the allowlist names, and refuses a stale entry first",
+  expect: ["allowlisted=0", "notAllowlisted=1", "staleButNamed=2"],
+  run(root) {
+    const rows = fixtureRowKeys(root)
+    const first = rows[0]
+    const key = allowlistKey(first)
+    const baseline = writeFixtureBaseline(root, rows.filter((k) => k !== first), "read")
+    const gate = (label, entries) => {
+      const al = writeJsonFile(join(root, `read-${label}.json`), { entries })
+      return `${label}=${captureMain(["--gate", "--root", root, "--baseline", baseline, "--allowlist", al]).code}`
+    }
+    return [
+      gate("allowlisted", [{ key, dated: "2026-09-15", reason: "a wiring fixture" }]),
+      gate("notAllowlisted", []),
+      gate("staleButNamed", [{ key, reason: "no date on purpose" }]),
+    ]
+  },
+})
+
+// The `--digest` block, which returned before the JSON branch and which no case
+// covered: deleting it left the suite green while `--digest` printed the human
+// table instead. The expectation is the SECOND digest implementation's value for
+// the fixture rows, so this case also pins the sort/LF/trailing-newline
+// convention against the real code path. Mutation that reddens it: deleting the
+// `--digest` block.
+SELF_TEST_CASES.push({
+  name: "cli: --digest prints the row-set digest of the tree it scanned",
+  expect: ["code=0", "digest=match"],
+  run(root) {
+    const want = independentRowsDigest(fixtureRowKeys(root))
+    const r = captureMain(["--digest", "--root", root])
+    return [`code=${r.code}`, `digest=${r.out.join("\n").trim() === want ? "match" : "mismatch"}`]
+  },
+})
+
+// An inert entry is the silent-exemption failure mode from the other direction:
+// it looks like a decision and exempts nothing. It is reported and never failed,
+// because the roadmap forbids failing on a low count -- an allowlisted row that
+// was legitimately fixed leaves exactly this trace, and reddening there is the
+// "gate gets switched off" defect. Mutation that reddens this case: deleting the
+// inert warning, which makes `inert=quiet`.
+SELF_TEST_CASES.push({
+  name: "cli: an allowlist entry that matches no live row is warned about, never failed",
+  expect: ["clean=quiet", "code=0", "inert=warned"],
+  run(root) {
+    const rows = fixtureRowKeys(root)
+    const live = { key: allowlistKey(rows[0]), dated: "2026-09-15", reason: "a live row" }
+    const dead = { key: "unused-export\t@i-harness/ghost#Never", dated: "2026-09-15", reason: "an inert row" }
+    const warns = (r) => (r.err.some((l) => l.includes("inert")) ? "warned" : "quiet")
+    const withInert = gateCli(root, rows, { entries: [live, dead] }, "inert")
+    const clean = gateCli(root, rows, { entries: [live] }, "inert-clean")
+    return [`code=${withInert.code}`, `inert=${warns(withInert)}`, `clean=${warns(clean)}`]
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
@@ -1125,10 +1460,8 @@ function runSelfTest() {
   return { ok, total: SELF_TEST_CASES.length }
 }
 
-if (args.includes("--self-test")) {
-  const { ok, total } = runSelfTest()
-  process.exit(ok === total && total > 0 ? 0 : 1)
-}
+// The `--self-test` dispatch is at the END of this file, not here: it must run
+// after the consts a `main()`-driving case reaches. See the note there.
 
 // ------------------------------------------------------------------ file index
 function collectTs(dir, out = []) {
@@ -1167,17 +1500,23 @@ function rowKey(f) {
   return `${f.kind}\t${f.subject}\t${f.evidence}`
 }
 
-/** sha256 over the findings rendered as sorted `kind <TAB> subject <TAB> evidence`
- *  lines, LF-joined, with EVERY line newline-terminated. All three conventions
- *  are load-bearing and are published as counterfactuals in
- *  docs/audit/2026-09-15-reachability-baseline.md section 2.1: dropping the
- *  trailing newline and sorting by locale both produce different digests, which
- *  is why the rule is stated rather than assumed. `Array#sort()` with no
- *  comparator is the byte-wise (code-unit) sort that rule names -- NOT a
- *  locale-aware collation. */
-function findingsDigest(findings) {
-  const text = findings.map(rowKey).sort().map((l) => `${l}\n`).join("")
+/** sha256 over row KEYS rendered as sorted lines, LF-joined, with EVERY line
+ *  newline-terminated. All three conventions are load-bearing and are published
+ *  as counterfactuals in docs/audit/2026-09-15-reachability-baseline.md section
+ *  2.1: dropping the trailing newline and sorting by locale both produce
+ *  different digests, which is why the rule is stated rather than assumed.
+ *  `Array#sort()` with no comparator is the byte-wise (code-unit) sort that rule
+ *  names -- NOT a locale-aware collation. It is defined over row keys rather
+ *  than findings so that the baseline's own `rows` can be checked with the same
+ *  rule the tool publishes (see `baselineProblems`). */
+function rowsDigest(rows) {
+  const text = rows.slice().sort().map((l) => `${l}\n`).join("")
   return createHash("sha256").update(text, "utf8").digest("hex")
+}
+
+/** The digest of a scan: `rowsDigest` over the findings' canonical keys. */
+function findingsDigest(findings) {
+  return rowsDigest(findings.map(rowKey))
 }
 
 // ------------------------------------------------------------ baseline + gate
@@ -1196,13 +1535,68 @@ function loadJsonIfPresent(path) {
   }
 }
 
+/** A baseline is only the identity it PUBLISHES when its own `count` and
+ *  `digest` describe its own `rows`. Before this check the gate printed
+ *  `with 999 (digest deadbeef)` beside the live row set and exited 0, so the two
+ *  values the plan calls the baseline's identity were attestations nobody had
+ *  verified -- and a wrong-SHAPE baseline (`{}`, `{"rows":[]}`,
+ *  `{"rows":"abc"}`) was reported through exit 1, the code reserved for "new
+ *  rows", so a caller went looking for an orphan that did not exist.
+ *  Returns [] when the file is self-consistent. */
+function baselineProblems(baseline) {
+  if (baseline === null || typeof baseline !== "object" || Array.isArray(baseline))
+    return [`the file is not a JSON object (it is ${Array.isArray(baseline) ? "an array" : typeof baseline})`]
+  if (!Array.isArray(baseline.rows))
+    return [`"rows" is ${baseline.rows === undefined ? "missing" : typeof baseline.rows}, not an array`]
+  const problems = []
+  const recomputed = rowsDigest(baseline.rows)
+  if (baseline.count !== baseline.rows.length)
+    problems.push(`"count" is ${JSON.stringify(baseline.count)}, but the file holds ${baseline.rows.length} row(s)`)
+  if (baseline.digest !== recomputed)
+    problems.push(`"digest" is ${JSON.stringify(baseline.digest)}, but its own rows hash to ${recomputed}`)
+  return problems
+}
+
+/** The parsed disposition lists of an allowlist, each guaranteed to be an
+ *  array. A valid-JSON WRONG SHAPE used to reach `.filter`/`.map` and escape as
+ *  an uncaught TypeError with a stack trace AND exit 1 -- the code the caller
+ *  reads as "new rows". A top-level array is wrong shape too: `Array#entries` is
+ *  a METHOD, so the obvious `allowlist.entries` lookup on `[null]` finds a
+ *  function. */
+function arrayOrEmpty(v) {
+  return Array.isArray(v) ? v : []
+}
+
+/** Structural problems with an allowlist, as messages. A malformed allowlist is
+ *  a CONFIGURATION error (exit 2), never a scan result; the date/reason price is
+ *  `staleDisposition`'s job, one level down. Returns [] when the shape is usable,
+ *  so an empty or absent allowlist stays legal. */
+function allowlistProblems(allowlist) {
+  if (allowlist === null || typeof allowlist !== "object" || Array.isArray(allowlist))
+    return [`the file is not a JSON object (it is ${Array.isArray(allowlist) ? "an array" : typeof allowlist})`]
+  const problems = []
+  for (const field of ["entries", "noRow"]) {
+    const v = allowlist[field]
+    if (v === undefined) continue
+    if (!Array.isArray(v)) {
+      problems.push(`"${field}" is ${typeof v}, not an array`)
+      continue
+    }
+    v.forEach((e, i) => {
+      if (e === null || typeof e !== "object" || Array.isArray(e))
+        problems.push(`"${field}[${i}]" is ${e === null ? "null" : Array.isArray(e) ? "an array" : typeof e}, not an object`)
+    })
+  }
+  return problems
+}
+
 /** Rows that must fail the gate: present now, in neither the baseline nor the
  *  allowlist. Rows that DISAPPEARED are progress and never fail -- the roadmap
  *  is explicit that the gate fails on new orphans, never on a low count, and a
  *  gate that reddens when work is done gets switched off within a week. */
 function gateDiff(current, baseline, allowlist) {
   const known = new Set(baseline?.rows ?? [])
-  const allowed = new Set((allowlist?.entries ?? []).map((e) => e.key))
+  const allowed = new Set(arrayOrEmpty(allowlist?.entries).map((e) => e && e.key))
   const added = current.filter((k) => !known.has(k) && !allowed.has(allowlistKey(k)))
   const removed = [...known].filter((k) => !current.includes(k))
   return { added: added.slice().sort(), removed: removed.slice().sort() }
@@ -1219,16 +1613,59 @@ function allowlistKey(k) {
   return k.split("\t").slice(0, 2).join("\t")
 }
 
-/** An allowlist entry is only legitimate with BOTH a date and a reason: the
- *  roadmap's completion definition requires it, and an undated exemption is
- *  indistinguishable from one nobody remembers granting. Returns the keys that
- *  fail that test, so `--gate` can print them and the self-test can pin it. */
+/** An exemption's price, and the whole of it: BOTH a date and a reason, with a
+ *  reason that is not blank. The roadmap's completion definition requires it
+ *  ("基線與 allowlist 都帶日期與理由"), and an undated exemption is
+ *  indistinguishable from one nobody remembers granting. Every clause is
+ *  enforced on its own -- an earlier suite pinned only their conjunction, so
+ *  dropping any single one of the three left the self-test green. */
+function isStaleDisposition(e) {
+  return !e || !e.dated || !e.reason || String(e.reason).trim() === ""
+}
+
+/** The `entries` keys that fail that test, so `--gate` can print them and the
+ *  self-test can pin it. */
 function staleAllowlistEntries(allowlist) {
-  return (allowlist?.entries ?? [])
-    .filter((e) => !e.dated || !e.reason || String(e.reason).trim() === "")
-    .map((e) => e.key)
+  return arrayOrEmpty(allowlist?.entries)
+    .filter(isStaleDisposition)
+    .map((e) => e && e.key)
     .sort()
 }
+
+/** The same price for the allowlist's OTHER half. The roadmap says "基線與
+ *  allowlist", not "the entries of the allowlist": a `noRow` disposition is a
+ *  decision about a row the scanner does not emit, and 13 of the 37 committed
+ *  keys are documentation-only. Before this check the rule was machine-enforced
+ *  for 24 dispositions and taken on trust for the other 13. */
+function staleNoRowEntries(allowlist) {
+  return arrayOrEmpty(allowlist?.noRow)
+    .filter(isStaleDisposition)
+    .map((e) => e && e.item)
+    .sort()
+}
+
+/** `entries` keys that match no live row. An inert entry exempts nothing while
+ *  looking like a decision -- the silent-exemption failure mode from the other
+ *  direction, reached by renaming a subject or by fixing the row by accident.
+ *  Reported as a WARNING and never as a failure: the roadmap fails on new rows
+ *  only, and failing an entry whose row was legitimately fixed is exactly the
+ *  "gate reddens when work is done" defect. */
+function inertAllowlistEntries(allowlist, current) {
+  const live = new Set(current.map(allowlistKey))
+  return arrayOrEmpty(allowlist?.entries)
+    .filter((e) => !live.has(e && e.key))
+    .map((e) => e && e.key)
+    .sort()
+}
+
+/** The baseline's own `reason`, written BY THE TOOL so the data file carries a
+ *  reason as well as a date (roadmap :125, "基線與 allowlist 都帶日期與理由").
+ *  It is a reason for the file's EXISTENCE, not a restatement of its field
+ *  names, and it rides in the `--seed-baseline` payload so the committed file is
+ *  never hand-edited: a hand-added key would break the rule that the tool is the
+ *  only writer. */
+const BASELINE_REASON =
+  "The accepted orphan population of this repository at seededAt. Every row here was reported by the scanner when this file was seeded, and this is the set the gate treats as known: it fails only on rows OUTSIDE it (a row a later change adds) and never on rows that leave it (reported as progress), so the file is a ratchet and not a cleanup target. It is not a claim that a row here is dead. The adjudications behind the allowlist, and the reasons for the rows that stay, are in docs/audit/2026-09-15-reachability-baseline.md section 6 and in the dated scripts/audit/reachability-allowlist.json. Regenerate with --seed-baseline; never edit by hand."
 
 // ------------------------------------------------------- the classes' strength
 // Per-class tally. The status strings are not decoration: class 1 is an
@@ -1255,15 +1692,54 @@ function isDirectorySync(p) {
   try { return statSync(p).isDirectory() } catch { return false }
 }
 
+/** One identity for a path, so two spellings of one directory compare equal.
+ *  `realpathSync.native` collapses case, separator style, `.`/`..` segments and
+ *  junctions/symlinks; on a path that does not exist yet (a seed target usually
+ *  does not) it throws, and `resolve` is the best available answer. Comparing
+ *  raw strings instead refused `d:\i-harness-main`, `\\?\D:\I-harness-main` and
+ *  a junction-reached script, all of which ARE this tree. */
+function canonicalPath(p) {
+  try { return realpathSync.native(p) } catch { return resolve(p) }
+}
+
+/** Whether a seed would overwrite THIS repository's committed baseline from a
+ *  DIFFERENT tree. The one rule that closes both halves of the hole: refusing
+ *  only "no explicit `--baseline`" still let `--root <foreign> --baseline <the
+ *  named baseline>` replace the committed 523-row file with a foreign tree's
+ *  rows and exit 0. A named target that is not this repository's baseline stays
+ *  legal -- seeding another tree's baseline from that tree is what `--root` is
+ *  for -- and so does re-seeding THIS tree. */
+function seedWouldClobberRepoBaseline(root, baselinePath) {
+  return canonicalPath(root) !== canonicalPath(ROOT) && canonicalPath(baselinePath) === canonicalPath(BASELINE_DEFAULT)
+}
+
 /** A root the scanner cannot walk is a USAGE error, never a clean tree. Before
  *  this guard, `--root ./nope` printed `0 ts files, 0 finding(s)` and exited 0,
  *  and `--root package.json` printed the same thing because the `readdirSync`
  *  in `collectTs` threw straight into its own catch: an under-report no caller
  *  can tell from a clean sweep, which is the exact failure this tool exists to
  *  prevent. `existsSync` was imported for this and never called. Exit 2, and the
- *  message goes to stderr, so a caller cannot read it as a result. */
-function main() {
-  const root = resolve(argVal("--root", ROOT))
+ *  message goes to stderr, so a caller cannot read it as a result.
+ *
+ *  `cliArgs` defaults to this process's argv; a self-test case passes its own so
+ *  the CLI can be driven from inside the suite. Every read of the command line
+ *  below goes through `has`/`val`, which is what makes that possible. */
+function main(cliArgs = args) {
+  const has = (flag) => cliArgs.includes(flag)
+  const val = (name, dflt) => {
+    const i = cliArgs.indexOf(name)
+    return i >= 0 && cliArgs[i + 1] ? cliArgs[i + 1] : dflt
+  }
+  // A combination that seeds AND gates would always pass: the seed rewrites the
+  // very file the gate reads, so the gate would compare the tree against itself.
+  // The allowlist files `tui --yes` as "parsed but never read", and a flag that
+  // is accepted and then ignored is that same defect, so this is refused rather
+  // than resolved by precedence.
+  if (has("--seed-baseline") && has("--gate")) {
+    console.error("reachability: --seed-baseline and --gate cannot be combined -- seeding rewrites the baseline the gate reads, so the gate would compare the tree against itself; run one or the other")
+    return 2
+  }
+  const root = resolve(val("--root", ROOT))
   if (!existsSync(root)) {
     console.error(`reachability: --root ${root} does not exist`)
     return 2
@@ -1281,34 +1757,44 @@ function main() {
   }
   const findings = SCANNERS.flatMap((s) => s(files))
 
-  const baselinePath = resolve(argVal("--baseline", BASELINE_DEFAULT))
-  const allowlistPath = resolve(argVal("--allowlist", ALLOWLIST_DEFAULT))
+  const baselinePath = resolve(val("--baseline", BASELINE_DEFAULT))
+  const allowlistPath = resolve(val("--allowlist", ALLOWLIST_DEFAULT))
   const current = findings.map(rowKey)
 
-  if (args.includes("--seed-baseline")) {
+  if (has("--seed-baseline")) {
     // Seeding writes the file the SCAN's tree owns, and `BASELINE_DEFAULT` is
-    // this script's own root -- so `--seed-baseline --root <other tree>` without
-    // an explicit `--baseline` silently replaced the committed row set with that
-    // tree's rows and exited 0. Measured: it rewrote
-    // scripts/audit/reachability-baseline.json from a synthetic fixture. A seed
-    // against any tree but this one must name where it writes.
-    if (root !== ROOT && argVal("--baseline") === undefined) {
+    // this script's own root -- so a seed of another tree into it silently
+    // replaced the committed row set with that tree's rows and exited 0 (measured
+    // both without an explicit `--baseline` and with the committed path named
+    // explicitly). One canonical-path rule refuses every spelling of that shape
+    // while still allowing `--root .` and a named target.
+    if (seedWouldClobberRepoBaseline(root, baselinePath)) {
       console.error(`reachability: --seed-baseline would write this repository's baseline (${baselinePath}) from --root ${root} -- pass --baseline <path> to seed another tree`)
       return 2
     }
     const payload = {
       seededAt: new Date().toISOString().slice(0, 10),
+      reason: BASELINE_REASON,
       digest: findingsDigest(findings),
       count: current.length,
       rows: current.slice().sort(),
     }
-    writeFileSync(baselinePath, `${JSON.stringify(payload, null, 2)}\n`)
+    // A write that cannot land is a usage error (2), not a crash: unwrapped, an
+    // ENOENT escaped as an 18-line stack trace and exit 1, which a shell
+    // pipeline reads as "1 = new rows" -- the exact false read this gate exists
+    // to prevent.
+    try {
+      writeFileSync(baselinePath, `${JSON.stringify(payload, null, 2)}\n`)
+    } catch (err) {
+      console.error(`reachability: could not write the baseline to ${baselinePath}: ${err.message}`)
+      return 2
+    }
     console.log(`reachability: seeded ${payload.count} row(s) into ${baselinePath}`)
     console.log(`reachability: digest ${payload.digest}`)
     return 0
   }
 
-  if (args.includes("--gate")) {
+  if (has("--gate")) {
     let baseline
     try {
       baseline = loadJsonIfPresent(baselinePath)
@@ -1318,6 +1804,18 @@ function main() {
     }
     if (baseline === undefined) {
       console.error(`reachability: no baseline at ${baselinePath} -- seed one with --seed-baseline`)
+      return 2
+    }
+    // The baseline's own `count` and `digest` are what the summary line below
+    // PUBLISHES, and a wrong shape is a configuration error rather than a scan
+    // result. Both are checked before any comparison: otherwise a baseline whose
+    // `rows` are the live set and whose count/digest are invented printed
+    // `with 999 (digest deadbeef)` and passed, and `{"rows":"abc"}` was reported
+    // through exit 1, the code reserved for new rows.
+    const baselineProblem = baselineProblems(baseline)
+    if (baselineProblem.length > 0) {
+      console.error(`reachability: the baseline at ${baselinePath} is not usable -- refusing to gate on it:`)
+      for (const p of baselineProblem) console.error(`  ${p}`)
       return 2
     }
     let allowlist
@@ -1330,18 +1828,38 @@ function main() {
       console.error(err.message)
       return 2
     }
-    // A dated, reasoned entry is the price of an exemption, and this check runs
-    // BEFORE `gateDiff` exempts anything: an entry missing either field is
+    const allowlistProblem = allowlistProblems(allowlist)
+    if (allowlistProblem.length > 0) {
+      console.error(`reachability: the allowlist at ${allowlistPath} is malformed -- refusing to gate on it:`)
+      for (const p of allowlistProblem) console.error(`  ${p}`)
+      return 2
+    }
+    // A dated, reasoned disposition is the price of an exemption, and this check
+    // runs BEFORE `gateDiff` exempts anything: an entry missing either field is
     // refused rather than honoured, because a stale exemption that keeps
     // exempting is exactly the silent, unremembered exception the allowlist
     // exists to prevent. Exit 2 matches the malformed-allowlist refusal above --
     // this is a configuration error, never the "new rows" result the caller
-    // reads from exit 1.
+    // reads from exit 1. The same price is charged to `noRow`, the allowlist's
+    // other half: the roadmap says "基線與 allowlist", not "the entries of the
+    // allowlist".
     const stale = staleAllowlistEntries(allowlist)
-    if (stale.length > 0) {
-      console.error(`reachability: ${stale.length} allowlist entr(ies) without a date or reason -- refusing to gate on them:`)
+    const staleNoRow = staleNoRowEntries(allowlist)
+    if (stale.length + staleNoRow.length > 0) {
+      console.error(`reachability: ${stale.length + staleNoRow.length} allowlist disposition(s) without a date or reason -- refusing to gate on them:`)
       for (const k of stale) console.error(`  stale ${k}`)
+      for (const k of staleNoRow) console.error(`  stale noRow ${k}`)
       return 2
+    }
+    // An entry that matches no live row exempts nothing while reading as a
+    // decision. That is the silent-exemption failure mode from the other
+    // direction, so it is said out loud -- but only said: the roadmap fails on
+    // new rows and never on a low count, and an allowlisted row that was
+    // legitimately fixed leaves exactly this trace.
+    const inert = inertAllowlistEntries(allowlist, current)
+    if (inert.length > 0) {
+      console.error(`reachability: warning: ${inert.length} allowlist entr(ies) match no live row -- they exempt nothing:`)
+      for (const k of inert) console.error(`  inert ${k}`)
     }
     const { added, removed } = gateDiff(current, baseline, allowlist)
     console.log(`reachability: ${current.length} row(s) now; baseline seeded ${baseline.seededAt} with ${baseline.count} (digest ${baseline.digest})`)
@@ -1359,12 +1877,15 @@ function main() {
   }
 
   // The digest alone, so a caller can compare identities without parsing rows.
-  if (args.includes("--digest")) {
+  // It is answered BEFORE the machine-readable branch, so `--digest --json`
+  // prints the digest only; the usage block above says so rather than leaving a
+  // caller to infer it.
+  if (has("--digest")) {
     console.log(findingsDigest(findings))
     return 0
   }
 
-  if (AS_JSON) {
+  if (has("--json")) {
     console.log(JSON.stringify({ root, digest: findingsDigest(findings), findings }, null, 2))
   } else {
     console.log(`reachability: ${files.length} ts files, ${findings.length} finding(s)\n`)
@@ -1386,4 +1907,17 @@ function main() {
 // stderr are flushed before the process ends: on Windows a piped stderr write is
 // asynchronous, and `process.exit` can truncate the very message this guard
 // exists to deliver.
-if (!args.includes("--self-test")) process.exitCode = main()
+//
+// The `--self-test` dispatch runs LAST, after the consts it reaches. While this
+// block sat above `BASELINE_DEFAULT`/`ALLOWLIST_DEFAULT`, a case that drove
+// `main()` died on `Cannot access 'BASELINE_DEFAULT' before initialization`, so
+// no case drove the CLI at all -- and deleting the `--gate` block, the
+// `--digest` block, the allowlist read or the stale-disposition check each left
+// the suite fully green. Moving the dispatch is what makes those call sites
+// testable; the `process.exit` form is kept as it was (its stdout-only flush
+// behaviour is a recorded, measured-lossless pre-existing property).
+if (args.includes("--self-test")) {
+  const { ok, total } = runSelfTest()
+  process.exit(ok === total && total > 0 ? 0 : 1)
+}
+process.exitCode = main()

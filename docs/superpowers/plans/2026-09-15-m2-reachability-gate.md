@@ -605,13 +605,20 @@ node scripts/audit/check-reachability.mjs --gate        # expect: gate PASS -- n
 - [ ] **Step 6: Run everything**
 
 ```powershell
-node scripts/audit/check-reachability.mjs --self-test    # expect 24/24 ok
+node scripts/audit/check-reachability.mjs --self-test    # expect 36/36 ok
 node scripts/audit/check-reachability.mjs                # expect 731 / 523 + per-class tally
 node scripts/audit/check-reachability.mjs --gate         # expect PASS, exit 0
 node scripts/audit/check-reachability.mjs --digest       # expect 5acf81aa...
 node scripts/audit/check-thresholds.mjs                  # expect ALL THRESHOLDS PASS
 pnpm -r typecheck                                        # expect exit 0
 ```
+
+**Correction (the closing fix wave, 2026-09-16):** this block read `# expect 24/24 ok` and
+the count it predicted was wrong twice over — it was written before Task 4 added the
+completion-proof case, and the closing wave added eleven more (the CLI-wiring cases and the
+third digest-fixture row). The number above is the count **measured on the shipped tool**,
+not a prediction; every earlier step-local count in this plan (`19/19` at Task 1, `22/22` at
+Task 3) is the expectation of the revision that step produced and is left as written.
 
 - [ ] **Step 7: Commit**
 
@@ -624,10 +631,12 @@ git commit -m "feat(audit): the gate proves itself, states each class's strength
 
 ## Self-Review
 
-**1. Spec coverage** — the roadmap §M2 requires: a re-runnable script (Tasks 2, 4); the ratchet failing only on new orphans (Task 2, with the removed-row case pinned); a reasoned allowlist (Task 3); the five enumerated classes (already in the tool — Tasks 1–4 must not break them, and `--self-test` guards that); the completion definition's **mutation proof** (Task 4 Step 1, plus the re-runnable self-test in Step 2); dates and reasons on both data files (Tasks 2, 3). The inherited list from the Phase B handoff §6 is closed explicitly in Task 4 Step 5, with anything not done named. **Not covered, and deliberately:** the roadmap's "它不保證什麼" (the gate does not prove reachable things are *correct*) — that is a statement to publish, not work; it belongs in the gate's own output and is added to `CLASS_STATUS`'s surrounding comment in Task 4 Step 3 and restated in the handoff paragraph.
+**1. Spec coverage** — the roadmap §M2 requires: a re-runnable script (Tasks 2, 4); the ratchet failing only on new orphans (Task 2, with the removed-row case pinned); a reasoned allowlist (Task 3); the five enumerated classes (already in the tool — Tasks 1–4 must not break them, and `--self-test` guards that); the completion definition's **mutation proof** (Task 4 Step 1, plus the re-runnable self-test in Step 2); dates and reasons on **both** data files — the allowlist from Task 3, and the baseline's own `reason` field, which the closing fix wave added to the **`--seed-baseline` payload** and then written by the tool (the baseline is never hand-edited, so a hand-added key would have broken that rule). The inherited list from the Phase B handoff §6 is closed explicitly in Task 4 Step 5, with anything not done named. **Not covered, and deliberately:** the roadmap's "它不保證什麼" (the gate does not prove reachable things are *correct*) — that is a statement to publish, not work; it belongs in the gate's own output and is added to `CLASS_STATUS`'s surrounding comment in Task 4 Step 3 and restated in the handoff paragraph.
 
 **2. Placeholder scan** — the one place this plan cannot give exact content is Task 3 Step 1's allowlist entries, because they must be *derived* from the baseline document by matching against live rows; the plan says exactly how, and forbids inventing keys. Task 4 Step 4 has a conditional fixture, with the instruction to add the fixture rather than fake an expectation.
 
 **3. Type consistency** — `rowKey(f)` takes a finding object; `gateDiff(current, baseline, allowlist)` takes arrays/sets of **keys** (strings), and the plan's call sites always pass `.map(rowKey)`; `findingsDigest(findings)` takes finding objects; `staleAllowlistEntries(allowlist)` takes the parsed file, returns sorted keys. `--baseline`/`--allowlist` are paths; `--seed-baseline`/`--gate`/`--digest`/`--json`/`--self-test` are flags. Exit codes: `0` pass, `1` new rows, `2` usage or missing/invalid baseline or a stale allowlist.
 
 **Known limitation, stated so nobody reads the gate as stronger than it is:** the baseline pins the row set **as of its `seededAt` date and digest**. Any legitimate row *removal* is silent progress (reported, not failed); any legitimate row *addition* must be accepted deliberately by re-seeding, which is the point of a ratchet but also its cost.
+
+**Correction (the closing fix wave, 2026-09-16), so this paragraph describes what shipped:** the seed payload at Task 2's snippet above is missing the `reason` field the tool now writes (roadmap `:125` requires a reason of the baseline file itself, not only of the allowlist), and the `--gate` snippet is missing the baseline `count`/`digest` validation: the gate now refuses a baseline whose own `count`/`digest` do not describe its own `rows` (exit 2) instead of printing them as verified attestation, refuses a wrong-shape baseline or allowlist as a configuration error (exit 2) rather than reporting it through exit 1, refuses `--seed-baseline --gate`, prices `noRow` dispositions as well as `entries`, and warns (without failing) about an entry that matches no live row. The snippets are left as they were written; this is the correction block, which is this plan's convention for post-execution drift.

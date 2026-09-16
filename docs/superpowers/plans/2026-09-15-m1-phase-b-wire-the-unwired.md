@@ -618,7 +618,7 @@ Documentation only, and the last task, because the digest changes here. Phase B'
 
 Class 1 walks only `packages/*/src/index.ts` entries, so **any file under `packages/*/src/` that its entry does not mention — and every name it declares — is invisible to all five scanner classes.** Three instances are now known: `packages/guard-approval/src/remember.ts`, `packages/sandbox-local/src/runner-failures.ts`, and `closeFileBackedConnections` in `packages/session-query/src/file-backed.ts:91`. Write this into §7 as a limitation, and into the M2 requirements, with the concrete ask: a scanner class that enumerates `packages/*/src/**/*.ts` with no inbound reference from either its entry or any other production file.
 
-It must land in the **M2** list, not as a fix here — the ratchet's scope is M2's, and without this the rows and their siblings regrow. Also record the measured fact that **re-exporting is not a remedy**: a probe through the real scanner gives 1 finding without the re-export and 2 with it (`check-reachability.mjs:359-365`), so "re-export to clear the row" measurably makes the ratchet worse.
+It must land in the **M2** list, not as a fix here — the ratchet's scope is M2's, and without this the rows and their siblings regrow. Also record the measured fact that **re-exporting is not a remedy**: a probe through the real scanner gives 1 finding without the re-export and 2 with it (`scanUnusedExports` in `check-reachability.mjs` — the entry selection, the origin exclusion and the `findings.push`; M2's closing wave replaced this plan's original line citation, which had rotted), so "re-export to clear the row" measurably makes the ratchet worse.
 
 - [ ] **Step 3: Record the argument-routing blind spot**
 
