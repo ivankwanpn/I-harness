@@ -17,11 +17,13 @@
 // Usage:
 //   node scripts/audit/check-reachability.mjs                 # human table
 //   node scripts/audit/check-reachability.mjs --json          # machine readable
+//   node scripts/audit/check-reachability.mjs --digest        # the row-set digest
 //   node scripts/audit/check-reachability.mjs --self-test     # prove the scanners
 
 import { readFileSync, readdirSync, existsSync, statSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
 import { tmpdir } from "node:os"
+import { createHash } from "node:crypto"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const args = process.argv.slice(2)
@@ -888,6 +890,39 @@ SELF_TEST_CASES.push({
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
+/** The three conventions the digest depends on, each pinned by a published
+ *  counterfactual in the baseline document section 2.1: sort order, LF joining,
+ *  and a trailing newline on EVERY line. The row set is synthetic so the case
+ *  does not rot when the repo's own rows move. */
+const SELF_TEST_PUBLISHED_FINDINGS = [
+  { kind: "unused-export", subject: "@i-harness/b#Two", evidence: "packages/b/src/index.ts" },
+  { kind: "unused-export", subject: "@i-harness/a#One", evidence: "packages/a/src/index.ts" },
+]
+
+// The expectation is the LITERAL hex for this fixture, derived with `node -e`
+// and `node:crypto` on 2026-09-15 -- independently of `findingsDigest`. Writing
+// `expect: [findingsDigest(SELF_TEST_PUBLISHED_FINDINGS)]` instead would evaluate
+// the function under test on BOTH sides, so the case could not fail on a wrong
+// digest; and because `expect` is evaluated at module scope, the missing
+// function would throw OUTSIDE the harness's per-case `try` -- measured: an
+// uncaught ReferenceError at this line, no `FAIL <name>` and no `self-test: N/M`
+// line at all, which is why the red state is written this way.
+//
+// Counterfactuals for this fixture, measured the same way: dropping the trailing
+// newline gives 0a57ff1961367076db6f3d7a0792a91f12a789a2321a259e2f429c6366b72746
+// and joining with CRLF gives
+// 98574259ffcefb60979fd2b16d1e99319fda8992b187a06fbea31bab2f3743b4, so both
+// conventions are pinned here. Sort order is NOT pinned by this fixture (its two
+// lines sort identically byte-wise and under `localeCompare`); the real tree's
+// 523 rows are what discriminate those, and Step 5 of this task proves it.
+SELF_TEST_CASES.push({
+  name: "digest: the published M1 digest is reproduced from the findings",
+  expect: ["9695a7fcca9f70dc227bb29d6983d89d30eec3ce0bb20adb69c85505282e4703"],
+  run() {
+    return [findingsDigest(SELF_TEST_PUBLISHED_FINDINGS)]
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
@@ -950,6 +985,26 @@ function indexTree(root) {
   })
 }
 
+// ------------------------------------------------------- row identity + digest
+/** The canonical identity of a finding. The digest, the baseline and the gate
+ *  all key on this exact string, so it is defined once, here. */
+function rowKey(f) {
+  return `${f.kind}\t${f.subject}\t${f.evidence}`
+}
+
+/** sha256 over the findings rendered as sorted `kind <TAB> subject <TAB> evidence`
+ *  lines, LF-joined, with EVERY line newline-terminated. All three conventions
+ *  are load-bearing and are published as counterfactuals in
+ *  docs/audit/2026-09-15-reachability-baseline.md section 2.1: dropping the
+ *  trailing newline and sorting by locale both produce different digests, which
+ *  is why the rule is stated rather than assumed. `Array#sort()` with no
+ *  comparator is the byte-wise (code-unit) sort that rule names -- NOT a
+ *  locale-aware collation. */
+function findingsDigest(findings) {
+  const text = findings.map(rowKey).sort().map((l) => `${l}\n`).join("")
+  return createHash("sha256").update(text, "utf8").digest("hex")
+}
+
 // ----------------------------------------------------------------------- main
 /** `statSync` that answers instead of throwing, so a missing path and a path
  *  that is not a directory are both simply "not a directory". */
@@ -983,8 +1038,14 @@ function main() {
   }
   const findings = SCANNERS.flatMap((s) => s(files))
 
+  // The digest alone, so a caller can compare identities without parsing rows.
+  if (args.includes("--digest")) {
+    console.log(findingsDigest(findings))
+    return 0
+  }
+
   if (AS_JSON) {
-    console.log(JSON.stringify({ root, findings }, null, 2))
+    console.log(JSON.stringify({ root, digest: findingsDigest(findings), findings }, null, 2))
   } else {
     console.log(`reachability: ${files.length} ts files, ${findings.length} finding(s)\n`)
     for (const f of findings) console.log(`  ${f.kind.padEnd(22)} ${f.subject.padEnd(52)} ${f.evidence}`)
