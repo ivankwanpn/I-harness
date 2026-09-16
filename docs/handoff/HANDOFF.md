@@ -265,6 +265,32 @@ Then confirm you are on the described state — `git rev-parse HEAD origin/m64` 
 the right test while M62 was the tip, and it is empty no longer — M1 Phase B changed 14 paths under
 `packages/` and `apps/` after `3e0e2536`, six of them sources.
 
+**One machine-local prerequisite, and it fails loudly rather than quietly.** The **M2 reachability gate**
+(`pnpm verify:reachability`) walks only this repo and needs nothing else — as do `typecheck` and
+`check-thresholds.mjs`. The **citations** gate and the audit extraction scripts are different: their seven
+source roots default to the original workstation's paths (`D:/I-harness-main`, `D:/agent-complete/…`, listed
+and explained in `scripts/audit/lib-union.mjs`). On a machine that does not have those trees,
+`node scripts/audit/verify-citations.mjs` prints **`SOURCE ROOTS MISSING -- refusing to run`**, names the
+absent roots and **exits 2** — deliberately, because a *wrong* root does not fail loudly: it reports every
+citation under it as a missing file (measured on a machine whose trees sat elsewhere: **6116 missing against
+a baseline of 0**). Point them without editing any tracked file — the override is partial, so name only what
+you move, and an unknown key is an error rather than a silent no-op:
+
+```bash
+# scripts/audit/source-paths.local.json   (gitignored)
+{ "ih": "C:/work/I-harness", "grok": "C:/src/grok-build-main" }
+# or, the env var wins over the file:
+IH_AUDIT_SOURCE_PATHS='{"grok":"C:/src/grok-build-main"}' node scripts/audit/verify-citations.mjs
+# or verify only the sources you actually have:
+node scripts/audit/verify-citations.mjs --allow-missing-roots
+```
+
+**Consequence for the baselines below:** the citations row (`8680 resolved / 0 missing / 51 problems`) is
+reproducible only on a machine that has the source trees. The reachability, thresholds and typecheck rows are
+not affected. Two further machine-level facts, both pre-existing and both in §6: `pnpm verify:store` shells
+out to `bash scripts/check-store.sh`, and the `session-executor` suite carries the known-red WSL-`bash` pair
+(86 passed / 2 failed of 88).
+
 **The verification gates:**
 
 ```powershell
