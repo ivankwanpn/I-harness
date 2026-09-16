@@ -102,6 +102,7 @@ node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
 | `pnpm typecheck` | Type-check every package (`pnpm -r typecheck`)       |
 | `pnpm e2e`       | End-to-end tests (`vitest run e2e/ --config e2e/vitest.config.ts`) |
 | `pnpm verify:store` | pnpm store integrity check (`scripts/check-store.sh`) — run before e2e after installs |
+| `pnpm verify:reachability` | Reachability ratchet — fails on **newly added** orphan rows only, never on a low count; seeded from `scripts/audit/reachability-baseline.json`, with exemptions only in a dated, reasoned allowlist. It proves a caller exists, never that the call is right |
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 

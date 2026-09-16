@@ -219,6 +219,7 @@ apps/
 | `pnpm typecheck` | 全倉 `tsc --noEmit`（0 錯誤） |
 | `pnpm e2e` | 端到端（真實 CLI + 真實工具） |
 | `pnpm verify:store` | pnpm store 完整性（e2e 前建議） |
+| `pnpm verify:reachability` | 可達性棘輪（對**新增**的孤兒行失敗；基線 `scripts/audit/reachability-baseline.json`） |
 | `node scripts/build-installer.mjs && node scripts/verify-installer.mjs` | 打包安裝器 + 19 項安裝驗證 |
 
 > 已知瑕疵：vitest worker flake（M31 修復——`web-host` 用 forks pool；新包遇到同症狀照搬該配置）。

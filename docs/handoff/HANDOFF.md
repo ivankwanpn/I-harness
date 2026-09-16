@@ -246,10 +246,13 @@ pnpm -r typecheck                                       # expect: exit 0, every 
 node scripts/audit/check-thresholds.mjs                 # expect: ALL THRESHOLDS PASS
 node scripts/audit/verify-citations.mjs --all-problems  # CLEAN TREE ONLY — see §6
 node scripts/audit/check-reachability.mjs               # expect: 731 ts files, 523 finding(s)
+node scripts/audit/check-reachability.mjs --gate        # expect: gate PASS -- no new rows
 pnpm test                                               # -r --no-bail, then the tui quarantine
 ```
 
 `check-reachability.mjs` exists **only from M1 Phase A onward** — it is not on `m62`; it arrived with `m64`.
+
+`--gate` is the reachability **ratchet** (wired as `pnpm verify:reachability`). It fails **only on rows that are new relative to the baseline** — never on a low count, because a gate that reddens when work is done gets switched off — and it refuses to run (exit 2) on a missing baseline, a malformed allowlist, or an allowlist entry lacking a **date and reason**. Exit codes are `0` pass, `1` new rows, `2` usage/config. Two things it does **not** establish, in the roadmap's own words: it does not prove that what is reachable is *right* — *"不保證可達的東西是對的 —— 它只證明「有人呼叫」。一個接了但接錯的生產者會通過這道閘門。"* (`2026-09-15-backend-polish-roadmap-design.md:126`) — and it does not prove every unwired surface was found (`:102`). The mutation proof behind M2's completion definition (`:125`, an intentionally added orphan must fail the gate) was performed for real on a package entry during Task 4 and is re-runnable without a human edit, as a `--self-test` case; the record is in the Phase B handoff §6.
 
 **One gate may refuse to run on your machine, and that is by design.** The audit tooling resolves citations against *reference source trees* whose paths are **machine-local**: the committed defaults in `scripts/audit/lib-union.mjs` describe the original workstation, and `missingSourceRoots()` (`:114`) exists so a caller "must refuse to run on a non-empty result rather than emit a phantom problem for every citation underneath" (`:110-111`). Name your own trees in **`scripts/audit/source-paths.local.json`** (gitignored — it will *not* arrive with your clone) or set **`IH_AUDIT_SOURCE_PATHS`**. On the original workstation neither is needed, because the committed defaults all resolve — so I verified the code that refuses, **not** the refusal itself.
 
