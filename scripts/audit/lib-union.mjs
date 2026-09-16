@@ -24,7 +24,7 @@
 // the mapping, and never delete a row that another source already occupies.
 
 import { readFileSync, existsSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 
 export const SOURCES = [
@@ -57,9 +57,16 @@ export const SOURCES = [
  * Both are partial -- name only the sources you are moving. An unknown key is
  * an error rather than a silent no-op, because a typo would otherwise leave
  * the committed default in place and look like it had worked.
+ *
+ * `ih` is the one root that needs no override: it is the tree this file lives
+ * in, resolved from `import.meta.url`. It used to be the literal
+ * `D:/I-harness-main`, which is wrong on every other clone -- a fresh clone
+ * would be told its own repository was a missing source root.
  */
+const HERE = dirname(fileURLToPath(import.meta.url))
+
 export const SOURCE_PATH_DEFAULTS = {
-  ih: "D:/I-harness-main",
+  ih: resolve(HERE, "../.."),
   dsh: "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
   codex: "D:/agent-complete/codex-rust-v0.149.1",
   opencode: "D:/agent-complete/opencode-1.18.30",
@@ -67,8 +74,6 @@ export const SOURCE_PATH_DEFAULTS = {
   grok: "D:/agent-complete/grok-build-main",
   "cc-custom": "D:/opencode-bugfix/cc-custom",
 }
-
-const HERE = dirname(fileURLToPath(import.meta.url))
 
 /** Overrides from the gitignored local file, then the env var (env wins). */
 function sourcePathOverrides() {
