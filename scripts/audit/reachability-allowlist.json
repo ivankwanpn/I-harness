@@ -1,0 +1,216 @@
+{
+  "note": "Deliberate exceptions to the reachability gate. Every entry needs a date and a reason; the gate refuses to run when either is missing.",
+  "entries": [
+    {
+      "key": "producerless-event\tretry/start",
+      "reason": "The telemetry manifest is the event **vocabulary**, not an emitter — `TELEMETRY_MANIFEST` is consumed at `packages/telemetry/src/manifest.ts:39` to build `TELEMETRY_EVENT_TYPES` — and the deferral is recorded in source at `packages/core-agent/src/index.ts:234,238` (\"NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20 … emits no `retry/start`\"), so deleting the row would delete a vocabulary entry the M12/M20 retry work is specified against.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:753 (6.1)"
+    },
+    {
+      "key": "unpushed-capability\tplan-mode",
+      "reason": "`packages/tui/src/app/loop.ts:2415-2418` states the three are NEVER supplied because the M49 backend has no live capability for them and the project refuses UI-state-only fakes, and their commands are gated invisible by `hasCapability` (`packages/tui/src/app/slash/impl/run.ts:49,57`) rather than faked — so nothing is broken and nothing is unreachable that advertises itself as reachable.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:754 (6.1)"
+    },
+    {
+      "key": "unpushed-capability\tguardian",
+      "reason": "Same declaration and the same reason as `plan-mode` above: the guardian commands are gated by `hasCapability(ctx, \"guardian\")` at `packages/tui/src/app/slash/impl/approval.ts:27,35` and the loop never pushes it, deliberately.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:755 (6.1)"
+    },
+    {
+      "key": "unpushed-capability\tvim-mode",
+      "reason": "Same declaration and the same reason as `plan-mode` above: the vim binding is gated by `hasCapability(ctx, \"vim-mode\")` at `packages/tui/src/app/slash/impl/text-input.ts:67` and the loop never pushes it, deliberately.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:756 (6.1)"
+    },
+    {
+      "key": "unread-flag\t--yes",
+      "reason": "**Deliberately out of scope — freeze/replacement.** The finding is real and unpatched: `flags.yes` is assigned at `apps/tui/src/index.ts:445` and read nowhere, while `--yes` is advertised in two usage strings (`:9`, `:461`). The code is `apps/tui`, the **TUI application** (not `packages/tui`), i.e. the frontend the roadmap's Q6 freeze covers (`2026-09-15-backend-polish-roadmap-design.md:278`), so fixing it would be investment in code being removed and Phase B must not be handed it. The gap is **not** retired with the code: the replacement frontend inherits the requirement that its flag surface must not advertise a flag nothing reads — if the replacement keeps a `--yes`, it must parse **and** read it, or drop the flag and its usage text. That obligation belongs to the replacement's requirements; this row records it rather than leaving it implicit.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:771 (6.2) — D1 §跨包主線 8 item 7 / CLI surface 1"
+    },
+    {
+      "key": "unused-export\t@i-harness/output-retention#createUnifiedSpillStore",
+      "reason": "`by-design`, because all three parts of the Phase A characterisation were wrong: `createUnifiedSpillStore` (`packages/output-retention/src/spill-guard.ts:90-92`) is a three-line root-selecting factory that **never calls GC**; GC **is** wired at `spill-guard.ts:25` inside `createOutputSpillGuard`, which production mounts at `packages/session-executor/src/assembly.ts:524` whenever a host passes `outputSpill` (`assembly.ts:129`); and **no production host passes one**, so what ships is **no spill store at all** — the shell path's default retention is `opts.shellRetention ?? { maxBytes: 64_000 }` (`assembly.ts:400`), which carries no `spill` key (`packages/shell/src/index.ts:135` declares it, `:280` tests it), and nothing outside `test/` ever passes either option with a value (`apps/cli/src/run.ts:252,288` only forwards what its caller gave). The decision is the source's own, at `packages/output-retention/src/index.ts:170-171`: *\"絕不寫 workspace——研究決策；**不清理（已知 limitation）**\"*, and the guard, the GC it calls and the factory landed together in `c3875a9`. Follow-up: **none owed in code** — if a host ever supplies a spill root it gets exactly the GC wired at `:25`, so the honest future question is retention **policy** (age/size caps), not wiring.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:773 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
+    },
+    {
+      "key": "unused-export\t@i-harness/output-retention#gcSpillStore",
+      "reason": "`by-design`, because all three parts of the Phase A characterisation were wrong: `createUnifiedSpillStore` (`packages/output-retention/src/spill-guard.ts:90-92`) is a three-line root-selecting factory that **never calls GC**; GC **is** wired at `spill-guard.ts:25` inside `createOutputSpillGuard`, which production mounts at `packages/session-executor/src/assembly.ts:524` whenever a host passes `outputSpill` (`assembly.ts:129`); and **no production host passes one**, so what ships is **no spill store at all** — the shell path's default retention is `opts.shellRetention ?? { maxBytes: 64_000 }` (`assembly.ts:400`), which carries no `spill` key (`packages/shell/src/index.ts:135` declares it, `:280` tests it), and nothing outside `test/` ever passes either option with a value (`apps/cli/src/run.ts:252,288` only forwards what its caller gave). The decision is the source's own, at `packages/output-retention/src/index.ts:170-171`: *\"絕不寫 workspace——研究決策；**不清理（已知 limitation）**\"*, and the guard, the GC it calls and the factory landed together in `c3875a9`. Follow-up: **none owed in code** — if a host ever supplies a spill root it gets exactly the GC wired at `:25`, so the honest future question is retention **policy** (age/size caps), not wiring.",
+      "dated": "2026-09-15",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:773 (6.2) — D1 §未竟事項 4 (the item's spill pair: both live rows it adjudicates)"
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#HarnessSession",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#HistoryOptions",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#INVALID_REQUEST",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#PARSE_ERROR",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#QueueState",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RewindConflictOpWire",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RewindPointRowWire",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RewindUnseenChangeWire",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RpcRequest",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RunInput",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#RunResult",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#SdkConnectionError",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#SdkRunError",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#createHarnessClient",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#isRpcFailure",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#isRpcSuccess",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    },
+    {
+      "key": "unused-export\t@i-harness/sdk#runHarness",
+      "dated": "2026-09-16",
+      "source": "docs/audit/2026-09-15-reachability-baseline.md:784-787 (6.3, class rule accepted by M2 on 2026-09-16); docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120 (the M2 sanction quoted in `reason`), :101 (M1 completion definition)",
+      "reason": "the SDK package is the **embedder-facing public surface**, so its exports are addressed to code outside this repository and \"no in-repo production consumer\" is the expected state rather than an orphan — which is exactly the case roadmap §3.M1 names (\"`sdk` 的公開 API 本來就不該有內部呼叫者\"). I did **not** adjudicate these 17 rows individually (R13). Roadmap sanction, docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120: \"現存孤兒數量不可能一次歸零，所以閘門**只對「新增的孤兒」失敗**，既有的記進基線。另需一份**帶理由的 allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義。\""
+    }
+  ],
+  "noRow": [
+    {
+      "item": "guard-approval/src/remember.ts",
+      "reason": "**Kept and declared deliberately unwired** (human ruling, 2026-09-15) — an **input to the replacement frontend**, not a pending task, and not deletable without losing a rule the tree states nowhere else. The three structural reasons: (a) the TUI records that nothing ever registered it — `packages/tui/test/slash-registry.test.ts:42-46` lists `\"remember\"` in `NEVER_REGISTERED`, whose own comment reads *\"zero registration hits — not even as hidden inventory\"*; (b) the approval path has **no persistent-decision vocabulary** to hang a remembered decision on — `packages/interaction/src/index.ts:15-17` is boolean-only (`ApprovalDecision = { approved: boolean }`), and the only \"once\" vocabulary in the tree is ACP's `allow-once` admission (`packages/acp/src/index.ts:15,43`), a per-request posture rather than a stored rule; (c) the package entry publishes three sibling modules and never this one — `packages/guard-approval/src/index.ts:82-88` re-exports `./guardian/verdict.ts`, `./guardian/breaker.ts` and `./guardian/index.ts`, `remember.ts` is the only file under `src/` that entry never mentions (`danger-class.ts` is at least imported, at `:4`), and `package.json` exposes only `\".\"`. What the module carries is the tree's **only** statement of the rule that a shell or interpreter can never be remembered: `BANNED_PREFIX_PATTERNS` (`remember.ts:14-20`) covers `bash`, `sh`, `zsh`, `cmd`, `pwsh`, `powershell` and `node -e`/`bun -e`, is matched at `:48`, and refuses with *\"shell/interpreters cannot be remembered (would approve everything)\"* at `:51`.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "session-query closeSessionQueries",
+      "reason": "**`by-design`: the lifetime it would end never outlives the process.** Each CLI entry point creates **at most one query per process** — `apps/cli/src/index.ts:307` (`run`), `:474` (`sdk`), `:644` (`acp`) — the code's own comment at `:304` says the index is a process-private `:memory:` index, and **no caller passes a `dbPath`** (`packages/session-query/src/file-backed.ts:238` defaults it to `:memory:`), so the process exit **is** the lifetime boundary and a close would have **no observable effect** on any shipped path. Two things this row must carry: the function is a **process-global destroyer** (`packages/session-query/src/index.ts:51-56` closes a module-level `Set` of connections plus the file-backed ones, so any caller reaching it closes every other caller's handles too), and the honest long-term fix is a **per-instance `close()`** — which adds a member to the published `SessionQuery` interface (`:43-46`) and is therefore **M**: a public-surface change with its own spec, not a wiring gap.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §未竟事項 1 — core-session migrate() is a no-op",
+      "reason": "It is declared a placeholder in its own body — `packages/core-session/src/index.ts:686` \"M1: only v1 exists; migrate-on-continue is a no-op placeholder for future versions\" — and with `CURRENT_FORMAT_VERSION` at 1 there is no v0 to migrate; note for Phase B that it also has **zero call sites**, so the live choice is really \"un-export or delete the seam\" rather than \"keep it\".",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §未竟事項 2 — goal round admission unimplemented",
+      "reason": "`packages/goal/src/index.ts:9-10` says \"no round admission (DSH's `roundsStarted` — explicitly out of scope)\", and `:36-43` keeps `round?: number` as wire vocabulary precisely so that the UI/host contract does not break when admission lands; `packages/goal/test/goal.test.ts:37` pins it as `undefined`.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §未竟事項 3 — session-query SearchHit.time is index time",
+      "reason": "The field's own doc comment declares the semantics and the reason — `packages/session-query/src/index.ts:13-17` \"INDEX-REBUILD time (epoch ms), NOT the event's time. The JSONL log carries no per-event timestamp, so the file-backed index can only …\" — so the value is documented as what it is rather than silently mislabelled.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §未竟事項 5 — workspace defers delete/insertBefore/follow/status",
+      "reason": "`packages/workspace/src/index.ts:30-42` records the deferral as a controller ruling (\"Deliberately DEFERRED (Task 3.1 controller ruling — seams noted in code, not implemented)\") with a per-item reason, and each seam is anchored in the code rather than left implicit.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §未竟事項 6 — lsp forces one server per run",
+      "reason": "`packages/lsp/src/scheduler.ts:20-24` declares it an explicit M18 non-goal and ships the refusal string \"lsp: only one LSP server per run is supported (M18 core)\", so the limit is announced rather than silent.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "sandbox spec §7 item 3 — allowed-once consumed by a call that fails for an unrelated reason",
+      "reason": "The spec records this as \"記錄而不修\" (recorded, not fixed) with its reason — reordering the guard would change **which** refusal a granted-but-invalid call returns — and the ordering is deliberate in code: `packages/fs/src/index.ts:305` spends the grant before `:308`'s unrelated `old_string === \"\"` validation.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "CLI surface 2 — unknown subcommands not rejected",
+      "reason": "`apps/cli/src/index.ts:142-144` documents the fall-through as the intended grok-style default — \"a bare `i-harness` (or any non-subcommand first token) launches the TUI in the current folder\" — so rejecting unknown subcommands would remove a documented behaviour; the accepted cost is that a mistyped subcommand opens the TUI instead of erroring.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "D1 §跨包主線 8 item 4 — mountPreset declared and exported with no production caller",
+      "reason": "**Deliberately out of scope — freeze/replacement.** The finding is real: `packages/preset/src/index.ts:30` declares and exports it and no production file calls it — the only production mention outside the declaring module is a comment in `packages/tui/src/views/light-personas.ts:2` (§7 item 4). That file is `packages/tui`, one of the four frontend packages frozen and slated for replacement (Q6), so the only in-repo evidence of a consumer is code being removed, and whether this export is wanted cannot be decided against it. `packages/preset` itself stays in scope; what is deferred is the decision, and it moves to the replacement frontend: its persona/catalog surface either calls `mountPreset` (which clears the row) or the export is dropped as dead.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "sandbox spec §7 item 1 — shell runtime denial unclassified (classifyDenial) (§4.3 item 1)",
+      "reason": "`by-design` on the parked ruling at `docs/handoff/what-the-design-does-not-answer.md:71` — *\"**Ruling: document, do not implement.**\"* — and the reason is structural rather than a preference: a real OS denial inside a confined shell reaches the model as an ordinary non-zero exit plus raw stderr (`denialSignatures` is read in production only inside the test-only classifier, `packages/sandbox-local/src/runner-failures.ts:26`), and classifying it means carrying the answer out of the platform backend through the **`@i-harness/sandbox`** seam — where `runner-failures.ts:1-3` says the other classification helpers already live, while `classifyDenial` stayed behind — into `exec`'s `ExecResult` **and** then into the model-visible shell payload. That is new surface on two published shapes at once, i.e. an **M-shaped spec**; the follow-up is \"write that spec\", not \"wire this function\".",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "sandbox spec §7 item 2 — exitCode: -1 is six-valued (§4.3 item 2)",
+      "reason": "`by-design` on **C10** (`docs/handoff/what-the-design-does-not-answer.md:49`), which records the **six** meanings and the mitigation that does hold — both sandbox refusals carry parseable JSON in `stderr`, and bash-absent is the only prose case — **and not, as this cell said until this correction, that the sentinel is \"deliberate\":** C10 rules nothing intentional, so \"un-disambiguated\" is what the source supports and \"deliberate\" is not — the `by-design` disposition is this document's adjudication on top of C10's record, not a quotation of it; the site list is corrected in §4.3 item 2, where `packages/shell/src/index.ts:372` turns out to be the **bash-absent** branch rather than a `kind: \"refused\"` refusal (that is `:217`, and its discriminator is internal — `:380` returns the bare refusal object), and `packages/exec/src/index.ts:210` (`child.on(\"error\", …)`) was missing from the baseline entirely. Counting **meanings** rather than sites gives **at least eight**, because `exec/src/index.ts:148-150` documents a deliberate, indistinguishable `-1` for an external abort (the same value a signal death produces). Follow-up: the disambiguation is **M** for the same reason as `classifyDenial` — it widens a result type every surface consumes before it can change what the model is told.",
+      "dated": "2026-09-15"
+    },
+    {
+      "item": "CLI surface 3 — no --flag=value support (§4.4 item 3)",
+      "reason": "`by-design` — **deliberately unsupported**, because partial grammar is worse than none: the value-taking flags are read through **nine** in-scope sites before the frozen TUI's parser is even reached — five lookups on the `run` argv (`apps/cli/src/index.ts:208`, `:247-250`), a **second** pass over that same argv which re-derives which tokens are flags and which are values (`:331-335` — the duplication Task 3's fix had to reconcile), and `apps/cli/src/sessions.ts:53-54`, which is **seven**, **plus** `--session-dir` again on the `sdk` and `acp` paths (`:455`, `:625`), which makes **nine**. **Corrected here by re-measurement:** this cell said \"seven\" while enumerating all nine; the seven is the count *before* the two subcommand parsers, and the plan this number was inherited from (`docs/superpowers/plans/2026-09-15-m1-phase-b-wire-the-unwired.md:573`) stops at seven. The last parser in the chain is the frozen TUI's (`apps/tui/src/index.ts:441-456`), which is reached only after all nine. Demand is zero: no caller, test or argv in the tree uses the form, and no spec or report asks for it. **The obligation this declaration carries:** Task 3 made the form **fail loud** as an unknown flag, so `--model=x` can no longer be silently swallowed into the prompt. The related grammar narrowing is recorded as grammar in §4.4 item 3 — any `run` task token beginning with a dash is reserved and rejected with exit 1, and there is no `--` end-of-flags separator — and adding one is new argv grammar, i.e. the **M** follow-up.",
+      "dated": "2026-09-15"
+    }
+  ]
+}

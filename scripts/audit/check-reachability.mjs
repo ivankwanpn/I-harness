@@ -976,6 +976,22 @@ SELF_TEST_CASES.push({
   },
 })
 
+// The allowlist is only legitimate with BOTH a date and a reason: the roadmap's
+// completion definition (backend-polish-roadmap-design.md:125, "基線與 allowlist
+// 都帶日期與理由") requires it, and an undated exemption is indistinguishable from
+// one nobody remembers granting. Mutation this case fails on: deleting the
+// `staleAllowlistEntries` filter -- making it accept any entry, e.g. `return []`
+// or `filter(() => false)` -- which would silently admit an exemption no one
+// remembers granting, and the gate would pass on it.
+SELF_TEST_CASES.push({
+  name: "gate: an allowlist entry with no date or reason is reported, not accepted",
+  expect: ["unpushed-capability\tguardian"],
+  run() {
+    const allowlist = { entries: [{ key: "unpushed-capability\tguardian" }] }
+    return staleAllowlistEntries(allowlist)
+  },
+})
+
 function runSelfTest() {
   const root = buildFixture()
   let ok = 0
@@ -1097,6 +1113,17 @@ function allowlistKey(k) {
   return k.split("\t").slice(0, 2).join("\t")
 }
 
+/** An allowlist entry is only legitimate with BOTH a date and a reason: the
+ *  roadmap's completion definition requires it, and an undated exemption is
+ *  indistinguishable from one nobody remembers granting. Returns the keys that
+ *  fail that test, so `--gate` can print them and the self-test can pin it. */
+function staleAllowlistEntries(allowlist) {
+  return (allowlist?.entries ?? [])
+    .filter((e) => !e.dated || !e.reason || String(e.reason).trim() === "")
+    .map((e) => e.key)
+    .sort()
+}
+
 // ----------------------------------------------------------------------- main
 /** `statSync` that answers instead of throwing, so a missing path and a path
  *  that is not a directory are both simply "not a directory". */
@@ -1177,6 +1204,19 @@ function main() {
       // means "new rows". Escaping as an uncaught throw printed a stack trace
       // AND exited 1, which a caller reads as a failed scan.
       console.error(err.message)
+      return 2
+    }
+    // A dated, reasoned entry is the price of an exemption, and this check runs
+    // BEFORE `gateDiff` exempts anything: an entry missing either field is
+    // refused rather than honoured, because a stale exemption that keeps
+    // exempting is exactly the silent, unremembered exception the allowlist
+    // exists to prevent. Exit 2 matches the malformed-allowlist refusal above --
+    // this is a configuration error, never the "new rows" result the caller
+    // reads from exit 1.
+    const stale = staleAllowlistEntries(allowlist)
+    if (stale.length > 0) {
+      console.error(`reachability: ${stale.length} allowlist entr(ies) without a date or reason -- refusing to gate on them:`)
+      for (const k of stale) console.error(`  stale ${k}`)
       return 2
     }
     const { added, removed } = gateDiff(current, baseline, allowlist)

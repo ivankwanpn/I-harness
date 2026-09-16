@@ -775,10 +775,12 @@ at all, and not list items either, so they belong here rather than in §6.2.
 | sandbox spec §7 item 2 | `exitCode: -1` is six-valued (§4.3 item 2) | `by-design` on **C10** (`docs/handoff/what-the-design-does-not-answer.md:49`), which records the **six** meanings and the mitigation that does hold — both sandbox refusals carry parseable JSON in `stderr`, and bash-absent is the only prose case — **and not, as this cell said until this correction, that the sentinel is "deliberate":** C10 rules nothing intentional, so "un-disambiguated" is what the source supports and "deliberate" is not — the `by-design` disposition is this document's adjudication on top of C10's record, not a quotation of it; the site list is corrected in §4.3 item 2, where `packages/shell/src/index.ts:372` turns out to be the **bash-absent** branch rather than a `kind: "refused"` refusal (that is `:217`, and its discriminator is internal — `:380` returns the bare refusal object), and `packages/exec/src/index.ts:210` (`child.on("error", …)`) was missing from the baseline entirely. Counting **meanings** rather than sites gives **at least eight**, because `exec/src/index.ts:148-150` documents a deliberate, indistinguishable `-1` for an external abort (the same value a signal death produces). Follow-up: the disambiguation is **M** for the same reason as `classifyDenial` — it widens a result type every surface consumes before it can change what the model is told. |
 | CLI surface 3 | no `--flag=value` support (§4.4 item 3) | `by-design` — **deliberately unsupported**, because partial grammar is worse than none: the value-taking flags are read through **nine** in-scope sites before the frozen TUI's parser is even reached — five lookups on the `run` argv (`apps/cli/src/index.ts:208`, `:247-250`), a **second** pass over that same argv which re-derives which tokens are flags and which are values (`:331-335` — the duplication Task 3's fix had to reconcile), and `apps/cli/src/sessions.ts:53-54`, which is **seven**, **plus** `--session-dir` again on the `sdk` and `acp` paths (`:455`, `:625`), which makes **nine**. **Corrected here by re-measurement:** this cell said "seven" while enumerating all nine; the seven is the count *before* the two subcommand parsers, and the plan this number was inherited from (`docs/superpowers/plans/2026-09-15-m1-phase-b-wire-the-unwired.md:573`) stops at seven. The last parser in the chain is the frozen TUI's (`apps/tui/src/index.ts:441-456`), which is reached only after all nine. Demand is zero: no caller, test or argv in the tree uses the form, and no spec or report asks for it. **The obligation this declaration carries:** Task 3 made the form **fail loud** as an unknown flag, so `--model=x` can no longer be silently swallowed into the prompt. The related grammar narrowing is recorded as grammar in §4.4 item 3 — any `run` task token beginning with a dash is reserved and rejected with exit 1, and there is no `--` end-of-flags separator — and adding one is new argv grammar, i.e. the **M** follow-up. |
 
-### 6.3 Proposed class-level rule — **not in force**, M2 must decide
+### 6.3 Proposed class-level rule — **accepted by M2 on 2026-09-16** (as written: **not in force**, M2 must decide)
 
 **Status: a proposal. Nothing in this subsection is an allowlist entry today.** It is recorded so the
 decision is made once, explicitly, rather than 17 times quietly.
+**M2 decided on 2026-09-16: ACCEPTED and in force, as 17 explicit entries — see the decision note at the
+end of this subsection.**
 
 **Proposed: `@i-harness/sdk`: 17 `unused-export` rows, all with evidence `packages/sdk/src/index.ts`.**
 Reason sentence: the SDK package is the **embedder-facing public surface**, so its exports are
@@ -788,6 +790,29 @@ rather than an orphan — which is exactly the case roadmap §3.M1 names ("`sdk`
 allowlist becomes **4 + 17 = 21 findings**, alongside §6.1's **2** adjacent rows and §6.2's **13**
 source-list rows — **36 entries** in all; if M2 rejects it, all 17 stay in the ratchet's baseline
 population.
+
+> **M2 decision note (Task 3, 2026-09-16): the class rule above is ACCEPTED and IN FORCE**, recorded as
+> **17 explicit entries** — one per measured `unused-export` row under `@i-harness/sdk#`, every one with
+> evidence `packages/sdk/src/index.ts` (re-measured 2026-09-16: exactly 17) — in
+> `scripts/audit/reachability-allowlist.json`, each carrying the reason sentence above and a `source`
+> naming this subsection. A pattern or wildcard rule was **rejected**: it would need new matching grammar
+> in `gateDiff`, which no milestone asked for. The roadmap sanction is
+> `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:120` — *"另需一份**帶理由的
+> allowlist**（`sdk` 的公開 API 是刻意的），否則閘門會被例外淹沒而失去意義"* — with M1's completion
+> definition at `:101` naming the same case.
+>
+> **Cost, stated so the decision can be reviewed:** a genuinely dead `sdk` export will not fail the gate.
+> That is bounded and declared, because an allowlist entry exempts a row from **failing**, never from
+> being **scanned** or **printed**: `--digest` and the human table still report all 523 rows, so the
+> information survives and only the failure is waived. Measured 2026-09-16 with the file seeded:
+> `--digest` unchanged at `5acf81aaf9733c88fbcb7471fcef00247c8c24804276cdcdcbfae0ffeab97786` and the count
+> unchanged at `731 ts files, 523 finding(s)`.
+>
+> **The "36 entries" arithmetic above counts dispositions, not machine keys.** A machine allowlist needs
+> `entries` whose keys match live rows, so §6.1's two *"no row surfaced"* rows and §6.2's eleven
+> row-less items cannot be keys at all. The measured split is **24 `entries` + 13 `noRow` = 37 keys for
+> 36 dispositions**, the extra key being §6.2's *spill pair*, which adjudicates two live rows
+> (`createUnifiedSpillStore` and `gcSpillStore`) under one disposition.
 
 ### 6.4 What is deliberately **not** on the allowlist
 
@@ -809,7 +834,10 @@ population.
 - **None of the 507 unadjudicated class-1 rows is allowlisted**, and the 17 `@i-harness/sdk` rows are
   among those 507 — §6.3 only *proposes* allowlisting them and is not in force (see its status line).
   Absence from this allowlist is not a claim that a row is a defect; it is a claim that nobody has
-  looked yet.
+  looked yet. **Corrected by M2 Task 3 (2026-09-16):** §6.3 was **accepted**, so those 17 rows **are** now
+  allowlisted; the remaining class-1 rows are not. (The counts in this bullet are also stale against the
+  current tree, which holds **510** `unused-export` rows, not 512/507 — re-measured 2026-09-16; the drift
+  predates this task and is recorded rather than silently rewritten.)
 - The **26 bucket-B rows of §5 are not allowlist candidates.** They are live symbols whose `export`
   keyword has no consumer; the fix is to narrow the declaration, not to grant an exception.
 - The `plugins.*` / `language` / `fontSize` / `searchBackend` / `onboarding.welcomeNoticeVersion`
@@ -821,6 +849,19 @@ population.
   `mountPreset` are **not** in this list and are not `still-holds`: they are the two rows allowlisted in
   §6.2 as **deliberately out of scope** by the freeze/replacement decision (§4) — which is a scope
   judgement, not a claim that either is declared deliberate in the tree.
+- **Corrected by M2 Task 3 (2026-09-16) by re-measurement: `mountPreset` is not, and cannot be, an
+  allowlist *entry* — so both cells above that call it one are wrong.** `packages/preset/src/index.ts:30`
+  does declare and export `mountPreset` and no production file calls it, but the scanner emits **no**
+  `unused-export` `@i-harness/preset#mountPreset` row at all: the package's only row is
+  `@i-harness/preset#ToolProvider` (measured 2026-09-16). The sole production mention is a **comment** at
+  `packages/tui/src/views/light-personas.ts:2`, and `scanUnusedExports` (`check-reachability.mjs:368`) tests
+  the raw file text, so the comment reads as a mention and suppresses the row. That is the tool's known
+  file-level false negative — the finding is real — but it means a machine key for it would **exempt
+  nothing**. The allowlist therefore files it under `noRow` with its reason preserved. Consequently §6.4's
+  "the 6 rows of §6.1 … i.e. 19 entries" and this bullet's "they are the two rows allowlisted in §6.2" both
+  count **dispositions, not keys**: the measured split is **24 `entries` + 13 `noRow`** for 36 dispositions
+  (see the §6.3 decision note). `--yes` **is** a live row — `unread-flag<TAB>--yes<TAB>apps/tui/src/index.ts`,
+  the tool's only `unread-flag` row — and is a real entry; `mountPreset` is not.
 
 ---
 
