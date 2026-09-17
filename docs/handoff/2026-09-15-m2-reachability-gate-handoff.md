@@ -181,10 +181,11 @@ Two further limits worth stating plainly:
    worktree copies of `reachability-baseline.json` and `reachability-allowlist.json` are CRLF on disk
    (measured on 2026-09-17 at `1ac091e`: the baseline is 480 CRLF of 480 newlines on disk; the committed blob
    is LF-only, which is `core.autocrlf=true` with no `.gitattributes`). What that costs, **measured in a
-   scratch repository with the same configuration**: `git status` reports the file modified, and both
-   `git status` and `git diff` print a one-line warning on **stderr** — *"in the working copy of '…', LF will
-   be replaced by CRLF the next time Git touches it"* — while `git diff`, `git diff --stat` and
-   `git diff --numstat` write **nothing to stdout** (measured: 0 bytes) and `git diff --quiet` exits **0**.
+   scratch repository with the same configuration**: `git status` reports the file modified and writes
+   **nothing to stderr** (measured: 0 bytes), while the *diff* family — `git diff`, `git diff --stat`,
+   `git diff --numstat` and `git diff --quiet` — each print a one-line warning on **stderr** — *"in the working
+   copy of '…', LF will be replaced by CRLF the next time Git touches it"* — and the three content forms write
+   **nothing to stdout** (measured: 0 bytes), with `--quiet` exiting **0**.
    `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a diff's content even though the
    worktree file differs from its blob on every line; the only signal is that stderr warning. `git add` then
    clears the status and stages nothing, and `git add --renormalize` normalises only the **index** — it leaves
