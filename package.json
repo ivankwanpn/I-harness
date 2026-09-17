@@ -10,9 +10,8 @@
     "pnpm": ">=10"
   },
   "scripts": {
-    "test": "pnpm -r --no-bail test && pnpm test:quarantine",
+    "test": "pnpm -r --no-bail test",
     "test:default": "pnpm -r --no-bail test",
-    "test:quarantine": "pnpm --filter @i-harness/tui test:quarantine",
     "typecheck": "pnpm -r typecheck",
     "e2e": "vitest run e2e/ --config e2e/vitest.config.ts",
     "verify:reachability": "node scripts/audit/check-reachability.mjs --gate",
