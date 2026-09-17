@@ -206,38 +206,63 @@ createSessionAssembly({
 **`unsupported` 機制照用**：`color`、`effort`、`initialPrompt`、`model`
 都是「我們不履行」的欄位，**記錄而不是丟掉**（`commands.ts` 的既有先例）。
 
-### 3.3 `toSubagentRoles` —— registry 端的結構化轉換
+### 3.3 `toSubagentRoles` —— registry 端的結構化轉換 —— **已落地（含一處設計修正）**
 
 與 `mount.ts:toMcpServerConfigs` 同一個手法：**逐欄位構造，不 import 任何型別。**
 
 ```ts
-interface AgentDescriptor {
-  name: string
-  description: string
-  systemPrompt: string          // = body
-  tools?: string[]              // 外掛宣告的，CC 詞彙
-  unsupported?: string[]
-}
+// packages/plugin-registry/src/mount.ts
+toSubagentRoles(descriptors, { allowedTools }): { roles, unresolved }
 ```
 
-轉換規則：
+> **⚠️ 設計修正：`defaultTools` 被拿掉了，換成單一的 `allowedTools`。**
+>
+> 第一版寫「`tools` 缺席 → 用宿主的 `defaultTools`；存在 → 對照表 + 丟掉」。量了才發現
+> **那是兩個清單，也就是兩條通往「宿主沒允許的工具」的路**。
+>
+> 改成**一個** `allowedTools`（宿主的許可清單），於是：
+> - 它是輸出裡工具名的**唯一**來源；
+> - 「缺席 = 繼承」直接拿 `allowedTools`，而**繼承許可清單不可能超過它**；
+> - **安全方向變成結構性的，不是文件性的** —— 沒有第二條路可以走。
+>
+> 這比第一版好，而好的地方正是「少了一個概念」。
 
-1. **`tools` 缺席**（9/35）→ 用宿主提供的 `defaultTools`，**不是** registry 的全集。
-   外掛不該因為「沒說」就拿到宿主的所有工具。
-2. **`tools` 存在** → 逐個查**明示對照表**（§3.4）；對得上的給，**對不上的丟掉並記錄**。
-   - 方向必須是**只縮不擴**：丟掉一個工具 = agent 少了能力 = 看得見的失敗。
+轉換規則（**已實作**）：
+
+1. **`tools` 缺席**（9/35）→ 繼承 `allowedTools`。**`tools: []` 是「不要工具」，維持空的**
+   —— 兩者是不同的事，描述子把它們分開。
+2. **`tools` 存在** → 逐個對照（§3.4）；對得上的給，**對不上的丟掉並記錄**。
+   - 方向是**只縮不擴**：丟掉一個工具 = agent 少了能力 = 看得見的失敗。
    - 猜一個對應（`KillShell → stop_task`）是**給錯權限**，比丟掉糟。
 3. **帶作用域參數的條目**（`Agent(x:y)`、`Bash(git:*)`）→ **不是工具名**，一律丟掉並記錄。
    我們沒有 per-tool 參數範圍這種東西，假裝有就是說謊。
-4. **`model` 不履行** —— 與 §4.2 of the mount spec 一致（v1 忽略 `model`），
-   但**記錄**。理由不只是極簡：`SubagentRole.model` 帶 `provider`，
+4. **`model` 完全不帶** —— 理由不只是極簡：`SubagentRole.model` 帶 `provider`，
    而** provider 是宿主的**（與 `blockedTools` / `auth` / `roots` 同一條邊界）。
-   `builtinRoles()` 全部不帶 model，繼承 parent —— 外掛 agent 也一樣。
-5. **名字衝突** → **跳過並記錄**，永不覆蓋。先例有兩個：
-   `pluginMcp` 是逐個掛載 + `Map<string, boolean>` 記錄成敗；
-   工具註冊是 `if (!parentRegistry.get(tool.name))` 跳過。**兩者都選了跳過，不是覆蓋。**
+   與 §4.2 of the mount spec 一致（v1 忽略 `model`）。
+5. **名字衝突** → **跳過並記錄**，永不覆蓋。這在組裝端（`572ef691`），不在轉換端。
 
-### 3.4 對照表 —— 由 §1.4 的量測決定，不是猜的
+**`unresolved` 帶 `reason`，而且那個欄位是必要的，不是裝飾。**
+原本只記 `{role, tool}`；但一個作用域條目**就算沒有那條分支也一樣會**在許可清單查詢失敗，
+所以「拿掉作用域分支」不會被任何斷言抓到。加了 `reason` 之後兩個 mutation 都轉紅
+（見 §4.4），而且對讀訊息的人來說本來就是兩件不同的事：
+**「我們沒實作這個形式」** vs **「這是真的工具，但這個宿主不許外掛用」**。
+
+### 3.4 對照表 —— 由 §1.4 的量測決定，不是猜的 —— **已落地**
+
+**機制比第一版想的簡單。** 第一版打算用一張完整的明示表；實作時發現
+**兩邊都正規化（小寫、去掉 `-`/`_`）就會自己對上大半**：
+
+```
+Read→read  Glob→glob  Grep→grep  Bash→bash  Write→write  Edit→edit
+WebFetch→webfetch  WebSearch→websearch  TodoWrite→todowrite=todo_write
+```
+
+所以只剩**三個大小寫折疊到不了的重命名**（`RENAMES`）：
+`LS → list_dir`、`AskUserQuestion → ask_user_input`、`Agent → spawn_agent`。
+
+**這也解釋了為什麼 `Task*` 家族不會意外對上**：`TaskStop` 正規化成 `taskstop`，
+而 `stop_task` 是 `stoptask` —— 不同。`TaskGet`、`KillShell`、`BashOutput` 同理。
+**結構上就不會誤配，不需要為它們寫例外。**
 
 **明示對應（意圖無歧義）：**
 
@@ -305,17 +330,25 @@ export type Capability = "skills" | "commands" | "mcp" | "agents"
 —— **同時餵進我們自己的詞彙與 Claude Code 的詞彙**，
 所以它釘住的不只是「有沒有回報」，還有**兩個詞彙確實不相等**這件事。
 
-### 4.2 待落地
+### 4.2 已落地：四個階段，全部紅先
 
-| 測試 | 先紅於 |
-|---|---|
-| `parseAgentMarkdown` 對 `description: \|` 給出**多行**描述，且**不**產生 `Context`/`user`/`assistant` 幻影鍵 | 解析器只吃單行；幻影鍵會進 `unsupported` |
-| `describeAgents` 讀 4 種 `tools` 形式（逗號／JSON 陣列／作用域／缺席） | `describeAgents` 不存在 |
-| `toSubagentRoles` 把 `LS` 映到 `list_dir`，**且**把 `NotebookRead` 丟掉並記錄 | 轉換不存在 |
-| `toSubagentRoles` **不**讓外掛資料設定 `model` | 邊界不存在 |
-| 名稱衝突 → 跳過並記錄，**builtin 不被覆蓋** | 同上 |
-| `tools` 缺席 → 得到的是宿主提供的預設，**不是** registry 全集 | 同上 |
-| 組裝註冊了外掛角色，且 `spawn_agent` 真的解析到它 | 接縫不存在（見 §4.3） |
+| 階段 | 測試檔 | 紅在哪 |
+|---|---|---|
+| 區塊純量 | `test/command-frontmatter.test.ts` | **紅在缺陷本身**：`expected '\|' to be 'first line\nsecond line'`、`expected ['Context','user','model'] to deeply equal ['model']` |
+| agent 解析 | `test/agent-frontmatter.test.ts` | `describeAgents`／`parseAgentMarkdown` 不存在 → 先補空殼，再紅在斷言 |
+| 能力維度 | `test/install.test.ts`、`test/registry.test.ts`、`test/evaluate.test.ts` | `agents` 欄位不存在；且**只有 agents 的外掛無法 enable** |
+| 轉換 | `test/mount.test.ts` | 同上 |
+| 宿主接線 | `apps/cli/test/plugin-mount.test.ts` | 有外掛時 exit 1；**對照組**（無外掛）exit ≠ 0 帶 `unknown role` |
+
+**三個「測不到東西」的測試，是三個 mutation 逼出來的** —— 每一個都寫成「空殼也能過」：
+
+1. `name` 的優先序：32 個真檔案的名字都等於檔名，語料分不出兩條規則 → 補一個合成的相異案例。
+2. `model` 不被履行：空殼回傳 `[]` 也過 → 補上「角色本身有落地」的斷言。
+3. `unresolved` 的 `reason`：拿掉作用域分支照樣過 → 見 §3.3，加 `reason` 才讓分支可證。
+
+**還有一個是我自己的測試 bug，被對照組抓到**：`createMockClient` 用 `shift()`
+**消耗**腳本，我把同一個陣列餵給兩個案例 —— 對照組跑在耗盡的卡帶上、乾淨地 exit 0、
+**因為完全錯誤的理由而通過**。改成 factory。**對照組的價值就在這裡。**
 
 ### 4.3 已落地：§3.5 的接縫
 
@@ -349,8 +382,47 @@ export type Capability = "skills" | "commands" | "mcp" | "agents"
   而我們的 `HookHandlerSpec` **要求 `trust.sha256`，每次執行都重算比對，不符即 fail-closed deny**。
   **「第一次的信任錨點從哪來」在兩種格式之間沒有對應物** —— 那是設計問題，不是接線問題。
 - **`Agent(...)` / `Workflow(...)` 的作用域語意。** 它們指的是**同一個外掛內的其他元件**，
-  那是外掛內部的一張圖，我們沒有。§3.4 先丟掉並記錄。
+  那是外掛內部的一張圖，我們沒有。**處置已定：丟掉，並以 `reason` 明確記成
+  「我們沒實作這個形式」**（§3.3）—— 與「這個工具不許外掛用」分開記，因為它們是
+  不同的問題。真正的語意留給有那張圖的時候。
 - **`description` 的長度。** 4 個區塊純量的描述是 30 行以上、內含 `<example>` XML。
   它們是**寫給模型看的**，塞進 subagent 清單會很貴。要不要截斷是產品決定，本設計不做。
 - **只量了一個快照、35 個檔案。** 另一個 marketplace（`glincker-marketplace`）的
   commit 停在 2025-11-13，沒有納入。**重測而不是引用。**
+
+---
+
+## 6. 結果（`m65` @ `1e211aa0`）
+
+四個 commit，全部已推：
+
+| commit | 內容 |
+|---|---|
+| `50db8463` | 區塊純量 —— 共用讀取器看得懂 `description: \|` |
+| `5298f9bd` | registry 端：`agents.ts`、`frontmatter.ts`、第四個能力維度 |
+| `e31660e3` | `toSubagentRoles` —— 轉換與安全方向 |
+| `1e211aa0` | 宿主接線 —— `run.ts` 餵給組裝 |
+
+**驗證，全部重測過：**
+
+| | |
+|---|---|
+| `pnpm -r --no-bail test` | **66 Done / 0 Failed** |
+| `pnpm -r typecheck` | exit 0 |
+| `--gate` / `--self-test` | exit 0 PASS · 36/36 |
+| findings | **455 → 455** |
+| digest | **`ed683569…` 不變** |
+| ts 檔數 | 473 → 476 |
+
+**最後兩列是這份設計最重要的一句話。** 三個新檔案、一整條新路徑，
+而**列集合與 digest 完全沒動** —— 意思是這條路上**沒有新增任何沒有被引用的名字**。
+這是儀器量出來的，不是 commit message 裡宣稱的。
+
+（而且過程中它**抓到我一次**：我從套件 index 轉出了 `MountedSubagentRole` 與
+`UnresolvedTool`，兩個沒有任何消費者命名的型別 —— 立刻多兩列 NEW。已移除。）
+
+**真實檔案的驗證**（不是 fixture）：35 個 `agents/*.md` 全部解析，
+**0 個幻影鍵、0 個被截斷的描述**（實作前是 4 與 4）。
+
+**還沒做的**：`hooks/`（§5 第一條）—— 它卡在一個**沒有對應物**的問題上
+（第一次的信任錨點從哪來），那是設計問題，不是這條線的剩餘工作。
