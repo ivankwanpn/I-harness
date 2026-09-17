@@ -147,7 +147,7 @@ for (const name of opts.role.tools) {
 
 ### 2.3 接縫：宿主根本拿不到 `RoleRegistry`
 
-`createSessionAssembly` 的回傳（`packages/session-executor/src/assembly.ts:837-882`）是：
+`createSessionAssembly` 的回傳（**修補前**；`packages/session-executor/src/assembly.ts` 的 return 區塊）：
 
 ```
 ctx · agent · session · sessionId? · model · modelLabel? · inbox · telemetry?
@@ -168,6 +168,13 @@ killJob · tasks() · cancelTask · compactNow · pluginMcpResults · rewind? ·
 
 **這與 `SkillsMountConfig.extraDirs` 是同一種形狀**：不是「沒接線」，
 是**接線的另一端不存在**。當時的處置是先建那一端（`a1d46bba`），這裡也一樣。
+
+**已修（本設計的第二步，早於 registry 端）**：`572ef691` 加了 `pluginAgents` 選項
+與 `pluginAgentResults` 回傳面，形狀照 `pluginMcp`。設計與兩個 mutation 見 §3.5 / §4.3。
+
+> **行號引註不要照抄。** 這一節第一版寫 `:837-882` / `:707` / `:738`，
+> 把接縫建起來之後全部位移了。這個 repo 的規矩是**重測而不是引用** ——
+> 要定位請自己 grep，不要相信這裡的數字。
 
 ---
 
@@ -252,19 +259,28 @@ interface AgentDescriptor {
 **整個 `Task*` 家族要嘛一起對應、要嘛一起不對應** —— 只對應其中幾個是半套的對應，
 而半套比不套更難發現。這一條留給後續有證據時再開。
 
-### 3.5 組裝：`pluginAgents` 選項
+### 3.5 組裝：`pluginAgents` 選項 —— **已落地**
 
 ```ts
 // packages/session-executor/src/assembly.ts
-pluginAgents?: SubagentRole[]         // 已由宿主轉換完成
+pluginAgents?: SubagentRole[]                        // 已由宿主轉換完成
+pluginAgentResults: Map<string, boolean>             // 回傳面，與 pluginMcpResults 對稱
 ```
 
-在 `registerSubagent` 之後、`subagent.ready` / guardian / team **之前**註冊
-（三者都讀 roles）。逐個 `try { roles.register(role) } catch { 記錄 false }` ——
-`RoleRegistry.register` 對重複名**會丟**，那個 throw 就是「跳過」的實作，
-不需要新 API。
+資料進、結果出，**不是**把 registry 交出去 —— 交出去連 `remove()` 一起交出去了，
+外掛就能刪掉 builtin 角色。形狀刻意照 `pluginMcp`。
 
-回傳面加 `pluginAgentResults: Map<string, boolean>`，與 `pluginMcpResults` 完全對稱。
+> **順序的理由，第一版寫錯過，記在這裡。**
+> 第一版寫「必須在 guardian / team 掛載**之前**，因為它們在掛載時捕捉 roles」。
+> **量測後是錯的**：兩者拿到的是**同一個 registry 物件**，晚註冊它們照樣讀得到。
+> 真正有理由的是 `registerSubagent` 本身 —— 它是**還原快照**的地方，
+> 也是 `persistentRoleRegistry` **換掉 `roles`** 的地方。所以在它**之後**註冊意味著：
+> 這個角色會被持久化（在包裝器裝上之前註冊的角色永遠不會），
+> 而且**永遠不會蓋掉一個還原回來的、使用者編輯過的角色**。
+> 一個看起來很合理的理由，量了才發現不成立 —— 這種理由不該留在註解裡。
+
+碰撞用 `get`-then-register（照抄上面工具迴圈），**不是** `try/catch`：
+`RoleRegistry.register` 對重複名會丟，但那個 throw 不該當控制流用。
 
 ### 3.6 `Capability` 從三個成員長到四個
 
@@ -299,7 +315,23 @@ export type Capability = "skills" | "commands" | "mcp" | "agents"
 | `toSubagentRoles` **不**讓外掛資料設定 `model` | 邊界不存在 |
 | 名稱衝突 → 跳過並記錄，**builtin 不被覆蓋** | 同上 |
 | `tools` 缺席 → 得到的是宿主提供的預設，**不是** registry 全集 | 同上 |
-| 組裝註冊了外掛角色，且它**在 guardian / team 掛載之前**就在 `roles` 裡 | 接縫不存在；順序是新的 |
+| 組裝註冊了外掛角色，且 `spawn_agent` 真的解析到它 | 接縫不存在（見 §4.3） |
+
+### 4.3 已落地：§3.5 的接縫
+
+`packages/session-executor/test/assembly.test.ts` 的 `pluginAgents` 三條。
+**證明是兩個 mutation，因為兩條斷言抓的是不同的謊**：
+
+| Mutation | 轉紅在 |
+|---|---|
+| 讓外掛**取代** builtin，並回報成功 | 結果 map：`expected [ [ 'general', true ] ] to deeply equal [ [ 'general', false ] ]` |
+| 取代它，但**照樣回報「已跳過」** | **子 agent 的 systemPrompt**：`expected true to be false` |
+
+第二條是關鍵：**「誠實地回報一個不誠實的掛載」還是要被抓到** ——
+只斷言那張 map 的話，一個會說謊的實作只要謊報得對就通過了。
+
+對照組是**同一個 fixture 拿掉選項**：那一輪會 **reject** 在
+`unknown role: code-simplifier`，所以是**選項**造成了差別，不是斷言剛好成立。
 
 **Mutation proof（雙向）**：
 - 把區塊純量處理拿掉 → 第一條必須轉紅
