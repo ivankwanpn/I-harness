@@ -74,11 +74,35 @@ export interface CommandDescriptor {
 
 /** The runtime surface enable() produces and the host consumes on every agent
  * build: materialized skill dirs (read-only overlays), the re-keyed MCP config
- * (`plugin:<id>:<server>` keys) and the markdown command descriptors. */
+ * (`plugin:<id>:<server>` keys), the markdown command descriptors and the
+ * markdown subagent descriptors. */
 export interface RuntimeInputs {
   skillDirs: string[]
   mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE>
   commandDescriptors: CommandDescriptor[]
+  agentDescriptors: AgentDescriptor[]
+}
+
+/** One subagent discovered in a plugin's agents/*.md (name = the frontmatter
+ * `name`, falling back to the file name). The body IS the system prompt.
+ *
+ * `tools` is reported VERBATIM — the names stay exactly as the plugin wrote
+ * them (Claude Code's `Read`/`Glob`/`Grep` vocabulary), because the translation
+ * into this repo's registry belongs to the mount side and doing it here would
+ * make the descriptor stop saying what the file actually said. `undefined` means
+ * the file declared no `tools` key at all, which is "inherit" — a DIFFERENT
+ * thing from `[]`, which is "no tools", and the host resolves the two
+ * differently. */
+export interface AgentDescriptor {
+  name: string
+  description: string
+  systemPrompt: string
+  tools?: string[]
+  /** The declared model alias. Recorded, never honoured — see the mount side. */
+  model?: string
+  /** Frontmatter keys the agent parser saw but does NOT honour, in file order.
+   * Present only when non-empty. Same contract as CommandDescriptor.unsupported. */
+  unsupported?: string[]
 }
 
 /** One plugin as listed by catalog(): merged manifest metadata + registry state. */

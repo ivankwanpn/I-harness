@@ -29,6 +29,7 @@ import { existsSync, statSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { inspectCapabilities } from "./capability.ts"
+import { describeAgents } from "./agents.ts"
 import { describeCommands } from "./commands.ts"
 import {
   InstallError,
@@ -49,6 +50,7 @@ import {
 } from "./marketplaces.ts"
 import { loadState, loadStateSync, saveState } from "./state.ts"
 import type {
+  AgentDescriptor,
   CatalogPlugin,
   CommandConflict,
   CommandDescriptor,
@@ -406,9 +408,9 @@ export class PluginRegistry {
       throw new PluginArtifactError(`install directory is missing for ${JSON.stringify(id)} (${installPath})`)
     }
     const capabilities = inspectCapabilities(installPath)
-    if (!capabilities.skills && !capabilities.commands && !capabilities.mcp) {
+    if (!capabilities.skills && !capabilities.commands && !capabilities.mcp && !capabilities.agents) {
       throw new PluginArtifactError(
-        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/ or .mcp.json)`,
+        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/, agents/ or .mcp.json)`,
       )
     }
     const conflicts = this.computeConflicts(state, rec, installPath)
@@ -456,6 +458,7 @@ export class PluginRegistry {
     const skillDirs: string[] = []
     const mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE> = {}
     const commandDescriptors: CommandDescriptor[] = []
+    const agentDescriptors: AgentDescriptor[] = []
     for (const rec of enabled) {
       const skillDir = join(this.root, "skills", rec.id)
       if (existsSync(skillDir)) skillDirs.push(skillDir)
@@ -466,9 +469,15 @@ export class PluginRegistry {
         console.warn(`[plugin-registry] runtime: skipping MCP config of ${rec.id}: ${reason}`)
       }
       commandDescriptors.push(...this.effectiveDescriptors(rec))
+      // Agents are read from the INSTALLED copy, not a materialized overlay —
+      // unlike skills/ and commands/, which the host reads back by path. An
+      // agent becomes DATA at mount (a SubagentRole), so copying it into
+      // <root>/agents/<id> would create a tree nothing ever reads.
+      agentDescriptors.push(...describeAgents(join(this.root, rec.id, "agents")))
     }
     commandDescriptors.sort(byNameCompare)
-    return { skillDirs, mcpServerConfigs, commandDescriptors }
+    agentDescriptors.sort(byNameCompare)
+    return { skillDirs, mcpServerConfigs, commandDescriptors, agentDescriptors }
   }
 
   /**
