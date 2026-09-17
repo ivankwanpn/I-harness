@@ -95,6 +95,30 @@ describe("SessionWriteBehind", () => {
     expect(controller.hasWork).toBe(true) // retained for retry
   })
 
+  it("a failed background write is NOT retried automatically — it waits for an enqueue or a flush", async () => {
+    // The policy behind `automaticPaused`: a failing disk must not be hammered
+    // once per window, forever. The batch is RETAINED and a flush retries it
+    // (the case above says so) — but the automatic deadline goes quiet.
+    //
+    // Nothing pinned that NEGATIVELY until now. "Retries on flush" passes just
+    // as well against a controller that ALSO retries on every tick, so this is
+    // the assertion with teeth: re-arm the timer in the failure path and it is
+    // the only case in this file that goes red.
+    vi.useFakeTimers()
+    let calls = 0
+    const controller = new SessionWriteBehind({
+      maxDelayMs: 200,
+      write: async () => { calls += 1; throw new Error("disk full") },
+      reportBackgroundFailure: vi.fn(),
+    })
+    controller.enqueue({ type: "turn/start" })
+    await vi.advanceTimersByTimeAsync(200) // the first background attempt fails
+    expect(calls).toBe(1)
+    await vi.advanceTimersByTimeAsync(2000) // ten more windows, no new events
+    expect(calls).toBe(1) // the deadline never re-armed
+    expect(controller.hasWork).toBe(true) // and the batch is still held, for the flush
+  })
+
   it("hasWork is true while pending or active and false when quiescent", async () => {
     const controller = new SessionWriteBehind({
       maxDelayMs: 1000,
