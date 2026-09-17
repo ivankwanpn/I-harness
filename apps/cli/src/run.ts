@@ -12,7 +12,10 @@ import type { ParentInputAdmission, SubagentStateSnapshot } from "@i-harness/sub
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import type { LspServerConfig } from "@i-harness/lsp"
 import type { TeamConfig } from "@i-harness/agent-team"
-import { registerCommand } from "@i-harness/interaction"
+import { join } from "node:path"
+import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
+import { resolveHarnessHome } from "@i-harness/harness-home"
+import { PluginRegistry, toMcpServerConfigs } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
@@ -30,6 +33,25 @@ import { loadProviderRuntime } from "./provider-runtime.ts"
 // "No compactable history yet." text when nothing was compacted, and a JSON
 // echo { compacted, shadowedSeqs, summary? } otherwise. `instructions` are
 // forwarded to the summarizer ("User instructions" section).
+/**
+ * The command names this file registers on the assembly's context, in ONE place.
+ *
+ * Two readers depend on it and they must not drift: the registrations below, and
+ * the plugin runtime above, which hands the list to `PluginRegistry` as
+ * `existingCommandNames` so a plugin command cannot claim one of them. Kept a
+ * literal because the live catalog does not exist until the assembly returns,
+ * and the conflict is resolved at plugin-enable time, not at read time.
+ */
+const CLI_COMMAND_NAMES = [
+  "session-send",
+  "session-followup",
+  "session-steer",
+  "session-inject",
+  "session-cancel",
+  "session-pending",
+  "session-compact",
+] as const
+
 export interface SessionCompactCommandDeps {
   compactNow(instructions?: string): Promise<CompactionResult>
   isRunning(): boolean
@@ -238,6 +260,35 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // well was a second copy of that logic — and the copy was wrong: when no
     // window resolved it passed `opts.compact` through unchanged, i.e. a config
     // missing the field the engine requires, instead of declining.
+    // ── plugin runtime ───────────────────────────────────────────────────────
+    // A machine-level registry under the harness home, read ONCE per agent build
+    // like every other assembly input. Empty when nothing is installed: one state
+    // read, no directory walking. Design:
+    // docs/superpowers/specs/2026-09-17-plugin-mount-design.md.
+    const pluginRegistry = new PluginRegistry({
+      root: join(resolveHarnessHome(), "plugins"),
+      // The seven names this file registers further down. A literal list rather
+      // than the live catalog because the catalog does not exist until the
+      // assembly below returns — and a plugin command silently shadowing
+      // `session-send` would be a behaviour change nobody asked for.
+      existingCommandNames: [...CLI_COMMAND_NAMES],
+    })
+    const pluginInputs = pluginRegistry.runtimeInputs()
+    const pluginMcp = toMcpServerConfigs(pluginInputs.mcpServerConfigs)
+    for (const skippedMcp of pluginMcp.skipped) {
+      console.warn(`[plugins] skipping MCP server ${skippedMcp.serverName}: ${skippedMcp.reason}`)
+    }
+    for (const desc of pluginInputs.commandDescriptors) {
+      if (desc.unsupported !== undefined) {
+        // Design §3 decision 3: an unhonoured frontmatter key is reported, never
+        // silently ignored — a command declaring `allowed-tools` must not appear
+        // to be restricted when nothing enforces it. Durable recording onto the
+        // plugin record is owed and belongs at enable() time, because
+        // `runtimeInputs()` is read-only by contract ("reads never materialize").
+        console.warn(`[plugins] command ${desc.name} declares unsupported frontmatter: ${desc.unsupported.join(", ")}`)
+      }
+    }
+
     assembly = await createSessionAssembly({
       workspace: opts.workspace,
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
@@ -276,6 +327,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // protecting them reintroduces that privilege escalation on resume.
       policySession: opts.session,
       ...(opts.mcp !== undefined ? { mcp: opts.mcp } : {}),
+      // Plugin runtime, from the registry read above. Both seams already
+      // existed and were documented for exactly this use — `pluginMcp` mounts
+      // each server and reports per-server containment into `pluginMcpResults`,
+      // and `skills.extraDirs` is scanned as an overlay root. Neither had a
+      // production caller until now.
+      ...(pluginInputs.skillDirs.length > 0 ? { skills: { extraDirs: pluginInputs.skillDirs } } : {}),
+      ...(pluginMcp.configs.length > 0 ? { pluginMcp: pluginMcp.configs } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
       ...(opts.team !== undefined ? { team: opts.team } : {}),
       ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
@@ -294,6 +352,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       parentNotify,
     })
+    // Plugin commands are registered FIRST, so this file's own seven — registered
+    // further down, outside this try — always win a name collision. The registry
+    // was handed CLI_COMMAND_NAMES so it should never offer a colliding name;
+    // this ordering makes the guarantee local rather than depending on that.
+    for (const desc of pluginInputs.commandDescriptors) {
+      registerPromptCommand(assembly.ctx, createPromptCommand(desc))
+    }
   } catch (err) {
     emitSessionEnd(1)
     telemetry?.close()

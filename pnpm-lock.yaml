@@ -77,6 +77,9 @@ importers:
       '@i-harness/guard-timeout':
         specifier: workspace:*
         version: link:../../packages/guard-timeout
+      '@i-harness/harness-home':
+        specifier: workspace:*
+        version: link:../../packages/harness-home
       '@i-harness/instructions':
         specifier: workspace:*
         version: link:../../packages/instructions
