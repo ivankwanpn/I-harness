@@ -7,23 +7,25 @@
  * `transcriptMode`, `busyEnter` and the whole `tui.prefs` block). What happens to
  * such a document once the key is gone is the question this file pins.
  *
- * The answer, established by reading the loader rather than by adding a shim:
+ * The answer, established by reading the loader rather than by adding a shim
+ * (line numbers are as of the change that retired the keys):
  *
- *   TOLERATED ON READ. `normalizeSettings` (`packages/settings/src/index.ts:650`)
+ *   TOLERATED ON READ. `normalizeSettings` (`packages/settings/src/index.ts:542`)
  *   is a field-by-field projection — it names each key it knows
- *   (`:666` `sandboxMode: oneOf(raw.sandboxMode, …)`, `:669` `theme:
- *   normalizeTheme(raw.theme)`, …) and simply never reads a key it does not
- *   name. Nothing validates the document against the schema, no `satisfies`,
- *   no strict-parse; and `load()` (`:767`) wraps the whole read in try/catch, so
- *   even a corrupt file degrades to defaults instead of throwing. Removing a key
- *   from the projection therefore cannot make an existing document unloadable.
+ *   (`:558` `sandboxMode: oneOf(raw.sandboxMode, …)`, `:561`
+ *   `fontSize: numberInList(raw.fontSize, …)`, …) and simply never reads a key it
+ *   does not name. Nothing validates the document against the schema, no
+ *   `satisfies`, no strict-parse; and `load()` (`:656`) wraps the whole read in
+ *   try/catch, so even a corrupt file degrades to defaults instead of throwing.
+ *   Removing a key from the projection therefore cannot make an existing document
+ *   unloadable.
  *
- *   DROPPED ON THE NEXT WRITE. `persist()` (`:875`) writes `rawWithPins()`, i.e.
- *   the NORMALIZED snapshot, so the first `set()`/`reset()` after the upgrade
- *   rewrites the file without the retired keys. That is this package's
- *   documented D5 stance — "no migration chain, no file rewrite"
- *   (`:157-159`, `:321`, `:529`) — so the drop IS the migration and no
- *   migration code is warranted.
+ *   DROPPED ON THE NEXT WRITE. `persist()` (`:764`) writes `rawWithPins()`
+ *   (`:750`), i.e. the NORMALIZED snapshot, so the first `set()`/`reset()` after
+ *   the upgrade rewrites the file without the retired keys. That is this
+ *   package's documented D5 stance — "no migration chain, no file rewrite"
+ *   (`:59`, `:133`, `:247`) — so the drop IS the migration and no migration code
+ *   is warranted.
  *
  * Red-first: the `toEqual([])` assertions below failed while the keys were still
  * in the schema (measured output in the task report).

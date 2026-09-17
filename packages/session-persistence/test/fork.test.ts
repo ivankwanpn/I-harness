@@ -5,11 +5,14 @@ import { describe, expect, it } from "vitest"
 import { append, createSession, rewindCuts, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
-  SessionForkUnavailableError,
-  completedTurnPrefix,
   createSessionCoordinator,
   forkSession,
 } from "../src/index.ts"
+// Task 2A: `SessionForkUnavailableError` and `completedTurnPrefix` are no longer
+// exported through the package entry (their only outside consumer was this
+// test); the behavior under test is unchanged, so the assertions below are
+// untouched and only the import path moves to the declaring module.
+import { SessionForkUnavailableError, completedTurnPrefix } from "../src/fork.ts"
 
 async function fixture(): Promise<{
   root: string
