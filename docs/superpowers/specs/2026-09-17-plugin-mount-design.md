@@ -250,3 +250,54 @@ export interface SkillsMountConfig {
   決定與「宿主是誰」的最終答案。
 - **`hooks` 的掛載**。它與本設計是同一種形狀（能力齊備、無消費者）但**不同的產品問題**：
   它需要「預設開或關」「對哪些宿主生效」「第一次的信任錨點從哪來」三個答案。
+
+---
+
+## 8. 用真實 marketplace plugin 的驗證（2026-09-17，實跑）
+
+上面每一節都是讀程式碼與跑合成 fixture 得到的。這一節不同：**用官方 marketplace 裡的 `superpowers` 走完整條鏈。**
+
+### 8.1 結果：通了
+
+```
+addSource("anthropics/claude-plugins-official")   ok — 308 個條目
+superpowers 條目  {"source":"url","url":"https://github.com/obra/superpowers.git","sha":"b36e0829…"}
+install(claude-plugins-official__superpowers)     ok
+enable(...)                                        ok
+runtimeInputs().skillDirs                          1 個目錄
+
+runHeadless(... skill_search "writing plans" ...)  exitCode 0
+  → {"matches":[{"name":"writing-plans",
+                 "path":"…/plugins/skills/claude-plugins-official__superpowers/writing-plans/SKILL.md",
+                 "source":"plugin"}, …]}
+```
+
+**`source: "plugin"` 出現在真實 run 裡** —— 那是本次新增的第三種來源，帶著一個真實 marketplace plugin 的路徑。
+
+### 8.2 巢狀落地在我們這裡沒問題 —— 而且是量出來的，不是推論
+
+`enable` 把 superpowers 的 20 個技能落在 `<registry>/skills/<id>/<skill-name>/SKILL.md` —— **巢狀**，正是 DSH 第三個陷阱的形狀（它的 `skill-filesystem` 不遞迴，於是「install 回報成功、面板顯示已安裝、模型一個 skill 都拿不到」）。
+
+**我們沒有這個 bug：`scanSkillsDir` 遞迴，`depth >= 1` 就接受 `SKILL.md`。** §4 是讀程式碼得到的同一個結論，這裡是用真實 plugin 證實的。
+
+### 8.3 真實世界的第一個陷阱：`https://…git` 不是 git clone
+
+**第一次嘗試就失敗了**，而失敗方式值得記下來。`fetchSource` 的偵測順序是固定的：
+
+```
+1. 本地目錄
+2. /^https?:\/\//i  → fetchHttp     ← 這裡
+3. owner/repo       → fetchGit
+4. 其他             → fetchGit
+```
+
+所以 `addSource("https://github.com/anthropics/claude-plugins-official.git")` —— **一個貨真價實的 git URL** —— 被規則 2 攔下、當成「manifest 的 HTTP 位址」去 GET，抓回 HTML，然後回報 **"marketplace manifest is not valid JSON"**。而那個訊息指向一個**根本沒被建立的 cache 目錄**，所以錯誤訊息本身也沒有指向真因。
+
+**處置：用 `owner/repo` 形式**（`anthropics/claude-plugins-official`），它走規則 3。
+
+**這是不是缺陷，本 spec 不斷言** —— 偵測順序在原始碼裡被寫成「fixed」且是有意的。但有一件事是量出來的：**`.git` 結尾的 HTTPS URL 無歧義地是 git URL，而目前它被當成 manifest URL。** 至少值得一個更指向真因的錯誤訊息（「這個 URL 看起來是 git repo，請用 owner/repo 形式」），因為目前的訊息會把讀者送去檢查一個不存在的檔案。
+
+### 8.4 這一節沒有證明的
+
+- **只試了一個 plugin**。`superpowers` 只有 skills，**沒有 commands、沒有 `.mcp.json`** —— 所以 `commandDescriptors` 與 `mcpServerConfigs` 在這次驗證裡都是 0，那兩條路徑仍然只有合成 fixture 的證據。
+- **驗證需要網路**（一次 marketplace clone + 一次 plugin clone），所以它**不是**測試套件的一部分，也不該是。
