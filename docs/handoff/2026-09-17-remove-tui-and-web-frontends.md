@@ -8,7 +8,7 @@ measurements.
 deleted the TUI and web frontends, and then had to price the 104 orphan exports the deletion left behind. The
 SDD ledger, task briefs, per-task reports and review files for this milestone all exist, under `.superpowers/`
 — **gitignored** (`.gitignore:46`), so a clone sees none of them. This repository has recorded that mistake
-once already: `docs/handoff/HANDOFF.md` §4 (`:232-248`) says the 2026-09-15 cycle's history once lived only in
+once already: `docs/handoff/HANDOFF.md:232-248` (§4) records that the 2026-09-15 cycle's history once lived only in
 a gitignored ledger and that this was a mistake, and M2 repaired it for itself with
 `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md`. This document is the same repair for M65.
 
@@ -162,7 +162,7 @@ credentials 1, provider-runtime 1, settings 1.
 **These are the replacement frontend's contract, not evidence that the backend rotted**, which is why the
 disposition is *deferred* rather than *deleted* — and why they are cheap to un-strand: the rebuilt frontend is
 expected to consume them again. The member list, each member with the production line that still reaches it, is
-in the allowlist's dated entry keyed `unused-export\t@i-harness/attachment#createImageAttachmentStore`
+in the allowlist's dated entry keyed `unused-export<TAB>@i-harness/attachment#createImageAttachmentStore`
 (2026-09-17).
 
 ### 2.5 ? = 13 — deferred, each with its deciding question
@@ -174,8 +174,8 @@ in the allowlist's dated entry keyed `unused-export\t@i-harness/attachment#creat
   host-side wrapper?), `shell#resolveShell` (does a host resolve the platform shell at all?),
   `text-diff#renderUnifiedDiff` (does it render unified diffs?). One product call, not nine independent ones.
 - **3 are `sdk` wire names — most likely an allowlist gap, not an orphan class.** `HarnessClient`,
-  `ServerInfo` and `RewindFileOpWire` are the same kind of name, from the same two files (`sdk/src/client.ts`,
-  `sdk/src/protocol.ts`), as the **17** already-allowlisted `@i-harness/sdk` names dated 2026-09-16; two of
+  `ServerInfo` and `RewindFileOpWire` are the same kind of name, from the same two files (`packages/sdk/src/client.ts`,
+  `packages/sdk/src/protocol.ts`), as the **17** already-allowlisted `@i-harness/sdk` names dated 2026-09-16; two of
   those seventeen are their direct siblings in `protocol.ts`. The class has not grown by three — the gap has.
 - **1 was already deferred by the allowlist's own `noRow` entry** dated 2026-09-15: `preset#mountPreset`,
   whose old evidence (*"the only production mention outside the declaring module is a comment in
@@ -244,11 +244,11 @@ declared in their package entry, so shape 2 does not exist for them.
 
 **5 — one row blocked by a cross-package repoint with no precedent.** `workflow#createWorkflowJobStore` is
 declared at `packages/workflow/src/runner.ts:68`. Its own-package consumers already deep-import it
-(`workflow/test/workflow.test.ts:15`, used at `:294`, `:315`), so shape 2 is available in principle — and the
+(`packages/workflow/test/workflow.test.ts:15`, used at `:294`, `:315`), so shape 2 is available in principle — and the
 **only** breakage is `packages/subagent/test/tools.test.ts:10`, a *different package* importing it from
 `@i-harness/workflow` (used at `:585`, `:601`, `:619`). The relative form that would fix it
 (`"../../workflow/src/…"`) has **zero hits anywhere in this tree** (measured: `git grep '"\.\./\.\./[a-z-]*/src/'`
-→ 0). The alternatives are not free: a subpath export in `workflow/package.json` is an API decision, and
+→ 0). The alternatives are not free: a subpath export in `packages/workflow/package.json` is an API decision, and
 omitting `jobs` silently couples three subagent tests to a module-level shared store (`runner.ts:293`).
 
 **Follow-up order, cheapest first:** `WorkspaceRegistry` → `describeDirectory` → `createExecService` →
@@ -259,8 +259,8 @@ the API/detector decision named above.
 
 ## 4. The two un-export shapes — the rule names only one
 
-The bucket-B rule on the record (`docs/audit/2026-09-15-reachability-baseline.md` §8, the bucket-B table row at
-`:1232`, inside a table that opens at `:1229`) says: **drop the `export` keyword, keep the declaration**. There
+The bucket-B rule on the record — §8 of `docs/audit/2026-09-15-reachability-baseline.md:1232`, the bucket-B
+table row, inside a table that opens at its `:1229` — says: **drop the `export` keyword, keep the declaration**. There
 is a **second, often cheaper shape**, and `8aabff4` is its first use in this repository:
 
 | Shape | What moves | Available when | Effect |
@@ -315,8 +315,15 @@ modified:
 
 **Two candidate fixes** for the gate's maintainer: (a) make the anchor tolerate a missing `export`; (b) key
 class 5 on the **object literal** rather than on the keyword. Either is a detector change owing its own
-`--self-test` case: the suite is 36/36 at `1ac091e` and has no case that would catch this — a limit the M2
-record already states in its §4.
+`--self-test` case, and the suite's limit is narrower than "it cannot see this". **Blinding the anchor outright
+reddens it**: measured at `1ac091e` on a copy whose class-5 anchor is blinded, `--self-test` reports **33/36,
+exit 1**, failing exactly its three class-5 fixture cases — **because the fixtures use the same anchor**. What no
+case sees is a **silent loosening that leaves the fixtures matching**: drop the `export` in the real tree, leave
+the scanner untouched, and the suite stays at **36/36, exit 0** while class 5 goes dark on the tree it is supposed
+to measure (variant 2 above). That is precisely the limit M2 states in its §5 — *"the self-test still cannot see a
+scanner loosening that no fixture element targets"* (`docs/handoff/2026-09-15-m2-reachability-gate-handoff.md:129`;
+its `:130` points on to the baseline document's §7) — and the quiet version is the dangerous one, which is why the
+tell is the `gone` count and not the suite.
 
 **The check that catches it is `gone rows` staying at `115`** when gating against the 523-row baseline. The
 exit code cannot carry the signal (that comparison already exits 1 for the 59 unexempted new rows), so a reader
@@ -359,8 +366,10 @@ one line past the end. What happens next is shape-dependent, and was measured in
 **The measured zero — and the measured three.** The adjudication pass recorded **0 of 79** line-bearing
 verdicts on existing paths exploiting it; that verdict set is part of this milestone's untracked working set,
 so it is recorded as measured rather than re-derived here. Re-measured directly at `1ac091e` with an
-instrumented copy of the engine over its own **tracked** corpus (`scripts/audit/verify-citations.mjs`;
-**8,367 citations, 7,936 resolved**), the two shapes separate:
+instrumented copy of the engine (`scripts/audit/verify-citations.mjs`) over the citation set held by the
+**tracked** audit data (`docs/audit/data/*.json`; the three citations below are
+`docs/audit/data/2026-09-11-d3-codex.json:1541` and its `:2480`, plus
+`docs/audit/data/2026-09-11-d3-grok.json:1402`; **8,367 citations, 7,936 resolved**), the two shapes separate:
 
 - the **start-line** shape is unexercised — **0** citations resolve to the phantom final element;
 - the **range-end** shape is **already in use** — **3** citations end exactly on it, and all three are
@@ -374,6 +383,15 @@ instrumented copy of the engine over its own **tracked** corpus (`scripts/audit/
   **interior** lines, none of them the phantom element, and the four `OUT_OF_RANGE` problems are real overruns
   the bound test caught (`packages/settings/src/index.ts:1250-1338`, *"file has 1275 lines"*, plus `:1316`,
   `:1338` and `:1365`).
+
+**Two different things are "tracked" in that sentence, and only one of them carries the evidence.** The
+*citations* are in this repository — the JSON files named above. The *files they point at* are not in it at all:
+they resolve only through the machine-local reference trees named in the **untracked**
+`scripts/audit/source-paths.local.json` (`.gitignore:57`), while the committed defaults
+(`scripts/audit/lib-union.mjs:70-74`) point at `D:/agent-complete/…`, which does not exist on this machine. On a
+machine without those trees the same three citations surface as `MISSING_FILE` — 740 citations already do at
+`1ac091e` — so the three instances are what *this* workstation can see of a hole that lives in the tracked
+engine: the finding survives a clone, the three witnesses do not.
 
 So the honest form is **a zero on one shape and a three on the other — and the exploited shape is the one that
 reports nothing.** A hole with a measured zero is acceptable only while both are on the record; this one is
@@ -414,14 +432,19 @@ A seed therefore rewrites a CRLF file with LF.
 **What that actually costs** — measured in a scratch repository with the same configuration, because the effect
 is narrower than "a whole-file diff" and the difference is the trap:
 
-- `git status --porcelain` reports the file **modified** (` M`) and git warns on stderr: *"in the working copy
-  of '…', LF will be replaced by CRLF the next time Git touches it"*;
-- `git diff`, `git diff --stat` and `git diff --numstat` print **nothing**, and `git diff --quiet` exits **0** —
-  `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a diff even though the worktree file
-  differs from its blob on **480 of 480 lines**;
-- `git add` clears the status and stages nothing; `git add --renormalize` normalises only the **index** and
-  leaves the worktree file LF;
-- restoring the worktree copy's CRLF needs a real re-checkout — remove the file and `git checkout -- <path>`.
+- `git status --porcelain` reports the file **modified** (` M`), and both `git status` and `git diff` print a
+  one-line warning on **stderr**: *"in the working copy of '…', LF will be replaced by CRLF the next time Git
+  touches it"*;
+- `git diff`, `git diff --stat` and `git diff --numstat` write **nothing to stdout** (measured: 0 bytes), and
+  `git diff --quiet` exits **0** — `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a
+  diff's *content* even though the worktree file differs from its blob on **480 of 480 lines**. The only signal
+  is that stderr warning, which a `2>/dev/null` or a stdout-capturing tool discards;
+- `git add` then clears the status and stages nothing, and `git add --renormalize` normalises only the
+  **index** — it leaves the worktree file LF;
+- a plain `git checkout -- <path>` **does restore CRLF** (measured) — *provided nothing refreshed git's stat
+  cache for that file in between*. Once a `git add` has run, which is what a re-seed workflow does next, git
+  considers the LF file clean, the checkout is a **no-op**, and the worktree stays LF; recovering CRLF then needs
+  the entry invalidated — remove the file and `git checkout -- <path>` (measured).
 
 So the trap is not "the diff you will see"; it is **a file that reports modified, stages clean and is
 byte-unstable**, plus every byte-level comparison (worktree against `git cat-file blob`, or the CRLF-converting
@@ -441,7 +464,11 @@ byte-unstable**, plus every byte-level comparison (worktree against `git cat-fil
   to this milestone's untracked working set. **§6.2 can be**: the engine is tracked, and its numbers were
   produced by a copy of it instrumented to count `line === split-length`, with the counts needed to re-run it.
 - **A zero from this instrument is not self-certifying.** §5 shows the gate's own blindness arriving as a
-  falling count. Check the digest, run `--self-test`, and read `gone rows`.
+  falling count, and the other two readings do not catch it either: measured on the silent variant above,
+  `--digest` still prints a digest and exits 0, and `--self-test` still reports 36/36. The tell is the `gone`
+  count — **and only against the frozen 523-row baseline**: a re-seeded baseline makes `gone` 0 by construction,
+  so the signal disappears exactly when someone follows the ordinary re-seed procedure. A monitor built on
+  `gone` must **pin** the baseline it compares against (§10), or it is watching a number that cannot move.
 - **Line-number rot.** Every `path:line` here was re-opened at `1ac091e`; a later edit above any of them moves
   it. The convention is the M2 record's trap 1: **label-primary with a dated line number**.
 - **M65 did not touch the scanner, the baseline data, or the gate's behaviour.** The only change this record's
@@ -459,6 +486,8 @@ node scripts/audit/check-reachability.mjs               # expect: 466 ts files, 
 git show 08f30c5:scripts/audit/reachability-baseline.json > /tmp/b523.json
 node scripts/audit/check-reachability.mjs --gate --baseline /tmp/b523.json
 # expect: 115 baseline rows gone, 59 NEW rows, exit 1 -- and `gone` must stay 115 (§5)
+# the pin is the point: the committed baseline was re-seeded to 472 on 2026-09-17,
+# and `gone` against THAT baseline is 0 by construction -- it cannot show the blindness
 ```
 
 And to reproduce the §2.1 table without disturbing this tree: `git archive` each named revision into a
