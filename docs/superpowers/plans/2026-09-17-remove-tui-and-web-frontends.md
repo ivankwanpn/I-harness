@@ -152,9 +152,79 @@ git commit -m "refactor: remove the TUI and web frontends, and restore the pre-M
 
 ---
 
-### Task 2: Re-seed the M2 gate and prune the allowlist
+### Task 2A: Retire the TUI-only settings, and un-export the names the frontend alone consumed
 
-The gate compares against a committed baseline. **104 of its 523 rows mention `tui`** and are about to stop existing, so the baseline stops describing the tree. This task is the repair, and it is the only step in this plan with real risk.
+**Added 2026-09-17, after Task 1's review.** Task 1's review found the gate failing with **104 new rows**, and a follow-up classification put every one in a bucket. Two human rulings fixed this task's shape: **the TUI-only settings are deleted, not deferred**, and **the un-exports happen here**, not in a later milestone.
+
+**Input — the classification, which is the specification for this task:**
+`D:\I-harness-main\.superpowers\sdd\m3\orphaned-exports-classification.md`
+
+| bucket | meaning | count | disposition |
+|---|---|---|---|
+| **T** | TUI-only leftover | 19 | **delete** (human ruling) |
+| **B** | backend-internal; only the *export* is unused | 38 | **un-export** (human ruling) |
+| **C** | frontend/wire contract | 34 | Task 2B allowlists it |
+| **?** | needs a product call | 13 | Task 2B defers it |
+
+**Files:**
+- Modify: `packages/settings/src/index.ts` (all 19 T rows live in this one file — 14 settings keys and 5 types)
+- Modify: the 38 files named in the classification's bucket-B table
+- Test: `packages/settings/test/**`, plus whatever test asserts on the removed keys
+
+**Interfaces:**
+- Consumes: the classification file, and the reachability instrument as the detector for both halves.
+- Produces: a tree where the 19 T rows and the 38 B rows **no longer appear as findings** — which is a *measurable* claim, not a described one.
+
+- [ ] **Step 1: Measure the starting point, and do not reuse the plan's numbers**
+
+Run `node scripts/audit/check-reachability.mjs` and record the tree's current count and its full list of `new` rows (there should be 104: 90 `unused-export` + 14 `unconsulted-setting`). **The plan's arithmetic — `523 − 115 + 104 = 512` — described `dbe2e41`; re-measure rather than quoting it.** If the numbers differ from that, say so in the report before continuing.
+
+- [ ] **Step 2: Answer the data-migration question BEFORE deleting any settings key**
+
+Deleting a key from the settings schema is not the same as deleting an unused export: **users have `settings.json` files that already contain these keys.** Determine, by reading the loader and validating against a hand-written `settings.json` containing `"tui": {"prefs": {"scrollSpeed": 3}}`, what happens on load today and what would happen after the key is removed — tolerated, silently dropped, or a hard failure.
+
+**State the answer in the report and choose the handling deliberately.** If removal makes an existing settings file unloadable, that is a migration defect and this step is not done. Existing tests are the cheapest evidence; a scratch settings file under `.superpowers/sdd/` is the second.
+
+- [ ] **Step 3: Delete the 19 T rows, red-first**
+
+The 19 are enumerated in the classification's §3: the 14 `unconsulted-setting` keys (`busyEnter`, `theme`, `transcriptMode`, the eleven `tui.prefs.*`) and the 5 types (`SETTINGS_THEMES`, `SETTINGS_THEMES_LOW_COLOR`, `SettingsTheme`, `SettingsScrollMode`, `SettingsKeepTextSelection`).
+
+Write the failing test first — an assertion that the schema no longer carries these keys, or that a settings file carrying them loads cleanly, whichever Step 2 showed is the real behaviour. **A test that would pass with the keys still present is not the test.** Then delete, and carry any test that asserted the old shape with it — **naming in the commit message what each removed test was pinning and why it goes**, exactly as Task 1 did.
+
+Note `tui.prefs.dashboard.pinned` has **zero mentions anywhere at HEAD, including the deleted tree** — it is a schema key with no reader at all, so its removal needs no test change and should be called out as such.
+
+- [ ] **Step 4: Un-export the 38 B rows — and stop if any is not what the bucket says**
+
+Drop the **`export` keyword only**; keep every declaration. This is this repo's bucket-B rule (`docs/audit/2026-09-15-reachability-baseline.md:1230-1234`), whose worked precedent is `output-retention#createUnifiedSpillStore` in the allowlist.
+
+**Two traps, both met before in this repo:**
+- **`TS6133`.** Phase B's Task 4 found that un-exporting a declaration which is *not* read inside its own module fails under `noUnusedLocals` (`tsconfig.base.json:9`). Bucket B *means* the declaration is read inside its module — but **verify each one rather than trusting the bucket.** If any turns out not to be, **stop and report it**; do not "fix" it by deleting the declaration, and do not manufacture a use with `void <name>` — that edit makes the instrument lie to itself, which is the one thing this repo refuses.
+- **`createExecService` is reached by a two-package chain**, not by its own module (`exec/src/index.ts:291` `registerExec` → `shell/src/index.ts:462` → `session-executor/src/assembly.ts:17`). Chains like this are why the classification re-implemented the gate's scan instead of trusting `git grep`.
+
+- [ ] **Step 5: Prove both halves with the instrument, and mutate**
+
+Re-run `node scripts/audit/check-reachability.mjs`. Expected: **the 19 T rows and the 38 B rows are gone from the finding set**, and the `--gate` "new" count has dropped by 57.
+
+Then mutate, in both directions:
+- re-add one removed settings key → its `unconsulted-setting` row returns;
+- re-add one `export` keyword → its `unused-export` row returns.
+
+Restore both and confirm the tree is byte-identical afterwards (`git diff` empty).
+
+- [ ] **Step 6: Gates, then commit**
+
+`pnpm -r typecheck` exit 0; `pnpm -r --no-bail test` showing **64 Done / 2 Failed and exactly the four known pre-existing cases** — the pass condition is **no NEW failures**, because the suite is red at base for `bash`-is-WSL reasons.
+
+```bash
+git add -A packages/settings packages/exec packages/shell
+git commit -m "refactor: retire the TUI-only settings and un-export the backend names whose only consumer was the frontend"
+```
+
+---
+
+### Task 2B: Re-seed the gate, and price what the removal left behind
+
+**This is the task that repairs the baseline, and it is the one step in this plan with real risk** — it rewrites a gate that was built and reviewed days ago, and the allowlist's `source` fields cite the baseline document **by line**.
 
 **Files:**
 - Modify: `scripts/audit/reachability-baseline.json` (written **only** by `--seed-baseline`)
@@ -162,40 +232,50 @@ The gate compares against a committed baseline. **104 of its 523 rows mention `t
 - Test: `scripts/audit/check-reachability.mjs --self-test` and `--gate`
 
 **Interfaces:**
-- Consumes: the seed writer `--seed-baseline` and the gate `--gate`, both already shipped by M2.
-- Produces: a baseline whose `count` and `digest` describe the post-deletion tree, and an allowlist with no entry pointing at a row that cannot exist.
+- Consumes: the post-2A tree, and the classification's C and ? tables.
+- Produces: a baseline whose `count` and `digest` describe the tree, and an allowlist that prices the frontend contract as **one named class** rather than a hundred near-identical entries.
 
-- [ ] **Step 1: Measure the delta before writing anything**
+- [ ] **Step 1: Measure, then re-seed**
 
-Run `node scripts/audit/check-reachability.mjs --json`, and count the rows. Expect **523 minus the TUI rows**. Record both numbers. **Do not guess the new count** — the M2 handoff's own lesson is that a figure written ahead of the measurement is the defect this repo keeps finding.
+Run `--json` and record the count. **Do not carry over any figure from the plan or from Task 2A's report** — the M2 handoff's own lesson is that a figure written ahead of its measurement is the defect this repo keeps finding.
 
-- [ ] **Step 2: Re-seed**
+Then `--seed-baseline`, followed by `--gate` and `--digest`. Expected: `gate PASS`, and a digest that is **not** `5acf81aa…` (that one described the pre-removal tree). Record all three outputs.
 
-Run `node scripts/audit/check-reachability.mjs --seed-baseline`, then `--gate` and `--digest`. Expected: `gate PASS`, and a digest that is **not** `5acf81aa…` (the old one described the old tree). Record all three outputs.
+- [ ] **Step 2: Record the 104 as a class disposition — the human's ruling**
 
-- [ ] **Step 3: Prune the four moot allowlist entries**
+**Ruling (2026-09-17): one named class entry, not 104 near-identical ones.** The `reason` field on the baseline seed, plus a dated section in `docs/audit/2026-09-15-reachability-baseline.md` (Task 3 carries the prose), must say: **104 rows became findings on 2026-09-17 because the TUI and web frontends — their only in-repo consumer — were removed**; and what happened to each bucket (**T deleted, B un-exported in Task 2A; C is the replacement frontend's contract; ? is deferred**).
 
-Measured: `unpushed-capability plan-mode`, `unpushed-capability guardian`, `unpushed-capability vim-mode` (evidence `packages/tui/src/app/slash/types.ts`) and `unread-flag --yes` (evidence `apps/tui/src/index.ts`) all name deleted code. Remove them **and** their `noRow` counterparts if any.
+**The reader who matters is the one who will design the replacement frontend.** They must be able to find the C list and read it as a contract, and must not conclude the backend rotted.
 
-**Say in the commit message that these four were removed *because their subject was deleted*, not because they were adjudicated differently.** A reader must not conclude the exemption was withdrawn on its merits.
+- [ ] **Step 3: Give the C rows one allowlist class entry, and defer the ? rows with reasons**
 
-- [ ] **Step 4: Re-match every remaining `source` line — the known trap**
+- **C (34)** — the frontend/wire contract: view models, DTOs and the approval / question / command seams. One class entry, reason citing the classification §2 and the human's ruling. Their shape did not change; only the consumer did.
+- **? (13)** — **deferred, each with its deciding question**, not guessed. Nine collapse to one question (*does the rebuilt frontend still have that surface?* — image upload, plugin status, the settings-section API, unified diffs, a host shell resolver). Three are `sdk` wire names (`HarnessClient`, `ServerInfo`, `RewindFileOpWire`) which are **siblings of 18 sdk names already allowlisted** as embedder-facing public API — treat the likely reading as an **allowlist gap, not an orphan class**, and say so. One is `mountPreset`, **already deferred by the allowlist's own `noRow` entry dated 2026-09-15** — re-state that ruling rather than re-deriving it.
 
-The M2 handoff (`docs/handoff/2026-09-15-m2-reachability-gate-handoff.md` §6 item 1) records this exactly: the allowlist's `source` fields cite the baseline document **by line**, Task 4's edits moved all 24, a repair introduced a +1 error in seven of them, and the closing wave moved them again. **Any edit to `docs/audit/2026-09-15-reachability-baseline.md` above §6.1 rotates them.**
+- [ ] **Step 4: Prune the four moot entries**
 
-Task 3 edits that document. So: **re-print every `source`, and match it to the row its entry names.** Run the check after Task 3, not only before it, and treat a mismatch as a defect rather than a rounding error.
+`unpushed-capability plan-mode`, `unpushed-capability guardian`, `unpushed-capability vim-mode` (evidence `packages/tui/src/app/slash/types.ts`) and `unread-flag --yes` (evidence `apps/tui/src/index.ts`) all name deleted code.
 
-- [ ] **Step 5: Run the gate's own proof and the self-test**
+**Say in the commit message that these four went *because their subject was deleted*, not because they were adjudicated differently.** A reader must not conclude the exemption was withdrawn on its merits.
 
-Run `node scripts/audit/check-reachability.mjs --self-test` → expect **36/36 ok**, exit 0.
-Run the completion proof from the M2 handoff §7: copy the repo to `%TEMP%`, append `export const M2_GATE_PROOF = "delete me"` to `packages/guard-repeat-tool/src/index.ts` in the copy, and run `--gate --root <copy>` → expect **exit 1** naming exactly that row.
+- [ ] **Step 5: Re-match every remaining `source` line — the known trap**
 
-- [ ] **Step 6: Commit**
+The M2 handoff §6 item 1 records this exactly: the allowlist's `source` fields cite the baseline document **by line**, Task 4's edits moved all 24, a repair introduced a +1 error in seven, and the closing wave moved them again. **Any edit above §6.1 rotates them**, and Task 3 edits that document.
+
+**Re-print every `source` and match it to the row its entry names.** Run the check again after Task 3, and treat a mismatch as a defect rather than a rounding error.
+
+- [ ] **Step 6: Run the gate's own proof and the self-test**
+
+`--self-test` → expect **36/36 ok**, exit 0.
+The M2 handoff §7 completion proof: copy the repo to `%TEMP%`, append `export const M2_GATE_PROOF = "delete me"` to `packages/guard-repeat-tool/src/index.ts` in the copy, run `--gate --root <copy>` → expect **exit 1** naming exactly that row.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add scripts/audit/reachability-baseline.json scripts/audit/reachability-allowlist.json
-git commit -m "chore(audit): re-seed the reachability baseline after the frontend removal, and drop the four exemptions whose subject no longer exists"
+git commit -m "chore(audit): re-seed the reachability baseline after the frontend removal, and price the 104 rows it left behind"
 ```
+
 
 ---
 
