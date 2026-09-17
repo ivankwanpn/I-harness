@@ -441,6 +441,8 @@ importers:
         specifier: workspace:*
         version: link:../shell
 
+  packages/harness-home: {}
+
   packages/hooks:
     dependencies:
       '@i-harness/core-plugin':
@@ -449,6 +451,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/harness-home':
+        specifier: workspace:*
+        version: link:../harness-home
     devDependencies:
       '@i-harness/core-agent':
         specifier: workspace:*
@@ -823,6 +828,9 @@ importers:
       '@i-harness/fs-lock':
         specifier: workspace:*
         version: link:../fs-lock
+      '@i-harness/harness-home':
+        specifier: workspace:*
+        version: link:../harness-home
     devDependencies:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
@@ -873,6 +881,9 @@ importers:
 
   packages/settings:
     dependencies:
+      '@i-harness/harness-home':
+        specifier: workspace:*
+        version: link:../harness-home
       '@i-harness/telemetry':
         specifier: workspace:*
         version: link:../telemetry
@@ -903,6 +914,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/harness-home':
+        specifier: workspace:*
+        version: link:../harness-home
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../tool-search
