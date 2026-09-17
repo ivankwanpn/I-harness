@@ -21,7 +21,25 @@ import { assertAllowed, runHookHandler } from "./runner.ts"
 import { resolveHarnessHome } from "@i-harness/harness-home"
 
 export * from "./types.ts"
-export { sha256File, trustScriptPath, verifyHandlerTrust } from "./trust.ts"
+// The last two are the user-layer grant surface. They are exported because the
+// rule `loadHooksConfig` enforces is UNSATISFIABLE without them — a non-home
+// handler can only be granted by a store a host constructs, and only located by
+// the same path helper. The two TYPES stay internal to trust.ts and are not
+// re-exported: `loadHooksConfig` takes its approvals STRUCTURALLY
+// (`{ isApproved(sha256): boolean }`), so no host is obliged to name either.
+//
+// NOTE FOR THE NEXT EDITOR: this comment sits ABOVE the export block on purpose.
+// `check-reachability.mjs` reads the braces literally, so a comment INSIDE them
+// is parsed as a list of exported names — measured 2026-09-18, when a five-line
+// comment in there produced four phantom rows and moved the digest. It reports
+// those as NEW, so the failure is at least loud rather than silent.
+export {
+  sha256File,
+  trustScriptPath,
+  verifyHandlerTrust,
+  resolveHookTrustPath,
+  createHookTrustStore,
+} from "./trust.ts"
 export { runHookHandler, validateHookOutput, assertAllowed } from "./runner.ts"
 
 const CONFIG_FILE = "hooks.json"
@@ -85,8 +103,30 @@ function compileMatcher(matcher: HandlerMatcher | undefined): (name: string) => 
   return (name: string): boolean => (exact !== undefined ? exact(name) : regex!.test(name))
 }
 
-/** Strict config load: version 1, every handler's fields validated. */
-export async function loadHooksConfig(configPath: string, configDir: string): Promise<LoadedHandler[]> {
+/**
+ * Strict config load: version 1, every handler's fields validated.
+ *
+ * TWO TRUST QUESTIONS, and a handler must pass both — they catch different lies:
+ *
+ *   1. **Was the declaration ever GRANTED?** A config's `trust.sha256` is
+ *      written by whoever wrote the config, so on its own it means nothing:
+ *      a config naming its own script and its own hash satisfies it entirely.
+ *      The rule (D1, docs/handoff/2026-09-18-prior-art-survey.md): **a declaring
+ *      layer may declare; only the user layer may grant.** The user layer is
+ *      THIS config being the one the harness-home convention resolves to —
+ *      derived from the path, never from a caller's claim, so another tree's
+ *      `hooks/hooks.json` cannot assert its way in.
+ *   2. **Do the bytes still match?** `verifyHandlerTrust` recomputes the
+ *      artifact's hash. That is what catches a granted script edited later.
+ *
+ * `approvals` is the user-layer store. Omitted, a non-home config grants nothing
+ * — fail-closed by omission rather than by a flag someone can get wrong.
+ */
+export async function loadHooksConfig(
+  configPath: string,
+  configDir: string,
+  approvals?: { isApproved(sha256: string): boolean },
+): Promise<LoadedHandler[]> {
   let text: string
   try {
     text = await readFile(configPath, "utf8")
@@ -105,6 +145,7 @@ export async function loadHooksConfig(configPath: string, configDir: string): Pr
   const cfg = raw as Record<string, unknown>
   if (cfg.version !== 1) throw new HookConfigError("hooks config version must be 1")
   if (!Array.isArray(cfg.handlers)) throw new HookConfigError("hooks config must carry a handlers array")
+  const userLayer = resolve(configPath) === resolve(resolveHooksConfigPath())
   const loaded: LoadedHandler[] = []
   for (const entry of cfg.handlers) {
     const spec = validateSpec(entry, configPath)
@@ -114,6 +155,9 @@ export async function loadHooksConfig(configPath: string, configDir: string): Pr
       await verifyHandlerTrust(spec, configDir)
     } catch (err) {
       trustError = err instanceof Error ? err.message : String(err)
+    }
+    if (trustError === undefined && !userLayer && approvals?.isApproved(spec.trust.sha256) !== true) {
+      trustError = `hook handler ${spec.id} is not approved by the user for this source (sha256 ${spec.trust.sha256})`
     }
     loaded.push({ spec, valid: trustError === undefined, trustError })
   }

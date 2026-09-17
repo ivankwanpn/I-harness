@@ -186,6 +186,18 @@
       "reason": "**`deferred` as ONE named class of 5 rows** — the settings UI contract the frontend removal stranded: `describeSection`, `SectionView`, `SectionOp`, `SectionName`, `SettingsConflictError`, every one of them re-exported from `packages/settings/src/index.ts`. Kept because the frontend is being rebuilt and will need exactly this. **The shape is AFFIRMED, not merely tolerated.** Checked on 2026-09-18 against three shipping agent harnesses (Codex v0.154.0, Grok Build, an opencode fork): `SectionName` is a CLOSED union, which is what Codex projects too (a closed `ThreadItem` union); `SectionOp` is a generic path-addressed patch, so there is no per-section op vocabulary to grow; and the revision guard is optimistic concurrency of the same family as Codex's kernel lease CAS. **What NONE of the three has is a per-section view registry** — Grok has no registry at all (its section list is the client's own match arms) and Codex's only projection knob is a depth enum. So the one thing this contract must not grow into is a registry, and `SectionName` being closed is what keeps that honest: widening it is a decision, not an edit. What would change this disposition: the frontend settling on a different projection shape, which would make it a rewrite rather than a revival.",
       "dated": "2026-09-18",
       "source": "docs/handoff/2026-09-18-prior-art-survey.md §2.3 and §4 (D2/D3)"
+    },
+    {
+      "key": "unused-export\t@i-harness/hooks#createHookTrustStore",
+      "reason": "**`deferred` as ONE named class of 2 rows** — the user-layer grant surface D1 requires. `createHookTrustStore` and its sibling `resolveHookTrustPath` (the next entry; the mechanic is one row per entry) are exported because the rule `loadHooksConfig` now enforces is UNSATISFIABLE without them: a non-home config's handler can only become valid via a store that a HOST constructs, and that host has to locate it by the same path helper. **The class is not an accident of the export shape** — dropping these leaves the security rule with no way to be satisfied, so non-home hooks could never run at all; the alternative to a row here is a rule that can only ever deny. The types in that file (`HookTrustStore`, `HookApproval`) are deliberately NOT re-exported: `loadHooksConfig` takes its approvals structurally, so `{ isApproved(sha256: string): boolean }` is satisfiable without naming either. The consumer is the hooks mount, which is not written yet (`packages/hooks` is still one of the zero-consumer packages). What would retire this entry: that mount landing and constructing the store.",
+      "dated": "2026-09-18",
+      "source": "docs/handoff/2026-09-18-prior-art-survey.md §1.1 and §4 (D1); packages/hooks/src/trust.ts"
+    },
+    {
+      "key": "unused-export\t@i-harness/hooks#resolveHookTrustPath",
+      "reason": "**`deferred`: the second row of the class above** (the mechanic allows one row per entry, so the class needs one entry per member). Exported for the same reason and retired by the same event — a host must LOCATE the user-layer grant store, and the path convention lives with the store so the two cannot drift. Not folded into the entry above because it cannot be: `allowlistKey` compares `kind<TAB>subject` for equality with no wildcard or class key.",
+      "dated": "2026-09-18",
+      "source": "docs/handoff/2026-09-18-prior-art-survey.md §4 (D1); scripts/audit/reachability-allowlist.json (the entry above)"
     }
   ],
   "noRow": [
