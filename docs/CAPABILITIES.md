@@ -1,6 +1,10 @@
 # I-harness 能力盤點（2026-09-03，M32 → M34 全貌）
 
-> 65 包 + `apps/cli` + `apps/tui-app`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
+> 65 包 + `apps/cli`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
+>
+> **⚠️ 範圍變更（M65，2026-09-17）：TUI 與 web 前端已移除。** `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts` 都已刪除——`git ls-files` 對前四個路徑各回 **0 個檔案**（工作目錄殘留的只有未追蹤的 `node_modules`，新 clone 沒有）。**下列區塊描述的東西已經不存在，一律以本註記為準**：**下方各條 TUI 增量註記（M36–M48）**、**§四 的 `web-host` 路由與宿主命令**、**§八 中引用 TUI 的實測記錄**、**§八¾ 的 Rewind UI**，以及 **§八¾½／§八¾¾／§八¾2 三節（Provider/模型 TUI 管理、TUI parity、鼠標五分面）**。產品立場是**後端必須在沒有界面附著時照常工作**、**前端應該純是前端**——**這是移除，不是廢棄**；重建是另一個里程碑（不在 M65 範圍內）。**裸啟動／未知子命令回到 M44 之前的行為**：用法印到 **stderr**、**exit 1**；宿主命令為 `run` / `sdk` / `acp` / `sessions`（無 `tui`、無 `web`）。
+>
+> **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 >
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
 >
@@ -51,11 +55,14 @@
 - 範式決策維持：PTC 不做、YAML workflow、無 B13 AST（關閉）
 
 ## 四、服務面（前端之前最後一關——完成）
-- **SessionService**（engine-owned）+ **web-host**：HTTP unary + WS mux（40+ 路由）、live 流四端點、seq 回放 + 分頁
-- 認證（HMAC cookie + launch token + DNS-rebind 柵欄 + CORS）/ `/api/health`
-- **`@i-harness/sdk`**（NDJSON JSON-RPC，**Wire Contract v0 已鎖**，**v1 加性落地（M41a）**：`session/history`（afterSeq 增量+limit 分頁）+`session/list`（可選源 + `listingUnavailable`）+ protocolVersion 2 + capabilities 兩行——`--attach` 回放/列表缺口閉合）
+
+> **⚠️ 已移除（M65，2026-09-17）：`packages/web-host` 整包已刪除——本節的 HTTP+WS 宿主、認證與 `/api/*` 路由（`/api/health`、`/api/llm/probe-apply`）一條都不存在；`run/web/sdk/acp` 宿主命令列亦已失效（現為 `run` / `sdk` / `acp` / `sessions`，無 `tui`、無 `web`）。** 保留為歷史記錄，讀者勿據此推論現況；見文首範圍變更註記。
+
+- **SessionService**（engine-owned）：HTTP unary + WS mux（40+ 路由）、live 流四端點、seq 回放 + 分頁——**其 HTTP+WS 宿主 `packages/web-host` 已於 M65 隨 web 前端刪除**
+- 認證（HMAC cookie + launch token + DNS-rebind 柵欄 + CORS）/ `/api/health`——**同屬已刪除的 `web-host` 面（M65）**
+- **`@i-harness/sdk`**（NDJSON JSON-RPC，**Wire Contract v0 已鎖**，**v1 加性落地（M41a）**：`session/history`（afterSeq 增量+limit 分頁）+`session/list`（可選源 + `listingUnavailable`）+ protocolVersion 2 + capabilities 兩行——原 `--attach` 遠程消費者的回放/列表缺口閉合；**`--attach` 已於 M65 隨前端刪除，RPC 本身保留**）
 - **ACP**（官方 SDK 子集）/ 模型目錄 + per-session model selection + **`/api/llm/probe-apply`**（discover→adopt 全鏈——**真 DeepSeek 實測 3 模型**）
-- 四宿主命令：`run` / `web` / `sdk` / `acp`
+- 宿主命令：`run` / `sdk` / `acp` / `sessions`（**M65：刪除 `web`，改列 `sessions`**）
 
 ## 五、子代理/多智能體
 - **durable 任務協議**（task records + 背景執行+父 wake + 取消樹/配額 + `get_task_output`/`stop_task`）
@@ -77,10 +84,12 @@
 ## 八、質量/工程
 - 每一輪 full 審計鏈；全量測試綠（64 測試文件、~4000+ 測試）、typecheck 0、e2e 11/11——M49 交付時的實測記錄（task-15-report.md）：`pnpm -r typecheck` exit 0、`pnpm e2e` 11/11、全部 19 個 PTY case 逐一獨立運行 exit 0、14 個 Step-4 包測試 exit 0（唯一例外：apps/cli 的 sdk-wire-v11 在此環境為基線既有失敗——stash 驗證）；本環境根 `pnpm test` 視同為此兩項基線/併發條件所限（TUI 全體 735/736 + case-027 全套併發 flake——獨立跑 1/1）
 - 依賴原則：通用公開庫自由、私有禁入（`chokidar`/`@aws-sdk`/`@agentclientprotocol` 為 M28+ 實踐）
-- 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——web-host forks pool）
+- 已知問題實錄：README quirks（vitest worker flake 已 M31 修復——`web-host` forks pool，**該包已於 M65 移除**）
 - 多輪執行模式：worktree 隔離 + 雙組平行 + 調和審查 + 可追溯的執行者報告
 
 ## 八&frac34;½、Provider/模型 TUI 管理 + Slash 註冊表（M46a 新增——M49 超集）
+
+> **⚠️ 已移除（M65，2026-09-17）：本節的 TUI provider/模型管理與 Slash 註冊表**——`/provider` 三步嚮導、`/model`、Settings modal、slash 清單、鍵表——**已隨前端刪除**（屬界面的 `tui.prefs.*` 旋鈕已於 M65 淘汰）。settings 的 canonical 平面（`llm.providers`／`llm.defaultModel`）與 `tui.providers` 的 read-pin 兼容屬後端面，保留。保留為歷史記錄，讀者勿據此推論現況；見文首範圍變更註記。
 
 > **M49 supersede 注**：M46a 的 `tui.providers` 平面、`tui.providers` 版本化佈局與「缺 → mock」鏈均已替換——見下方 M49 節（canonical `llm.providers`、required-model、read-pin）；本節收錄的 M46a 機制描述（mask 顯示、三步嚮導、ArgPicker、Settings modal 形狀、鍵表）仍以 M49 狀態為準。
 
@@ -92,6 +101,8 @@
 - 誠實縫：compact/rename = BackendClient 可選成員（assembly/後臺裝配）；always-approve 運行時線縫 = m46b。
 
 ## 八¾¾、Provider/模型 plane + TUI parity（M49——Grok parity 收官）
+
+> **⚠️ 已移除（M65，2026-09-17）：本節的 TUI parity 面**——`/provider` master/detail、slash 可見清單、主題/畫面模式、status line、dashboard、鼠標捕獲切換、grapheme editor、typed tool 呈現、queue/tasks、PTY case-028——**已隨前端刪除**。canonical `llm.providers`／`llm.defaultModel` 與解析鏈屬後端面，保留。保留為歷史記錄，讀者勿據此推論現況；見文首範圍變更註記。
 
 - **Canonical provider settings**：settings `llm.providers`（id 化、protocol/baseURL/modelsURL/models/displayName/apiKeyEnv 引用）+ `llm.defaultModel` 為唯一解析真源；TUI `/provider` master/detail 寫入此平面（`createProviderRuntime`——directory/upsert/remove/setApiKey/discoverModels/setDefaultModel/resolveModel）。M46 `tui.providers` 佈局僅**讀取 pin**（重寫時文件原樣保留、規格化輸出永不暴露、永不推入 `llm.providers` 持久化）。provider 目錄 = registry 模板 + user 覆蓋合併；身份/密鑰**絕不進 settings**（credentials 引用 + `apiKeyEnv` env 覆寫、shadowed 拒絕）。
 - **解析鏈**（`provider-runtime/src/index.ts:456-483` selectModel：override 先判）：`--model` override > session model selection > `llm.defaultModel`；未配置 → `No model configured`（required-model gate——Welcome 路由 Settings；無 mock 回退）；`reasoningEffort` 6 檔、`contextWindow` 來自 model card 有效上下文（stale-window 防止單元級）。
@@ -109,6 +120,8 @@
 
 ## 八¾2、鼠標五分面（M46b 新增——grok 鼠標全 parity）
 
+> **⚠️ 已移除（M65，2026-09-17）：本節整節是 TUI 的鼠標面**——捕獲五模、懸停、點擊語義、滾動流式、knobs、PTY case-023——**已隨前端刪除**；其 settings 旋鈕（`scrollSpeed`／`scrollMode`／`scrollLines`／`invertScroll`／`keepTextSelection`／`wordSeparators`／`mouseReportingToggle`，共 7 個）屬 M65 淘汰的 `tui.prefs.*` 十一鍵之列。保留為歷史記錄，讀者勿據此推論現況；見文首範圍變更註記。
+
 - **捕獲/解析**：init 五模 `?1000h ?1002h ?1003h ?1015h ?1006h`（crossterm 順序）+ teardown 五模 `l` 全復位；解析器 Moved（無按鈕 `<3;x;yM` → `motion`）+ `released` 位（點擊 down/up 分隔）；`<32;+` 拖動、`<64/65` 滾輪。minimal 模式捕獲完全關（無 terminal——byte 流無 `?1000h`）。
 - **懸停（HitArea + dirty）**：視圖繪製時登記 rect+語義（`hit()`）；present 每幀 settle 一次——懸停集變了才重繪（**不裝 30fps 懸停泵**——性能紅線）。視覺：scrollback 行 bg blend（markdown 行改左欄邊框 `│`）、時間戳懸停擴展 `%H:%M:%S | %b %d`、status cwd chip 下劃線、dropdown/permission/question 行 hover 穿 bgVisual、tasks/queue 行、completion 等。
 - **點擊語義（G2，時序常量全在 mouse-consts.ts——唯 300ms 多擊窗**）**：scrollback 單擊=選+聚焦；雙擊（≤300同格）=折疊（組頭=整組；execute=excerpt 顯影；edit=`❙ 頭 (+N/-M)`；subagent=viewer 縫（缺→誠實 toast））；三擊=折疊+置頂；word_select 模式 1/2/3=行/詞URL（即複製）/段落；拖拽 ≥1 cell = wrap 感知顯示行選+邊緣 2-row band 自動滾動（1/2/3/5 行/tick）+ 鬆手自動複製（注入剪貼板層——唯一複製路徑）+ "Copied!" toast + 150ms flash（flash/hold/word_select 三模式；失 Up 恢復路徑仍複製）；scrollbar 列=鎖存+fraction 跳；permission 單擊=光標/雙擊（≤300 同 idx）即發（binder decide 複用）；question 單擊 toggle/雙擊=選+答；cancel-turn 點擊即發；status chips（cwd 複製/tasks 面板切換/context 300ms debounce/goal/plan）；面板（tasks 組頭折疊 [✗]/[↗]、queue [cancel]/[Send now]、todo 行選、dropdown 行選+接受+右欄比例跳）；Ctrl+點 armed→同格 Up 開鏈接（縫缺→誠實 toast）。
@@ -121,10 +134,10 @@
 - **後端**：`packages/rewind`——RewindStore（`rewind/<sid>/points.jsonl` + content-addressed blobs 原子寫）、RewindRecorder（take-once per turn、turn/end finalize + afterHash）、RewindService（points/plan/execute——clean/conflict 三型惰性比對、unTracked 誠實、兩階段恢復）。
 - **通道**：fs 寫管道報告 pre-image（write/edit/apply_patch 精確鉤點；結果帶 preImageRef/isNewFile——日誌即通道；shell 不攔截誠實標記）。
 - **對話回滾**：`rewind/point` 事件 + deriveMessages cut 投影（重疊 meld、append-only 鐵則保持；與 compaction 遮蔽組合）。
-- **UI（M43 已複刻）**：§3.9 六相位逐字（picker `Rewind to which turn?` / ModeSelect 三選 / CancelOffer / Confirm 衝突 `! {path} ({kind})` + `+N more` / `Rewinding...` / `Rewind failed`）+ Esc-Esc 開熱 + scrollback **anchor 下暗化** + **引擎隱藏 rewound 塊**（標記行在位）+ case-020（真服務磁盤 byte-exact 恢復 + 日誌截斷）。
-- 注：rewind/v1（`--attach` wire 附錄）待後。
+- **UI（M43 已複刻——M65 已隨前端刪除）**：§3.9 六相位逐字（picker `Rewind to which turn?` / ModeSelect 三選 / CancelOffer / Confirm 衝突 `! {path} ({kind})` + `+N more` / `Rewinding...` / `Rewind failed`）+ Esc-Esc 開熱 + scrollback **anchor 下暗化** + **引擎隱藏 rewound 塊**（標記行在位）+ case-020（真服務磁盤 byte-exact 恢復 + 日誌截斷）。
+- 注：rewind/v1（原 `--attach` wire 附錄；`--attach` 已於 M65 隨前端刪除）待後。
 
 ## 九、明確邊界
 - **不做**：PTC/run_code、workflow worker、provider 註冊表化、插件執行
-- **遠期/觀望**：R-A10 memories、rollover、執行策略深化、R-B4 git undo **B 案**（checkpoint 引擎；A 案 M58 已落地：`plan().unseen` 唯讀 git 對照）、分享/webhook/身份/外部進程子代理、macOS 沙箱
+- **遠期/觀望**：**前端重建**（web/desktop 面——排在很後面）、R-A10 memories、rollover、執行策略深化、R-B4 git undo **B 案**（checkpoint 引擎；A 案 M58 已落地：`plan().unseen` 唯讀 git 對照）、分享/webhook/身份/外部進程子代理、macOS 沙箱
 - **零缺口確認**（相較五源審計五區清單）：除 R-B4 B 案外全部落地或明確關閉/遠期

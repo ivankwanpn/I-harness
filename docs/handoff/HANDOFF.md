@@ -13,10 +13,12 @@
 |---|---|
 | Repo | `D:\I-harness-main` on the original workstation; any clone works |
 | Remote | `https://github.com/ivankwanpn/I-harness` — **authoritative** |
-| Branch | **`m64`** — the live branch. `m62` is its ancestor and is finished; `m63` was retired (see §0.1) |
-| HEAD | **`a686d9e1`** is the revision the **M2-era** figures below were measured at; the M62/M1-era figures were measured at `a5e4bb0e`, and every commit since moves HEAD again. **Run `git rev-parse HEAD origin/m64` rather than trusting this row** — that is the lesson §0.2 records, applied to this table. |
-| Sync / tree | `HEAD == origin/m64`, working tree **clean** |
-| What `m64` holds | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** + **M2, the reachability gate** (§0.3) — at `a686d9e1`: **61** commits after `3e0e2536`, **115** after `origin/main` (and 2 behind it). The count rises by one per commit, so **re-run it** (§0.2's lesson) |
+| Branch | **`m65`** — the live branch since 2026-09-17. `m64` is its ancestor (by **20** commits, measured 2026-09-17); `m62` is an ancestor of `m64`; `m63` was retired (see §0.1) |
+| HEAD | **`7eb13e3`** when this row was written. As always: **run `git rev-parse HEAD origin/m65` rather than trusting this row** — that is the lesson §0.2 records, applied to this table. |
+| Sync / tree | `HEAD == origin/m65`, working tree **clean**. m65 is **135** commits ahead of `origin/main` and **2** behind it (measured 2026-09-17) |
+| What `m65` holds | **M65 — the frontend removal** (§0.4): the TUI and web frontends are **deleted**, the pre-M44 bare-launch is restored, and the 104 orphan rows the removal left were priced as **one named class**. Its tracked record is `docs/handoff/2026-09-17-remove-tui-and-web-frontends.md` |
+| What `m64` holds — **still the revision the figures below were measured at** | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** + **M2, the reachability gate** (§0.3) — at `a686d9e1`: **61** commits after `3e0e2536`, **115** after `origin/main` (and 2 behind it). The count rises by one per commit, so **re-run it** (§0.2's lesson) |
+| HEAD the **M2-era** figures below were measured at | **`a686d9e1`**; the M62/M1-era figures at `a5e4bb0e`. Every commit since moves HEAD again — **and M65 has moved it further still**, which is why §0.4 exists and why any `path:line` below may have rotated |
 
 **This document is not a snapshot of the tip; it is the orientation guide, and §5's baselines are the M62 baseline plus a tip section.** Two things follow, and the second is the one that bites:
 
@@ -26,7 +28,9 @@
 
 The last goal — implementing `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` — is **complete**: five steps, a four-scope final review, a consolidated fix round. Its report is the first thing to read if you need depth: `docs/handoff/FINAL-REPORT.md`.
 
-**One surprising thing you should know up front** (it is a reachability statement, not a bug): the "session is tightened mid-run" scenario the whole sandbox design exists for is **still unreachable in production**, and the **TUI composes no sandbox at all**. A producer does exist now — M1 Phase B added one — but it runs at **construction time** only, recording the mode a session *starts* under; it does not create the mid-session path. Details in §7.
+**One surprising thing you should know up front** (it is a reachability statement, not a bug): the "session is tightened mid-run" scenario the whole sandbox design exists for is **still unreachable in production**. A producer does exist — M1 Phase B added one — but it runs at **construction time** only, recording the mode a session *starts* under; it does not create the mid-session path. Details in §7.
+
+**Corrected 2026-09-17 (M65):** this paragraph also used to say *"the TUI composes no sandbox at all"*. **The TUI no longer exists**, so that clause has no subject — §7's bullet about it is marked rather than deleted, because it is how the sandbox design's reachability was reasoned at the time. See §0.4.
 
 ### 0.1 Which branch is which — measured, because this already went wrong once
 
@@ -106,6 +110,13 @@ The durable lesson is one level up from this section's own: a claim about which
 asserted in documents, and both were stale when read. The repair is the same in
 both cases — measure it, and make the wrong answer fail loudly instead of quietly.
 
+**Updated 2026-09-17 (M65).** This section's instruction — *take over from `m64`* — has itself
+now rotted in exactly the way it warns about, which is why it is corrected here rather than left
+standing: **`m65` is the live branch.** `m64` is an ancestor of it (by **20** commits, measured
+2026-09-17), so nothing on `m64` is missing from `m65`; the branch to open the next milestone from
+is **`m65`**, and the merge into `main` is still the human's call. The branch table above describes
+`m64`, which remains correct as history.
+
 ---
 
 ### 0.2 The 2026-09-15 review cycle — what a second session found, and the one lesson worth inheriting
@@ -173,6 +184,47 @@ Three things worth knowing before you touch it:
   table — because each moves the row set, the digest or the precision sample. They are named in §7 below and
   in the M2 record, so "M2 is done" is not read as "the reachability question is closed".
 
+### 0.4 M65 — the frontends are GONE, and the bare launch changed with them (added 2026-09-17)
+
+**Read this before running anything from §5.** On 2026-09-17 the TUI and web frontends were **removed**
+(`4ea5b5d` and its repairs), and this is the change most likely to invalidate an instruction you are
+about to follow.
+
+**What no longer exists.** `apps/tui`, `packages/tui`, `packages/tui-core`, `packages/web-host`, and
+the file `apps/cli/src/web.ts`. `git ls-files` returns **0 files** for each of those four directories;
+they may still appear on a working checkout because untracked `node_modules` are left behind, but **a
+fresh clone has none of it**.
+
+**`packages/web` DID NOT GO, and deleting it would be a bug.** It is the `web_search` / `web_fetch`
+**tool** package — mounted on the production path at `packages/session-executor/src/assembly.ts:19` —
+not the web frontend. The frontend was `packages/web-host` plus `apps/cli/src/web.ts`.
+
+**The bare launch is a usage error again.** `i-harness` with no subcommand, and any unrecognised first
+token, now print usage to **stderr** and exit **1**. It does **not** launch anything. The subcommand
+set is `run` / `sdk` / `acp` / `sessions` (plus `__dist-selfcheck`, `--version`, `help`). This restores
+the pre-M44 shape verbatim (`db3d1e7^:apps/cli/src/index.ts`); M44 had made a bare launch start the
+TUI, and that is what M65 reverses.
+
+**Why it went, so you do not infer it was abandoned.** The human's product statement (2026-09-17):
+*the backend must keep working with no interface attached, and the frontend really should be a pure
+frontend*. The TUI assembled its engine **inside the TUI process** — exactly the coupling the removal
+breaks. **This is removal, not deprecation**: the rebuild is a separate, later milestone and has
+**not** happened.
+
+**Two conclusions this section exists to block:**
+- The 34 frontend/wire rows the removal stranded (view models, DTOs, approval / question / command
+  seams) were **kept deliberately** as the replacement frontend's contract. They are **not** evidence
+  that the backend rotted.
+- The reachability row set moved **523 → 472** for a **structural** reason — rows left with their
+  deleted subject. **No verdict was withdrawn because it was wrong.** The same movement is why every
+  `path:line` in this repo that points into a frontend path now cites a deleted file.
+
+The milestone's tracked record — the 104 rows it priced as one named class, the class-5 anchor defect
+it found, and the sweep every future behaviour-changing task owes — is
+`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`. **The removal also rotated the `source`
+lines in `scripts/audit/reachability-allowlist.json`, which cite the baseline document by line; those
+were re-matched within the same milestone.**
+
 ---
 
 ## 1. There are TWO checkouts. Do not confuse them — it has already happened once.
@@ -190,7 +242,7 @@ Also harness-side, and worth knowing if a goal dies mid-run: `STREAM_CLOSED` is 
 
 ## 2. What this repo is, in thirty seconds
 
-- **pnpm monorepo**, 68 packages under `packages/`, plus `apps/` (`apps/cli`, `apps/tui`, …).
+- **pnpm monorepo**, **65** packages under `packages/`, plus `apps/cli` — the only app. (`apps/tui` and three frontend packages are gone as of M65; the "68" this line used to carry was measured before that removal. §0.4.)
 - **Node ≥ 22.18**; this machine runs **v24.15.0**.
 - **Windows-first** — and several traps in §6 are Windows/PowerShell-specific.
 - **Zero-external-dependency discipline**: a package uses `node:*` builtins and other workspace packages, nothing else. New runtime dependencies are a design decision, not a convenience.
@@ -300,10 +352,10 @@ $env:NO_COLOR = $null                                   # REQUIRED — see §6
 pnpm -r typecheck                                       # expect: exit 0, every package
 node scripts/audit/check-thresholds.mjs                 # expect: ALL THRESHOLDS PASS
 node scripts/audit/verify-citations.mjs --all-problems  # CLEAN TREE ONLY — see §6
-node scripts/audit/check-reachability.mjs               # expect: 731 ts files, 523 finding(s)
+node scripts/audit/check-reachability.mjs               # expect: 466 ts files, 472 finding(s) -- M65 moved it from 731/523; §0.4
 node scripts/audit/check-reachability.mjs --gate        # expect: gate PASS -- no new rows
 node scripts/audit/check-reachability.mjs --self-test   # expect: 36/36 ok
-pnpm test                                               # -r --no-bail, then the tui quarantine
+pnpm test                                               # -r --no-bail (the tui quarantine went with the TUI -- §0.4)
 ```
 
 `check-reachability.mjs` exists **only from M1 Phase A onward** — it is not on `m62`; it arrived with `m64`.
@@ -392,8 +444,8 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 - **The `sandbox/mode` producer — CORRECTED 2026-09-15, because this bullet was true when written and false within a day.** It used to say "**nothing in production appends a `sandbox/mode` event** … `sandbox-policy` has **no writer at all**". M1 Phase B's Task 1 (`34c746e6`, on `m64`) added the first production producer: `packages/session-executor/src/assembly.ts:354` appends the event when a host passes a `sandbox` option. **The precise state now, and the two halves must not be conflated:**
   - **A production producer EXISTS, at construction time only** — it records the mode a session starts under, so `effectiveSandboxMode`'s non-default branch is finally taken and the event reaches durable JSONL. (That change also *forced* a companion fix: `session-persistence` had never registered the type, so the first producer made every sandboxed session unloadable — `registerEventType("sandbox/mode")`, same load-gate defect class as `rewind/point`.)
   - **The mid-session tightening path is STILL unreachable in production — and the reason is stronger than this bullet first gave (that clause CORRECTED 2026-09-15).** It needs a host that appends a `sandbox/mode` event *after* construction, and **no shipped host does**. This bullet previously named one: "the only shipped one is `/sandbox` in the **frozen** `apps/cli/src/web.ts`". **That was false.** Measured: `/sandbox` is a tightening *surface*, not a mid-session appender — `web.ts:273-282` runs `await settings.set({ sandboxMode: mode })` and answers "沙箱模式已设为 …（随后创建的会话生效）" (takes effect for sessions created **later**), and `web.ts:470-475` reads `const sandboxMode = opts.sandbox ?? settings.get().sandboxMode` **once**, before `createSessionService({ … sandbox: sandboxMode })`. So no shipped command changes the sandbox mode of a live session at all. The event's sole producer anywhere in production is `assembly.ts:354`, at **construction** — `git grep -n '"sandbox/mode"' -- apps packages` returns **nothing in `apps/`** (under the bare pattern that tree holds one comment, `apps/cli/src/run.ts:271`), and in `packages/` exactly one append, beside the type declaration, the reader and the persistence registration. So the ladder remains the reachable half, and this is still a reachability statement rather than a defect.
-  - Two consequences Phase B recorded and this document did not: the producer **silently disarmed a mutation proof** (`sandbox-policy-per-call.test.ts`'s restored-history case can no longer detect removal of the `policyFloor` slice — disclosed in the test itself, deliberately no seam), and **a latent landmine in the frozen TUI** (`packages/tui/src/backend/embedded.ts:536` gates the initial kickoff on `events.length === 0`, so a host passing `sandbox` would make `i-harness tui --prompt …` silently never fire). Their `docs/handoff/2026-09-15-m1-phase-b-handoff.md` §4 R-G/R-F carry the fixes.
-- **The TUI composes no sandbox.** The word `sandbox` does not occur in `apps/tui/src/index.ts`, and the embedded session service is built with **no `sandbox` key** (`packages/tui/src/backend/embedded.ts:969`). On the shipped TUI the fs guard, the shell policy and the terminal refusal are **inert** and the ladder is unreachable. **Confinement is enabled by the CLI and the web host only.** Related and worth knowing: the same construction passes `approveAll: opts.approveAll ?? true` (`:976`) — so **on the TUI, `approveAll` is the DEFAULT**, and a host that auto-approves everything has also handed over *widening the sandbox mode* for a call. That consequence is documented in spec §3.3 point 2.
+  - Two consequences Phase B recorded and this document did not: the producer **silently disarmed a mutation proof** (`sandbox-policy-per-call.test.ts`'s restored-history case can no longer detect removal of the `policyFloor` slice — disclosed in the test itself, deliberately no seam), and **a latent landmine in the frozen TUI** (`packages/tui/src/backend/embedded.ts:536` gates the initial kickoff on `events.length === 0`, so a host passing `sandbox` would make `i-harness tui --prompt …` silently never fire). Their `docs/handoff/2026-09-15-m1-phase-b-handoff.md` §4 R-G/R-F carry the fixes. **The TUI half of that is now moot (2026-09-17, M65):** `packages/tui` is deleted, so neither the landmine nor the `i-harness tui --prompt` path it described exists — the mutation-proof half still stands and is the half that mattered. §0.4.
+- **The TUI composes no sandbox.** *(Historical as of 2026-09-17 — M65 deleted the TUI, so this bullet describes a surface that no longer exists. It is kept, not deleted, because it is why the ladder was unreachable on that host and therefore part of how §7's reachability argument was made. §0.4.)* The word `sandbox` does not occur in `apps/tui/src/index.ts`, and the embedded session service is built with **no `sandbox` key** (`packages/tui/src/backend/embedded.ts:969`). On the shipped TUI the fs guard, the shell policy and the terminal refusal are **inert** and the ladder is unreachable. **Confinement is enabled by the CLI and the web host only.** Related and worth knowing: the same construction passes `approveAll: opts.approveAll ?? true` (`:976`) — so **on the TUI, `approveAll` is the DEFAULT**, and a host that auto-approves everything has also handed over *widening the sandbox mode* for a call. That consequence is documented in spec §3.3 point 2.
 - **Read isolation is not "unwired", it is unimplemented.** No backend declares `capabilities.readIsolation: true` (`sandbox-local` says `false` explicitly at `:47`/`:71`; `sandbox-windows-acl` omits the declaration, which the contract at `packages/sandbox/src/index.ts:38` treats as false), so `requireReadIsolation: true` makes **every confined call throw** by design (`:64-71`). The revisit condition, including the `denyRead?: readonly string[]` field that does not exist yet, is written up in spec §3.5.
 - `docs/CAPABILITIES-DETAIL.md:285` used to name `session-mode.ts` as the `sandbox/mode` **producer**; it only reads. Corrected — a mechanism claim this range disproved must not be inherited silently.
 
@@ -413,7 +465,7 @@ Single file: `cd packages/<pkg>; npx vitest run test/<file>.test.ts`.
 
 ## 9. What this handoff does NOT establish
 
-- I did **not** run the TUI or the web host end-to-end. The reachability statements in §7 come from reading code plus targeted greps, not from driving those surfaces.
+- I did **not** run the TUI or the web host end-to-end. The reachability statements in §7 come from reading code plus targeted greps, not from driving those surfaces. **Both of those surfaces were removed on 2026-09-17 (§0.4), so this limitation is now moot rather than dischargeable** — nothing can go and run them.
 - The six parked findings in §7 are **unproven in both directions** — no test was written to demonstrate them, and none was written to rule them out.
 - The performance figure is withdrawn; no replacement measurement exists, and **IH has no benchmarking harness** (dsh does).
 - On the harness side I verified only the code paths cited in §1 (`sse.ts:39`, `retry-policy.ts:18-24`, the pinning test). I did not reproduce the `STREAM_CLOSED` failure itself — nor the `0xC0000409` web-server crash in §7.

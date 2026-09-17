@@ -1,11 +1,15 @@
 # I-harness 能力盤點（詳細版）— CAPABILITIES-DETAIL
 
-> 本文是 `docs/CAPABILITIES.md` 的**逐項深挖**版本：同一組九大節骨架，但每一項都給出可從原始碼驗證的細節（工具 schema、事件欄位、常數、策略值、file:line 出處）。範圍 = `d:\I-harness-main`（65 包 + `apps/cli` + `apps/tui`）當前工作樹（含 M35–M39 TUI 全鏈）。所有斷言均從實際程式碼讀出；關鍵項附 `file:line`。✎ 標記 = 與上層概覽（CAPABILITIES.md）**不一致或概覽未載**的項目，見 §11 差異清單。
+> 本文是 `docs/CAPABILITIES.md` 的**逐項深挖**版本：同一組九大節骨架，但每一項都給出可從原始碼驗證的細節（工具 schema、事件欄位、常數、策略值、file:line 出處）。範圍 = `d:\I-harness-main`（65 包 + `apps/cli`）當前工作樹。所有斷言均從實際程式碼讀出；關鍵項附 `file:line`。✎ 標記 = 與上層概覽（CAPABILITIES.md）**不一致或概覽未載**的項目，見 §11 差異清單。
+>
+> **⚠️ 範圍變更（M65，2026-09-17）：TUI 與 web 前端已移除。** `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts` 都已刪除——`git ls-files` 對前四個路徑各回 **0 個檔案**（工作目錄殘留的只有未追蹤的 `node_modules`，新 clone 沒有）。**本文是移除前那棵樹的快照**，因此下列區塊描述的東西已經不存在，一律以本註記為準：**§4.1 與 §4.4 的 `web-host` 路由與認證**、**§4.1b 的 `web`／`tui` 宿主命令**、**§4.3 的 `i-harness web` 一列**、**§10（已改寫成移除說明）**，以及 **§11 與 §12** 中引用 `tui`／`tui-core`／`web-host` 的項目。
+>
+> **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 >
 > 驗證原則：不憑記憶。腳本層驗證見 §12（抽查清單 + 抽查方法）。
 
-**導航**：§一 工具註冊表（schema 級）｜§二 事件詞彙｜§三 引擎/機制｜§四 服務面（host/sdk/acp）｜§五 子代理/團隊｜§六 生態/配置｜§七 模型面｜§八 持久化｜§九 沙箱/安全｜§十 TUI 層（M36–M39）｜§十一 已知缺口與差異｜§十二 驗證記錄。
-**涵蓋深度對照**：Capabilities-overview 每行正文於此一節內擴展為 2-5 小節；未見於概覽者（TUI 全鏈、E-region 細節、事件生產者、工具實現對照）為新增。
+**導航**：§一 工具註冊表（schema 級）｜§二 事件詞彙｜§三 引擎/機制｜§四 服務面（host/sdk/acp）｜§五 子代理/團隊｜§六 生態/配置｜§七 模型面｜§八 持久化｜§九 沙箱/安全｜§十 TUI 層（**已移除**）｜§十一 已知缺口與差異｜§十二 驗證記錄。
+**涵蓋深度對照**：Capabilities-overview 每行正文於此一節內擴展為 2-5 小節；未見於概覽者（E-region 細節、事件生產者、工具實現對照；**TUI 全鏈一項已隨 M65 移除**）為新增。
 
 **頭數字速查**（全部於下文有出處）：
 
@@ -26,7 +30,7 @@
 | provider | 5 協議、probe 10s、retry 5 次/500ms/10s/0.1 jitter |
 | 推理 | 6 檔 × 4 譯表（anthropic legacy 2048/8192/16384） |
 | 沙箱 | 3 模式、bwrap/ACL 兩後端皆 readIsolation:false、lock 24-hex sha 路徑 |
-| TUI | 50 RGB × 2 主題、30fps 主循環、7.5fps braille、16ms batch、500ms tail flush、minimal region ≤10/h、wcwidth 6+15 區間、ESC 64/OSC 512、probe 500ms、8MiB mux |
+| ~~TUI~~ ⚠️ **已移除（M65）** | 50 RGB × 2 主題、30fps 主循環、7.5fps braille、16ms batch、500ms tail flush、minimal region ≤10/h、wcwidth 6+15 區間、ESC 64/OSC 512、probe 500ms、8MiB mux |
 | 檢索 | FTS5 app 0x49485155、limit 1..100（工具）/200 預設 500 上限（HTTP 分頁） |
 | 指令載入 | AGENTS.md>CLAUDE.md、24_000 字元上限 |
 | workspace walk | 500 entries / 8 層 / 3000 visited |
@@ -370,6 +374,8 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 ### 4.1 web-host 路由清單（packages/web-host/src/host.ts——HTTP + WS mux）
 
+> **⚠️ 已移除（M65，2026-09-17）：`packages/web-host` 整包已刪除，本小節描述的路由一條都不存在。** 保留為歷史量測，讀者勿据此推論現況；見文首範圍變更註記與 `docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`。
+
 **HTTP（~53 路由 / 24 靜態 + 29 參數）**，全部位於同一個 `route()`：
 
 | 路由 | 方法 | 行為 |
@@ -420,10 +426,12 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 ### 4.1b 四宿主命令面（apps/cli/src/index.ts:100-320）
 
+> **⚠️ 已移除（M65，2026-09-17）：四個宿主裡 `web` 與 `tui` 兩個沒有了。** 現行的子命令集是 `run` / `sdk` / `acp` / `sessions`（加內部的 `__dist-selfcheck`、`--version`、`help`），**裸啟動或未知子命令是用法錯誤：用法印 stderr、exit 1**。見文首範圍變更註記。
+
 | 命令 | 旗標 | 行為 |
 |---|---|---|
 | `i-harness run <task>` | `--model p:m`、`--api-key KEY`、`--yes`（=approveAll）、`--session-dir DIR`、`--resume ID`、`--telemetry`（+`I_HARNESS_TELEMETRY=1`） | runHeadless（§1.2/§3）；健康路徑：resume 失敗/裝配失敗/drain 失敗 → exit 1 |
-| `i-harness web` | `--port N`（> `PORT` env > **4310**）、`--session-dir DIR`、`--launch-token`、`--hmac-secret`（env `I_HARNESS_TOKEN`/`I_HARNESS_HMAC` 等價；任一給定即啟 R-C3 fence） | createWebServer（§4.1）；SIGINT/SIGTERM elegant close。**M61**：session store 不再是 workspace（cwd）——預設 = 共用 root（`<harness home>/sessions`），`--session-dir` 可覆蓋；`GET /` 供應內建 **L3 對話頁**（`packages/web-host/src/ui.ts`：session 清單 + 新建 session + transcript + prompt 輸入）。prompt 走 mux `command` endpoint（`{sessionId, prompt}`），串流走同 session 的 `session` / `chunk` / `reasoning` 串流，approval / question 走兩條**全域**決策通道（回 `{type:"approval"}` / `{type:"answer"}`）；回合落定後回讀 durable log 以免串流與日誌不一致。`ui: false` 可回到純 API（非 API 路徑 404 JSON）。 |
+| ~~`i-harness web`~~ ⚠️ **已移除（M65，2026-09-17）** | `--port N`（> `PORT` env > **4310**）、`--session-dir DIR`、`--launch-token`、`--hmac-secret`（env `I_HARNESS_TOKEN`/`I_HARNESS_HMAC` 等價；任一給定即啟 R-C3 fence） | createWebServer（§4.1）；SIGINT/SIGTERM elegant close。**M61**：session store 不再是 workspace（cwd）——預設 = 共用 root（`<harness home>/sessions`），`--session-dir` 可覆蓋；`GET /` 供應內建 **L3 對話頁**（`packages/web-host/src/ui.ts`：session 清單 + 新建 session + transcript + prompt 輸入）。prompt 走 mux `command` endpoint（`{sessionId, prompt}`），串流走同 session 的 `session` / `chunk` / `reasoning` 串流，approval / question 走兩條**全域**決策通道（回 `{type:"approval"}` / `{type:"answer"}`）；回合落定後回讀 durable log 以免串流與日誌不一致。`ui: false` 可回到純 API（非 API 路徑 404 JSON）。 |
 | `i-harness sdk` | `--session-dir DIR` | SDK stdio 伺服器（stdout 僅協定） |
 | `i-harness acp` | `--session-dir DIR`、`--no-auto-approve` | official-ACP v1 stdio |
 | `i-harness sessions` | `list`（預設）、`show <id>`、`--session-dir DIR`、`--json`、`--last N` | **M61**：durable store 的 CLI 讀取面（唯讀、不取 ownership、不寫入）。root 預設 = `<harness home>/sessions`（`$IH_CONFIG_DIR` 或 `~/.i-harness`，與 TUI 同一個），所以它顯示的就是 TUI 存下來的東西。`list` 每列 = id / title / turn count / 相對時間（新到舊；單一壞檔只讓那一列帶 `problem`，不使整份列表失敗）；`show` 印出逐回合 transcript（`─── turn` / `❯ prompt` / `◆ tool args` / `→ result` / assistant 文字），**internal runtime-context 訊息不入 transcript**。listing 與 `sdk` 的 `session/list` 共用同一實作（`apps/cli/src/sessions.ts`）。 |
@@ -445,6 +453,8 @@ M48 durable stdio lifecycle：`sdk`/`acp` 在 `--session-dir` 下先 create/adop
 - v0 棄置清單（:14-19 註記為明文缺口）：MCP servers 於 session/new、per-session cwd、session/update 對映、delete、fork、set_mode、set_config_option、terminal/fs/elicitation 客戶端方法呼叫、認證方法。
 
 ### 4.4 認證（R-C3 fence，packages/web-host/src/auth.ts:37-100）
+
+> **⚠️ 已移除（M65，2026-09-17）：`packages/web-host` 已刪除，本小節的 fence 已不在樹上。** 歷史量測，見文首範圍變更註記。
 
 HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token（constant-time 比對，:94）、DNS-rebind 柵欄（Host/Origin 僅 loopback：127.0.0.1/localhost/::1，:25, 69-89）、CORS preflight allow-list = loopback origins（host.ts:688-690）。WS upgrade 同 fence：先 host 檢查 + cookie/token（host.ts:687-699）；無 auth 配置 = 無圍欄（dev 姿態）。
 
@@ -568,105 +578,43 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 
 ---
 
-## 十、TUI 層（M36–M39：tui-core + tui + apps/tui）
+## 十、TUI 層 —— 已移除（M65，2026-09-17）
 
-### 10.1 tui-core 渲染
+**這一節描述的整個層已經不在這棵樹裡了。** M35–M49 的 TUI 鏈——`packages/tui-core` 渲染層、
+`packages/tui` app 層、`apps/tui` 宿主，以及其後的全局命令、提供商／模型管理、Slash 註冊表、
+鼠標全語義與 PTY 回歸——於 **2026-09-17 隨 M65 一併刪除**：`git ls-files` 對
+`apps/tui`、`packages/tui`、`packages/tui-core` 各回 **0 個檔案**（工作目錄上殘留的只有未追蹤的
+`node_modules`，新 clone 完全沒有）。同批刪除的還有 `packages/web-host` 與 `apps/cli/src/web.ts`。
 
-- **Cell 雙緩衝 diff**：`DiffBuffer` front/back；`sameFrame = runs.length===0`（grid/index.ts:93-118）；diff = **全格掃描的最大行 run**（每列一次掃描，無 dirty 集，:66-91）——width-2 頭頁擴展至 `x+1`（中→日 同寬替換，:79-82）；`commit` 原地 swap 陣列保留後端堆疊句柄（:111-117）。**零字節 idle**：`flushRuns` 於 sameFrame/無 runs/寬高 0 → `""`（render/index.ts:108-111）；WriterPump.submit("") no-op（output/index.ts:32）。
-- **DEC 2026**：`\x1b[?2026h<out>\x1b[?2026l` 僅當 `sync && cap.synchronizedOutput && 輸出非空`（render/index.ts:115-117）；init 序列 `?2026h` 於尾部（terminal/index.ts:18）。
-- 寬度安全（render/index.ts:84-99）：width-2 於末欄 → 空間佔位；continuation → 空白＋1 步進；CUP 僅在游標非 run 頭時發出；文字消毒（控制字元 → 空白，:57-66）；`CursorTracker.advance` 換行回繞（:37-44）。
-- **wcwidth 賣方表**（packages/tui-core/src/wcwidth/index.ts）：6 零寬區間（0300–036F/0483–0489/200B–200F/20D0–20F0/FE00–FE0F/E0000–E0FFF）＋ 15 寬區間（1100–115F…30000–3FFFD，**含 2E80–A4CF 註明 U+301C 為 2**）；**U+2501 修正**：git 9e68f3b 自 WIDE 表**移除** 2501-2501 特例——整個 box-drawing U+2500–257F 恆寬 1（grok 的「━━」為兩個寬 1 單元格）；測試 pin（test/wcwidth.test.ts:14, 63, 94-102）。
-- **glyphs**（glyphs/index.ts:40-78）：fancy/legacy 成對表（`❯`/`>`、`◉`/`*`、`⠋⠙⠹⠸⠼⠴⠦⠧` 8 幀 vs `|/-\`、`┃`/`│`、`━━`/`══`…）；不變面（progressBlocks `▏▎▍▌▋▊▉█`、todo `□▶✓✗`）。
-- **SGR minifier**（ansi/style.ts:125-164）：`emitSgrChange` = 純狀態 diff，**無位元組閾值**；順序固定（invert→bold→dim(22 同時清 bold+dim 故 bold 先)→italic/underline→fg→bg）；inverse-off 特殊路徑：完整 reset 重套（SGR 27 舊端不可靠，:130-144）。
-- **WriterPump**（output/index.ts:18-79）：drain 驅動（無計時器）；backpressure 期間只保留**最新**幀（合併非排隊）；皆 `frames++`；錯誤無處理（錯誤上浮給呼叫端）——✎ 概覽的「backpressure 語意」即此。
-- 渲染輸出組裝：runs → CUP+SGR+文字（選用 2026 wrap）；**無 decorations 層**。
+**為什麼是移除而不是修**：產品立場是**後端必須在沒有界面附著時照常工作**，而**前端真就應該是純前端**；
+TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這是移除，不是廢棄**——重建是另一個里程碑，
+**尚未發生**。完整記錄（含它留下的 104 列孤兒如何被定價、以及 class-5 偵測器缺陷）見
+[`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 
-### 10.2 輸入解析（tui-core/src/input/parser.ts）
+**本節先前的內容沒有被改寫、也沒有被摘要掉，而是整段留在 git 歷史裡**：它以當時的工作樹為準，
+全文可在 `git show 4ea5b5d^:docs/CAPABILITIES-DETAIL.md` 讀到（`4ea5b5d` 就是執行刪除的那個 commit）。
+留在那裡而不是搬進來標成「歷史」，是因為**本文件的範圍是當前工作樹**——
+一份把已刪除子系統寫成現況的清單，比一份誠實說「它沒了」的清單更容易誤導人。
 
-- 狀態機：ground/esc/esc-int/csi/ss3/osc/dcs/paste/paste-trail（:64-66）。C0：`\n`→Enter（`\r\n` 合併一次）、`\0`→Ctrl+Space、0x08/0x7F→Backspace、0x09→Tab、0x01–0x1A→Ctrl-letter、**`\x03` = char "c"+ctrl**（:232-235）。
-- C1（80–9F）：unknown 事件；ESC 分支（doubled ESC→Esc、[→CSI、O→SS3、]→OSC、P→DCS、utf8 lead→altChar）；CSI finals：A/B/C/D/H/F/Z(I…)、**I=焦點 gained、O=gained:false**（:365-366）、`~`→csiTilde、其餘 unknown（raw bytes + 下一 byte resync）；**kitty CSI-u** 僅 `cap.kitty` 才解碼（:351-356）——`decodeKitty`：`;`/`:` 多欄（code;mods;event；event 3 = 釋放濾除）、特殊碼（7F/08/09/0D/0A/1B→鍵）、printable→char + kitty:true（:509-561）。
-- **SGR mouse 1006 唯一**（✎ 1106 不存在）：CSI `<… M/m` 解碼（wheel 64 位元組/button+drag/mod:ctr16/shift4/alt8，:486-506），**無條件解碼——app 依能力卡欖**（:13-14）。
-- bracketed paste（200~…201~）：raw 入緩衝、`ESC[201~` 結束、失敗轉回字面；UTF-8 streaming（2/3/4 位元組手解，**未完成緩衝跨 push 保留**，:178-200）；**64 位元組 escape 上限**（ESC_MAX=64，:57）：逾限 → 單一 unknown 事件 + 重同步重新處理（csi/intermediate/ss3，:300-303）；**OSC/DCS 上限 512**，溢滿靜默丟棄（:58, 447-483）。
+**留下來的兩件事，重建前端的人會需要：**
 
-### 10.3 終端初始化/探測/訊號
-
-- **init 典序**：`?2026h`? → `?1049h H 2J ?25l` → `?2004h`? → `?1006h ?1002h`? → `?1004h`?（terminal/index.ts:16-25）。**teardown 固定序（與能力無關）**：`?2026l 0m ?1006l ?1004l ?2004l ?25h ?1002l ?1049l`（:27-29）；`TeardownGuard` 純一次性旗標（invoke 恰一次 true，:31-60）。
-- **探測**（probe/index.ts）：**僅三条查詢**——XTVERSION `\x1b[>0q`（✎ 無 DA1/DASR 查詢；僅被動 DA2 `\x1b[>1;95`→WindowsTerminal）、kitty `\x1b[?27u`（DECRPM 回應 `/^\x1b\[\?27;?(\d+)\$p$/` 或 progressive）、OSC 11 `\x1b]11;?\x07`（`rgb:…` 亮度 BT.709 < 0.5 → dark）；**500ms 截止**（PROBE_DEADLINE_MS=500），早完成早結算（:86-111）；掃描每次饋送 ≤8 迴圈。
-- 能力結果（types.ts:6-27 13 欄）：colorLevel（COLORTERM truecolor/24bit > TERM 256color > ansi16）、dark、kitty、mouse、bracketedPaste、focusEvents、synchronizedOutput、brand（XTVERSION > DA2 > WT_SESSION > unknown）、multiplexer（**ZELLIJ/TMUX env 判定**，probe:225-228）、legacyConsole（win32 無 WT_SESSION 且非 xterm 或 brand unknown，:230-232）；`modern` 統一門控 mouse/bracketedPaste/focusEvents/synchronizedOutput（:229, 236-240）。
-- **screen-mode 政策**（screen-mode/index.ts:18-51）：CLI > config > auto（zellij→inline、tmux→inline、legacyConsole→minimal、否則 fullscreen）；auto 途徑無數值閾值（純 env/布林）；回傳 `{mode, fallback, reason}`（inline/minimal 時 fallback="fullscreen"──M37 待 inline 引擎落地——**M38a 已落地**因此現行 harness 直接使用）。
-- **訊號**（signal/index.ts：SignalGate + installSignalHandlers）：SIGINT/SIGTERM/SIGBREAK(僅 win32)；**第一訊號 ∈ 1000ms 窗口 → graceful**、第二 → force（exit 130）；（`GRACE_WINDOW_MS=1000`）；exit hook 補 graceful；**raw 模式下 Ctrl-C 以資料 \x03 交到輸入層，非 SIGINT**（:11-13）——與 §10.2 一致。
-
-### 10.4 主題
-
-- GrokNight/GrokDay 各 **50 RGB 值**（44 標量 + mdHeading 6 色元組；groknight.ts:6-50 / grokday.ts:9-53；數值取自 2026-09-03 grok-ui-spec §5，兩者皆 `Object.freeze`）。
-- 量化（theme/index.ts:163-170）：truecolor 直通 → monochrome（亮度 < 0.5 → idx7 否則 15）→ ansi16 色相釘定（`toAnsi16`：s<0.15 灰系 v≥85%→15、<20%→8、dark?8:7；否則 red/yellow/green/cyan/blue/magenta 桶：hue≥345‖<20→1、<80→3、<150→2、<205→6、<255→4、else 5；dark → idx+8，:137-157）→ 256 立方（6×6×6 層級 [0,95,135,175,215,255] + 灰階 8..238，:93-118，平方歐氏近鄰）。
-- **Windows 對比增益**（boosted，:82-89）：亮度 <0.2→+16、<0.32→+40、<0.6→+8 每通道、clamp255——僅 `boost && cap.dark` 時作用。
-- OSC 11 = 暗色判定輸入（暗 → groknight）；OSC 12 僅 initSequence 選用參（shipped createTerminal 不發——stub，terminal:23）。`resolvePalette = kind ?? (dark ? groknight : grokday)`——**單步、無更深的 fallback**。
-
-### 10.5 tui app 層（packages/tui）
-
-- **循環**（app/loop.ts）：三源合流（input pump 431-438 / backend pump 440-445 / 30fps anim pump 447-457，`ANIM_MS=33`，:110）；frame 合併（requestFrame 1016-1023；同幀 → `""` 零字節，:299）；anim 僅 turn 運行或 toast 存活時請求（460-464）；對 toast 3000ms 失效＋≥3 收縮；行為分派表（:308-427：scroll ±3、page=floor(h/2)、toggle-fold、cycle-mode normal↔plan、cancel-turn 三分支、interject→backend.steer 347-354）。
-- **keymap 全表**（app/keys.ts——路由優先 welcome → overlay/panel/dropdown → minimal → scrollback → prompt，:84-93；`Kbd={code,key,ctrl,alt,shift}`，ShiftTab 特判 :79-82）：
-
-| 焦點 | 按鍵 | 動作 |
-|---|---|---|
-| prompt | Enter / Ctrl+Enter / Shift·Alt+Enter | submit / interject / newline（multiLine 時 Enter=newline） |
-| prompt | Esc（有文）/ Esc（空·未臂）/ Esc（空·臂） | cancel-turn / quit-arm1 / quit |
-| prompt | Tab / ShiftTab | cycle-mode（normal↔plan） |
-| prompt | Up/Down（空碼） | history-prev/next |
-| prompt | Ctrl+C（有文）/ Ctrl+C（空） | 清草稿 / cancel+arm·armed→quit-arm1 |
-| prompt | Ctrl+M / Ctrl+Q / Ctrl+T / Ctrl+B / Ctrl+; / Ctrl+S / Ctrl+N / Ctrl+P / `?`(空碼) | toggle-multiline / quit / todo 窗 / tasks 窗 / queue 窗 / sessions / sessions-new / 命令盤 / 命令盤 |
-| scrollback | ↓↑ PgUp PgDn | scroll/page（page=floor(rows/2)） |
-| scrollback | ←/→ · Tab · Esc | toggle-fold · focus-prompt · none |
-| scrollback | j k · g G · L H · h l e E · y | scroll · top/bottom · 下一/上一 turn · fold 摺/展 · copy |
-| overlay（permission/question/cancel） | 1-9 · Esc · Enter · ↑↓ · PgUp/PgDn · ←→ · Tab/ShiftTab | overlay-accept index / dismiss / select / nav / page / range(permission)·collapse / tab |
-| overlay | Ctrl+F · Ctrl+P/N · Ctrl+Y(question) · Ctrl+C · j k y e E Space | 擴充 / 導航 / 複製 / dismiss / nav-copy-fold-toggle |
-| overlay（history/sessions） | `/` · `f` | overlay-search / overlay-filter |
-| overlay（question） | `]` `[` · z · Shift+X | 下一/上一題 · freeform · submit |
-| minimal | Enter(Ctrl+Enter/Shift·Alt+Enter) · Ctrl+Q/Ctrl+S/Ctrl+M | submit(newline/newline) · quit/sessions/multiline |
-| welcome | Enter·Tab·Ctrl-any · ↑↓ · j k · g · G/l · q | menu-activate / nav / nav / top / bottom / quit |
-
-**✎ 無 mod-slash/指令前綴和弦**（`mod|meta|super|CMD` 於 keys 檔零命中）——slash 下拉以鍵入 `/` 觸發（loop.ts:937-950）；指令盤為 `?`/Ctrl+P。
-- **overlay seam**（app/overlay-seam.ts）：permission 五行 `0 Always allow / 1 Never allow / 2 Yes, proceed / 3 No, I trust it / 4 No, reject(type to add feedback)`（:86-101，freeform 行 89-91）；數位接受 1-based→internal index-1（:139-142）；←→ 循環 scope（:149-154）；**M39 freeform 真鍵路徑**：行 4 持 freeform 元件，chars/Backspace/Enter/Esc 於 keymap 前路由（loop.ts:502-510）；decision 走 `{surfaceId, verdict:"always|never|once|reject", approved, index, scope, feedback}`。question binder：1-9/a-f/多選切換/Ctrl-Y dismiss/Ctrl-C submit/Esc 返回/Tab/Z freeform/[] 翻頁（question.ts:66, 71-96）。cancel-turn：`["Stop running","Continue to run","Always stop","Always continue"]`（cancel-turn.ts:19）。
-- **視圖（資料路徑補充）**：welcome 主選單 = loop 內建 `ctrl+s Resume session / ctrl+n New session / ctrl+q Quit`＋資料源 = `opts.listSessions`（raw JSONL 可直接計算 turnCount；injected coordinator 的 cold nonblank session 無唯讀 event count 時省略 `Turns`，不偽造 0）＋ session-picker 行 `顯示 id/CWD/Model/Created/Updated/Messages/Turns?` 欄 + 相對時間（`fmtRel` just now/Nm/Nh/Nd/Nmo）；history-panel 資料 = app prompt history；file-search 資料 = `opts.searchFiles`（走 workspace walk）；tasks-pane 分組 = `Subagents|Background|Schedule`；queue-pane 前綴種類：prompt=magenta、shell=`!` yellow、cron=`↻` gray。
-- **視圖（幾何）**：agent 佈局堆疊（status 1 → tasks ≤8 → todo ≤10 → **scrollback ≥5**（agent.ts:239）→ btw ≤14 → queue ≤3 → turn 1（運行時）→ prompt → shortcuts, :146-253）；ptompt 盒 `promptLines+3+2*vpad` 上限 `max(3, floor(rows/2))`（:117-122）；**退化** cols<2*colsPad+6 || rows<2*rowsPad+4 → 1 邊距（:163-167——✎ 註解稱「rows≤16」但程式碼閾值是 6+2*rowsPad）。狀態 chips：`⎇ branch path` + 任務圓點（tickMs/125）+ plan + `[Goal:…]` + `⠋ MCP (n/N)` + 上下文梯度（**0.5/0.75/0.85 → text/accent-user/warning/accent-error**，status.ts:53-58）+ queue +N + todo ✓；TurnStatus spinner **braille 7.5fps（floor(nowMs/133.34)）**（turn-status.ts:50-54）+ 階段計時/回合計時 + `⇣N` tokens（+`[stop]`/`[↗ send to bg]` 宣告式輸入）；prompt chrome `┃` rail + `╭───╮` 右對齊標題 + `╰───╯` info 行（model·plan｜multiline）+ `❯`（prompt.ts:98-153）。
-- **scrollback 引擎**：**Fenwick 前綴和 O(log n)**（layout.ts:128-189，sumBefore/total/order 葉選取）；O(dirty) 增量（flush 只重算髒塊 309-320）；wrap 以 Intl.Segmenter 分段原子（39-87）；**verb-group 折疊**（folding.ts:20-22：`["read","search","webfetch","websearch"]` 連續可折疊工具合併、一鍵 non-destructive 不折疊；預設折疊；`◈` 總覽列含首 3 類型 + N more + failed），fold 狀態 auto/collapsed/expanded/truncated（folding.ts:12）+ 自動規則「用戶 >3 列折疊、assistant 展開、thinking 折疊」；regex 搜尋（search.ts，bad 模式→-1、下次包裹）；**sticky prompt**（engine.ts:449-459：offset ≥ userEnd 時釘住「最新用戶 3 列」）+ 時間戳（12 保留 + "h:mm AM/PM"）；選區（anchor+focus，不規則化）。
-- **retain() 顯示幹裁剪**（M39）：塊級原子（engine.ts:212-219）、fold 邊界不切（:238-251）、`… earlier {N} lines` 標記（layout.ts:292-299）、seq 不變、搜尋範圍排除（:220-221）、**>2000 行自動觸發 → 1500**（loop.ts:249-253）。
-- **FPS HUD**（app/hud.ts）：僅 `opts.hud===true` 分配（loop.ts:160-163；default off）；120 幀滾窗（下限 8）；>2000ms 區間捨棄；p50/p95 nearest-rank + 平均 fps；頂右 32 欄（HUD_PANEL_W=32）+ 滾動行數（當 lineCount>0）。
-- **後端橋**：embedded（backend/embedded.ts）——16ms batch、seq 游標 + 同 mapper 全 log replay、token-meter `context()`（host 提供 window 時同時回 total）、generation-token transactional `open()`；成功切換先送非持久化 `{type:"session/open",sessionId,seq:-1}`，scrollback/app state reset 後才送 replacement history。remote（backend/remote.ts）對 wire v1 cold-open 先由 SDK verify/adopt/build existing session，再按 `nextSeq` 抓完整 history（短頁不等於 EOF）、buffer target notifications、依 durable seq 去重，最後以 generation 原子提交 boundary→history→live tail；v1.1 capability rows 提供 cancel/Rewind，舊 server 誠實降級。steer 仍以 send-tier prompt 實作，context 仍因 wire 無 metrics RPC 而缺席。approval bridge 維持 30s fail-closed timeout 與既有 decision mapping。
-- **minimal 模式**（M38a）：inline（minimal/inline.ts：**insert_before + LF-at-bottom 原生滾動**（250-251；CSI S 於 xterm6 實測丟行，:33-46）、region 零字節 gate（signature 259-282）、setRegion canon 縫（:226-234）、region 高度 min(10,max(3,rows-2))（:103-106））；commit（MinimalCommits：turn/end·compaction·user 邊界 commit、**500ms idle tail-flush**（:23, 84-87））；composeRegion（live-region.ts：底部側欄 [tail·todos·status·prompt·info]，status+prompt 恆在）；mode（parseModeArg / relaunchArgs 剝 mode 旗、`--model` 保留 / ModeSwitch `spawn(process.execPath, ["--import","tsx", entry, ...argv], {stdio:"inherit"})`、only `/minimal`/`/fullscreen`）。
-- **markdown checkpoint**（render/markdown.ts + highlight.ts）：marked.lexer → DocPart 流；閉合邊界 = 段落空行/列表與引用結構閉合/標題/hr/表閉合/**圍欄 ``` 閉合**（:4-9, 130-143）；Checkpointer 每 chunk 整段 re-lex、只發閉合前綴＋只在尾部重繪；**未閉合圍欄 = plain 於 md_code_bg（codeBg:true）**，閉合後翻轉 hljs 上色（:43-47, 187-199）；hljs class→Style 對映（keywords→md-code bold、strings→accent-model、comments→md-muted、numbers/titles/types→accent-assistant…全 class 圖，highlight.ts:17-74）；六級標題 md-h1..h6（h6 不 bold，present.ts:181-184）。
-- **PTY harness 與案例**：`packages/tui/test/harness/`（runner.ts = node-pty spawn 真實子進程 `--import tsx <host> <markerDir> …` ＋ writtenBytes 流水；referee.ts = 宣言式 YAML 場景執行器；virtual.ts = `@xterm/headless` 虛擬終端＋完整 VT 解析器；host-011/012/013/015/016/017.ts = 各案例宿主，tui-core/test/harness 有 case-010）；**referee**——`assert-byte-budget` 為**零字節 idle 的決定性證明**（host 累積 byte/write 帳本 vs pty 面，**計數不收捨入延遲影響**——ConPTY 分塊間隔數秒，時間窗偵測 flaky，故 011/014 用 `writes:N` 模式，referee.ts:6-12, 347-391）；場景動作集：await-marker/request-marker/assert-screen/wait-screen/assert-glyph-integrity（每行寬和=cols、width-2/continuation/控制字元不變量）/assert-scrollback（baseY 釘）+ assert-cell-colors（M38b cell 級 SGR 證據）+ resize（ConPTY 注入重放 → 燒錄 2J+H 再重繪）/app-resize（fs 通道子驅動，:458-503）。**案例 010-017**：
-  - 010：first-frame render + 零字節 idle（tui-core）。
-  - 011：**live streaming 真 pty**（46×24，凍結時鐘 now→13334 使重繪恆同幀；writes=8 = init+6 幀+teardown）。
-  - 012：**真鍵面**（"hi"、\r、CSI Up 歷史、孤獨 ESC、\x03 Ctrl+C→cancel-turn→ARM（同幀零字節證明）＋退回順序退出 0；writes-budget 13）。
-  - 013：permission 覆蓋屏經生產 G4 seam（j/k/1 → decision 回寫斷言）。
-  - 014：流中 resize（host 內部 34×18 re-grid；閒視窗內 resize → 無壞形）；ConPTY 重放 → writes 計數模式。
-  - 015：**minimal 模式**（native buffer 即 print-once 帳本：baseY=5/42 + 10-write budget + resize + relaunch exit 0）。
-  - 016：markdown checkpoint（6 chunk、段落閉合 flush、未閉圍欄 plain→閉合高亮、writes=10）。
-  - 017：**交互矩陣**（真 approval bridge + freeform reject 「dont trust」→ reject+feedback→bridge round-trip；question、/btw、picker、history）。
-  - **被棄的「時間窗」**：assert-idle-bytes 列為仅 smoke——Windows ConPTY 直傳確切性差（referee.ts:421-459）。
-- **apps/tui CLI 旗標**（apps/tui/src/index.ts:60-118）：`--prompt/--workspace/--model/--yes/--session-dir <dir>/--resume <sessionId>/--attach <sessionId>/--minimal/--fullscreen/--mode <minimal|fullscreen>`；M48：`--session-dir` 將 embedded TUI 接到 JSONL store，無 `--resume` 時建立 durable session，並提供 session list、close flush 與 durable Rewind root；`--resume <sessionId>` 從同一 store 恢復指定 session，**不自動提交初始 `--prompt`**，後續 turns 繼續寫入同一 durable log；無 `--session-dir` 時 embedded session 保持 ephemeral。`--attach` 仍改走 SDK remote backend；能力探測外框 2s（:171-176）；**質紅線 12 屬性表**（M39 blueprint §1：1–10 及 12 落地、11=mermaid 規格留檔跳過——見 README M39 row）。
-- **質紅線清單**（M39 blueprint §1，12 屬性逐項狀態——README M39 row：「1–10+12 verified; mermaid skip = spec'd」）：
-
-| # | 屬性 | 落地所在（代碼證據） |
-|---|---|---|
-| 1 | 零字節 idle | tui-core render/index.ts:108-111 + output/index.ts:32；PTY case-011/014/015 斷言 |
-| 2 | backpressure writer | WritePump merge-latest（output/index.ts:18-79） |
-| 3 | 單一 teardown | TeardownGuard 一次性（terminal/index.ts:31-60）+ 固定 teardown 序 |
-| 4 | 雙級信號 | SignalGate graceful/force（signal/index.ts:32-94） |
-| 5 | 螢幕模式政策 | resolveScreenMode CLI>config>auto（screen-mode/index.ts:18-51） |
-| 6 | 能力上下文 | probeCapabilities 3 查詢 + 500ms 截止（probe/index.ts:83-111） |
-| 7 | O(dirty) 虛擬化 | Fenwick 前綴和 + 髒塊增量（scrollback/layout.ts:128-189, 309-320） |
-| 8 | checkpoint 流式 | MarkdownCheckpointer 閉合邊界（render/markdown.ts:107-144） |
-| 9 | 時間分片 | animPump 30fps + isFrame 應待（app/loop.ts:447-464） |
-| 10 | 有需才轉 | PNG/純文字路由（hasMarkdown 門）|
-| 11 | mermaid | **規格留檔、跳過未實作**（M39 spec 註記） |
-| 12 | PTY e2e | 案例 010–017（referee.ts 動作集） |
+- **wire 契約（34 列）還在，而且是刻意留的。** view model、DTO，以及 approval / question / command 接縫——
+  它們的宣告**與移除前逐位元組相同**（`git show 4ea5b5d^:<file>`），變的只有消費者。
+  它們是**重建前端的契約**，**不是後端腐化的證據**；具名清單在
+  `scripts/audit/reachability-allowlist.json` 的
+  `unused-export<TAB>@i-harness/attachment#createImageAttachmentStore` 條目（dated 2026-09-17）的 `reason` 裡。
+- **TUI-only settings 已經刪掉。** 14 個 key（`theme`、`busyEnter`、`transcriptMode` 及 11 個 `tui.prefs.*`）
+  與 5 個型別由 `144369f` 退場。**既有的 `settings.json` 仍然載得起來**：`normalizeSettings`
+  （`packages/settings/src/index.ts:542`）是逐欄投影、不讀它沒命名的 key，而 `persist()`（`:764`）寫回的
+  是正規化後的快照（`rawWithPins()`，`:750`）——所以**退役的 key 會在下次完整寫入時自然被丟掉**。
+  那個「丟掉」就是這個套件所稱的遷移：沒有遷移程式碼，也**不需要**遷移程式碼。
+  red-first 釘在 `packages/settings/test/retired-tui-keys.test.ts`。
 
 ---
 
 ## 十一、已知缺口 / 交付差異（found-vs-assumed）
+
+> **⚠️ 已移除（M65，2026-09-17）：本節若干項目引用 `tui`／`tui-core`／`web-host`，那些套件已刪除。** 具體地：`tui-contracts` 路徑、TUI 16-row 佈局、`--attach` 的 remote 缺口、以及 M49 的 TUI parity 補充——**它們描述的是已不存在的東西**，保留為量測歷史。**仍然成立且仍待處理的**是與前端無關的那些（`todo_write` 未掛載、guardian 語意精化等）。見文首範圍變更註記。
 
 **✎ 與概覽不同（不存在或未掛載）**：
 

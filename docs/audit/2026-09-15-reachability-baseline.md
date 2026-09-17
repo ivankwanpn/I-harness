@@ -16,6 +16,23 @@ each such citation is marked, and those paths are **not present in a fresh check
 every carried number is stated with its counting rule and never as the document's only evidence for a
 claim.
 
+**Correction of record (frontend removal, 2026-09-17) — read this before trusting any count below.**
+The TUI and web frontends were **removed** (`4ea5b5d` and its repairs): `apps/tui`, `packages/tui`,
+`packages/tui-core`, `packages/web-host` and `apps/cli/src/web.ts` are no longer in the tree. This
+document is a **snapshot of 2026-09-15/16** and has not been re-measured, so the removal has made a
+measurable part of it un-reproducible rather than wrong: **50 citation tokens across §3, §4, §5, §6
+and §7 name a path that does not exist** — 19 distinct paths, measured at `1ac091e` by resolving every
+backticked `path[:line]` token in this file against `git ls-files`. Those tokens are the same class as
+the `.superpowers/` citations above: they are the revision's evidence, and **they no longer resolve**.
+
+**The finding tally moved for a STRUCTURAL reason, and no verdict moved on its merits.** §2.1's 523
+rows became **472** (`523 − 115 + 104 − 36 − 4`: 115 rows left with their deleted subject, 104 arrived
+as new orphans, and 36 + 4 were retired by the two milestones that did the removing), and the §2.1
+digest moved from `5acf81aa…` to `c777795c…`. **No §4 or §6 verdict was withdrawn because it was
+wrong**, and no row whose subject survives changed disposition. §9 records the event in full, prices
+the 104 rows as one named class, and lists — measured, by item id — the cells whose **premise** the
+removal changed, which is a different and larger thing than a citation that stopped resolving.
+
 ---
 
 ## 1. What this is
@@ -1237,3 +1254,126 @@ remediation for most class-1 rows (§5.2) *and* why it would silently fail to ty
 minority. A future fix wave that reads the plan's Step 2/3 and applies it row-by-row will hit a red
 typecheck on every bucket-A row it touches; the plan's own text was never updated to say so, and this
 section is the correction of record.
+
+---
+
+## 9. The frontend removal (2026-09-17) — what it changed in this document
+
+**This is the repair the head note promises.** It is the only part of this document measured *after*
+the event, and every figure in it names its revision. The narrative record of the milestone that did
+the removing is tracked and clone-visible at
+`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`; what follows here is only what belongs to
+**this** document — the disposition of the rows this document adjudicated, and the cells whose premise
+the removal changed.
+
+### 9.1 The event, and which tally moved
+
+`4ea5b5d` deleted `apps/tui`, `packages/tui`, `packages/tui-core`, `packages/web-host` and
+`apps/cli/src/web.ts` (301 files, 71,395 deletions), with out-of-file-list repairs in `aff98d1`,
+`dbe2e41`. **`packages/web` is not a frontend and survives untouched** — it is the `web_search` /
+`web_fetch` tool package, mounted on the production path at `packages/session-executor/src/assembly.ts:19`
+(`import { registerWeb } from "@i-harness/web"`).
+
+| Revision | Rows | Movement |
+|---|---:|---|
+| `08f30c5` (M2's seed) | 523 | the baseline this document's §2.1 published |
+| `3f6084c` | 512 | `523 − 115 + 104` |
+| `144369f` | 476 | `−36` = 19 bucket-T + 17 bucket-B rows |
+| `8aabff4` | 472 | `−4` further bucket-B rows |
+| `1ac091e` (HEAD at this section's measurement) | **472** | unchanged since `8aabff4` |
+
+- **115 vanished, 115 of 115** carrying an evidence path under a deleted frontend path — so "the row
+  left because its subject did" is exact here and not a summary.
+- **104 appeared**, across **36** declaring packages: 90 `unused-export` + 14 `unconsulted-setting`.
+- **64 remain** new relative to the 523 baseline; **5** are allowlisted, which is why `--gate` reports
+  **59** and exits 1 against that frozen baseline. §2.1's digest moved `5acf81aa…` → `c777795c…`.
+
+**The self-test figure in §2.1's table also moved, and that one is not the removal's doing:** the
+suite was `18/18` at this document's revision and is **`36/36`** at HEAD. A reader reproducing §2.1's
+command block is not looking at a regression.
+
+### 9.2 The 104 rows, as ONE named class disposition
+
+Recorded here because this is the only tracked home it has: the baseline's `reason` field is a
+hardcoded constant in the scanner (`BASELINE_REASON`, `scripts/audit/check-reachability.mjs:1667-1668`), inside a
+region a human is forbidden to hand-edit.
+
+**The 104 became findings on 2026-09-17 because the TUI and web frontends — their only in-repo
+consumer — were removed.** They are one named class, not 104 findings. The four buckets partition
+exactly, **19 + 38 + 34 + 13 = 104**, and the 64 still-new rows split **17 + 34 + 13**:
+
+| bucket | meaning | rows | disposition |
+|---|---|---:|---|
+| **T** | TUI-only leftover — 14 settings keys + 5 types | 19 | **deleted** (`144369f`) |
+| **B** | backend-internal; the *export* lost its consumer, the code is live | 38 | **un-exported** — 21 retired (`144369f` 17, `8aabff4` 4), **17 stand** |
+| **C** | the frontend/wire contract — view models, DTOs, approval / question / command seams | 34 | **deferred**, as the replacement frontend's contract |
+| **?** | a product call is needed | 13 | **deferred**, each with its deciding question |
+
+**The reader who matters is the one designing the replacement frontend.** The C rows are that
+frontend's contract — their declarations are **byte-identical to the pre-removal tree**
+(`git show 4ea5b5d^:<file>`), so nothing in the removal edited them; only the consumer went away.
+**A C row is not evidence that the backend rotted.**
+
+**The 17 standing B rows are not one blocker but five**, with five different owners — the partition is
+**11 + 1 + 1 + 3 + 1**: eleven error classes whose class identity *is* a live test assertion (retiring
+them would force `toMatchObject({ name, code })`, i.e. a weakened assertion, which the ruling prefers
+to a standing row); two settings rows reachable only through `export * from "./sections.ts"` (an API
+decision); one row blocked by the class-5 detector defect (§8's sibling — see the M65 record §5); three
+reroutable by a test-body edit and **an order of magnitude apart in size**; and one cross-package
+repoint with no precedent in this repo.
+
+### 9.3 The class entries are ADJUDICATION, not exemption — stated because it is easy to misread
+
+**The gate's exemption lookup is one row per entry.** `allowlistKey` (`scripts/audit/check-reachability.mjs:1612`)
+reduces a row to `kind<TAB>subject` and the gate compares that for **equality** against each entry's
+`key` (`:1599-1600`): no wildcard, no prefix, **no class key**.
+
+So the entries dated 2026-09-17 that say "one class of N rows" **exempt exactly one row each**. The C
+and ? members are accepted through the **baseline**, which holds them; the entries are the dated,
+written reason they are there. **The gate's verdict is identical with or without them**, and repairing
+one member of a class would warn that its entry is inert while saying nothing about its siblings. A
+reader who takes those entries for enforcement is reading the opposite of what this document argued.
+
+### 9.4 The cells whose PREMISE the removal changed — measured, by item id
+
+This is the part that is *worse* than a citation that stopped resolving: a cell whose claim is now
+false rather than merely stale. Every row below was re-opened at `1ac091e`.
+
+| this document's cell | what it said | what the removal did |
+|---|---|---|
+| §3.1, class-4 row | 3 `unpushed-capability` rows, all from `packages/tui/src/app/slash/types.ts` | **the declaring file is deleted and the class emits 0 rows at HEAD**; the 3 rows no longer exist |
+| §3.1, class-3 row | 1 `unread-flag` row, evidence `apps/tui/src/index.ts` | same — **0 rows at HEAD** |
+| §4.1 item 4 — `mountPreset` | `by-design`, on the ground that the only non-test mention was a **comment** in `packages/tui/src/views/light-personas.ts:2` | **the suppression died with the file.** Re-measured at `1ac091e`: `unused-export @i-harness/preset#mountPreset` is a **live finding** (evidence `packages/preset/src/index.ts`). The deferral's premise has now actually happened; **the verdict is unchanged and the row is no longer inert** |
+| §4.1 item 6 / §4.3 item 4 — `sandbox/mode` | `still-holds`; blocker: *"the only shipped surface that could [change a live mode] is `/sandbox` (`apps/cli/src/web.ts:273-282`), which is frozen … so the caller cannot be written here"* | **the blocker is deleted, not frozen.** The reachability claim it stands on is **unchanged**, but the named **M** follow-up is now **unblocked** — the reason it could not be written here is gone with the route |
+| §4.1 item 7 / §4.4 item 1 — `tui --yes` | `by-design` — deliberately out of scope, `apps/tui` frozen | **discharged**: the subject is deleted and the row is gone. Not a verdict change |
+| §4.3 item 2 — `exitCode: -1` | *"Counting **meanings** rather than sites gives **at least eight**"*, meaning (8) being *"the TUI's copy of that runner does the same"* | **seven.** Meaning (8) died with `packages/tui/src/app/slash/impl/workflow2.ts:220-221`. Meanings (1)–(7) are unaffected |
+| §4.4 item 2 — unknown subcommands not rejected | `by-design`, because the fall-through was *"documented as deliberate at `:142-144`"* | **REVERSED, not stale.** `4ea5b5d` restored the pre-M44 behaviour: usage to stderr, exit 1, for an absent or unknown subcommand (`apps/cli/src/index.ts:122-125`, authority `db3d1e7^:apps/cli/src/index.ts`). The allowlist's matching `noRow` entry was corrected in place on 2026-09-17 and recorded as **reversed and superseded** |
+| §4.4 item 3 — no `--flag=value` support | *"**Two** `=` splits **do** exist in the tree"*, both in frozen frontend packages | **zero.** Re-measured at `1ac091e`: `git grep -n 'split("=")\|indexOf("=")' -- '*.ts'` matches **no file**. The verdict is unchanged and the sentence is now simpler than it was |
+| §4.5 item 3 — `packages/guard-approval/src/remember.ts` | *"the TUI lists `"remember"` in `NEVER_REGISTERED`"* | the citing list is deleted. The human ruling stands: the module is still **declared deliberately unwired** and still an input to the replacement frontend |
+| §6.1 rows 1, 4 and 5; §6.3's `--yes` note | four live allowlist rows for `unpushed-capability` ×3 and `unread-flag --yes` | **pruned from the allowlist — because their subject was deleted, NOT because the exemption was withdrawn on its merits.** A reader comparing the two revisions must not read the removal as a changed adjudication |
+
+**One cell removed itself from this table by surviving:** §4.2 item 4's `output-retention` spill row
+cites `apps/cli/src/run.ts:252,288`, and `apps/cli/src/run.ts` **survives the removal** — so that
+citation, alone among the seven in §4, still resolves and its two rows still stand.
+
+### 9.5 What resolves and what does not, so no reader mistakes history for evidence
+
+**50 citation tokens in §3–§7 name a path that is not in the tree** — over §3 (11), §4 (7), §5 (17),
+§6 (10) and §7 (5), across **19 distinct deleted paths**. §5's precision sample carries the most,
+because the sample was drawn over the whole tree and six of its listed rows were `@i-harness/tui` or
+`@i-harness/tui-core` rows — **those sample members no longer exist**, which is a fact about the
+sample's subject and not a defect in how it was drawn.
+
+**Eight further tokens in this document name a deleted path on purpose** — one in the head note and
+seven in §9 — which is why a whole-file count reads **58** rather than 50. Those eight are the repair
+naming what it is repairing; a reader who runs the rule below over the file and gets 58 has not found
+a defect, and the decomposition is the check.
+
+The rule used to produce those five numbers, stated so it can be re-run rather than trusted: take every
+backticked token matching `` `path.with.extension[:N[-M]]` `` in this file, resolve `path` against
+`git ls-files`, and count the tokens whose path begins with `apps/tui/`, `packages/tui/`,
+`packages/tui-core/`, `packages/web-host/`, or is exactly `apps/cli/src/web.ts`.
+
+**What this section does not do:** it does not re-measure §2–§7, and it does not rewrite their cells.
+This document's value is that it is a dated measurement of a revision, and the repair for a snapshot
+that has been overtaken is a dated correction — which is what §9 is — not a silent overwrite.
