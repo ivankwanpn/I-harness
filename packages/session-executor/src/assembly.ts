@@ -36,7 +36,7 @@ import { createFsSearchTools } from "@i-harness/fs-search"
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { registerSkills } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -107,6 +107,16 @@ export interface AssemblyOptions {
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step
   mcp?: McpServerConfig[] // M17: MCP servers to mount
   pluginMcp?: McpServerConfig[] // per-server containment; pluginMcpResults reports
+  // Plugin-contributed subagent roles, registered into the SAME RoleRegistry the
+  // builtin roles seed into. Placement is load-bearing twice, and NOT for the
+  // reason it first looks like: guardian/team hold the same registry object, so
+  // they read a late registration fine. What matters is registerSubagent itself
+  // — it restores the snapshot's roles first, then swaps in the persistence
+  // wrapper. Registering after it means a plugin role is PERSISTED (a role
+  // registered before the wrapper is installed never would be) and can never
+  // clobber a restored, user-edited role. A name already taken is SKIPPED, never
+  // replaced; pluginAgentResults reports per role like pluginMcpResults does.
+  pluginAgents?: SubagentRole[]
   lsp?: LspServerConfig[] // M18: LSP servers to mount
   skills?: { extraDirs?: string[] } // plugin overlay skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
@@ -200,6 +210,9 @@ export interface SessionAssembly {
   compactNow(instructions?: string): Promise<CompactionResult>
   /** Per-server mount outcome of the plugin MCP servers (serverName → success). */
   pluginMcpResults: Map<string, boolean>
+  /** Per-role outcome of the plugin subagent roles (role name → registered).
+   * false means the name was already taken and the role was SKIPPED. */
+  pluginAgentResults: Map<string, boolean>
   /** M42 G1: rewind engine handle — present only when the host supplied
    * rewindStoreRoot (with a sessionId) AND the journal is not bound to another
    * workspace (M54 G3 mismatch → rewind stays off, "not enabled"). */
@@ -701,6 +714,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.restoredState !== undefined ? { restoredState: opts.restoredState } : {}),
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
+    // Plugin subagent roles. AFTER registerSubagent on purpose: that call is
+    // where the snapshot's roles are restored and where the persistence wrapper
+    // replaces `subagent.roles`, so registering here means the role is saved on
+    // register and cannot shadow a restored, user-edited role. `get`-then-
+    // register rather than try/catch, mirroring the tool loop above: a taken
+    // name is skipped, and RoleRegistry.register's duplicate throw is never
+    // used as control flow.
+    const pluginAgentResults = new Map<string, boolean>()
+    for (const role of opts.pluginAgents ?? []) {
+      const free = subagent.roles.get(role.name) === undefined
+      if (free) subagent.roles.register(role)
+      pluginAgentResults.set(role.name, free)
+    }
     if (opts.guardian) {
       await registerGuardian(ctx, {
         subagents: {
@@ -875,6 +901,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       compactNow: async (instructions?: string) =>
         agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,
+      pluginAgentResults,
       ...(rewindStore !== undefined && rewindRecorder !== undefined
         ? { rewind: { store: rewindStore, recorder: rewindRecorder } }
         : {}),
