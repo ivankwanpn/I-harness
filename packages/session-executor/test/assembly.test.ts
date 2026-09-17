@@ -18,6 +18,7 @@ import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { McpMountDeps, McpServerConfig, McpServerStatusEvent } from "@i-harness/mcp-client"
 import { approxTokens } from "@i-harness/compaction"
 import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
+import type { SubagentRole } from "@i-harness/subagent"
 import { createSessionAssembly, ModelUnavailableError } from "../src/assembly.ts"
 
 // ── Observation seams for the two wirings the M33/M56/M57 cases below cover ──
@@ -647,4 +648,91 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
   // that reader is `mcpStates.get(serverName)` — a Map lookup that cannot throw —
   // so the defensive branch has no reachable public trigger. The loss is recorded
   // in the task report (it is the one unit case the un-export costs).
+})
+
+// ── pluginAgents: a plugin contributes a subagent role ──────────────────────
+// The RoleRegistry is deliberately NOT on the assembly handle ("the projection
+// owns NO registry object — rows only"), so the contract is checked where it IS
+// observable: the per-role result map, and a REAL spawn through the mounted
+// spawn_agent — which resolves roles by name and throws `unknown role: X` when
+// one is absent. The first case runs the same fixture with and without the
+// option, so it is the OPTION that makes the difference rather than an
+// assertion that merely passes.
+describe("createSessionAssembly — pluginAgents", () => {
+  /** One turn whose model asks spawn_agent for `roleName`. `background: false`
+   * makes the child's turn land before the parent's continuation, so the
+   * cassette order is deterministic. Returns what the model saw (a role's
+   * identity becomes observable through the child's systemPrompt) plus the whole
+   * recorded turn. An UNRESOLVABLE role makes the spawn tool throw straight out
+   * of `agent.run` — so the control case asserts a rejection, which is the
+   * sharper form of the same fact rather than a weaker one. */
+  async function spawnVia(roleName: string, pluginAgents?: SubagentRole[]) {
+    const cassette = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "simplify this", task_name: "helper", agent_type: roleName, background: false } }] },
+      { role: "assistant", text: "child finished" }, // the child's turn
+      { role: "assistant", text: "parent finished" }, // the parent's continuation
+    ])
+    const requests: LLMRequest[] = []
+    const model: ModelClient = { async *stream(req) { requests.push(req); yield* cassette.stream(req) } }
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model,
+      // spawn_agent is an approval-gated tool; absent an answerer the mount is
+      // fail-closed, which would fail these cases for a reason unrelated to the
+      // seam (same option the service subagent fixture uses).
+      approveAll: true,
+      ...(pluginAgents !== undefined ? { pluginAgents } : {}),
+    })
+    try {
+      const run = await assembly.agent.run("start")
+      return {
+        requests,
+        agentResults: [...assembly.pluginAgentResults],
+        log: JSON.stringify({ run, events: assembly.session.events }),
+      }
+    } finally {
+      await assembly.dispose()
+    }
+  }
+
+  it("a plugin role is what spawn_agent resolves against; without the option the same call does not", async () => {
+    const role: SubagentRole = {
+      name: "code-simplifier",
+      description: "simplifies code",
+      systemPrompt: "You simplify code.",
+      tools: ["read"],
+    }
+
+    // Control: the SAME fixture, option absent — the role does not exist, and
+    // the spawn tool's throw ends the run.
+    await expect(spawnVia("code-simplifier")).rejects.toThrow(/unknown role: code-simplifier/)
+
+    const withRole = await spawnVia("code-simplifier", [role])
+    expect(withRole.log).not.toContain("unknown role")
+    expect(withRole.agentResults).toEqual([["code-simplifier", true]])
+    // and it is genuinely THIS role: its own prompt reached the child
+    expect(withRole.requests.some((r) => r.systemPrompt.includes("You simplify code."))).toBe(true)
+  }, 30_000)
+
+  it("a plugin role colliding with a builtin is SKIPPED and reported, never substituted", async () => {
+    const impostor: SubagentRole = {
+      name: "general",
+      description: "IMPOSTOR",
+      systemPrompt: "You are the impostor.",
+      tools: [],
+    }
+    const run = await spawnVia("general", [impostor])
+
+    expect(run.agentResults).toEqual([["general", false]])
+    // the spawn still resolves — against the BUILTIN, which the plugin did not replace
+    expect(run.log).not.toContain("unknown role")
+    expect(run.requests.some((r) => r.systemPrompt.includes("You are the impostor."))).toBe(false)
+    expect(run.requests.some((r) => r.systemPrompt.includes("You are a general-purpose coding agent."))).toBe(true)
+  }, 30_000)
+
+  it("omitting pluginAgents is a no-op — empty report, builtin roles untouched", async () => {
+    const run = await spawnVia("general")
+    expect(run.agentResults).toEqual([])
+    expect(run.log).not.toContain("unknown role")
+  }, 30_000)
 })
