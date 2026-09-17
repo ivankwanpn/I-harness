@@ -26,39 +26,13 @@ import type { Telemetry } from "@i-harness/telemetry"
  * dependency-free — the settings package must not import sandbox). */
 export type SettingsSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 
-/** Theme preference (M49 Task 8 — design spec §9.3): six persisted ids;
- * `system` follows the OS appearance (auto). Legacy on-disk `light` / `dark`
- * values soft-normalize to `grok-day` / `grok-night` at read. */
-export type SettingsTheme =
-  | "system"
-  | "grok-night"
-  | "grok-day"
-  | "tokyo-night"
-  | "rose-pine-moon"
-  | "oscura-midnight"
-
-/** The six accepted theme ids, in the settings modal's cycle order. */
-export const SETTINGS_THEMES: readonly SettingsTheme[] = [
-  "system",
-  "grok-night",
-  "grok-day",
-  "tokyo-night",
-  "rose-pine-moon",
-  "oscura-midnight",
-]
-
-/** The theme ids low-color terminals can distinguish (design §9.3 — the tinted
- * palettes "lose their character" when quantized — pickers expose only these). */
-export const SETTINGS_THEMES_LOW_COLOR: readonly SettingsTheme[] = [
-  "system",
-  "grok-night",
-  "grok-day",
-]
-
-/** Completed-turn transcript presentation (dsh settings.transcript). */
+/** Completed-turn transcript presentation (dsh settings.transcript). Retained as
+ * a vocabulary type after the `transcriptMode` key was retired: it is not one of
+ * the retired names, and it still names the closed value set. */
 export type SettingsTranscriptMode = "normal" | "compact"
 
-/** Enter-while-busy behavior (dsh settings.busyEnter). */
+/** Enter-while-busy behavior (dsh settings.busyEnter). Retained as a vocabulary
+ * type alongside `transcriptMode` — see the note there. */
 export type SettingsBusyEnter = "interrupt" | "wait"
 
 /** Session search-backend preference (M29 語意降級——search index switch):
@@ -169,12 +143,6 @@ export interface SettingsLlm {
   defaultModel: SettingsDefaultModel
 }
 
-/** M46b G1: keep_text_selection modes (grok `ui.keep_text_selection`). */
-export type SettingsKeepTextSelection = "flash" | "hold" | "word_select"
-
-/** M46b G1: scroll input classification (grok `ui.scroll_mode`). */
-export type SettingsScrollMode = "auto" | "wheel" | "trackpad"
-
 /** M46b G1: the grok default word-separator set (text_selection.rs:
  * DEFAULT_WORD_SEPARATORS `!"#$%&'()*+,-./:;<=>?@[\]^`{|}~`). */
 export const SETTINGS_DEFAULT_WORD_SEPARATORS = "!\"#$%&'()*+,-./:;<=>?@[\\]^`{|}~"
@@ -191,11 +159,10 @@ export const SETTINGS_STATUS_LINE_SEGMENTS = [
 ] as const
 export type SettingsStatusLineSegment = (typeof SETTINGS_STATUS_LINE_SEGMENTS)[number]
 
-/** M49 Task 13 (spec §8.3): dashboard pin/order ids (tui.prefs.dashboard) —
- * ids ONLY; missing ids are ignored for display and deleted only after the
- * next successful commit. */
+/** M49 Task 13 (spec §8.3): dashboard order ids (tui.prefs.dashboard) — ids
+ * ONLY; missing ids are ignored for display and deleted only after the next
+ * successful commit. */
 export interface SettingsTuiDashboardPrefs {
-  pinned: string[]
   order: string[]
 }
 
@@ -213,38 +180,11 @@ export interface SettingsTuiStatusLinePrefs {
 }
 
 export interface SettingsTuiPrefs {
-  /** Scrollback timestamps (the engine's showTimestamps). */
-  timestamps: boolean
   /** UI density compaction (the loop's layout compact mode). */
   compact: boolean
   /** Approval guardian: ON = tool asks go to the user (approveAll off). */
   guardian: boolean
-  /** Always-approve default for permission asks (with the guardian on). */
-  alwaysApprove: boolean
-  /** Mouse/trackpad scroll speed multiplier (1–100; 1→0.1×, 50→1.0×, 100→6.0×). */
-  scrollSpeed: number
-  /** Scroll input classification (auto-detect wheel vs trackpad, or forced). */
-  scrollMode: SettingsScrollMode
-  /** Lines per scroll tick for both wheel and trackpad (1–10). Unset (3 in the
-   * schema default) keeps the per-terminal profile in charge; the loop's
-   * normalizer treats it as the override when present. */
-  scrollLines: number
-  /** Reverse vertical scroll direction (natural scrolling). */
-  invertScroll: boolean
-  /** In-app selection: brief flash, hold, or double-click word select. */
-  keepTextSelection: SettingsKeepTextSelection
-  /** Word separators for double-click word-select (grok default set). */
-  wordSeparators: string
-  /** Opt-in mouse-reporting toggle (grok `ui.mouse_reporting_toggle`, default
-   * off): ON exposes the Ctrl+R scrollback binding + /toggle-mouse-reporting
-   * that flips mouse capture/hover at runtime (and GROK_MOUSE_REPORTING_TOGGLE
-   * forces it ON at startup). */
-  mouseReportingToggle: boolean
-  /** M49 Task 8: production UI surface mode. The executable resolves explicit
-   * `--mode` flag > this persisted value > fullscreen default; `/minimal` and
-   * `/fullscreen` write it on switch. */
-  screenMode: "fullscreen" | "minimal"
-  /** M49 Task 13 (spec §9.2): the local dashboard's pinned/order id lists. */
+  /** M49 Task 13 (spec §9.2): the local dashboard's order id list. */
   dashboard: SettingsTuiDashboardPrefs
   /** M49 Task 13 (spec §9.2): the status-line preferences. */
   statusLine: SettingsTuiStatusLinePrefs
@@ -268,10 +208,7 @@ export interface Settings {
   sandboxMode: SettingsSandboxMode
   model: string
   language: SettingsLanguage
-  theme: SettingsTheme
   fontSize: number
-  transcriptMode: SettingsTranscriptMode
-  busyEnter: SettingsBusyEnter
   /** M29: search-index ON-switch, not a persistence backend (JSONL is the sole
    *  authority). "jsonl" = index enabled (default); legacy "sqlite" value reads
    *  as enabled (compat); unknown value normalizes to "jsonl". */
@@ -311,10 +248,7 @@ export const SETTINGS_DEFAULTS: Settings = {
   // no default anywhere.
   model: "",
   language: "zh",
-  theme: "system",
   fontSize: 14,
-  transcriptMode: "normal",
-  busyEnter: "interrupt",
   searchBackend: "jsonl",
   plugins: { agentLoop: true, bash: true, webSearch: false, subagentModel: false },
   // Appended sections: fresh documents default here without any migration path
@@ -331,25 +265,14 @@ export const SETTINGS_DEFAULTS: Settings = {
   // the first-run notice visible, while a plain old document stays unset.
   onboarding: { welcomeNoticeVersion: "" },
   // M46a G1 appended section (M49 Task 6: presentation prefs only — the
-  // provider plane is llm.providers): timestamps off (the engine default),
-  // compact off (the fullscreen default), guardian off (the embedded
-  // factory's approveAll:true default; always-approve on — "no asks" stance).
+  // provider plane is llm.providers): compact off (the fullscreen default) and
+  // guardian off (the embedded factory's approveAll:true default).
   tui: {
-    // M46b G1 mouse defaults: speed 50 (1.0×), auto mode, scroll_lines 3 (the
-    // registry default — per-terminal profile in charge), invert off, flash
-    // selection, grok's word separators, mouse-reporting-toggle opt-in OFF
-    // (the Ctrl+R binding + /toggle-mouse-reporting stay inert until ON).
     prefs: {
-      timestamps: false, compact: false, guardian: false, alwaysApprove: true,
-      scrollSpeed: 50, scrollMode: "auto", scrollLines: 3, invertScroll: false,
-      keepTextSelection: "flash", wordSeparators: SETTINGS_DEFAULT_WORD_SEPARATORS,
-      mouseReportingToggle: false,
-      // M49 Task 8: fullscreen is the executable default (the resolver order):
-      // explicit flag > this persisted value > fullscreen.
-      screenMode: "fullscreen",
-      // M49 Task 13 (spec §9.2): dashboard pins/order empty; the builtin
-      // status line with every configurable segment.
-      dashboard: { pinned: [], order: [] },
+      compact: false, guardian: false,
+      // M49 Task 13 (spec §9.2): dashboard order empty; the builtin status line
+      // with every configurable segment.
+      dashboard: { order: [] },
       statusLine: { mode: "builtin", items: [...SETTINGS_STATUS_LINE_SEGMENTS] },
     },
   },
@@ -360,19 +283,6 @@ export const FONT_SIZE_MIN = 13
 export const FONT_SIZE_MAX = 16
 
 const SANDBOX_MODES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
-const THEMES: readonly SettingsTheme[] = SETTINGS_THEMES
-/** Legacy on-disk vocabulary (design §9.3): light/dark → grok-day/grok-night. */
-const LEGACY_THEMES: Record<string, SettingsTheme> = { light: "grok-day", dark: "grok-night" }
-
-/** Theme value normalization: legacy light/dark soft-upgrade to the modern ids
- * (D5 — no migration chain, no file rewrite), the six modern ids pass, and an
- * unknown value degrades to the default (`system`). */
-function normalizeTheme(value: unknown): SettingsTheme {
-  if (typeof value === "string" && value in LEGACY_THEMES) return LEGACY_THEMES[value]!
-  return oneOf(value, THEMES, SETTINGS_DEFAULTS.theme)
-}
-const TRANSCRIPT_MODES: readonly SettingsTranscriptMode[] = ["normal", "compact"]
-const BUSY_ENTERS: readonly SettingsBusyEnter[] = ["interrupt", "wait"]
 const SEARCH_BACKENDS: readonly SettingsSearchBackend[] = ["jsonl", "sqlite"]
 const LANGUAGES: readonly SettingsLanguage[] = ["zh"]
 
@@ -593,40 +503,22 @@ function normalizeOnboarding(raw: unknown, base: SettingsOnboarding): SettingsOn
 /** Appended TUI section (M49 Task 6): the presentation prefs only — the
  * legacy `providers` payload is no longer normalized (the canonical plane is
  * `llm.providers`; the store still passes the raw legacy section to the
- * read migration). Corrupt input degrades per pref. */
+ * read migration). Corrupt input degrades per pref.
+ *
+ * The projection names every key it reads, so a retired key left in an older
+ * on-disk document is simply never read — the document still loads. */
 function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
   const prefsRaw = isRecord(raw) && isRecord(raw.prefs) ? raw.prefs : {}
   const b = base.prefs
   return {
     prefs: {
-      timestamps: typeof prefsRaw.timestamps === "boolean" ? prefsRaw.timestamps : b.timestamps,
       compact: typeof prefsRaw.compact === "boolean" ? prefsRaw.compact : b.compact,
       guardian: typeof prefsRaw.guardian === "boolean" ? prefsRaw.guardian : b.guardian,
-      alwaysApprove: typeof prefsRaw.alwaysApprove === "boolean" ? prefsRaw.alwaysApprove : b.alwaysApprove,
-      // M46b G1 mouse knobs (loose on-disk values degrade to the defaults —
-      // same fallback discipline as every other appended pref).
-      scrollSpeed: numberInList(prefsRaw.scrollSpeed, 1, 100, b.scrollSpeed),
-      scrollMode: oneOf(prefsRaw.scrollMode, ["auto", "wheel", "trackpad"] as const, b.scrollMode),
-      scrollLines: numberInList(prefsRaw.scrollLines, 1, 10, b.scrollLines),
-      invertScroll: typeof prefsRaw.invertScroll === "boolean" ? prefsRaw.invertScroll : b.invertScroll,
-      keepTextSelection: oneOf(
-        prefsRaw.keepTextSelection,
-        ["flash", "hold", "word_select"] as const,
-        b.keepTextSelection,
-      ),
-      wordSeparators: typeof prefsRaw.wordSeparators === "string" && prefsRaw.wordSeparators !== ""
-        ? prefsRaw.wordSeparators
-        : b.wordSeparators,
-      mouseReportingToggle: typeof prefsRaw.mouseReportingToggle === "boolean"
-        ? prefsRaw.mouseReportingToggle
-        : b.mouseReportingToggle,
-      screenMode: oneOf(prefsRaw.screenMode, ["fullscreen", "minimal"] as const, b.screenMode),
-      // M49 Task 13 (spec §9.2): dashboard pin/order + the status line —
-      // corrupt input degrades per field (the run-time nullability of
-      // command/refreshMs is preserved — an absent value means "host default
-      // 1000ms/1s", never a fabricated one).
+      // M49 Task 13 (spec §9.2): dashboard order + the status line — corrupt
+      // input degrades per field (the run-time nullability of command/refreshMs
+      // is preserved — an absent value means "host default 1000ms/1s", never a
+      // fabricated one).
       dashboard: {
-        pinned: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).pinned),
         order: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).order),
       },
       statusLine: (() => {
@@ -666,10 +558,7 @@ export function normalizeSettings(raw: unknown): Settings {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,
     language: oneOf(raw.language, LANGUAGES, base.language),
-    theme: normalizeTheme(raw.theme),
     fontSize: numberInList(raw.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, base.fontSize),
-    transcriptMode: oneOf(raw.transcriptMode, TRANSCRIPT_MODES, base.transcriptMode),
-    busyEnter: oneOf(raw.busyEnter, BUSY_ENTERS, base.busyEnter),
     searchBackend: oneOf(raw.searchBackend, SEARCH_BACKENDS, base.searchBackend),
     compaction: { auto: booleanOf(compactionRaw.auto, base.compaction.auto) },
     plugins: {

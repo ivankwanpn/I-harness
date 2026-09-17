@@ -4,14 +4,13 @@ import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behi
 import { repairTurnTail } from "./repair.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
-export { resolveHarnessHome, resolveSessionStoreRoot } from "./harness-home.ts"
+export { resolveSessionStoreRoot } from "./harness-home.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
   SessionForkUnavailableError,
   completedTurnPrefix,
   forkSession,
   type ForkSessionOptions,
-  type ForkSessionResult,
 } from "./fork.ts"
 
 // M23: the ownership lease's typed errors are part of the coordinator's

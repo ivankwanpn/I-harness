@@ -46,10 +46,10 @@ import type { Capabilities } from "./capability.ts"
 import type { PluginRecord } from "./types.ts"
 
 /** Per-dimension runtime status of one plugin. */
-export type CapabilityStatus = "ready" | "pending" | "failed" | "unsupported" | "disabled"
+type CapabilityStatus = "ready" | "pending" | "failed" | "unsupported" | "disabled"
 
 /** Overall runtime status of one plugin. */
-export type OverallStatus = "disabled" | "initializing" | "ready" | "degraded" | "failed"
+type OverallStatus = "disabled" | "initializing" | "ready" | "degraded" | "failed"
 
 /**
  * Runtime observations injected by the host (web.ts scans its overlays and the
@@ -77,7 +77,7 @@ export interface Observations {
 }
 
 /** Per-command verdict label for the plugin's expected command set. */
-export type CommandStatus = "ready" | "failed"
+type CommandStatus = "ready" | "failed"
 
 /** The evaluator's per-plugin verdict. */
 export interface EvaluateResult {

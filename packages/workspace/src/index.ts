@@ -59,7 +59,6 @@ export {
   DEFAULT_LIST_FILES_OPTIONS,
   DEFAULT_LIST_FILES_SKIP_NAMES,
   listWorkspaceFiles,
-  type FileReferenceCandidate,
   type ListWorkspaceFilesOptions,
 } from "./files.ts"
 
@@ -98,7 +97,7 @@ export interface WorkspaceSnapshot {
 }
 
 /** The requested path is blank or malformed (DSH: workspace-invalid-path). */
-export class WorkspaceInvalidPathError extends Error {
+class WorkspaceInvalidPathError extends Error {
   readonly code = "workspace-invalid-path" as const
   constructor(message: string, readonly path: string) {
     super(message)
@@ -125,7 +124,7 @@ export class WorkspaceNotFoundError extends Error {
 }
 
 /** The proposed title duplicates another workspace's (DSH: workspace-name-conflict). */
-export class WorkspaceNameConflictError extends Error {
+class WorkspaceNameConflictError extends Error {
   readonly code = "workspace-name-conflict" as const
   constructor(message: string, readonly name: string) {
     super(message)
@@ -140,7 +139,7 @@ export class WorkspaceNameConflictError extends Error {
  * must never silently record a dangling id in a DISPLAY set the user cannot
  * see enumerated.
  */
-export class WorkspaceUnknownSessionError extends Error {
+class WorkspaceUnknownSessionError extends Error {
   readonly code = "session-not-found" as const
   constructor(message: string, readonly sessionId: string) {
     super(message)

@@ -7,7 +7,7 @@ export interface ForkSessionOptions {
   workspaceId?: string
 }
 
-export interface ForkSessionResult {
+interface ForkSessionResult {
   sessionId: string
   seedLength: number
   title?: string

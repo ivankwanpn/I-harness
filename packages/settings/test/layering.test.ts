@@ -41,10 +41,10 @@ describe("resolveLayeredSources (global < workspace < project)", () => {
 describe("mergeRawLayers", () => {
   it("last wins per key, deep-merged across layers", () => {
     const merged = mergeRawLayers([
-      { label: "global", order: 0, path: null, raws: { model: "g-model", theme: "dark" } },
+      { label: "global", order: 0, path: null, raws: { model: "g-model", fontSize: 13 } },
       { label: "project", order: 2, path: null, raws: { model: "p-model", plugins: { bash: false } } },
     ])
-    expect(merged).toEqual({ model: "p-model", theme: "dark", plugins: { bash: false } })
+    expect(merged).toEqual({ model: "p-model", fontSize: 13, plugins: { bash: false } })
   })
 })
 
@@ -53,14 +53,14 @@ describe("createLayeredStore", () => {
     const root = await tmpRoot()
     try {
       await writeFile(join(root, "g.json"), JSON.stringify({ model: "g-model" }), "utf8")
-      await writeFile(join(root, "w.json"), JSON.stringify({ model: "w-model", theme: "dark" }), "utf8")
+      await writeFile(join(root, "w.json"), JSON.stringify({ model: "w-model", sandboxMode: "read-only" }), "utf8")
       await writeFile(join(root, "p.json"), JSON.stringify({ model: "p-model", fontFamily: "hmm" }), "utf8")
       const store = createLayeredStore({
         files: [join(root, "g.json"), join(root, "w.json"), join(root, "p.json")],
       })
       await store.load()
       expect(store.get().model).toBe("p-model")
-      expect(store.get().theme).toBe("grok-night") // legacy "dark" normalizes
+      expect(store.get().sandboxMode).toBe("read-only") // the workspace layer's value survives
       // unknown/partial keys degrade per-normalize; merged values are normalized once
       expect(store.get().fontSize).toBe(14)
     } finally {
@@ -78,8 +78,8 @@ describe("createLayeredStore", () => {
       const s = await store.load()
       expect(s.model).toBe("p")
       // writes go to the master (last source), never a silent first-source write
-      await store.set({ theme: "grok-day" })
-      expect(await readFile(join(root, "p.json"), "utf8")).toContain("grok-day")
+      await store.set({ fontSize: 16 })
+      expect(await readFile(join(root, "p.json"), "utf8")).toContain('"fontSize": 16')
       expect(await readFile(join(root, "g.json"), "utf8").catch(() => "MISSING")).toBe("MISSING")
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -97,13 +97,13 @@ describe("createLayeredStore", () => {
       )
       const store = createLayeredStore({ files: [file] })
       await store.load()
-      await store.set({ theme: "grok-night" })
+      await store.set({ fontSize: 16 })
       const raw = JSON.parse(await readFile(file, "utf8"))
       // the hand-edited unknown key and the revision meta survive the write
       expect(raw.team).toEqual({ role: "dev" })
       expect(raw._revision).toEqual({ llm: 3 })
-      expect(raw.theme).toBe("grok-night") // raw doc keeps the written value verbatim
-      expect(store.get().theme).toBe("grok-night")
+      expect(raw.fontSize).toBe(16) // raw doc keeps the written value verbatim
+      expect(store.get().fontSize).toBe(16)
       expect((store.get() as unknown as Record<string, unknown>).team).toBeUndefined()
     } finally {
       await rm(root, { recursive: true, force: true })
@@ -119,8 +119,8 @@ describe("createLayeredStore", () => {
       await writeFile(
         file,
         commentHeader
-          + JSON.stringify({ theme: "system", llm: { providers: {}, defaultModel: { provider: "", model: "" } } }, null, 2)
-          .replace('"theme": "system"', `"theme": "system",\n${commentInline.slice(0, -1)}`),
+          + JSON.stringify({ fontSize: 15, llm: { providers: {}, defaultModel: { provider: "", model: "" } } }, null, 2)
+          .replace('"fontSize": 15', `"fontSize": 15,\n${commentInline.slice(0, -1)}`),
         "utf8",
       )
       const store = createLayeredStore({ files: [file] })
@@ -185,7 +185,7 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
     const root = await tmpRoot()
     try {
       const file = join(root, "s.json")
-      await writeFile(file, JSON.stringify({ theme: "dark" }), "utf8")
+      await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
       const events: TelemetryEvent[] = []
       const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
       const store = createLayeredStore({ files: [file], watchIntervalMs: 10, telemetry })
@@ -194,16 +194,16 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       await new Promise((r) => setTimeout(r, 60))
       expect(events).toHaveLength(0)
       // Mutation → later tick detects + reloads + emits with the changed path.
-      await writeFile(file, JSON.stringify({ theme: "light" }), "utf8")
+      await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
       await new Promise((r) => setTimeout(r, 200))
-      expect(store.get().theme).toBe("grok-day") // legacy "light" normalizes
+      expect(store.get().fontSize).toBe(15)
       const changed = events.filter((e) => e.type === "settings/changed")
       expect(changed.length).toBe(1)
       expect(changed[0]!.data.path).toBe(file)
       // onChange listeners still get the same change (store surface unchanged).
       let notified: string | undefined
       store.onChange((p) => { notified = p })
-      await writeFile(file, JSON.stringify({ theme: "system" }), "utf8")
+      await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
       await new Promise((r) => setTimeout(r, 200))
       expect(notified).toBe(file)
       expect(events.filter((e) => e.type === "settings/changed")).toHaveLength(2)

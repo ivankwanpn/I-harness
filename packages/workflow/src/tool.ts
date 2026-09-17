@@ -24,7 +24,7 @@ export interface WorkflowRunArgs {
   wait?: boolean
 }
 
-export interface WorkflowRunOutput {
+interface WorkflowRunOutput {
   run_id: string
   job_id: string
   // Background path (wait default false): "running" — the model collects with
@@ -37,7 +37,7 @@ export interface WorkflowRunOutput {
   exit_code?: number
 }
 
-export interface WorkflowListEntry {
+interface WorkflowListEntry {
   name: string
   description: string
   whenToUse?: string

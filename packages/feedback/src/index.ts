@@ -122,7 +122,7 @@ export class FeedbackNoteTooLargeError extends Error {
 }
 
 /** messageId does not name a finalized `assistant/message` event (DSH target-not-found). */
-export class FeedbackMessageNotFoundError extends Error {
+class FeedbackMessageNotFoundError extends Error {
   readonly code = "message-not-found" as const
   constructor(message: string, readonly sessionId: string, readonly messageId: string) {
     super(message)

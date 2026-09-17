@@ -6,7 +6,7 @@ import { join } from "node:path"
  * `~/.i-harness`. The settings document and every store hang off it, so hosts
  * that need a default path agree by construction instead of each inventing one.
  */
-export function resolveHarnessHome(configDir?: string): string {
+function resolveHarnessHome(configDir?: string): string {
   return configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
 }
 

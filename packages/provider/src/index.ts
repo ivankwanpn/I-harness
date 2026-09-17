@@ -177,7 +177,7 @@ export interface ModelDescriptor {
 }
 
 /** Directory row: the UI-facing view of one registered provider route. */
-export interface DirectoryEntry {
+interface DirectoryEntry {
   route: string
   displayName: string
   protocol: string
