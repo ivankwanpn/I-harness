@@ -180,6 +180,12 @@
       "reason": "One MCP entry that could not be converted, reported rather than dropped. The conversion function this belongs to is now CONSUMED by the CLI (apps/cli/src/run.ts feeds its output to the assembly), so its own row is gone; these two element types remain rows because nothing names them by type. See the git history for the `toMcpServerConfigs` entry this one used to point at.",
       "dated": "2026-09-17",
       "source": "docs/superpowers/specs/2026-09-17-plugin-mount-design.md §2.2 (a malformed entry is skipped AND reported, never silently)"
+    },
+    {
+      "key": "unused-export\t@i-harness/settings#describeSection",
+      "reason": "**`deferred` as ONE named class of 5 rows** — the settings UI contract the frontend removal stranded: `describeSection`, `SectionView`, `SectionOp`, `SectionName`, `SettingsConflictError`, every one of them re-exported from `packages/settings/src/index.ts`. Kept because the frontend is being rebuilt and will need exactly this. **The shape is AFFIRMED, not merely tolerated.** Checked on 2026-09-18 against three shipping agent harnesses (Codex v0.154.0, Grok Build, an opencode fork): `SectionName` is a CLOSED union, which is what Codex projects too (a closed `ThreadItem` union); `SectionOp` is a generic path-addressed patch, so there is no per-section op vocabulary to grow; and the revision guard is optimistic concurrency of the same family as Codex's kernel lease CAS. **What NONE of the three has is a per-section view registry** — Grok has no registry at all (its section list is the client's own match arms) and Codex's only projection knob is a depth enum. So the one thing this contract must not grow into is a registry, and `SectionName` being closed is what keeps that honest: widening it is a decision, not an edit. What would change this disposition: the frontend settling on a different projection shape, which would make it a rewrite rather than a revival.",
+      "dated": "2026-09-18",
+      "source": "docs/handoff/2026-09-18-prior-art-survey.md §2.3 and §4 (D2/D3)"
     }
   ],
   "noRow": [
