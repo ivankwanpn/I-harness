@@ -2,10 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import {
   createProviderRegistry,
   defaultProviderRegistry,
-  describeDirectory,
   probeCandidatePaths,
-  probeModels,
-  registerProbe,
 } from "../src/index.ts"
 
 const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("{}", { status: 200 }))
@@ -803,16 +800,25 @@ describe("probe response normalization (task 2)", () => {
   })
 })
 
-describe("module-level directory/probe API", () => {
-  it("describeDirectory/probeModels/registerProbe operate on the module default registry", async () => {
-    defaultProviderRegistry().register({
+describe("the module default registry", () => {
+  // This case used to call three STANDALONE wrappers (`describeDirectory`,
+  // `probeModels`, `registerProbe`) that operated on the module default registry.
+  // They were removed: production never called them, one test file did, and each
+  // was a one-line sugar over `defaultProviderRegistry()` + the instance method —
+  // a second way to do one thing, which the module's own comment already advises
+  // against ("Embeddings that own a specific registry should pass it through its
+  // methods instead"). The COVERAGE is unchanged: what this case is really about
+  // is that the module default registry is ONE shared registry.
+  it("is one shared registry: a registration is visible through its own methods", async () => {
+    const reg = defaultProviderRegistry()
+    reg.register({
       name: "module-static",
       displayName: "Module Static",
       protocol: "anthropic-messages",
       apiKeyEnv: "MODULE_STATIC_KEY",
       models: ["a-model", "b-model"],
     })
-    const entry = describeDirectory().find((e) => e.route === "module-static")
+    const entry = reg.describeDirectory().find((e) => e.route === "module-static")
     expect(entry).toEqual({
       route: "module-static",
       displayName: "Module Static",
@@ -820,8 +826,8 @@ describe("module-level directory/probe API", () => {
       defaultApiKeyEnv: "MODULE_STATIC_KEY",
       models: [{ id: "a-model" }, { id: "b-model" }],
     })
-    expect(await probeModels("module-static", {})).toEqual([{ id: "a-model" }, { id: "b-model" }])
-    registerProbe("module-static", async () => [{ id: "dynamic-probe" }])
-    expect(await probeModels("module-static", {})).toEqual([{ id: "dynamic-probe" }])
+    expect(await reg.probeModels("module-static", {})).toEqual([{ id: "a-model" }, { id: "b-model" }])
+    reg.registerProbe("module-static", async () => [{ id: "dynamic-probe" }])
+    expect(await reg.probeModels("module-static", {})).toEqual([{ id: "dynamic-probe" }])
   })
 })
