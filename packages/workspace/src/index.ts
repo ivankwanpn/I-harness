@@ -105,7 +105,7 @@ class WorkspaceInvalidPathError extends Error {
 }
 
 /** The request payload violates a semantic input constraint (DSH: bad-request). */
-export class WorkspaceBadRequestError extends Error {
+class WorkspaceBadRequestError extends Error {
   readonly code = "bad-request" as const
   constructor(message: string) {
     super(message)
@@ -114,7 +114,7 @@ export class WorkspaceBadRequestError extends Error {
 }
 
 /** The referenced workspace record does not exist (DSH: workspace-not-found). */
-export class WorkspaceNotFoundError extends Error {
+class WorkspaceNotFoundError extends Error {
   readonly code = "workspace-not-found" as const
   constructor(message: string, readonly workspaceId: string) {
     super(message)

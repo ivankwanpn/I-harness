@@ -2,12 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest"
 import { mkdtemp, rm, writeFile, readFile, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import {
-  createProviderAuthResolver,
-  createCredentialStore,
-  CredentialRefError,
-  CredentialShadowedError,
-} from "../src/index.ts"
+import { createProviderAuthResolver, createCredentialStore } from "../src/index.ts"
 
 // Unique refs so tests never collide with real process.env entries.
 const REF_FILE = "IH_TST_CRED_FILE"
@@ -129,8 +124,11 @@ describe("createCredentialStore", () => {
     } catch (e) {
       err = e
     }
-    expect(err).toBeInstanceOf(CredentialShadowedError)
-    expect((err as CredentialShadowedError).code).toBe("credential-rejected")
+    // `{name, code}` rather than `toBeInstanceOf`: the repo's own convention
+    // (workspace/src/index.ts:46, mirrored at plugin-registry/src/types.ts:116)
+    // is that a consumer discriminates by `code`, and the sibling case below
+    // already asserted exactly this shape.
+    expect(err).toMatchObject({ name: "CredentialShadowedError", code: "credential-rejected" })
   })
 
   it("env-shadowed unset → CredentialShadowedError (code credential-rejected)", async () => {
@@ -145,16 +143,20 @@ describe("createCredentialStore", () => {
   it("invalid ref grammar → CredentialRefError for describe/set/unset", async () => {
     const store = createCredentialStore(docPath())
     for (const bad of ["1abc", "a-b", "a b", "", "ref:value", "a.b"]) {
-      expect(() => store.describe([bad])).toThrow(CredentialRefError)
-      await expect(store.set(bad, "sk-x")).rejects.toBeInstanceOf(CredentialRefError)
-      await expect(store.unset(bad)).rejects.toBeInstanceOf(CredentialRefError)
+      let thrown: unknown
+      try { store.describe([bad]) } catch (e) { thrown = e }
+      expect(thrown).toMatchObject({ name: "CredentialRefError", code: "credential-invalid-ref" })
+      const refErr = { name: "CredentialRefError", code: "credential-invalid-ref" }
+      await expect(store.set(bad, "sk-x")).rejects.toMatchObject(refErr)
+      await expect(store.unset(bad)).rejects.toMatchObject(refErr)
     }
   })
 
   it("invalid set value (empty / whitespace-only) → CredentialRefError", async () => {
     const store = createCredentialStore(docPath())
-    await expect(store.set(REF_FILE, "")).rejects.toBeInstanceOf(CredentialRefError)
-    await expect(store.set(REF_FILE, "   ")).rejects.toBeInstanceOf(CredentialRefError)
+    const refErr = { name: "CredentialRefError", code: "credential-invalid-ref" }
+    await expect(store.set(REF_FILE, "")).rejects.toMatchObject(refErr)
+    await expect(store.set(REF_FILE, "   ")).rejects.toMatchObject(refErr)
   })
 
   it("corrupt file → treated as empty + warn (degrade, never throw)", async () => {
@@ -234,7 +236,9 @@ describe("createCredentialStore", () => {
   it("resolve: absent ref → undefined; invalid ref grammar → CredentialRefError", async () => {
     const store = createCredentialStore(docPath())
     expect(store.resolve(REF_ENV)).toBeUndefined()
-    expect(() => store.resolve("1bad")).toThrow(CredentialRefError)
+    let thrown: unknown
+    try { store.resolve("1bad") } catch (e) { thrown = e }
+    expect(thrown).toMatchObject({ name: "CredentialRefError", code: "credential-invalid-ref" })
   })
 
   it("empty / whitespace-only env var means 'not configured here' (no shadow)", async () => {

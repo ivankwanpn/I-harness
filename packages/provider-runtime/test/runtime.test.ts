@@ -11,9 +11,7 @@ import {
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
-import {
-  ModelProbeFailedError,
-  buildModelClient,
+import {  buildModelClient,
   createProviderRegistry,
   type ProbeRequest,
   type ProviderProfile,
@@ -632,8 +630,14 @@ describe("auth and discovery", () => {
           displayName: "Custom",
           protocol: "openai-compatible",
         })
+        // A probe that FAILS, which is all this case needs: its assertion below is
+        // on the message, and nothing on this path discriminates by the error
+        // class — `provider-runtime`'s production code never names it (measured).
+        // The class is no longer exported from `@i-harness/provider`, because
+        // nothing outside that package consumed it; a consumer discriminates by
+        // `code`, per the convention workspace/src/index.ts:44-46 records.
         registry.registerProbe("custom", async () => {
-          throw new ModelProbeFailedError("model probe failed: 2 candidate attempts failed")
+          throw new Error("model probe failed: 2 candidate attempts failed")
         })
       },
     })

@@ -6,8 +6,6 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   WORKSPACE_DOC_KEY,
-  WorkspaceBadRequestError,
-  WorkspaceNotFoundError,
   createWorkspaceRegistry,
 } from "../src/index.ts"
 
@@ -65,8 +63,10 @@ describe("workspace registry", () => {
       const renamed = await registry.rename(app.workspaceId, "控制台")
       expect(renamed.title).toBe("控制台")
 
-      await expect(registry.rename(app.workspaceId, "   ")).rejects.toBeInstanceOf(WorkspaceBadRequestError)
-      await expect(registry.rename("ws-missing", "x")).rejects.toBeInstanceOf(WorkspaceNotFoundError)
+      await expect(registry.rename(app.workspaceId, "   ")).rejects
+        .toMatchObject({ name: "WorkspaceBadRequestError", code: "bad-request" })
+      await expect(registry.rename("ws-missing", "x")).rejects
+        .toMatchObject({ name: "WorkspaceNotFoundError", code: "workspace-not-found" })
       await expect(registry.rename(api.workspaceId, "控制台")).rejects.toMatchObject({
         code: "workspace-name-conflict",
         message: "workspace name '控制台' is already in use",
@@ -90,7 +90,8 @@ describe("workspace registry", () => {
       expect(after.sessionIds).toEqual(["sess-b", "sess-a"])
       const again = await registry.attachSession(workspace.workspaceId, "sess-a")
       expect(again.sessionIds).toEqual(["sess-b", "sess-a"])
-      await expect(registry.attachSession("ws-missing", "sess-z")).rejects.toBeInstanceOf(WorkspaceNotFoundError)
+      await expect(registry.attachSession("ws-missing", "sess-z")).rejects
+        .toMatchObject({ name: "WorkspaceNotFoundError", code: "workspace-not-found" })
     })
   })
 

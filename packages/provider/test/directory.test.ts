@@ -1,7 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import {
-  ModelProbeFailedError,
-  ProbeUnavailableError,
   createProviderRegistry,
   defaultProviderRegistry,
   describeDirectory,
@@ -185,15 +183,14 @@ describe("probeModels", () => {
       apiKeyEnv: "ANTHROPIC_API_KEY",
     })
     const error = await reg.probeModels("anthropic", {}).catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(ProbeUnavailableError)
-    const pe = error as ProbeUnavailableError
-    expect(pe.code).toBe("probe-unavailable")
-    expect(pe.route).toBe("anthropic")
+    // `route` is asserted here too, so dropping the class import loses no
+    // coverage of the fields this error carries.
+    expect(error).toMatchObject({ name: "ProbeUnavailableError", code: "probe-unavailable", route: "anthropic" })
   })
 
   it("unknown route → ProbeUnavailableError as well", async () => {
     const reg = createProviderRegistry()
-    await expect(reg.probeModels("nope", {})).rejects.toBeInstanceOf(ProbeUnavailableError)
+    await expect(reg.probeModels("nope", {})).rejects.toMatchObject({ name: "ProbeUnavailableError", code: "probe-unavailable" })
   })
 
   it("openai-compatible probe without any baseURL fails loudly", async () => {
@@ -222,7 +219,7 @@ describe("probe robustness (fix round 1)", () => {
     const reg = createProviderRegistry()
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
     await expect(reg.probeModels("openai-compatible", { baseURL: "ftp://example.com" }))
-      .rejects.toBeInstanceOf(ModelProbeFailedError)
+      .rejects.toMatchObject({ name: "ModelProbeFailedError", code: "model-probe-failed" })
     await expect(reg.probeModels("openai-compatible", { baseURL: "not a url" }))
       .rejects.toMatchObject({ code: "model-probe-failed", message: expect.stringMatching(/invalid baseURL/) })
     expect(fetchMock).not.toHaveBeenCalled()
@@ -265,8 +262,7 @@ describe("probe robustness (fix round 1)", () => {
     const reg = createProviderRegistry()
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
     const error = await reg.probeModels("openai-compatible", { baseURL: "https://x/v1" }).catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(ModelProbeFailedError)
-    expect((error as ModelProbeFailedError).code).toBe("model-probe-failed")
+    expect(error).toMatchObject({ name: "ModelProbeFailedError", code: "model-probe-failed" })
   })
 
   // Fix round 2: a 2xx with a NON-JSON body (error-page HTML, proxy message)
@@ -283,9 +279,8 @@ describe("probe robustness (fix round 1)", () => {
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
     const error = await reg.probeModels("openai-compatible", { baseURL: "https://x/v1", apiKey: "k" })
       .catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(ModelProbeFailedError)
-    expect((error as ModelProbeFailedError).code).toBe("model-probe-failed")
-    expect((error as ModelProbeFailedError).message).toMatch(/body is not JSON — expected \{data:\[\{id\}\]\}/)
+    expect(error).toMatchObject({ name: "ModelProbeFailedError", code: "model-probe-failed" })
+    expect((error as Error).message).toMatch(/body is not JSON — expected \{data:\[\{id\}\]\}/)
   })
 })
 
@@ -391,7 +386,7 @@ describe("protocol-aware probe (task 2)", () => {
   it("bedrock without a static catalog → ProbeUnavailableError", async () => {
     const reg = createProviderRegistry()
     reg.register({ name: "bedrock", displayName: "Amazon Bedrock", protocol: "bedrock" })
-    await expect(reg.probeModels("bedrock", {})).rejects.toBeInstanceOf(ProbeUnavailableError)
+    await expect(reg.probeModels("bedrock", {})).rejects.toMatchObject({ name: "ProbeUnavailableError", code: "probe-unavailable" })
   })
 
   it("terminal protocol fallback is openai-completions (Bearer) when req.protocol is absent", async () => {
@@ -464,9 +459,8 @@ describe("dual-candidate probe (task 2)", () => {
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible" })
     const error = await reg.probeModels("openai-compatible", { baseURL: "https://g.example", apiKey: "k" })
       .catch((e: unknown) => e)
-    expect(error).toBeInstanceOf(ModelProbeFailedError)
-    expect((error as ModelProbeFailedError).code).toBe("model-probe-failed")
-    const message = (error as ModelProbeFailedError).message
+    expect(error).toMatchObject({ name: "ModelProbeFailedError", code: "model-probe-failed" })
+    const message = (error as Error).message
     expect(message).toContain("https://g.example/v1/models → 404")
     expect(message).toContain("https://g.example/models → 404")
   })
@@ -626,7 +620,7 @@ describe("custom-route live probe (task 7 — D4 fix: explicit draft probes ANY 
 
   it("no draft, no registered profile → ProbeUnavailableError (route-based preview flow preserved)", async () => {
     const reg = createProviderRegistry()
-    await expect(reg.probeModels("acme-gw", {})).rejects.toBeInstanceOf(ProbeUnavailableError)
+    await expect(reg.probeModels("acme-gw", {})).rejects.toMatchObject({ name: "ProbeUnavailableError", code: "probe-unavailable" })
   })
 
   it("an empty-string draft baseURL is NOT an explicit draft: route-based flow keeps the static catalog", async () => {
@@ -651,7 +645,7 @@ describe("custom-route live probe (task 7 — D4 fix: explicit draft probes ANY 
     // built-in probe + static catalogs) — a registered profile's baseUrl alone
     // does NOT turn it into a live probe; the explicit draft path is D4's.
     reg.register({ name: "openai-compatible", displayName: "X", protocol: "openai-compatible", apiKey: "sk-other" })
-    await expect(reg.probeModels("groq", {})).rejects.toBeInstanceOf(ProbeUnavailableError)
+    await expect(reg.probeModels("groq", {})).rejects.toMatchObject({ name: "ProbeUnavailableError", code: "probe-unavailable" })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })

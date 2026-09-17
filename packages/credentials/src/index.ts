@@ -82,7 +82,7 @@ export interface CredentialDocument {
 /**
  * Invalid ref name or raw set value → code "credential-invalid-ref".
  */
-export class CredentialRefError extends Error {
+class CredentialRefError extends Error {
   readonly code = "credential-invalid-ref"
   constructor(message: string) {
     super(message)
@@ -95,7 +95,7 @@ export class CredentialRefError extends Error {
  * "credential-rejected". Silent shadowed writes would make the user believe
  * the file value took effect; reject instead.
  */
-export class CredentialShadowedError extends Error {
+class CredentialShadowedError extends Error {
   readonly code = "credential-rejected"
   constructor(message: string) {
     super(message)
