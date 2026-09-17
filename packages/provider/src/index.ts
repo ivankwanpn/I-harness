@@ -647,30 +647,36 @@ export function createProviderRegistry(): ProviderRegistry {
   }
 }
 
-// ── Module-level conveniences (plan interface) ───────────────────────────────
-// The standalone describeDirectory/registerProbe/probeModels operate on the
-// module default registry — the registration API is unchanged (`register`).
-// Embeddings that own a specific registry should pass it through its methods
-// instead (createProviderRegistry instances are independent).
+// ── The module default registry ──────────────────────────────────────────────
+// A plan once specified standalone `describeDirectory` / `registerProbe` /
+// `probeModels` wrappers over this registry. They are gone (see the note below);
+// what remains is the accessor, and embeddings that own a specific registry
+// should pass it through its methods instead (`createProviderRegistry` instances
+// are independent).
 let defaultRegistry: ProviderRegistry | undefined
 
-/** The module-level default registry the standalone functions use (one per module). */
+/** The module-level default registry (one per module). */
 export function defaultProviderRegistry(): ProviderRegistry {
   if (defaultRegistry === undefined) defaultRegistry = createProviderRegistry()
   return defaultRegistry
 }
 
-export function describeDirectory(): DirectoryEntry[] {
-  return defaultProviderRegistry().describeDirectory()
-}
-
-export function registerProbe(route: string, probe: Probe): void {
-  defaultProviderRegistry().registerProbe(route, probe)
-}
-
-export function probeModels(route: string, req: ProbeRequest): Promise<ModelDescriptor[]> {
-  return defaultProviderRegistry().probeModels(route, req)
-}
+// The three standalone wrappers that used to live here — `describeDirectory()`,
+// `registerProbe(route, probe)` and `probeModels(route, req)` — were removed.
+// Each was a one-line sugar over `defaultProviderRegistry()` plus the equivalent
+// INSTANCE method, which remains: `defaultProviderRegistry().probeModels(…)`.
+//
+// Why they went: production never called them (measured — no file outside this
+// package and its own test file did), and the comment above already gives the
+// reason they were the wrong shape: "Embeddings that own a specific registry
+// should pass it through its methods instead". A second way to do one thing is
+// what this package's own advice argues against.
+//
+// One instrument note, because it is why only two of the three were ever rows:
+// `probeModels` was NOT reported, because the scanner's used-test is a TEXT match
+// and `packages/provider-runtime/src/index.ts:262` writes
+// `registry.probeModels(id, …)` — the INSTANCE method. A word regex cannot tell
+// `probeModels(…)` from `registry.probeModels(…)`, so the standalone read as used.
 
 // M15: context windows fail loud at registration (no defaults injected —
 // absence means "unknown, fall back to config").
