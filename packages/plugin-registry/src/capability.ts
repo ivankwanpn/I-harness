@@ -2,18 +2,19 @@
  * Capability introspection for a plugin package directory (disk sniffing only).
  *
  * Plugin code is never executed here — capabilities are derived purely from the
- * file tree: a non-empty "skills/" dir, a "commands/" dir, a ".mcp.json" file,
- * and a parse-safe package.json declaring a server entry (exports["./server"]
- * or a main field). A package.json is never imported/required/dynamically
- * loaded; it is only JSON.parsed. A missing or broken package.json simply means
- * "not executable" (the host shows the plugin as unsupported).
+ * file tree: a non-empty "skills/" dir, a "commands/" dir, an "agents/" dir, a
+ * ".mcp.json" file, and a parse-safe package.json declaring a server entry
+ * (exports["./server"] or a main field). A package.json is never
+ * imported/required/dynamically loaded; it is only JSON.parsed. A missing or
+ * broken package.json simply means "not executable" (the host shows the plugin
+ * as unsupported).
  */
 
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 /** The capability dimensions a plugin can advertise. */
-export type Capability = "skills" | "commands" | "mcp"
+export type Capability = "skills" | "commands" | "mcp" | "agents"
 
 /** Introspected capabilities of one plugin package on disk. `executable`
  * means the plugin carries its own server entry (package.json exports
@@ -22,6 +23,10 @@ export interface Capabilities {
   skills: boolean
   commands: boolean
   mcp: boolean
+  /** agents/ is its OWN dimension, not a flavour of commands: it feeds a
+   * different mount (subagent roles, not the command catalog) and, before it
+   * existed here, a plugin shipping only subagents could not be enabled at all. */
+  agents: boolean
   executable: boolean
 }
 
@@ -35,6 +40,7 @@ export function inspectCapabilities(pluginDir: string): Capabilities {
     skills: existsSync(join(pluginDir, "skills")),
     commands: existsSync(join(pluginDir, "commands")),
     mcp: existsSync(join(pluginDir, ".mcp.json")),
+    agents: existsSync(join(pluginDir, "agents")),
     executable: hasServerEntry(pluginDir),
   }
 }

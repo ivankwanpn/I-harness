@@ -82,7 +82,7 @@ type CommandStatus = "ready" | "failed"
 /** The evaluator's per-plugin verdict. */
 export interface EvaluateResult {
   overall: OverallStatus
-  capabilities: Record<"skills" | "commands" | "mcp" | "executable", CapabilityStatus>
+  capabilities: Record<"skills" | "commands" | "mcp" | "agents" | "executable", CapabilityStatus>
   /** One entry per expected command name ([]/{} once the commands dimension is
    * unsupported, pending or the plugin is disabled). */
   commandStatuses: Record<string, CommandStatus>
@@ -107,6 +107,7 @@ export function evaluatePlugin(
         skills: "disabled",
         commands: "disabled",
         mcp: "disabled",
+        agents: "disabled",
         executable: "unsupported", // D2: package-level fact, not runtime state
       },
       commandStatuses: {},
@@ -121,6 +122,7 @@ export function evaluatePlugin(
         skills: apply(caps.skills, "pending"),
         commands: apply(caps.commands, "pending"),
         mcp: apply(caps.mcp, "pending"),
+        agents: apply(caps.agents, "pending"),
         executable: "unsupported",
       },
       commandStatuses: {},
@@ -134,11 +136,22 @@ export function evaluatePlugin(
   const commands = evaluated !== undefined ? evaluated.status : "unsupported"
   const commandStatuses = evaluated !== undefined ? evaluated.commandStatuses : {}
   const mcp = caps.mcp ? evaluateMcp(observations) : "unsupported"
+  // agents needs no observation, unlike the other three. skills are verified
+  // against a materialized overlay, mcp against a live connection and commands
+  // against the interaction catalog — all host-side steps that can fail after
+  // enable. Agent descriptors are read synchronously by the registry itself from
+  // the installed copy in runtimeInputs(), so advertising the dimension IS the
+  // whole claim. Residual, stated rather than hidden: an `agents/` directory
+  // that exists but holds no readable file reads "ready".
+  const agents = apply(caps.agents, "ready")
 
-  const statuses = { skills, commands, mcp }
+  const statuses = { skills, commands, mcp, agents }
 
   let overall: OverallStatus
-  if (skills === "unsupported" && commands === "unsupported" && mcp === "unsupported") {
+  if (
+    skills === "unsupported" && commands === "unsupported" && mcp === "unsupported" &&
+    agents === "unsupported"
+  ) {
     // Nothing advertised → the runtime surface is empty and can never become
     // ready (reached when a refreshed package drops all its dimensions, e.g.
     // an executable-only payload). D2 phase rule → failed.
