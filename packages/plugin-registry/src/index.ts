@@ -115,6 +115,7 @@ export {
 export { describeCommands, parseCommandMarkdown } from "./commands.ts"
 export { evaluatePlugin, type EvaluateResult, type Observations } from "./evaluate.ts"
 export { materializePlugin, type MaterializedPlugin } from "./materialize.ts"
+export { toMcpServerConfigs, type MountedMcpServer, type SkippedMcpServer } from "./mount.ts"
 
 function byIdCompare(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
