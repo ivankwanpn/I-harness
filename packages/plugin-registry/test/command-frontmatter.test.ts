@@ -47,3 +47,61 @@ describe("command frontmatter — unsupported keys are recorded, never dropped",
     expect(desc.unsupported).toBeUndefined()
   })
 })
+
+// YAML block scalars: `key: |` (and `>`, and the `-`/`+` chomping variants)
+// make the value the INDENTED BLOCK below the key, not the marker itself.
+//
+// Measured 2026-09-17 against the 35 real agents/*.md in the local official
+// marketplace snapshot: 4 of them use `description: |`. The single-line reader
+// takes the literal "|" as the value and then reads every INDENTED line that
+// contains a colon as a KEY — so a real agent's description becomes the
+// one-character string "|" and ~15 phantom keys (`Context`, `user`, `assistant`)
+// land in `unsupported`. `commands/*.md` has zero block scalars (30 files,
+// measured), which is the only reason this was latent.
+describe("frontmatter block scalars", () => {
+  it("a literal block scalar is the indented block, not the marker", () => {
+    const desc = parseCommandMarkdown(
+      "x.md",
+      ["---", "description: |", "  first line", "  second line", "---", "body"].join("\n"),
+    )
+    expect(desc.description).toBe("first line\nsecond line")
+    expect(desc.body).toBe("body")
+  })
+
+  it("indented block content is content, never a key", () => {
+    const desc = parseCommandMarkdown(
+      "x.md",
+      ["---", "description: |", "  Context: a phantom key", "  user: another", "model: opus", "---", "body"].join("\n"),
+    )
+    // only `model` is a real key; the two indented lines are the description
+    expect(desc.unsupported).toEqual(["model"])
+    expect(desc.description).toBe("Context: a phantom key\nuser: another")
+    expect(desc.body).toBe("body")
+  })
+
+  it("a blank line inside the block survives, and only an un-indented line ends it", () => {
+    const desc = parseCommandMarkdown(
+      "x.md",
+      ["---", "description: |", "  para one", "", "  para two", "model: opus", "---", "body"].join("\n"),
+    )
+    expect(desc.description).toContain("para one")
+    expect(desc.description).toContain("para two")
+    expect(desc.unsupported).toEqual(["model"])
+  })
+
+  it("a chomping indicator is consumed, not read as the value", () => {
+    const desc = parseCommandMarkdown(
+      "x.md",
+      ["---", "description: |-", "  only line", "---", "body"].join("\n"),
+    )
+    expect(desc.description).toBe("only line")
+  })
+
+  it("a folded block scalar joins its lines with spaces", () => {
+    const desc = parseCommandMarkdown(
+      "x.md",
+      ["---", "description: >", "  folded one", "  folded two", "---", "body"].join("\n"),
+    )
+    expect(desc.description).toBe("folded one folded two")
+  })
+})
