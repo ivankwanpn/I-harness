@@ -118,6 +118,13 @@ export { describeCommands, parseCommandMarkdown } from "./commands.ts"
 export { evaluatePlugin, type EvaluateResult, type Observations } from "./evaluate.ts"
 export { materializePlugin, type MaterializedPlugin } from "./materialize.ts"
 export { toMcpServerConfigs, type MountedMcpServer, type SkippedMcpServer } from "./mount.ts"
+// `toSubagentRoles` alone: its two result types are not named by any consumer —
+// they are read structurally (`pluginAgents.roles`, `.unresolved`). Re-exporting
+// them anyway put two rows on the reachability gate the moment this landed, which
+// is the instrument doing its job: an exported name nothing references IS an
+// orphan, however small. They stay exported from mount.ts, where the signature
+// that produces them lives.
+export { toSubagentRoles } from "./mount.ts"
 
 function byIdCompare(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0

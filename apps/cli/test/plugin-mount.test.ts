@@ -1,5 +1,5 @@
 import { describe, expect, it, afterEach, beforeEach } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -105,5 +105,92 @@ describe("plugin mount — the registry's runtime inputs reach the agent", () =>
       mockScript: [{ role: "assistant", text: "ok" }],
     })
     expect(result.exitCode).toBe(0)
+  })
+})
+
+// ── a plugin's agent role reaching a real run ───────────────────────────────
+// The SAME differential shape as the skill case above, and for the same reason:
+// `runtimeInputs().agentDescriptors` is a new output, and a new output with no
+// production consumer is exactly the orphan this audit keeps finding. The
+// control run below is the identical script with no plugin installed, so the
+// wiring — not the assertion — is what makes the difference.
+describe("plugin mount — a plugin's subagent role reaches the agent", () => {
+  let home: string
+  let previous: string | undefined
+  let src: string
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "i-harness-plugin-agents-home-"))
+    previous = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = home
+    // A marketplace built here rather than added to the committed fixtures:
+    // putting agents/ on `hello` would change every other test's exact runtime
+    // shape for the benefit of this one case.
+    src = mkdtempSync(join(tmpdir(), "i-harness-plugin-agents-src-"))
+    mkdirSync(join(src, ".claude-plugin"), { recursive: true })
+    mkdirSync(join(src, "plugins", "helper", "agents"), { recursive: true })
+    writeFileSync(
+      join(src, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "Agents Mkt", plugins: [{ name: "helper", source: "./plugins/helper" }] }),
+      "utf8",
+    )
+    // NOTE the tools: the plugin writes CLAUDE CODE's vocabulary. Nothing here
+    // would resolve without the mount-side translation.
+    writeFileSync(
+      join(src, "plugins", "helper", "agents", "code-simplifier.md"),
+      ["---", "name: code-simplifier", "description: Simplifies code.", "tools: Read, Glob, Grep", "---",
+        "You are a code simplification specialist."].join("\n"),
+      "utf8",
+    )
+  })
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.IH_CONFIG_DIR
+    else process.env.IH_CONFIG_DIR = previous
+    rmSync(home, { recursive: true, force: true })
+    rmSync(src, { recursive: true, force: true })
+  })
+
+  /** The one script both cases run: ask for the plugin's role BY NAME, blocking
+   * so the child's turn is deterministic.
+   *
+   * A FACTORY, not a shared array: createMockClient consumes its script with
+   * `shift()` — it is a one-shot cassette. A shared constant made the control
+   * run against an exhausted cassette, which ends the run cleanly at exit 0 and
+   * made the "no plugin → cannot resolve" control pass for entirely the wrong
+   * reason. Caught by that control failing, not by reading the helper. */
+  const script = () => [
+    { role: "assistant" as const, toolCalls: [{ name: "spawn_agent", args: { message: "simplify", task_name: "helper", agent_type: "code-simplifier", background: false } }] },
+    { role: "assistant" as const, text: "child done" }, // the child's turn
+    { role: "assistant" as const, text: "parent done" }, // the parent's continuation
+  ]
+
+  it("spawn_agent resolves the plugin's role in a real run", async () => {
+    const registry = new PluginRegistry({ root: join(home, "plugins") })
+    await registry.addSource(src)
+    await registry.install("Agents Mkt__helper")
+    await registry.enable("Agents Mkt__helper")
+
+    const result = await runHeadless("spawn the simplifier", {
+      workspace: home,
+      approveAll: true,
+      mockScript: script(),
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.finalText).toContain("parent done")
+  })
+
+  it("the control: with no plugin the identical script cannot resolve the role", async () => {
+    const result = await runHeadless("spawn the simplifier", {
+      workspace: home,
+      approveAll: true,
+      mockScript: script(),
+    })
+
+    // The spawn tool throws and the run ends non-zero. THIS is the control that
+    // makes the case above meaningful: the wiring is the only difference.
+    expect(result.exitCode).not.toBe(0)
+    expect(String(result.error)).toContain("unknown role: code-simplifier")
   })
 })
