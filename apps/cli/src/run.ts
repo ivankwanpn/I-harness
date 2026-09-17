@@ -15,7 +15,7 @@ import type { TeamConfig } from "@i-harness/agent-team"
 import { join } from "node:path"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
 import { resolveHarnessHome } from "@i-harness/harness-home"
-import { PluginRegistry, toMcpServerConfigs } from "@i-harness/plugin-registry"
+import { PluginRegistry, toMcpServerConfigs, toSubagentRoles } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
@@ -51,6 +51,22 @@ const CLI_COMMAND_NAMES = [
   "session-pending",
   "session-compact",
 ] as const
+
+/**
+ * The tools a PLUGIN's subagent role may use, as a host permit list.
+ *
+ * This is the ONLY source of a tool name in a plugin role: the plugin's own
+ * `tools:` list (written in Claude Code's vocabulary) can narrow it and can
+ * never widen it. `toSubagentRoles` enforces that structurally, so a plugin
+ * cannot reach a tool by any path that is not on this list.
+ *
+ * READ-ONLY, and deliberately so. The CLI is a development/test harness, not the
+ * product: a plugin agent that needs to write should get that from a host whose
+ * policy says it may, and no host has made that call yet. Widening this is a
+ * policy decision, not a bug fix — which is why it is one named constant whose
+ * change is visible in a diff.
+ */
+const PLUGIN_AGENT_TOOLS = ["read", "glob", "grep", "list_dir"] as const
 
 export interface SessionCompactCommandDeps {
   compactNow(instructions?: string): Promise<CompactionResult>
@@ -288,6 +304,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         console.warn(`[plugins] command ${desc.name} declares unsupported frontmatter: ${desc.unsupported.join(", ")}`)
       }
     }
+    // Agent roles. The plugin writes Claude Code's tool vocabulary and this repo
+    // registers different names, so the conversion is the mount point where a
+    // declaration either becomes a real grant or is refused — and a refusal is
+    // REPORTED, because a role that quietly runs with fewer tools than it
+    // declares is the failure this whole path exists to avoid.
+    const pluginAgents = toSubagentRoles(pluginInputs.agentDescriptors, {
+      allowedTools: [...PLUGIN_AGENT_TOOLS],
+    })
+    for (const missed of pluginAgents.unresolved) {
+      console.warn(`[plugins] agent ${missed.role} declares an unusable tool (${missed.reason}): ${missed.tool}`)
+    }
 
     assembly = await createSessionAssembly({
       workspace: opts.workspace,
@@ -334,6 +361,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // production caller until now.
       ...(pluginInputs.skillDirs.length > 0 ? { skills: { extraDirs: pluginInputs.skillDirs } } : {}),
       ...(pluginMcp.configs.length > 0 ? { pluginMcp: pluginMcp.configs } : {}),
+      ...(pluginAgents.roles.length > 0 ? { pluginAgents: pluginAgents.roles } : {}),
       ...(opts.lsp !== undefined ? { lsp: opts.lsp } : {}),
       ...(opts.team !== undefined ? { team: opts.team } : {}),
       ...(opts.compact !== undefined ? { compact: opts.compact } : {}),
