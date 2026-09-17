@@ -1329,9 +1329,18 @@ SELF_TEST_CASES.push({
 // rows". Mutation that reddens this case: deleting the `allowlistProblems` call
 // from `--gate`, which then reports all four wrong shapes as 0 (the gate reads
 // them as an empty allowlist and passes).
+//
+// The last two cases are the SECOND route to the same silence, measured by
+// walking into it on 2026-09-18: an entry can be well-shaped as a JSON OBJECT
+// and still be inert, because the two arrays name their target with DIFFERENT
+// fields (`entries` uses `key`, `noRow` uses `item`). Appending a `{key, …}`
+// entry to `noRow` -- which is what an edit anchored on the wrong `],` does --
+// passed every check above and exempted nothing. Same hazard `allowlistKey`'s
+// comment names for the key FORMAT ("the allowlist becomes inert and looks
+// harmless while exempting nothing"), reached through the shape instead.
 SELF_TEST_CASES.push({
   name: "cli: a wrong-shape allowlist is a configuration error, not a scan failure",
-  expect: ["entriesArray=2", "entriesNumber=2", "entryNull=2", "topLevelArray=2", "wellShaped=0"],
+  expect: ["entriesArray=2", "entriesNumber=2", "entryNull=2", "topLevelArray=2", "wellShaped=0", "noKey=2", "noItem=2"],
   run(root) {
     const rows = fixtureRowKeys(root)
     const gate = (label, allowlist) => {
@@ -1345,6 +1354,10 @@ SELF_TEST_CASES.push({
       gate("topLevelArray", [null]),
       gate("entriesArray", { entries: { a: 1 } }),
       gate("wellShaped", { entries: [] }),
+      // an entries item naming its target the noRow way
+      gate("noKey", { entries: [{ item: "unused-export\tx", dated: "2026-09-15", reason: "why" }] }),
+      // a noRow item naming its target the entries way -- the exact mistake
+      gate("noItem", { noRow: [{ key: "unused-export\tx", dated: "2026-09-15", reason: "why" }] }),
     ]
   },
 })
@@ -1605,8 +1618,25 @@ function allowlistProblems(allowlist) {
       continue
     }
     v.forEach((e, i) => {
-      if (e === null || typeof e !== "object" || Array.isArray(e))
+      if (e === null || typeof e !== "object" || Array.isArray(e)) {
         problems.push(`"${field}[${i}]" is ${e === null ? "null" : Array.isArray(e) ? "an array" : typeof e}, not an object`)
+        return
+      }
+      // The field THIS array uses to name its target. An entry can be a
+      // well-formed object and still be inert: `gateDiff` builds its allowed-set
+      // from `entries[*].key`, and `staleNoRowEntries` reads `noRow[*].item`, so
+      // a missing -- or wrong-array -- naming field contributes `undefined` and
+      // matches nothing. That is the hazard `allowlistKey`'s comment already
+      // names for the key FORMAT ("the allowlist becomes inert and looks harmless
+      // while exempting nothing"), reached by a second route. Measured
+      // 2026-09-18 by making the mistake: a `{key, …}` object appended to `noRow`
+      // -- which is what an edit anchored on the wrong `],` produces -- passed
+      // every check that existed and exempted nothing.
+      const naming = field === "entries" ? "key" : "item"
+      const named = e[naming]
+      if (typeof named !== "string" || named.trim() === "") {
+        problems.push(`"${field}[${i}]" has no usable "${naming}" for this array (got ${JSON.stringify(named)})`)
+      }
     })
   }
   return problems
