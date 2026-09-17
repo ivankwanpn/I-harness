@@ -10,7 +10,7 @@ import { homedir } from "node:os"
 import { parseFrontmatter } from "./frontmatter.ts"
 import { searchSkillSummaries } from "./search.ts"
 
-export type SkillSource = "workspace" | "global"
+export type SkillSource = "workspace" | "global" | "plugin"
 
 export interface Skill {
   name: string
@@ -43,6 +43,22 @@ export interface SkillRegistry {
 export interface SkillRegistryDeps {
   workspace?: string
   globalDir?: string
+  /**
+   * Additional read-only skill roots — plugin overlays. Each is scanned exactly
+   * like the workspace and global roots, and its skills report source `"plugin"`.
+   *
+   * PRECEDENCE (decided, not incidental): `global < plugin < workspace`. The
+   * user's own workspace is the most specific thing in play and wins; a plugin is
+   * a machine-level addition like the global root, and being an explicit install
+   * is why it outranks it. Pinned by test/extra-dirs.test.ts.
+   *
+   * This field is what `assembly.ts` has been passing (as
+   * `skills.extraDirs`) into a config that had no such field since the plugin
+   * seams were built — silently discarded, because TypeScript does not
+   * excess-property check spread properties. See the plugin-mount design
+   * (docs/superpowers/specs/2026-09-17-plugin-mount-design.md §4).
+   */
+  extraDirs?: string[]
   // Observability seam for the scan's warn+skip path (defaults to console.warn).
   onWarn?: (message: string) => void
 }
@@ -179,20 +195,28 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
     return scanSkillsDir(join(deps.workspace, "skills"), "workspace", onWarn)
   }
 
+  function scanExtras(): SkillSummary[] {
+    const out: SkillSummary[] = []
+    for (const dir of deps?.extraDirs ?? []) out.push(...scanSkillsDir(dir, "plugin", onWarn))
+    return out
+  }
+
   function list(): SkillSummary[] {
     const merged = new Map<string, SkillSummary>()
     for (const summary of scanGlobal()) merged.set(summary.name, summary)
-    for (const summary of scanWorkspace()) merged.set(summary.name, summary) // workspace 蓋 global
+    for (const summary of scanExtras()) merged.set(summary.name, summary) // plugin 蓋 global
+    for (const summary of scanWorkspace()) merged.set(summary.name, summary) // workspace 蓋 plugin
     return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  // Conventional <root>/<name>/SKILL.md probe locations, workspace first. Used
-  // only when the valid index has no such name: a skill whose file is BROKEN is
-  // skipped by the scan, but skill_get must fail explicitly on it instead of
-  // reporting a misleading SKILL_NOT_FOUND.
+  // Conventional <root>/<name>/SKILL.md probe locations, in the same precedence
+  // `list` resolves collisions with. Used only when the valid index has no such
+  // name: a skill whose file is BROKEN is skipped by the scan, but skill_get must
+  // fail explicitly on it instead of reporting a misleading SKILL_NOT_FOUND.
   function probeRoots(): [root: string, source: SkillSource][] {
     const roots: [string, SkillSource][] = []
     if (deps?.workspace !== undefined) roots.push([join(deps.workspace, "skills"), "workspace"])
+    for (const dir of deps?.extraDirs ?? []) roots.push([dir, "plugin"])
     roots.push([deps?.globalDir ?? GLOBAL_SKILLS_DIR, "global"])
     return roots
   }
