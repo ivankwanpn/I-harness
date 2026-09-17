@@ -61,12 +61,9 @@
     "@i-harness/telemetry": "workspace:*",
     "@i-harness/terminal": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
-    "@i-harness/web": "workspace:*",
-    "@i-harness/web-host": "workspace:*",
     "@i-harness/workflow": "workspace:*",
     "@i-harness/workspace": "workspace:*",
-    "@vscode/ripgrep": "^1.18.0",
-    "@i-harness/tui-app": "workspace:*"
+    "@vscode/ripgrep": "^1.18.0"
   },
   "bin": {
     "i-harness": "./bin/i-harness.js",
