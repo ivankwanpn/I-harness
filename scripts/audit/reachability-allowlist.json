@@ -156,6 +156,30 @@
       "reason": "`deferred` as the workspace registry's constructor — the SPA-side project-grouping API the 2026-09-17 frontend removal stranded. Adjudicated as ONE named class with the rest of `@i-harness/workspace` rather than row by row, on the same reasoning as the C bucket. **Why this row is NEW on 2026-09-17 while the package's other rows are not — measured, and it is the second instance of a mechanism this repo already records.** It was CLEAN until the same day, and the only reason was COMMENT-MASKING: the sole cross-file mention of the name anywhere in production was a doc comment in the then-existing `packages/feedback/src/index.ts:208` — `Registry over the coordinator document store (the createWorkspaceRegistry shape)` — which referred to it as a design precedent, not a call. Deleting the `@i-harness/feedback` package removed that comment and the row appeared. The mechanism is the one the baseline document's §7 item 4 records (`a mention in a comment counts as a use`); the class-1 used-scan is production-only (`check-reachability.mjs:404`, applied at `:412`) but it is a TEXT scan, so it cannot tell a call from a prose reference. **The package is KEPT, not deleted, and the evidence for that is its own source:** every export is `WorkspaceView`-shaped (its header names 'the WorkspaceView vocabulary'), and before the removal its only consumers were `packages/web-host/src/host.ts`, `packages/web-host/src/types.ts` and `apps/cli/src/web.ts` — all deleted by M65 — with `apps/cli/package.json` keeping the dependency for the rebuild. **What is missing is the producer, not the model:** no production code anywhere writes `SessionMeta.workspaceId`, so the registry's grouping link is never populated. **What would clear this row:** the rebuilt frontend calling `createWorkspaceRegistry` again. Until then this entry is the dated record of the decision, accepted through the baseline like the other class entries.",
       "dated": "2026-09-17",
       "source": "docs/audit/2026-09-15-reachability-baseline.md §9 — this row belongs to §9.2's C bucket, whose disposition it shares; scripts/audit/check-reachability.mjs:404 and :412 (the class-1 used-scan is production-only and counts COMMENTS, which is what masked this name until 2026-09-17); the masking comment is recorded here rather than cited, because the file it lived in was deleted by the same task"
+    },
+    {
+      "key": "unused-export\t@i-harness/interaction#registerPromptCommand",
+      "reason": "`deferred` — the prompt-expanded command capability, which the 2026-09-17 spec deliberately left WITHOUT a host. FOUR rows, one entry each, following the `@i-harness/sdk` precedent: `registerPromptCommand` (here), `#PromptCommand` (the type), `#CommandOutcome` (the discriminated result) and `#createPromptCommand` (the `$ARGUMENTS` expander). **These rows are the SPEC'S OWN PREDICTED CONSEQUENCE, not a surprise.** docs/superpowers/specs/2026-09-17-prompt-command-design.md scopes itself to the CAPABILITY and not to a host: its §4 says in terms that no host is wired, because the product host is the rebuilt frontend and not the CLI — wiring a product feature into a development harness was already corrected once in this milestone. A capability with no host therefore has no production consumer BY CONSTRUCTION, and the spec's §5 says exactly that, including that the answer is a dated allowlist entry rather than a manufactured `void` use: the instrument must not be told a lie to make a number look better. **What the capability fixes:** `runCommand` used to return a bare `string`, so 'hand this text to the model' and 'show this text to the user' were the same value — which is why a plugin's Markdown command (Anthropic's `commands/*.md` is a PROMPT) could not be carried at all. It now returns `CommandOutcome`, and the two kinds are distinguishable. **What would clear these rows:** a host calling `runCommand` and acting on `outcome.kind`.",
+      "dated": "2026-09-17",
+      "source": "docs/superpowers/specs/2026-09-17-prompt-command-design.md §4 (scope: the capability, not a host) and §5 (the predicted rows and their required handling); docs/handoff/2026-09-17-backend-audit-and-plugin-gap.md §3.3 for the four-link measurement that established the gap. Nothing here cites the untracked working notes this milestone kept."
+    },
+    {
+      "key": "unused-export\t@i-harness/interaction#PromptCommand",
+      "reason": "The prompt-command type. Same class and same ruling as the `registerPromptCommand` entry above — see it for the full reasoning; FOUR rows, one entry each.",
+      "dated": "2026-09-17",
+      "source": "docs/superpowers/specs/2026-09-17-prompt-command-design.md §2.1 (the type) and §4 (scope: the capability, not a host)"
+    },
+    {
+      "key": "unused-export\t@i-harness/interaction#CommandOutcome",
+      "reason": "The discriminated result of invoking a command. Same class and same ruling as the `registerPromptCommand` entry above — see it for the full reasoning; FOUR rows, one entry each.",
+      "dated": "2026-09-17",
+      "source": "docs/superpowers/specs/2026-09-17-prompt-command-design.md §2.1 (why a discriminated union rather than a flag or a second function) and §4"
+    },
+    {
+      "key": "unused-export\t@i-harness/interaction#createPromptCommand",
+      "reason": "Builds a PromptCommand from a plugin command's Markdown body, including the `$ARGUMENTS` substitution. Same class and same ruling as the `registerPromptCommand` entry above — see it for the full reasoning; FOUR rows, one entry each.",
+      "dated": "2026-09-17",
+      "source": "docs/superpowers/specs/2026-09-17-prompt-command-design.md §2.3 (substitution is `$ARGUMENTS` only, and why the rest is deliberately unsupported) and §4"
     }
   ],
   "noRow": [

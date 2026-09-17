@@ -76,7 +76,12 @@ describe("session-compact command (M33 §5)", () => {
         ),
       })
       const out = await runCommand(assembly.ctx, "session-compact", "{}")
-      const parsed = JSON.parse(out) as { compacted: boolean; shadowedSeqs: number[]; summary: string }
+      // 2026-09-17: runCommand's result is an explicit CommandOutcome.
+      // `session-compact` is a HANDLER command, so its text is a reply — shown to
+      // the user, never into model history. Narrowing rather than casting keeps
+      // that distinction honest if the kind ever changes.
+      if (out.kind !== "reply") throw new Error(`expected a reply, got ${out.kind}`)
+      const parsed = JSON.parse(out.text) as { compacted: boolean; shadowedSeqs: number[]; summary: string }
       expect(parsed.compacted).toBe(true)
       expect(parsed.shadowedSeqs).toEqual([0])
       expect(parsed.summary).toBeDefined()

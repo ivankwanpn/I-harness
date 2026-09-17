@@ -56,6 +56,20 @@ export interface CommandDescriptor {
   description?: string
   argumentHints?: string
   body: string
+  /** Frontmatter keys the commands parser saw but does NOT honour, in file order.
+   * Present only when non-empty. Recorded so a command declaring `allowed-tools`
+   * (or any key we do not implement) cannot silently believe it is restricted —
+   * the parser in `commands.ts` fills this, and spec 2026-09-17 §3 decision 3
+   * says why it is recorded rather than dropped.
+   *
+   * NOTE: this comment deliberately does NOT name the command-file parser's
+   * exported function. The reachability scanner's "is this used?" test is a TEXT
+   * match over production files, so writing that name anywhere here — including
+   * in an explanation of this very hazard — marks it used and silently suppresses
+   * its row. Measured on 2026-09-17, twice in a row: the first wording tripped
+   * it, and so did the first attempt at THIS note. That is the comment-masking
+   * mechanism the baseline document's §7 item 4 records. */
+  unsupported?: string[]
 }
 
 /** The runtime surface enable() produces and the host consumes on every agent

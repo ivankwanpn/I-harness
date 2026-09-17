@@ -49,14 +49,25 @@ export interface Command {
 
 | 環節 | 狀態 | 證據 |
 |---|---|---|
-| `plugin-registry` 發現並解析 `commands/*.md` | ✅ | `plugin-registry/src/index.ts:544`、`:556` 呼叫 `describeCommands` |
-| 有人消費那個輸出 | ❌ **零個消費者** | 全樹無 `describeCommands` 的生產呼叫者 |
-| 有人呼叫 `registerCommand` | ❌ **零個呼叫點** | `interaction/src/index.ts:83` 的函式無人呼叫 |
-| 有人呼叫 `runCommand` | ❌ **零個呼叫點** | `interaction/src/index.ts:97` 的函式無人呼叫 |
+| plugin 的 `commands/*.md` 被發現並解析 | ✅ | `plugin-registry/src/index.ts:544`、`:556` 呼叫 `describeCommands` |
+| **那份輸出有人消費** | ❌ **零個消費者** | 全樹無 `describeCommands` 的生產呼叫者 |
+| **指令有被註冊** | ✅ **7 個生產呼叫點** | `apps/cli/src/run.ts:320,328,336,344,352,359,363` 註冊 `session-send`/`session-followup` 等 |
+| 有人**派送**它們（`runCommand`） | ❌ **只有一個測試呼叫者** | `apps/cli/test/session-compact.test.ts`；生產零 |
+| `listCommands` / `parseCommandLine` | ❌ 只有測試 | 同上 |
 | `execute` 能把手續送給模型 | ❌ **型別上不行** | 回傳 `Promise<string>` |
 
-**所以整個 command 區域是「完整、自洽、有測試、卻沒有入口」的子系統** —— 而且**即使給了入口，
-它的型別也載不動提示詞**。DSH 對同一件事的結論是同樣的字：**這是格式缺口，不是接線缺口**。
+**所以精確的形狀是：registry 在生產路徑上被填滿了，但沒有派送者。** CLI 註冊了 7 個指令，
+而**沒有任何生產程式碼能呼叫它們** —— `runCommand` 的呼叫者原本是前端（命令面板），前端被 M65
+刪了。這是與那 7 個零消費者套件**同一個模式**的又一個實例。
+
+> **⚠️ 一次量測修正，記在這裡因為它改變了本節的結論。** 本表初稿說 `registerCommand` 與
+> `runCommand` 都是「零個呼叫點」。**那是錯的**，錯因是一個靜默失敗的 `git grep`：
+> `-- 'packages/*/src' 'apps/*/src'` 這個 pathspec 不匹配任何東西，回傳空結果卻看起來像「乾淨」。
+> 用未加 pathspec 的搜尋重測得到上表的數字。**這正是 `docs/handoff/2026-09-17-backend-audit-and-plugin-gap.md`
+> §7 記載的同一種假陰性**，而它在同一個 session 裡又發生了一次。
+
+**即使給了派送者，型別也載不動提示詞。** DSH 對同一件事的結論是同樣的字：**這是格式缺口，
+不是接線缺口**。
 
 ---
 

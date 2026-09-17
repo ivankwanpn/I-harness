@@ -150,18 +150,29 @@ prompt… 'invoking it' means sending that text to the model; DSH's `CommandDefi
 explicitly runs *against* the receiving agent and **does not send the instruction to the model**…
 **This is a format gap, not a wiring gap**."*
 
-**Our chain is broken in four places, measured at `a813e71`:**
+**Our chain, measured at `a813e71` and CORRECTED on 2026-09-17 (see the warning below the table):**
 
 | Link | State |
 |---|---|
 | `plugin-registry` discovers + parses `commands/*.md` | ✅ (`index.ts:544`, `:556`) |
 | Anything consumes that output | ❌ **zero consumers** |
-| Anything calls `registerCommand` | ❌ **zero call sites** |
-| Anything calls `runCommand` (`interaction/src/index.ts:97`) | ❌ **zero call sites** |
+| Commands are **registered** | ✅ **seven production call sites** — `apps/cli/src/run.ts:320,328,336,344,352,359,363` registers `session-send`, `session-followup`, and five more |
+| Anything **dispatches** them (`runCommand`, `interaction/src/index.ts:97`) | ❌ **one caller, and it is a test** (`apps/cli/test/session-compact.test.ts`) — production: zero |
+| `listCommands` / `parseCommandLine` | ❌ tests only |
 | `execute` can hand a prompt to the model | ❌ returns `Promise<string>` — **the type has no such path** |
 
-**The command region is a complete, self-consistent, tested subsystem with no entry point** — and
-even given one, its type cannot carry a prompt.
+**So the precise shape is: the registry is POPULATED on the production path and has no dispatcher.**
+The CLI registers seven commands that no production code can invoke — `runCommand`'s caller was the
+frontend's command palette, and M65 deleted it. **That is the same pattern as §2's zero-consumer
+packages, arriving a third way.**
+
+> **⚠️ A measurement correction, recorded because it changed this section's conclusion.** An earlier
+> draft of this table said `registerCommand` and `runCommand` were BOTH "zero call sites". **That was
+> wrong**, and the cause was a silently-failing `git grep`: the pathspec
+> `-- 'packages/*/src' 'apps/*/src'` matches nothing, so the search returned empty and read as
+> "clean". Re-measured without a pathspec, the numbers are as above. **This is the same false
+> negative §7 of this very document warns about, occurring again in the same session** — which is
+> why §7 exists, and why its advice is to re-measure rather than quote.
 
 ### 3.4 DSH already built a working marketplace — and it is portable
 

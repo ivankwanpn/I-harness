@@ -56,10 +56,22 @@ export function askUser(ctx: PluginContext, q: UserQuestion): Promise<string> {
   return provider.ask(q)
 }
 
-// ── commands seam (audit F05-6: results never enter model history) ─────────
-// Commands are UI-plane operations. They are dispatched through their own
-// registry and their results are returned to the caller directly; they never
-// feed the model's message history.
+// ── commands seam (audit F05-6) ────────────────────────────────────────────
+// Commands are dispatched through their own registry and their result goes back
+// to the caller directly. There are TWO KINDS and a caller must be able to tell
+// them apart, because they end in different places:
+//
+//   - HANDLER commands execute an action; their text is shown to the USER and
+//     never enters model history. That is the original F05-6 invariant and it
+//     still holds for this kind.
+//   - PROMPT commands expand into text that goes INTO the conversation, on the
+//     host's authority — Anthropic's `commands/*.md` are prompts, not handlers.
+//     Spec 2026-09-17 §3 decision 1: the host sends it as a user message.
+//
+// Before 2026-09-17 both kinds were the same value (a bare string), which is
+// precisely why a Markdown prompt from a plugin could not be carried at all:
+// "hand this text to the model" and "show this text to the user" were the same
+// `string`, so no type could express the difference.
 
 export interface Command {
   name: string
@@ -71,6 +83,21 @@ export interface Command {
   execute(input: string, ctx: PluginContext): Promise<string>
 }
 
+/** A command that expands into prompt text for the conversation. */
+export interface PromptCommand {
+  name: string
+  description?: string
+  argumentHints?: string
+  expand(input: string, ctx: PluginContext): string
+}
+
+/** What invoking a command produced. The `kind` is the whole point: a caller
+ * holding only a NAME (what `parseCommandLine` yields) cannot know which kind it
+ * will get, so the VALUE decides what the caller does with it. */
+export type CommandOutcome =
+  | { kind: "reply"; text: string }
+  | { kind: "prompt"; text: string }
+
 // The one command-name grammar (DSH COMMAND_NAME rule): lowercase first, then
 // letters/digits/underscore/dash. parseCommandLine parses the same alphabet,
 // so a name that fails it could be registered and listed but never executed —
@@ -78,32 +105,80 @@ export interface Command {
 const COMMAND_NAME_SRC = "[a-z][a-z0-9_-]*"
 const COMMAND_NAME_RE = new RegExp(`^${COMMAND_NAME_SRC}$`)
 
+/** A registered command, tagged so the two kinds cannot be confused. */
+type RegisteredCommand =
+  | { kind: "handler"; command: Command }
+  | { kind: "prompt"; command: PromptCommand }
+
+function assertCommandName(name: string): void {
+  if (!COMMAND_NAME_RE.test(name)) {
+    throw new TypeError(`command name "${name}" must match ^${COMMAND_NAME_SRC}$`)
+  }
+}
+
 // `services.get` throws when the registry is missing, so the try/catch lazily
 // creates the registry on first registration.
-export function registerCommand(ctx: PluginContext, cmd: Command): void {
-  if (!COMMAND_NAME_RE.test(cmd.name)) {
-    throw new TypeError(`command name "${cmd.name}" must match ^${COMMAND_NAME_SRC}$`)
-  }
-  let registry: Map<string, Command>
+function registryForRegistration(ctx: PluginContext): Map<string, RegisteredCommand> {
+  let registry: Map<string, RegisteredCommand>
   try {
-    registry = ctx.services.get<Map<string, Command>>("commands/registry")
+    registry = ctx.services.get<Map<string, RegisteredCommand>>("commands/registry")
   } catch {
     registry = new Map()
     ctx.services.register("commands/registry", registry)
   }
-  registry.set(cmd.name, cmd)
+  return registry
 }
 
-export async function runCommand(ctx: PluginContext, name: string, input: string): Promise<string> {
-  let registry: Map<string, Command>
+export function registerCommand(ctx: PluginContext, cmd: Command): void {
+  assertCommandName(cmd.name)
+  registryForRegistration(ctx).set(cmd.name, { kind: "handler", command: cmd })
+}
+
+/** Register a prompt-expanded command. Same grammar and same registry as
+ * `registerCommand` — one name is one entry, last registration wins. */
+export function registerPromptCommand(ctx: PluginContext, cmd: PromptCommand): void {
+  assertCommandName(cmd.name)
+  registryForRegistration(ctx).set(cmd.name, { kind: "prompt", command: cmd })
+}
+
+export async function runCommand(ctx: PluginContext, name: string, input: string): Promise<CommandOutcome> {
+  let registry: Map<string, RegisteredCommand>
   try {
-    registry = ctx.services.get<Map<string, Command>>("commands/registry")
+    registry = ctx.services.get<Map<string, RegisteredCommand>>("commands/registry")
   } catch {
     throw new Error(`unknown command: ${name}`)
   }
-  const cmd = registry.get(name)
-  if (!cmd) throw new Error(`unknown command: ${name}`)
-  return cmd.execute(input, ctx)
+  const entry = registry.get(name)
+  if (!entry) throw new Error(`unknown command: ${name}`)
+  return entry.kind === "handler"
+    ? { kind: "reply", text: await entry.command.execute(input, ctx) }
+    : { kind: "prompt", text: entry.command.expand(input, ctx) }
+}
+
+/**
+ * Build a PromptCommand from a plugin command's Markdown body.
+ *
+ * The input is STRUCTURAL on purpose: `plugin-registry` parses `commands/*.md`
+ * and must not depend on this package (nor this one on it), so the two agree on
+ * a shape rather than on a type import.
+ *
+ * Substitution is `$ARGUMENTS` ONLY (spec 2026-09-17 §2.3). Positional `$1`/`$2`
+ * need a quoting-and-escaping grammar; `!` command substitution and `@` file
+ * references are execution/read surfaces with their own security decisions.
+ * Each is deliberately not supported rather than half-supported.
+ */
+export function createPromptCommand(desc: {
+  name: string
+  description?: string
+  argumentHints?: string
+  body: string
+}): PromptCommand {
+  return {
+    name: desc.name,
+    ...(desc.description !== undefined ? { description: desc.description } : {}),
+    ...(desc.argumentHints !== undefined ? { argumentHints: desc.argumentHints } : {}),
+    expand: (input: string): string => desc.body.replaceAll("$ARGUMENTS", input),
+  }
 }
 
 // ── M26-B14: ask_user_input 工具化 ──────────────────────────────────────────
@@ -165,26 +240,26 @@ export interface CommandDescriptor {
  * unknown-command case is fail-loud).
  */
 export function listCommands(ctx: PluginContext): CommandDescriptor[] {
-  let registry: Map<string, Command>
+  let registry: Map<string, RegisteredCommand>
   try {
-    registry = ctx.services.get<Map<string, Command>>("commands/registry")
+    registry = ctx.services.get<Map<string, RegisteredCommand>>("commands/registry")
   } catch {
     return []
   }
   return [...registry.values()]
-    .map((cmd) => ({
-      name: cmd.name,
-      ...(cmd.description !== undefined ? { description: cmd.description } : {}),
-      ...(cmd.argumentHints !== undefined ? { argumentHints: cmd.argumentHints } : {}),
+    .map((entry) => ({
+      name: entry.command.name,
+      ...(entry.command.description !== undefined ? { description: entry.command.description } : {}),
+      ...(entry.command.argumentHints !== undefined ? { argumentHints: entry.command.argumentHints } : {}),
     }))
     .sort((left, right) => (left.name < right.name ? -1 : 1))
 }
 
 /** Names of all currently registered commands, name-sorted. Empty → []. */
 export function listCommandNames(ctx: PluginContext): string[] {
-  let registry: Map<string, Command>
+  let registry: Map<string, RegisteredCommand>
   try {
-    registry = ctx.services.get<Map<string, Command>>("commands/registry")
+    registry = ctx.services.get<Map<string, RegisteredCommand>>("commands/registry")
   } catch {
     return []
   }

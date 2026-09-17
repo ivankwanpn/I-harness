@@ -39,7 +39,11 @@ describe("commands seam (audit F05-6)", () => {
   it("executes a registered command", async () => {
     const ctx = makeCtx()
     registerCommand(ctx, { name: "help", execute: async () => "help text" })
-    expect(await runCommand(ctx, "help", "")).toBe("help text")
+    // 2026-09-17: runCommand's result is now an explicit CommandOutcome. This
+    // assertion is the ONE that had to change — the value is the same string,
+    // but it now says WHERE it goes (a reply: shown to the user, never into
+    // model history). See test/prompt-command.test.ts and the spec.
+    expect(await runCommand(ctx, "help", "")).toEqual({ kind: "reply", text: "help text" })
   })
 
   it("rejects unknown commands", async () => {
