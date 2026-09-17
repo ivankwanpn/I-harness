@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
@@ -9,7 +9,7 @@ import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
 import { forkTurns } from "../src/fork.ts"
-import { spawnChild } from "../src/child.ts"
+import { resolveRoleTools, spawnChild } from "../src/child.ts"
 import { createProviderRegistry } from "@i-harness/provider"
 
 function makeTool(name: string): Tool {
@@ -300,4 +300,55 @@ describe("spawnChild — M49 Default prompt carries the subagent contract", () =
     }
     expect(jobs.read(jobId)?.status).toBe("completed")
   }, 15_000)
+})
+
+// ── resolveRoleTools: a role's declared tools vs the HOST's registry ────────
+// `role.tools` is a RESTRICTION — the child gets exactly these and no others —
+// and it resolves against whatever tools the host mounted. The two vocabularies
+// do not agree: this repo registers `read`/`glob`/`grep`, while Claude Code
+// plugins declare `Read`/`Glob`/`Grep`. An unmatched name used to be dropped in
+// place (`if (tool)` with no else), so the child ran with fewer tools than its
+// role declared and no surface reported it.
+describe("resolveRoleTools", () => {
+  it("registers what the host mounts, returns what it does not, and warns", () => {
+    const parent = createToolRegistry(createContext())
+    parent.register(makeTool("read"))
+    parent.register(makeTool("bash"))
+    const child = createToolRegistry(createContext())
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const missing = resolveRoleTools("plugin-agent", ["read", "bash", "Read", "NotebookRead"], parent, child)
+
+      // the two mounted names land...
+      expect(child.get("read")).toBeDefined()
+      expect(child.get("bash")).toBeDefined()
+      // ...the two that resolve to nothing are RETURNED, not silently skipped
+      expect(missing).toEqual(["Read", "NotebookRead"])
+      expect(child.get("Read")).toBeUndefined()
+      expect(child.get("NotebookRead")).toBeUndefined()
+      // ...and the drop reached a surface
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = String(warn.mock.calls[0]![0])
+      expect(line).toContain("plugin-agent")
+      expect(line).toContain("Read")
+      expect(line).toContain("NotebookRead")
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it("says nothing when every declared tool resolves (the builtin-role case)", () => {
+    const parent = createToolRegistry(createContext())
+    parent.register(makeTool("read"))
+    const child = createToolRegistry(createContext())
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      expect(resolveRoleTools("general", ["read"], parent, child)).toEqual([])
+      expect(child.get("read")).toBeDefined()
+      expect(warn).not.toHaveBeenCalled()
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
