@@ -237,6 +237,13 @@ function buildFixture() {
   // `realKey`; anchoring on the initialiser does the opposite.
   put("packages/nu/src/defaults.ts", 'export const NU_DEFAULTS: { annotationOnly: number } = { realKey: 5 }\n')
 
+  // The class-5 anchor's `export` requirement, PINNED. Dropping the `export`
+  // keyword is this repo's PRESCRIBED remediation for an unused export -- and it
+  // used to blind class 5, so the tool reported its own blindness as PROGRESS:
+  // findings fall, `gone` rises, `--gate` still exits 0 and `--self-test` still
+  // reads 36/36. A DEFAULTS document is one whether or not it is exported.
+  put("packages/xi/src/defaults.ts", 'const XI_DEFAULTS = { xiKey: 1 }\n')
+
   return dir
 }
 
@@ -637,7 +644,22 @@ function scanUnpushedCapabilities(files) {
  *  as a clean sweep. The name anchor is kept for the fixture's shape; the export
  *  anchor is added for the real one. */
 const SETTINGS_SCHEMA_FILE = /(^|\/)(schema|settings-schema)\.ts$/
-const SETTINGS_DEFAULTS_DECL = /export const [A-Z0-9_]*DEFAULTS\b[^=]*=\s*\{/
+// The `export` is OPTIONAL on purpose, and that is a correction of record.
+//
+// It used to be required, and the consequence was the worst kind: dropping the
+// `export` keyword is this repo's PRESCRIBED remediation for an unused export
+// (the bucket-B rule), so doing the right thing blinded this class. The tool then
+// reported its own blindness as progress -- findings fall, `gone` rises against a
+// frozen baseline, `--gate` exits 0, and `--self-test` stays green because the
+// fixtures happened to be exported. Measured 2026-09-17 before the fix, on the
+// real tree: blinding the anchor took findings 472 -> 464 with
+// `unconsulted-setting` 8 -> 0.
+//
+// A DEFAULTS document is one whether or not it is exported: class 5 asks which
+// setting keys nothing consults, and that question does not depend on the
+// declaration's visibility. `\b` keeps the match from starting inside a longer
+// identifier (`myconst X_DEFAULTS = {` must not match at `const`).
+const SETTINGS_DEFAULTS_DECL = /\b(?:export\s+)?const [A-Z0-9_]*DEFAULTS\b[^=]*=\s*\{/
 const SETTING_KEY = /"([a-z][a-zA-Z0-9-]*\.[a-zA-Z0-9.-]+)"\s*:/g
 
 /** Skip one object-literal VALUE. Strings, templates and comments are honoured,
@@ -864,7 +886,7 @@ SELF_TEST_CASES.push({
 
 SELF_TEST_CASES.push({
   name: "class 5: a settings key with a schema entry and no reader is a finding",
-  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx", "xiKey"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
@@ -914,7 +936,7 @@ SELF_TEST_CASES.push({
 // property half has no `.syncWindow` anywhere to find.
 SELF_TEST_CASES.push({
   name: "class 5: a key read as a quoted key rather than a property is consulted",
-  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx", "xiKey"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
@@ -932,7 +954,7 @@ SELF_TEST_CASES.push({
 // the annotation's brace -- it reports `annotationOnly` and never sees `realKey`.
 SELF_TEST_CASES.push({
   name: "class 5: a typed DEFAULTS declaration anchors on its initialiser",
-  expect: ["compaction.auto", "realKey", "ui.fontSizePx"],
+  expect: ["compaction.auto", "realKey", "ui.fontSizePx", "xiKey"],
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
