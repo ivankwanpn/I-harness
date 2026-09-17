@@ -28,7 +28,9 @@ What it does (each step cached/skip-if-not-needed):
    > + `dist/runner.mjs` (bundled windows-acl sandbox runner, spawned next to
    > `ih.mjs` so confinement needs no source checkout and no tsx)
    > + `dist/node_modules/` (externalized native packages). `--version`
-   > prints the package version; `tui --help` (and `help`) exit 0.
+   > prints the package version; `help` exits 0 and prints the usage. There is
+   > no default UI: a bare launch (or any unknown subcommand, including the
+   > deleted `tui`) prints the usage on stderr and exits 1.
 
 2. **Node runtime** — ensures `build/node-win-x64/node.exe`; downloads
    `https://nodejs.org/dist/v22.23.2/node-v22.23.2-win-x64.zip`
@@ -83,7 +85,7 @@ runs the real thing — never a GUI, never a system write: rebuilds artifacts,
 silent-installs (`/S`) the **test** exe into a fresh temp dir under
 `os.tmpdir()` outside the repo, then asserts — installed tree mirrors
 staging, `i-harness.cmd --version` and `ih.cmd --version` print `<ver>`,
-`ih.cmd tui --help` exits 0, bundled `node.exe --version` reports the runtime
+`ih.cmd help` exits 0 and prints the usage, bundled `node.exe --version` reports the runtime
 version — then silent-uninstalls and polls (<=10 s) until the install dir is
 gone (the NSIS uninstaller defers the final root-dir delete to its temp-copy
 helper). PASS lines per assertion; nonzero exit on any failure.
