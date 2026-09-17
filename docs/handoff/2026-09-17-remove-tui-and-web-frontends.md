@@ -249,7 +249,8 @@ declared at `packages/workflow/src/runner.ts:68`. Its own-package consumers alre
 `@i-harness/workflow` (used at `:585`, `:601`, `:619`). The relative form that would fix it
 (`"../../workflow/src/…"`) has **zero hits anywhere in this tree** (measured: `git grep '"\.\./\.\./[a-z-]*/src/'`
 → 0). The alternatives are not free: a subpath export in `packages/workflow/package.json` is an API decision, and
-omitting `jobs` silently couples three subagent tests to a module-level shared store (`runner.ts:293`).
+omitting `jobs` silently couples three subagent tests to a module-level shared store
+(`packages/workflow/src/runner.ts:293`).
 
 **Follow-up order, cheapest first:** `WorkspaceRegistry` → `describeDirectory` → `createExecService` →
 `createWorkflowJobStore`. The remaining thirteen cannot be retired without weakening an assertion or making
@@ -325,14 +326,23 @@ see a scanner loosening that no fixture element targets"* (`docs/handoff/2026-09
 a line inside §4, which opens at that file's `:114`; its `:130` points on to the baseline document's §7) — and the
 quiet version is the dangerous one, which is why the tell is not the suite.
 
-**Two readings catch it, and the cheaper one is the digest.** `--digest` moves the moment the anchor goes blind —
-measured: `c777795c…` unblinded, **`6fa7863c…`** with the class-5 anchor blinded — so a monitor that pins the
-digest catches a blind anchor *directly*, with no baseline comparison at all. `gone` moves too, and is the reading
-that says *which kind* of change happened: it rises, **115 → 123**, because the tool counts lost findings as
-progress. The digest cannot make that distinction — it also moves for a legitimate retirement (the tree-side
-variant above digests to `6c156033…`) — so pin both, and expect opposite readings. Neither is the exit code: that
-comparison already exits 1 for the 59 unexempted new rows, so a reader who watches only exit status sees nothing
-at all.
+**What the two readings do and do not separate — measured, not reasoned.** Against the same frozen 523-row
+baseline:
+
+| state of the tree | `--digest` | `gone` |
+|---|---|---|
+| as committed at `1ac091e` | `c777795c…` | **115** |
+| class-5 anchor blinded (variant 1) | `6fa7863c…` | **123** |
+| the `export` dropped in the tree (variant 2) | `6c156033…` | **123** |
+
+**The digest discriminates by value** — three distinct row sets, three distinct digests — so a monitor that pins
+it can say *which state* it is looking at. **`gone` does not discriminate at all**: it reads **123** for both the
+blinded anchor and a legitimate retirement, so it says only *that* something changed, never *what*. A monitor
+should therefore **pin the digest for identity and read `gone` for magnitude**, and it must not expect either to
+name a cause: **nothing in this record tells you which kind of change occurred, and this instrument emits no
+signal that separates a blinded anchor from a legitimate retirement.** A reader who needs that distinction needs a
+signal the tree does not currently produce. Neither reading is the exit code either: that comparison already
+exits 1 for the new rows, so a reader who watches only exit status sees nothing at all.
 
 ---
 
@@ -471,10 +481,11 @@ byte-unstable**, plus every byte-level comparison (worktree against `git cat-fil
   produced by a copy of it instrumented to count `line === split-length`, with the counts needed to re-run it.
 - **A zero from this instrument is not self-certifying.** §5 shows the gate's own blindness arriving as a
   falling count, and `--self-test` does not catch it: measured on the silent variant above, the suite still
-  reports 36/36. The other two readings do catch it — but **only if you pin what you compare against**:
-  `--digest` moves on a blinded anchor (`c777795c…` → `6fa7863c…`) and `gone` rises (115 → 123), and `gone` is
-  a tell **only against the frozen 523-row baseline**, because a re-seeded baseline makes it 0 by construction.
-  Run without a pin, both are numbers that cannot move (§10).
+  reports 36/36. The other two readings move, but **only a pinned digest identifies a state** — it takes a
+  distinct value per row set (`c777795c…` / `6fa7863c…` / `6c156033…`) — while `gone` reads **123** for the
+  blinded anchor and for a legitimate retirement alike, and is a count **only against the frozen 523-row
+  baseline**, because a re-seeded baseline makes it 0 by construction. Pin the digest for identity, read `gone`
+  for magnitude, and expect neither to name a cause (§5, §10).
 - **Line-number rot.** Every `path:line` here was re-opened at `1ac091e`; a later edit above any of them moves
   it. The convention is the M2 record's trap 1: **label-primary with a dated line number**.
 - **M65 did not touch the scanner, the baseline data, or the gate's behaviour.** The only change this record's
@@ -494,8 +505,9 @@ node scripts/audit/check-reachability.mjs --gate --baseline /tmp/b523.json
 # expect: 115 baseline rows gone, 59 NEW rows, exit 1 -- and `gone` must stay 115 (§5)
 # the pin is the point: the committed baseline was re-seeded to 472 on 2026-09-17,
 # and `gone` against THAT baseline is 0 by construction -- it cannot show the blindness.
-# pin the row-set digest too: blindness moves it (c777795c -> 6fa7863c), and unlike
-# `gone` it needs no baseline at all
+# pin the row-set digest as well: it identifies the state with no baseline at all
+#   (c777795c = as committed, 6fa7863c = anchor blinded, 6c156033 = variant 2),
+# whereas `gone` reads 123 for the last two alike -- magnitude, not cause
 ```
 
 And to reproduce the §2.1 table without disturbing this tree: `git archive` each named revision into a
