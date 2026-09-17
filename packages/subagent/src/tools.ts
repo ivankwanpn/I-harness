@@ -15,7 +15,7 @@ import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { spawnChild } from "./child.ts"
+import { resolveRoleTools, spawnChild } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
 export interface SubagentToolDeps {
@@ -548,10 +548,8 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   if (!role) return false
   const childCtx = deps.parentCtx.scope.mount()
   const childReg = createToolRegistry(childCtx)
-  for (const name of role.tools) {
-    const tool = deps.parentRegistry.get(name)
-    if (tool) childReg.register(tool)
-  }
+  // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
+  resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
   // model resolution identical to spawnChild (child.ts): role.model →
   // provider → buildModelClient; else inherit the parent model.
   let model = deps.parentModel

@@ -38,6 +38,46 @@ export function composeSubagentPrompt(roleSystemPrompt: string): string {
   return `${roleSystemPrompt}\n\n${SUBAGENT_PROMPT_CONTRACT}`
 }
 
+/**
+ * Register a role's declared tools onto a child registry, resolved from the
+ * parent. Returns the declared names that resolved to NOTHING.
+ *
+ * The drop is reported rather than performed in silence. A role's `tools` list
+ * is a RESTRICTION — the child gets exactly these and no others — so a name
+ * that matches no mounted tool silently narrows the child below what its role
+ * declares, and no surface showed it: the role registered, the table listed it,
+ * and the agent simply could not do the thing. (Two identical copies of the
+ * silent loop lived in child.ts and tools.ts; a plugin agent declaring Claude
+ * Code's `Read`/`Glob`/`Grep` vocabulary against this repo's lowercase registry
+ * would have hit it on every entry.)
+ *
+ * Deliberately a warn, NOT a throw — unlike the unknown-provider case a few
+ * lines below, which does throw. The two look symmetric but are not: a role
+ * naming a provider that does not exist cannot run at all, whereas a role with
+ * ONE unmounted tool still runs and simply has less to work with. A host that
+ * mounts no `pwsh` must still be able to spawn its builtin roles.
+ */
+export function resolveRoleTools(
+  roleName: string,
+  declared: string[],
+  parent: ToolRegistry,
+  child: ToolRegistry,
+): string[] {
+  const missing: string[] = []
+  for (const name of declared) {
+    const tool = parent.get(name)
+    if (tool) child.register(tool)
+    else missing.push(name)
+  }
+  if (missing.length > 0) {
+    console.warn(
+      `[subagent] role '${roleName}' declares ${missing.length} tool(s) absent from the parent registry; ` +
+        `the child runs without them: ${missing.join(", ")}`,
+    )
+  }
+  return missing
+}
+
 export interface SpawnOptions {
   taskName: string
   message: string
@@ -103,11 +143,9 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   }
 
   // child registry: register the role's allowed tools (resolved from the parent).
+  // A declared tool the host does not mount is reported, never dropped silently.
   const childReg = createToolRegistry(childCtx)
-  for (const name of opts.role.tools) {
-    const tool = opts.parentRegistry.get(name)
-    if (tool) childReg.register(tool)
-  }
+  resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
 
   // model: role model via provider, else inherit parent.
   let model = opts.parentModel
