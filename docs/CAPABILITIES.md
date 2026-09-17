@@ -73,7 +73,7 @@
 ## 六、生態/配置
 - **settings**（多層/熱更/註釋保持 leaf-patch + section 協議 revision-guard）、**credentials**（refs-not-values + shadowed 拒絕）、**workspace**、**plugin-registry**（市場/安裝/status、**代碼永不執行**）
 - **hooks**（9 事件、CC 相容輸出語義、per-handler hash 信任、fail-closed）
-- **goal / jobs / feedback / schedule** + **telemetry**（manifest 擴充 + JSONL sink 可插拔）+ **fs-watch**（chokidar）
+- **goal / jobs / schedule** + **telemetry**（manifest 擴充 + JSONL sink 可插拔）+ **fs-watch**（chokidar）
 
 ## 七、模型面（M30 + M31 + M32）
 - **五協議 first-class**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（Converse）+ mock
