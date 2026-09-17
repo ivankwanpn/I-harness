@@ -163,12 +163,17 @@ async function bundleEntry(entry, outfile, label) {
       external: EXTERNALS,
       logLevel: "info",
       absWorkingDir: ROOT,
-      // DIST double-entry guard: esbuild merges every module into ONE file
-      // with ONE import.meta.url — apps/tui's direct-entry guard
-      // (`import.meta.url === pathToFileURL(argv[1]).href`) would fire on
-      // every `node ih.mjs ...` invocation and boot the TUI alongside main()
-      // (probe escape bytes on stdout). source-run never sets the env — the
-      // guard changes shape ONLY in the bundle.
+      // DIST marker. Read at runtime by the sandbox's runnerInvocation
+      // (packages/sandbox-windows-acl/src/index.ts:470 — the I_HARNESS_DIST
+      // branch re-enters the SIBLING runner.mjs instead of the source tsx
+      // entry) and by apps/cli's __dist-selfcheck, which fails loud if the dist
+      // confinement still goes through tsx. Source runs never set the env, so
+      // the branch changes shape ONLY in the bundle.
+      // Historical second reason, now gone: apps/tui's direct-entry guard
+      // (`import.meta.url === pathToFileURL(argv[1]).href`) would have fired on
+      // every `node ih.mjs ...` invocation and booted the TUI alongside main()
+      // — that module was deleted in M65 T1, and the marker is still required
+      // by the two readers above.
       define: { "process.env.I_HARNESS_DIST": JSON.stringify("1") },
       // esbuild keeps `require("node:stream")`-style calls inside the CJS
       // modules it wraps as a RUNTIME `__require` shim that throws in ESM
