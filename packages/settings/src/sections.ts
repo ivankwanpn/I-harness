@@ -80,7 +80,7 @@ export class SettingsConflictError extends Error {
 }
 
 /** Field/path validation failure before any write. */
-export class SettingsValidationError extends Error {
+class SettingsValidationError extends Error {
   readonly code = "settings-section-validation" as const
   constructor(message: string) {
     super(message)
@@ -113,7 +113,7 @@ export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "an
 export type SettingsProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]
 
 /** Fill-in when a stored/raw protocol is absent or invalid (normalize level). */
-export const DEFAULT_PROVIDER_PROTOCOL: SettingsProviderProtocol = "openai-completions"
+const DEFAULT_PROVIDER_PROTOCOL: SettingsProviderProtocol = "openai-completions"
 
 /** FieldSpec-level check: contextWindow/maxTokens must be positive integers. */
 function positiveInteger(value: unknown): string | undefined {

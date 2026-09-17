@@ -37,56 +37,31 @@ describe("normalizeSettings", () => {
   })
 
   it("keeps valid values and merges partial unknowns", () => {
-    const s = normalizeSettings({ theme: "dark", fontSize: 16, plugins: { bash: false } })
-    expect(s.theme).toBe("grok-night")
+    const s = normalizeSettings({ sandboxMode: "read-only", fontSize: 16, plugins: { bash: false } })
+    expect(s.sandboxMode).toBe("read-only")
     expect(s.fontSize).toBe(16)
     expect(s.plugins.bash).toBe(false)
     // untouched fields stay at defaults
     expect(s.plugins.agentLoop).toBe(SETTINGS_DEFAULTS.plugins.agentLoop)
-    expect(s.sandboxMode).toBe(SETTINGS_DEFAULTS.sandboxMode)
+    expect(s.model).toBe(SETTINGS_DEFAULTS.model)
   })
 
   it("rejects out-of-range / wrong-typed values with fallbacks", () => {
     const s = normalizeSettings({
-      theme: "purple",
       fontSize: 99,
       fontSizeStr: "14",
       sandboxMode: 4,
       searchBackend: "postgres",
       plugins: { webSearch: "yes" },
     })
-    expect(s.theme).toBe("system")
     expect(s.fontSize).toBe(14)
     expect(s.sandboxMode).toBe("workspace-write")
     expect(s.searchBackend).toBe("jsonl")
     expect(s.plugins.webSearch).toBe(false)
-    // unknown theme ids degrade to the default (system) — never a silent keep.
-    expect(normalizeSettings({ theme: "midnight" }).theme).toBe("system")
-  })
-
-  it("normalizes legacy light/dark theme values", () => {
-    expect(normalizeSettings({ theme: "light" }).theme).toBe("grok-day")
-    expect(normalizeSettings({ theme: "dark" }).theme).toBe("grok-night")
-  })
-
-  it("accepts all six modern theme ids verbatim", () => {
-    for (const theme of [
-      "system", "grok-night", "grok-day", "tokyo-night", "rose-pine-moon", "oscura-midnight",
-    ] as const) {
-      expect(normalizeSettings({ theme }).theme).toBe(theme)
-    }
-  })
-
-  it("tui.prefs.screenMode defaults to fullscreen and validates minimal", () => {
-    expect(SETTINGS_DEFAULTS.tui.prefs.screenMode).toBe("fullscreen")
-    expect(normalizeSettings(undefined).tui.prefs.screenMode).toBe("fullscreen")
-    expect(normalizeSettings({ tui: { prefs: { screenMode: "minimal" } } }).tui.prefs.screenMode).toBe("minimal")
-    // unknown / wrong-typed values degrade to the default (never corrupt)
-    expect(normalizeSettings({ tui: { prefs: { screenMode: "tiny" } } }).tui.prefs.screenMode).toBe("fullscreen")
   })
 
   it("tui.prefs.dashboard + statusLine (Task 13, spec §9.2): defaults, valid parse, corrupt degrade", () => {
-    expect(SETTINGS_DEFAULTS.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
+    expect(SETTINGS_DEFAULTS.tui.prefs.dashboard).toEqual({ order: [] })
     expect(SETTINGS_DEFAULTS.tui.prefs.statusLine).toEqual({
       mode: "builtin",
       items: ["cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks"],
@@ -94,12 +69,12 @@ describe("normalizeSettings", () => {
     const s = normalizeSettings({
       tui: {
         prefs: {
-          dashboard: { pinned: ["s2", "s1"], order: ["s2", "s1"] },
+          dashboard: { order: ["s2", "s1"] },
           statusLine: { mode: "command", items: ["cwd", "queue"], command: "git status --short", refreshMs: 500 },
         },
       },
     })
-    expect(s.tui.prefs.dashboard).toEqual({ pinned: ["s2", "s1"], order: ["s2", "s1"] })
+    expect(s.tui.prefs.dashboard).toEqual({ order: ["s2", "s1"] })
     expect(s.tui.prefs.statusLine).toEqual({
       mode: "command",
       items: ["cwd", "queue"],
@@ -110,12 +85,12 @@ describe("normalizeSettings", () => {
     const bad = normalizeSettings({
       tui: {
         prefs: {
-          dashboard: { pinned: [42, ""], order: "s1" },
+          dashboard: { order: "s1" },
           statusLine: { mode: "inline", items: ["nope", 5], command: "", refreshMs: 20 },
         },
       },
     })
-    expect(bad.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
+    expect(bad.tui.prefs.dashboard).toEqual({ order: [] })
     expect(bad.tui.prefs.statusLine.mode).toBe("builtin")
     expect(bad.tui.prefs.statusLine.items).toEqual([
       "cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks",
@@ -162,7 +137,7 @@ describe("normalizeSettings", () => {
     expect(out.llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
     // the normalized TUI section no longer carries the legacy plane (prefs only).
     expect("providers" in out.tui).toBe(false)
-    expect(out.tui.prefs.timestamps).toBe(false)
+    expect(out.tui.prefs.compact).toBe(false)
   })
 
   it("canonical provider fields win over a legacy migration row", () => {
@@ -243,7 +218,7 @@ describe("SettingsStore", () => {
   /** A legacy-only document (tui.providers, no llm section) — the load-path
    * migration fixture. */
   const LEGACY_FILE = {
-    theme: "dark",
+    fontSize: 15,
     tui: {
       providers: {
         version: 1,
@@ -309,14 +284,14 @@ describe("SettingsStore", () => {
     const store = new SettingsStore({ path: file })
     await store.load()
 
-    const immediate = await store.set({ theme: "grok-day" })
-    expect(immediate.theme).toBe("grok-day")
+    const immediate = await store.set({ fontSize: 16 })
+    expect(immediate.fontSize).toBe(16)
     expect(immediate.llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     // the normalized section still never exposes the legacy plane.
     expect("providers" in immediate.tui).toBe(false)
 
     const persisted = JSON.parse(await readFile(file, "utf8"))
-    expect(persisted.theme).toBe("grok-day")
+    expect(persisted.fontSize).toBe(16)
     expect(persisted.tui.providers.providers.custom).toEqual(LEGACY_FILE.tui.providers.providers.custom)
 
     const reloaded = new SettingsStore({ path: file })
@@ -376,8 +351,8 @@ describe("SettingsStore", () => {
     // the empty pin is cleaned up entirely; the rest of the document stays.
     const persisted = JSON.parse(await readFile(file, "utf8"))
     expect(persisted.tui.providers).toBeUndefined()
-    // the rest of the document survives (theme "dark" normalizes to grok-night).
-    expect(persisted.theme).toBe("grok-night")
+    // the rest of the document survives (the fixture's fontSize 15 is kept).
+    expect(persisted.fontSize).toBe(15)
     const reloaded = new SettingsStore({ path: file })
     await reloaded.load()
     expect(reloaded.get().llm.providers).toEqual({})
@@ -432,10 +407,10 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "grok-night", fontSize: 16, searchBackend: "sqlite" })
+    await store.set({ sandboxMode: "read-only", fontSize: 16, searchBackend: "sqlite" })
     const again = new SettingsStore({ path: file })
     const s = await again.load()
-    expect(s.theme).toBe("grok-night")
+    expect(s.sandboxMode).toBe("read-only")
     expect(s.fontSize).toBe(16)
     expect(s.searchBackend).toBe("sqlite")
     expect(s.model).toBe(SETTINGS_DEFAULTS.model)
@@ -447,10 +422,10 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "grok-night" })
+    await store.set({ fontSize: 16 })
     await store.reset()
     const s = store.get()
-    expect(s.theme).toBe("system")
+    expect(s.fontSize).toBe(SETTINGS_DEFAULTS.fontSize)
     await rm(root, { recursive: true, force: true })
   })
 

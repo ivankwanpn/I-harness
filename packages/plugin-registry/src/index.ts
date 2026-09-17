@@ -114,7 +114,7 @@ export {
   type PluginSourceUrl,
 } from "./marketplaces.ts"
 export { describeCommands, parseCommandMarkdown } from "./commands.ts"
-export { evaluatePlugin, type CapabilityStatus, type CommandStatus, type EvaluateResult, type Observations, type OverallStatus } from "./evaluate.ts"
+export { evaluatePlugin, type EvaluateResult, type Observations } from "./evaluate.ts"
 export { materializePlugin, type MaterializedPlugin } from "./materialize.ts"
 
 function byIdCompare(a: { id: string }, b: { id: string }): number {
