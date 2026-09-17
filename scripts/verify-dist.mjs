@@ -21,12 +21,20 @@
  *       still has a subject and is kept;
  *   (e) <out>/runner.mjs              → the windows-acl runner bundle exists,
  *       honours its exit-127 failure contract, and really confines (child
- *       exit code mirrored).
+ *       exit code mirrored);
+ *   (f) node <out>/ih.mjs sdk         → the bundle re-enters ITSELF for the SDK
+ *       stdio server and answers an NDJSON JSON-RPC `initialize`. M65 T1
+ *       restored this assertion: the TUI helper that used to drive it
+ *       (spawnSdkSubprocess / buildSdkSpawnArgs) was deleted, but the SUBJECT —
+ *       the dist bundle's `sdk` surface — survives, so the probe is written
+ *       here against the bundle. It is platform-independent, which is also what
+ *       keeps this gate non-vacuous off win32, where (d1) can only assert its
+ *       own skip line.
  * Every assertion failure prints the full stdout/stderr of the failing
  * command and exits 1 (non-zero) — never settles for a silent pass.
  */
 
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -216,6 +224,69 @@ function aclRunnerSpawn() {
     confined.status === 7,
     `(e) confined spawn mirrors the child exit code (7) ${getDuration(t2)}`,
     `  exit: ${confined.status}\n  stdout:\n${confined.stdout}\n  stderr:\n${confined.stderr}`,
+  )
+}
+
+// (f) dist-level SDK stdio server — the restored `--attach`-era probe.
+//
+// What it asserts: `node ih.mjs sdk` re-enters the bundle, speaks NDJSON
+// JSON-RPC 2.0 over stdio, and answers `initialize` with a numeric
+// protocolVersion (packages/sdk/src/server.ts:266-275). No TUI helper is
+// involved — the frame is written by hand with the same shape the SDK client
+// sends (packages/sdk/src/protocol.ts:467 makeRequest + :534 encodeFrame), which
+// is what makes this check possible after M65 T1 deleted
+// spawnSdkSubprocess/buildSdkSpawnArgs.
+//
+// IH_CONFIG_DIR is pinned to a fresh temp dir: `sdk` loads the provider runtime
+// at startup, and a developer's own settings must not be read (and nothing may
+// be written into this repo) by a build gate.
+function sdkInitializeProbe() {
+  const configDir = mkdtempSync(join(tmpdir(), "ih-verify-dist-sdk-"))
+  const child = spawn(process.execPath, [IH, "sdk"], {
+    cwd: ROOT,
+    env: { ...process.env, IH_CONFIG_DIR: configDir },
+  })
+  let stdout = ""
+  let stderr = ""
+  let timer
+  const outcome = new Promise((resolve) => {
+    let settled = false
+    const finish = (value) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child.kill()
+      resolve(value)
+    }
+    timer = setTimeout(
+      () => finish({ error: `no initialize response within 45 s\n  stdout:\n${stdout}\n  stderr:\n${stderr}` }),
+      45_000,
+    )
+    child.stdout.on("data", (d) => {
+      stdout += String(d)
+      for (const line of stdout.split(/\r?\n/)) {
+        if (line.trim() === "") continue
+        let frame
+        try { frame = JSON.parse(line) } catch { continue }
+        if (frame !== null && typeof frame === "object" && frame.id === 1) finish({ frame })
+      }
+    })
+    child.stderr.on("data", (d) => { stderr += String(d) })
+    child.on("error", (e) => finish({ error: `spawn failed: ${e.message}` }))
+    child.on("exit", (code) => finish({ error: `sdk exited (code ${code}) before answering\n  stdout:\n${stdout}\n  stderr:\n${stderr}` }))
+    child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })}\n`)
+  })
+  return outcome.finally(() => { rmSync(configDir, { recursive: true, force: true }) })
+}
+
+{
+  const t = Date.now()
+  const r = await sdkInitializeProbe()
+  const protocolVersion = r.frame?.result?.protocolVersion
+  assert(
+    typeof protocolVersion === "number",
+    `(f) node ih.mjs sdk answers an NDJSON initialize from the bundle ${getDuration(t)}`,
+    r.error ?? `  frame: ${JSON.stringify(r.frame)}`,
   )
 }
 
