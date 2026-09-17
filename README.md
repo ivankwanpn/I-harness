@@ -3,7 +3,7 @@
 <div align="center">
 
 **一款以「後端完整」為先、複刻 grok-build 工程細節的 Agent 開源框架** ——
-TypeScript/ESM 單倉（pnpm workspace），Windows 一等，從模型對接到終端界面全鏈自持。
+TypeScript/ESM 單倉（pnpm workspace），Windows 一等，從模型對接到服務面的全鏈自持。
 
 </div>
 
@@ -13,14 +13,15 @@ TypeScript/ESM 單倉（pnpm workspace），Windows 一等，從模型對接到�
 
 ## 這是一套什麼
 
-I-harness 是一個**完整的 Agent 產品後端 + 終端前端**：
+I-harness 是一個**完整的 Agent 產品後端**：
 
 - **引擎**（M1–M25）：事件驅動 Agent 迴圈、真實工具面、守衛五層、壓縮五路、JSONL 唯一真相持久化、子代理/團隊、Windows ACL 沙箱、MCP/LSP、技能/工作流
 - **服務面**（M26–M34）：輸入分級、記憶體/會話管理、HTTP+WS 服務網關、NDJSON JSON-RPC **SDK（Wire v0–v1.1 凍結/加性體系）**、ACP、模型目錄與動態發現
-- **終端界面**（M35–M47）：複刻 **grok-build 的工程細節**——渲染層、minimal 原生滾動模式、markdown 檢查點、Rewind 全鏈、**提供商/模型管理**、**完整 Slash 註冊表**、**鼠標全語義**、遠程附著
-- **體驗**：`i-harness` / `ih` 全局命令（任意資料夾即啟動）+ **NSIS 自包含安裝器**
+- **體驗**：`i-harness` / `ih` 全局命令 + **NSIS 自包含安裝器**
 
-> 設計立場：**不默認任何提供商**；**append-only 日誌**（JSONL 唯一真相，遮罩/回滾皆不改寫）；**後端零新面地接前端**（TUI 只是 SessionService 的另一個客戶端）；源碼直跑（tsx），dіst 只在發布期產出。
+> **界面：TUI 與 web 前端已於 2026-09-17（M65）移除。** 產品立場是**後端必須在沒有界面附著時照常工作**，而**前端真就應該是純前端**——所以先移除，重建另計（重建不在 M65 範圍內）。移除的是 `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts`；**`packages/web` 不是前端**（它是 `web_search` / `web_fetch` 工具包，仍在生產路徑上），原樣保留。**裸啟動回到 M44 之前的行為**：用法印到 **stderr**、**exit 1**，不再是「啟動 TUI」。完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](docs/handoff/2026-09-17-remove-tui-and-web-frontends.md)。
+
+> 設計立場：**不默認任何提供商**；**append-only 日誌**（JSONL 唯一真相，遮罩/回滾皆不改寫）；**後端零新面地接前端**——前端只是 SessionService 的另一個客戶端，這正是它能被移除而不動後端的原因；源碼直跑（tsx），dіst 只在發布期產出。
 
 ---
 
@@ -31,17 +32,14 @@ I-harness 是一個**完整的 Agent 產品後端 + 終端前端**：
 pnpm install
 
 # 2. 用真實模型跑（以 DeepSeek 為例——任意 OpenAI 兼容/五協議提供商同法）
-$env:DEEPSEEK_API_KEY = "sk-..."     # 或經 TUI /provider 三步錄入（存為憑證引用）
-node --import tsx apps/tui/src/index.ts --model deepseek:deepseek-chat          # 全屏 TUI（真實模型會話）
+$env:DEEPSEEK_API_KEY = "sk-..."     # 存為憑證引用
 node --import tsx apps/cli/src/index.ts run "say hi" --model deepseek:deepseek-chat --api-key $env:DEEPSEEK_API_KEY --yes
 
-# 3. 全局命令（grok 式：任意文件夾敲名字）
+# 3. 全局命令（任意文件夾敲名字）
 cd apps/cli && pnpm link -g
-i-harness           # 在當前文件夾啟動 TUI（workspace = cwd；模型取 settings/provider 默認）
-ih --minimal        # 原生 scrollback 模式
-ih --prompt "hello" --model deepseek:deepseek-chat
-ih --attach <session-id>
-ih help             # 全部子命令（run / web / sdk / acp / tui）
+ih run "say hi" --model deepseek:deepseek-chat --yes   # 無頭運行（workspace = cwd）
+ih sessions list                                       # 會話清單
+ih help             # 全部子命令（run / sdk / acp / sessions）
 ```
 
 > **M49 起（superseded）**：模型解析是**必需**——未配置任何提供商時按 `No model configured` 拒絕啟動（Welcome 頁開放 Settings），不再有 mock 回退。解析鏈（`provider-runtime.selectModel`：override 先判，再 session selection，最後 defaultModel）：明確的 `--model` override > session model selection > `llm.defaultModel`；provider 設定走**canonical settings 平面**（`llm.providers` 為唯一真源；M46 的 `tui.providers` 布局僅以 read-pin 方式被兼容讀取，永不寫回主力平面）。
@@ -54,38 +52,29 @@ node scripts/build-installer.mjs    # → build\I-harness-Setup-0.1.0.exe
 
 ---
 
-## 終端界面（TUI —— grok 1:1 複刻）
-
-| 面 | 亮點 |
-|---|---|
-| 渲染 | 雙緩衝 cell diff + **零字節 idle**（同幀 → 0 寫入；渲染/minimal/懸停/live-probe 全路徑復證）、DEC 2026、寬字符 vendor 表、GrokNight/GrokDay 量化（truecolor/256/16 + ANSI16 釘色 + Windows 對比提升） |
-| 模式 | Fullscreen（alt-screen）/ **Minimal**（終端原生滾動 + print-once——提交後永不重繪）/ self-relaunch 切換 |
-| 內容 | **markdown 檢查點**（段落/列表/圍欄閉合即刷）、hljs 極性安全高亮、mermaid Unicode 圖、`md_code_bg` |
-| 交互 | **鼠標全語義**（5 模式捕獲、懸停 dirty 重繪、單/雙/三擊、拖拽+邊緣自動滾動+自動複製、滾動流式、permission 雙擊即發、最小化模式無捕獲）、鍵表（Ctrl+S 存草稿 / F3 會話 / Ctrl+G 模式拆分…）、**完整 Slash 註冊表**（45 條可見 + 21 條誠實跳過——**只做後端真支持的功能**） |
-| 管理 | **/provider** 三步嚮導 + **/model** 選擇 + **8 分類設置面板**、會話選擇器、工作量面板、Rewind 六相位（檔案快照兩階段恢復） |
-| 遠程 | `--attach`（SDK stdio 客戶端；v1.1 全 wire：歷史/列表/取消/Rewind） |
-
-**PTY 屏幕級回歸**：`packages/tui/test/harness/` 下 13+ 個真實虛擬終端場景（`case-010…023`），以 **byte-budget**（主機側累計 ledger ≡ pty 實觀）定量證明零字節 idle 與渲染確定性——註：Windows ConPTY 傳送分塊間隙可達秒級，時間窗採樣被實際證明不可靠，這是我們定下的證據學。
-
----
-
 ## 命令一覽
 
 ### 全局（`i-harness` / `ih`）
 
 | 命令 | 說明 |
 |---|---|
-| （裸） | 當前文件夾啟動 TUI（grok 式默認） |
-| `tui [--prompt …] [--minimal\|--fullscreen] [--attach <id>] [--resume <id>]` | TUI 子命令 |
-| `run <task> [--model p:m --api-key K --yes --session-dir D --resume ID --telemetry]` | 無頭運行 |
-| `web [--port N] [--launch-token T] [--hmac-secret S]` | Web 服務（HTTP+WS） |
+| `run <task> [--model p:m --api-key K --yes --session-dir D --resume ID --telemetry --no-compact --sandbox MODE]` | 無頭運行 |
 | `sdk [--session-dir D]` | NDJSON JSON-RPC stdio 伺服器 |
 | `acp [--session-dir D] [--no-auto-approve]` | ACP 伺服器 |
+| `sessions [list] [--session-dir D] [--json]` / `sessions show <id> [--last N]` | 會話清單與檢視 |
 | `help` / `--version` | 用法 / 版本（0.1.0） |
 
-### TUI 常用斜杠
+**裸啟動，或缺席／未知的子命令，是用法錯誤**：用法印到 **stderr**、**exit 1**。沒有「預設啟動某個界面」這回事——那是 M44–M64 的舊行為，M65 已還原成 M44 之前的形狀（權威：`db3d1e7^:apps/cli/src/index.ts`）。
 
-`/minimal` `/fullscreen` `/btw` `/theme` `/timestamps` `/multiline` `/compact-mode` `/find` `/jump` `/history` `/resume` `/new` `/delete` `/rename` `/session-info` `/context` `/usage` `/rewind` `/plan` `/view-plan` `/compact` `/queue` `/tasks` `/doctor` `/copy` `/export` `/transcript` `/help` `/quit` `/always-approve` `/auto` `/effort` `/model` `/provider` `/settings` `/skills` `/mcps` `/hooks` `/plugins` `/marketplace` `/personas` `/config-agents` `/workflow` `/tutorial` `/timeline` —— 完整清單見 `docs/CAPABILITIES-DETAIL.md` §TUI。
+---
+
+## 已移除：終端界面（TUI）與 web 前端
+
+> **M35–M47 的 TUI**（雙緩衝 cell diff + 零字節 idle、minimal 原生滾動、markdown 檢查點、完整 Slash 註冊表、鼠標全語義、`--attach` 遠程附著、PTY byte-budget 回歸）與 **`i-harness web`**（HTTP+WS 主機、內建 L3 對話頁）**已於 2026-09-17 隨 M65 一併刪除**。
+>
+> **為什麼**：產品立場是後端必須在沒有界面附著時照常工作，前端應該是純前端——TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這是移除，不是廢棄**：重建是另一個里程碑，被刪掉的能力**不會**從這份 README 復原，也**不該**被當成後端退步。
+>
+> **留下了什麼**：前端孤立出來的 34 個 wire 契約（view model、DTO、approval／question／command 接縫）被**具名保留**為重建前端的契約，不是後端腐化的證據；完整處置見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](docs/handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 
 ---
 
@@ -124,14 +113,16 @@ node scripts/verify-installer.mjs  # 19 項安裝驗證（靜默裝 → 雙命�
 | 卸載器 | 文件/目錄清除 + 註冊表 + PATH 回寫 + 自刪 |
 | 測試模式 | `-test.exe`（`IH_NSIS_TEST` 編譯變體：不寫 PATH/註冊表、**預設裝到 `%LOCALAPPDATA%\I-harness`**——用戶級可寫；原 `Program Files` 預設在未提權下寫不進去，雙擊即報 `Error opening file for writing`） |
 
-**dist 自足（M55）**：`--attach` 的 SDK spawn 重入自身 bundle（`node ih.mjs sdk`）、Windows-ACL 沙箱 spawn 同捆的 `dist/runner.mjs`、`/minimal` 自重啟重入自身、minimal 內聯引擎已入 bundle——都不再需要源碼或 tsx。`I_HARNESS_HOME` 僅是**源碼模式**的開發覆蓋（指向非標準路徑的 checkout），dist 不讀它。
+**dist 自足（M55）**：Windows-ACL 沙箱 spawn 同捆的 `dist/runner.mjs`，以及 `node ih.mjs sdk` **重入自身 bundle**——都不再需要源碼或 tsx。`I_HARNESS_HOME` 僅是**源碼模式**的開發覆蓋（指向非標準路徑的 checkout），dist 不讀它。
+
+> **M65 更正**：這條 bullet 原本還列舉三個探針——`--attach` 的 SDK spawn、`/minimal` 自重啟、minimal 內聯引擎。**它們是隨其主體（被刪除的 `@i-harness/tui-app`）一併移除的，不是失效**：沒有東西可測了。`scripts/verify-dist.mjs` 的標頭記著這件事。**SDK 重入本身仍有覆蓋**——`verify-dist.mjs` 的 (f) 區塊直接驅動 `node <out>/ih.mjs sdk`（平台無關，且帶反向控制），所以上面留下的那一半不是空話。
 
 ---
 
 ## 模型與提供商
 
 - **五協議一等**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（AWS Converse）+ mock
-- **設置在 TUI**：`/provider` 添加（ID/Base URL/API Key 遮罩，≥註冊只存 **refs**——明文永不入設置）→ `/model` 選擇 → 目錄動態發現（`/v1/models` 候選鏈 + probe-apply 落定），每次選擇持久化進 settings
+- **設置面**：`llm.providers` 是唯一真源（註冊只存 **refs**——明文永不入設置），目錄動態發現（`/v1/models` 候選鏈 + probe-apply 落定），每次選擇持久化進 settings。**M65 之前**這條路徑的錄入界面是 TUI 的 `/provider` 三步嚮導，該嚮導已隨前端移除；重建前端時見 `docs/CAPABILITIES-DETAIL.md` 的移除註記
 - **自訂請求標頭（M59）**：`llm.providers.<route>.headers`——網關要求的固定標頭（例：OpenCode Zen 的 `x-opencode-session`）。settings 平面直填（嚮導暫無此欄位；重新保存 provider 不會清掉它），適配器自身標頭（Authorization 等）優先
 - **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議翻譯表（世代規則）
 - 每會話窗口/輸出上限解析鏈：settings `userModel` > modelContexts > profile > `model-catalog.json` > undefined
@@ -187,7 +178,7 @@ $env:NODE_EXTRA_CA_CERTS = "C:\path\company-root.pem"
 ## 架構與包
 
 ```
-packages/  (~70 個包)
+packages/  (65 個包 + apps/cli)
 ├── core-{plugin,session,agent,tools}   引擎核心（事件驅動/日誌唯一真相/工具註冊表）
 ├── llm-{seam,openai,openai-compatible,anthropic,gemini,bedrock,mock} + provider
 ├── exec / shell / fs / fs-search / tool-search / output-retention / todo
@@ -199,12 +190,9 @@ packages/  (~70 個包)
 ├── interaction / instructions / plan-mode / runtime-context / preset
 ├── credentials / settings / workspace / plugin-registry / hooks / telemetry
 ├── rewind                              檔案快照/兩階段回滾引擎
-├── sdk / acp / web-host / web          服務面（wire 凍結/ACP/HTTP+WS）
-├── tui-core                            渲染層（cell diff/輸入解析/終端/探測/主題——運行時 0 依賴）
-└── tui                                 App 層（scrollback/views/slash/鼠標/後端橋）
+└── sdk / acp / web                     服務面（wire 凍結/ACP；`web` 是 web_search/web_fetch **工具**包，不是前端）
 apps/
-├── cli                                 全局命令（run/web/sdk/acp/tui + bin shim）
-└── tui-app                             TUI 宿主
+└── cli                                 全局命令（run/sdk/acp/sessions + bin shim）
 ```
 
 詳細能力全景：`docs/CAPABILITIES.md`（九節）+ `docs/CAPABILITIES-DETAIL.md`（工具 schema 級粒度 + 已知缺口表）。
@@ -222,7 +210,7 @@ apps/
 | `pnpm verify:reachability` | 可達性棘輪（對**新增**的孤兒行失敗；基線 `scripts/audit/reachability-baseline.json`） |
 | `node scripts/build-installer.mjs && node scripts/verify-installer.mjs` | 打包安裝器 + 19 項安裝驗證 |
 
-> 已知瑕疵：vitest worker flake（M31 修復——`web-host` 用 forks pool；新包遇到同症狀照搬該配置）。
+> 已知瑕疵：vitest worker flake（M31 修復——`web-host` 用 forks pool，**該包已於 M65 移除**；新包遇到同症狀照搬該配置）。
 
 ---
 
@@ -257,15 +245,16 @@ apps/
 | M47 | 質量輪 2：鼠標/hover bench + live 探測 + line-viewer |
 | M48 | 可靠性與 TUI 交付：G1 chain rejection 推進；配置 session-dir 時 TUI session 建立/列表/resume/close flush；transactional session switch + scrollback/app reset；SDK/ACP 跨進程恢復舊 history 並延續 seq；ACP per-session close/lease release；durable Rewind bridge（僅 recorder-backed 檔案變更）；PTY case-010 修復 Windows `chcp` codepage 命令解析 |
 | M49 | Grok TUI parity 收官：canonical provider settings（`llm.providers` 唯一真源 + M46 `tui.providers` read-pin）、required-model gate、Welcome 面、typed settings/provider 流、grapheme editor + cursor、主題（system/grok-night/grok-day/tokyo-night/rose-pine-moon/oscura-midnight）+ minimal 生產化、typed tool 塊 + viewers/clipboard/bridges、真實 prompt queue、tasks/subagents 投影、本地 dashboard + 內建 status line（模型標籤為 runtime 真綁定）、capability-gated slash + prompts + Ctrl+R mouse 捕獲切換；PTY case-028 整合 parity 證明（最低啟動無 alt-screen/mouse 位元組、theme/screen/status 持久化重啟、unsupported `/login` 零提交） |
+| **M65** | **移除 TUI 與 web 前端**（`apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host`、`apps/cli/src/web.ts`），還原 **pre-M44 裸啟動**（用法 → stderr、exit 1），淘汰 19 個 TUI-only settings、21 個只剩前端的 export，並把前端留下的 104 列孤兒當**一個具名類別**定價（T 刪／B 退場／C 契約／? 待決）。**M35–M49 的界面能力因此不再存在**——重建是另一個里程碑 |
 
 ---
 
 ## 邊界與遠期
 
 - **明確不做**：PTC/run_code、plugin 代碼執行、默認提供商、dashboard/leader 多進程、grok 賬戶登錄/賬單/共享/刪除面、remote/session 刪除、跨機器 dashboard 同步、account OAuth 綁定
-- **明確限制**：未配置 store root 的 TUI 仍是 ephemeral fallback；Rewind **不還原** shell/外部編輯器等未經 recorder 的變更（M58 起以 `plan().unseen` 唯讀列出，永不進 `ops`）；PTY 時間窗採樣仍不可靠；dashboard 為**本地機器**面（durable session store + 真實 backend 投影——無跨機同步）；Bedrock ambient 認證（無 API key 環境即用；OAuth-account 類型為未來擴展邊界，本期未實作）；發現機制 = **手動添加 + 明確 discovery（probe）**——入門教程/自動爬取不支持
+- **明確限制**：未配置 store root 的 session 仍是 ephemeral fallback；Rewind **不還原** shell/外部編輯器等未經 recorder 的變更（M58 起以 `plan().unseen` 唯讀列出，永不進 `ops`）；PTY 時間窗採樣仍不可靠；dashboard 為**本地機器**面（durable session store + 真實 backend 投影——無跨機同步）；Bedrock ambient 認證（無 API key 環境即用；OAuth-account 類型為未來擴展邊界，本期未實作）；發現機制 = **手動添加 + 明確 discovery（probe）**——入門教程/自動爬取不支持
 - **遠期隊列**：web/desktop 面（排在很後面）、mermaid PNG 評估、Rewind 冷啟動恢復、MCP OAuth 實線刷新、macOS 沙箱、R-B4 git undo **B 案**（checkpoint 引擎——A 案 M58 已落地：`plan().unseen` 唯讀 git 對照）、記憶（R-A10）、provider OAuth 賬號綁定
-- 每個「後端沒有」的功能在 TUI 一律**誠實降級**（toast + 記錄），不捏造
+- 前端存在時，每個「後端沒有」的功能一律**誠實降級**（toast + 記錄），不捏造——**這條立場不因前端被移除而改變**，重建時照用
 
 ---
 
