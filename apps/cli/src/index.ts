@@ -24,41 +24,28 @@ import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
-import { parsePort, runWebServer } from "./web.ts"
-import type { WebServerOptions } from "./web.ts"
-import { parseFlags, runTui } from "@i-harness/tui-app"
-import { CLI_VERSION } from "./web.ts"
+import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 
+// M65 T1: the frontends are gone, so USAGE advertises only the backend
+// surface — and it no longer describes a bare-launch default, because there is
+// none (see the fall-through at the end of the dispatch chain). The
+// `--sandbox read-only|workspace-write|danger-full-access` token is
+// test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
-  "usage: i-harness [<run|web|sdk|acp|tui|sessions> ...] — BARE (no subcommand) launches the TUI in the current folder (grok-style)\n" +
-  "  tui [--prompt <text>] [--workspace <dir>] [--model <spec>] [--yes] [--resume <id>] [--attach <id>] [--minimal|--fullscreen] |\n" +
+  "usage: i-harness [<run|sdk|acp|sessions> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
-  "  web [--port N] [--session-dir DIR] [--launch-token TOKEN] [--hmac-secret SECRET] | sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
+  "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N]"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
 
-/**
- * H-4: web port selection — `--port N` flag beats the PORT env var, which
- * beats the 4310 default. Flag values must be positive integers; anything
- * else falls through to the env (or the default). The env path reuses
- * `parsePort` (web.ts) so PORT=0 (OS-assigned) stays valid there.
- */
-export function pickWebPort(args: string[], envPort: string | undefined): number {
-  const idx = args.indexOf("--port")
-  const flagPort = idx !== -1 ? Number(args[idx + 1]) : undefined
-  return flagPort !== undefined && Number.isInteger(flagPort) && flagPort > 0
-    ? flagPort
-    : envPort !== undefined ? parsePort(envPort) : 4310
-}
-
 // M31: no hardcoded model catalogs — gemini/bedrock built-in profiles keep
 // only the config template (protocol/defaultModel); `models: []` + no
-// `modelContexts`. The model list comes from the user settings (adopt via the
-// web-host probe-apply, spec §2.3 — nothing is preset by the CLI).
+// `modelContexts`. The model list comes from the user settings (spec §2.3 —
+// nothing is preset by the CLI).
 export function parseModel(modelSpec: string, apiKey: string): ModelClient {
   const [provider, model] = modelSpec.split(":")
   const reg = createProviderRegistry()
@@ -95,42 +82,15 @@ export async function main(argv: string[]): Promise<number> {
     console.error("--session-backend is removed (M29: JSONL-only persistence; the search index derives from the store)")
     return Promise.resolve(1)
   }
-  // R-C1 web subcommand: the thin composition over the session service
-  // (apps/cli/src/web.ts). PORT env wins over the default; the workspace is
-  // the cwd; auth is opt-in (--launch-token/--hmac-secret) — absent = no
-  // fence (dev), present = the R-C3 fence.
-  if (args[0] === "web") {
-    const launchIdx = args.indexOf("--launch-token")
-    const hmacIdx = args.indexOf("--hmac-secret")
-    const launchToken = launchIdx !== -1 ? args[launchIdx + 1] : process.env.I_HARNESS_TOKEN
-    const hmacSecret = hmacIdx !== -1 ? args[hmacIdx + 1] : process.env.I_HARNESS_HMAC
-    const opts: WebServerOptions = {
-      // H-4: flag > PORT env > default (4310) — pickWebPort owns the priority.
-      port: pickWebPort(args, process.env.PORT),
-      workspace: process.cwd(),
-      // M61: the session store the host serves — an explicit --session-dir
-      // wins, else the shared default root (the same store the agent keeps).
-      ...(args.includes("--session-dir") ? { storeRoot: args[args.indexOf("--session-dir") + 1] } : {}),
-      ...(launchToken !== undefined || hmacSecret !== undefined
-        ? { auth: { launchToken, hmacSecret }, printLoginUrl: true }
-        : {}),
-    }
-    try {
-      const result = await runWebServer(opts)
-      return Promise.resolve(result.port)
-    } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err))
-      return Promise.resolve(1)
-    }
-  }
   // R-C4 sdk subcommand: NDJSON JSON-RPC 2.0 stdio server (hosted by the
   // SessionService). stdout carries ONLY protocol frames — every log goes to
   // stderr. `i-harness sdk [--session-dir DIR]`
   if (args[0] === "sdk") {
     return runSdkCommand(args)
   }
-  // M61: the durable session store's CLI face — list what the TUI persisted
-  // and print a transcript of one session (read-only; shares the TUI root).
+  // M61: the durable session store's CLI face — list the sessions the agent
+  // persisted and print a transcript of one (read-only; shares the store root
+  // with the run/sdk/acp paths).
   if (args[0] === "sessions") {
     return runSessionsCommand(args)
   }
@@ -139,17 +99,10 @@ export async function main(argv: string[]): Promise<number> {
   if (args[0] === "acp") {
     return runAcpCommand(args)
   }
-  // M44: the `tui` subcommand + the GROK-STYLE DEFAULT — a bare `i-harness`
-  // (or any non-subcommand first token) launches the TUI in the current
-  // folder (workspace = cwd), exactly like `grok` in a project folder.
-  if (args[0] === "tui") {
-    return Promise.resolve(runTui(parseFlags(args.slice(1))))
-  }
   // Hidden dist self-check (M55 — scripts/verify-dist.mjs drives it): the
-  // surfaces the bundle must serve WITHOUT a source checkout/tsx — the
-  // minimal inline engine, the /minimal relaunch argv, the windows-acl
-  // confinement, the --attach SDK subprocess. Exit 0 only when every probe
-  // passed. Deliberately not in USAGE (a build gate, not a user command).
+  // windows-acl confinement the bundle must serve WITHOUT a source
+  // checkout/tsx. Exit 0 only when every probe passed. Deliberately not in
+  // USAGE (a build gate, not a user command).
   if (args[0] === "__dist-selfcheck") {
     return runDistSelfcheck()
   }
@@ -161,26 +114,33 @@ export async function main(argv: string[]): Promise<number> {
     console.error(USAGE)
     return Promise.resolve(0)
   }
+  // M65 T1: the pre-M44 fall-through, restored in shape verbatim
+  // (`db3d1e7^:apps/cli/src/index.ts`). M44 replaced it with the grok-style
+  // default, which launched the TUI for a bare `i-harness` or for any first
+  // token that was not a subcommand. The frontends are gone, so an absent or
+  // unknown subcommand is a usage error again: usage on stderr, exit 1.
   if (args[0] !== "run") {
-    // Bare launch == TUI (grok-style); the `run`/`web`/`sdk`/`acp` set stays
-    // the headless/backend surface.
-    return Promise.resolve(runTui(parseFlags(args)))
+    console.error(USAGE)
+    return Promise.resolve(1)
   }
 
   // M1 Phase B: a FLAG must never become the prompt. `--help`/`-h` are handled at
-  // :156-163 as `args[0]` only, so `i-harness run --help` fell through to the
-  // filter at :331-335 -- which knows only the eight flags it strips (it read "seven" until 2026-09-15; the list at :332 carries eight names) -- and
+  // :109-116 as `args[0]` only, so `i-harness run --help` fell through to the
+  // filter at :291-295 -- which knows only the eight flags it strips (it read "seven" until 2026-09-15; the list at :292 carries eight names) -- and
   // reached runHeadless as a real turn whose prompt was "--help". The same hole
-  // sent `--no-compact` (parsed at :209, absent from that filter) into the prompt
+  // sent `--no-compact` (parsed at :169, absent from that filter) into the prompt
   // as `do x --no-compact`.
   //
-  // The TOP-LEVEL `help`/`--help`/`-h` command at :156-163 is deliberately left
-  // alone -- it is test-pinned as the documentation surface (bin.test.ts:33-38,
-  // and ":72-75" forces a new run flag to appear in it). The run path gets no
+  // The TOP-LEVEL `help`/`--help`/`-h` command at :109-116 is deliberately left
+  // alone -- it is test-pinned as the documentation surface (bin.test.ts:36-47,
+  // and ":73-76" forces a new run flag to appear in it). The run path gets no
   // `--help` case for a different reason: `--help` AFTER `run` is not a help
   // request, it is an unrecognised flag, and unrecognised flags are errors here.
-  // That mirrors the file's own fail-loud stance (`--session-backend`: ":92-97";
-  // `--resume`: ":252-263") rather than inventing a second help contract.
+  // That mirrors the file's own fail-loud stance (`--session-backend`: ":78-84";
+  // `--resume`: ":212-223") rather than inventing a second help contract.
+  // M65 T1 renumbered every citation in this comment: the frontend removal
+  // deleted ~50 lines ABOVE it and this note adds three, so the targets below
+  // moved and every number here was re-derived from the file, not guessed.
   const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact"])
   const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox"])
   const runArgs = args.slice(1)
@@ -199,8 +159,8 @@ export async function main(argv: string[]): Promise<number> {
   // gap this closes: HeadlessOptions.sandbox was read from the caller and the
   // CLI could not supply it, so `i-harness run` — the ONLY remaining interface
   // that executes shells — always ran with sandbox unset, i.e. unconfined, no
-  // matter what settings.json said. `web` was wired in 891db14 and the TUI has
-  // its own path; this is the last one.
+  // matter what settings.json said. `web` was wired in 891db14 and the TUI had
+  // its own path (M65 T1 deleted both); this is the last one.
   //
   // Resolved HERE rather than inside runHeadless on purpose: HeadlessOptions
   // stays an embedder contract where unset means "no sandbox requested", so the
@@ -343,7 +303,8 @@ export async function main(argv: string[]): Promise<number> {
     workspace: process.cwd(),
     approveAll: yes,
     modelPolicy: "required",
-    // Mirrors the web path: explicit flag wins, otherwise the operator's setting.
+    // The rule the (M65-deleted) web path established: explicit flag wins,
+    // otherwise the operator's setting.
     sandbox: sandboxMode,
     // The window is NOT supplied here — `runHeadless` resolves the model binding
     // and the assembly fills it in. See the resolution above.
@@ -364,31 +325,26 @@ export async function main(argv: string[]): Promise<number> {
   })
 }
 
-/** Hidden `__dist-selfcheck` (see the dispatch in main()). Every probe
- * drives the PRODUCTION seam — the inline engine through loadMinimalHost,
- * the SDK subprocess through spawnSdkSubprocess + the host's own argv
- * builder, the windows-acl confinement through createWindowsAclSandbox —
- * never a parallel re-implementation. The relaunch argv is printed for
- * verify-dist to EXECUTE (the probe never claims a spawn it did not make).
+/** Hidden `__dist-selfcheck` (see the dispatch in main()). Every probe drives
+ * a PRODUCTION seam — the windows-acl confinement through
+ * createWindowsAclSandbox — never a parallel re-implementation.
+ * M65 T1 removed the three probes whose subject WAS the TUI: the inline engine
+ * (probeMinimalHost), the /minimal relaunch argv (relaunchArgs /
+ * defaultRelaunchArgv, printed here for verify-dist to execute) and the
+ * --attach SDK spawn (spawnSdkSubprocess + buildSdkSpawnArgs) all lived in
+ * @i-harness/tui-app, which is deleted. The confinement probe's subject still
+ * exists and is kept.
  * Exit 0 only when every live probe passed. */
 async function runDistSelfcheck(): Promise<number> {
-  const tuiApp = await import("@i-harness/tui-app")
   let failed = false
   const record = (label: string, error: unknown): void => {
     failed = true
     console.error(`dist-selfcheck: ${label} FAIL: ${error instanceof Error ? error.message : String(error)}`)
   }
-  try {
-    console.log(`minimal-host: ok (${await tuiApp.probeMinimalHost()})`)
-  } catch (error) {
-    record("minimal-host", error)
-  }
-  // The REAL /minimal switch argv (relaunchArgs) under the default spawn
-  // (defaultRelaunchArgv) — printed for verify-dist to EXECUTE.
-  const relaunchArgv = tuiApp.defaultRelaunchArgv(tuiApp.relaunchArgs("minimal", ["tui", "--help"]))
-  console.log(`relaunch-argv: ${JSON.stringify(relaunchArgv)}`)
   // The Windows-ACL sandbox seam: confine() must spawn the DIST runner
-  // bundle and really confine (child exit mirrored). Windows-only surface.
+  // bundle and really confine (child exit mirrored). Windows-only surface —
+  // on other platforms this is now the ONLY probe's skip line, so say so
+  // rather than let the check read as a pass it did not earn.
   if (process.platform === "win32") {
     try {
       console.log(`acl-seam: ok (confined child exit=${await probeAclSeam()})`)
@@ -396,25 +352,7 @@ async function runDistSelfcheck(): Promise<number> {
       record("acl-seam", error)
     }
   } else {
-    console.log("acl-seam: skipped (non-win32)")
-  }
-  try {
-    const client = tuiApp.spawnSdkSubprocess({
-      command: process.execPath,
-      args: tuiApp.buildSdkSpawnArgs({ sessionDir: undefined }),
-      cwd: process.cwd(),
-    })
-    try {
-      const info = (await client.request("initialize", {}, 30_000)) as { protocolVersion?: unknown }
-      if (typeof info.protocolVersion !== "number") {
-        throw new Error(`initialize returned no protocolVersion: ${JSON.stringify(info).slice(0, 200)}`)
-      }
-      console.log(`sdk-spawn: ok (protocolVersion=${info.protocolVersion})`)
-    } finally {
-      await client.close().catch(() => undefined)
-    }
-  } catch (error) {
-    record("sdk-spawn", error)
+    console.log("acl-seam: skipped (non-win32) — no probe remains on this platform")
   }
   console.log(`dist-selfcheck: ${failed ? "FAIL" : "PASS"}`)
   return failed ? 1 : 0

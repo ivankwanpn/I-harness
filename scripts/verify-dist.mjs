@@ -6,13 +6,19 @@
  *
  * Asserts layout + real smoke on the built bundle:
  *   (a) node <out>/ih.mjs --version   → stdout "0.1.0", exit 0
- *   (b) node <out>/ih.mjs tui --help  → stdout "usage: tui", exit 0
+ *   (b) node <out>/ih.mjs             → stderr "usage: i-harness", exit 1
+ *       and node <out>/ih.mjs tui     → the same. M65 T1 replaced the old
+ *       "(b) tui --help" smoke: the TUI it printed for is deleted, and the
+ *       behaviour that replaced M44's grok-style default — a bare launch (or a
+ *       removed subcommand) is a usage error — is what must hold in dist;
  *   (c) node <out>/ih.mjs help        → stderr "usage: i-harness", exit 0
  * M55 self-sufficiency (no source checkout, no tsx):
- *   (d) hidden `__dist-selfcheck`     → minimal inline engine loads from the
- *       bundle, the /minimal relaunch argv re-execs the bundle (and that argv
- *       is EXECUTED here), the --attach SDK spawn handshakes over stdio, and
- *       the windows-acl seam confines through the bundled runner;
+ *   (d) hidden `__dist-selfcheck`     → the windows-acl seam confines through
+ *       the bundled runner. M65 T1 removed the three probes whose subject was
+ *       the TUI (the inline engine, the /minimal relaunch argv — which this
+ *       script used to re-execute — and the --attach SDK spawn): all three
+ *       lived in @i-harness/tui-app, which is deleted. The confinement probe
+ *       still has a subject and is kept;
  *   (e) <out>/runner.mjs              → the windows-acl runner bundle exists,
  *       honours its exit-127 failure contract, and really confines (child
  *       exit code mirrored).
@@ -136,9 +142,18 @@ smoke("(a) --version", ["--version"], (r, detail) => {
   assert(r.stdout.trim() === "0.1.0", "(a) --version prints 0.1.0", detail)
 })
 
-smoke("(b) tui --help", ["tui", "--help"], (r, detail) => {
-  assert(r.stdout.includes("usage: tui"), "(b) tui --help prints 'usage: tui'", detail)
-})
+// M65 T1: the bare launch and the removed `tui` subcommand are usage errors in
+// the bundle too. This replaces the old "(b) tui --help" smoke — its subject is
+// deleted, and what replaced M44's grok-style default (usage on stderr, exit 1,
+// nothing on stdout) is the behaviour this gate must pin in dist.
+for (const [label, args] of [["bare launch", []], ["removed subcommand 'tui'", ["tui"]]]) {
+  const t = Date.now()
+  const r = spawnSync(process.execPath, [IH, ...args], { cwd: ROOT, encoding: "utf8" })
+  const detail = `  exit: ${r.status}\n  stdout:\n${r.stdout}\n  stderr:\n${r.stderr}`
+  assert(r.status === 1, `(b) ${label} exits 1 ${getDuration(t)}`, detail)
+  assert(r.stderr.includes("usage: i-harness"), `(b) ${label} prints 'usage: i-harness' (stderr)`, detail)
+  assert(r.stdout === "", `(b) ${label} writes nothing to stdout`, detail)
+}
 
 smoke("(c) help", ["help"], (r, detail) => {
   assert(r.stderr.includes("usage: i-harness"), "(c) help prints 'usage: i-harness' (stderr)", detail)
@@ -163,40 +178,26 @@ function aclRunnerSpawn() {
   }
 }
 
-// (d) hidden self-check: minimal inline engine + relaunch argv + SDK spawn.
+// (d) hidden self-check: the windows-acl confinement probe (M65 T1 removed the
+// three TUI-subject probes; see the header).
 {
   const t = Date.now()
   const r = spawnSync(process.execPath, [IH, "__dist-selfcheck"], { cwd: ROOT, encoding: "utf8", timeout: 120_000 })
   const detail = `  exit: ${r.status}\n  stdout:\n${r.stdout}\n  stderr:\n${r.stderr}`
   assert(r.status === 0, `(d) __dist-selfcheck exits 0 ${getDuration(t)}`, detail)
-  assert(r.stdout.includes("minimal-host: ok"), "(d1) minimal inline engine loads from the bundle", detail)
-  assert(r.stdout.includes("sdk-spawn: ok"), "(d3) --attach SDK spawn handshakes over stdio", detail)
   assert(
-    process.platform !== "win32" || r.stdout.includes("acl-seam: ok"),
-    "(d4) windows-acl seam confines through the bundled runner",
+    process.platform === "win32"
+      ? r.stdout.includes("acl-seam: ok")
+      : r.stdout.includes("acl-seam: skipped (non-win32)"),
+    "(d1) the self-check's confinement probe ran (or declared its platform skip — nothing else is probed off win32)",
     detail,
   )
-
   const relaunchLine = r.stdout.split(/\r?\n/).find((line) => line.startsWith("relaunch-argv: "))
-  assert(relaunchLine !== undefined, "(d2) self-check prints the /minimal relaunch argv", detail)
-  if (relaunchLine !== undefined) {
-    const argv = JSON.parse(relaunchLine.slice("relaunch-argv: ".length))
-    const shapeOk = Array.isArray(argv) && argv.length > 0 && resolve(String(argv[0])) === IH && !argv.includes("tsx")
-    assert(
-      shapeOk,
-      "(d2) dist relaunch argv re-execs the bundle and drops the tsx loader",
-      `${detail}\n  argv: ${JSON.stringify(argv)}`,
-    )
-    if (shapeOk) {
-      const t2 = Date.now()
-      const relaunch = spawnSync(process.execPath, argv, { cwd: ROOT, encoding: "utf8", timeout: 60_000 })
-      assert(
-        relaunch.status === 0,
-        `(d2) executing that relaunch argv exits 0 ${getDuration(t2)}`,
-        `  exit: ${relaunch.status}\n  stdout:\n${relaunch.stdout}\n  stderr:\n${relaunch.stderr}`,
-      )
-    }
-  }
+  assert(
+    relaunchLine === undefined,
+    "(d2) no relaunch-argv line remains (its producer, the TUI's relaunchArgs, is deleted)",
+    `${detail}\n  line: ${relaunchLine}`,
+  )
 }
 
 // (e) the windows-acl runner bundle: present + failure contract + real confine.
