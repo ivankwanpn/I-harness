@@ -91,7 +91,21 @@ export class SkillToolError extends Error {
   }
 }
 
-const GLOBAL_SKILLS_DIR = join(homedir(), ".i-harness", "skills")
+/**
+ * The machine-level skills root: `<harness home>/skills`, where the harness home
+ * is `$IH_CONFIG_DIR` when set, else `~/.i-harness` (the default the module used
+ * to hard-code as `GLOBAL_SKILLS_DIR`).
+ *
+ * That is the SAME chain settings, hooks and the session store resolve, and it is
+ * this repo's isolation contract — a test that pins `IH_CONFIG_DIR` to a temp dir
+ * must not read the developer's real home (e2e/helpers.ts:29). The skills global
+ * root was the one place that ignored it, which is why a plugin-mount test could
+ * not be isolated. Resolved PER CALL on purpose: a module-level const captures the
+ * environment once, at import.
+ */
+function globalSkillsDir(): string {
+  return join(process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness"), "skills")
+}
 
 function defaultWarn(message: string): void {
   console.warn(`[skills] ${message}`)
@@ -187,7 +201,7 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
   const onWarn = deps?.onWarn ?? defaultWarn
 
   function scanGlobal(): SkillSummary[] {
-    return scanSkillsDir(deps?.globalDir ?? GLOBAL_SKILLS_DIR, "global", onWarn)
+    return scanSkillsDir(deps?.globalDir ?? globalSkillsDir(), "global", onWarn)
   }
 
   function scanWorkspace(): SkillSummary[] {
@@ -217,7 +231,7 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
     const roots: [string, SkillSource][] = []
     if (deps?.workspace !== undefined) roots.push([join(deps.workspace, "skills"), "workspace"])
     for (const dir of deps?.extraDirs ?? []) roots.push([dir, "plugin"])
-    roots.push([deps?.globalDir ?? GLOBAL_SKILLS_DIR, "global"])
+    roots.push([deps?.globalDir ?? globalSkillsDir(), "global"])
     return roots
   }
 
