@@ -14,13 +14,13 @@
 import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { homedir } from "node:os"
 // Runtime import of the protocol constants (the enum's single source). Safe:
 // sections.ts only ever imports TYPES from this module, so the runtime edge
 // is one-directional (this module → sections.ts) — no evaluation-order cycle.
 import { PROVIDER_PROTOCOLS } from "./sections.ts"
 import type { SettingsProviderProtocol } from "./sections.ts"
 import type { Telemetry } from "@i-harness/telemetry"
+import { resolveHarnessHome } from "@i-harness/harness-home"
 
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
@@ -591,7 +591,7 @@ export interface SettingsStoreOptions {
  */
 export function resolveSettingsPath(options: SettingsStoreOptions = {}): string {
   if (options.path !== undefined) return resolve(options.path)
-  const dir = options.configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  const dir = resolveHarnessHome(options.configDir)
   return join(dir, "settings.json")
 }
 
@@ -1199,7 +1199,7 @@ function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
   }
   const roots = options.roots ?? {}
   const sources: LayerSource[] = []
-  const configDir = options.configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  const configDir = resolveHarnessHome(options.configDir)
   const workspaceRoot = options.workspace ?? process.cwd()
   if (roots.global !== undefined) {
     const path = roots.global === "auto" ? join(configDir, "settings.json") : resolve(roots.global)

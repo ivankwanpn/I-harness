@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { isCascadeRedispatch, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolCall, ToolDecision } from "@i-harness/core-tools"
@@ -19,6 +18,7 @@ import {
 } from "./types.ts"
 import { verifyHandlerTrust } from "./trust.ts"
 import { assertAllowed, runHookHandler } from "./runner.ts"
+import { resolveHarnessHome } from "@i-harness/harness-home"
 
 export * from "./types.ts"
 export { sha256File, trustScriptPath, verifyHandlerTrust } from "./trust.ts"
@@ -28,9 +28,10 @@ const CONFIG_FILE = "hooks.json"
 
 /** @i-harness/settings config-home convention (no cross-package import). */
 export function resolveHooksConfigPath(configDir?: string): string {
+  // The explicit case keeps `resolve` (it normalises a relative dir); only the
+  // default chain moves out, to the one package that resolves the harness home.
   if (configDir !== undefined) return resolve(configDir, CONFIG_FILE)
-  const dir = process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
-  return join(dir, CONFIG_FILE)
+  return join(resolveHarnessHome(), CONFIG_FILE)
 }
 
 export interface HookRegistryOptions {

@@ -4,7 +4,7 @@ import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behi
 import { repairTurnTail } from "./repair.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
-export { resolveSessionStoreRoot } from "./harness-home.ts"
+export { resolveSessionStoreRoot } from "./store-root.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
   forkSession,

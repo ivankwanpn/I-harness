@@ -6,9 +6,9 @@
 // is cheap); one bad skill warns and skips, never breaking the registry.
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { homedir } from "node:os"
 import { parseFrontmatter } from "./frontmatter.ts"
 import { searchSkillSummaries } from "./search.ts"
+import { resolveHarnessHome } from "@i-harness/harness-home"
 
 export type SkillSource = "workspace" | "global" | "plugin"
 
@@ -104,7 +104,7 @@ export class SkillToolError extends Error {
  * environment once, at import.
  */
 function globalSkillsDir(): string {
-  return join(process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness"), "skills")
+  return join(resolveHarnessHome(), "skills")
 }
 
 function defaultWarn(message: string): void {
