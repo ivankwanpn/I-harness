@@ -22,7 +22,108 @@
  *
  * See docs/superpowers/specs/2026-09-17-plugin-mount-design.md §2.2.
  */
-import type { MCP_CONFIG_SHAPE } from "./types.ts"
+import type { AgentDescriptor, MCP_CONFIG_SHAPE } from "./types.ts"
+
+/** A subagent role as an agent build mounts it (structural — this package does
+ * not import `@i-harness/subagent`; a mismatch surfaces at the consumer's
+ * typecheck). */
+export interface MountedSubagentRole {
+  name: string
+  description: string
+  systemPrompt: string
+  tools: string[]
+}
+
+/** One declared tool that resolved to nothing usable. Reported, never dropped
+ * silently. `reason` distinguishes the two paths, which are different problems:
+ * a form this repo does not implement at all, versus a real tool this host does
+ * not permit a plugin agent to use. */
+export interface UnresolvedTool {
+  role: string
+  tool: string
+  reason: string
+}
+
+/** Why a declaration could not be honoured (see UnresolvedTool.reason). */
+const SCOPED_FORM = "scoped argument form is not a tool name"
+const NOT_ALLOWED = "not a tool this host permits a plugin agent to use"
+
+/**
+ * Claude Code's tool vocabulary → this repo's registered names, for the entries
+ * a plain case-fold cannot reach. Everything else maps by normalizing BOTH
+ * sides (lowercase, `-`/`_` dropped), which is what makes `Read` → `read`,
+ * `TodoWrite` → `todo_write` and `WebFetch` → `webfetch` fall out for free.
+ *
+ * The omissions are the interesting part. `KillShell`, `BashOutput` and the
+ * whole `Task*` family have shape-similar counterparts here (`process_kill`,
+ * `job_output`, `get_task_output`, `stop_task`), and GUESSING one would grant a
+ * tool the plugin did not ask for. The family goes mapped or unmapped as a
+ * whole — a half-mapping is harder to notice than none. `NotebookRead` and
+ * `Workflow` have no counterpart at all. All of them land in `unresolved`.
+ */
+const RENAMES: Record<string, string> = {
+  ls: "list_dir",
+  askuserquestion: "ask_user_input",
+  agent: "spawn_agent",
+}
+
+/** Case- and separator-insensitive form, used on BOTH sides of a lookup. */
+function normalizeToolName(name: string): string {
+  return name.toLowerCase().replace(/[-_]/g, "")
+}
+
+/**
+ * Convert a plugin's agent descriptors into mountable subagent roles.
+ *
+ * THE SECURITY DIRECTION IS STRUCTURAL. `allowedTools` is the host's permit
+ * list, and it is the ONLY source of a tool name in the output: a declaration
+ * can narrow it and can never widen it. That is also why there is no separate
+ * "default tools" option — a second list would be a second path to a tool
+ * outside the allowlist.
+ *
+ * `d.tools === undefined` means the file declared no `tools:` key at all, which
+ * is Claude Code's "inherit" — and inheriting the permit list cannot exceed it.
+ * `[]` means the plugin asked for no tools, and stays empty.
+ *
+ * `model` is deliberately NOT carried. A role naming a MODEL would be fine, but
+ * `SubagentRole.model` also carries a `provider`, and the provider belongs to
+ * the host — the same boundary that keeps `blockedTools`/`auth`/`roots` out of
+ * the MCP conversion above.
+ */
+export function toSubagentRoles(
+  descriptors: AgentDescriptor[],
+  opts: { allowedTools: string[] },
+): { roles: MountedSubagentRole[]; unresolved: UnresolvedTool[] } {
+  const allowed = new Map(opts.allowedTools.map((t) => [normalizeToolName(t), t]))
+  const roles: MountedSubagentRole[] = []
+  const unresolved: UnresolvedTool[] = []
+  for (const d of descriptors) {
+    const tools: string[] = []
+    if (d.tools === undefined) {
+      tools.push(...opts.allowedTools)
+    } else {
+      for (const declared of d.tools) {
+        // a scoped entry (`Agent(ns:name)`, `Bash(git:*)`) is a per-argument
+        // constraint, not a tool name. This repo has no such concept, so passing
+        // the raw string through as a name would grant nothing while LOOKING
+        // like a grant.
+        if (declared.includes("(")) {
+          unresolved.push({ role: d.name, tool: declared, reason: SCOPED_FORM })
+          continue
+        }
+        const mapped = RENAMES[normalizeToolName(declared)] ?? declared
+        const target = allowed.get(normalizeToolName(mapped))
+        if (target === undefined) {
+          unresolved.push({ role: d.name, tool: declared, reason: NOT_ALLOWED })
+          continue
+        }
+        if (!tools.includes(target)) tools.push(target)
+      }
+    }
+    roles.push({ name: d.name, description: d.description, systemPrompt: d.systemPrompt, tools })
+  }
+  return { roles, unresolved }
+}
 
 /** A stdio MCP server as an agent build mounts it. */
 export interface MountedStdioMcp {
