@@ -58,7 +58,6 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 export {
   DEFAULT_LIST_FILES_OPTIONS,
   DEFAULT_LIST_FILES_SKIP_NAMES,
-  listWorkspaceFiles,
   type ListWorkspaceFilesOptions,
 } from "./files.ts"
 

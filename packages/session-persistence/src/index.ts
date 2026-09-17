@@ -7,8 +7,6 @@ export { SessionWriteBehind, type SessionWriteBehindOptions }
 export { resolveSessionStoreRoot } from "./harness-home.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
-  SessionForkUnavailableError,
-  completedTurnPrefix,
   forkSession,
   type ForkSessionOptions,
 } from "./fork.ts"

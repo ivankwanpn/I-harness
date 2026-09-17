@@ -86,7 +86,6 @@ export { inspectCapabilities, type Capabilities, type Capability } from "./capab
 export {
   InstallError,
   installPlugin,
-  mcpServerKey,
   mcpServerKeyPrefix,
   pluginId,
   readMcpServers,
