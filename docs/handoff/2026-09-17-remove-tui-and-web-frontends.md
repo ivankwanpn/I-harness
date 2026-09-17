@@ -320,14 +320,19 @@ reddens it**: measured at `1ac091e` on a copy whose class-5 anchor is blinded, `
 exit 1**, failing exactly its three class-5 fixture cases — **because the fixtures use the same anchor**. What no
 case sees is a **silent loosening that leaves the fixtures matching**: drop the `export` in the real tree, leave
 the scanner untouched, and the suite stays at **36/36, exit 0** while class 5 goes dark on the tree it is supposed
-to measure (variant 2 above). That is precisely the limit M2 states in its §5 — *"the self-test still cannot see a
-scanner loosening that no fixture element targets"* (`docs/handoff/2026-09-15-m2-reachability-gate-handoff.md:129`;
-its `:130` points on to the baseline document's §7) — and the quiet version is the dangerous one, which is why the
-tell is the `gone` count and not the suite.
+to measure (variant 2 above). That is precisely the limit M2 states in **its §4** — *"the self-test still cannot
+see a scanner loosening that no fixture element targets"* (`docs/handoff/2026-09-15-m2-reachability-gate-handoff.md:129`,
+a line inside §4, which opens at that file's `:114`; its `:130` points on to the baseline document's §7) — and the
+quiet version is the dangerous one, which is why the tell is not the suite.
 
-**The check that catches it is `gone rows` staying at `115`** when gating against the 523-row baseline. The
-exit code cannot carry the signal (that comparison already exits 1 for the 59 unexempted new rows), so a reader
-who watches only exit status sees nothing at all.
+**Two readings catch it, and the cheaper one is the digest.** `--digest` moves the moment the anchor goes blind —
+measured: `c777795c…` unblinded, **`6fa7863c…`** with the class-5 anchor blinded — so a monitor that pins the
+digest catches a blind anchor *directly*, with no baseline comparison at all. `gone` moves too, and is the reading
+that says *which kind* of change happened: it rises, **115 → 123**, because the tool counts lost findings as
+progress. The digest cannot make that distinction — it also moves for a legitimate retirement (the tree-side
+variant above digests to `6c156033…`) — so pin both, and expect opposite readings. Neither is the exit code: that
+comparison already exits 1 for the 59 unexempted new rows, so a reader who watches only exit status sees nothing
+at all.
 
 ---
 
@@ -432,13 +437,14 @@ A seed therefore rewrites a CRLF file with LF.
 **What that actually costs** — measured in a scratch repository with the same configuration, because the effect
 is narrower than "a whole-file diff" and the difference is the trap:
 
-- `git status --porcelain` reports the file **modified** (` M`), and both `git status` and `git diff` print a
-  one-line warning on **stderr**: *"in the working copy of '…', LF will be replaced by CRLF the next time Git
-  touches it"*;
-- `git diff`, `git diff --stat` and `git diff --numstat` write **nothing to stdout** (measured: 0 bytes), and
-  `git diff --quiet` exits **0** — `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a
-  diff's *content* even though the worktree file differs from its blob on **480 of 480 lines**. The only signal
-  is that stderr warning, which a `2>/dev/null` or a stdout-capturing tool discards;
+- `git status --porcelain` reports the file **modified** (` M`) — and `git status` writes **nothing to stderr**
+  (measured: 0 bytes), so the "modified" flag arrives with no explanation at all;
+- the warning comes from the *diff* family only: `git diff`, `git diff --stat`, `git diff --numstat` and
+  `git diff --quiet` each write a one-line warning to **stderr** — *"in the working copy of '…', LF will be
+  replaced by CRLF the next time Git touches it"* — while the three content forms write **nothing to stdout**
+  (measured: 0 bytes) and `--quiet` exits **0**. `autocrlf` normalises on read, so an EOL-only rewrite is
+  invisible to a diff's *content* even though the worktree file differs from its blob on **480 of 480 lines**.
+  The only signal is that stderr warning, which a `2>/dev/null` or a stdout-capturing tool discards;
 - `git add` then clears the status and stages nothing, and `git add --renormalize` normalises only the
   **index** — it leaves the worktree file LF;
 - a plain `git checkout -- <path>` **does restore CRLF** (measured) — *provided nothing refreshed git's stat
@@ -464,11 +470,11 @@ byte-unstable**, plus every byte-level comparison (worktree against `git cat-fil
   to this milestone's untracked working set. **§6.2 can be**: the engine is tracked, and its numbers were
   produced by a copy of it instrumented to count `line === split-length`, with the counts needed to re-run it.
 - **A zero from this instrument is not self-certifying.** §5 shows the gate's own blindness arriving as a
-  falling count, and the other two readings do not catch it either: measured on the silent variant above,
-  `--digest` still prints a digest and exits 0, and `--self-test` still reports 36/36. The tell is the `gone`
-  count — **and only against the frozen 523-row baseline**: a re-seeded baseline makes `gone` 0 by construction,
-  so the signal disappears exactly when someone follows the ordinary re-seed procedure. A monitor built on
-  `gone` must **pin** the baseline it compares against (§10), or it is watching a number that cannot move.
+  falling count, and `--self-test` does not catch it: measured on the silent variant above, the suite still
+  reports 36/36. The other two readings do catch it — but **only if you pin what you compare against**:
+  `--digest` moves on a blinded anchor (`c777795c…` → `6fa7863c…`) and `gone` rises (115 → 123), and `gone` is
+  a tell **only against the frozen 523-row baseline**, because a re-seeded baseline makes it 0 by construction.
+  Run without a pin, both are numbers that cannot move (§10).
 - **Line-number rot.** Every `path:line` here was re-opened at `1ac091e`; a later edit above any of them moves
   it. The convention is the M2 record's trap 1: **label-primary with a dated line number**.
 - **M65 did not touch the scanner, the baseline data, or the gate's behaviour.** The only change this record's
@@ -487,7 +493,9 @@ git show 08f30c5:scripts/audit/reachability-baseline.json > /tmp/b523.json
 node scripts/audit/check-reachability.mjs --gate --baseline /tmp/b523.json
 # expect: 115 baseline rows gone, 59 NEW rows, exit 1 -- and `gone` must stay 115 (§5)
 # the pin is the point: the committed baseline was re-seeded to 472 on 2026-09-17,
-# and `gone` against THAT baseline is 0 by construction -- it cannot show the blindness
+# and `gone` against THAT baseline is 0 by construction -- it cannot show the blindness.
+# pin the row-set digest too: blindness moves it (c777795c -> 6fa7863c), and unlike
+# `gone` it needs no baseline at all
 ```
 
 And to reproduce the §2.1 table without disturbing this tree: `git archive` each named revision into a
