@@ -11,7 +11,7 @@ import {
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
-import {  buildModelClient,
+import {  buildModelClient,
   createProviderRegistry,
   type ProbeRequest,
   type ProviderProfile,
