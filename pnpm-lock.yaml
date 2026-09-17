@@ -326,19 +326,6 @@ importers:
         specifier: workspace:*
         version: link:../sandbox
 
-  packages/feedback:
-    dependencies:
-      '@i-harness/core-session':
-        specifier: workspace:*
-        version: link:../core-session
-      '@i-harness/session-persistence':
-        specifier: workspace:*
-        version: link:../session-persistence
-    devDependencies:
-      '@i-harness/session-persistence-jsonl':
-        specifier: workspace:*
-        version: link:../session-persistence-jsonl
-
   packages/fs:
     dependencies:
       '@i-harness/core-tools':

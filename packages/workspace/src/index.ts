@@ -146,7 +146,7 @@ class WorkspaceUnknownSessionError extends Error {
   }
 }
 
-export interface WorkspaceRegistry {
+interface WorkspaceRegistry {
   /** All workspaces, registry order (creation order; DSH reorder deferred). */
   list(): Promise<Workspace[]>
   /** One workspace by id, or undefined when unknown. */

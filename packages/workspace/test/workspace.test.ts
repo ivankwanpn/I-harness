@@ -9,10 +9,9 @@ import {
   WorkspaceBadRequestError,
   WorkspaceNotFoundError,
   createWorkspaceRegistry,
-  type WorkspaceRegistry,
 } from "../src/index.ts"
 
-async function withRegistry(run: (registry: WorkspaceRegistry, root: string) => Promise<void>): Promise<void> {
+async function withRegistry(run: (registry: ReturnType<typeof createWorkspaceRegistry>, root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), "i-harness-workspace-"))
   const coordinator = createSessionCoordinator(createJsonlBackend(root))
   try {

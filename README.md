@@ -184,7 +184,7 @@ packages/  (65 個包 + apps/cli)
 ├── exec / shell / fs / fs-search / tool-search / output-retention / todo
 ├── guard-{approval,timeout,retry,repeat-tool} / sandbox{-local,-windows-acl} / sandbox-policy
 ├── mcp-client / lsp / terminal / fs-lock / fs-watch
-├── subagent / agent-team / goal / feedback / jobs / schedule / skills / workflow
+├── subagent / agent-team / goal / jobs / schedule / skills / workflow
 ├── compaction / token-meter / session-{persistence*,query,executor,title}
 ├── session-persistence-jsonl           JSONL 唯一真相 + file-backed 索引（reconcile-on-search）
 ├── interaction / instructions / plan-mode / runtime-context / preset

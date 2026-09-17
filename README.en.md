@@ -241,7 +241,6 @@ packages/
 ├── session-title/        M26 A: session title (LLM providers + fold)
 ├── plan-mode/            M26 A: plan mode (log-only event + projection + exit tool)
 ├── goal/                 M26 E: event-sourced goal + tools
-├── feedback/             M26 E: message feedback (doc sidecar + CAS)
 ├── jobs/                 M26 D: durable job records + kill bridge
 ├── credentials/          M26 E: credentials (env-first, refs-not-values)
 ├── workspace/            M26 E: workspace document-library registry

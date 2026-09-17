@@ -71,7 +71,10 @@ reachability: 59 NEW row(s) -- the gate fails:
 
 The 59 are the unexempted remainder of the 64 rows the frontend removal orphaned that the classification left
 standing (§2). The exit code cannot carry the signal, so the readable one is **`gone` rows — 115 here, and it
-must stay 115** (§5).
+must stay 115** (§5). **[Corrected 2026-09-17: the reading is `1ac091e`'s, not a constant — `gone` is
+counted against a FIXED baseline, so later retirements raise it. It is 120 as of the feedback
+deletion, and the instruction is to pin the *baseline*, not the number. See §10's dated correction,
+which reconciles the movement.]**
 
 ---
 
@@ -509,6 +512,51 @@ node scripts/audit/check-reachability.mjs --gate --baseline /tmp/b523.json
 #   (c777795c = as committed, 6fa7863c = anchor blinded, 6c156033 = variant 2),
 # whereas `gone` reads 123 for the last two alike -- magnitude, not cause
 ```
+
+**Dated correction (2026-09-17, after M65 closed): four figures above have moved, and one of them
+mattered.** The `@i-harness/feedback` package was deleted — 330 lines whose own source recorded that
+*"the only consumer of feedback persistence is the SPA over the web host's HTTP routes — there is no
+embedder seam to compose"*, i.e. a consumer M65 had already removed. Rows left the set, so the block
+above is wrong for a reader running it now. **It is left as measured rather than rewritten**, per this
+document's convention; this table is the correction. Measured at the tree that made the deletion:
+
+| reading | at `1ac091e` | after the deletion |
+|---|---|---|
+| `--digest` | `c777795c…` | **`87f97ca1…`** |
+| bare output | 466 ts files, 472 finding(s) | **464 ts files, 459 finding(s)** |
+| `--gate` against the frozen 523-row baseline | **115** gone, **59** NEW | **120** gone, **50** NEW |
+| `--self-test` | 36/36 | **36/36 — unchanged** |
+| `--gate` against the committed baseline | PASS, no new rows | **PASS, no new rows — unchanged** |
+
+**§5's pin is therefore corrected here, and the correction is the point:** §5 says of the frozen-523
+comparison that *"`gone` rows — 115 here, and it must stay 115"*. **It is 120 now, and it must not be
+expected to stay anything** — `gone` is a count against a FIXED baseline, so any later retirement of a
+row the 523 held raises it. That is the ratchet working, not a defect, but it means **115 is a
+`1ac091e` reading and not a constant**. The five rows are exactly the five `@i-harness/feedback` rows
+the 523 baseline carried, measured by set difference against `git show 08f30c5:…`; **the other eight
+feedback rows were *new* relative to the 523, so their removal lowers the NEW count instead** — which
+is why NEW reads 50 and not 59. The decomposition reconciles: 64 new → 56 (−8 feedback, −1
+`workspace#WorkspaceRegistry`, +1 `workspace#createWorkspaceRegistry`), of which 6 are allowlisted
+(was 5), leaving 50 reported.
+
+**What §5's argument loses, it loses honestly, and it does not lose its conclusion.** The table in §5
+is explicitly scoped to `1ac091e` and remains a correct measurement *of that revision*. The
+`gone`-vs-the-frozen-baseline reading is still the only reading that shows the blindness at all; what
+the deletion changed is that **the number to compare against is whatever the frozen baseline yields on
+the day, not a pinned 115** — which §5 already said in its own words ("a re-seeded baseline makes
+`gone` 0 by construction", so a monitor must pin its baseline). **A monitor that pinned 115 rather
+than the baseline would now read the deletion as blindness.** That is the trap this note exists to
+close.
+
+**One more thing this deletion exposed, recorded here because it is this document's own signature
+defect arriving a second time.** Retiring the package made
+`@i-harness/workspace#createWorkspaceRegistry` appear as a NEW row — it had been CLEAN, and the only
+reason was **comment-masking**: the sole cross-file mention of that name anywhere in production was a
+doc comment in the then-existing `packages/feedback/src/index.ts:208` (*"Registry over the coordinator
+document store (the createWorkspaceRegistry shape)"*), which named it as a design precedent, not a
+call. This is the mechanism baseline doc §7 item 4 records, and it is the second measured instance in
+this milestone's own history. The row is adjudicated in the allowlist (dated 2026-09-17) as part of
+the workspace package's frontend-contract class, **not** as a new orphan.
 
 And to reproduce the §2.1 table without disturbing this tree: `git archive` each named revision into a
 temporary directory and run the tool with `--root <that directory>`; the `1ac091e` copy must reproduce the
