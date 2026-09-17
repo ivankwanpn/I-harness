@@ -181,15 +181,19 @@ Two further limits worth stating plainly:
    worktree copies of `reachability-baseline.json` and `reachability-allowlist.json` are CRLF on disk
    (measured on 2026-09-17 at `1ac091e`: the baseline is 480 CRLF of 480 newlines on disk; the committed blob
    is LF-only, which is `core.autocrlf=true` with no `.gitattributes`). What that costs, **measured in a
-   scratch repository with the same configuration**: `git status` reports the file modified and git warns
-   *"in the working copy of '…', LF will be replaced by CRLF the next time Git touches it"*, but `git diff`,
-   `git diff --stat` and `git diff --numstat` print **nothing** and `git diff --quiet` exits **0** —
-   `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a diff even though the worktree file
-   differs from its blob on every line. `git add` then clears the status and stages nothing, and
-   `git add --renormalize` normalises only the **index** — it leaves the worktree LF. Restoring CRLF needs a
-   real re-checkout (remove the file, then `git checkout -- <path>`). So a re-seed leaves a file that reports
-   modified, stages clean and is byte-unstable; normalise it back to CRLF and re-run `--gate` and `--digest`
-   to confirm the tool's behaviour is unchanged. Full measurements and the reproduction are in
+   scratch repository with the same configuration**: `git status` reports the file modified, and both
+   `git status` and `git diff` print a one-line warning on **stderr** — *"in the working copy of '…', LF will
+   be replaced by CRLF the next time Git touches it"* — while `git diff`, `git diff --stat` and
+   `git diff --numstat` write **nothing to stdout** (measured: 0 bytes) and `git diff --quiet` exits **0**.
+   `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a diff's content even though the
+   worktree file differs from its blob on every line; the only signal is that stderr warning. `git add` then
+   clears the status and stages nothing, and `git add --renormalize` normalises only the **index** — it leaves
+   the worktree LF. A plain `git checkout -- <path>` **does restore CRLF** (measured) unless something has
+   already refreshed git's stat cache for that file: after a `git add`, which is what a re-seed workflow does
+   next, git considers the LF file clean and the checkout is a no-op, so the entry must be invalidated first
+   (remove the file, then `git checkout -- <path>`). So a re-seed leaves a file that reports modified, stages
+   clean and is byte-unstable; normalise it back to CRLF and re-run `--gate` and `--digest` to confirm the
+   tool's behaviour is unchanged. Full measurements and the reproduction are in
    `docs/handoff/2026-09-17-remove-tui-and-web-frontends.md` §8.
 
 ---
