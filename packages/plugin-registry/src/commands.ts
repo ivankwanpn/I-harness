@@ -27,11 +27,18 @@ function stripQuotes(value: string): string {
  * Parse one command markdown file into a CommandDescriptor. `fileName` yields
  * the command name (basename without the .md extension). Frontmatter keys are
  * matched case-insensitively with `-`/`_` treated as equivalent.
+ *
+ * A key we do NOT honour is recorded in `unsupported` rather than dropped
+ * (spec 2026-09-17 §3 decision 3): a command declaring `allowed-tools` would
+ * otherwise believe it is restricted while nothing enforces it — the
+ * "looks successful, did nothing" defect this repo keeps deleting. The command
+ * still parses; the limitation is what gets reported.
  */
 export function parseCommandMarkdown(fileName: string, text: string): CommandDescriptor {
   const name = fileName.replace(/\.md$/i, "")
   const lines = text.split(/\r?\n/)
   const meta: { description?: string; argumentHints?: string } = {}
+  const unsupported: string[] = []
   let bodyStart = 0
   if (lines[0]?.trim() === "---") {
     let fence = -1
@@ -46,16 +53,27 @@ export function parseCommandMarkdown(fileName: string, text: string): CommandDes
         const line = lines[i]!
         const colon = line.indexOf(":")
         if (colon <= 0) continue
-        const key = line.slice(0, colon).trim().toLowerCase().replace(/[-_]/g, "")
+        const rawKey = line.slice(0, colon).trim()
+        const key = rawKey.toLowerCase().replace(/[-_]/g, "")
         const value = stripQuotes(line.slice(colon + 1).trim())
         if (value === "") continue
         if (key === "description") meta.description = value
-        else if (key === "argumenthints") meta.argumentHints = value
+        // `argument-hint` is the OFFICIAL spelling (it is what Anthropic's own
+        // commands use); `argument-hints` is ours. Both are honoured — the
+        // singular was silently dropped before 2026-09-17, which is how a
+        // frontmatter key came to be ignored without anyone noticing.
+        else if (key === "argumenthints" || key === "argumenthint") meta.argumentHints = value
+        else if (!unsupported.includes(rawKey)) unsupported.push(rawKey)
       }
       bodyStart = fence + 1
     }
   }
-  return { name, ...meta, body: lines.slice(bodyStart).join("\n").trim() }
+  return {
+    name,
+    ...meta,
+    body: lines.slice(bodyStart).join("\n").trim(),
+    ...(unsupported.length > 0 ? { unsupported } : {}),
+  }
 }
 
 /**
