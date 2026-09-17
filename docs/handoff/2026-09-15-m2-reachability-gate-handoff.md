@@ -162,7 +162,7 @@ Two further limits worth stating plainly:
 
 ---
 
-## 6. Two traps a later edit will hit
+## 6. Three traps a later edit will hit
 
 1. **Line-number rot, and it already happened twice here.** The allowlist's `source` fields cite the
    baseline document by line; Task 4's own edits moved all 24, its repair introduced a +1 error in seven of
@@ -176,6 +176,21 @@ Two further limits worth stating plainly:
    export. So an archive-based proof compares **blobs**, and a worktree-vs-archive byte diff will show
    spurious differences. Verify what you are about to commit with `git cat-file blob` (or force
    `-c core.autocrlf=false` for the archive), not with a byte comparison of the two trees.
+3. **`--seed-baseline` writes LF into a CRLF worktree.** The tool writes
+   ``writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`)`` with no EOL translation, while the
+   worktree copies of `reachability-baseline.json` and `reachability-allowlist.json` are CRLF on disk
+   (measured on 2026-09-17 at `1ac091e`: the baseline is 480 CRLF of 480 newlines on disk; the committed blob
+   is LF-only, which is `core.autocrlf=true` with no `.gitattributes`). What that costs, **measured in a
+   scratch repository with the same configuration**: `git status` reports the file modified and git warns
+   *"in the working copy of '…', LF will be replaced by CRLF the next time Git touches it"*, but `git diff`,
+   `git diff --stat` and `git diff --numstat` print **nothing** and `git diff --quiet` exits **0** —
+   `autocrlf` normalises on read, so an EOL-only rewrite is invisible to a diff even though the worktree file
+   differs from its blob on every line. `git add` then clears the status and stages nothing, and
+   `git add --renormalize` normalises only the **index** — it leaves the worktree LF. Restoring CRLF needs a
+   real re-checkout (remove the file, then `git checkout -- <path>`). So a re-seed leaves a file that reports
+   modified, stages clean and is byte-unstable; normalise it back to CRLF and re-run `--gate` and `--digest`
+   to confirm the tool's behaviour is unchanged. Full measurements and the reproduction are in
+   `docs/handoff/2026-09-17-remove-tui-and-web-frontends.md` §8.
 
 ---
 
