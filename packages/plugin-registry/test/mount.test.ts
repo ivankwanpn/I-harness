@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { toMcpServerConfigs } from "../src/mount.ts"
+import { toMcpServerConfigs, toSubagentRoles } from "../src/mount.ts"
+import type { AgentDescriptor } from "../src/types.ts"
 
 // The mount-side conversion (design §2.2): the registry's MCP_CONFIG_SHAPE →
 // the shape an agent build mounts. Two things it must get right, and one it must
@@ -113,5 +114,100 @@ describe("toMcpServerConfigs — a malformed entry is skipped AND reported", () 
     const { configs, skipped } = toMcpServerConfigs({ "plugin:x:blank": { url: "   " } })
     expect(configs).toEqual([])
     expect(skipped).toHaveLength(1)
+  })
+})
+
+// ── toSubagentRoles: a plugin's agent declarations → mountable roles ────────
+// The security direction is STRUCTURAL, not documentary: the host declares the
+// tools a plugin agent may use and the plugin's own `tools:` list can only
+// NARROW it. There is deliberately no separate "default tools" concept, because
+// a second list would be a second path to a tool outside the host's allowlist.
+//
+// Translation is unavoidable here. A plugin writes Claude Code's vocabulary
+// (`Read`/`Glob`/`Grep`); this repo registers `read`/`glob`/`grep`. Handing the
+// declared names straight through would grant NOTHING — every entry would fail
+// to resolve, and (before resolveRoleTools reported it) in silence.
+describe("toSubagentRoles", () => {
+  const allowed = ["read", "glob", "grep", "write", "list_dir", "todo_write", "ask_user_input", "spawn_agent"]
+
+  const agent = (over: Partial<AgentDescriptor> = {}): AgentDescriptor => ({
+    name: "code-simplifier",
+    description: "Simplifies code.",
+    systemPrompt: "You simplify.",
+    ...over,
+  })
+
+  it("maps the plugin's vocabulary onto this repo's registry", () => {
+    const { roles, unresolved } = toSubagentRoles([agent({ tools: ["Read", "Glob", "Grep"] })], { allowedTools: allowed })
+    expect(roles).toEqual([
+      {
+        name: "code-simplifier",
+        description: "Simplifies code.",
+        systemPrompt: "You simplify.",
+        tools: ["read", "glob", "grep"],
+      },
+    ])
+    expect(unresolved).toEqual([])
+  })
+
+  it("maps the renames a case-fold cannot reach", () => {
+    const { roles } = toSubagentRoles(
+      [agent({ tools: ["LS", "TodoWrite", "AskUserQuestion", "Agent"] })],
+      { allowedTools: allowed },
+    )
+    expect(roles[0]?.tools).toEqual(["list_dir", "todo_write", "ask_user_input", "spawn_agent"])
+  })
+
+  it("drops what it cannot map, REPORTS it, and keeps the rest", () => {
+    const { roles, unresolved } = toSubagentRoles(
+      [agent({ tools: ["Read", "NotebookRead", "Workflow", "KillShell"] })],
+      { allowedTools: allowed },
+    )
+    expect(roles[0]?.tools).toEqual(["read"])
+    expect(unresolved.map((u) => u.tool).sort()).toEqual(["KillShell", "NotebookRead", "Workflow"])
+    expect(unresolved.every((u) => u.role === "code-simplifier")).toBe(true)
+  })
+
+  it("a scoped entry is not a tool name at all — dropped and reported", () => {
+    const { roles, unresolved } = toSubagentRoles(
+      [agent({ tools: ["Read", "Agent(a:one, a:two)"] })],
+      { allowedTools: allowed },
+    )
+    expect(roles[0]?.tools).toEqual(["read"])
+    expect(unresolved).toHaveLength(1)
+    expect(unresolved[0]?.tool).toBe("Agent(a:one, a:two)")
+    // the REASON is what makes the scoped-form branch load-bearing: without it
+    // this entry still fails the allowlist lookup and still lands here, so only
+    // the reason can tell the two paths apart
+    expect(unresolved[0]?.reason).toMatch(/scoped/i)
+  })
+
+  it("a plugin can never widen past the host's allowlist", () => {
+    // `bash` IS a real tool in this repo, but not one this host allows a plugin
+    // agent to use. It must not reach the output by either path.
+    const { roles, unresolved } = toSubagentRoles(
+      [agent({ tools: ["Read", "Bash"] })],
+      { allowedTools: ["read", "glob"] },
+    )
+    expect(roles[0]?.tools).toEqual(["read"])
+    expect(unresolved).toHaveLength(1)
+    expect(unresolved[0]?.tool).toBe("Bash")
+    // `Bash` IS a form this repo knows, so it is refused as not-permitted —
+    // a different problem from a form we do not implement
+    expect(unresolved[0]?.reason).not.toMatch(/scoped/i)
+  })
+
+  it("no tools key means inherit the host's list; [] means none", () => {
+    expect(toSubagentRoles([agent()], { allowedTools: allowed }).roles[0]?.tools).toEqual(allowed)
+    expect(toSubagentRoles([agent({ tools: [] })], { allowedTools: allowed }).roles[0]?.tools).toEqual([])
+  })
+
+  it("model is NOT honoured — the provider belongs to the host", () => {
+    const { roles } = toSubagentRoles([agent({ tools: ["Read"], model: "opus" })], { allowedTools: allowed })
+    // the role itself still lands: without this the assertion below is satisfied
+    // by a function that returns nothing at all
+    expect(roles[0]?.tools).toEqual(["read"])
+    expect(roles[0]).not.toHaveProperty("model")
+    expect(JSON.stringify(roles)).not.toContain("opus")
   })
 })
