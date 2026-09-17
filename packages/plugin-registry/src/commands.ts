@@ -23,6 +23,25 @@ function stripQuotes(value: string): string {
   return value
 }
 
+/** YAML folded (`>`) block: runs of non-blank lines join with a space, a blank
+ * line becomes a newline. */
+function foldBlock(lines: string[]): string {
+  let text = ""
+  for (const line of lines) {
+    if (line.trim() === "") { text += "\n"; continue }
+    text += text === "" || text.endsWith("\n") ? line : ` ${line}`
+  }
+  return text
+}
+
+/** A block scalar's value: leading/trailing blank lines carry no meaning in any
+ * field we parse, so they are dropped. (The `+`/`-` chomping indicators are
+ * ACCEPTED and ignored — keeping every trailing newline buys nothing for a
+ * description and would make the value differ from its rendered form.) */
+function normalizeBlock(text: string): string {
+  return text.replace(/^\n+/, "").replace(/\n+$/, "")
+}
+
 /**
  * Parse one command markdown file into a CommandDescriptor. `fileName` yields
  * the command name (basename without the .md extension). Frontmatter keys are
@@ -49,14 +68,10 @@ export function parseCommandMarkdown(fileName: string, text: string): CommandDes
       }
     }
     if (fence !== -1) {
-      for (let i = 1; i < fence; i++) {
-        const line = lines[i]!
-        const colon = line.indexOf(":")
-        if (colon <= 0) continue
-        const rawKey = line.slice(0, colon).trim()
-        const key = rawKey.toLowerCase().replace(/[-_]/g, "")
-        const value = stripQuotes(line.slice(colon + 1).trim())
-        if (value === "") continue
+      /** Record one honoured/unsupported key. Empty values are skipped, which is
+       * also what a block scalar with no content yields. */
+      const take = (key: string, rawKey: string, value: string): void => {
+        if (value === "") return
         if (key === "description") meta.description = value
         // `argument-hint` is the OFFICIAL spelling (it is what Anthropic's own
         // commands use); `argument-hints` is ours. Both are honoured — the
@@ -64,6 +79,39 @@ export function parseCommandMarkdown(fileName: string, text: string): CommandDes
         // frontmatter key came to be ignored without anyone noticing.
         else if (key === "argumenthints" || key === "argumenthint") meta.argumentHints = value
         else if (!unsupported.includes(rawKey)) unsupported.push(rawKey)
+      }
+      let i = 1
+      while (i < fence) {
+        const line = lines[i]!
+        const colon = line.indexOf(":")
+        // Not a `key: value` line. An INDENTED line is block-scalar content the
+        // branch below already consumed, or an orphan continuation — never a key,
+        // which is what stopped `Context:`/`user:`/`assistant:` (the lines inside
+        // a real agent's `description: |`) from landing in `unsupported`.
+        if (colon <= 0 || /^[ \t]/.test(line)) { i++; continue }
+        const rawKey = line.slice(0, colon).trim()
+        const key = rawKey.toLowerCase().replace(/[-_]/g, "")
+        const rest = line.slice(colon + 1).trim()
+        const marker = /^([|>])([+-]?)$/.exec(rest)
+        if (marker) {
+          // The value is the indented block BELOW, never the marker itself.
+          const raw: string[] = []
+          let j = i + 1
+          for (; j < fence; j++) {
+            const b = lines[j]!
+            if (b.trim() === "") { raw.push(""); continue }
+            if (!/^[ \t]/.test(b)) break // an un-indented line ends the block
+            raw.push(b)
+          }
+          const first = raw.find((b) => b.trim() !== "")
+          const indent = first === undefined ? 0 : first.length - first.trimStart().length
+          const content = raw.map((b) => (b.trim() === "" ? "" : b.slice(indent)))
+          take(key, rawKey, normalizeBlock(marker[1] === "|" ? content.join("\n") : foldBlock(content)))
+          i = j
+          continue
+        }
+        take(key, rawKey, stripQuotes(rest))
+        i++
       }
       bodyStart = fence + 1
     }
