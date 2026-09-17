@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readFileSync } from "node:fs"
 import { mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -24,8 +24,18 @@ import {
   validateHookOutput,
 } from "../src/runner.ts"
 
+/** A temp config dir that is ALSO the harness home.
+ *
+ * The second half is load-bearing since D1 (see hook-trust.test.ts): a config's
+ * declared hashes are the user's GRANT only when the config is the one the
+ * harness-home convention resolves to. These tests write a user's own
+ * `hooks.json`, so the dir has to BE the home or every one of them would read as
+ * an unapproved third-party source. That the change is needed here is the rule
+ * working — before it, any directory at all could grant itself. */
 async function tmpDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "i-harness-hooks-"))
+  const dir = await mkdtemp(join(tmpdir(), "i-harness-hooks-"))
+  process.env.IH_CONFIG_DIR = dir
+  return dir
 }
 
 /** Write a handler script that: reads stdin JSON, resolves a per-kind reply, prints it. */
@@ -49,6 +59,8 @@ async function configWith(dir: string, handlers: HooksConfig["handlers"]): Promi
   await writeFile(file, JSON.stringify({ version: 1, handlers }, null, 2), "utf8")
   return file
 }
+
+afterEach(() => { delete process.env.IH_CONFIG_DIR })
 
 describe("hook output validation (fail-closed)", () => {
   it("accepts the documented fields and rejects junk", () => {
