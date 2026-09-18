@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { existsSync, readFileSync } from "node:fs"
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
@@ -150,6 +150,62 @@ describe("registry wiring (createHookRegistry mounts)", () => {
     await expect(tools.execute({ name: "bash", args: {} })).rejects.toThrow(HookBlockedError)
     await expect(tools.execute({ name: "bash", args: {} })).rejects.toThrow(/policy says no/)
     await expect(tools.execute({ name: "read", args: { path: "a.txt" } })).resolves.toMatchObject({ name: "read" })
+  })
+
+  // D1's second half, and the one that is easy to get wrong. "May not run" and
+  // "must gate closed" are DIFFERENT verdicts that both read as `valid: false`:
+  //
+  //   - a HASH MISMATCH is a security event — someone changed the artifact under
+  //     an approved declaration — so the gate must close (block the tool);
+  //   - an UNAPPROVED declaration is not the user's policy YET, so it must not
+  //     act at all. Gating closed on it would let a plugin brick the agent
+  //     merely by being enabled: every tool call refused until someone approves,
+  //     which is fail-BROKEN, not fail-closed.
+  it("an UNAPPROVED declaration neither runs nor gates — being enabled must not brick the agent", async () => {
+    await tmpDir() // the home (its own hooks.json would be self-granting)
+    const plugin = await mkdtemp(join(tmpdir(), "i-harness-plugin-"))
+    const script = await writeHandler(plugin, "deny.js", jsonBody({ block: true, reason: "plugin policy" }))
+    const configPath = join(plugin, "hooks", "hooks.json")
+    await mkdir(join(plugin, "hooks"), { recursive: true })
+    await writeFile(configPath, JSON.stringify({
+      version: 1,
+      handlers: [{
+        id: "plugin-deny", event: "pre-tool", type: "command", matcher: { tool: "read" },
+        command: { cmd: process.execPath, args: [script] },
+        trust: { script, sha256: await sha256File(script) },
+      }],
+    }), "utf8")
+
+    const ctx = createContext()
+    // NO approvals: this is another tree's config and nobody has granted it.
+    await createHookRegistry(ctx, { configPath, configDir: plugin })
+    const tools = makeTools(ctx)
+    // The declaration is not the user's policy, so it must NOT block...
+    await expect(tools.execute({ name: "read", args: { path: "a.txt" } })).resolves.toMatchObject({ name: "read" })
+  })
+
+  // The other half of the pair above, and it is the half that keeps the fix
+  // honest: "ungranted declarations are skipped" passes just as well against an
+  // implementation that skips EVERYTHING invalid — which would silently disable
+  // the tamper defence. A mismatch must still close the gate.
+  it("...but a hash MISMATCH still gates closed — an approved artifact changed underneath", async () => {
+    const dir = await tmpDir() // the home: its declarations are the user's grant
+    const script = await writeHandler(dir, "deny.js", jsonBody({ block: true, reason: "never runs" }))
+    const configPath = await configWith(dir, [{
+      id: "tampered", event: "pre-tool", type: "command", matcher: { tool: "read" },
+      command: { cmd: process.execPath, args: [script] },
+      // Declared, but the artifact does not match it — the file moved after the
+      // grant. The handler body never runs; the GATE closes on the mismatch.
+      trust: { script, sha256: "0".repeat(64) },
+    }])
+    const ctx = createContext()
+    await createHookRegistry(ctx, { configPath, configDir: dir })
+    const tools = makeTools(ctx)
+    await expect(tools.execute({ name: "read", args: { path: "a.txt" } })).rejects.toThrow(HookBlockedError)
+    // ...and the refusal is SCOPED to what the handler matches: `matches()` runs
+    // before the validity check, so a tool this handler never claimed is
+    // untouched. A mismatch must not become a blanket refusal of everything.
+    await expect(tools.execute({ name: "bash", args: {} })).resolves.toMatchObject({ name: "bash" })
   })
 
   it("post-tool handlers run after the body and may block it (fail-closed)", async () => {
