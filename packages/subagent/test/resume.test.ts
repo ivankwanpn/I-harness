@@ -14,7 +14,7 @@ import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
@@ -34,7 +34,7 @@ function setup() {
   const roles = createRoleRegistry()
   for (const r of builtinRoles()) roles.register(r)
   const providers = createProviderRegistry()
-  const exec = createExecService()
+  const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "child done" }])
   const deps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
@@ -207,7 +207,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const parentReg = createToolRegistry(ctx)
     return registerSubagent(ctx, parentReg, {
       providers: createProviderRegistry(),
-      exec: createExecService(),
+      exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
       restoredState,
@@ -265,7 +265,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const parentReg = createToolRegistry(ctx)
     const subagent = registerSubagent(ctx, parentReg, {
       providers: createProviderRegistry(),
-      exec: createExecService(),
+      exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
     })

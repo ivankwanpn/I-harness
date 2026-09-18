@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createShellTools, resolveShell } from "@i-harness/shell"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { createTimeoutGuard, TOOL_TIMEOUT } from "../src/index.ts"
 
 // honors the signal: settles as soon as exec.abortSignal fires
@@ -133,7 +133,7 @@ describe("guard-timeout", () => {
     const registry = createToolRegistry(ctx)
     ctx.mount(createTimeoutGuard(ctx))
     const resolved = resolveShell()
-    const shell = createShellTools({ exec: createExecService(), timeoutMs: 300 })
+    const shell = createShellTools({ exec: registerExec(createContext()), timeoutMs: 300 })
       .find((tool) => tool.name === resolved.name)!
     registry.register(shell)
 

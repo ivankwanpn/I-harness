@@ -17,7 +17,7 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { createProviderRegistry } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -43,7 +43,7 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
       jobs: createJobRegistry(),
       roles: createRoleRegistry(),
       agents: createAgentRegistry(),
-      exec: createExecService(),
+      exec: registerExec(createContext()),
       providers: createProviderRegistry(),
     },
     parentModel: model(),
@@ -147,7 +147,7 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
+        exec: registerExec(createContext()),
         providers: createProviderRegistry(),
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
@@ -213,7 +213,7 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
+        exec: registerExec(createContext()),
         providers: createProviderRegistry(),
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
@@ -365,7 +365,7 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
+        exec: registerExec(createContext()),
         providers: createProviderRegistry(),
         childSessions: { coordinator, parentSessionId: "sess-parent" },
       },

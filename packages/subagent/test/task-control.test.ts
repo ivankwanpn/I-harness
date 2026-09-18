@@ -5,7 +5,7 @@ import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry } from "@i-harness/core-agent"
 import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
@@ -23,7 +23,7 @@ function setupWith(maxConcurrency?: number) {
   const roles = createRoleRegistry()
   for (const r of builtinRoles()) roles.register(r)
   const tasks = createTaskRegistry({ maxConcurrency })
-  const exec = createExecService()
+  const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "done" }])
   const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers: createProviderRegistry(), exec, agents: createAgentRegistry(), tasks })
   return { all, tasks }
@@ -66,7 +66,7 @@ describe("M26-D3 cancelTree", () => {
     })
     const deps: SubagentToolDeps = {
       table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
-      parentModel: model, providers: createProviderRegistry(), exec: createExecService(),
+      parentModel: model, providers: createProviderRegistry(), exec: registerExec(createContext()),
       agents: createAgentRegistry(), tasks,
     }
     // 活體 entry（供 quiescence）：running stub —— cancelSubtree 會 abort 其 controller
@@ -89,7 +89,7 @@ describe("M26-D3 cancelTree", () => {
       table: createAgentTable(), jobs: createJobRegistry(), roles: createRoleRegistry(),
       parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
       parentModel: createMockClient([]), providers: createProviderRegistry(),
-      exec: createExecService(), agents: createAgentRegistry(), tasks,
+      exec: registerExec(createContext()), agents: createAgentRegistry(), tasks,
     }
     await expect(cancelSubtree(deps, "task-99")).rejects.toThrow(/unknown task/)
     tasks.restore({
@@ -121,7 +121,7 @@ describe("M26-D3 cancelTree", () => {
       },
     }
     const tasks = createTaskRegistry()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, providers: createProviderRegistry(), exec: createExecService(), agents: createAgentRegistry(), tasks })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, providers: createProviderRegistry(), exec: registerExec(createContext()), agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const close = all.find((t) => t.name === "close_agent")!
     await spawn.execute({ message: "go", task_name: "h" }, { sessionId: "s1", callEventSeq: 1 })
@@ -147,7 +147,7 @@ describe("M26-D4 get_task_output", () => {
     for (const r of builtinRoles()) roles.register(r)
     const model = createMockClient([{ role: "assistant", text: "child done" }])
     const tasks = createTaskRegistry()
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers: createProviderRegistry(), exec: createExecService(), agents: createAgentRegistry(), tasks })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers: createProviderRegistry(), exec: registerExec(createContext()), agents: createAgentRegistry(), tasks })
     const spawn = all.find((t) => t.name === "spawn_agent")!
     const get = all.find((t) => t.name === "get_task_output")!
     await spawn.execute({ message: "go", task_name: "h" }, { sessionId: "s1", callEventSeq: 1 })
@@ -191,7 +191,7 @@ describe("M26-D4 stop_task", () => {
       ],
       notifications: [],
     })
-    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers: createProviderRegistry(), exec: createExecService(), agents: createAgentRegistry(), tasks })
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers: createProviderRegistry(), exec: registerExec(createContext()), agents: createAgentRegistry(), tasks })
     const stop = all.find((t) => t.name === "stop_task")!
     // ADAPTATION (plan T13 Step 1): the plan created a deferred gate, awaited
     // stop.execute (which awaits quiescence of that very chain) and resolved

@@ -2,7 +2,8 @@ import { describe, expect, it, beforeAll } from "vitest"
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { createExecService, type ExecCommand, type ExecService } from "@i-harness/exec"
+import { createContext } from "@i-harness/core-plugin"
+import { registerExec, type ExecCommand, type ExecService } from "@i-harness/exec"
 import { createFsSearchTools, resolveRgPath } from "../src/index.ts"
 
 // D1 (m55-shell): a recording exec service — asserts the cwd handed to rg.
@@ -39,7 +40,7 @@ describe("fs-search glob", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [glob] = createFsSearchTools({ exec: createExecService() })
+      const [glob] = createFsSearchTools({ exec: registerExec(createContext()) })
       const result = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[] }> }).execute(
         { pattern: "**/*.txt", path: dir },
         {},
@@ -57,7 +58,7 @@ describe("fs-search glob", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [glob] = createFsSearchTools({ exec: createExecService() })
+      const [glob] = createFsSearchTools({ exec: registerExec(createContext()) })
       const result = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[]; error?: string }> }).execute(
         { pattern: "**/*.rs", path: dir },
         {},
@@ -70,7 +71,7 @@ describe("fs-search glob", () => {
   }, 20_000)
 
   it("marks both tools isConcurrencySafe", () => {
-    const [glob, grep] = createFsSearchTools({ exec: createExecService() })
+    const [glob, grep] = createFsSearchTools({ exec: registerExec(createContext()) })
     expect(glob.isConcurrencySafe).toBe(true)
     expect(grep.isConcurrencySafe).toBe(true)
   })
@@ -78,7 +79,7 @@ describe("fs-search glob", () => {
   it("reports an error when the search path does not exist", async () => {
     if (!rgAvailable) return
     const missingDir = join(tmpdir(), `fs-search-missing-${Date.now()}`)
-    const [glob] = createFsSearchTools({ exec: createExecService() })
+    const [glob] = createFsSearchTools({ exec: registerExec(createContext()) })
     const result = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[]; error?: string }> }).execute(
       { pattern: "**/*.txt", path: missingDir },
       {},
@@ -131,7 +132,7 @@ describe("fs-search workspace-bound search root (D1)", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [glob] = createFsSearchTools({ exec: createExecService(), workspace: dir })
+      const [glob] = createFsSearchTools({ exec: registerExec(createContext()), workspace: dir })
       const result = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[]; error?: string }> }).execute(
         { pattern: "**/*.txt" },
         {},
@@ -152,7 +153,7 @@ describe("fs-search workspace-bound search root (D1)", () => {
     const marker = `ws-marker-${Date.now()}-${Math.random().toString(36).slice(2)}`
     writeFileSync(join(dir, "m.txt"), `${marker}\n`)
     try {
-      const [, grep] = createFsSearchTools({ exec: createExecService(), workspace: dir })
+      const [, grep] = createFsSearchTools({ exec: registerExec(createContext()), workspace: dir })
       const result = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { text: string }[]; error?: string }> }).execute(
         { pattern: marker },
         {},
@@ -171,7 +172,7 @@ describe("fs-search grep", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [, grep] = createFsSearchTools({ exec: createExecService() })
+      const [, grep] = createFsSearchTools({ exec: registerExec(createContext()) })
       const result = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string; line: number; text: string }[] }> }).execute(
         { pattern: "hello", path: dir },
         {},
@@ -189,7 +190,7 @@ describe("fs-search grep", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [, grep] = createFsSearchTools({ exec: createExecService() })
+      const [, grep] = createFsSearchTools({ exec: registerExec(createContext()) })
       const result = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string; line: number; text: string }[]; error?: string }> }).execute(
         { pattern: "zzzabsent", path: dir },
         {},
@@ -205,7 +206,7 @@ describe("fs-search grep", () => {
     if (!rgAvailable) return
     const dir = setupDir()
     try {
-      const [, grep] = createFsSearchTools({ exec: createExecService() })
+      const [, grep] = createFsSearchTools({ exec: registerExec(createContext()) })
       const result = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string; line: number; text: string }[]; error?: string }> }).execute(
         { pattern: "[", path: dir },
         {},
