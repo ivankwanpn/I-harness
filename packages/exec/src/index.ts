@@ -109,7 +109,11 @@ function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): Resol
   const sandbox = cmd.sandbox
   if (!isConfinedPolicy(sandbox)) return {} // passthrough
   if (sandboxProvider === undefined) {
-    throw new SandboxUnavailableError(sandbox.mode, "no sandbox provider composed (createExecService({ sandbox }))")
+    // Names the MOUNT, not the constructor: `createExecService` is module-private
+    // as of 2026-09-18, so pointing a reader at it would send them somewhere they
+    // cannot go. The mirror in packages/shell/test/sandbox-refusal.test.ts:44 is
+    // a fake that reproduces this string and moves with it.
+    throw new SandboxUnavailableError(sandbox.mode, "no sandbox provider composed (registerExec(ctx, { sandbox }))")
   }
   // M22 enforcement gate: a policy that demands read isolation must never run
   // on a backend that does not (or cannot) declare it — refuse to run, fail closed.
@@ -224,7 +228,11 @@ export interface ExecService {
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
 
-export function createExecService(deps?: ExecServiceOptions): ExecService {
+// NOT exported (2026-09-18): the production path is `registerExec`, and every
+// other caller was a test. Making it private is what forces tests through the
+// mount they would meet in production — `registerExec` returns the service so
+// that costs a rename rather than a rewrite.
+function createExecService(deps?: ExecServiceOptions): ExecService {
   let bashCounter = 0
   const jobs = new Map<string, BackgroundJobView & { handle: SpawnHandle }>()
   const provider = deps?.sandbox
@@ -287,6 +295,14 @@ export function createExecService(deps?: ExecServiceOptions): ExecService {
   }
 }
 
-export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): void {
-  ctx.services.register("exec/service", createExecService(deps))
+/** Mount the exec service and RETURN it.
+ *
+ * The return is what lets `createExecService` stop being exported: its only
+ * non-production callers were tests, and a test that wants an isolated service
+ * can now go through the mount it would meet in production rather than around
+ * it. Returning void forced every one of them to reach past the seam. */
+export function registerExec(ctx: PluginContext, deps?: ExecServiceOptions): ExecService {
+  const service = createExecService(deps)
+  ctx.services.register("exec/service", service)
+  return service
 }

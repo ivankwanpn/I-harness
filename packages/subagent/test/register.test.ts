@@ -4,7 +4,7 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { registerSubagent } from "../src/index.ts"
 
 describe("registerSubagent", () => {
@@ -12,7 +12,7 @@ describe("registerSubagent", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
 
@@ -39,7 +39,7 @@ describe("registerSubagent", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
 
@@ -56,7 +56,7 @@ describe("registerSubagent", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
     registerSubagent(ctx, parentReg, { providers, exec, parentModel: model, parentSession: session })

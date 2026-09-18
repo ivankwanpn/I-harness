@@ -41,7 +41,7 @@ function refusingExec(): ExecService {
     if (policy === undefined || policy.mode === "danger-full-access") {
       throw new Error(`refusingExec: no confined policy on this command (sandbox=${String(policy?.mode)})`)
     }
-    throw new SandboxUnavailableError(policy.mode, "no sandbox provider composed (createExecService({ sandbox }))")
+    throw new SandboxUnavailableError(policy.mode, "no sandbox provider composed (registerExec(ctx, { sandbox }))")
   }
   return {
     run: async (cmd) => refuse(cmd),

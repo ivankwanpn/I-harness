@@ -9,5 +9,8 @@
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@vscode/ripgrep": "^1.18.0"
+  },
+  "devDependencies": {
+    "@i-harness/core-plugin": "workspace:*"
   }
 }

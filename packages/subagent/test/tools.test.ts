@@ -6,7 +6,7 @@ import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { createWorkflowExecutor, createWorkflowJobStore, type WorkflowDefinition } from "@i-harness/workflow"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
@@ -26,7 +26,7 @@ function setup() {
   const roles = createRoleRegistry()
   for (const r of builtinRoles()) roles.register(r)
   const providers = createProviderRegistry()
-  const exec = createExecService()
+  const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "child done" }])
   const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, providers, exec, agents: createAgentRegistry(), tasks: createTaskRegistry() })
   return { ctx, parentReg, session, jobs, table, roles, providers, model, exec, tools }
@@ -825,7 +825,7 @@ describe("M26-D2 background delivery", () => {
     const roles = createRoleRegistry()
     for (const r of builtinRoles()) roles.register(r)
     const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     // slow child so terminalize happens after spawn returns — ADAPTATION
     // (plan T7 Step 1 test 2): the plan used an instant mock, but its own
     // comment ("slow child") requires terminalize to not race the first
@@ -865,7 +865,7 @@ describe("M26-D2 background delivery", () => {
     const admits: string[] = []
     const mounted = registerSubagent(ctx, parentReg, {
       providers: createProviderRegistry(),
-      exec: createExecService(),
+      exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "done here" }]),
       parentSession: session,
       parentNotify: { admit: async (a) => { admits.push(a.text) }, wake: () => {} },

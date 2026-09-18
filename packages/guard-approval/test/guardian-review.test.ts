@@ -5,14 +5,14 @@ import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { registerSubagent } from "@i-harness/subagent"
 import { registerGuardian, runGuardianReview, ensureReviewerRole, renderGuardianMessage } from "../src/guardian/index.ts"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createApprovalPolicy } from "../src/index.ts"
 
 function makeSubagents(ctx: PluginContext, parentRegistry: ReturnType<typeof createToolRegistry>, parentSession: ReturnType<typeof createSession>, model: ReturnType<typeof createMockClient>) {
-  const exec = createExecService()
+  const exec = registerExec(createContext())
   const providers = createProviderRegistry()
   const sub = registerSubagent(ctx, parentRegistry, {
     providers, exec, parentModel: model, parentSession,

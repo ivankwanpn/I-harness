@@ -361,6 +361,10 @@ importers:
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
+    devDependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
 
   packages/fs-watch:
     dependencies:
