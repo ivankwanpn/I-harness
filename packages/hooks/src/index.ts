@@ -112,6 +112,18 @@ export interface HookRegistry {
 interface InternalRegistry {
   loaded: LoadedHandler[]
   opts: Required<Pick<HookRegistryOptions, "report" | "env">> & { configDir: string }
+  /**
+   * Handler ids already reported as UNGRANTED.
+   *
+   * Only the unapproved verdict needs this, and the asymmetry is the point. A
+   * mismatch BLOCKS, so the user meets it on the first matching call and it
+   * cannot repeat unboundedly — each refusal is a distinct event worth stating.
+   * An ungranted declaration lets the run continue, so without this it would
+   * report on every matching call for the life of the process, with nothing the
+   * user could do about it until a grant UI exists. The fact never changes
+   * between calls: saying it once is the signal.
+   */
+  reportedUnapproved: Set<string>
 }
 
 const TOOL_EVENTS = new Set<HookEventName>(["pre-tool", "post-tool", "permission"])
@@ -269,9 +281,18 @@ async function runHandlers(
     if (!matches(handler, event, toolName)) continue
     if (!handler.valid) {
       const message = handler.trustError ?? "handler failed trust verification"
-      // An ungranted declaration acts in NEITHER direction; only a genuine
-      // mismatch closes a gate. See LoadedHandler.unapproved for why.
-      if (gate && handler.unapproved !== true) throw new HookBlockedError(handler.spec.id, message)
+      if (handler.unapproved === true) {
+        // Not the user's policy yet: acts in NEITHER direction, and is reported
+        // ONCE (see InternalRegistry.reportedUnapproved).
+        if (!registry.reportedUnapproved.has(handler.spec.id)) {
+          registry.reportedUnapproved.add(handler.spec.id)
+          registry.opts.report(new HookTrustError(handler.spec.id, handler.spec.trust.sha256, message))
+        }
+        continue
+      }
+      // A genuine mismatch: someone changed an approved artifact, so the gate
+      // closes. See LoadedHandler.unapproved for why the two must differ.
+      if (gate) throw new HookBlockedError(handler.spec.id, message)
       registry.opts.report(new HookTrustError(handler.spec.id, handler.spec.trust.sha256, message))
       continue
     }
@@ -338,6 +359,7 @@ export async function createHookRegistry(
   const configDir = opts.configDir ?? dirname(configPath)
   const registry: InternalRegistry = {
     loaded: [],
+    reportedUnapproved: new Set<string>(),
     opts: {
       report: opts.report ?? ((err: unknown) => console.warn(`[hooks] ${err instanceof Error ? err.message : String(err)}`)),
       env: opts.env ?? {},
