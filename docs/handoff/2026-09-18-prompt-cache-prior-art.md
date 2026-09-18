@@ -126,15 +126,20 @@ IH 的日誌是 append-only，模型可見訊息是 `deriveMessages(session)` �
 而 Anthropic 的快取**需要顯式 `cache_control` 斷點**（grok 的實作就是證明：它必須自己放 3 個）。
 所以：
 
-| 協議 | IH 今天的快取狀態 |
+| 協議（IH 的 adapter） | IH 今天的快取狀態 |
 |---|---|
-| **Anthropic** | **不存在。** 沒有斷點就沒有快取 —— 每一個請求都付全額，不是「壓縮後才付全額」 |
-| **DeepSeek／OpenAI-compatible** | 自動前綴匹配 → **路線圖的前提成立**（這是我們實際用的） |
-| **OpenAI Responses** | 自動快取；`prompt_cache_key` 可選（codex 用它路由） |
-| **Gemini** | 隱式快取 |
+| **Anthropic Messages**（`llm-anthropic`） | **不存在。** 沒有顯式斷點就沒有快取 —— 每一個請求都付全額，不是「壓縮後才付全額」 |
+| **Bedrock Converse**（`llm-bedrock`） | 同上：`cachePoint` 也是**顯式**的（grok 的 `bedrock-cache.ts` 為證） |
+| **OpenAI Chat Completions**（`llm-openai-compatible`） | 自動前綴匹配 → **路線圖的前提成立** |
+| **OpenAI Responses**（`llm-openai`） | 自動快取；`prompt_cache_key` 可選（codex 用它路由） |
+| **Gemini**（`llm-gemini`） | 隱式快取 |
+
+**⚠️ 這裡區分的是「協議」而不是「供應商」**（2026-09-18 更正）：DeepSeek 不是一個協議，它是一個**說 Chat Completions 的供應商**。
+所以「自動前綴匹配」是 **Chat Completions 這條線**的性質，而走同一條線的任何供應商都一樣 ——
+把它寫成「DeepSeek」會讓一條協議性質看起來像一個廠商的怪癖。
 
 **所以路線圖 §3.M5 的「長 session 不再在每次壓縮後默默付全額」要分成兩句**：
-對自動前綴的協議成立；對 Anthropic **它比描述的更糟** —— 那裡沒有快取可以失去。
+對**自動前綴**的那兩條線成立；對 **Anthropic 與 Bedrock 兩條顯式斷點的線更糟** —— 那裡沒有快取可以失去。
 
 ---
 
