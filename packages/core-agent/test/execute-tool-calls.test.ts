@@ -79,6 +79,61 @@ describe("executeToolCalls — the durable dispatch boundary (M4)", () => {
   })
 })
 
+// M5's T4, second half: **cancellation propagates to the siblings of a failed
+// call.** Measured before writing: the failure path says
+//
+//   // Failure: drain started (results discarded), rethrow the first error.
+//   await Promise.allSettled([...inFlight.values()])
+//
+// — a DRAIN. The siblings keep running (a `bash` command keeps spawning, a network
+// call keeps going), their results are thrown away, and the caller waits for the
+// SLOWEST of them before the error surfaces. The roadmap's completion definition
+// asks for "可取消", and the mechanism is already there: `prepare` puts the signal
+// on `prepared.exec.abortSignal` (core-tools:291), so a body can observe it.
+describe("executeToolCalls — a failure cancels its siblings (M5)", () => {
+  it("a failed call CANCELS a still-running sibling instead of waiting for it", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+
+    let siblingOutcome: string | undefined
+    tools.register({
+      name: "slow",
+      description: "",
+      inputSchema: {},
+      // Concurrency-safe, so `slow` and `boom` land in the SAME parallel group —
+      // `isExclusive` is "not concurrency-safe", and a singleton group per call
+      // means there are no siblings to cancel at all. (Measured: without this
+      // the test was red for that reason and not for the one it names.)
+      isConcurrencySafe: true,
+      execute: async (_args: unknown, exec: { abortSignal?: AbortSignal }) => {
+        // Observe the abort the way a real body would — a bash command's signal,
+        // a fetch's signal. Polling rather than one sleep so the test measures
+        // WHEN the abort lands, not just whether it eventually does.
+        for (let i = 0; i < 300 && !(exec.abortSignal?.aborted ?? false); i++) {
+          await new Promise((r) => setTimeout(r, 10))
+        }
+        siblingOutcome = exec.abortSignal?.aborted === true ? "cancelled" : "drained"
+        return {}
+      },
+    })
+    tools.register({
+      name: "boom",
+      description: "",
+      inputSchema: {},
+      isConcurrencySafe: true,
+      execute: async () => { throw new Error("boom") },
+    })
+
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "slow", args: {} },
+      { callId: "c1", name: "boom", args: {} },
+    ], { maxParallel: 10 }).catch(() => { /* the failure is the setup, not the subject */ })
+
+    expect(siblingOutcome).toBe("cancelled")
+  }, 20_000)
+})
+
 describe("executeToolCalls scheduler", () => {
   it("commits results in model order even when a later call settles first", async () => {
     const ctx = createContext()
