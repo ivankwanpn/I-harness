@@ -30,6 +30,11 @@ export interface MetricsSnapshot {
    * provider reported zero" stays distinguishable from "nobody reported"; an
    * unreported field is ABSENT, never a fabricated 0. */
   reported: Record<string, number>
+  /** M5/D3: how many provider round-trips ran on a REWRITTEN prefix, out of how
+   * many ran at all. A tally rather than a sum — `provider/call` carries
+   * positions (step, message count), not measurements, and those must never be
+   * added up. `requests` is the denominator that makes `rewritten` readable. */
+  prefix: { requests: number; rewritten: number; lastCause?: string }
   /** Tool outcomes by tool name (`tool/end` vs `tool/error`). */
   tools: Record<string, { ok: number; error: number }>
 }
@@ -42,6 +47,7 @@ export function createMetricsSink(): MetricsSink {
   const events = new Map<string, number>()
   const tokens = new Map<string, number>()
   const reported = new Map<string, number>()
+  const prefix = { requests: 0, rewritten: 0 } as { requests: number; rewritten: number; lastCause?: string }
   const tools = new Map<string, { ok: number; error: number }>()
 
   return {
@@ -64,6 +70,15 @@ export function createMetricsSink(): MetricsSink {
         return
       }
 
+      if (ev.type === "provider/call") {
+        prefix.requests += 1
+        if (ev.data.prefixRewritten === true) {
+          prefix.rewritten += 1
+          if (typeof ev.data.prefixCause === "string") prefix.lastCause = ev.data.prefixCause
+        }
+        return
+      }
+
       if (ev.type === "tool/end" || ev.type === "tool/error") {
         const name = typeof ev.data.tool === "string" ? ev.data.tool : "unknown"
         const row = tools.get(name) ?? { ok: 0, error: 0 }
@@ -78,6 +93,7 @@ export function createMetricsSink(): MetricsSink {
         events: Object.fromEntries(events),
         tokens: Object.fromEntries(tokens),
         reported: Object.fromEntries(reported),
+        prefix: { ...prefix },
         tools: Object.fromEntries([...tools].map(([name, row]) => [name, { ...row }])),
       }
     },

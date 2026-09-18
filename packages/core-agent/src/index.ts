@@ -1,7 +1,7 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
-import { append, deriveMessages } from "@i-harness/core-session"
+import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import { assertMessagesFromLog } from "@i-harness/llm-seam"
@@ -178,6 +178,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   let steps = 0
   let callSeq = 0
   const reasoning: string[] = []
+  // M5/D3: how many rewrite markers the log carried at the PREVIOUS request. A
+  // bigger count next time means a rewrite landed in between, which is what
+  // breaks the cached prefix — the absolute count is not a break, since it stays
+  // non-zero forever after the first compaction. Undefined before the first
+  // request: a resumed session has no predecessor to compare against, so the
+  // first request claims nothing rather than guessing.
+  let rewriteMarkers: number | undefined
 
   async function runTurn(message: string, signal?: AbortSignal): Promise<AgentResult> {
     const abort = signal ?? deps.signal
@@ -237,7 +244,26 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // core-agent loop, so a retry is not observable from this layer. v0
       // emits no retry/start (a failed call still surfaces as provider/error
       // or tool/error); adding a retry hook to those packages is follow-up.
-      deps.telemetry?.emit({ type: "provider/call", ts: Date.now(), data: { step: steps, messages: messages.length, tools: request.tools.length } })
+      // M5/D3: whether THIS request's prefix was rewritten by a marker that
+      // arrived since the last one. Derived from the log rather than reported by
+      // whoever rewrote it, so a rewrite path that forgets to announce itself
+      // still shows up. Read beside T2-1's `reported:` numbers, which say
+      // whether the provider actually charged full price.
+      const rewrite = deriveProjectionRewrite(deps.session)
+      const prefixRewritten = rewriteMarkers !== undefined && rewrite.markers > rewriteMarkers
+      rewriteMarkers = rewrite.markers
+      deps.telemetry?.emit({
+        type: "provider/call",
+        ts: Date.now(),
+        data: {
+          step: steps,
+          messages: messages.length,
+          tools: request.tools.length,
+          ...(prefixRewritten
+            ? { prefixRewritten: true, ...(rewrite.lastCause !== undefined ? { prefixCause: rewrite.lastCause } : {}) }
+            : {}),
+        },
+      })
 
       let stepText = ""
       let toolCallsThisStep = 0
