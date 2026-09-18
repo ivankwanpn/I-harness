@@ -20,7 +20,7 @@
 | **M1** | 可達性：重量 → 誠實化 | S | **完成** | `scripts/audit/check-reachability.mjs` 存在並在跑 |
 | **M2** | 可達性閘門 | M | **完成** | 472 列基線已種、`--gate`／`--digest`／`--self-test` 三件套齊 |
 | **M3** | 量測底座 | M | **大部分未動** | 見 §1.1 |
-| **M4** | 耐久 turn 狀態機 | **L** | **進行中** —— spec 完成、I1 ＋ I2 落地（`a64fa18` · `491dd10` · `262e245`）；spawn 測試與 Q8 未做 | `docs/superpowers/specs/2026-09-18-durable-turn-state-machine-design.md` |
+| **M4** | 耐久 turn 狀態機 | **L** | ✅ **工程完成**（`a64fa18` · `491dd10` · `262e245` · `a1ad14a`）—— spec、I1、I2、**路線圖的 spawn 驗收測試**；**只差 Q8**（產品決定） | `docs/superpowers/specs/2026-09-18-durable-turn-state-machine-design.md` |
 | **M5** | 一致性：工具管線 ＋ prompt 快取 | M | **未開始** | 依賴 M3（T2） |
 | **M6** | 廣度：生態 ＋ 介面硬化 | M | **未開始** | 依賴 M5 |
 | **M7** | 自我喚醒與記憶 | M/S | **卡住** | **要 Q1／Q2 的答案** |
