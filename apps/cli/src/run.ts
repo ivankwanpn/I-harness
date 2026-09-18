@@ -19,7 +19,7 @@ import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type Ho
 import { PluginRegistry, toMcpServerConfigs, toSubagentRoles } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
-import { createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
+import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
   type ModelPolicy,
@@ -251,7 +251,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
   // host asks for it (`--telemetry` → opts.telemetry === "jsonl"). JSONL sink
   // on stdout; absent → no telemetry object, no events, zero behavior change.
-  const telemetry: Telemetry | undefined = opts.telemetry === "jsonl" ? createTelemetry([createJsonlSink(process.stdout)]) : undefined
+  // M3: the metrics sink is attached ALWAYS (it is a counter map; the cost is
+  // nothing) but only REPORTED when the operator asked for observability. That
+  // is also what keeps `createMetricsSink` off the reachability instrument's
+  // orphan list — an accumulator with no reader is exactly the shape this repo
+  // keeps deleting, and wiring a reader is the fix, not an allowlist entry.
+  const metrics = createMetricsSink()
+  const telemetry: Telemetry | undefined = opts.telemetry === "jsonl"
+    ? createTelemetry([createJsonlSink(process.stdout), metrics])
+    : createTelemetry([metrics])
   if (telemetry) {
     telemetry.emit({
       type: "session/start",
@@ -607,6 +615,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
     })
     if (opts.coordinator) await opts.coordinator.close()
+    // The metrics summary, when the operator asked for observability. On STDERR
+    // because stdout carries ONLY the telemetry's NDJSON frames (the same
+    // discipline `sdk` and `acp` follow) — a summary printed to stdout would
+    // corrupt the stream it is summarising.
+    if (opts.telemetry === "jsonl") {
+      const m = metrics.snapshot()
+      const events = Object.entries(m.events).map(([k, v]) => `${k}=${v}`).join(" ")
+      const tokens = Object.entries(m.tokens).map(([k, v]) => `${k}=${v}`).join(" ")
+      const tools = Object.entries(m.tools).map(([k, v]) => `${k}=${v.ok}/${v.ok + v.error}`).join(" ")
+      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
+    }
     emitSessionEnd(0)
     telemetry?.close()
     return { finalText, exitCode: 0, session, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
