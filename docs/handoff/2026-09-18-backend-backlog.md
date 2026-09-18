@@ -33,7 +33,7 @@
 | fail-loud 崩潰處理 ＋ 優雅關閉 | ✅ **完成**（`ede0850` ＋ `8c34ca1`）—— SIGINT/SIGTERM → abort → 走既有的 `finally`（drain ＋ dispose）；`failureReport` 取代裸堆疊 **與** 失敗 run 的那一行裸訊息 |
 | 本地結構化診斷日誌 | ⚠️ **一半** —— 失敗／崩潰報告已經結構化（session、error、frame、損失契約）；**79 個 `console.warn/error` 站點沒有分級**。量過：那些訊息確實是**不同類別被壓平**（fail-soft 降級、CLI 用法錯誤、背景失敗），所以分級**有價值** —— 但那是 79 處的遷移 |
 | secret redaction | ⚠️ **缺口示範不出來** —— 見下 |
-| in-process 診斷 metrics registry | **不存在** |
+| in-process 診斷 metrics registry | ✅ **完成**（`58d7db6`）—— `createMetricsSink` 是一個 `TelemetrySink`（**零 emit 站點**）；`run.ts` 接上它，`--telemetry` 時在 **stderr** 報 summary |
 
 **「secret redaction」為什麼標成「示範不出來」，而不是「未做」。** roadmap 引的是跨專案 triage 的措辭
 （*"secret-redaction-before-log-and-sink"*），不是這裡量到的缺陷。**照量測**：
@@ -238,7 +238,7 @@ driver 讀什麼、`onDue` 交給誰。**邊接邊發明等於把三個決定拆
 2. 崩潰處理 ＋ 優雅關閉      ← ✅ 完成（ede0850 ＋ 8c34ca1）
 3. 本地結構化診斷日誌        ← ⚠️ 一半（報告已結構化；79 站點未分級）
 4. secret redaction         ← ⚠️ 缺口示範不出來（量過，見 §1.1）
-5. metrics registry         ← ❌ 未做
+5. metrics registry         ← ✅ 完成（58d7db6）
 ```
 
 **M3 沒有全部做完，而 M4 的前置仍然滿足。** 路線圖對 M3 的硬依賴寫的是
