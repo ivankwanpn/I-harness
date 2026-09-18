@@ -76,9 +76,24 @@ export interface HookRegistryOptions {
 /** One loaded handler with its load-time trust verdict. */
 export interface LoadedHandler {
   spec: HookHandlerSpec
-  /** false = trust mismatch at load (gates deny, observers skipped). */
+  /** false = may not run (a trust mismatch OR an ungranted declaration). */
   valid: boolean
   trustError?: string
+  /**
+   * WHY it may not run, when the reason is not tampering: this declaration has
+   * never been GRANTED by the user (D1 —
+   * docs/handoff/2026-09-18-prior-art-survey.md §4).
+   *
+   * Distinguished from a hash mismatch because the two demand OPPOSITE
+   * responses, and both would otherwise read as `valid: false`:
+   *   - a mismatch means someone changed an artifact the user already approved
+   *     — a security event, so a gate closes;
+   *   - an ungranted declaration is simply not the user's policy yet, so it must
+   *     act in NEITHER direction. Closing a gate on it would let a plugin brick
+   *     the agent by being enabled: every tool call refused until someone
+   *     approves. That is fail-BROKEN, not fail-closed.
+   */
+  unapproved?: boolean
 }
 
 export interface HookRegistry {
@@ -161,6 +176,7 @@ export async function loadHooksConfig(
     const spec = validateSpec(entry, configPath)
     compileMatcher(spec.matcher) // regex validity is a config error
     let trustError: string | undefined
+    let unapproved = false
     try {
       await verifyHandlerTrust(spec, configDir)
     } catch (err) {
@@ -168,8 +184,9 @@ export async function loadHooksConfig(
     }
     if (trustError === undefined && !userLayer && approvals?.isApproved(spec.trust.sha256) !== true) {
       trustError = `hook handler ${spec.id} is not approved by the user for this source (sha256 ${spec.trust.sha256})`
+      unapproved = true
     }
-    loaded.push({ spec, valid: trustError === undefined, trustError })
+    loaded.push({ spec, valid: trustError === undefined, trustError, ...(unapproved ? { unapproved } : {}) })
   }
   return loaded
 }
@@ -252,7 +269,9 @@ async function runHandlers(
     if (!matches(handler, event, toolName)) continue
     if (!handler.valid) {
       const message = handler.trustError ?? "handler failed trust verification"
-      if (gate) throw new HookBlockedError(handler.spec.id, message)
+      // An ungranted declaration acts in NEITHER direction; only a genuine
+      // mismatch closes a gate. See LoadedHandler.unapproved for why.
+      if (gate && handler.unapproved !== true) throw new HookBlockedError(handler.spec.id, message)
       registry.opts.report(new HookTrustError(handler.spec.id, handler.spec.trust.sha256, message))
       continue
     }
