@@ -99,6 +99,19 @@ export interface HeadlessOptions {
   workspace: string
   mockScript?: MockStep[]
   model?: ModelClient
+  /**
+   * M3: abort the run from the host side. A real SIGINT/SIGTERM does the same
+   * thing — this exists so the unwind is reachable without a process boundary,
+   * and so a host that outlives one run can cancel it.
+   *
+   * The abort is HONOURED AT TURN GRANULARITY, not mid-tool: `SessionExecutor`
+   * checks `signal.aborted` at the pump head and the agent at its own step
+   * boundaries, so an in-flight tool call finishes and the events already
+   * appended stay appended. What the signal buys is the UNWIND — `finally` runs,
+   * the assembly disposes, and `coordinator.close()` drains the write-behind's
+   * pending batch. Without it the process is killed where it stands.
+   */
+  signal?: AbortSignal
   /** Production defaults to required. `test-mock` is reserved for explicit
    * test fixtures; supplying mockScript is itself an explicit mock fixture. */
   modelPolicy?: ModelPolicy
@@ -175,6 +188,53 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
 // dispose() owns every mount teardown + the win32 ACL sandbox — never the
 // coordinator lifecycle (this file's close() does) and never the telemetry
 // stream (this file closes it last on every exit path).
+/**
+ * M3 fail-loud: what the process prints when it is about to die from an UNHANDLED
+ * error — the case Node's own reporter covers with a bare stack trace that names
+ * no session, so the reader cannot tell which run broke or how much of it
+ * survived. M3's completion definition asks for exactly that ("一次失敗的執行不需要
+ * 人手讀 JSONL 就能定位").
+ *
+ * The `durable` line is the LOSS CONTRACT, and it is written here because this is
+ * the moment somebody needs it: `session-persistence`'s write-behind batches on a
+ * 200 ms deadline, flushes on `turn/end`, and is drained by `coordinator.close()`
+ * — so everything already flushed survives, and the tail of a turn that was in
+ * flight may not. Measured (see `packages/session-persistence/src/write-behind.ts`
+ * and the runner's onAppend), never assumed.
+ *
+ * Pure and total: a rejection can carry anything, so this takes `unknown` and
+ * never throws.
+ */
+export function crashReport(err: unknown, ctx: { sessionId?: string }): string {
+  const message = err instanceof Error ? err.message : String(err)
+  const frame = err instanceof Error ? err.stack?.split("\n")[1]?.trim() : undefined
+  return [
+    "",
+    "── i-harness crashed ───────────────────────────────────────────",
+    `  session  : ${ctx.sessionId ?? "(no session — the crash preceded session creation)"}`,
+    `  error    : ${message}`,
+    ...(frame !== undefined ? [`  at       : ${frame}`] : []),
+    "",
+    "  durable  : every event already flushed is on disk. The write-behind",
+    "             batches on a 200 ms deadline and flushes at turn end, so the",
+    "             TAIL of a turn that was still running may not be — that is the",
+    "             one part of this run to re-check before resuming it.",
+    "────────────────────────────────────────────────────────────────",
+  ].join("\n")
+}
+
+/**
+ * The session the CURRENT run is working on, for the process-level crash
+ * reporter in `index.ts`.
+ *
+ * A module-level slot, deliberately: the crash handler lives at the process entry
+ * because THAT is where exiting is correct — a library function must not call
+ * `process.exit`. The slot carries the one thing the entry cannot know and the
+ * reader most needs. **Diagnostic only; nothing reads it to make a decision.**
+ */
+let crashSession: string | undefined
+export function diagnosticSessionId(): string | undefined { return crashSession }
+
 export async function runHeadless(task: string, opts: HeadlessOptions): Promise<HeadlessResult> {
   const activeId = opts.resumeSessionId ?? opts.sessionId
   // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
@@ -239,6 +299,18 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+  crashSession = activeId
+  // M3: the abort path. `sdk` and `acp` already had one (`teardown()` wired to
+  // SIGINT/SIGTERM); `run` did not, so an interrupt mid-turn skipped the
+  // `finally` entirely — no dispose, no `coordinator.close()`, and therefore no
+  // drain of the write-behind's pending batch. The signal is composed with a
+  // host-supplied one rather than replacing it: `AbortSignal.any` fires on
+  // whichever aborts first, and neither caller has to know about the other.
+  const abort = new AbortController()
+  const onSignal = (): void => { abort.abort() }
+  process.on("SIGINT", onSignal)
+  process.on("SIGTERM", onSignal)
+  const runSignal = opts.signal !== undefined ? AbortSignal.any([opts.signal, abort.signal]) : abort.signal
   // One registry per hook SOURCE (the harness home's own config, plus each
   // enabled plugin's): `createHookRegistry` takes one config and owns its load,
   // so N sources are N mounts. All of them must see session/start and session/end.
@@ -447,6 +519,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       session,
       agent: assembly.agent,
       inbox: assembly.inbox,
+      // The seam already existed (`SessionExecutorDeps.signal`, checked at the
+      // pump head); nothing had ever passed one.
+      signal: runSignal,
     }))
     registerCommand(assembly.ctx, {
       name: "session-send",
@@ -530,6 +605,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
+    // The handlers come off on EVERY exit path. A run that left them behind
+    // accumulates one pair per invocation, and a host running many sessions
+    // reaches Node's listener warning for reasons unrelated to its own code.
+    process.off("SIGINT", onSignal)
+    process.off("SIGTERM", onSignal)
+    crashSession = undefined // no run is in flight once this one has left
     // session/end fires on EVERY exit path — success and failure alike — the
     // same way the telemetry session/end does. A hook recording session
     // teardown must not be skipped because the run errored, and it must run
