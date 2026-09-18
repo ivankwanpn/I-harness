@@ -83,6 +83,18 @@ per-tool 的 attempt record**（出現的 "attempt" 全是在講鎖的重試）�
 
 > **I2 — 裁決會被寫回去。** 復原做出的判斷**本身**是一個事件。第二次復原**讀到它**，
 > 而不是重新推導一次 —— 所以兩次復原不可能給出不同的答案。
+>
+> **【量測後更正：這一條在 2026-09-18 之前就已經成立了。】**
+> `loadOwned` 已經有 `needsRewrite` ＋ `backend.replaceEvents`：它把修好的 tail **耐久寫回**，
+> 而既有的測試（`loadOwned durably canonicalizes crash recovery before continuation`）
+> 已經用「換一個 coordinator 再載」證明了它。
+>
+> **所以 M4 對 I2 的義務不是「建寫回」，是「證明新的判決也被寫回」。**
+> `491dd10` 之後補了那條測試（`...canonicalizes an OUTCOME-UNKNOWN verdict too`），
+> 而它**第一次就綠** —— 那不是「測試沒用」，是**這一條本來就成立**。
+> 它的牙齒由突變證明：拿掉 `replaceEvents` → `expected '…' to contain 'TOOL_OUTCOME_UNKNOWN'`。
+>
+> **寫在這裡，因為一份把「既有能力」記成「待辦」的 spec，會讓下一個人去建一個已經存在的東西。**
 
 > **I3 — 不確定就是「不確定」。** 一個派人了的工具如果沒有結果，它的裁決是
 > **`outcome-unknown`**，不是任何一種「它沒跑」。**永不自動重跑。**
