@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import { crashReport, runHeadless } from "../src/run.ts"
+import { failureReport, runHeadless } from "../src/run.ts"
 
 // M3, deliverable 2: **fail-loud crash handling and graceful shutdown.**
 //
@@ -100,26 +100,36 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
 // that names no session, so the reader cannot tell WHICH run broke or HOW MUCH of
 // it survived — which is exactly what M3's completion definition asks for ("一次
 // 失敗的執行不需要人手讀 JSONL 就能定位").
-describe("crashReport — a crash names the session and states what survived", () => {
+// M3's diagnose-ability requirement, applied to BOTH ways a run ends badly.
+// Measured before building: the CLI printed `console.error(r.error)` for a
+// failed run — ONE bare line, no session, no context — while an unhandled error
+// got Node's stack trace, also naming no run. They are the same report, so they
+// are the same function.
+describe("failureReport — a run that ends badly says WHICH run and WHAT survived", () => {
   it("names the session, the error, and what the durable log can and cannot hold", () => {
-    const out = crashReport(new Error("kaboom"), { sessionId: "s-shutdown" })
+    const out = failureReport(new Error("kaboom"), { sessionId: "s-shutdown", kind: "failed" })
     expect(out).toContain("s-shutdown")
     expect(out).toContain("kaboom")
-    // THE DIAGNOSE-ABILITY PART: the reader has to learn what is at risk without
-    // reading the JSONL. This sentence is the loss contract, and it had never
-    // been written down anywhere (backlog §6.2).
+    // THE DIAGNOSE-ABILITY PART: the reader learns what is at risk without
+    // reading the JSONL. This is the loss contract, and it had never been
+    // written down anywhere (backlog §6.2).
     expect(out).toMatch(/flush/i)
-    expect(out).toMatch(/tail|未寫|not yet/i)
+    expect(out).toMatch(/tail/i)
   })
 
-  it("says so when the crash preceded any session — never a blank field", () => {
-    const out = crashReport("string failure", {})
+  it("distinguishes a CRASH from a FAILED run — they are different operator events", () => {
+    expect(failureReport(new Error("x"), { sessionId: "s1", kind: "crashed" })).toMatch(/crash/i)
+    expect(failureReport(new Error("x"), { sessionId: "s1", kind: "failed" })).not.toMatch(/crash/i)
+  })
+
+  it("says so when the failure preceded any session — never a blank field", () => {
+    const out = failureReport("string failure", { kind: "crashed" })
     expect(out).toMatch(/no session|before/i)
     expect(out).toContain("string failure")
   })
 
   it("takes a non-Error without throwing (a rejection can carry anything)", () => {
-    expect(() => crashReport({ code: 7 }, { sessionId: "s1" })).not.toThrow()
-    expect(crashReport(undefined, { sessionId: "s1" })).toContain("s1")
+    expect(() => failureReport({ code: 7 }, { sessionId: "s1", kind: "failed" })).not.toThrow()
+    expect(failureReport(undefined, { sessionId: "s1", kind: "failed" })).toContain("s1")
   })
 })

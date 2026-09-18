@@ -28,7 +28,7 @@ import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
-import { crashReport, diagnosticSessionId } from "./run.ts"
+import { failureReport, diagnosticSessionId } from "./run.ts"
 
 // M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
 // instead of as a bare stack trace that names no run — M3's completion definition
@@ -42,7 +42,7 @@ import { crashReport, diagnosticSessionId } from "./run.ts"
 // v15 and `uncaughtException` always was. What changes is what the reader is TOLD.
 for (const event of ["uncaughtException", "unhandledRejection"] as const) {
   process.on(event, (err: unknown) => {
-    console.error(crashReport(err, { sessionId: diagnosticSessionId() }))
+    console.error(failureReport(err, { sessionId: diagnosticSessionId(), kind: "crashed" }))
     process.exit(1)
   })
 }
@@ -348,7 +348,10 @@ export async function main(argv: string[]): Promise<number> {
   if (sessionQuery) opts.sessionQuery = sessionQuery
   return runHeadless(task, opts).then((r) => {
     if (r.finalText) console.log(r.finalText)
-    if (r.error) console.error(r.error)
+    // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
+    // naming no session and saying nothing about what survived. It now gets the
+    // same report an unhandled crash gets, because it is the same question.
+    if (r.error) console.error(failureReport(r.error, { ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}), kind: "failed" }))
     return r.exitCode
   })
 }
