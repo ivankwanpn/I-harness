@@ -12,7 +12,7 @@
 > **一個長 session 不該在不知情的情況下付全額；而當它付的時候，那應該是一個決定，不是意外。**
 
 不是「加 prompt 快取」。是**三件事**：**不要不必要地弄斷**（D1）、**斷了也別多付**（D2）、
-**斷的時候看得到、且知道是誰弄斷的**（D3）。D4 是協議專屬的，D5 是刻意不做。
+**斷的時候看得到、且知道是誰弄斷的**（D3）。D4 只有**顯式斷點的兩條協議線**需要（Anthropic／Bedrock），D5 是刻意不做。
 
 ---
 
@@ -25,9 +25,33 @@
 | **3** | **壓縮恆斷在 index 0**（保留尾巴也一樣），因為 `selectShadowableRange` 從前面走、摘要按 log 順序注入 | 探針 `.superpowers/sdd/probe-prefix-break.mts`；`compaction/src/region.ts:18-40`、`core-session/src/index.ts:489-491` |
 | **4** | **IH 不送任何快取線索** —— 零 `cache_control`、零 `prompt_cache_key` | `grep -rn "cache_control\|prompt_cache\|promptCacheKey" packages apps` → 零命中 |
 | **5** | 壓縮閾值預設 **0.8**，CLI 不覆寫 | `compaction/src/config.ts:106`；`apps/cli/src/index.ts:339` |
+| **6** | **兩條保留尾巴的路徑都會孤兒一個 tool block** —— 邊界逐**事件**算，而 `deriveMessages` 逐**block** 摺 | `compaction/src/index.ts:251`（`slice(-retainLast)`）、`compaction/src/region.ts:29-37`（token 走訪） |
 
 **而 `deriveMessages` 已經在收集被 shadow 的 seq**（`core-session/src/index.ts:419-433`）——
 D3 不需要新機制，只需要把已經算出來的東西說出來。
+
+### 1.1 第 6 條：一個在量 D2 時撞到的**正確性**缺陷
+
+`deriveMessages` 把 `assistant(toolCalls) + tool(result)` 摺成**一個單位**，但兩條「保留尾巴」的路徑
+都是**逐事件**選邊界。切在 block 中間時，被保留的那一半會失去它的另一半 ——
+最常見的形狀是**訊息串列以一個 `tool` 開頭**，而它的 `tool_call` 被 shadow 掉了。
+
+**實測（掃過每一個值，不是抽樣）：**
+
+| 路徑 | 壞掉的值 |
+|---|---|
+| `resetWindow(retainLast)`（M20 預算階梯第 2 層，**預設 20**） | **4／11／18／25**（1..25 之中）—— 正好每隔「每輪事件數」 |
+| `compact()` 帶 `retainTokens`（**出貨設定裡沒有地方設它**） | **50／150／300／900**（500 安全） |
+
+**而「安全」是算術運氣，不是保證** —— 取決於邊界落點對不對得上 block。
+
+**我們把這變成什麼**（`llm-anthropic/src/index.ts:130-132`，實測）：
+一個 `tool` 訊息被映射成 `{role:"user", content:[{type:"tool_result", tool_use_id}]}`
+—— 放在**第一則**，而那個 `tool_use_id` **從來沒有被引入過**。
+（**provider 會拒絕這點是協議知識，這裡沒有量測** —— 量到的是「我們送得出這個形狀」。）
+
+**修法（`b95d1c4` 之後）：邊界往後退，直到它不是 `tool/call` 也不是 `tool/result`。**
+寧可多留，不可切開。**同一條規則用在兩個地方**，因為它們是同一個缺陷的兩扇門。
 
 ---
 
@@ -40,7 +64,7 @@ D3 不需要新機制，只需要把已經算出來的東西說出來。
 Permafrost 在 Claude Code→DeepSeek 上量的）：工具穩定 **~89.6%**、被 MCP 攪動 **~33%**、
 加上確定性排序回到 **~71%**。
 
-**而 IH 現在兩個問題都有**（§1.1）：
+**而 IH 現在兩個問題都有**（§1 第 1 條）：
 
 1. **沒有排序** —— `[...tools.values()]` 是**註冊順序**，取決於外掛掛載與 MCP 連線次序。
    兩次組裝可能產生不同的位元組，而它們本來該一樣。
@@ -62,7 +86,7 @@ Permafrost 在 Claude Code→DeepSeek 上量的）：工具穩定 **~89.6%**、�
 ### D2 — 摘要器停止付全額
 
 **為什麼。** 摘要器讀的是**整個 shadow 區** —— 壓縮當下約**視窗的 80%**，
-是整個 session 裡**單次最大的讀取**。而 IH 現在讓它**完全冷啟動**（§1.2）。
+是整個 session 裡**單次最大的讀取**。而 IH 現在讓它**完全冷啟動**（§1 第 2 條）。
 
 **三家刻意不這樣做：**
 - **grok**：摘要請求帶**同樣的 tools**，指令接在最後 —— *"**Omitting them would shift the entire prefix
@@ -73,15 +97,28 @@ Permafrost 在 Claude Code→DeepSeek 上量的）：工具穩定 **~89.6%**、�
 
 **設計：** 摘要請求做成**上次主請求的 byte-prefix** ＋ 指令以**最後一則 user 訊息**追加。
 
-**⚠️ 但這裡有一個 IH 特有的障礙，必須先量再決定。** IH 現在把 shadow 區**渲染成文字**
-（`renderShadowed` → `deriveSearchText`），所以就算想重用也**對不上位元組**。
-改成真正的前綴會遇到三件事：
-- **(a) 圖片** —— shadow 區可能含圖，而摘要器可能是文字模型（`llm-seam:248-267` 已經有投影，但那是給主路徑的）
-- **(b) `tool_use` / `tool_result` 配對** —— 送真正的訊息陣列就必須維持合法配對
-- **(c) 被改寫過的 thinking block** —— grok 為此有 `strip_reasoning`
+**⚠️ 這裡原本列了三個「必須先量」的障礙。量完了，而答案是：兩個不存在，一個是真的，還有一個沒預料到的。**
 
-**所以 D2 的施工前綴是「量 shadow 區裡有多少 (a)(b)(c)」**，而不是直接改。
-**這是這份設計裡唯一一個「先量再決定要不要做」的項目。**
+| 障礙 | 量測結果 |
+|---|---|
+| **(b) `tool_use`／`tool_result` 配對** | **不存在。** `deriveMessages` 的折疊由 M10a 的 adjacency 規則**保證合法配對** —— 送它送出的陣列就是合法的 |
+| **(c) thinking block** | **不存在。** IH 的訊息投影只有 `user`／`assistant`／`tool`；reasoning 走**另一個陣列**，從不進 messages |
+| **(a) 圖片** | **是真的**，而且是唯一那個。IH 已經有 `llm-seam` 的 `projectImagesForTextModel`，但那個投影是給主路徑的，摘要器要不要沿用是一個決定 |
+
+**⚠️ 而真正會擋住 D2 的是第四件，原本沒寫：**
+
+**shadow 區的訊息只有在「沒有保留尾巴」時才是主請求的 byte-prefix。** 實測（探針 `.superpowers/sdd/probe-summarizer-prefix.mts`）：
+
+```
+無保留尾巴： region 36 則，是主請求的 PREFIX → YES
+有保留尾巴： region 32 則，是 PREFIX → NO，在第 31 則分歧
+```
+
+原因是 `deriveMessages` 把 `assistant(toolCalls) + tool(result)` **摺成一個單位**，
+而邊界是**逐事件**算的。**所以 D2 的前置條件是「邊界必須對齊 tool block」** ——
+而那正好也是 §1.1 那個**正確性缺陷**的修法。**兩件事是同一件。**
+
+**所以 D2 現在的狀態是：前置已具備（見 §1.1），剩下 (a) 圖片那一個決定。**
 
 ### D3 — 「前綴被改寫」變成一個**推導出來的**事實
 
@@ -112,10 +149,21 @@ cc-custom 的設計精髓（本地指紋說為什麼、provider delta 說是不�
 沒改寫卻沒命中 ⇒ 不是我們的錯，是時效或伺服器端。
 （實證層說 DeepSeek 的保留期官方與量測互相矛盾，而**在那個矛盾解決之前，這個區分就是唯一能用的證據**。）
 
-### D4 — 只有 Anthropic 需要：斷點
+### D4 — **顯式斷點協議**需要斷點（不是「Anthropic」）
 
-**現況：IH 送零個 `cache_control`。** 而 Anthropic 的快取**需要顯式斷點** ——
-所以在 Anthropic 上**IH 根本沒有快取可失去**，每一個請求都付全額（調研 §5）。
+**⚠️ 這一節原本寫成「只有 Anthropic 需要」（2026-09-18 更正）。** 那是把**供應商**當成了**協議**。
+正確的切法是**協議**，而 IH 的五條線裡有**兩條**是顯式斷點的：
+
+| 協議 | adapter | 顯式斷點？ |
+|---|---|---|
+| Anthropic Messages | `llm-anthropic` | **是** —— `cache_control` |
+| Bedrock Converse | `llm-bedrock` | **是** —— `cachePoint` |
+| OpenAI Chat Completions | `llm-openai-compatible` | 否（自動前綴匹配） |
+| OpenAI Responses | `llm-openai` | 否（自動；`prompt_cache_key` 是路由提示） |
+| Gemini | `llm-gemini` | 否（隱式） |
+
+**現況：IH 送零個 `cache_control`、零個 `cachePoint`。** 所以在**兩條顯式斷點的線上**，
+**IH 根本沒有快取可失去** —— 每一個請求都付全額（調研 §5）。而另外三條線上 D1／D3 就是全部。
 
 **設計（若 Anthropic 在支援範圍內）：**
 - 照 **opencode 的失效順序**分配：`tools → system → messages`（*"Tools live highest in the cache hierarchy"*）
@@ -142,7 +190,7 @@ cc-custom 的設計精髓（本地指紋說為什麼、provider delta 說是不�
 D1  工具清單：排序 ＋ 尾巴追加      ← 最便宜、有外部數字（2.7×）、而且是推導的
 D3  「被改寫」變成可觀測            ← 它讓 D2 與閾值討論有依據
 D2  摘要器重播前綴                  ← 回報最大，但最侵入 → 先量 (a)(b)(c)
-D4  Anthropic 斷點                  ← 等你的產品決定
+D4  顯式斷點協議（Anthropic／Bedrock）  ← 等你的產品決定
 ```
 
 **D1 先，因為它同時是最便宜與最高槓桿的**（§2.D1），而且它是**推導的保證**：排序一旦寫對，
