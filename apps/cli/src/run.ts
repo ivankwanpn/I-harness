@@ -623,8 +623,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const m = metrics.snapshot()
       const events = Object.entries(m.events).map(([k, v]) => `${k}=${v}`).join(" ")
       const tokens = Object.entries(m.tokens).map(([k, v]) => `${k}=${v}`).join(" ")
+      // M5 T2: the provider's own numbers, NEVER merged with `tokens` above —
+      // that section is our estimate, this one is what the wire said. Read the
+      // two together with `provider/usage` in the event list: that count is the
+      // denominator, and it is what makes a `0` here mean "the provider said
+      // zero" instead of "nothing ever reported".
+      const reported = Object.entries(m.reported).map(([k, v]) => `${k}=${v}`).join(" ")
       const tools = Object.entries(m.tools).map(([k, v]) => `${k}=${v.ok}/${v.ok + v.error}`).join(" ")
-      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
+      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
     }
     emitSessionEnd(0)
     telemetry?.close()

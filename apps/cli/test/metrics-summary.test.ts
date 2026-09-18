@@ -50,4 +50,26 @@ describe("runHeadless — the metrics summary", () => {
     })
     expect(errors.some((line) => line.includes("[metrics]"))).toBe(false)
   }, 30_000)
+
+  // M5 T2. The reader for the provider's OWN numbers. Without it, `reported`
+  // would be an accumulator with a producer and no consumer — the shape the
+  // instrument flags and this repo deletes — and the completion definition
+  // ("快取連續性可從 provider 回報…觀察") would have no observable at all.
+  //
+  // The event COUNT is asserted alongside the values on purpose: it is the
+  // denominator that makes `cacheReadTokens=0` mean "the provider said zero"
+  // rather than "nobody ever reported".
+  it("M5 T2: reports what the PROVIDER said, in its own section, with its count", async () => {
+    await runHeadless("say hi", {
+      workspace: root,
+      telemetry: "jsonl",
+      mockScript: [{ role: "assistant", text: "hi", usage: { inputTokens: 12, cacheReadTokens: 400 } }],
+    })
+    const summary = errors.find((line) => line.includes("[metrics]"))
+    expect(summary).toBeDefined()
+    expect(summary).toMatch(/provider\/usage=1/)
+    expect(summary).toMatch(/reported: [^\n]*cacheReadTokens=400/)
+    // Our estimate keeps its own section — the two facts are never merged.
+    expect(summary).toMatch(/tokens: tokens=/)
+  }, 30_000)
 })

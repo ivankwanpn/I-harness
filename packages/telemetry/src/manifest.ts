@@ -26,6 +26,10 @@ export const TELEMETRY_MANIFEST = [
   { code: "tool/error", domain: "tool", description: "A tool call failed", refs: ["opencode tool/error"] },
   { code: "provider/call", domain: "provider", description: "A provider round-trip began", refs: ["opencode provider/start"] },
   { code: "provider/error", domain: "provider", description: "A provider round-trip failed", refs: ["opencode provider/error"] },
+  // M5 T2: emitted once per round-trip that actually reported usage, so the
+  // event COUNT is the denominator for every number in the payload. No refs —
+  // this code is ours; the five-source audit has no equivalent row for it.
+  { code: "provider/usage", domain: "provider", description: "A provider round-trip reported its own token usage (count = round-trips that reported)" },
   { code: "token/usage", domain: "token", description: "Token usage accounted after a turn", refs: ["opencode token/usage", "codex token/usage"] },
   { code: "retry/start", domain: "retry", description: "A tool retry (guard-retry) started", refs: ["codex retry"] },
   { code: "mcp/server-status", domain: "mcp", description: "MCP server mount/status transition", refs: ["opencode mcp/*"] },

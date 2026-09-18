@@ -193,4 +193,29 @@ describe("createRetryingClient", () => {
     expect(calls()).toBe(2)
     expect(out.text.join("")).toBe("ok")
   })
+
+  // M5 T2. The wrapper sits between the adapter and core-agent, and the retry
+  // is SILENT — core-agent cannot tell two attempts from one round-trip. So a
+  // usage report from an attempt that then DIED must not reach it, or it will
+  // be merged with the successful attempt's and every number will be inflated
+  // by an amount no reader can see. That is worse than no metric at all: a
+  // wrong number that looks like a measurement.
+  //
+  // The attempt below is the realistic shape — Anthropic reports the input side
+  // on message_start, before any content, so a connection that dies early
+  // reports usage and produces nothing else. `produced` stays false, so the
+  // retry is silent and the leak is invisible.
+  it("M5 T2: usage from a FAILED attempt is not leaked into the retry's round-trip", async () => {
+    const reported = { type: "usage", usage: { inputTokens: 1000, cacheReadTokens: 900 } } as const
+    const { client, calls } = steppedModel(
+      () => streamOf([reported, errorEvent("SERVER", "died after reporting")]),
+      () => streamOf([reported, { type: "text/chunk", text: "ok" }, { type: "end" }]),
+    )
+    const retrying = createRetryingClient(client, resolveRetryPolicy({ mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1 } }))
+    const usages: unknown[] = []
+    for await (const ev of retrying.stream(REQ)) if (ev.type === "usage") usages.push(ev.usage)
+    expect(calls()).toBe(2)
+    // ONE round-trip completed → ONE report. Not two.
+    expect(usages).toEqual([{ inputTokens: 1000, cacheReadTokens: 900 }])
+  })
 })
