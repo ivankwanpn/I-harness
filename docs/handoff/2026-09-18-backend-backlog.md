@@ -31,7 +31,7 @@
 |---|---|
 | benchmark harness | ✅ **完成**（`b6e1f02`）—— `pnpm bench` ／ `pnpm verify:bench`；`--self-test` 證明它抓得到 10 倍退化 |
 | in-process 診斷 metrics registry | **不存在** |
-| fail-loud 崩潰處理 ＋ 優雅關閉 | 部分（1 個檔提到 `uncaughtException`／`unhandledRejection`） |
+| fail-loud 崩潰處理 ＋ 優雅關閉 | ✅ **完成**（`ede0850`）—— SIGINT/SIGTERM → abort → 走既有的 `finally`（drain ＋ dispose）；`crashReport` 取代裸堆疊，**並第一次寫下損失契約** |
 | secret redaction | 部分（3 個檔提到 redact） |
 | 本地結構化診斷日誌 | 部分（1 個檔） |
 
@@ -212,11 +212,16 @@ driver 讀什麼、`onDue` 交給誰。**邊接邊發明等於把三個決定拆
 事實：`session-persistence` 的 write-behind 是 **200ms 固定截止**、失敗時**保留批次並暫停自動重試**
 （掛載點 `apps/cli/src/run.ts` 只在 `turn/end` flush）。三份文件都提到它，**沒有一份寫下「崩潰最多掉什麼」。**
 
+> **已完成（`ede0850`）**，而且落在**最需要它的地方**：`crashReport` 的輸出裡。
+> 「已經 flush 的都在磁碟上；write-behind 以 200ms 截止批次、turn 結束時 flush，
+> 所以**還在跑的那一輪的尾端可能沒有** —— 那是續行前唯一要重查的部分。」
+> **契約寫在崩潰報告裡，因為那是有人需要它的那一刻。**
+
 ### 6.3 M3 的五項 —— 建議的順序
 
 ```
 1. benchmark harness        ← ✅ 完成（b6e1f02）
-2. 崩潰處理 ＋ 優雅關閉      ← 唯一「壞掉時會產生錯誤答案」的一項（行程死了、狀態不明）
+2. 崩潰處理 ＋ 優雅關閉      ← ✅ 完成（ede0850）
 3. 本地結構化診斷日誌
 4. secret redaction
 5. metrics registry
