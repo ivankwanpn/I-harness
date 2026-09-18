@@ -248,8 +248,23 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   if (!Number.isInteger(retainLast) || retainLast < 1) {
     throw new Error(`compaction: resetWindow retainLast must be a positive integer (got ${retainLast})`)
   }
+  // M5/D2: the retained tail must not start inside a tool block. deriveMessages
+  // folds assistant(toolCalls) together with its tool(result) messages, but a
+  // "last N events" cut is finer than that fold — a tail beginning at a
+  // `tool/result` keeps a result whose call was just shadowed, and llm-anthropic
+  // renders that as a leading tool_result block with no tool_use. So walk the
+  // cut BACKWARDS (retaining more, never less) until it rests on an event that is
+  // neither half of a call/result pair. Without this, safety depends on
+  // retainLast modulo the events per turn: measured, 4 of the first 25 values
+  // produce an orphaned result.
+  let cut = Math.max(0, session.events.length - retainLast)
+  while (cut > 0) {
+    const at = session.events[cut]!
+    if (at.type !== "tool/call" && at.type !== "tool/result") break
+    cut -= 1
+  }
   const keepSeqs = new Set(
-    session.events.slice(-retainLast).map((e) => e.seq).filter((s): s is number => s !== undefined),
+    session.events.slice(cut).map((e) => e.seq).filter((s): s is number => s !== undefined),
   )
   const removedSeqs: number[] = []
   for (const ev of session.events) {
