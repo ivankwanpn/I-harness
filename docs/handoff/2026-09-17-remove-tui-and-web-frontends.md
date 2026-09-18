@@ -274,6 +274,41 @@ omitting `jobs` silently couples three subagent tests to a module-level shared s
 `createWorkflowJobStore`. The remaining thirteen cannot be retired without weakening an assertion or making
 the API/detector decision named above.
 
+> ### STATUS 2026-09-18 — **17 → 3**
+>
+> The order above was followed. Retired: `WorkspaceRegistry`, `describeDirectory` and `createExecService`
+> (blocker 4, the follow-up order), `SETTINGS_DEFAULTS` (blocker 3 — the detector that blocked it was fixed
+> at `9bd45b9d` and nobody revisited it; see the correction below), and all eleven error classes except one
+> (blocker 1, `661ed0e4` plus the settings one).
+>
+> **Still standing, and both are DECIDED rather than pending:**
+> - `settings#describeSection` + `settings#SettingsConflictError` — the settings UI contract the frontend
+>   removal stranded. Adjudicated 2026-09-18: it **survives the rebuild**, and the shape is affirmed against
+>   three shipping harnesses (Codex's closed union, no per-section view registry anywhere). One allowlist
+>   entry carries the class.
+> - `workflow#createWorkflowJobStore` — blocker 5.
+>
+> **Blocker 5's stated reason is not its real cost, measured 2026-09-18.** This document says "a cross-package
+> repoint with no precedent". The precedent is not what is missing — the cost is **test isolation**:
+>
+> ```ts
+> packages/workflow/src/runner.ts:293   const jobs = deps.jobs ?? sharedJobs
+> ```
+>
+> `jobs` is OPTIONAL and defaults to the process-shared singleton. The tests pass `jobs: createWorkflowJobStore()`
+> precisely to get an isolated store; dropping the export leaves them no way to make one, so every one of them
+> would share `sharedJobs` and contaminate across tests. (`workflow.test.ts:294` and `:315` hold a `store` and
+> drive it directly, so they cannot simply omit the argument.) **That is a worse outcome than one standing row,
+> which is why this one stays** — a different disposition from the same conclusion, and the reason matters
+> because "no precedent" invites someone to go create one.
+>
+> **Also corrected here: the allowlist entry that carried this class is GONE, and that is correct.** Its key
+> was `exec#createExecService`, which retired; the gate then reported it inert ("match no live row -- they
+> exempt nothing") and it was removed. By the file's own mechanic an entry keyed on a representative row is a
+> **dated adjudication of a class**, not an exemption covering it — the remaining members are accepted through
+> the baseline, and the class's documentation lives HERE. **This document is now the only written adjudication
+> of blockers 1 and 5's remainder**; nothing else records why they are accepted.
+
 ---
 
 ## 4. The two un-export shapes — the rule names only one
