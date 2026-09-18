@@ -18,6 +18,54 @@ function events(...types: Array<Partial<SessionEvent> & { type: SessionEvent["ty
   return types as SessionEvent[]
 }
 
+// M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the
+// call; the body runs later, in a batch (core-agent/src/index.ts:261-264). So a
+// `tool/call` with no `tool/result` used to be given ONE verdict —
+// TOOL_ABORTED_BEFORE_DISPATCH — for four possibilities that the log cannot tell
+// apart, **including "dispatched and still running"** (`rm`, `git push`). The
+// model reads that verdict, may re-run the tool, and doubles a side effect.
+//
+// `tool/dispatch` is written before the body starts, so the two are now READ
+// apart instead of guessed apart.
+describe("repairTurnTail — the dispatch boundary (M4)", () => {
+  const syntheticResultCode = (out: SessionEvent[]): unknown =>
+    (out.find((e) => e.type === "tool/result") as { output?: { code?: unknown } } | undefined)?.output?.code
+
+  it("a DISPATCHED tool with no result is outcome-unknown, NEVER 'before dispatch'", () => {
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+      { type: "tool/dispatch", callId: "c1", eventSeq: 1, seq: 2 },
+    ))
+    expect(syntheticResultCode(out)).toBe("TOOL_OUTCOME_UNKNOWN")
+    // THE ASSERTION WITH TEETH: the old verdict must not survive anywhere in the
+    // repaired log — not just not in the code field.
+    expect(JSON.stringify(out)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
+  })
+
+  it("a tool with NO dispatch marker keeps the before-dispatch verdict", () => {
+    // The control, and it is not decoration: an implementation that simply
+    // renamed the constant would pass the case above and be wrong here.
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+    ))
+    expect(syntheticResultCode(out)).toBe("TOOL_ABORTED_BEFORE_DISPATCH")
+  })
+
+  it("one dispatch marker does not change the verdict for a DIFFERENT call", () => {
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+      { type: "tool/dispatch", callId: "c1", eventSeq: 1, seq: 2 },
+      { type: "tool/call", callId: "c2", name: "read", args: {}, seq: 3 },
+    ))
+    const codes = out.filter((e) => e.type === "tool/result")
+      .map((e) => (e as { output?: { code?: unknown } }).output?.code)
+    expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN", "TOOL_ABORTED_BEFORE_DISPATCH"])
+  })
+})
+
 describe("repairTurnTail", () => {
   it("closes an interrupted turn (synthetic step/end + turn/end)", () => {
     const evs = events({ type: "turn/start", seq: 0 }, { type: "assistant/message", text: "x", seq: 1 })

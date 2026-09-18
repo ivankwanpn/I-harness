@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, type Session } from "@i-harness/core-session"
+import { append, createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH } from "../src/index.ts"
 
@@ -34,6 +34,50 @@ function resultsOf(session: Session): { name: string; callId: string }[] {
     .filter((e) => e.type === "tool/result")
     .map((e) => ({ name: (e as { name: string }).name, callId: (e as { callId: string }).callId }))
 }
+
+// M4: the dispatch boundary is made DURABLE.
+//
+// In-process this file ALREADY tracks the boundary precisely — `startedUpTo`
+// advances only after `prepare` succeeds, and the abort synthesis splits
+// [committed, startedUpTo) from [startedUpTo, batch.length), naming only the
+// latter TOOL_ABORTED_BEFORE_DISPATCH. **None of that is durable.** A process that
+// DIES rather than aborting runs neither synthesis site, so the log is later read
+// by `repairTurnTail`, which gives EVERY pending call the same verdict —
+// including the ones that had already run.
+describe("executeToolCalls — the durable dispatch boundary (M4)", () => {
+  const dispatchesOf = (session: Session) => session.events.filter((e) => e.type === "tool/dispatch")
+
+  it("a dispatched call leaves a durable marker carrying the call event's seq", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const t = makeTracker()
+    tools.register(t.makeTool("ok", true, 0))
+    append(session, { type: "tool/call", callId: "c0", name: "ok", args: {} })
+    const callSeq = session.events.findIndex((e) => e.type === "tool/call")
+
+    // `eventSeq` is what the production caller passes (core-agent/src/index.ts:260
+    // captures it BEFORE the append); the marker carries it so recovery can point
+    // back at the call it belongs to.
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "ok", args: {}, eventSeq: callSeq }], { maxParallel: 10 })
+
+    const markers = dispatchesOf(session)
+    expect(markers).toHaveLength(1)
+    expect(markers[0]).toMatchObject({ callId: "c0", eventSeq: callSeq })
+  })
+
+  it("a call whose PREPARE fails leaves NO marker — it never ran, and the log says so", async () => {
+    // The control, and it is the whole contract: the marker must mean "the body
+    // started", never "we tried". An unregistered tool makes `prepare` throw,
+    // which is exactly the never-started case the abort synthesis names.
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "no-such-tool", args: {} }], { maxParallel: 10 })
+      .catch(() => { /* the failure itself is not this test's subject */ })
+    expect(dispatchesOf(session)).toHaveLength(0)
+  })
+})
 
 describe("executeToolCalls scheduler", () => {
   it("commits results in model order even when a later call settles first", async () => {

@@ -13,6 +13,14 @@ export type SessionEvent =
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
+    // M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the
+    // call; the body runs later, in a batch (core-agent/src/index.ts:261-264).
+    // Without this marker a `tool/call` with no `tool/result` is indistinguishable
+    // between "never dispatched" and "dispatched, outcome unknown" — and the two
+    // demand opposite responses. Written BEFORE the body starts.
+    // `callId` is the identity; `eventSeq` is the durable seq of the `tool/call`
+    // it belongs to, present when the caller knows it (the production path does).
+    | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
     | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
     | { type: "step/end"; seq?: number }
     | { type: "turn/end"; seq?: number }
