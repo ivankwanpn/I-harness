@@ -82,6 +82,22 @@ describe("createMetricsSink", () => {
     expect(s.reported).toEqual({ inputTokens: 150, cacheReadTokens: 1200 })
   })
 
+  // M5/D3: the reader for "was the prefix rewritten, and by what". A TALLY, not
+  // a sum — `provider/call` already carries numeric fields (step, messages,
+  // tools) that must never be added up, and the denominator has to be every
+  // request, not just the rewritten ones.
+  it("counts rewritten requests against every request — with the cause of the last one", () => {
+    const m = createMetricsSink()
+    m.onEvent(ev("provider/call", { step: 1, messages: 3, tools: 2 }))
+    m.onEvent(ev("provider/call", { step: 2, messages: 3, tools: 2, prefixRewritten: true, prefixCause: "compaction/summary" }))
+    m.onEvent(ev("provider/call", { step: 3, messages: 4, tools: 2 }))
+    expect(m.snapshot().prefix).toEqual({ requests: 3, rewritten: 1, lastCause: "compaction/summary" })
+    // `tokens`/`reported` must stay untouched by a provider/call — its numbers
+    // are positions, not measurements.
+    expect(m.snapshot().tokens).toEqual({})
+    expect(m.snapshot().reported).toEqual({})
+  })
+
   it("'0 cached' and 'nobody reported' are distinguishable — the count is the denominator", () => {
     // The failure this pins: a summary showing `cacheReadTokens: 0` reads as
     // "the cache did nothing" when the truth may be "no provider ever told us".

@@ -630,7 +630,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // zero" instead of "nothing ever reported".
       const reported = Object.entries(m.reported).map(([k, v]) => `${k}=${v}`).join(" ")
       const tools = Object.entries(m.tools).map(([k, v]) => `${k}=${v.ok}/${v.ok + v.error}`).join(" ")
-      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
+      // M5/D3: rewritten/total, sitting next to the provider's own numbers above
+      // — the CAUSE on the left, the COST on the right.
+      const prefix = m.prefix.requests === 0
+        ? ""
+        : `${m.prefix.rewritten}/${m.prefix.requests}${m.prefix.lastCause === undefined ? "" : ` (${m.prefix.lastCause})`}`
+      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
     }
     emitSessionEnd(0)
     telemetry?.close()
