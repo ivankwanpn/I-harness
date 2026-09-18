@@ -15,6 +15,7 @@ import type { TeamConfig } from "@i-harness/agent-team"
 import { join } from "node:path"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { createHookRegistry, type HookRegistry } from "@i-harness/hooks"
 import { PluginRegistry, toMcpServerConfigs, toSubagentRoles } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
@@ -238,6 +239,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+  let hookRegistry: HookRegistry | undefined
   // M26-D2: the run's serial lane is created below (after the assembly) — the
   // default parent-notify adapter closes over it and is rebound before the run
   // starts; a task completing before the lane exists keeps its outbox row
@@ -387,6 +389,22 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     for (const desc of pluginInputs.commandDescriptors) {
       registerPromptCommand(assembly.ctx, createPromptCommand(desc))
     }
+    // The hooks policy layer — backend middleware, not a UI feature: its
+    // `pre-tool` handler can VETO a tool call (`block:true`), and it reads
+    // `<harness home>/hooks.json`.
+    //
+    // "Default off" needs no flag here: a host with no such file gets zero
+    // handlers, so **the file's existence IS the opt-in**. (A MALFORMED file
+    // still fails the run — the user asked for hooks and the request is
+    // unreadable, which is the repo's fail-loud stance rather than a silent
+    // "policy quietly not applied".)
+    //
+    // `approvals` is deliberately not passed: this mount is the user's OWN
+    // config, which is self-granting under the D1 rule. A plugin's hooks arrive
+    // by another path and DO need the store — see
+    // docs/handoff/2026-09-18-prior-art-survey.md §4.
+    hookRegistry = await createHookRegistry(assembly.ctx)
+    if (activeId !== undefined) await hookRegistry.beginSession(activeId)
   } catch (err) {
     emitSessionEnd(1)
     telemetry?.close()
@@ -492,6 +510,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
   } finally {
+    // session/end fires on EVERY exit path — success and failure alike — the
+    // same way the telemetry session/end does. A hook recording session
+    // teardown must not be skipped because the run errored, and it must run
+    // BEFORE the assembly tears its seams down. A handler failure is reported
+    // rather than rethrown: on the way out it would replace the run's real
+    // outcome with the observer's.
+    if (hookRegistry !== undefined && activeId !== undefined) {
+      await hookRegistry.endSession(activeId).catch((err: unknown) => {
+        console.warn(`[hooks] session/end handler failed: ${err instanceof Error ? err.message : String(err)}`)
+      })
+    }
     // The assembly owns every mount's reverse-order unmount + the win32 ACL
     // sandbox teardown (dispose never throws) — never the coordinator.
     await assembly?.dispose().catch(() => {})

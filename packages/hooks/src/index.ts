@@ -21,6 +21,8 @@ import { assertAllowed, runHookHandler } from "./runner.ts"
 import { resolveHarnessHome } from "@i-harness/harness-home"
 
 export * from "./types.ts"
+import type { HookTrustStore } from "./trust.ts"
+
 // The last two are the user-layer grant surface. They are exported because the
 // rule `loadHooksConfig` enforces is UNSATISFIABLE without them — a non-home
 // handler can only be granted by a store a host constructs, and only located by
@@ -61,6 +63,14 @@ export interface HookRegistryOptions {
   env?: NodeJS.ProcessEnv
   /** Observer-side failure reporter (trust/config/output errors on non-gate events). Default console.warn. */
   report?: (error: unknown) => void
+  /**
+   * The user-layer grant set, threaded to `loadHooksConfig`. Required for any
+   * config that is NOT the harness home's own `hooks.json` — a host mounting
+   * another tree's hooks must supply it, or every handler reads `valid: false`
+   * (fail-closed by omission, which is the intended default and not an error).
+   * The home's own config is self-granting and needs none.
+   */
+  approvals?: HookTrustStore
 }
 
 /** One loaded handler with its load-time trust verdict. */
@@ -319,7 +329,7 @@ export async function createHookRegistry(
   // config — its absence is a hard error); a DEFAULT-derived path simply
   // yields zero handlers (a host that never configured hooks).
   if (existsSync(configPath)) {
-    registry.loaded = await loadHooksConfig(configPath, configDir)
+    registry.loaded = await loadHooksConfig(configPath, configDir, opts.approvals)
   } else if (explicitConfigPath) {
     throw new HookConfigError(`hooks config ${configPath} does not exist (explicit configPath)`)
   }
