@@ -184,6 +184,39 @@ describe("registry wiring (createHookRegistry mounts)", () => {
     await expect(tools.execute({ name: "read", args: { path: "a.txt" } })).resolves.toMatchObject({ name: "read" })
   })
 
+  it("an ungranted declaration is reported ONCE, not once per matching tool call", async () => {
+    await tmpDir()
+    const plugin = await mkdtemp(join(tmpdir(), "i-harness-plugin-"))
+    const script = await writeHandler(plugin, "deny.js", jsonBody({ block: true, reason: "plugin policy" }))
+    const configPath = join(plugin, "hooks", "hooks.json")
+    await mkdir(join(plugin, "hooks"), { recursive: true })
+    await writeFile(configPath, JSON.stringify({
+      version: 1,
+      handlers: [{
+        id: "notice-once", event: "pre-tool", type: "command", matcher: { tool: "read" },
+        command: { cmd: process.execPath, args: [script] },
+        trust: { script, sha256: await sha256File(script) },
+      }],
+    }), "utf8")
+
+    const report = vi.fn()
+    const ctx = createContext()
+    await createHookRegistry(ctx, { configPath, configDir: plugin, report })
+    const tools = makeTools(ctx)
+    // Three matching calls. Unlike a mismatch — which BLOCKS, so the user meets
+    // it at the first call and it cannot repeat unboundedly — an ungranted
+    // declaration lets the run continue and would otherwise report on every
+    // call for the life of the process, with no way to silence it until the
+    // grant UX exists. The fact does not change between calls; saying it once is
+    // the signal, saying it 500 times is noise that trains the reader to ignore
+    // the line that matters.
+    await tools.execute({ name: "read", args: { path: "a.txt" } })
+    await tools.execute({ name: "read", args: { path: "b.txt" } })
+    await tools.execute({ name: "read", args: { path: "c.txt" } })
+    expect(report).toHaveBeenCalledTimes(1)
+    expect(String(report.mock.calls[0]![0])).toMatch(/not approved/i)
+  })
+
   // The other half of the pair above, and it is the half that keeps the fix
   // honest: "ungranted declarations are skipped" passes just as well against an
   // implementation that skips EVERYTHING invalid — which would silently disable
