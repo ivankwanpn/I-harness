@@ -113,6 +113,18 @@ export async function executeToolCalls(
       { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
     )
     startedUpTo = index + 1
+    // M4: make the boundary DURABLE, at the exact point it becomes true. The
+    // in-memory `startedUpTo` above already carries this fact for the abort path;
+    // a process that DIES instead of aborting loses it, and `repairTurnTail` then
+    // gave every pending call the "aborted before dispatch" verdict — including
+    // the ones whose bodies had run, whose side effects a re-run would double.
+    // `append` is the SAME call the tool/result path uses, so this costs one
+    // event and no new store.
+    append(session, {
+      type: "tool/dispatch",
+      callId: call.callId,
+      ...(call.eventSeq !== undefined ? { eventSeq: call.eventSeq } : {}),
+    })
     // M25: tool/start only once the call is REALLY dispatched (after prepare —
     // a prepare failure means the tool never started, mirroring the
     // never-started boundary that abort synthesis relies on).

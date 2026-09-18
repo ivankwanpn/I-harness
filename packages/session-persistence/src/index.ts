@@ -232,6 +232,11 @@ registerEventType("rewind/point")
 // dropped, so `effectiveSandboxMode` still sees the history it was built for.
 registerEventType("sandbox/mode")
 
+// M4: the dispatch boundary (see the type's own note in @i-harness/core-session).
+// Registered so it crosses the guardIgnorable load gate on its own — a log that
+// carries a dispatch marker must still load when only this package is present.
+registerEventType("tool/dispatch")
+
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
