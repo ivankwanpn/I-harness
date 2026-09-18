@@ -80,6 +80,9 @@ importers:
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../../packages/harness-home
+      '@i-harness/hooks':
+        specifier: workspace:*
+        version: link:../../packages/hooks
       '@i-harness/instructions':
         specifier: workspace:*
         version: link:../../packages/instructions

@@ -29,6 +29,7 @@
     "@i-harness/guard-retry": "workspace:*",
     "@i-harness/guard-timeout": "workspace:*",
     "@i-harness/harness-home": "workspace:*",
+    "@i-harness/hooks": "workspace:*",
     "@i-harness/instructions": "workspace:*",
     "@i-harness/interaction": "workspace:*",
     "@i-harness/jobs": "workspace:*",

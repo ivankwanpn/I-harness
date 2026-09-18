@@ -3,9 +3,10 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { createContext } from "@i-harness/core-plugin"
 import type { HooksConfig } from "../src/types.ts"
 import { sha256File } from "../src/trust.ts"
-import { createHookTrustStore, loadHooksConfig, resolveHookTrustPath } from "../src/index.ts"
+import { createHookRegistry, createHookTrustStore, loadHooksConfig, resolveHookTrustPath } from "../src/index.ts"
 
 // D1 of docs/handoff/2026-09-18-prior-art-survey.md: **a declaring layer may
 // declare; only the user layer may grant.**
@@ -102,6 +103,40 @@ describe("a declared hash is a grant only in the home's own config", () => {
 
     const loaded = await loadHooksConfig(configPath, plugin, store)
     expect(loaded[0]!.valid).toBe(false)
+  })
+})
+
+// The MOUNT must carry the store too. `createHookRegistry` loads the config
+// itself, so a host that mounts a non-home config through it needs the grants to
+// reach `loadHooksConfig` — otherwise the rule above holds but nothing can ever
+// satisfy it, and the whole class is only ever denied.
+describe("createHookRegistry threads the approval store", () => {
+  it("a non-home config's handler is valid once approved", async () => {
+    await homeDir()
+    const plugin = await mkdtemp(join(tmpdir(), "i-harness-plugin-"))
+    const { configPath, sha256 } = await declare(plugin, "from-plugin", join("hooks", "hooks.json"))
+
+    const store = createHookTrustStore(resolveHookTrustPath())
+    store.approve({ sha256, script: join(plugin, "from-plugin.mjs"), handlerId: "from-plugin" })
+
+    const registry = await createHookRegistry(createContext(), {
+      configPath,
+      configDir: plugin,
+      approvals: store,
+    })
+    expect(registry.handlers()).toHaveLength(1)
+    expect(registry.handlers()[0]!.valid).toBe(true)
+    expect(registry.handlers()[0]!.trustError).toBeUndefined()
+  })
+
+  it("...and the same mount without the store refuses it (fail-closed by omission)", async () => {
+    await homeDir()
+    const plugin = await mkdtemp(join(tmpdir(), "i-harness-plugin-"))
+    const { configPath } = await declare(plugin, "from-plugin", join("hooks", "hooks.json"))
+
+    const registry = await createHookRegistry(createContext(), { configPath, configDir: plugin })
+    expect(registry.handlers()[0]!.valid).toBe(false)
+    expect(String(registry.handlers()[0]!.trustError)).toMatch(/not approved/i)
   })
 })
 
