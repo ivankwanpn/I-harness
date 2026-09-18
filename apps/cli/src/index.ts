@@ -27,6 +27,7 @@ import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
+import { runHooksCommand } from "./hooks.ts"
 
 // M65 T1: the frontends are gone, so USAGE advertises only the backend
 // surface — and it no longer describes a bare-launch default, because there is
@@ -34,10 +35,11 @@ import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 // `--sandbox read-only|workspace-write|danger-full-access` token is
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
-  "usage: i-harness [<run|sdk|acp|sessions> ...]\n" +
+  "usage: i-harness [<run|sdk|acp|sessions|hooks> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
-  "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N]"
+  "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
+  "  hooks <list|approve|revoke> [sha256]"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -93,6 +95,14 @@ export async function main(argv: string[]): Promise<number> {
   // with the run/sdk/acp paths).
   if (args[0] === "sessions") {
     return runSessionsCommand(args)
+  }
+  // D1's grant surface. The RULE lives in @i-harness/hooks; without a way to
+  // GRANT, a plugin's declared hook was permanently ungranted — so the rule was
+  // complete and unusable. This is the CLI's own reason for existing (the
+  // development/test harness), not a product surface: the frontend will grow its
+  // own, against the same store.
+  if (args[0] === "hooks") {
+    return runHooksCommand(args)
   }
   // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
   // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.
