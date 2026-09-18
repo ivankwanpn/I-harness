@@ -14,7 +14,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
 
 /** The capability dimensions a plugin can advertise. */
-export type Capability = "skills" | "commands" | "mcp" | "agents"
+export type Capability = "skills" | "commands" | "mcp" | "agents" | "hooks"
 
 /** Introspected capabilities of one plugin package on disk. `executable`
  * means the plugin carries its own server entry (package.json exports
@@ -27,6 +27,15 @@ export interface Capabilities {
    * different mount (subagent roles, not the command catalog) and, before it
    * existed here, a plugin shipping only subagents could not be enabled at all. */
   agents: boolean
+  /** hooks/hooks.json — its own dimension for the same reason agents is, and
+   * MEASURED: three plugins in the official marketplace snapshot
+   * (explanatory-output-style, learning-output-style, security-guidance) ship
+   * nothing else, so without it they cannot be enabled at all.
+   *
+   * A FILE, not a directory: an empty hooks/ tree is what a half-copied plugin
+   * leaves behind and must not read as usable — which is why this sniffs
+   * `hooks/hooks.json` while `agents` sniffs the directory. */
+  hooks: boolean
   executable: boolean
 }
 
@@ -41,6 +50,7 @@ export function inspectCapabilities(pluginDir: string): Capabilities {
     commands: existsSync(join(pluginDir, "commands")),
     mcp: existsSync(join(pluginDir, ".mcp.json")),
     agents: existsSync(join(pluginDir, "agents")),
+    hooks: existsSync(join(pluginDir, "hooks", "hooks.json")),
     executable: hasServerEntry(pluginDir),
   }
 }

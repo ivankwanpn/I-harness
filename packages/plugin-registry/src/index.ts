@@ -415,9 +415,12 @@ export class PluginRegistry {
       throw new PluginArtifactError(`install directory is missing for ${JSON.stringify(id)} (${installPath})`)
     }
     const capabilities = inspectCapabilities(installPath)
-    if (!capabilities.skills && !capabilities.commands && !capabilities.mcp && !capabilities.agents) {
+    if (
+      !capabilities.skills && !capabilities.commands && !capabilities.mcp &&
+      !capabilities.agents && !capabilities.hooks
+    ) {
       throw new PluginArtifactError(
-        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/, agents/ or .mcp.json)`,
+        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/, agents/, hooks/hooks.json or .mcp.json)`,
       )
     }
     const conflicts = this.computeConflicts(state, rec, installPath)
@@ -466,6 +469,7 @@ export class PluginRegistry {
     const mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE> = {}
     const commandDescriptors: CommandDescriptor[] = []
     const agentDescriptors: AgentDescriptor[] = []
+    const hookConfigs: string[] = []
     for (const rec of enabled) {
       const skillDir = join(this.root, "skills", rec.id)
       if (existsSync(skillDir)) skillDirs.push(skillDir)
@@ -481,10 +485,17 @@ export class PluginRegistry {
       // agent becomes DATA at mount (a SubagentRole), so copying it into
       // <root>/agents/<id> would create a tree nothing ever reads.
       agentDescriptors.push(...describeAgents(join(this.root, rec.id, "agents")))
+      // Hooks: the PATH only. Same reasoning as agents (read from the installed
+      // copy, no materialized overlay) plus one of its own — the hooks registry
+      // owns the config's load and its fail-closed semantics, so parsing here
+      // would be a second reader of the same file.
+      const hookConfig = join(this.root, rec.id, "hooks", "hooks.json")
+      if (existsSync(hookConfig)) hookConfigs.push(hookConfig)
     }
     commandDescriptors.sort(byNameCompare)
     agentDescriptors.sort(byNameCompare)
-    return { skillDirs, mcpServerConfigs, commandDescriptors, agentDescriptors }
+    hookConfigs.sort()
+    return { skillDirs, mcpServerConfigs, commandDescriptors, agentDescriptors, hookConfigs }
   }
 
   /**

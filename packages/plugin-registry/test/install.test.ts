@@ -58,14 +58,14 @@ function expectManifestInvalid(f: () => void): void {
 }
 
 describe("inspectCapabilities", () => {
-  it("hello fixture: skills + commands, no mcp, no agents, not executable", async () => {
+  it("hello fixture: skills + commands, no mcp, no agents, no hooks, not executable", async () => {
     const dir = await copyPlugin("hello")
-    expect(inspectCapabilities(dir)).toEqual({ skills: true, commands: true, mcp: false, agents: false, executable: false })
+    expect(inspectCapabilities(dir)).toEqual({ skills: true, commands: true, mcp: false, agents: false, hooks: false, executable: false })
   })
 
   it("proxy fixture: mcp only", async () => {
     const dir = await copyPlugin("proxy")
-    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: true, agents: false, executable: false })
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: true, agents: false, hooks: false, executable: false })
   })
 
   it("an agents/ tree is a capability dimension of its own", async () => {
@@ -73,7 +73,25 @@ describe("inspectCapabilities", () => {
     // "no usable capabilities", so the sniff is not cosmetic.
     const dir = await tempDir("inst-agents-")
     await mkdir(join(dir, "agents"), { recursive: true })
-    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: false, agents: true, executable: false })
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: false, agents: true, hooks: false, executable: false })
+  })
+
+  it("a hooks/hooks.json is a capability dimension of its own", async () => {
+    // Same argument, MEASURED: the official snapshot has three plugins whose
+    // ONLY content is hooks/ (explanatory-output-style, learning-output-style,
+    // security-guidance). Without this dimension they cannot be enabled at all.
+    const dir = await tempDir("inst-hooks-")
+    await mkdir(join(dir, "hooks"), { recursive: true })
+    await writeFile(join(dir, "hooks", "hooks.json"), JSON.stringify({ version: 1, handlers: [] }), "utf8")
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: true, executable: false })
+  })
+
+  it("an EMPTY hooks/ dir is not the dimension — the config file is", async () => {
+    // `agents` is a directory sniff; hooks is a FILE. An empty hooks/ tree is
+    // what a half-copied plugin leaves behind, and it must not read as usable.
+    const dir = await tempDir("inst-hooks-empty-")
+    await mkdir(join(dir, "hooks"), { recursive: true })
+    expect(inspectCapabilities(dir).hooks).toBe(false)
   })
 
   it("executable: package.json main or exports['./server'] (JSON.parse only, never loaded)", async () => {
@@ -86,7 +104,7 @@ describe("inspectCapabilities", () => {
     expect(inspectCapabilities(exp).executable).toBe(true)
 
     const bare = await tempDir("inst-none-")
-    expect(inspectCapabilities(bare)).toEqual({ skills: false, commands: false, mcp: false, agents: false, executable: false })
+    expect(inspectCapabilities(bare)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false })
 
     const broken = await tempDir("inst-badpkg-")
     await writeFile(join(broken, "package.json"), "{broken", "utf8")
@@ -96,7 +114,7 @@ describe("inspectCapabilities", () => {
   it("missing directory → all false (safe to inspect an uninstalled id)", async () => {
     const ghost = await tempDir("inst-ghost-")
     await rm(ghost, { recursive: true, force: true })
-    expect(inspectCapabilities(ghost)).toEqual({ skills: false, commands: false, mcp: false, agents: false, executable: false })
+    expect(inspectCapabilities(ghost)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false })
   })
 })
 
@@ -177,7 +195,7 @@ describe("installPlugin", () => {
     const res = await installPlugin(sourceDir, "Marketplace A", "hello", installRoot)
     expect(res.id).toBe("Marketplace A__hello")
     expect(res.installPath).toBe(resolve(join(installRoot, "Marketplace A__hello")))
-    expect(res.capabilities).toEqual({ skills: true, commands: true, mcp: false, agents: false, executable: false })
+    expect(res.capabilities).toEqual({ skills: true, commands: true, mcp: false, agents: false, hooks: false, executable: false })
     const skill = await readFile(join(res.installPath, "skills", "hello", "SKILL.md"), "utf8")
     expect(skill).toContain("A tiny demo skill bundled with the fixture marketplace plugin.")
     expect((await stat(join(res.installPath, "commands", "hello.md"))).isFile()).toBe(true)

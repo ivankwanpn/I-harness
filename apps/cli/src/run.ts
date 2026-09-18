@@ -12,10 +12,10 @@ import type { ParentInputAdmission, SubagentStateSnapshot } from "@i-harness/sub
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import type { LspServerConfig } from "@i-harness/lsp"
 import type { TeamConfig } from "@i-harness/agent-team"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
 import { resolveHarnessHome } from "@i-harness/harness-home"
-import { createHookRegistry, type HookRegistry } from "@i-harness/hooks"
+import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import { PluginRegistry, toMcpServerConfigs, toSubagentRoles } from "@i-harness/plugin-registry"
 import { enterPlanMode } from "@i-harness/plan-mode"
 import { maybeAutoTitle } from "@i-harness/session-title"
@@ -239,7 +239,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
-  let hookRegistry: HookRegistry | undefined
+  // One registry per hook SOURCE (the harness home's own config, plus each
+  // enabled plugin's): `createHookRegistry` takes one config and owns its load,
+  // so N sources are N mounts. All of them must see session/start and session/end.
+  const hookRegistries: HookRegistry[] = []
   // M26-D2: the run's serial lane is created below (after the assembly) — the
   // default parent-notify adapter closes over it and is rebound before the run
   // starts; a task completing before the lane exists keeps its outbox row
@@ -403,8 +406,25 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // config, which is self-granting under the D1 rule. A plugin's hooks arrive
     // by another path and DO need the store — see
     // docs/handoff/2026-09-18-prior-art-survey.md §4.
-    hookRegistry = await createHookRegistry(assembly.ctx)
-    if (activeId !== undefined) await hookRegistry.beginSession(activeId)
+    hookRegistries.push(await createHookRegistry(assembly.ctx))
+
+    // Plugin hooks — a DIFFERENT TREE's config, so under D1 every handler starts
+    // UNGRANTED: skipped and reported once, neither enforced nor allowed to
+    // block, until a user grants that hash. The store is the user-layer one; the
+    // granting UX is the frontend's, so today nothing is granted and nothing
+    // runs. That is the DESIGN, not a gap — "no grant ⇒ no run" is the rule
+    // working, and the declaration is visible in the report rather than silent.
+    const approvals = createHookTrustStore(resolveHookTrustPath())
+    for (const hookConfig of pluginInputs.hookConfigs) {
+      hookRegistries.push(await createHookRegistry(assembly.ctx, {
+        configPath: hookConfig,
+        configDir: dirname(hookConfig),
+        approvals,
+      }))
+    }
+    if (activeId !== undefined) {
+      for (const registry of hookRegistries) await registry.beginSession(activeId)
+    }
   } catch (err) {
     emitSessionEnd(1)
     telemetry?.close()
@@ -516,10 +536,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // BEFORE the assembly tears its seams down. A handler failure is reported
     // rather than rethrown: on the way out it would replace the run's real
     // outcome with the observer's.
-    if (hookRegistry !== undefined && activeId !== undefined) {
-      await hookRegistry.endSession(activeId).catch((err: unknown) => {
-        console.warn(`[hooks] session/end handler failed: ${err instanceof Error ? err.message : String(err)}`)
-      })
+    if (activeId !== undefined) {
+      for (const registry of hookRegistries) {
+        await registry.endSession(activeId).catch((err: unknown) => {
+          console.warn(`[hooks] session/end handler failed: ${err instanceof Error ? err.message : String(err)}`)
+        })
+      }
     }
     // The assembly owns every mount's reverse-order unmount + the win32 ACL
     // sandbox teardown (dispose never throws) — never the coordinator.

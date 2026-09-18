@@ -16,7 +16,7 @@ function record(overrides: Partial<PluginRecord> = {}): PluginRecord {
 }
 
 function caps(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { skills: false, commands: false, mcp: false, agents: false, executable: false, ...overrides }
+  return { skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false, ...overrides }
 }
 
 function obs(overrides: Partial<Observations> = {}): Observations {
@@ -44,6 +44,7 @@ describe("evaluatePlugin", () => {
       commands: "disabled",
       mcp: "disabled",
       agents: "disabled",
+      hooks: "disabled",
       executable: "unsupported",
     })
     expect(r.commandStatuses).toEqual({})
@@ -69,6 +70,7 @@ describe("evaluatePlugin", () => {
       commands: "unsupported",
       mcp: "unsupported",
       agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("failed")
@@ -82,6 +84,16 @@ describe("evaluatePlugin", () => {
     // would otherwise introduce.
     const r = evaluatePlugin(record(), caps({ agents: true }), obs())
     expect(r.capabilities.agents).toBe("ready")
+    expect(r.overall).not.toBe("failed")
+  })
+
+  it("a hooks-only plugin is NOT 'failed' — hooks is a runtime surface too", () => {
+    // Same argument as agents, and measured: three plugins in the official
+    // snapshot ship nothing but hooks/. An enabled one that read "failed"
+    // ("nothing advertised") would be reporting a lie about a plugin the host
+    // is actively running.
+    const r = evaluatePlugin(record(), caps({ hooks: true }), obs())
+    expect(r.capabilities.hooks).toBe("ready")
     expect(r.overall).not.toBe("failed")
   })
 
@@ -117,6 +129,7 @@ describe("evaluatePlugin", () => {
       commands: "pending",
       mcp: "pending",
       agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("initializing")
@@ -302,6 +315,7 @@ describe("evaluatePlugin", () => {
       commands: "unsupported",
       mcp: "unsupported",
       agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("ready")
