@@ -69,6 +69,19 @@ export async function executeToolCalls(
   let committed = 0
   let aborted = opts.signal?.aborted ?? false
   let firstError: unknown
+  // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
+  // path said "drain started (results discarded)" and awaited `allSettled`, so a
+  // failed call left its siblings running — a `bash` still spawning, a fetch
+  // still in flight — threw their results away anyway, and made the caller wait
+  // for the SLOWEST of them before the error surfaced. The roadmap asks for
+  // "可取消", and the mechanism was already there: `prepare` puts the signal on
+  // `prepared.exec.abortSignal` (core-tools:291), so a body can observe it.
+  // Composed with the outer signal rather than replacing it — an abort and a
+  // failure are different events and both must reach the body.
+  const batchAbort = new AbortController()
+  const batchSignal = opts.signal !== undefined
+    ? AbortSignal.any([opts.signal, batchAbort.signal])
+    : batchAbort.signal
 
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
 
@@ -109,7 +122,7 @@ export async function executeToolCalls(
     // TOOL_ABORTED_BEFORE_DISPATCH results).
     const prepared = await tools.prepare(
       { name: call.name, args: call.args },
-      opts.signal,
+      batchSignal,
       { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
     )
     startedUpTo = index + 1
@@ -141,7 +154,14 @@ export async function executeToolCalls(
           ts: Date.now(),
           data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
         })
-        firstError ??= err
+        // M5 T4: on the FIRST failure, cancel the siblings. `abort()` before the
+        // drain below, so `allSettled` returns their cancellations instead of
+        // waiting out their work. Only the first, so a second failure cannot
+        // re-open a channel that is already closed.
+        if (firstError === undefined) {
+          firstError = err
+          batchAbort.abort()
+        }
       })
       .then(() => index)
     inFlight.set(index, promise)
