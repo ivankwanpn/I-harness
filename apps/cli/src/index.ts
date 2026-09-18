@@ -28,6 +28,24 @@ import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
+import { crashReport, diagnosticSessionId } from "./run.ts"
+
+// M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
+// instead of as a bare stack trace that names no run — M3's completion definition
+// is that a failed run can be located "不需要人手讀 JSONL".
+//
+// It lives HERE, at the process entry, because exiting is correct here and is not
+// correct in a library: `runHeadless` publishes the in-flight session id for
+// exactly this reader and must not call `process.exit` itself.
+//
+// Exiting matches Node's own default — `unhandledRejection` has been fatal since
+// v15 and `uncaughtException` always was. What changes is what the reader is TOLD.
+for (const event of ["uncaughtException", "unhandledRejection"] as const) {
+  process.on(event, (err: unknown) => {
+    console.error(crashReport(err, { sessionId: diagnosticSessionId() }))
+    process.exit(1)
+  })
+}
 
 // M65 T1: the frontends are gone, so USAGE advertises only the backend
 // surface — and it no longer describes a bare-launch default, because there is
