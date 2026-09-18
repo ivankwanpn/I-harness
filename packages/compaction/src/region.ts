@@ -31,7 +31,20 @@ export function selectShadowableRange(session: Session, retainTokens: number): n
     if (isCompactionMarker(ev)) continue
     tail += approxTokens(deriveSearchText(ev))
     if (tail >= retainTokens) {
-      firstRetainedSeq = ev.seq ?? i
+      // M5/D2: walk BACK off any tool event before cutting. deriveMessages folds
+      // assistant(toolCalls) together with its tool(result) messages, but this
+      // walk counts events — so a cut on a `tool/result` retains a result whose
+      // call was just shadowed, and llm-anthropic renders that as a tool_result
+      // block with no tool_use. Same rule as resetWindowOnce, same reason.
+      // Measured on a 12-turn tool session: 50/150/300/900 all orphan, while 500
+      // lands on a `tool/call` and survives — by arithmetic, not by design.
+      let j = i
+      while (j > 0) {
+        const at = session.events[j]!
+        if (at.type !== "tool/call" && at.type !== "tool/result") break
+        j -= 1
+      }
+      firstRetainedSeq = session.events[j]!.seq ?? j
       break
     }
   }

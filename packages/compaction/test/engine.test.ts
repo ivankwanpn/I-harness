@@ -272,3 +272,93 @@ describe("compaction engine", () => {
     expect((await engine.maybeCompact(s)).compacted).toBe(false)
   })
 })
+
+// ---------------------------------------------------------------------------
+// M5/D2 — the retained tail must not orphan a tool block.
+//
+// Found by measurement, not by reading: resetWindow "keeps the last retainLast
+// EVENTS", and events are finer than the units deriveMessages folds. Its fold
+// pairs assistant(toolCalls) with the following tool(result) messages, so a
+// boundary that lands INSIDE a block retains a tool result whose call was
+// shadowed away — or an assistant tool_call whose results are gone.
+//
+// What the wire does with that: llm-anthropic maps a `tool` message to
+// `{role:"user", content:[{type:"tool_result", tool_use_id}]}` with no
+// preceding `tool_use`, which the provider rejects. (That rejection is protocol
+// knowledge — it is NOT measured here; what IS measured is that we emit it.)
+//
+// It is reachable from a user-set budget knob (`resetRetainLast`, default 20):
+// whether a given value is safe depends on how it lands modulo the events per
+// turn, which is arithmetic luck rather than a guarantee. The loop below sweeps
+// every value instead of trusting one.
+function assertWellFormed(msgs: ReturnType<typeof deriveMessages>): string | undefined {
+  const introduced = new Set<string>()
+  const closed = new Set<string>()
+  for (const m of msgs) {
+    if (m.role === "assistant" && m.toolCalls !== undefined) {
+      for (const c of m.toolCalls) {
+        if (introduced.has(c.id)) return `tool call ${c.id} introduced twice`
+        introduced.add(c.id)
+      }
+    }
+    if (m.role === "tool") {
+      if (!introduced.has(m.toolCallId)) return `orphan tool result ${m.toolCallId} — its call was shadowed`
+      closed.add(m.toolCallId)
+    }
+  }
+  for (const id of introduced) if (!closed.has(id)) return `dangling tool call ${id} — its result was shadowed`
+  return undefined
+}
+
+function toolSession() {
+  const s = createSession()
+  for (let t = 0; t < 12; t++) {
+    append(s, { type: "step/start" })
+    append(s, { type: "user/message", text: `question ${t}` })
+    append(s, { type: "tool/call", callId: `call_${t}`, name: "read", args: { path: `f${t}.txt` } })
+    // Realistic size. A tiny result makes the token-budget walk land somewhere
+    // else entirely and hides the very boundary this session shape exists to test.
+    append(s, { type: "tool/result", callId: `call_${t}`, name: "read", output: { content: `body ${t} `.repeat(80) } })
+    append(s, { type: "assistant/message", text: `answer ${t}` })
+    append(s, { type: "step/end" })
+    append(s, { type: "turn/end" })
+  }
+  return s
+}
+
+describe("compaction never orphans a tool block (M5/D2)", () => {
+  it("every retained tail is well-formed, for EVERY retainLast — not just the default", async () => {
+    const engine = createCompactionEngine({ model: mockModel("x"), config })
+    const broken: Array<{ retainLast: number; why: string }> = []
+    for (let retainLast = 1; retainLast <= 25; retainLast++) {
+      const s = toolSession()
+      await engine.resetWindow(s, retainLast)
+      const why = assertWellFormed(deriveMessages(s))
+      if (why !== undefined) broken.push({ retainLast, why })
+    }
+    expect(broken).toEqual([])
+  })
+})
+
+describe("compaction with a retained tail is block-aligned too (M5/D2)", () => {
+  it("no retain budget may orphan a tool block — the same cut, reached from compact()", async () => {
+    // selectShadowableRange walks the tail greedily and cuts wherever the token
+    // budget lands, with no notion of a tool block. resetWindowOnce had the same
+    // defect; this is the other door into it.
+    const broken: Array<{ retainTokens: number; why: string }> = []
+    // Measured on this exact shape: 50/150/300/900 each begin the retained tail
+    // on a `tool/result`, whose call is then shadowed away. 500 happens to land
+    // on a `tool/call` — safe only by arithmetic, which is the whole point.
+    for (const retainTokens of [50, 150, 300, 500, 900]) {
+      const s = toolSession()
+      const engine = createCompactionEngine({
+        model: mockModel("## Primary Request and Intent\n- " + "work ".repeat(120)),
+        config: { contextWindow: 1000, thresholdRatio: 0.5, maxTokens: 200, retainTokens },
+      })
+      await engine.compact(s)
+      const why = assertWellFormed(deriveMessages(s))
+      if (why !== undefined) broken.push({ retainTokens, why })
+    }
+    expect(broken).toEqual([])
+  })
+})
