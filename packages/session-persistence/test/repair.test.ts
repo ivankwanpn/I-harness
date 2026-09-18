@@ -327,6 +327,54 @@ describe("repairTurnTail through coordinator.load()", () => {
     }
   })
 
+  // M4: the NEW verdict has to be as durable as the old one, and the machinery
+  // that makes it so already existed (`needsRewrite` + `backend.replaceEvents`).
+  // This test exists because "the write-back happens" was checked for the
+  // before-dispatch verdict and NOT for the unknown-outcome one — the case the
+  // whole milestone is about.
+  it("loadOwned durably canonicalizes an OUTCOME-UNKNOWN verdict too (M4)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-unknown-"))
+    const sessionId = "sess-owned-unknown"
+    try {
+      const header = `{"formatVersion":1,"sessionId":"${sessionId}","createdAt":"2026-09-06T00:00:00.000Z"}`
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        header,
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "rm -rf build" }, seq: 2 }),
+        // THE MARKER: the body started. The log cannot say how it ended.
+        JSON.stringify({ type: "tool/dispatch", callId: "c1", eventSeq: 2, seq: 3 }),
+        "",
+      ].join("\n"), "utf8")
+
+      const first = createSessionCoordinator(createJsonlBackend(dir))
+      const loaded = await first.loadOwned(sessionId)
+      const verdict = loaded.session.events.find((event) => event.type === "tool/result") as
+        | { output?: { code?: string; replay?: boolean } }
+        | undefined
+      expect(verdict?.output?.code).toBe("TOOL_OUTCOME_UNKNOWN")
+      expect(verdict?.output?.replay).toBe(false)
+      await first.close()
+
+      // A SECOND coordinator over the same directory: the verdict must be READ
+      // from the file, not re-derived. Re-deriving would be the failure I2 names.
+      const second = createSessionCoordinator(createJsonlBackend(dir))
+      const reloaded = await second.loadOwned(sessionId)
+      const codes = reloaded.session.events
+        .filter((event) => event.type === "tool/result")
+        .map((event) => (event.output as { code?: string }).code)
+      expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN"])
+      await second.close()
+
+      // And it is on DISK, not only in the objects returned.
+      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")
+      expect(raw).toContain("TOOL_OUTCOME_UNKNOWN")
+      expect(raw).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it("loadOwned refuses a non-positional established sequence instead of renumbering references", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ih-repair-seq-ref-"))
     const sessionId = "sess-seq-ref"
