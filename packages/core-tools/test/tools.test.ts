@@ -21,6 +21,48 @@ describe("tool registry", () => {
     expect(reg.schemas().map((s) => s.name)).toEqual(["read"])
   })
 
+  // M5 / D1 — the tool array is the FIRST thing in the cached prompt, so any
+  // change to it is a cache break at byte 0: the whole prompt, not just the tool
+  // span. Measured externally (Claude Code → DeepSeek): ~89.6% hit rate with a
+  // stable tool list, ~33% while MCP servers churn it, ~71% once sorting is
+  // deterministic. These two tests pin the two ways IH could churn it.
+  const tool = (name: string, exposure?: Tool["exposure"]): Tool => ({
+    name,
+    description: `d-${name}`,
+    inputSchema: { type: "object" },
+    ...(exposure !== undefined ? { exposure } : {}),
+    execute: async () => ({}),
+  })
+
+  it("M5/D1: the schema list does not depend on REGISTRATION order", () => {
+    const build = (order: string[]): string => {
+      const reg = createToolRegistry(makeCtx())
+      for (const n of order) reg.register(tool(n))
+      return JSON.stringify(reg.schemas())
+    }
+    // Same set of tools, two mount orders. The bytes the model sees must match,
+    // or two assemblies of the same session disagree about the prefix.
+    expect(build(["read", "bash", "edit"])).toBe(build(["edit", "read", "bash"]))
+  })
+
+  it("M5/D1: promoting a deferred tool APPENDS — it must not shift the tools already sent", () => {
+    const reg = createToolRegistry(makeCtx())
+    // Registered BEFORE a direct tool, which is the realistic mount shape for
+    // MCP/discovered tools. Insertion order would put it in front of `read`.
+    reg.register(tool("a-deferred", "deferred"))
+    reg.register(tool("read", "direct"))
+    const before = reg.schemas().map((s) => s.name)
+    expect(before).toEqual(["read"])
+
+    reg.installSearch(() => [{ name: "a-deferred", description: "d-a-deferred", inputSchema: {}, exposure: "deferred" }])
+    reg.search("a")
+
+    const after = reg.schemas().map((s) => s.name)
+    // The prefix already sent must survive verbatim; the promotion is an append.
+    expect(after.slice(0, before.length)).toEqual(before)
+    expect(after).toEqual(["read", "a-deferred"])
+  })
+
   it("throws on same-layer duplicate tool name (audit F03-5)", () => {
     const ctx = makeCtx()
     const reg = createToolRegistry(ctx)

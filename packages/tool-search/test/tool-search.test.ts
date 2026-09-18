@@ -29,11 +29,13 @@ describe("tool_search registration", () => {
     const output = result.output as { matches: ToolSchema[]; totalDeferred: number }
     expect(output.matches.map((m) => m.name)).toEqual(["grep"])
     expect(output.totalDeferred).toBe(1)
-    // promoted: next schemas() includes grep
-    // NOTE: schemas() preserves registration order (direct + promoted deferred
-    // filtered in place) — the brief's original assertion assumed a
-    // direct-then-promoted ordering that core-tools (Task 1) does not provide.
-    expect(reg.schemas().map((s) => s.name)).toEqual(["grep", "read", toolSearchName])
+    // promoted: next schemas() includes grep.
+    // M5/D1: direct tools sort first BY NAME, promoted deferred ones follow —
+    // which is exactly the direct-then-promoted ordering this file's original
+    // assertion wanted and could not get (that is the NOTE this replaced). The
+    // append-only shape is the point: a promotion must not shift the tools
+    // already sent, because tools are the FIRST thing in the cached prompt.
+    expect(reg.schemas().map((s) => s.name)).toEqual(["read", toolSearchName, "grep"])
   })
 
   it("select: query promotes exactly the selected tools", async () => {
@@ -46,8 +48,9 @@ describe("tool_search registration", () => {
     const result = await reg.execute({ name: toolSearchName, args: { query: "select:grep" } })
     const output = result.output as { matches: ToolSchema[] }
     expect(output.matches.map((m) => m.name)).toEqual(["grep"])
-    // registration order: grep (deferred, promoted), write (deferred, not promoted), tool_search (direct)
-    expect(reg.schemas().map((s) => s.name)).toEqual(["grep", toolSearchName])
+    // M5/D1: direct first (tool_search), then the promoted deferred one (grep).
+    // write stays deferred and unpromoted, so it is absent either way.
+    expect(reg.schemas().map((s) => s.name)).toEqual([toolSearchName, "grep"])
   })
 
   it("hidden tools never appear in matches or schemas()", async () => {

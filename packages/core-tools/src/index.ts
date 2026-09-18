@@ -199,8 +199,24 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   function schemas(): ToolSchema[] {
     // Hidden tools never surface in schemas(); deferred tools surface only
     // after promotion via search().
+    //
+    // M5/D1: the tool array is the FIRST thing in the cached prompt, so a change
+    // to it is a cache break at byte 0 — the WHOLE prompt, not just the tool
+    // span. Two ways it could churn, both closed here:
+    //   1. Map insertion order is mount order (plugin load, MCP connect), so two
+    //      assemblies of the same session could disagree. Sorting makes the
+    //      array a function of its CONTENTS, not of when things registered.
+    //   2. Promotion used to insert a deferred tool at its registration index,
+    //      shifting every tool after it. Ranking deferred ones last makes
+    //      promotion an APPEND, so what was already sent stays byte-identical.
+    // Compared by code unit, not `localeCompare`: the latter follows the host's
+    // locale/ICU, which would reintroduce machine-dependent bytes.
     return [...tools.values()]
       .filter((t) => t.exposure !== "hidden" && (t.exposure !== "deferred" || promoted.has(t.name)))
+      .sort((a, b) => {
+        const rank = (t: Tool): number => (t.exposure === "deferred" ? 1 : 0)
+        return rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      })
       .map((t) => ({
         name: t.name,
         description: t.description,
