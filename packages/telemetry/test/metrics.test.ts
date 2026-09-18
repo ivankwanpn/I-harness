@@ -67,4 +67,36 @@ describe("createMetricsSink", () => {
     m.onEvent(ev("token/usage", { input: "not-a-number", output: null }))
     expect(m.snapshot().tokens).toEqual({ input: 100 })
   })
+
+  // T2 (M5): the provider's REPORT and our own ESTIMATE are two different facts.
+  // `token/usage` carries `activeTokens` — a heuristic over the derived surface.
+  // `provider/usage` carries what the wire actually said. Putting them in one bag
+  // would erase the only distinction the milestone exists to make.
+  it("accumulates provider-REPORTED usage in its own section, never with our estimate", () => {
+    const m = createMetricsSink()
+    m.onEvent(ev("token/usage", { tokens: 1000 }))
+    m.onEvent(ev("provider/usage", { inputTokens: 100, cacheReadTokens: 900 }))
+    m.onEvent(ev("provider/usage", { inputTokens: 50, cacheReadTokens: 300 }))
+    const s = m.snapshot()
+    expect(s.tokens).toEqual({ tokens: 1000 })
+    expect(s.reported).toEqual({ inputTokens: 150, cacheReadTokens: 1200 })
+  })
+
+  it("'0 cached' and 'nobody reported' are distinguishable — the count is the denominator", () => {
+    // The failure this pins: a summary showing `cacheReadTokens: 0` reads as
+    // "the cache did nothing" when the truth may be "no provider ever told us".
+    // That is the vacuous-detector shape — a check that passes because it never
+    // ran. The denominator is the event count, and an unreported field is ABSENT
+    // rather than zero.
+    const reportedZero = createMetricsSink()
+    reportedZero.onEvent(ev("provider/usage", { cacheReadTokens: 0 }))
+    const a = reportedZero.snapshot()
+    expect(a.events["provider/usage"]).toBe(1)
+    expect(a.reported.cacheReadTokens).toBe(0)
+
+    const nobodyReported = createMetricsSink()
+    const b = nobodyReported.snapshot()
+    expect(b.events["provider/usage"] ?? 0).toBe(0)
+    expect("cacheReadTokens" in b.reported).toBe(false)
+  })
 })

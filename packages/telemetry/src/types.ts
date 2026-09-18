@@ -13,6 +13,9 @@ export type TelemetryEventType =
   | "tool/error"
   | "provider/call"
   | "provider/error"
+  // M5 T2: the provider's OWN usage report for one round-trip — a fact, kept
+  // apart from `token/usage`, which carries our estimate of the same surface.
+  | "provider/usage"
   | "token/usage"
   | "retry/start"
   | "error"

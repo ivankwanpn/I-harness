@@ -241,6 +241,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
 
       let stepText = ""
       let toolCallsThisStep = 0
+      // M5 T2: the provider's own usage report for THIS round-trip. Merged
+      // rather than overwritten, because one request can report twice and each
+      // report carries only its own fields.
+      const stepUsage: Record<string, number> = {}
       const batch: BatchCall[] = []
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
@@ -265,12 +269,31 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             toolCallsThisStep += 1
             break
           }
+          case "usage":
+            // M5 T2. This `case` is the ONLY thing that turns a provider report
+            // into something the host can see: the switch has no default and no
+            // exhaustiveness assert, so without it the event is dropped in
+            // silence — the run looks perfect and the numbers are simply absent.
+            for (const [field, value] of Object.entries(ev.usage)) {
+              if (typeof value === "number") stepUsage[field] = value
+            }
+            break
           case "error":
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
             break
         }
+      }
+
+      // M5 T2: emitted ONLY on a completed round-trip, and only if something was
+      // actually reported. The event count is the denominator for every number
+      // in it, so a round-trip that died mid-stream must not report: llm-seam's
+      // retry wrapper is silent, and an attempt that failed and was retried
+      // would otherwise be counted as its own reported request. No report at all
+      // is the honest outcome — absent is not zero.
+      if (Object.keys(stepUsage).length > 0) {
+        deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
       }
 
       if (batch.length > 0) {

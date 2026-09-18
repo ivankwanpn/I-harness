@@ -2,10 +2,36 @@ import { setTimeout as delay } from "node:timers/promises"
 import type { LLMMessage, Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
 
+/**
+ * M5 T2: the provider's OWN usage report for one round-trip.
+ *
+ * Every field is optional, and **absent stays distinguishable from zero** — a
+ * provider that never mentions the cache must not produce `cacheReadTokens: 0`,
+ * because that reads as a measurement. Adapters report what the wire said, when
+ * it said it; a single request may report twice (Anthropic's `message_start`
+ * carries the input side and `message_delta` the output side), and the CONSUMER
+ * merges. Adapters therefore hold no buffering state of their own.
+ *
+ * These are native field NAMES normalized once, not a semantic model of the
+ * cache: the roadmap's Q3 forbids inventing a unified "epoch", and nothing here
+ * derives one. This is the same job the seam already does for `text/chunk` and
+ * `tool_call` across five wire protocols. Note also that nothing is ever summed
+ * into a total — the protocols disagree about whether `input` already includes
+ * cache (Anthropic's `input_tokens` does not), so a total would be a wrong
+ * number rather than a convenient one.
+ */
+export interface LLMUsage {
+  inputTokens?: number
+  outputTokens?: number
+  cacheReadTokens?: number
+  cacheCreationTokens?: number
+}
+
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; call: { name: string; args: unknown } }
+  | { type: "usage"; usage: LLMUsage }
   | { type: "end" }
   | { type: "error"; error: Error }
 
@@ -152,9 +178,21 @@ export function createRetryingClient(client: ModelClient, policy: ResolvedRetryP
       let produced = false
       let failure: unknown // set by an error event or a throw
       let failureEvent: { type: "error"; error: Error } | undefined // set only by an error event
+      // M5 T2: a usage report describes a COMPLETED round-trip, so it is held
+      // until the attempt proves it finished. This wrapper's retry is silent —
+      // core-agent cannot tell two attempts from one round-trip — so releasing
+      // a dead attempt's report would merge it with the successful attempt's
+      // and inflate every number with no trace. Holding costs one array; the
+      // alternative is a wrong number that reads as a measurement. Fresh per
+      // attempt, so a retry never inherits the previous one's.
+      const pendingUsage: LLMStreamEvent[] = []
       try {
         for await (const ev of client.stream(request)) {
           if (ev.type === "text/chunk" || ev.type === "reasoning" || ev.type === "tool_call") produced = true
+          if (ev.type === "usage") {
+            pendingUsage.push(ev)
+            continue
+          }
           if (ev.type === "error") {
             // Provider signaled failure via an error EVENT. It is a terminal
             // event for the attempt: stop consuming (don't leak events after
@@ -163,15 +201,22 @@ export function createRetryingClient(client: ModelClient, policy: ResolvedRetryP
             failureEvent = ev
             break
           }
+          if (ev.type === "end") {
+            yield* pendingUsage // the attempt completed → its report is real
+            yield ev
+            return
+          }
           yield ev
-          if (ev.type === "end") return // attempt completed normally
         }
         // Fall through: normal completion (no failure) or an error event broke
         // the attempt out of the for-await — both handled below.
       } catch (err) {
         failure = err // provider signaled failure via a THROW
       }
-      if (failure === undefined && failureEvent === undefined) return // completed normally
+      if (failure === undefined && failureEvent === undefined) {
+        yield* pendingUsage // completed normally without an explicit `end`
+        return
+      }
       const code = retryErrorCode(failure ?? failureEvent!.error)
       const retryable = policy.mode === "always" || (policy.mode === "normal" && policy.retryableCodes.includes(code ?? ""))
       const budgetExhausted = policy.mode === "normal" && attemptNo > policy.maxRetries
