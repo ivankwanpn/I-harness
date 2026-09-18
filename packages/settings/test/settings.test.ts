@@ -7,27 +7,38 @@ import {
   mutateSection,
   normalizeSettings,
   resolveSettingsPath,
-  SETTINGS_DEFAULTS,
 } from "../src/index.ts"
 
 async function tmpRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ih-settings-"))
 }
 
+/** The defaults, obtained through the PUBLIC api.
+ *
+ * `DEFAULTS` used to be exported and the tests named it directly. It is
+ * module-private now (nothing outside `index.ts` ever read it in production),
+ * and `normalizeSettings` is the sanctioned way to the same values — it is pure,
+ * so a module-scope constant is safe. */
+const DEFAULTS = normalizeSettings(undefined)
+
 describe("normalizeSettings", () => {
   it("falls back to defaults for a non-object / corrupt input", () => {
-    expect(normalizeSettings(undefined)).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings(null)).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings("junk")).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings([])).toEqual(SETTINGS_DEFAULTS)
+    // `undefined` is deliberately NOT asserted here: it IS the reference the
+    // other three are compared against, so `expect(normalizeSettings(undefined))
+    // .toEqual(DEFAULTS)` would be `expect(X).toEqual(X)`. Dropping it costs no
+    // coverage — it never tested anything — and keeping it would have meant
+    // keeping a public export alive to avoid noticing that.
+    expect(normalizeSettings(null)).toEqual(DEFAULTS)
+    expect(normalizeSettings("junk")).toEqual(DEFAULTS)
+    expect(normalizeSettings([])).toEqual(DEFAULTS)
   })
 
   it("empty state has NO model defaults anywhere (amendment: no seeded model)", () => {
     // core.model = "" = unset; llm.defaultModel = {provider:"",model:""} = unset;
     // old files that carry values keep them (no migration chain) — see the
     // preservation test below.
-    expect(SETTINGS_DEFAULTS.model).toBe("")
-    expect(SETTINGS_DEFAULTS.llm.defaultModel).toEqual({ provider: "", model: "" })
+    expect(DEFAULTS.model).toBe("")
+    expect(DEFAULTS.llm.defaultModel).toEqual({ provider: "", model: "" })
     expect(normalizeSettings(undefined).model).toBe("")
     expect(normalizeSettings(undefined).llm.defaultModel).toEqual({ provider: "", model: "" })
     // an old file with values keeps them verbatim at read (no migration writes)
@@ -42,8 +53,8 @@ describe("normalizeSettings", () => {
     expect(s.fontSize).toBe(16)
     expect(s.plugins.bash).toBe(false)
     // untouched fields stay at defaults
-    expect(s.plugins.agentLoop).toBe(SETTINGS_DEFAULTS.plugins.agentLoop)
-    expect(s.model).toBe(SETTINGS_DEFAULTS.model)
+    expect(s.plugins.agentLoop).toBe(DEFAULTS.plugins.agentLoop)
+    expect(s.model).toBe(DEFAULTS.model)
   })
 
   it("rejects out-of-range / wrong-typed values with fallbacks", () => {
@@ -61,8 +72,8 @@ describe("normalizeSettings", () => {
   })
 
   it("tui.prefs.dashboard + statusLine (Task 13, spec §9.2): defaults, valid parse, corrupt degrade", () => {
-    expect(SETTINGS_DEFAULTS.tui.prefs.dashboard).toEqual({ order: [] })
-    expect(SETTINGS_DEFAULTS.tui.prefs.statusLine).toEqual({
+    expect(DEFAULTS.tui.prefs.dashboard).toEqual({ order: [] })
+    expect(DEFAULTS.tui.prefs.statusLine).toEqual({
       mode: "builtin",
       items: ["cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks"],
     })
@@ -101,7 +112,7 @@ describe("normalizeSettings", () => {
   })
 
   it("searchBackend (Task 1.2): defaults to jsonl, accepts sqlite, rejects unknowns", () => {
-    expect(SETTINGS_DEFAULTS.searchBackend).toBe("jsonl")
+    expect(DEFAULTS.searchBackend).toBe("jsonl")
     expect(normalizeSettings({ searchBackend: "sqlite" }).searchBackend).toBe("sqlite")
     expect(normalizeSettings(undefined).searchBackend).toBe("jsonl")
   })
@@ -398,7 +409,7 @@ describe("SettingsStore", () => {
     const root = await tmpRoot()
     const store = new SettingsStore({ path: join(root, "settings.json") })
     const s = await store.load()
-    expect(s).toEqual(SETTINGS_DEFAULTS)
+    expect(s).toEqual(DEFAULTS)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -413,7 +424,7 @@ describe("SettingsStore", () => {
     expect(s.sandboxMode).toBe("read-only")
     expect(s.fontSize).toBe(16)
     expect(s.searchBackend).toBe("sqlite")
-    expect(s.model).toBe(SETTINGS_DEFAULTS.model)
+    expect(s.model).toBe(DEFAULTS.model)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -425,7 +436,7 @@ describe("SettingsStore", () => {
     await store.set({ fontSize: 16 })
     await store.reset()
     const s = store.get()
-    expect(s.fontSize).toBe(SETTINGS_DEFAULTS.fontSize)
+    expect(s.fontSize).toBe(DEFAULTS.fontSize)
     await rm(root, { recursive: true, force: true })
   })
 

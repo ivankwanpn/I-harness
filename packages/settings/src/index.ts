@@ -233,7 +233,12 @@ export interface SettingsCompaction {
   auto: boolean
 }
 
-export const SETTINGS_DEFAULTS: Settings = {
+// NOT exported (2026-09-18): nothing outside this module names it, and
+// `normalizeSettings` is the public way to obtain the same values — which is
+// what the three test files that used it as an oracle now do. The row this
+// retires was blocked for months by a mis-stated reason; see the correction in
+// docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
+const SETTINGS_DEFAULTS: Settings = {
   sandboxMode: "workspace-write",
   // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
   // and its designed ladder: layer 1 is pressure compaction at 80% of the window,
