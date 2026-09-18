@@ -429,6 +429,21 @@ export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
   return { markers, hiddenSeqs, ...(lastCause !== undefined ? { lastCause } : {}) }
 }
 
+/** M5/D2: the projection as of a PREFIX of the log — `maxSeq` inclusive.
+ *
+ * The summarizer uses this to send a byte-prefix of the last main request, so
+ * its own call can reuse the provider's cache instead of paying full price for
+ * the whole conversation. Built through the SAME fold as deriveMessages, so the
+ * two cannot drift; that identity is the entire reason the cache can hit.
+ *
+ * Correct only when the cut is block-aligned — a boundary inside a tool block
+ * would project a different message list here than the main path sends. The
+ * compaction module guarantees that by walking its boundary off tool events.
+ */
+export function deriveMessagesUpTo(session: Session, maxSeq: number): LLMMessage[] {
+  return deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })
+}
+
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []
   // A tool block is one step of assistant toolCalls followed by its tool

@@ -131,7 +131,22 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
-  const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
+  // M5/D2: the agent is the only layer that knows the shape the model sees, so
+  // it hands the engine a getter — read at compact time, matching the LAST
+  // request rather than whatever was true at construction. Without this the
+  // summarizer falls back to its text form and the whole conversation is re-read
+  // at full price; with it, the call is a byte-prefix of the main request and the
+  // provider's cache serves it.
+  const compactor = deps.compact
+    ? createCompactionEngine({
+        model: deps.model,
+        config: deps.compact,
+        requestShape: () => ({
+          systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+          tools: deps.tools.schemas(),
+        }),
+      })
+    : undefined
   const compactEnabled = deps.compact?.auto ?? true
   // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
   // at creation above); the default matches the engine convention.

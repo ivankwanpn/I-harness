@@ -1,4 +1,4 @@
-import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
+import type { LLMMessage, LLMRequest, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import { approxTokens } from "./tokens.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
@@ -86,6 +86,11 @@ export function buildSummaryPrompt(
   shadowText: string,
   previousSummary?: string,
   instructions?: string,
+  // M5/D2: when the caller replays the region as REAL messages, the shadow text
+  // is already in the request — embedding it again would duplicate the whole
+  // conversation AND be pointless. The template still derives its sensitive-line
+  // prefill from `shadowText`, so that M33 behaviour is preserved either way.
+  opts?: { embedText?: boolean },
 ): string {
   const parts: string[] = [
     "You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.",
@@ -104,7 +109,7 @@ export function buildSummaryPrompt(
   if (instructions !== undefined && instructions.trim().length > 0) {
     parts.push("", "## User instructions (they take priority over the template):", instructions)
   }
-  parts.push("", shadowText)
+  if (opts?.embedText ?? true) parts.push("", shadowText)
   return parts.join("\n")
 }
 
@@ -160,6 +165,11 @@ export async function summarizeWithModel(
   instructions?: string,
   minSummaryChars = 500,
   attemptsTracker?: { count: number }, // optional: model-call count even when the pass throws
+  // M5/D2: the shape the main loop sends. Present → this request is a byte-prefix
+  // of the last main request, so the provider's cache can serve the whole
+  // conversation instead of charging full price for it. Absent → the legacy
+  // single-message text form, unchanged.
+  prefix?: { systemPrompt: string; tools: ToolSchema[]; messages: LLMMessage[] },
 ): Promise<{ text: string; attempts: number }> {
   let attempts = 0
   let lastLength = 0
@@ -167,11 +177,11 @@ export async function summarizeWithModel(
   for (let round = 0; round < 2; round++) {
     attempts += 1
     attemptsTrackerOut.count += 1
-    const request: LLMRequest = {
-      messages: [{ role: "user", content: buildSummaryPrompt(replayText, previousSummary, instructions) }],
-      tools: [],
-      systemPrompt: "",
-    }
+    const directive = buildSummaryPrompt(replayText, previousSummary, instructions, { embedText: prefix === undefined })
+    const request: LLMRequest =
+      prefix === undefined
+        ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
+        : { messages: [...prefix.messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
     let out = ""
     for await (const ev of model.stream(request)) {
       if (ev.type === "text/chunk") out += ev.text
