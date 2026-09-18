@@ -162,6 +162,10 @@ export interface HeadlessResult {
   exitCode: number
   error?: string
   session?: Session // NEW: session events so tests can assert guard outcomes
+  /** The session this run worked on, so a caller can NAME it when reporting a
+   * failure (M3's diagnose-ability). Absent when the caller supplied no id and
+   * none was generated. */
+  sessionId?: string
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -189,29 +193,36 @@ function isSubagentStateSnapshot(doc: unknown): doc is SubagentStateSnapshot {
 // coordinator lifecycle (this file's close() does) and never the telemetry
 // stream (this file closes it last on every exit path).
 /**
- * M3 fail-loud: what the process prints when it is about to die from an UNHANDLED
- * error — the case Node's own reporter covers with a bare stack trace that names
- * no session, so the reader cannot tell which run broke or how much of it
- * survived. M3's completion definition asks for exactly that ("一次失敗的執行不需要
- * 人手讀 JSONL 就能定位").
+ * M3 fail-loud / diagnosability: what a run that ends badly TELLS the operator.
  *
- * The `durable` line is the LOSS CONTRACT, and it is written here because this is
- * the moment somebody needs it: `session-persistence`'s write-behind batches on a
- * 200 ms deadline, flushes on `turn/end`, and is drained by `coordinator.close()`
- * — so everything already flushed survives, and the tail of a turn that was in
- * flight may not. Measured (see `packages/session-persistence/src/write-behind.ts`
- * and the runner's onAppend), never assumed.
+ * ONE report for the two ways it happens, because they are the same question —
+ * "which run, and what survived?" — and they were answered differently and badly:
+ *
+ *   - a run that returned `{exitCode: 1, error}` printed `console.error(r.error)`:
+ *     ONE bare line, no session, no context (`apps/cli/src/index.ts`);
+ *   - an UNHANDLED error got Node's own reporter: a stack trace that names no run
+ *     at all.
+ *
+ * M3's completion definition is that a failed run can be located "不需要人手讀
+ * JSONL" — which is exactly the `session` and `durable` lines.
+ *
+ * The `durable` line is the LOSS CONTRACT, written here because this is the moment
+ * somebody needs it: `session-persistence`'s write-behind batches on a 200 ms
+ * deadline, flushes on `turn/end`, and is drained by `coordinator.close()` — so
+ * everything already flushed survives and the tail of the in-flight turn may not.
+ * Measured (write-behind.ts + the runner's onAppend), never assumed.
  *
  * Pure and total: a rejection can carry anything, so this takes `unknown` and
  * never throws.
  */
-export function crashReport(err: unknown, ctx: { sessionId?: string }): string {
+export function failureReport(err: unknown, ctx: { sessionId?: string; kind: "crashed" | "failed" }): string {
   const message = err instanceof Error ? err.message : String(err)
   const frame = err instanceof Error ? err.stack?.split("\n")[1]?.trim() : undefined
+  const headline = ctx.kind === "crashed" ? "i-harness crashed" : "i-harness run did not finish"
   return [
     "",
-    "── i-harness crashed ───────────────────────────────────────────",
-    `  session  : ${ctx.sessionId ?? "(no session — the crash preceded session creation)"}`,
+    `── ${headline} ${"─".repeat(Math.max(4, 62 - headline.length))}`,
+    `  session  : ${ctx.sessionId ?? "(no session — this happened before one existed)"}`,
     `  error    : ${message}`,
     ...(frame !== undefined ? [`  at       : ${frame}`] : []),
     "",
@@ -278,7 +289,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     } catch (err) {
       emitSessionEnd(1)
       telemetry?.close()
-      return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+      return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
     }
   }
 
@@ -501,7 +512,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     emitSessionEnd(1)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
-    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   }
   if (telemetry) {
     telemetry.emit({ type: "session/request", ts: Date.now(), data: { ...(activeId ? { sessionId: activeId } : {}) } })
@@ -598,12 +609,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (opts.coordinator) await opts.coordinator.close()
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText, exitCode: 0, session }
+    return { finalText, exitCode: 0, session, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
-    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err) }
+    return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } finally {
     // The handlers come off on EVERY exit path. A run that left them behind
     // accumulates one pair per invocation, and a host running many sessions
