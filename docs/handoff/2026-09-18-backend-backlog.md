@@ -21,7 +21,7 @@
 | **M2** | 可達性閘門 | M | **完成** | 472 列基線已種、`--gate`／`--digest`／`--self-test` 三件套齊 |
 | **M3** | 量測底座 | M | **大部分未動** | 見 §1.1 |
 | **M4** | 耐久 turn 狀態機 | **L** | ✅ **工程完成**（`a64fa18` · `491dd10` · `262e245` · `a1ad14a`）—— spec、I1、I2、**路線圖的 spawn 驗收測試**；**只差 Q8**（產品決定） | `docs/superpowers/specs/2026-09-18-durable-turn-state-machine-design.md` |
-| **M5** | 一致性：工具管線 ＋ prompt 快取 | M | **進行中** —— T4 的**兄弟取消**已做（`4c85a04`）；T4 的 schema 驗證層與 **T2 全部**未動 | 前置 M3 已滿足（`58d7db6`） |
+| **M5** | 一致性：工具管線 ＋ prompt 快取 | M | **進行中** —— T4 的**兄弟取消**已做（`4c85a04`）；**T2 第一半完成**（見 §1.2）；T4 的 schema 驗證層與 **T2 第二半（前綴）**未動 | 前置 M3 已滿足（`58d7db6`） |
 | **M6** | 廣度：生態 ＋ 介面硬化 | M | **未開始** | 依賴 M5 |
 | **M7** | 自我喚醒與記憶 | M/S | **卡住** | **要 Q1／Q2 的答案** |
 
@@ -53,6 +53,29 @@
 
 **M3 必須排在 M4 之前** —— 否則 M4 的驗證只能靠人工複讀。**這是路線圖自己的硬依賴。**
 
+### 1.2 M5／T2 的兩半，逐項量測
+
+設計在 `docs/superpowers/specs/2026-09-18-m5-t2-prompt-cache-continuity-design.md`。
+
+| 半 | 現況 |
+|---|---|
+| **第一半：以 provider 回報為事實** | ✅ **完成** —— seam 長出 `LLMUsage` ＋ `usage` 成員；`provider/usage` 新 telemetry code；`core-agent` 合併後發出**恰好一筆**；sink 長出 `reported` 區；`[metrics]` 印它；`llm-anthropic` 映射 |
+| **第二半：以自己的位元組為偵測** | **未動** |
+
+**量到的三件事（都是這一項獨有的）：**
+
+1. **缺口不是推論出來的，是三個 adapter 各自記下來的** —— `llm-gemini:237-241` 的字面是
+   *"a future usage seam slot"*，`llm-bedrock:225-229` 說 *"same gap as llm-anthropic / llm-gemini"*。
+   全詞彙 grep 在 `src` 只有**一個**命中，而且是一句**註解**。
+2. **一個現成的紅燈早就在樹裡** —— `llm-bedrock/test/bedrock.test.ts:161` 餵了一份 usage fixture，
+   而 adapter 把它丟掉。第一半的 RED 不需要憑空造輸入。
+3. **一個實測到的缺陷，靠寫測試才發現** —— `createRetryingClient` 的重試是**靜默的**，
+   而它的用量事件第一版是即時 `yield` 的，所以**一次完成的往返收到兩份報告**
+   （`expected [ {…}, {…} ] to deeply equal [ {…} ]`）。**這比沒有指標更糟：一個看起來像量測的錯數字。**
+   修法是包裝把用量**扣留到該次嘗試證明自己跑完**。
+
+**這一項的完成定義要兩半都有。** 第一半做完**不等於 M5 做完**。
+
 ---
 
 ## 2. 路線圖之外的三筆帳
@@ -82,9 +105,12 @@
 | `settings#SettingsConflictError` | 同上（同一類） |
 | `workflow#createWorkflowJobStore` | **刻意留著** —— 真正的代價是測試隔離（`jobs` 是選填，預設行程級單例），比一列 row 貴 |
 
-### 2.3 448 條 findings —— **不是待辦**
+### 2.3 447 條 findings —— **不是待辦**
 
-`439 unused-export ／ 8 unconsulted-setting ／ 1 producerless-event`，全部由基線接受。
+`438 unused-export ／ 8 unconsulted-setting ／ 1 producerless-event`，全部由基線接受。
+
+**⚠️ 這一節原本寫 448（`439／8／1`），而那個數字在每一版修訂裡都沒被重測過。** 2026-09-18 重測是
+**447**，少的一列是 `unused-export`。寫在這裡，因為一份自稱「量出來的」文件不該有一行是抄的。
 **閘門只對「新增的」失敗**（路線圖 §3.M1 的明文裁定），所以這份清單不是工作佇列。
 唯一相關的動作是**別讓新的長出來**，而那是 M2 已在做的事。
 
@@ -179,12 +205,12 @@ session/cancel · session/queue · session/queue/cancel · session/rewind/{point
 ## 5. 建議順序
 
 ```
-1. §3.1  重讀 sections.ts 的裁定（Q6 可能推翻它）      ← 先做，因為它是一次判錯
-2. M3    量測底座（harness + crash + redaction + metrics）← M4 的硬前置
-3. M4    耐久 turn 狀態機（L）                          ← 路線圖裡唯一「崩潰會產生錯誤答案」的主題
-4. M5 → M6                                              ← 依賴鏈
-5. schedule 的 spec                                     ← 唯一不需要前端的零消費者套件
-6. M7                                                   ← 等 Q1／Q2
+1. ✅ §3.1  重讀 sections.ts 的裁定（Q6 可能推翻它）      ← 先做，因為它是一次判錯
+2. ✅ M3    量測底座（harness + crash + redaction + metrics）← M4 的硬前置（4/5；兩項在 §1.1 仍開著）
+3. ✅ M4    耐久 turn 狀態機（L）                          ← 路線圖裡唯一「崩潰會產生錯誤答案」的主題（只差 Q8）
+4. ▶  M5 → M6                                            ← 依賴鏈（M5 進行中：T2 第一半完成，見 §1.2）
+5.    schedule 的 spec                                   ← 唯一不需要前端的零消費者套件
+6.    M7                                                 ← 等 Q1／Q2
 ```
 
 **為什麼 §3.1 排第一**：一個錯的裁定會讓後面每一次「前端要什麼」的判斷跟著錯。**它比任何實作都便宜，也比任何實作都貴。**
@@ -256,6 +282,6 @@ driver 讀什麼、`onDue` 交給誰。**邊接邊發明等於把三個決定拆
 ## 7. 這份文件沒有建立什麼
 
 - **沒有重測路線圖的每個聲稱**，只重測了**狀態**（里程碑做沒做、交付物在不在）。路線圖引用的證據（沙箱的 `0.056–0.125 ms/call` 等）**沒有重新量**。
-- **448 條 findings 沒有逐條分類**，只按套件與類別數了。
+- **447 條 findings 沒有逐條分類**，只按套件與類別數了。
 - **零消費者套件的掃描是文字比對**（`import` 出現與否），不是模組圖。它會漏掉動態 import —— 這個樹裡沒有這種用法，但方法本身不保證。
 - **`schedule` 的「三件缺失」是照抄既有稽核的**，我沒有在這次重新驗證。**要動它之前先重測。**
