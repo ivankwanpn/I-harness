@@ -238,10 +238,19 @@ describe("createSessionAssembly", () => {
   it("M33: compactNow with instructions forwards them to the summarizer prompt", async () => {
     const s = createSession()
     append(s, { type: "user/message", text: "kickoff" })
-    let captured: string | undefined
+    // M5/D2 changed WHERE the instructions land, so this captures the position
+    // rather than just the text. The summarizer now replays the region as real
+    // messages and appends the directive as the FINAL user message — that is what
+    // makes its call a byte-prefix of the last main request and lets the
+    // provider's cache serve the whole conversation. It used to be the only
+    // message, so asserting on messages[0] would now be asserting on the
+    // replayed conversation instead.
+    let first: string | undefined
+    let last: string | undefined
     const spy: ModelClient = {
       async *stream(request: LLMRequest) {
-        captured = (request.messages[0]!.content as string)
+        first = request.messages[0]!.content as string
+        last = request.messages.at(-1)!.content as string
         yield { type: "text/chunk", text: "summary".repeat(100) } // ≥ 500 chars (M34 ⑦c floor)
         yield { type: "end" }
       },
@@ -254,8 +263,11 @@ describe("createSessionAssembly", () => {
     })
     try {
       await assembly.compactNow("keep the constraint X in mind")
-      expect(captured).toContain("## User instructions")
-      expect(captured).toContain("keep the constraint X in mind")
+      // The instructions reach the summarizer — as the FINAL user message.
+      expect(last).toContain("## User instructions")
+      expect(last).toContain("keep the constraint X in mind")
+      // And the conversation before it is the replayed region, not the directive.
+      expect(first).toBe("kickoff")
     } finally {
       await assembly.dispose()
     }

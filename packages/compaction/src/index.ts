@@ -1,6 +1,6 @@
 import type { Session, SessionEvent } from "@i-harness/core-session"
-import { append, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { append, deriveMessagesUpTo, deriveSearchText, renderPruneSubstitute, type PruneRecord } from "@i-harness/core-session"
+import type { LLMMessage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
 import type { Telemetry } from "@i-harness/telemetry"
 import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
@@ -53,6 +53,13 @@ export function createCompactionEngine(deps: {
   modelId?: string          // M15: the resolved model id for catalog lookup
   provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
   telemetry?: Telemetry     // M34 ⑦b: optional host stream (M25 convention — absent = zero events)
+  /** M5/D2: the shape the main loop sends, read AT COMPACT TIME so it matches
+   * the last request rather than whatever was true at construction. Present →
+   * the summarizer's call becomes a byte-prefix of the main request and the
+   * provider's cache serves the whole conversation instead of charging full
+   * price for it. Absent → the legacy text form, unchanged: without the shape
+   * the bytes cannot match, so there is no reuse to lose. */
+  requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
@@ -105,6 +112,19 @@ export function createCompactionEngine(deps: {
     }
     const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     const model = config.summarizationModel ?? deps.model
+    // M5/D2: replay the region as REAL messages so this call is a byte-prefix of
+    // the last main request. Only when the summarizer is the same model — a
+    // configured `summarizationModel` has its own cache key, so replaying would
+    // buy nothing and cost tokens for nothing. The region is everything the
+    // shadow markers name, and it is a prefix of the log by construction, so
+    // deriveMessagesUpTo over its last seq is exactly the main path's fold.
+    const shape = config.summarizationModel === undefined ? deps.requestShape?.() : undefined
+    let prefix: { systemPrompt: string; tools: ToolSchema[]; messages: LLMMessage[] } | undefined
+    if (shape !== undefined) {
+      let lastShadowed = -1
+      for (const seq of shadowedSeqs) if (seq > lastShadowed) lastShadowed = seq
+      prefix = { systemPrompt: shape.systemPrompt, tools: shape.tools, messages: deriveMessagesUpTo(session, lastShadowed) }
+    }
     // M33 §1.2 anchored: scan the session for the LAST `compaction/summary`
     // before building the prompt. If one exists, its text is injected via
     // `<previous-summary>` and the summarizer is told to UPDATE it — the
@@ -118,7 +138,7 @@ export function createCompactionEngine(deps: {
     // the analytics event even when the pass throws (degenerate retry).
     const attemptsTracker = { count: 0 }
     try {
-      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker)
+      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix)
       summary = result.text
       attempts = attemptsTracker.count
     } catch (err) {
