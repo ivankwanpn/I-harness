@@ -29,7 +29,7 @@
 
 | 交付物 | 現況 |
 |---|---|
-| benchmark harness | **不存在**（`scripts/` 無任何 bench） |
+| benchmark harness | ✅ **完成**（`b6e1f02`）—— `pnpm bench` ／ `pnpm verify:bench`；`--self-test` 證明它抓得到 10 倍退化 |
 | in-process 診斷 metrics registry | **不存在** |
 | fail-loud 崩潰處理 ＋ 優雅關閉 | 部分（1 個檔提到 `uncaughtException`／`unhandledRejection`） |
 | secret redaction | 部分（3 個檔提到 redact） |
@@ -215,7 +215,7 @@ driver 讀什麼、`onDue` 交給誰。**邊接邊發明等於把三個決定拆
 ### 6.3 M3 的五項 —— 建議的順序
 
 ```
-1. benchmark harness        ← 它是「偵測器」本身；沒有它，後面四項的驗證都只能靠人工複讀
+1. benchmark harness        ← ✅ 完成（b6e1f02）
 2. 崩潰處理 ＋ 優雅關閉      ← 唯一「壞掉時會產生錯誤答案」的一項（行程死了、狀態不明）
 3. 本地結構化診斷日誌
 4. secret redaction
