@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { sha256File } from "@i-harness/hooks"
+import { createHookTrustStore, resolveHookTrustPath, sha256File } from "@i-harness/hooks"
+import { PluginRegistry } from "@i-harness/plugin-registry"
 import { runHeadless } from "../src/run.ts"
 
 // The hooks policy layer, mounted through the REAL run.ts wiring.
@@ -85,5 +86,62 @@ describe("hooks mount — the harness home's hooks.json gates a real run", () =>
   it("the control: with NO hooks.json the identical script is not blocked", async () => {
     const result = await runHeadless("read a file", { workspace: home, approveAll: true, mockScript: script() })
     expect(JSON.stringify({ error: result.error, events: result.session?.events })).not.toContain("policy says no")
+  })
+
+  // ── a PLUGIN's hooks, which is another tree's config ──────────────────────
+  // The whole point of D1, end to end: a plugin can DECLARE a `pre-tool` hook
+  // that vetoes tools, and it does not take effect until the user grants that
+  // exact script hash. Both halves below run the same plugin; the difference is
+  // one entry in the user-layer store.
+  async function installPluginWithHook(): Promise<string> {
+    const src = mkdtempSync(join(tmpdir(), "i-harness-plugin-hooks-src-"))
+    const pdir = join(src, "plugins", "guard")
+    mkdirSync(join(pdir, "hooks"), { recursive: true })
+    mkdirSync(join(src, ".claude-plugin"), { recursive: true })
+    writeFileSync(
+      join(src, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "Hooks Mkt", plugins: [{ name: "guard", source: "./plugins/guard" }] }),
+      "utf8",
+    )
+    const handler = join(pdir, "hooks", "deny.cjs")
+    writeFileSync(handler, reply({ block: true, reason: "plugin policy says no" }), "utf8")
+    writeFileSync(
+      join(pdir, "hooks", "hooks.json"),
+      JSON.stringify({
+        version: 1,
+        handlers: [{
+          id: "plugin-deny", event: "pre-tool", type: "command", matcher: { tool: "read" },
+          command: { cmd: process.execPath, args: [handler] },
+          trust: { script: handler, sha256: await sha256File(handler) },
+        }],
+      }, null, 2),
+      "utf8",
+    )
+    const registry = new PluginRegistry({ root: join(home, "plugins") })
+    await registry.addSource(src)
+    await registry.install("Hooks Mkt__guard")
+    await registry.enable("Hooks Mkt__guard")
+    return handler
+  }
+
+  it("a plugin's hook is NOT enforced until the user grants its hash", async () => {
+    await installPluginWithHook()
+    const result = await runHeadless("read a file", { workspace: home, approveAll: true, mockScript: script() })
+    // Declared but ungranted: it neither enforces nor blocks.
+    expect(JSON.stringify({ error: result.error, events: result.session?.events })).not.toContain("plugin policy says no")
+  })
+
+  it("...and IS enforced once that exact hash is approved", async () => {
+    const handler = await installPluginWithHook()
+    // The grant: the user approves the SCRIPT's hash, which is the only object
+    // worth trusting — an id is chosen by the declaring layer and a path can be
+    // repointed.
+    createHookTrustStore(resolveHookTrustPath()).approve({
+      sha256: await sha256File(handler),
+      script: handler,
+      handlerId: "plugin-deny",
+    })
+    const result = await runHeadless("read a file", { workspace: home, approveAll: true, mockScript: script() })
+    expect(JSON.stringify({ error: result.error, events: result.session?.events })).toContain("plugin policy says no")
   })
 })

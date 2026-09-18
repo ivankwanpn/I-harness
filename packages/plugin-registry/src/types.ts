@@ -74,13 +74,19 @@ export interface CommandDescriptor {
 
 /** The runtime surface enable() produces and the host consumes on every agent
  * build: materialized skill dirs (read-only overlays), the re-keyed MCP config
- * (`plugin:<id>:<server>` keys), the markdown command descriptors and the
- * markdown subagent descriptors. */
+ * (`plugin:<id>:<server>` keys), the markdown command descriptors, the markdown
+ * subagent descriptors and the hook config PATHS. */
 export interface RuntimeInputs {
   skillDirs: string[]
   mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE>
   commandDescriptors: CommandDescriptor[]
   agentDescriptors: AgentDescriptor[]
+  /** Paths to each enabled plugin's `hooks/hooks.json`, read from the INSTALLED
+   * copy like agents — no materialized overlay, because the hooks registry takes
+   * a path and owns its own load. The config is deliberately NOT parsed here:
+   * a second reader of the same file is how the two drift, and the loader's
+   * fail-closed semantics (trust, approval, malformed-config) live with it. */
+  hookConfigs: string[]
 }
 
 /** One subagent discovered in a plugin's agents/*.md (name = the frontmatter

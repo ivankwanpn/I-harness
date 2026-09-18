@@ -116,7 +116,7 @@ function makeRegistry(opts: { existingCommandNames?: string[] | (() => string[])
   return new PluginRegistry({ root, ...opts })
 }
 
-const NO_RUNTIME = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [] }
+const NO_RUNTIME = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [], hookConfigs: [] }
 
 describe("PluginRegistry: sources", () => {
   it("fresh root: empty sources, empty catalog, empty runtime", async () => {
@@ -246,7 +246,7 @@ describe("PluginRegistry: catalog", () => {
     const hello = (await r.catalog()).plugins.find((p) => p.id === HELLO_ID)!
     expect(hello.installed).toBe(true)
     expect(hello.enabled).toBe(false)
-    expect(hello.capabilities).toEqual({ skills: true, commands: true, mcp: false, agents: false, executable: false })
+    expect(hello.capabilities).toEqual({ skills: true, commands: true, mcp: false, agents: false, hooks: false, executable: false })
     // state round-trips through a fresh instance
     expect((await makeRegistry().catalog()).plugins.find((p) => p.id === HELLO_ID)).toMatchObject({
       installed: true,
@@ -480,6 +480,7 @@ describe("PluginRegistry: enable/disable", () => {
       skillDirs: [join(root, "skills", HELLO_ID)],
       mcpServerConfigs: {},
       agentDescriptors: [],
+      hookConfigs: [],
       commandDescriptors: [
         {
           name: "hello",
@@ -497,6 +498,7 @@ describe("PluginRegistry: enable/disable", () => {
       skillDirs: [join(root, "skills", HELLO_ID)],
       mcpServerConfigs: { "plugin:Marketplace_A__proxy:echo": { command: "node", args: ["echo-server.mjs"] } },
       agentDescriptors: [],
+      hookConfigs: [],
       commandDescriptors: [
         {
           name: "hello",
@@ -549,6 +551,32 @@ describe("PluginRegistry: enable/disable", () => {
     // agents need no materialized overlay: they become DATA at mount, so the
     // host never reads them by path (unlike skills/ and commands/)
     expect(existsSync(join(root, "agents"))).toBe(false)
+  })
+
+  it("a HOOKS-ONLY plugin ENABLES and surfaces its config path", async () => {
+    // Measured against the official snapshot: three of its 39 plugins ship
+    // nothing but hooks/ (explanatory-output-style, learning-output-style,
+    // security-guidance). Before this dimension they failed enable() outright.
+    const src = await tempDir("reg-hooks-")
+    await mkdir(join(src, "plugins", "guard", "hooks"), { recursive: true })
+    await writeFile(
+      join(src, "plugins", "guard", "hooks", "hooks.json"),
+      JSON.stringify({ version: 1, handlers: [] }, null, 2),
+      "utf8",
+    )
+    await writeMarketplace(src, [{ name: "guard" }])
+
+    const r = makeRegistry()
+    await r.addSource(src)
+    await r.install("Test Mkt__guard")
+    const inputs = await r.enable("Test Mkt__guard")
+
+    // The PATH, not the parsed config: the hooks registry takes a config path
+    // and owns its own load (fail-closed semantics inside). Parsing here would
+    // be a second reader of the same file, which is how the two drift.
+    expect(inputs.hookConfigs).toEqual([join(root, "Test Mkt__guard", "hooks", "hooks.json")])
+    // Like agents, read from the INSTALLED copy — no materialized overlay
+    expect(existsSync(join(root, "hooks"))).toBe(false)
   })
 
   it("enabled state + runtime round-trip through a fresh registry instance (state persisted)", async () => {
@@ -645,6 +673,7 @@ describe("PluginRegistry: command conflicts (D5: enable succeeds, conflicting co
       skillDirs: [join(root, "skills", HELLO_ID)],
       mcpServerConfigs: {},
       agentDescriptors: [],
+      hookConfigs: [],
       commandDescriptors: [], // the colliding command is not registered
     })
     // state written atomically: a complete enable with a recorded limitation
@@ -756,6 +785,7 @@ describe("PluginRegistry: runtimeInputs", () => {
       // the install copy is gone, so the agent scan finds nothing — and must not
       // throw, exactly as the MCP read above it degrades rather than failing
       agentDescriptors: [],
+      hookConfigs: [],
       commandDescriptors: [
         {
           name: "hello",

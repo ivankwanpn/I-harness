@@ -82,7 +82,7 @@ type CommandStatus = "ready" | "failed"
 /** The evaluator's per-plugin verdict. */
 export interface EvaluateResult {
   overall: OverallStatus
-  capabilities: Record<"skills" | "commands" | "mcp" | "agents" | "executable", CapabilityStatus>
+  capabilities: Record<"skills" | "commands" | "mcp" | "agents" | "hooks" | "executable", CapabilityStatus>
   /** One entry per expected command name ([]/{} once the commands dimension is
    * unsupported, pending or the plugin is disabled). */
   commandStatuses: Record<string, CommandStatus>
@@ -108,6 +108,7 @@ export function evaluatePlugin(
         commands: "disabled",
         mcp: "disabled",
         agents: "disabled",
+        hooks: "disabled",
         executable: "unsupported", // D2: package-level fact, not runtime state
       },
       commandStatuses: {},
@@ -123,6 +124,7 @@ export function evaluatePlugin(
         commands: apply(caps.commands, "pending"),
         mcp: apply(caps.mcp, "pending"),
         agents: apply(caps.agents, "pending"),
+        hooks: apply(caps.hooks, "pending"),
         executable: "unsupported",
       },
       commandStatuses: {},
@@ -144,13 +146,20 @@ export function evaluatePlugin(
   // whole claim. Residual, stated rather than hidden: an `agents/` directory
   // that exists but holds no readable file reads "ready".
   const agents = apply(caps.agents, "ready")
+  // hooks joins agents in needing no observation, for the same structural
+  // reason: the descriptor/config paths are read synchronously by the registry
+  // itself from the installed copy, so there is no host-side step between
+  // advertising the dimension and contributing it. Residual, stated rather than
+  // hidden: a `hooks/hooks.json` that exists but parses to zero handlers reads
+  // "ready".
+  const hooks = apply(caps.hooks, "ready")
 
-  const statuses = { skills, commands, mcp, agents }
+  const statuses = { skills, commands, mcp, agents, hooks }
 
   let overall: OverallStatus
   if (
     skills === "unsupported" && commands === "unsupported" && mcp === "unsupported" &&
-    agents === "unsupported"
+    agents === "unsupported" && hooks === "unsupported"
   ) {
     // Nothing advertised → the runtime surface is empty and can never become
     // ready (reached when a refreshed package drops all its dimensions, e.g.
