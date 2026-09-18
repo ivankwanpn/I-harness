@@ -1,0 +1,23 @@
+{
+  "fingerprint": {
+    "node": "v22.23.2",
+    "platform": "win32",
+    "release": "10.0.26200",
+    "arch": "x64",
+    "cpuModel": "Intel(R) Core(TM) i7-6700 CPU @ 3.40GHz",
+    "cpuCount": 8,
+    "totalMemGb": 16
+  },
+  "cases": [
+    {
+      "name": "deriveMessages/long-session",
+      "ms": 0.0789091482649841,
+      "samples": 15
+    },
+    {
+      "name": "append/many-events",
+      "ms": 0.12650000000000014,
+      "samples": 15
+    }
+  ]
+}
