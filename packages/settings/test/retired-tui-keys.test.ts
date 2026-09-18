@@ -141,14 +141,19 @@ describe("retired TUI-only settings keys (Task 2A)", () => {
   })
 
   it("the retired keys are absent from the defaults document and from an empty normalize", async () => {
-    const { normalizeSettings, SETTINGS_DEFAULTS } = await import("../src/index.ts")
-    expect(survivors(SETTINGS_DEFAULTS)).toEqual([])
-    expect(survivors(normalizeSettings(undefined))).toEqual([])
+    const { normalizeSettings } = await import("../src/index.ts")
+    // `normalizeSettings(undefined)` IS the defaults document now that
+    // `SETTINGS_DEFAULTS` is module-private — the same values, through the
+    // public api. The two lines that used to compare against it separately
+    // collapse into one, which is the honest shape: they were asserting the
+    // same thing twice from different doors.
+    const DEFAULTS = normalizeSettings(undefined)
+    expect(survivors(DEFAULTS)).toEqual([])
     // A document whose ONLY content is retired keys is not a special case: it
     // normalizes to the defaults rather than throwing.
     const onlyRetired = normalizeSettings({ theme: "grokn-night", busyEnter: "wait", tui: { prefs: { scrollSpeed: 3 } } })
     expect(survivors(onlyRetired)).toEqual([])
-    expect(onlyRetired.sandboxMode).toBe(SETTINGS_DEFAULTS.sandboxMode)
+    expect(onlyRetired.sandboxMode).toBe(DEFAULTS.sandboxMode)
   })
 
   it("the first write after the upgrade drops them from the file, and the file stays loadable", async () => {

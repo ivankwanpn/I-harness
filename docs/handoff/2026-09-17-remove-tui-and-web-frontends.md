@@ -228,6 +228,21 @@ sections API and belongs to the API's owner.
 declared at `packages/settings/src/index.ts:236` and is an `unused-export` row; the remediation a class-1 row
 normally takes — drop the `export` keyword, shape 1 — would blind class 5. See §5.
 
+> **RESOLVED 2026-09-18.** The detector was fixed at `9bd45b9d` (`SETTINGS_DEFAULTS_DECL` now reads
+> `\b(?:export\s+)?const`), so the remediation this blocker was waiting on became available, and the row
+> was retired: `SETTINGS_DEFAULTS` is module-private and the three test files that named it as an oracle
+> now obtain the same values through `normalizeSettings(undefined)`.
+>
+> **A correction to this document's own margin, because the wrong reason was repeated in a session
+> report and nearly became the justification for real work.** The blocker was later described as *"moving
+> it needs a runtime cycle: it reads `SETTINGS_STATUS_LINE_SEGMENTS` (a value), so the whole package
+> imports itself"*. **That is false** — both constants are in the SAME file (`index.ts:157` and `:236`),
+> so there is no cross-module edge at all. The actual cost was one **tautological assertion**:
+> `expect(normalizeSettings(undefined)).toEqual(SETTINGS_DEFAULTS)` becomes `expect(X).toEqual(X)` once
+> the oracle is the public accessor. It was deleted, and it never tested anything — the `undefined` case
+> IS the reference the other three compare against. **The lesson is the one §5 keeps teaching: a blocker's
+> stated reason has to be re-measured, not inherited.**
+
 **4 — three rows reroutable by a test-body edit, and their sizes must not be flattened.** All three are
 declared in their package entry, so shape 2 does not exist for them.
 

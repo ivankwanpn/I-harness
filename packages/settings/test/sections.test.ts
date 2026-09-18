@@ -5,7 +5,6 @@ import { join } from "node:path"
 import {
   SettingsStore,
   normalizeSettings,
-  SETTINGS_DEFAULTS,
 } from "../src/index.ts"
 import {
   describeSection,
@@ -17,6 +16,11 @@ import {
   type SectionOp,
   type SectionSchema,
 } from "../src/index.ts"
+
+/** The defaults, obtained through the PUBLIC api — `SETTINGS_DEFAULTS` is
+ * module-private now (nothing outside `index.ts` read it in production).
+ * `normalizeSettings` is pure, so a module-scope constant is safe. */
+const DEFAULTS = normalizeSettings(undefined)
 
 /** Test-local accessor for the unknown-typed view layers. */
 type AnyRecord = Record<string, any>
@@ -47,14 +51,14 @@ describe("new keys default without migration (old file loads fine)", () => {
     expect(store.get().fontSize).toBe(15)
     expect(store.get().plugins.bash).toBe(false)
     // the appended keys come from defaults — no migration path
-    expect(store.get().llm).toEqual(SETTINGS_DEFAULTS.llm)
-    expect(store.get().onboarding).toEqual(SETTINGS_DEFAULTS.onboarding)
+    expect(store.get().llm).toEqual(DEFAULTS.llm)
+    expect(store.get().onboarding).toEqual(DEFAULTS.onboarding)
     // load() must not rewrite the document (no migration writes)
     expect(await readFile(file, "utf8")).toBe(JSON.stringify({ language: "zh", sandboxMode: "read-only", fontSize: 15, plugins: { bash: false } }))
     // and a reload from the same file keeps the extra defaults
     const again = new SettingsStore({ path: file })
     await again.load()
-    expect(again.get().llm).toEqual(SETTINGS_DEFAULTS.llm)
+    expect(again.get().llm).toEqual(DEFAULTS.llm)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -91,7 +95,7 @@ describe("new keys default without migration (old file loads fine)", () => {
     const raw = JSON.parse(await readFile(file, "utf8"))
     expect(raw._revision).toEqual({ llm: 1 })
     expect("_revision" in normalizeSettings(raw)).toBe(false) // old readers never see it
-    expect("llm" in SETTINGS_DEFAULTS).toBe(true)
+    expect("llm" in DEFAULTS).toBe(true)
     await rm(root, { recursive: true, force: true })
   })
 })
@@ -139,7 +143,7 @@ describe("describeSection", () => {
     expect("protocol" in value.providers.gateway).toBe(false)
     // defaultModel section default: EMPTY ("" = unset — no seeded default model)
     expect(value.defaultModel).toEqual({ provider: "", model: "" })
-    expect(value.defaultModel).toEqual(SETTINGS_DEFAULTS.llm.defaultModel)
+    expect(value.defaultModel).toEqual(DEFAULTS.llm.defaultModel)
     // user layer only holds what was written (no normalize protocol fill)
     const user = view.user as AnyRecord
     const base = view.base as AnyRecord
