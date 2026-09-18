@@ -30,10 +30,23 @@
 | 交付物 | 現況 |
 |---|---|
 | benchmark harness | ✅ **完成**（`b6e1f02`）—— `pnpm bench` ／ `pnpm verify:bench`；`--self-test` 證明它抓得到 10 倍退化 |
+| fail-loud 崩潰處理 ＋ 優雅關閉 | ✅ **完成**（`ede0850` ＋ `8c34ca1`）—— SIGINT/SIGTERM → abort → 走既有的 `finally`（drain ＋ dispose）；`failureReport` 取代裸堆疊 **與** 失敗 run 的那一行裸訊息 |
+| 本地結構化診斷日誌 | ⚠️ **一半** —— 失敗／崩潰報告已經結構化（session、error、frame、損失契約）；**79 個 `console.warn/error` 站點沒有分級**。量過：那些訊息確實是**不同類別被壓平**（fail-soft 降級、CLI 用法錯誤、背景失敗），所以分級**有價值** —— 但那是 79 處的遷移 |
+| secret redaction | ⚠️ **缺口示範不出來** —— 見下 |
 | in-process 診斷 metrics registry | **不存在** |
-| fail-loud 崩潰處理 ＋ 優雅關閉 | ✅ **完成**（`ede0850`）—— SIGINT/SIGTERM → abort → 走既有的 `finally`（drain ＋ dispose）；`crashReport` 取代裸堆疊，**並第一次寫下損失契約** |
-| secret redaction | 部分（3 個檔提到 redact） |
-| 本地結構化診斷日誌 | 部分（1 個檔） |
+
+**「secret redaction」為什麼標成「示範不出來」，而不是「未做」。** roadmap 引的是跨專案 triage 的措辭
+（*"secret-redaction-before-log-and-sink"*），不是這裡量到的缺陷。**照量測**：
+
+- 遮蔽**已經存在**，在 view 那一域：`settings/sections.ts` 的 `redactForSchema`／`redactRecord`，
+  帶 `secret` / `credential-ref` 兩種角色；`credentials.describe` 也是單向遮蔽。
+- 日誌那一域：**沒有任何 console 站點印出 config 物件** —— 全部是 `err.message`、檔案路徑、或
+  server 名 ＋ 原因。
+- 金鑰只在 **adapter 邊界的 header** 進出（`Authorization`／`x-api-key`），`llm-seam` 的 throw
+  **全是設定驗證**（路徑 ＋ 數字），telemetry **從未見過 `apiKey`**。
+
+**所以沒有找到可示範的洩漏路徑。** 這一項的處置是**繼續量**而不是**先建一個濾網** —— 一個沒有
+已知輸入的濾網，正是這份文件在別處拒絕的那種東西。
 
 **M3 的完成定義**（照抄路線圖，因為它是可測的）：
 > harness 能**偵測一個 10 倍退化**（證明它是偵測器而不是天花板）；一次失敗的執行不需要人手讀 JSONL 就能定位。
@@ -221,11 +234,17 @@ driver 讀什麼、`onDue` 交給誰。**邊接邊發明等於把三個決定拆
 
 ```
 1. benchmark harness        ← ✅ 完成（b6e1f02）
-2. 崩潰處理 ＋ 優雅關閉      ← ✅ 完成（ede0850）
-3. 本地結構化診斷日誌
-4. secret redaction
-5. metrics registry
+2. 崩潰處理 ＋ 優雅關閉      ← ✅ 完成（ede0850 ＋ 8c34ca1）
+3. 本地結構化診斷日誌        ← ⚠️ 一半（報告已結構化；79 站點未分級）
+4. secret redaction         ← ⚠️ 缺口示範不出來（量過，見 §1.1）
+5. metrics registry         ← ❌ 未做
 ```
+
+**M3 沒有全部做完，而 M4 的前置仍然滿足。** 路線圖對 M3 的硬依賴寫的是
+*「否則 M4 的驗證只能像沙箱那次一樣靠人工複讀」* —— **那個依賴是「量測」，而它已完成（第 1 項）。**
+剩下的兩項不是 M4 的前置：第 4 項的缺口在這裡量不出來，第 3 項的 79 站點遷移與 M4 無關。
+
+**所以 §5 繼續往下走，而這兩項仍然是開的** —— 不是被放棄，是被排在後面，而且理由寫在這裡。
 
 **理由**：M3 的完成定義要求 harness 能**偵測 10 倍退化**，所以 harness 必須先存在，否則其餘四項
 做完也沒有人能說它們有沒有退化。**而第 2 項排第二，理由是它與 M4 同型** —— M4 要解的正是
