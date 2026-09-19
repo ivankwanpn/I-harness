@@ -55,6 +55,12 @@ interface ProviderPatch {
   apiKeyEnv?: string | null
 }
 
+/** The route fields `patchProvider` may change — a RUNTIME allowlist, not only
+ * a type. `models` is absent ON PURPOSE (see the method), and a type cannot
+ * enforce that here: the patch arrives as a variable, so TypeScript's
+ * excess-property check never runs. */
+const PATCHABLE_PROVIDER_FIELDS = ["baseURL", "protocol", "catalog", "displayName", "modelsURL", "apiKeyEnv"] as const
+
 export interface SessionModelBinding {
   client: ModelClient
   providerId: string
@@ -317,10 +323,16 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         throw new Error(`provider "${id}" is not configured`)
       }
       const next: SettingsProviderConfig = { ...current }
-      for (const [key, value] of Object.entries(patch)) {
+      // The KEYS come from the allowlist, never from the patch: `Object.entries`
+      // here would let a variable-shaped patch (which the type cannot check —
+      // no excess-property check applies) write `models` and empty the catalog
+      // this method exists to protect.
+      for (const key of PATCHABLE_PROVIDER_FIELDS) {
+        if (!(key in patch)) continue
+        const value = patch[key]
         if (value === undefined) continue
-        if (value === null) delete (next as Record<string, unknown>)[key]
-        else (next as Record<string, unknown>)[key] = value
+        if (value === null) delete next[key]
+        else (next as unknown as Record<string, unknown>)[key] = value
       }
       // No baseURL suffix-stripping here: `SettingsStore.set` normalizes every
       // write (normalizeSettings → normalizeProviderConfig → stripBaseURLSuffix),
