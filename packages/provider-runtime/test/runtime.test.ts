@@ -1288,8 +1288,16 @@ describe("protocol: the row overrides the route", () => {
             { id: "plain-model" },
           ],
         },
+        // A second route whose protocol is NOT the hard-coded default — see the
+        // assertion below for why `gw` alone cannot prove the route arm ran.
+        claude: {
+          baseURL: "https://claude.example",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "CLAUDE_API_KEY",
+          models: [{ id: "haiku-model" }],
+        },
       },
-      credentials: { GW_API_KEY: "fixture-key" },
+      credentials: { GW_API_KEY: "fixture-key", CLAUDE_API_KEY: "fixture-key" },
       registry(registry) {
         registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
       },
@@ -1297,9 +1305,18 @@ describe("protocol: the row overrides the route", () => {
 
     await runtime.resolveModel({ override: "gw:anthropic-model" })
     await runtime.resolveModel({ override: "gw:plain-model" })
+    await runtime.resolveModel({ override: "claude:haiku-model" })
 
     // adapterProtocol maps openai-completions → openai-compatible.
     expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+    // This row's route protocol COINCIDES with the hard-coded default
+    // (provider-runtime's runtimeProfile falls back to openai-completions only
+    // if the route arm collapsed), so on its own it would still pass if the
+    // route arm did nothing at all.
     expect(builds[1]?.profile.protocol).toBe("openai-compatible")
+    // The distinguishing case: a protocol-less row on an anthropic-messages
+    // route. Only inheritance from the ROUTE produces this value — a collapsed
+    // route arm would read openai-compatible here.
+    expect(builds[2]?.profile.protocol).toBe("anthropic-messages")
   })
 })
