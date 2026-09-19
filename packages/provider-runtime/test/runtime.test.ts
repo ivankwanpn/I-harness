@@ -1048,3 +1048,84 @@ describe("probeModels — the read half of discovery", () => {
     await expect(runtime.probeModels("nope")).rejects.toThrow(/not configured/)
   })
 })
+
+describe("per-row model writes", () => {
+  async function rowsFixture() {
+    return fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://gateway.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "kept", contextWindow: 128_000 }, { id: "gone" }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("addModels adds only the rows given, and an EXISTING row keeps its own numbers", async () => {
+    const { runtime, settings } = await rowsFixture()
+
+    await runtime.addModels("deepseek", [
+      { id: "kept", contextWindow: 999 },      // exists → left alone
+      { id: "fresh", name: "Fresh" },          // new → added
+    ])
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", contextWindow: 128_000 },
+      { id: "gone" },
+      { id: "fresh", name: "Fresh" },
+    ])
+  })
+
+  it("addModels refuses an empty list and a blank id, without writing", async () => {
+    const { runtime, settings } = await rowsFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.addModels("deepseek", [])).rejects.toThrow(/at least one/i)
+    await expect(runtime.addModels("deepseek", [{ id: "   " }])).rejects.toThrow(/non-empty id/i)
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("setModel changes only that row, and null CLEARS a field back to the card", async () => {
+    const { runtime, settings } = await rowsFixture()
+
+    await runtime.setModel("deepseek", "kept", { contextWindow: 65_536, maxTokens: 8_192 })
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", contextWindow: 65_536, maxTokens: 8_192 },
+      { id: "gone" },
+    ])
+
+    await runtime.setModel("deepseek", "kept", { contextWindow: null })
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", maxTokens: 8_192 },
+      { id: "gone" },
+    ])
+  })
+
+  it("setModel and removeModel refuse a model the route does not have", async () => {
+    const { runtime } = await rowsFixture()
+
+    await expect(runtime.setModel("deepseek", "absent", { contextWindow: 1 })).rejects.toThrow(/no model "absent"/)
+    await expect(runtime.removeModel("deepseek", "absent")).rejects.toThrow(/no model "absent"/)
+  })
+
+  it("removeModel takes one row out and leaves llm.defaultModel ALONE", async () => {
+    const { runtime, settings } = await rowsFixture()
+    await settings.set({
+      llm: { providers: settings.get().llm.providers, defaultModel: { provider: "deepseek", model: "gone" } },
+    })
+
+    await runtime.removeModel("deepseek", "gone")
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    // D1 removed the membership check, so a default naming a removed row still
+    // resolves — nothing breaks, and the row is simply gone from the directory.
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "gone" })
+  })
+})

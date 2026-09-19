@@ -30,6 +30,20 @@ export type ModelResolutionState =
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
   | { status: "ready"; binding: SessionModelBinding }
 
+/** The per-model fields a caller may set. `null` CLEARS the field (falling back
+ * to the card), which is NOT the same as omitting it (leave it alone).
+ *
+ * Deliberately NOT exported: every caller (the CLI included) passes an OBJECT
+ * LITERAL to `setModel`, so nothing outside this module needs to name the type,
+ * and the reachability gate counts type exports as rows — exporting it would
+ * book an orphan until its first consumer landed. */
+interface ModelFields {
+  protocol?: SettingsProviderProtocol | null
+  contextWindow?: number | null
+  maxTokens?: number | null
+  name?: string | null
+}
+
 export interface SessionModelBinding {
   client: ModelClient
   providerId: string
@@ -73,6 +87,15 @@ export interface ProviderRuntime {
   /** What the route's endpoint offers, WITHOUT writing anything. The read half
    * of `discoverModels` — see that method for why the two are separate. */
   probeModels(id: string, options?: { signal?: AbortSignal }): Promise<ModelDescriptor[]>
+  /** Add rows, or complete existing ones. EXISTING ROWS WIN — this is the
+   * `mergeDiscoveredModels` rule, and it is what keeps a probe from clobbering
+   * numbers the user set. To change an existing row, use `setModel`. */
+  addModels(id: string, rows: readonly SettingsModel[]): Promise<ModelDescriptor[]>
+  /** Change named fields on ONE existing row. `null` clears a field (the CLI's
+   * `auto`); an omitted field is left alone. */
+  setModel(id: string, modelId: string, fields: ModelFields): Promise<ModelDescriptor[]>
+  /** Remove one row. The route and its credential are untouched. */
+  removeModel(id: string, modelId: string): Promise<ModelDescriptor[]>
   discoverModels(
     id: string,
     options?: { force?: boolean; signal?: AbortSignal },
@@ -197,6 +220,27 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     return cloneModels(models)
   }
 
+  /** Merge `rows` into the route's SETTINGS model list and persist once. The
+   * existing row wins every field it has — see `mergeDiscoveredModels`. */
+  async function addModelRows(id: string, rows: readonly SettingsModel[]): Promise<ModelDescriptor[]> {
+    const additions: SettingsModel[] = rows.map((row) => {
+      const modelId = row.id.trim()
+      if (modelId === "") throw new Error("a model row needs a non-empty id")
+      return { ...row, id: modelId }
+    })
+    if (additions.length === 0) throw new Error("addModels needs at least one row")
+
+    const llm = canonicalLlm(options.settings)
+    const current = llm.providers[id]
+    const models = mergeDiscoveredModels(current?.models ?? [], additions)
+    await persistLlm({
+      providers: { ...llm.providers, [id]: { ...(current ?? {}), models } },
+      defaultModel: { ...llm.defaultModel },
+    })
+    discovered.delete(id)
+    return cloneModels(provider(id)?.models ?? models)
+  }
+
   return {
     async directory() {
       const rows: ProviderRuntimeEntry[] = []
@@ -294,6 +338,59 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     async probeModels(id, probeOptions = {}) {
       assertProviderId(id)
       return probeRouteModels(id, probeOptions)
+    },
+
+    async addModels(id, rows) {
+      assertProviderId(id)
+      if (provider(id) === undefined) throw new Error(`provider "${id}" is not configured`)
+      return addModelRows(id, rows)
+    },
+
+    async setModel(id, modelId, fields) {
+      assertProviderId(id)
+      if (provider(id) === undefined) throw new Error(`provider "${id}" is not configured`)
+      const llm = canonicalLlm(options.settings)
+      const current = llm.providers[id]
+      const models = current?.models ?? []
+      const existing = models.find((model) => model.id === modelId)
+      // The SETTINGS list, not the merged view: the view also carries template
+      // rows, and a write has to land somewhere real.
+      if (existing === undefined) {
+        throw new Error(`provider "${id}" has no model "${modelId}"; add it first`)
+      }
+      const next: SettingsModel = { ...existing }
+      for (const [key, value] of Object.entries(fields)) {
+        if (value === undefined) continue
+        if (value === null) delete (next as unknown as Record<string, unknown>)[key]
+        else (next as unknown as Record<string, unknown>)[key] = value
+      }
+      const merged = models.map((model) => (model.id === modelId ? next : { ...model }))
+      await persistLlm({
+        providers: { ...llm.providers, [id]: { ...(current ?? {}), models: merged } },
+        defaultModel: { ...llm.defaultModel },
+      })
+      discovered.delete(id)
+      return cloneModels(provider(id)?.models ?? merged)
+    },
+
+    async removeModel(id, modelId) {
+      assertProviderId(id)
+      const llm = canonicalLlm(options.settings)
+      const current = llm.providers[id]
+      if (current === undefined) throw new Error(`provider "${id}" is not configured`)
+      const models = current.models ?? []
+      if (!models.some((model) => model.id === modelId)) {
+        throw new Error(`provider "${id}" has no model "${modelId}"`)
+      }
+      // `llm.defaultModel` is deliberately NOT touched: with D1's membership
+      // check gone, a default naming a removed row still resolves.
+      const merged = models.filter((model) => model.id !== modelId).map((model) => ({ ...model }))
+      await persistLlm({
+        providers: { ...llm.providers, [id]: { ...current, models: merged } },
+        defaultModel: { ...llm.defaultModel },
+      })
+      discovered.delete(id)
+      return cloneModels(provider(id)?.models ?? merged)
     },
 
     async discoverModels(id, discoveryOptions = {}) {
