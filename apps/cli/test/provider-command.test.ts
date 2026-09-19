@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseProviderArgs, renderProviderList, runProviderCommand } from "../src/provider.ts"
+import { PROVIDER_PROTOCOLS, parseProviderArgs, renderProviderList, runProviderCommand } from "../src/provider.ts"
+import { PROVIDER_PROTOCOLS as SETTINGS_PROTOCOLS } from "@i-harness/settings"
 
 // The CLI face of the provider lifecycle
 // (docs/superpowers/specs/2026-09-19-provider-lifecycle-design.md §4). Its
@@ -32,6 +33,13 @@ describe("parseProviderArgs", () => {
       fields: {},
       error: "unknown provider subcommand: aproove",
     })
+  })
+
+  it("the protocol list IS the settings list — one enum, not a third copy", () => {
+    // Identity, not equality: two equal arrays today are two places to edit
+    // tomorrow. Settings owns the closed set (settings/src/sections.ts:110);
+    // the CLI validates --protocol against the same object.
+    expect(PROVIDER_PROTOCOLS).toBe(SETTINGS_PROTOCOLS)
   })
 
   it("a bad protocol is refused with the valid list", () => {

@@ -22,12 +22,15 @@ import {
   type ModelCatalogRow,
 } from "@i-harness/provider"
 import type { ProviderRuntimeEntry } from "@i-harness/provider-runtime"
+import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 
-/** The five wire protocols a route may declare. Exported because `models.ts`
- * validates `--protocol` against the SAME list — two copies would drift. */
-export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"] as const
-export type CliProtocol = (typeof PROVIDER_PROTOCOLS)[number]
+/** The five wire protocols a route may declare. ONE list, and it lives in
+ * settings — the CLI used to keep a second (and a third in `models`) copy of
+ * the same enum, which is three places to edit for one fact. Re-exported
+ * because `models.ts` validates `--protocol` against the SAME list. */
+export { PROVIDER_PROTOCOLS }
+export type CliProtocol = SettingsProviderProtocol
 
 /** The route fields the CLI can write. `models` is not among them — that is
  * `i-harness models`' job, and keeping them apart is what stops a protocol
