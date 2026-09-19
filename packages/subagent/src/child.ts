@@ -237,12 +237,18 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // the host's resolver, else inherit the parent's client — which is what an
   // unconfigured harness does, and the ONLY case that inherits.
   let model = opts.parentModel
+  // What the child ran on, RECORDED at spawn (Task 6) — the projection reads
+  // this record instead of re-deriving the precedence, which it cannot do (the
+  // settings getter is not on its source) and should not do (a running child's
+  // settings can change under it). The inherit arm records nothing.
+  let modelLabel: string | undefined
   if (declared !== undefined) {
     const state = await opts.resolveModel(declared)
     if (state.status !== "ready") {
       throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
     }
     model = state.binding.client
+    modelLabel = `${declared.provider}:${declared.model}`
   }
 
   const controller = new AbortController()
@@ -272,6 +278,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     jobId,
     ...(sessionId !== undefined ? { sessionId } : {}),
     roleName: opts.role.name,
+    ...(modelLabel !== undefined ? { modelLabel } : {}),
     // Serialization: seed the followup chain with the initial run so a
     // followup_task fired mid-run waits for turn 1 to finish (dsh's
     // queue-then-run semantics) instead of running two runTurns concurrently

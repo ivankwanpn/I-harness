@@ -13,6 +13,11 @@ export interface ChildAgentEntry {
   unmount?: () => void
   sessionId?: string
   roleName?: string
+  /** The model this child actually ran on, as `provider:model`, RECORDED at
+   * spawn. Absent = it inherited the parent's client. Never re-derived at read
+   * time: a running child's settings can change under it, and the row must say
+   * what IS, not what today's configuration would say. */
+  modelLabel?: string
   followupChain?: Promise<void>
   lastInboxSeq?: number
 }
