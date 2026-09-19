@@ -294,6 +294,11 @@ describe("renderProviderList", () => {
     // the deleted verdict is pinned as absent.
     expect(out).not.toContain("cannot be used")
     expect(out).toContain("i-harness provider set gateway --protocol")
+    // `toContain("i-harness provider set gateway --protocol")` passes even if
+    // the tail degrades to ONE fixed protocol, which would pick a wire for a
+    // user who never chose one — the metavariable's whole point. The set is
+    // pinned by content (the same object the renderer reads, from ./provider.ts).
+    expect(out).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
   })
 
   it("a route that DOES declare one still prints it, unchanged", () => {

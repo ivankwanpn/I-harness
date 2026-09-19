@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseModelsArgs, parseTokenValue, probeRequestFor, renderModels, runModelsCommand } from "../src/models.ts"
+import { PROVIDER_PROTOCOLS } from "../src/provider.ts"
 import { loadProviderRuntime } from "../src/provider-runtime.ts"
 
 describe("parseTokenValue", () => {
@@ -159,6 +160,11 @@ describe("renderModels", () => {
     expect(out).toContain("no protocol of its own")
     expect(out).not.toContain("cannot be used")
     expect(out).toContain("i-harness provider set gw --protocol")
+    // The other half of the contract: the tail names the SET, not one protocol.
+    // `toContain("i-harness provider set gw --protocol")` alone would pass with
+    // a single fixed protocol — the very thing the metavariable forbids. Pinned
+    // by content, against the same object `models.ts` reads (via ./provider.ts).
+    expect(out).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
   })
 
   it("a route that DOES declare one still prints it, unchanged", () => {

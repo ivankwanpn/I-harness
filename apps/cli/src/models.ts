@@ -230,7 +230,10 @@ export interface ModelsRouteView {
   id: string
   cardFamily: string
   declared: boolean
-  /** Absent = the route declares no protocol (and refuses to resolve).
+  /** Absent = the route declares no protocol OF ITS OWN. NOT "it refuses to
+   * resolve": resolution falls through to the model row and the selection
+   * before it refuses (`renderModels` below says so on the line it prints), so
+   * this field's absence is a fact about the route, not a verdict on the route.
    * Optional here because the value rides straight off `directory()`. */
   protocol?: string
   /** Whether the route's endpoint can be probed at all — `directory()`'s own
