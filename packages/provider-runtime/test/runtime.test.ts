@@ -1161,6 +1161,10 @@ describe("route writes that leave the model list alone", () => {
           protocol: "openai-completions",
           apiKeyEnv: "DEEPSEEK_API_KEY",
           displayName: "Old",
+          // A patch has no field for either of these, so the ONLY thing that can
+          // keep them is the copy-then-overlay shape. Asserted below.
+          headers: { "x-gateway": "gw-1" },
+          inputModalities: ["text", "image"],
           models: [{ id: "kept", contextWindow: 128_000 }],
         },
       },
@@ -1178,11 +1182,16 @@ describe("route writes that leave the model list alone", () => {
 
     const row = settings.get().llm.providers.deepseek
     expect(row?.protocol).toBe("anthropic-messages")
-    // The three fields a naive whole-config replace would have dropped — this
-    // is the merge the deleted TUI's saveProvider() did, and why it existed.
+    // The fields a naive whole-config replace would have dropped — this is the
+    // merge the deleted TUI's saveProvider() did, and why it existed. `headers`
+    // and `inputModalities` are here because they are UNPATCHABLE (no key for
+    // them in ProviderPatch), so an overlay that started from `{}` would take
+    // them with it and no other case in this file would notice.
     expect(row?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
     expect(row?.displayName).toBe("Old")
     expect(row?.apiKeyEnv).toBe("DEEPSEEK_API_KEY")
+    expect(row?.headers).toEqual({ "x-gateway": "gw-1" })
+    expect(row?.inputModalities).toEqual(["text", "image"])
   })
 
   it("patchProvider with null CLEARS a field", async () => {
@@ -1209,5 +1218,17 @@ describe("route writes that leave the model list alone", () => {
     await runtime.createProvider("fresh", { baseURL: "https://fresh.example", protocol: "anthropic-messages" })
 
     expect(settings.get().llm.providers.fresh).toEqual({ baseURL: "https://fresh.example", protocol: "anthropic-messages" })
+  })
+
+  it("`models` is unreachable from a patch, even through a variable", async () => {
+    const { runtime, settings } = await routeFixture()
+    // A VARIABLE, not a literal: no excess-property check, so the type alone
+    // would not stop this — which is why the allowlist is at runtime.
+    const smuggled = { protocol: "anthropic-messages", models: [] } as unknown as Parameters<typeof runtime.patchProvider>[1]
+
+    await runtime.patchProvider("deepseek", smuggled)
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    expect(settings.get().llm.providers.deepseek?.protocol).toBe("anthropic-messages")
   })
 })
