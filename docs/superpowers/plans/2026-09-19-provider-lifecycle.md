@@ -619,7 +619,11 @@ The methods (after `upsertProvider`):
         if (value === null) delete (next as Record<string, unknown>)[key]
         else (next as Record<string, unknown>)[key] = value
       }
-      if (next.baseURL !== undefined) next.baseURL = stripBaseURLSuffix(next.baseURL)
+      // No baseURL suffix-stripping here: `SettingsStore.set` normalizes every
+      // write (normalizeSettings → normalizeProviderConfig → stripBaseURLSuffix),
+      // so a second implementation in the runtime would be a second place for
+      // the rule to live — and the helper is module-private in settings, so
+      // reaching it would mean exporting it for one caller.
       await persistLlm({
         providers: { ...llm.providers, [id]: cloneProviderConfig(next) },
         defaultModel: { ...llm.defaultModel },
@@ -628,7 +632,7 @@ The methods (after `upsertProvider`):
     },
 ```
 
-Import `stripBaseURLSuffix` from `@i-harness/settings` (it is exported — `normalizeProviderConfig` uses it at `packages/settings/src/index.ts:441`).
+**No import of `stripBaseURLSuffix`** — it is module-private in settings (`packages/settings/src/index.ts:366`), and it does not need to be reached: the store normalizes on every write, so the suffix is stripped there. `isProviderProtocol` (`:332`) is likewise local; Task 5 uses it from inside the same file.
 
 - [ ] **Step 4: Run it — expect GREEN**
 
