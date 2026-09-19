@@ -142,8 +142,9 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         role,
         parentModel: deps.parentModel,
         resolveModel: deps.resolveModel,
-        // The role-model gate rides to spawnChild with the resolver; the spawn
-        // itself is where the refusal (and the message) lives — see child.ts.
+        // Forwarded with the resolver so spawnChild decides the role's model for
+        // EVERY spawn site (this tool's precondition above only exists to refuse
+        // before the task record is written). See child.ts for the rule.
         roleSelectionFor: deps.roleSelectionFor,
         allowSubagentModelSelection: deps.allowSubagentModelSelection,
         jobs: deps.jobs,

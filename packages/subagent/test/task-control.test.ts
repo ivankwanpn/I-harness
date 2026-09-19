@@ -225,9 +225,9 @@ describe("a gated role model refuses before any durable write", () => {
     const roles = createRoleRegistry()
     // The builtin general, carrying a model the way a settings entry or a
     // restored snapshot declares one.
-    for (const r of builtinRoles()) roles.register(r)
-    roles.remove("general")
-    roles.register({ ...builtinRoles()[0]!, model: { provider: "gw", model: "small" } })
+    const builtins = builtinRoles()
+    for (const r of builtins) if (r.name !== "general") roles.register(r)
+    roles.register({ ...builtins.find((r) => r.name === "general")!, model: { provider: "gw", model: "small" } })
     const session = createSession()
     const tasks = createTaskRegistry()
     const tools = createSubagentTools({
