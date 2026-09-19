@@ -1021,6 +1021,48 @@ describe("probeModels — the read half of discovery", () => {
     expect(JSON.stringify(settings.get().llm)).toBe(before)
   })
 
+  it("a protocol override shapes THIS request only — the route and the store are untouched", async () => {
+    const seen: ProbeRequest[] = []
+    const probe = vi.fn(async (req: ProbeRequest) => {
+      seen.push(req)
+      return [{ id: "gw-model" }]
+    })
+    const f = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gateway.example",
+          modelsURL: "https://models.example/v1/models",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "manual" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+        registry.registerProbe("gw", probe)
+      },
+    })
+    const before = JSON.stringify(f.settings.get().llm)
+
+    await f.runtime.probeModels("gw", { protocol: "anthropic-messages" })
+    // Omitted: the probe runs on the ROUTE's protocol, which is the default.
+    await f.runtime.probeModels("gw")
+
+    expect(seen.map((req) => req.protocol)).toEqual(["anthropic-messages", "openai-completions"])
+    // The design's §4 promise: a one-off parameter, landed nowhere.
+    expect(JSON.stringify(f.settings.get().llm)).toBe(before)
+  })
+
+  it("an override does not make bedrock probeable — the refusal is a fact about the ROUTE", async () => {
+    const { runtime } = await fixture({
+      providers: { br: { baseURL: "https://br.example", protocol: "bedrock" } },
+    })
+
+    await expect(runtime.probeModels("br", { protocol: "openai-completions" }))
+      .rejects.toThrow(/manually|not available/i)
+  })
+
   it("leaves the discovery memo alone — a later discoverModels still writes", async () => {
     const { runtime, settings } = await probeFixture()
 

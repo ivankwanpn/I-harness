@@ -86,7 +86,7 @@ export interface ParsedModelsArgs {
 const MODELS_USAGE =
   "usage: i-harness models <list|probe|add|set|rm|use|refresh> [args]\n" +
   "  [<route>]                                 what each model resolves, and whether the route can be probed\n" +
-  "  probe <route>                             ask the endpoint what it offers — WRITES NOTHING\n" +
+  "  probe <route> [--protocol P]              ask the endpoint what it offers — WRITES NOTHING; P shapes this request only\n" +
   "  add <route> <id...> [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  set <route> <id>    [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  rm <route> <id>\n" +
@@ -94,6 +94,27 @@ const MODELS_USAGE =
   "  refresh <route>                           probe and merge everything it returns\n" +
   "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
   "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
+
+/** Which flags each verb READS. The design's §4 table is the source: `--protocol`
+ * belongs to probe/add/set, `--context-window`/`--max-tokens` to add/set (a row's
+ * numbers), `--reasoning-effort` to use (the default model's). */
+const MODELS_FLAGS: Record<ParsedModelsArgs["subcommand"], readonly (keyof ModelValues)[]> = {
+  list: [],
+  probe: ["protocol"],
+  add: ["protocol", "contextWindow", "maxTokens"],
+  set: ["protocol", "contextWindow", "maxTokens"],
+  rm: [],
+  use: ["reasoningEffort"],
+  refresh: [],
+  help: [],
+}
+
+const FLAG_NAMES: Record<keyof ModelValues, string> = {
+  contextWindow: "--context-window",
+  maxTokens: "--max-tokens",
+  protocol: "--protocol",
+  reasoningEffort: "--reasoning-effort",
+}
 
 export function parseModelsArgs(args: string[]): ParsedModelsArgs {
   const rest = args.slice(1)
@@ -142,6 +163,23 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
     positional.push(token)
   }
 
+  // A flag a verb cannot READ is refused rather than dropped — `rm gw x
+  // --protocol gemini` used to delete the row and say nothing about the flag it
+  // ignored, which is the same "exit 0 having done something other than what was
+  // asked" the probe override had. The design's §4 table is the source of the
+  // rule below. Checked AFTER the scan: a flag may still precede the verb
+  // (`models --protocol P set gw a`), and by here the verb is known.
+  const misplaced = (Object.keys(values) as Array<keyof ModelValues>)
+    .find((key) => !MODELS_FLAGS[subcommand].includes(key))
+  if (misplaced !== undefined) {
+    const takers = (Object.keys(MODELS_FLAGS) as ParsedModelsArgs["subcommand"][])
+      .filter((verb) => MODELS_FLAGS[verb].includes(misplaced))
+    return {
+      subcommand: "help", ids: [], values: {},
+      error: `${FLAG_NAMES[misplaced]} is not a flag of "${subcommand}"; it belongs to: ${takers.join(", ")}`,
+    }
+  }
+
   if (subcommand === "list") {
     if (positional.length > 1) return { subcommand: "help", ids: [], values: {}, error: "unexpected extra argument" }
     if (positional.length > 0) return { subcommand, route: positional[0], ids: [], values }
@@ -149,8 +187,17 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
   }
   if (subcommand === "use") {
     if (positional.length !== 1) return { subcommand: "help", ids: [], values: {}, error: "use takes <route>:<model>" }
-    if (!positional[0]!.includes(":")) return { subcommand: "help", ids: [], values: {}, error: `use needs provider:model; got "${positional[0]}"` }
-    return { subcommand, route: positional[0], ids: [], values }
+    const token = positional[0]!
+    const separator = token.indexOf(":")
+    if (separator === -1) return { subcommand: "help", ids: [], values: {}, error: `use needs provider:model; got "${token}"` }
+    // BOTH halves must name something. `use gw:` used to be accepted and wrote
+    // { provider: "gw", model: "" } with a success message — a typo (or a
+    // script's unset $MODEL) destroyed a working default, and the next run
+    // reported "No model configured".
+    if (token.slice(0, separator) === "" || token.slice(separator + 1) === "") {
+      return { subcommand: "help", ids: [], values: {}, error: `use needs BOTH a provider and a model; got "${token}"` }
+    }
+    return { subcommand, route: token, ids: [], values }
   }
   if (subcommand === "probe" || subcommand === "refresh") {
     if (positional.length !== 1) return { subcommand: "help", ids: [], values: {}, error: `${subcommand} takes exactly one route` }
@@ -164,6 +211,15 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
   if (positional.length < 2) return { subcommand: "help", ids: [], values: {}, error: `${subcommand} takes a route and at least one model id` }
   if (subcommand === "set" && positional.length !== 2) return { subcommand: "help", ids: [], values: {}, error: "set takes exactly one model id" }
   return { subcommand, route: positional[0], ids: positional.slice(1), values }
+}
+
+/** What `probe` sends as its one-request protocol override (design §4): it
+ * shapes THIS request's auth headers and lands nowhere. `auto` (`null`) means
+ * "the route's protocol decides", which is also what a probe does with no flag
+ * at all — so on a request that writes nothing it passes no override rather
+ * than being refused. */
+export function probeRequestFor(values: ModelValues): { protocol?: CliProtocol } {
+  return values.protocol === null || values.protocol === undefined ? {} : { protocol: values.protocol }
 }
 
 export interface ModelsRouteView {
@@ -256,7 +312,7 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     }
     const route = parsed.route!
     if (parsed.subcommand === "probe") {
-      const models = await runtime.probeModels(route)
+      const models = await runtime.probeModels(route, probeRequestFor(parsed.values))
       console.log(`${models.length} model(s) found — NOTHING was written:`)
       for (const model of models) {
         const card = resolveModelCard(
@@ -275,15 +331,17 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     }
     if (parsed.subcommand === "add") {
       // Which ids already existed is REPORTED, because `addModels` follows the
-      // merge rule (an existing row wins) and a silently-ignored
-      // --context-window would be exactly the kind of quiet wrong answer this
-      // repo keeps measuring.
+      // merge rule and a silently-ignored --context-window would be exactly the
+      // kind of quiet wrong answer this repo keeps measuring. The wording says
+      // what the merge ACTUALLY does: `{...addition, ...existing}` keeps the
+      // fields the existing row HAS, so a bare row (one with no numbers of its
+      // own) still absorbs the flags — "left alone" was false in that direction.
       const before = new Set((await runtime.directory()).find((row) => row.id === route)?.models.map((model) => model.id) ?? [])
       const already = parsed.ids.filter((modelId) => before.has(modelId))
       const models = await runtime.addModels(route, parsed.ids.map((modelId) => rowFor(modelId, fields)))
       console.log(`"${route}": ${models.length} model(s)`)
       if (already.length > 0) {
-        console.log(`  already present and left alone: ${already.join(", ")} — use \`models set\` to change one`)
+        console.log(`  already present: ${already.join(", ")} — their own values win where set; the flags fill only the gaps. Use \`models set\` to change one.`)
       }
       return 0
     }

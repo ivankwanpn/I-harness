@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { parseModelsArgs, parseTokenValue, renderModels, runModelsCommand } from "../src/models.ts"
+import { parseModelsArgs, parseTokenValue, probeRequestFor, renderModels, runModelsCommand } from "../src/models.ts"
 
 describe("parseTokenValue", () => {
   it("reads plain integers, k/m suffixes, and `auto`", () => {
@@ -55,6 +55,30 @@ describe("parseModelsArgs", () => {
       .toBe("anthropic-messages")
     expect(parseModelsArgs(["models", "set", "gw", "a", "--protocol", "auto"]).values.protocol).toBeNull()
     expect(parseModelsArgs(["models", "set", "gw", "a", "--protocol", "grpc"]).error).toMatch(/grpc/)
+    expect(parseModelsArgs(["models", "probe", "gw", "--protocol", "gemini"]).values.protocol).toBe("gemini")
+  })
+
+  it("a flag the verb cannot use is refused, not silently dropped", () => {
+    // Same class as the probe override: the flag used to be parsed for EVERY
+    // verb and ignored by the ones with no reader for it.
+    expect(parseModelsArgs(["models", "rm", "gw", "a", "--protocol", "gemini"]).error)
+      .toMatch(/--protocol is not a flag of "rm".*probe, add, set/)
+    expect(parseModelsArgs(["models", "list", "--context-window", "1m"]).error)
+      .toMatch(/--context-window is not a flag of "list"/)
+    expect(parseModelsArgs(["models", "use", "gw:deepseek-flash", "--context-window", "1m"]).error)
+      .toMatch(/--context-window/)
+    // The legal homes still accept them, wherever the flag sits.
+    expect(parseModelsArgs(["models", "probe", "gw", "--protocol", "gemini"]).error).toBeUndefined()
+    expect(parseModelsArgs(["models", "--protocol", "gemini", "probe", "gw"]).error).toBeUndefined()
+    expect(parseModelsArgs(["models", "add", "gw", "a", "--context-window", "1m"]).error).toBeUndefined()
+  })
+
+  it("probe's --protocol is a one-off request parameter, and `auto` means the route's", () => {
+    expect(probeRequestFor({ protocol: "gemini" })).toEqual({ protocol: "gemini" })
+    // On a request that writes nothing, "the route decides" and "no override"
+    // are the same sentence — so `auto` is the default, not a refusal.
+    expect(probeRequestFor({ protocol: null })).toEqual({})
+    expect(probeRequestFor({})).toEqual({})
   })
 })
 
@@ -147,10 +171,49 @@ describe("runModelsCommand", () => {
       .toEqual({ provider: "gw", model: "deepseek-flash", reasoningEffort: "high" })
   })
 
+  it("use refuses an empty half — a typo must not unset a working default", async () => {
+    // The failure mode: `use gw:` (or a script's unset $MODEL) wrote
+    // { provider: "gw", model: "" }, printed success, and the next run said
+    // "No model configured" — a working default destroyed by a typo.
+    expect(await runModelsCommand(["models", "use", "gw:deepseek-flash"])).toBe(0)
+    expect(await runModelsCommand(["models", "use", "gw:"])).toBe(1)
+    expect(await runModelsCommand(["models", "use", ":deepseek-flash"])).toBe(1)
+
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.defaultModel)
+      .toEqual({ provider: "gw", model: "deepseek-flash" })
+  })
+
+  it("add says what it actually does to a BARE existing row: the flags fill the gaps", async () => {
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: {
+        providers: {
+          gw: { baseURL: "https://gw.example", protocol: "openai-completions", catalog: "deepseek", models: [{ id: "bare" }] },
+        },
+        defaultModel: { provider: "", model: "" },
+      },
+    }), "utf8")
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "add", "gw", "bare", "--context-window", "128k"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+
+    // The row had no contextWindow, so the flag FILLS it — "left alone" was false.
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.models)
+      .toEqual([{ id: "bare", contextWindow: 131_072 }])
+    expect(lines.join("\n")).not.toContain("left alone")
+    expect(lines.join("\n")).toContain("fill only the gaps")
+  })
+
   it("a route that cannot be probed fails loudly (bedrock is manual-only)", async () => {
     writeFileSync(join(home, "settings.json"), JSON.stringify({
       llm: { providers: { br: { baseURL: "https://br.example", protocol: "bedrock", models: [] } }, defaultModel: { provider: "", model: "" } },
     }), "utf8")
     expect(await runModelsCommand(["models", "probe", "br"])).toBe(1)
+    // The one-off override shapes a REQUEST; it cannot give the route a
+    // discovery endpoint it does not have.
+    expect(await runModelsCommand(["models", "probe", "br", "--protocol", "openai-completions"])).toBe(1)
   })
 })

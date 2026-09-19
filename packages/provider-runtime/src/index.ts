@@ -109,8 +109,13 @@ export interface ProviderRuntime {
   setApiKey(id: string, value: string): Promise<void>
   clearApiKey(id: string): Promise<void>
   /** What the route's endpoint offers, WITHOUT writing anything. The read half
-   * of `discoverModels` — see that method for why the two are separate. */
-  probeModels(id: string, options?: { signal?: AbortSignal }): Promise<ModelDescriptor[]>
+   * of `discoverModels` — see that method for why the two are separate.
+   *
+   * `protocol` rides the REQUEST only (design §4): it changes the shape of this
+   * probe's auth headers — one gateway can serve a vendor's models on a
+   * protocol other than the route's — and it is never stored. Omitted means the
+   * route's own protocol, which is why `discoverModels` above never passes it. */
+  probeModels(id: string, options?: { signal?: AbortSignal; protocol?: SettingsProviderProtocol }): Promise<ModelDescriptor[]>
   /** Add rows, or complete existing ones. EXISTING ROWS WIN — this is the
    * `mergeDiscoveredModels` rule, and it is what keeps a probe from clobbering
    * numbers the user set. To change an existing row, use `setModel`. */
@@ -209,12 +214,15 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
    * behind `probeModels` and `discoverModels`. */
   async function probeRouteModels(
     id: string,
-    probeOptions: { signal?: AbortSignal },
+    probeOptions: { signal?: AbortSignal; protocol?: SettingsProviderProtocol },
   ): Promise<ModelDescriptor[]> {
     probeOptions.signal?.throwIfAborted()
 
     const view = provider(id)
     if (view === undefined) throw new Error(`provider "${id}" is not configured`)
+    // The ROUTE's protocol, deliberately not the override's: bedrock has no
+    // discovery endpoint, and that is a fact about the route — a request
+    // parameter cannot conjure one.
     if (view.protocol === "bedrock") {
       throw new Error("Discovery is not available for this provider; add a model ID manually.")
     }
@@ -235,7 +243,10 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         ? { modelsURL: view.modelsURL }
         : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
       apiKey,
-      protocol: view.protocol,
+      // The one-request override wins when given; the route's protocol is the
+      // default. This is the ONLY place the override is read — nothing below it
+      // persists, so nothing below it needs to un-do anything.
+      protocol: probeOptions.protocol ?? view.protocol,
       // M60 E: the route's configured headers (a gateway may require one for
       // discovery too) — the probe's own auth keys still win.
       ...(view.headers !== undefined ? { headers: view.headers } : {}),
