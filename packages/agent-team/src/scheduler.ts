@@ -12,7 +12,6 @@ import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import type { ExecService } from "@i-harness/exec"
-import type { ProviderRegistry } from "@i-harness/provider"
 import {
   driveFollowups,
   spawnChild,
@@ -21,6 +20,7 @@ import {
   type FollowupDeps,
   type JobRegistry,
   type RoleRegistry,
+  type SpawnOptions,
   type SubagentRole,
 } from "@i-harness/subagent"
 import { validateTeamConfig, type TeamConfig, type TeamEvent, type TeamCaller } from "./types.ts"
@@ -42,7 +42,8 @@ export interface TeamSubagentDeps {
   // re-drives.
   agents: AgentRegistry
   exec: ExecService
-  providers: ProviderRegistry
+  /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
+  resolveModel: SpawnOptions["resolveModel"]
   // M8 durable child sessions: coordinator + parent session id. When present,
   // spawned teammates get durable child-<uuid> sessions (lineage header) and
   // their inbox appends go through the write-behind mirror. WITHOUT it the
@@ -192,7 +193,7 @@ export async function mountAgentTeams(
         parentCtx: ctx,
         role,
         parentModel: deps.parentModel,
-        providers: sub.providers,
+        resolveModel: sub.resolveModel,
         jobs: sub.jobs,
         table: sub.table,
         agents: sub.agents,

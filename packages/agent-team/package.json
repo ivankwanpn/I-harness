@@ -14,7 +14,6 @@
     "@i-harness/core-agent": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/exec": "workspace:*",
-    "@i-harness/provider": "workspace:*",
     "zod": "^4.4.3"
   }
 }

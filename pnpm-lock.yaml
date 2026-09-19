@@ -227,9 +227,6 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
-      '@i-harness/provider':
-        specifier: workspace:*
-        version: link:../provider
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
@@ -404,9 +401,6 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
-      '@i-harness/provider':
-        specifier: workspace:*
-        version: link:../provider
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
@@ -778,9 +772,6 @@ importers:
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../preset
-      '@i-harness/provider':
-        specifier: workspace:*
-        version: link:../provider
       '@i-harness/rewind':
         specifier: workspace:*
         version: link:../rewind
@@ -805,6 +796,9 @@ importers:
       '@i-harness/session-query':
         specifier: workspace:*
         version: link:../session-query
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
       '@i-harness/shell':
         specifier: workspace:*
         version: link:../shell
@@ -960,12 +954,12 @@ importers:
       '@i-harness/preset':
         specifier: workspace:*
         version: link:../preset
-      '@i-harness/provider':
-        specifier: workspace:*
-        version: link:../provider
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../workflow

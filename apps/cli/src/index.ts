@@ -25,7 +25,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
-import { loadProviderRuntime } from "./provider-runtime.ts"
+import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
 import { runProviderCommand } from "./provider.ts"
@@ -454,6 +454,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),
+    resolveRoleModel: roleModelResolverFor(async () => runtime),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
@@ -624,6 +625,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),
+    resolveRoleModel: roleModelResolverFor(async () => runtime),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),

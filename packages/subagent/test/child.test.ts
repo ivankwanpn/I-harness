@@ -10,11 +10,15 @@ import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
 import { forkTurns } from "../src/fork.ts"
 import { resolveRoleTools, spawnChild } from "../src/child.ts"
-import { createProviderRegistry } from "@i-harness/provider"
 
 function makeTool(name: string): Tool {
   return { name, description: "", inputSchema: {}, execute: async () => ({}) }
 }
+
+/** Every built-in role carries NO model, so the cases below never reach the
+ * resolver — it is here because `spawnChild`'s seam is required. The cases that
+ * exercise a role's model supply their own. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("fork.ts", () => {
   it("forkTurns returns the last N turn blocks", () => {
@@ -38,7 +42,6 @@ describe("spawnChild", () => {
     const table = createAgentTable()
     const roles = createRoleRegistry()
     for (const r of builtinRoles()) roles.register(r)
-    const providers = createProviderRegistry()
     const model = createMockClient([{ role: "assistant", text: "child done" }])
 
     const { path, jobId } = await spawnChild({
@@ -50,7 +53,7 @@ describe("spawnChild", () => {
       parentCtx,
       role: roles.get("general")!,
       parentModel: model,
-      providers,
+      resolveModel: noRoleModel,
       jobs,
       table,
       agents: createAgentRegistry(),
@@ -115,7 +118,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentCtx: ctx,
       role: roles.get("general")!,
       parentModel: mock,
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
       jobs,
       table,
       agents,
@@ -166,7 +169,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentCtx: ctx,
       role: roles.get("general")!,
       parentModel: mock,
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
       jobs,
       table,
       agents: createAgentRegistry(),
@@ -190,7 +193,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     const { sessionId, path } = await spawnChild({
       taskName: "h", message: "hi", parentPath: "root",
       parentRegistry, parentSession, parentCtx: ctx, role: roles.get("general")!,
-      parentModel: mock, providers: createProviderRegistry(), jobs, table,
+      parentModel: mock, resolveModel: noRoleModel, jobs, table,
       agents: createAgentRegistry(),
     })
     expect(sessionId).toBeUndefined()
@@ -213,7 +216,7 @@ describe("spawnChild onSettled seam (M26-D1)", () => {
     const { path } = await spawnChild({
       taskName: "helper", message: "hi", parentPath: "root", parentRegistry: parentReg,
       parentSession: createSession(), parentCtx: ctx, role: roles.get("general")!,
-      parentModel: model, providers: createProviderRegistry(), jobs, table,
+      parentModel: model, resolveModel: noRoleModel, jobs, table,
       agents: createAgentRegistry(),
       onSettled: (info) => { settled.push(info) },
     })
@@ -278,7 +281,7 @@ describe("spawnChild — M49 Default prompt carries the subagent contract", () =
       parentCtx,
       role: roles.get("general")!,
       parentModel: model,
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
       jobs,
       table,
       agents: createAgentRegistry(),
@@ -350,5 +353,75 @@ describe("resolveRoleTools", () => {
     } finally {
       warn.mockRestore()
     }
+  })
+})
+
+describe("a role's model goes through the host's resolver (not a registry)", () => {
+  function spawnFixture() {
+    const parentCtx = createContext()
+    const parentReg = createToolRegistry(parentCtx)
+    parentReg.register(makeTool("read"))
+    const roles = createRoleRegistry()
+    for (const r of builtinRoles()) roles.register(r)
+    return {
+      parentCtx, parentReg, roles,
+      parentSession: createSession(),
+      jobs: createJobRegistry(),
+      table: createAgentTable(),
+      agents: createAgentRegistry(),
+      parentModel: createMockClient([{ role: "assistant", text: "parent" }]),
+    }
+  }
+
+  it("calls the resolver with the ROLE's selection and uses its client", async () => {
+    const f = spawnFixture()
+    const roleClient = createMockClient([{ role: "assistant", text: "from the role's model" }])
+    const calls: Array<{ provider: string; model: string }> = []
+    const resolveModel = async (sel: { provider: string; model: string }) => {
+      calls.push(sel)
+      return {
+        status: "ready" as const,
+        binding: { client: roleClient, providerId: sel.provider, modelId: sel.model, label: "role" },
+      }
+    }
+
+    await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
+      parentModel: f.parentModel, resolveModel,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+
+    expect(calls).toEqual([{ provider: "gw", model: "small" }])
+  })
+
+  it("a resolver that is not ready FAILS the spawn with the resolver's reason", async () => {
+    const f = spawnFixture()
+    const resolveModel = async () => ({ status: "invalid" as const, reason: 'Unknown provider "gw"' })
+
+    await expect(spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
+      parentModel: f.parentModel, resolveModel,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })).rejects.toThrow(/Unknown provider "gw"/)
+  })
+
+  it("a role with NO model never calls the resolver — it inherits the parent's client", async () => {
+    const f = spawnFixture()
+    let called = 0
+    const resolveModel = async () => { called += 1; return { status: "unconfigured" as const, reason: "x" } }
+
+    await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: f.parentModel, resolveModel,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+
+    expect(called).toBe(0)
   })
 })

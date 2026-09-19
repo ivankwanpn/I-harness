@@ -23,7 +23,6 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { ProviderRegistry } from "@i-harness/provider"
 import type { ExecService } from "@i-harness/exec"
 // M24b (spec §3.3): optional workflow executor threaded into SubagentToolDeps
 // (type-only here — the runtime object flows from the host).
@@ -34,6 +33,7 @@ import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent
 import { projectAgentTasks, type AgentTaskView } from "./projection.ts"
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
 import type { SubagentToolDeps } from "./tools.ts"
+import type { RoleModelSelection, RoleModelState } from "./child.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { emitRestoredJobTransitions, restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
@@ -41,7 +41,14 @@ import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, tas
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 
 export interface RegisterSubagentOptions {
-  providers: ProviderRegistry
+  /** Resolve a selection to a live client through the HOST's provider plane —
+   * the same one the session's own model went through, so a role gets the same
+   * credentials, the same card table and the same protocol chain.
+   *
+   * It replaced a `ProviderRegistry` that `assembly.ts` built empty and nothing
+   * ever registered into, which made `role.model` throw `references unknown
+   * provider` for every value it could ever hold. */
+  resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   parentModel: ModelClient
   parentSession: ReturnType<typeof createSession>
@@ -145,7 +152,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
-    parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
+    parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
     tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the

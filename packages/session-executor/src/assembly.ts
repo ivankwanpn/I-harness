@@ -49,6 +49,10 @@ import {
   type McpTokenStore,
 } from "@i-harness/mcp-client"
 import type { Telemetry } from "@i-harness/telemetry"
+// Type-only: the role selection's protocol is the SAME closed set settings
+// validates (`SettingsProviderProtocol`) — a copy of the five names here would
+// be another place to edit one enum. Erased at build time, no runtime edge.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 import { mountLspClient, type LspMountHandle, type LspServerConfig } from "@i-harness/lsp"
 import {
   mountAgentTeams,
@@ -56,7 +60,6 @@ import {
   type TeamMountHandle,
   type TeamConfig,
 } from "@i-harness/agent-team"
-import { createProviderRegistry } from "@i-harness/provider"
 import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
@@ -71,6 +74,16 @@ export class ModelUnavailableError extends Error {
     this.name = "ModelUnavailableError"
   }
 }
+
+/** What a `resolveRoleModel` resolver answers. Structural on purpose: the
+ * provider runtime's own answer satisfies it exactly as it stands — this
+ * package stays independent of provider-runtime (the same reason service.ts
+ * declares its own binding result type), and the subagent seam this feeds
+ * reads nothing but the status, the reason and the client. */
+type RoleModelResolution =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | { status: "ready"; binding: { client: ModelClient } }
 
 // The m26 mock client is destructive (one script step per turn, exhausted →
 // error). For the web path (repeated turns on ONE assembly with the default
@@ -169,6 +182,20 @@ export interface AssemblyOptions {
    * The web path resolves it per session from meta.modelSelection
    * (see SessionServiceOptions.reasoningEffortFor). */
   reasoningEffort?: ReasoningEffort
+  /** Resolve a ROLE's model selection. The host supplies it from the same
+   * runtime `modelBindingFor` uses, so a sub-agent's provider, credential and
+   * capability card come from the one provider plane this harness has.
+   *
+   * Optional because an embedder may serve no role that names a model. Absent,
+   * the spawn of such a role FAILS naming the selection rather than inheriting
+   * the session's model in silence — a role that names one model and runs
+   * another is the wrong answer stated as a right one. */
+  resolveRoleModel?: (selection: {
+    provider: string
+    model: string
+    protocol?: SettingsProviderProtocol
+    reasoningEffort?: string
+  }) => Promise<RoleModelResolution>
 }
 
 /** M42 G1: the rewind slice of an assembly — the host (run.ts / the web
@@ -694,9 +721,17 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
     workflowMount = registerWorkflow(ctx, tools, { workspace: opts.workspace, exec: execService })
-    const providers = createProviderRegistry()
+    // ONE resolver for every role-carrying spawn in this assembly: the subagent
+    // tools, the approval guardian and team teammates all hand their role's
+    // selection to the host's provider plane — the same runtime call the
+    // session's own binding made. The fallback names the selection the host
+    // asked about, so a missing wiring is heard at the first such spawn.
+    const resolveRoleModel: NonNullable<AssemblyOptions["resolveRoleModel"]> = opts.resolveRoleModel ?? (async (selection) => ({
+      status: "unconfigured" as const,
+      reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
+    }))
     const subagent = registerSubagent(ctx, tools, {
-      providers,
+      resolveModel: resolveRoleModel,
       exec: execService,
       parentModel: model,
       parentSession: session,
@@ -738,7 +773,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         parentSession: session,
         parentCtx: ctx,
-        providers,
+        resolveModel: resolveRoleModel,
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
@@ -764,7 +799,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           roles: subagent.roles,
           agents: subagent.agents,
           exec: execService,
-          providers: createProviderRegistry(),
+          resolveModel: resolveRoleModel,
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }

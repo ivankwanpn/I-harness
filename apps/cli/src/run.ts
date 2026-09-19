@@ -26,7 +26,7 @@ import {
   type ReasoningEffort,
 } from "@i-harness/session-executor"
 import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-runtime"
-import { loadProviderRuntime } from "./provider-runtime.ts"
+import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 
 // M33 §5: the session-compact command handler — pure (testable) surface.
 // v0 error semantics: busy text while the executor lane is running (the
@@ -352,9 +352,20 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   try {
     const modelPolicy = opts.modelPolicy
       ?? (opts.mockScript !== undefined ? "test-mock" : "required")
+    // One runtime per run, created at most once: the session's binding and a
+    // ROLE's selection resolve through the same provider plane (the resolver
+    // below is providerModelBindingFor's role twin). Lazy on purpose — a run
+    // handed its model and spawning no model-carrying role loads nothing.
+    let runtimePromise: Promise<ProviderRuntime> | undefined
+    const runtimeNow = (): Promise<ProviderRuntime> => {
+      runtimePromise ??= opts.providerRuntime !== undefined
+        ? Promise.resolve(opts.providerRuntime)
+        : loadProviderRuntime().then((loaded) => loaded.runtime)
+      return runtimePromise
+    }
     let providerBinding: SessionModelBinding | undefined
     if (opts.model === undefined && modelPolicy === "required") {
-      const runtime = opts.providerRuntime ?? (await loadProviderRuntime()).runtime
+      const runtime = await runtimeNow()
       const meta = opts.coordinator !== undefined && activeId !== undefined
         ? (await opts.coordinator.profile(activeId)).meta
         : undefined
@@ -474,6 +485,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           ? { reasoningEffort: providerBinding.reasoningEffort }
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      resolveRoleModel: roleModelResolverFor(runtimeNow),
       parentNotify,
     })
     // Plugin commands are registered FIRST, so this file's own seven — registered

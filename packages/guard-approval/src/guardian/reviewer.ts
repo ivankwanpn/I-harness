@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { deriveSearchText, type Session } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { ProviderRegistry } from "@i-harness/provider"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import {
   spawnChild,
@@ -32,7 +31,8 @@ export interface GuardianReviewDeps {
   parentRegistry: ToolRegistry
   parentSession: Session
   parentCtx: PluginContext
-  providers: ProviderRegistry
+  /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
+  resolveModel: SpawnOptions["resolveModel"]
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
   model?: ModelClient
@@ -137,7 +137,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     parentCtx: deps.parentCtx,
     role,
     parentModel: model,
-    providers: deps.providers,
+    resolveModel: deps.resolveModel,
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,
     agents: deps.subagents.agents,
