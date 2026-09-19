@@ -260,14 +260,18 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
       ? `no protocol of its own — set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
       : route.protocol
     lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
-    // Same rule as `provider list`'s hint: `models probe` refuses on a route
-    // that declares no protocol (there is no wire to shape the request with),
-    // so the next step named is the write that unblocks the probe. A route
-    // with a protocol of its own keeps the probe hint it always had.
+    // Same rule as `provider list`'s hint, and the same two refusing states:
+    // `models probe` refuses on a route that declares no protocol (nothing to
+    // shape the request with) and on one whose discovery is manual-only
+    // (bedrock has no discovery endpoint — provider-runtime/src/index.ts:246
+    // throws it). Each state names the verb that can actually run; a declared
+    // protocol with discovery available keeps the probe hint it always had.
     if (route.models.length === 0) {
       lines.push(route.protocol === undefined
         ? `  (no models — declare a protocol first: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`
-        : `  (no models — try: i-harness models probe ${route.id})`)
+        : route.discovery === "manual-only"
+          ? `  (no models — discovery is unavailable for this route; add one: i-harness models add ${route.id} <id...>)`
+          : `  (no models — try: i-harness models probe ${route.id})`)
     }
     for (const model of route.models) {
       const numbers = model.card?.contextWindow !== undefined

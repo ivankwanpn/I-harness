@@ -179,17 +179,24 @@ describe("renderModels", () => {
   })
 
   it("a modelless route gets the next step that can actually run", () => {
-    // `models probe` refuses on a route that declares no protocol (there is no
-    // wire to shape the request with), so recommending it costs a round trip;
-    // the hint names the write that unblocks the probe. A route with a
-    // protocol of its own keeps the probe hint it always had. Both renderings
-    // are pinned as WHOLE lines: the route line above the hint names the same
-    // command, so a substring assertion would pass on its text alone.
+    // `models probe` refuses in two states — no declared protocol (nothing to
+    // shape the request with) and manual-only discovery (bedrock has no
+    // discovery endpoint) — so recommending it in either costs a round trip.
+    // ALL THREE branches are pinned as WHOLE lines, the unchanged `available`
+    // arm included: the route line above the hint names the same command, so
+    // a substring assertion would pass on its text alone, and an unpinned arm
+    // is one a future edit can collapse silently.
     const protocolLess = renderModels([
       { id: "gw", cardFamily: "gw", declared: false, discovery: "available", models: [] },
     ])
     expect(protocolLess).toContain(`  (no models — declare a protocol first: i-harness provider set gw --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`)
     expect(protocolLess).not.toContain("models probe gw")
+
+    const manualOnly = renderModels([
+      { id: "br", cardFamily: "br", declared: false, protocol: "bedrock", discovery: "manual-only", models: [] },
+    ])
+    expect(manualOnly).toContain("  (no models — discovery is unavailable for this route; add one: i-harness models add br <id...>)")
+    expect(manualOnly).not.toContain("models probe br")
 
     const declared = renderModels([
       { id: "gw", cardFamily: "gw", declared: false, protocol: "gemini", discovery: "available", models: [] },

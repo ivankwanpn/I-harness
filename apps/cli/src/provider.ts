@@ -195,15 +195,19 @@ export function renderProviderList(
         : "no card"
       return `      ${model.id}  (${numbers})${aliases.length > 0 ? `  +${aliases.length} retired name(s): ${aliases.join(", ")}` : ""}`
     })
-    // The next step depends on the route's OWN state: `models probe` refuses
-    // on a route that declares no protocol (there is no wire to shape the
-    // request with), so recommending it costs a round trip; the hint names the
-    // write that unblocks the probe instead. A declared protocol keeps the
-    // probe hint it always had.
+    // The next step depends on the route's OWN facts, because `models probe`
+    // refuses in two states: no declared protocol (nothing to shape the
+    // request with) and manual-only discovery (bedrock; there is no discovery
+    // endpoint at all — provider-runtime/src/index.ts:246 throws it).
+    // Recommending it in either state costs a round trip, so each state names
+    // the verb that can actually run. A declared protocol with discovery
+    // available keeps the probe hint it always had.
     lines.push("    models:", ...(cards.length > 0 ? cards : [
       row.protocol === undefined
         ? `      (none — declare a protocol first: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`
-        : `      (none — try: i-harness models probe ${row.id})`,
+        : row.discovery === "manual-only"
+          ? `      (none — discovery is unavailable for this route; add one: i-harness models add ${row.id} <id...>)`
+          : `      (none — try: i-harness models probe ${row.id})`,
     ]))
     lines.push("")
   }
