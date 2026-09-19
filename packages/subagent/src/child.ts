@@ -123,6 +123,14 @@ export function declaredRoleModel(role: SubagentRole, host: RoleModelHost): Role
   return host.roleSelectionFor?.(role.name) ?? role.model
 }
 
+/** The recorded label for a resolved selection — `provider:model`, the ONE
+ * spelling of that pair. `spawnChild` and the resident rebuild
+ * (`ensureResidentAgent`) both RECORD what the child runs on; a second copy of
+ * this expression would be a second place for the two records to drift. */
+export function modelLabelOf(selection: RoleModelSelection): string {
+  return `${selection.provider}:${selection.model}`
+}
+
 /** The ONE refusal for a gated selection — shared by the spawn path, the
  * restored resident rebuild and `resume_agent`'s diagnostic, so the message
  * cannot drift between them. It names BOTH fixes because the reader has both at
@@ -248,7 +256,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
     }
     model = state.binding.client
-    modelLabel = `${declared.provider}:${declared.model}`
+    modelLabel = modelLabelOf(declared)
   }
 
   const controller = new AbortController()
