@@ -13,7 +13,8 @@
   "dependencies": {
     "@i-harness/core-session": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
-    "@i-harness/harness-home": "workspace:*"
+    "@i-harness/harness-home": "workspace:*",
+    "@i-harness/settings": "workspace:*"
   },
   "devDependencies": {
     "@i-harness/session-persistence-jsonl": "workspace:*"

@@ -1,5 +1,10 @@
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
+// Type-only, following session-executor's precedent (`assembly.ts` imports the
+// same type from the same place): the protocol is the SAME closed set settings
+// validates — a copy of the five names here would be another place to edit one
+// enum. Erased at build time.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 import { repairTurnTail } from "./repair.ts"
 
@@ -38,6 +43,10 @@ export interface SessionModelSelection {
   provider: string
   /** Model id within the provider's registry/catalog. */
   model: string
+  /** The wire this session's selection was made on, when it named one.
+   * ABSENT is not "the default" — it hands the decision to the chain
+   * (model row > route > refusal). Design: protocol-selection §2, §4.2. */
+  protocol?: SettingsProviderProtocol
   /** Optional reasoning-effort hint (forward-compatible passthrough). */
   reasoningEffort?: string
 }

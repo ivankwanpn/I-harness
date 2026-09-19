@@ -838,6 +838,9 @@ importers:
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
     devDependencies:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
@@ -851,6 +854,9 @@ importers:
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/session-query:
     dependencies:
