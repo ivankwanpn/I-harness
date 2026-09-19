@@ -128,11 +128,11 @@ export interface SettingsProviderConfig {
   displayName?: string
   /** Wire protocol (D2). normalizeSettings keeps VALID values only: absent
    * stays absent and invalid raw degrades to absent (review r1 — a normalizing
-   * default-fill would shadow the consumers' resolution chain; the per-route
-   * default belongs there, never in the stored document). Per-route
-   * resolution is resolveProviderProtocol (user > SEEDED_PROTOCOLS > DEFAULT
-   * — the seeded map is EMPTY after the amendment); the section API's mutate
-   * rejects unknown values fail-loud. */
+   * default-fill would shadow the consumers' resolution chain; the resolved
+   * protocol belongs there, never in the stored document). Per-route
+   * resolution is resolveProviderProtocol (user > SEEDED_PROTOCOLS — the
+   * seeded map is EMPTY after the amendment, and absence is where the chain
+   * ends); the section API's mutate rejects unknown values fail-loud. */
   protocol?: SettingsProviderProtocol
   /** Model rows (objects since T1; string entries soft-upgrade at normalize). */
   models?: SettingsModel[]
@@ -462,11 +462,12 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
  * (it never rescues a route either).
  * TWO-TIER protocol stance (review r1): at READ a valid raw value is kept,
  * an absent/invalid raw value stays ABSENT — normalize never fills a default,
- * because the per-route default belongs to resolveProviderProtocol's chain
- * (user > SEEDED_PROTOCOLS({}) > DEFAULT — the seeded map is empty after the
- * amendment); filling here would shadow the consumers' resolution and
- * mis-dispatch the T2 probe / T4 build. Fail-loud rejection of unknown
- * values remains the section API's mutate (the protocol enum FieldSpec). */
+ * because the resolved protocol belongs to resolveProviderProtocol's chain
+ * (user > SEEDED_PROTOCOLS({}) — the seeded map is empty after the
+ * amendment, and the chain has no tail after it); filling here would shadow
+ * the consumers' resolution and mis-dispatch the T2 probe / T4 build.
+ * Fail-loud rejection of unknown values remains the section API's mutate
+ * (the protocol enum FieldSpec). */
 function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (!isRecord(raw)) return null
   const out: SettingsProviderConfig = {}

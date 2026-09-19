@@ -463,31 +463,44 @@ describe("provider protocol + models objects (Task 1)", () => {
     expect(normalizeSettings({ llm: { providers: { p: { protocol: "gpt-5" } } } }).llm.providers.p).toBeUndefined()
   })
 
-  it("resolveProviderProtocol chains user > SEEDED_PROTOCOLS({}) > DEFAULT (T2 probe / T4 dispatch)", () => {
+  it("resolveProviderProtocol chains user > SEEDED_PROTOCOLS({}) — and stops there (T2 probe / T4 dispatch)", () => {
     // user value wins
     expect(resolveProviderProtocol("anthropic", { protocol: "openai-completions" })).toBe("openai-completions")
-    // Amendment: no seeds remain — ANY route without a user protocol resolves
-    // to the generic default (there is no seeded deepseek/anthropic/openai
-    // protocol anymore; every provider is settings-managed).
-    expect(resolveProviderProtocol("anthropic", { apiKeyEnv: "ANTHROPIC_API_KEY" })).toBe("openai-completions")
-    expect(resolveProviderProtocol("openai", {})).toBe("openai-completions")
-    expect(resolveProviderProtocol("deepseek", undefined)).toBe("openai-completions")
-    expect(resolveProviderProtocol("openai-compatible", undefined)).toBe("openai-completions")
-    // unknown route → the generic default (indistinguishable now — no seeds)
-    expect(resolveProviderProtocol("custom-route", {})).toBe("openai-completions")
+    // Amendment: no seeds remain, and there is no tail after them — a route
+    // without a user protocol resolves to ABSENCE, which the callers refuse on
+    // (there is no seeded deepseek/anthropic/openai protocol anymore; every
+    // provider is settings-managed).
+    expect(resolveProviderProtocol("anthropic", { apiKeyEnv: "ANTHROPIC_API_KEY" })).toBeUndefined()
+    expect(resolveProviderProtocol("openai", {})).toBeUndefined()
+    expect(resolveProviderProtocol("deepseek", undefined)).toBeUndefined()
+    expect(resolveProviderProtocol("openai-compatible", undefined)).toBeUndefined()
+    // unknown route → absence too (indistinguishable now — no seeds)
+    expect(resolveProviderProtocol("custom-route", {})).toBeUndefined()
   })
 
-  it("apiKeyEnv-only user entry stays protocol-free; the resolved protocol is the DEFAULT (no seeds remain)", async () => {
+  it("a route with no declared protocol resolves to undefined, not to a default", () => {
+    // The tail this removes: a route nobody declared a protocol for used to
+    // resolve to "openai-completions" SILENTLY. Absence is now absence.
+    expect(resolveProviderProtocol("gateway")).toBeUndefined()
+  })
+
+  it("a declared protocol still wins, and an invalid one is still invalid", () => {
+    expect(resolveProviderProtocol("gateway", { protocol: "anthropic-messages" })).toBe("anthropic-messages")
+    // Read-tolerant: a raw caller's garbage falls through to absence, not to a guess.
+    expect(resolveProviderProtocol("gateway", { protocol: "nope" as never })).toBeUndefined()
+  })
+
+  it("apiKeyEnv-only user entry stays protocol-free; resolution is ABSENT (no seeds remain)", async () => {
     const { store, root } = await newStore()
     // the settings UI's typical partial write: only the key ref, no protocol
     await mutateSection("llm", [{ op: "set", path: ["providers", "anthropic", "apiKeyEnv"], value: "ANTHROPIC_API_KEY_USER" }], store)
     const userCfg = store.get().llm.providers.anthropic
     // user layer stays protocol-free (no normalize fill)
     expect(userCfg).toEqual({ apiKeyEnv: "ANTHROPIC_API_KEY_USER" })
-    expect(resolveProviderProtocol("anthropic", userCfg)).toBe("openai-completions")
+    expect(resolveProviderProtocol("anthropic", userCfg)).toBeUndefined()
     const view = describeSection("llm", store)
     // merged value = the user layer only (every provider is settings-managed);
-    // the resolved default belongs to the consumers' chain, never the view
+    // the resolved protocol belongs to the consumers' chain, never the view
     expect((view.value as AnyRecord).providers.anthropic).toEqual({
       apiKeyEnv: "ANTHROPIC_API_KEY_USER",
     })
@@ -495,7 +508,7 @@ describe("provider protocol + models objects (Task 1)", () => {
     await rm(root, { recursive: true, force: true })
   })
 
-  it("invalid raw protocol in an old file falls back to the DEFAULT protocol at read (no load failure)", async () => {
+  it("invalid raw protocol in an old file degrades to absent at read, and resolution is ABSENT (no load failure)", async () => {
     const root = await tmpRoot()
     const file = join(root, "settings.json")
     await writeFile(file, JSON.stringify({
@@ -506,7 +519,7 @@ describe("provider protocol + models objects (Task 1)", () => {
     const userCfg = store.get().llm.providers.anthropic
     // the bad raw value degrades to absent (not to the old generic default fill)
     expect(userCfg).toEqual({ apiKeyEnv: "ANTHROPIC_API_KEY" })
-    expect(resolveProviderProtocol("anthropic", userCfg)).toBe("openai-completions")
+    expect(resolveProviderProtocol("anthropic", userCfg)).toBeUndefined()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -556,10 +569,11 @@ describe("provider protocol + models objects (Task 1)", () => {
     ])
   })
 
-  it("SEEDED_PROTOCOLS is EMPTY: no built-in provider routes (the resolver keeps the user > {} > DEFAULT chain shape)", () => {
+  it("SEEDED_PROTOCOLS is EMPTY: no built-in provider routes (the resolver keeps the user > {} chain shape)", () => {
     // Amendment: seeds were removed entirely — every provider comes from the
     // user section. The export stays (the resolver chain shape
-    // `user > SEEDED_PROTOCOLS > DEFAULT` is preserved); it simply never matches.
+    // `user > SEEDED_PROTOCOLS` is preserved, with NO tail after it); it simply
+    // never matches.
     expect(SEEDED_PROTOCOLS).toEqual({})
   })
 })
