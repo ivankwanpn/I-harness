@@ -528,9 +528,13 @@ it("marks a route with no protocol OF ITS OWN — not as a wire nobody declared"
   // 必須印出的那串尾巴。要釘的是「**路由自己的括號裡不能是一個協議**」：
   expect(out).not.toContain("gateway  [openai-completions]")
   expect(out).not.toContain("gateway  [undefined]")
-  expect(out).toContain("gateway  [no protocol")
-  expect(out).toContain("no protocol")
-  expect(out).toContain("i-harness provider set gateway --protocol")
+  expect(out).toContain("gateway  [no protocol of its own")
+  // ⚠ 這兩條是複審要求的：契約有兩半 ——「拿掉判決」與「列出集合」。
+  // `toContain("no protocol")` 是**子字串**，句子一改它就不再守任何東西；
+  // 而 `toContain("i-harness provider set gateway --protocol")` 在尾巴退化成
+  // **單一協議**時仍然會過。集合那一半要用集合本身釘。
+  expect(out).not.toContain("cannot be used")
+  expect(out).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
 })
 
 it("a route that DOES declare one still prints it, unchanged", () => {
@@ -598,15 +602,23 @@ it("marks a route with no protocol of its own, the same as provider list", () =>
   // sentence changes — measured, not assumed.
   expect(out).toContain("no protocol of its own")
   expect(out).not.toContain("cannot be used")
-  expect(out).toContain("i-harness provider set gw --protocol")
+  // 契約的另一半 ——「列出集合」—— 用集合本身釘，理由同 provider 那邊。
+  expect(out).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
 })
 
 it("does NOT tell a protocol-less route it is unusable when a ROW supplies the protocol", () => {
   // The guard the review demanded, and the case the original wording failed:
   // the chain is selection > model row > route, so a row carrying a protocol
-  // makes the route usable. Write the runtime assertion FIRST — on the buggy
-  // source it PASSES while the listing assertion fails, which is what proves
-  // the measured red is a LISTING lie and not a runtime failure.
+  // makes the route usable.
+  //
+  // ⚠ 執行期斷言必須寫在**列表斷言之前**，這不是風格問題：在修復前的原始碼上
+  // 它會**先通過**，然後列表斷言才紅 —— 那正是「這次紅測到的是**列表說謊**，
+  // 不是執行期壞掉」的證據。用這支測試檔**既有**的 runtime fixture 建一條
+  // 沒有協議的路由 + 一個帶 protocol 的模型行，然後：
+  await expect(
+    runtime.resolveModel({ sessionSelection: { provider: "gw", model: "m" } }),
+  ).resolves.toMatchObject({ status: "ready" })
+
   const out = renderModels([
     {
       id: "gw", cardFamily: "gw", declared: false, discovery: "available",
