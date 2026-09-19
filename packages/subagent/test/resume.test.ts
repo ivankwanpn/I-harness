@@ -143,6 +143,46 @@ describe("ensureResidentAgent", () => {
     expect(await ensureResidentAgent(declared, entry)).toBe(false) // resolver answered "no route"
     expect(calls).toEqual([{ provider: "gw", model: "from-settings" }])
   }, 10_000)
+
+  // Task 6 fix round: the rebuild re-resolves against the LIVE settings
+  // callback, so it can move the recorded label EITHER way. A label written
+  // only at spawn goes stale — the row would print the model the child ran on
+  // before the settings changed, which is exactly what R3 ("say what IS")
+  // forbids. Both directions are asserted: the label must follow the rebuild.
+  it("a rebuild that resolves a DIFFERENT selection re-records the entry's model label", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    entry.modelLabel = "gw:small" // what the child ran on when it was spawned
+    table.add(entry.path, entry)
+    const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const reResolved: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "general" ? { provider: "gw", model: "big" } : undefined),
+      resolveModel: async () => ({ status: "ready" as const, binding: { client: model } }),
+    }
+
+    expect(await ensureResidentAgent(reResolved, entry)).toBe(true)
+    // the row says what the child runs on NOW, not what it ran on at spawn
+    expect(entry.modelLabel).toBe("gw:big")
+  }, 10_000)
+
+  it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    entry.modelLabel = "gw:small" // recorded at spawn, before the entry was cleared
+    table.add(entry.path, entry)
+    const inheritsNow: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => undefined, // the settings entry was removed
+    }
+
+    expect(await ensureResidentAgent(inheritsNow, entry)).toBe(true)
+    // it runs on the parent's client now — a label left behind would name a
+    // model the child is no longer running on
+    expect(entry.modelLabel).toBeUndefined()
+  }, 10_000)
 })
 
 describe("driveFollowups rebuild injection (M23 wakeup no-op fix)", () => {

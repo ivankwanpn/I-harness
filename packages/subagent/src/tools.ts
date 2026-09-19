@@ -14,7 +14,7 @@ import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { declaredRoleModel, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
+import { declaredRoleModel, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
 export interface SubagentToolDeps extends RoleModelHost {
@@ -593,6 +593,14 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     if (state.status !== "ready") return false
     model = state.binding.client
   }
+  // The label records what the child runs on NOW, and a rebuild can move it
+  // EITHER way: a settings entry added while the toggle is on moves an
+  // inheriting entry to labeled, and one removed moves it back. Assigning only
+  // in the labeled direction would leave the second case printing "inherited
+  // from the session" while it runs on a configured model. (The switch-off and
+  // non-ready arms returned above — those rebuilds change nothing, so the label
+  // still describes the client the child was last left on.)
+  entry.modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     session: entry.session, tools: childReg, model,
