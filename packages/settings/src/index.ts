@@ -100,6 +100,20 @@ export function normalizeInputModalities(raw: unknown): SettingsInputModality[] 
  * packages/credentials (Task 2), so this document never holds key material. */
 export interface SettingsProviderConfig {
   apiKeyEnv?: string
+  /** The model-card FAMILY this route draws its per-model capability metadata
+   * from (`model-catalog.json`'s top-level key — `deepseek`, `gemini`, …).
+   *
+   * The route NAME is the default, and that is deliberate: most routes are named
+   * after their vendor, so the default is the status quo rather than a guess.
+   * This field exists for the routes where it is not — the user's second route
+   * for a vendor (`deepseek1`, opened to use a second API key) inherits nothing
+   * from the name `deepseek`, and before this field it inherited nothing at all.
+   *
+   * It is declared, NOT derived from baseURL, because a derivation would be wrong
+   * on precisely the set-ups the field exists for: gateways, proxies, regional
+   * and subscription variants, and any vendor fronted by a custom host. A wrong
+   * family is worse than no family — it supplies another vendor's numbers. */
+  catalog?: string
   /** Host ROOT after normalize (a trailing /v1 is stripped — the adapters
    * assemble /v1/... themselves); see stripBaseURLSuffix. */
   baseURL?: string
@@ -429,6 +443,7 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   }
   if (isNonEmptyString(raw.modelsURL)) out.modelsURL = raw.modelsURL
   if (isNonEmptyString(raw.displayName)) out.displayName = raw.displayName
+  if (isNonEmptyString(raw.catalog)) out.catalog = raw.catalog
   const models = normalizeModels(raw.models)
   if (models !== undefined) out.models = models
   const headers = normalizeProviderHeaders(raw.headers)

@@ -388,6 +388,96 @@ describe("model resolution", () => {
     })
   })
 
+  // ── the card FAMILY, declared rather than inferred from the route name ──────
+  // `runtimeProfile` sets `name: view.id`, and the card lookup used that name —
+  // so a provider whose route is named anything other than the vendor's table key
+  // resolved NO model metadata at all. Measured 2026-09-19: `deepseek1` (the
+  // user's second route, opened to use a second API key) got nothing while
+  // `deepseek` got the card. The route name is the user's label; it is not a
+  // vendor identity, and the two only coincide by convention.
+  it("a route named DIFFERENTLY from its vendor still reaches the card, via a declared catalog", async () => {
+    const f = await fixture({
+      providers: {
+        deepseek1: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          catalog: "deepseek", // ← the declaration the route name cannot make
+          models: [{ id: "deepseek-v4-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek1", model: "deepseek-v4-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { contextWindow: 1_048_576 },
+    })
+    // NOT asserted: the card's `maxOutputTokens`, because it does not reach the
+    // binding. Measured 2026-09-19 — `SessionModelBinding` has no such field and
+    // `resolveModel` takes only `.contextWindow` off `resolveEffectiveModelContext`,
+    // so the card parses it, validates it, threads it through the five-tier chain
+    // and then drops it. Nothing in production reads it (its only mentions are in
+    // this package's own loader and chain), which is the repo's familiar shape:
+    // a capability built to the last link with no consumer. Recorded in the
+    // design's open questions; NOT fixed here, because whether we should SEND
+    // `max_output_tokens` at all is a separate decision (Codex does not model it;
+    // Pi, DSH and Grok do).
+  })
+
+  it("with NO catalog declared, the route name IS the family — unchanged, and deliberately so", async () => {
+    // The default is the route name, NOT a guess. A provider named after its
+    // vendor keeps working exactly as before, and `deepseek1` is fixed by one
+    // line of config rather than by inferring a vendor from a base URL — which
+    // would guess wrong on exactly the gateways, proxies and regional variants
+    // the field exists for. A default that is merely the status quo is honest;
+    // a derivation would be a claim.
+    const f = await fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "deepseek-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek", model: "deepseek-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { contextWindow: 1_048_576 },
+    })
+    // `deepseek-flash` rather than a retired name ON PURPOSE: this case declares
+    // no `catalog`, so it isolates the ALIAS — the table's new name reaching the
+    // same card as the old ones — from the field the case above proves.
+  })
+
+  it("`deepseek-flash` — the vendor's CURRENT name — reaches the same card as the retired one", async () => {
+    // DeepSeek renamed `deepseek-v4-flash` → `deepseek-flash`, and its own docs
+    // say the old names "仍可调用，但对应模型已下线，请求将由 DeepSeek V4.1-Flash
+    // 模型提供服务" — i.e. both names now serve the SAME model. Our table listed
+    // only the retired ones, so the current name resolved nothing. Both are
+    // aliases of one card; DSH's own catalogue lists them side by side.
+    const f = await fixture({
+      providers: {
+        deepseek1: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          catalog: "deepseek",
+          models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek1", model: "deepseek-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    const current = await f.runtime.resolveModel({})
+    expect(current).toMatchObject({ status: "ready", binding: { contextWindow: 1_048_576 } })
+    const retired = await f.runtime.resolveModel({ override: "deepseek1:deepseek-v4-flash" })
+    expect(retired).toMatchObject({ status: "ready", binding: { contextWindow: 1_048_576 } })
+  })
+
   it("reports a missing non-Bedrock credential as unconfigured", async () => {
     const { runtime, builds } = await fixture({
       providers: {
