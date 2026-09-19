@@ -212,13 +212,13 @@ function runtimeProfile(
         // The chain ran out. Name the ROUTE (not the model): the protocol is
         // the route's declaration, and `provider set` is the verb that owns it.
         return invalidState(
-          `provider "${providerId}" declares no protocol, so "${modelId}" cannot be sent; set one with: i-harness provider set ${providerId} --protocol P`,
+          `provider "${providerId}" declares no protocol, so "${modelId}" cannot be sent; set one with: i-harness provider set ${providerId} --protocol ${PROTOCOL_CHOICES}`,
           providerId,
           modelId,
         )
       }
 ```
-（`invalidState` 已經在這支檔案裡。訊息**不列舉**那五個 —— `provider set` 自己會列，而 spec §2 的範例用的就是 `P`。**不要**為此新增 `PROVIDER_PROTOCOLS` 的 import：provider-runtime 現在沒有它。）
+（`invalidState` 已經在這支檔案裡。`PROTOCOL_CHOICES` 是模組私有的 `\`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>\`` —— **不是 export**，所以不佔 gate 的 row；`PROVIDER_PROTOCOLS` 從既有的 `@i-harness/settings` import 那一行加進去。**不要寫成 `--protocol P`**：那個字面照抄會得到 `unknown protocol "P"`，在修好之前先撞第二個錯。spec §2 的範例用的是 `P`，但本 repo 已經裁定過這件事（`5d0f2d89`）。）
 
 6. **`view.protocol` 有六個讀者，不是兩個 —— 逐個處置（實測清單，不要漏）**
 
@@ -547,10 +547,13 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
     // A route with no declared protocol is NOT a route with a default one: it
     // is a route that cannot be sent to. The listing says so, and names the
     // verb that fixes it — `[undefined]` would be a rendering accident, and
-    // `[openai-completions]` would be a wire nobody declared.
+    // `[openai-completions]` would be a wire nobody declared. The repair names
+    // the SET, not a placeholder — `--protocol P` copied verbatim fails with
+    // `unknown protocol "P"`, a second error before the fix (this repo already
+    // ruled on that: 5d0f2d89, "P was the --provider placeholder").
     lines.push(
       row.protocol === undefined
-        ? `  ${row.id}  [no protocol — cannot be used; set one with: i-harness provider set ${row.id} --protocol P]`
+        ? `  ${row.id}  [no protocol — cannot be used; set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
         : `  ${row.id}  [${row.protocol}]${row.configured ? "" : "  (not configured)"}`,
     )
 ```
@@ -595,7 +598,7 @@ Expected: FAIL —— `expected '…[undefined]…' not to contain 'undefined'`
 `apps/cli/src/models.ts`（`renderModels`，:247）—— 把那一行拆出一個區域變數，**不要複製那串長尾**：
 ```ts
     const wire = route.protocol === undefined
-      ? `no protocol — cannot be used; set one with: i-harness provider set ${route.id} --protocol P`
+      ? `no protocol — cannot be used; set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
       : route.protocol
     lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
 ```
