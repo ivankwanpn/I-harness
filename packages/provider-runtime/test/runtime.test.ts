@@ -346,11 +346,10 @@ describe("model resolution", () => {
       providerId: "missing",
       modelId: "model",
     })
-    await expect(ready.runtime.resolveModel({ override: "deepseek:not-catalogued" })).resolves.toMatchObject({
-      status: "invalid",
-      providerId: "deepseek",
-      modelId: "not-catalogued",
-    })
+    // `deepseek:not-catalogued` used to sit here and is now a READY case — an
+    // uncatalogued model is not an invalid state (see the test below it). It was
+    // removed rather than moved: this case asserts "invalid WITHOUT building a
+    // client", and an unknown model DOES build one now.
     await expect(ready.runtime.resolveModel({
       sessionSelection: { provider: "deepseek", model: "session-model", reasoningEffort: "turbo" },
     })).resolves.toMatchObject({
@@ -360,6 +359,33 @@ describe("model resolution", () => {
       reason: expect.stringMatching(/reasoning/i),
     })
     expect(ready.builds).toEqual([])
+  })
+
+  it("an UNCATALOGUED model resolves — the catalog is advisory, not a licence", async () => {
+    // Measured 2026-09-19, against the real home: the membership check refused
+    // `deepseek-flash` — the name DeepSeek's own docs tell you to use — because
+    // our table still listed the RETIRED ones (`deepseek-v4-flash`, …). A vendor
+    // rename was enough to break the default-model path.
+    //
+    // Six shipping harnesses were read for this. Four pass an unknown model
+    // straight through (Codex with a 272k fallback + `used_fallback_model_metadata`,
+    // Pi by cloning the provider's default, DSH never rejecting by design), one
+    // probes the provider, and the two that refuse — opencode and Grok — both
+    // give an actionable message and a documented escape hatch. This check gave
+    // neither: `is not in the configured catalog`, and no route to fix it.
+    //
+    // And the code after it already tolerated an undeclared model (`userModel?.`,
+    // an optional `contextWindow` in the binding), so it withheld service without
+    // supplying anything in return. An unknown PROVIDER still refuses — there is
+    // no base URL and no auth without it — and that is the line the next case pins.
+    const { runtime } = await readyFixture()
+    await expect(runtime.resolveModel({ override: "deepseek:not-catalogued" })).resolves.toMatchObject({
+      status: "ready",
+      // On the BINDING, not the top level: `invalidState` hoists providerId/modelId
+      // so the neighbours above read that way, but a ready result carries them
+      // inside the binding it built.
+      binding: { providerId: "deepseek", modelId: "not-catalogued" },
+    })
   })
 
   it("reports a missing non-Bedrock credential as unconfigured", async () => {
