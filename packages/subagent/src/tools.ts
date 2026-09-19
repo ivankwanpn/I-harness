@@ -10,7 +10,7 @@ import type { ExecService } from "@i-harness/exec"
 // by the host via RegisterSubagentOptions.workflow), so absent = current
 // behavior (subagent → exec only).
 import type { WorkflowExecutor } from "@i-harness/workflow"
-import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
+import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
@@ -586,12 +586,16 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
   // model resolution identical to spawnChild (child.ts): the declared selection
   // (settings first, then role.model) → the host's resolver; else inherit the
-  // parent model.
+  // parent model. The binding's `reasoningEffort` rides along for the same
+  // reason it does at spawn: a rebuild that kept only the client would run the
+  // same model at the adapter default.
   let model = deps.parentModel
+  let reasoningEffort: ReasoningEffort | undefined
   if (declared !== undefined) {
     const state = await deps.resolveModel(declared)
     if (state.status !== "ready") return false
     model = state.binding.client
+    reasoningEffort = state.binding.reasoningEffort
   }
   // The label records what the child runs on NOW, and a rebuild can move it
   // EITHER way: a settings entry added while the toggle is on moves an
@@ -605,6 +609,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const agent = createAgent(childCtx, {
     session: entry.session, tools: childReg, model,
     systemPrompt: role.systemPrompt, signal: controller.signal,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
     // team member via the durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),

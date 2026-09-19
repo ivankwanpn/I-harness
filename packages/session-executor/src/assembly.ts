@@ -79,11 +79,14 @@ export class ModelUnavailableError extends Error {
  * provider runtime's own answer satisfies it exactly as it stands — this
  * package stays independent of provider-runtime (the same reason service.ts
  * declares its own binding result type), and the subagent seam this feeds
- * reads nothing but the status, the reason and the client. */
+ * reads nothing but the status, the reason and the client. The ready arm also
+ * admits `reasoningEffort`: the runtime resolves the selection's effort (and
+ * refuses an invalid one), and the spawn hands it to `createAgent` instead of
+ * dropping it at the boundary — the field is the runtime binding's own. */
 type RoleModelResolution =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort } }
 
 /** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
  * holds, and what subagent's own `RoleModelSelection` is: named here so the
