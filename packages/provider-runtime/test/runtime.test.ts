@@ -172,6 +172,11 @@ describe("provider directory", () => {
       ],
       defaultModel: "default-model",
       discovery: "available",
+      // No `catalog` declared anywhere in this fixture, so the route name IS
+      // the family. Reported as a resolved value so a listing never has to
+      // re-implement `catalog ?? id` — and reported WITHOUT `catalog`, which is
+      // what lets a reader tell "declared" from "defaulted".
+      cardFamily: "deepseek",
     })
   })
 
