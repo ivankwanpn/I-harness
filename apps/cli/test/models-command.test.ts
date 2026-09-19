@@ -177,6 +177,25 @@ describe("renderModels", () => {
 
     expect(out).toContain("[gemini]")
   })
+
+  it("a modelless route gets the next step that can actually run", () => {
+    // `models probe` refuses on a route that declares no protocol (there is no
+    // wire to shape the request with), so recommending it costs a round trip;
+    // the hint names the write that unblocks the probe. A route with a
+    // protocol of its own keeps the probe hint it always had. Both renderings
+    // are pinned as WHOLE lines: the route line above the hint names the same
+    // command, so a substring assertion would pass on its text alone.
+    const protocolLess = renderModels([
+      { id: "gw", cardFamily: "gw", declared: false, discovery: "available", models: [] },
+    ])
+    expect(protocolLess).toContain(`  (no models — declare a protocol first: i-harness provider set gw --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`)
+    expect(protocolLess).not.toContain("models probe gw")
+
+    const declared = renderModels([
+      { id: "gw", cardFamily: "gw", declared: false, protocol: "gemini", discovery: "available", models: [] },
+    ])
+    expect(declared).toContain("  (no models — try: i-harness models probe gw)")
+  })
 })
 
 describe("runModelsCommand", () => {

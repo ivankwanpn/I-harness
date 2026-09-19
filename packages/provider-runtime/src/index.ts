@@ -75,8 +75,11 @@ export interface ProviderRuntimeEntry {
   id: string
   displayName: string
   /** The route's DECLARED wire protocol. ABSENT means the route declares none
-   * — which is not a default: it is a route that refuses to resolve (see
-   * `resolveModel`), so a listing must not render the absence as a wire. */
+   * OF ITS OWN — which is not a default, and NOT a verdict on usability: the
+   * resolution chain is selection > model row > route (`resolveModel`), so
+   * such a route still resolves whenever a row or a selection names one. It
+   * refuses only when all three are silent. A listing must therefore not
+   * render the absence as a wire, and must not claim the route cannot be used. */
   protocol?: SettingsProviderProtocol
   configured: boolean
   auth: {
