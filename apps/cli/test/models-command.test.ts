@@ -176,6 +176,83 @@ describe("runModelsCommand", () => {
     expect(models).toEqual([{ id: "keep-me" }, { id: "deepseek-flash" }])
   })
 
+  it("a --max-tokens above the card's maxOutputTokens warns on stderr and does NOT block", async () => {
+    // Spec §5: 警告，不阻擋，exit 0. The card is documentation, not a wall —
+    // the standing stance is no clamping (fail loud at the model end instead).
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.join(" ")) })
+    try {
+      // deepseek-flash's card caps output at 384,000; 400k = 409,600.
+      expect(await runModelsCommand(["models", "add", "gw", "deepseek-flash", "--max-tokens", "400k"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(errors.join("\n")).toContain("deepseek-flash")
+    expect(errors.join("\n")).toMatch(/409600/)
+    expect(errors.join("\n")).toMatch(/384000/)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.models)
+      .toContainEqual({ id: "deepseek-flash", maxTokens: 409_600 })
+
+    // `set` is the same check, and the boundary is "above", not "at".
+    const atCap: string[] = []
+    const spy2 = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { atCap.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--max-tokens", "384000"])).toBe(0)
+    } finally {
+      spy2.mockRestore()
+    }
+    expect(atCap.join("\n")).toBe("")
+    const overCap: string[] = []
+    const spy3 = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { overCap.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--max-tokens", "400k"])).toBe(0)
+    } finally {
+      spy3.mockRestore()
+    }
+    expect(overCap.join("\n")).toContain("409600")
+  })
+
+  it("set with no flags says there was nothing to change", async () => {
+    await runModelsCommand(["models", "add", "gw", "deepseek-flash"])
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.join("\n")).toContain("nothing to change")
+    expect(lines.join("\n")).not.toContain("updated")
+  })
+
+  it("a route that does not exist is named, not reported as an empty config", async () => {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "gww"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    const out = lines.join("\n")
+    expect(out).toContain('no route "gww"')
+    expect(out).toContain("gw")
+    expect(out).not.toContain("no provider routes configured")
+  })
+
+  it("the genuinely-empty case still says no routes are configured", async () => {
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: { providers: {}, defaultModel: { provider: "", model: "" } },
+    }), "utf8")
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "gww"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.join("\n")).toContain("no provider routes configured")
+  })
+
   it("rm takes a row out; an absent row is a failure, not a shrug", async () => {
     expect(await runModelsCommand(["models", "rm", "gw", "keep-me"])).toBe(0)
     expect(await runModelsCommand(["models", "rm", "gw", "keep-me"])).toBe(1)
