@@ -287,6 +287,13 @@ export interface SessionIdResult {
 export interface SessionModelSelection {
   provider: string
   model: string
+  /** The wire this selection was made on, when it named one. A STRING, not
+   * settings' closed set: this file is the zero-dependency wire contract, and
+   * the closed set is already enforced where a raw value actually enters —
+   * session-persistence-jsonl's parser drops anything outside the five. Same
+   * rule as `reasoningEffort` directly below: loose on the wire, validated at
+   * the boundary. */
+  protocol?: string
   reasoningEffort?: string
 }
 
