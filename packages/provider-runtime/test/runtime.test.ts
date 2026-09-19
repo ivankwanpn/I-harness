@@ -986,3 +986,65 @@ describe("canonical mutations", () => {
     })
   })
 })
+
+// D4-superseding (spec §3.1): `discoverModels` probed AND wrote, so "show me
+// what this endpoint offers" could not be asked without also changing the
+// route's model list. This is the read half.
+describe("probeModels — the read half of discovery", () => {
+  async function probeFixture() {
+    const probe = vi.fn(async () => [{ id: "gw-model", name: "Gateway" }])
+    const f = await fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://gateway.example",
+          modelsURL: "https://models.example/v1/models",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "manual" }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+        registry.registerProbe("deepseek", probe)
+      },
+    })
+    return { ...f, probe }
+  }
+
+  it("returns what the endpoint offers and writes NOTHING", async () => {
+    const { runtime, settings } = await probeFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.probeModels("deepseek")).resolves.toEqual([{ id: "gw-model", name: "Gateway" }])
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("leaves the discovery memo alone — a later discoverModels still writes", async () => {
+    const { runtime, settings } = await probeFixture()
+
+    await runtime.probeModels("deepseek")
+    // No `force`: only a populated memo could answer without probing. If
+    // probeModels had filled it, the settings below would be untouched.
+    await runtime.discoverModels("deepseek")
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "manual" },
+      { id: "gw-model", name: "Gateway" },
+    ])
+  })
+
+  it("refuses bedrock, a keyless route, and a route that is not configured", async () => {
+    const { runtime } = await fixture({
+      providers: {
+        bedrock: { baseURL: "https://bedrock.example", protocol: "bedrock" },
+        keyless: { baseURL: "https://gw.example", protocol: "openai-completions" },
+      },
+    })
+
+    await expect(runtime.probeModels("bedrock")).rejects.toThrow(/manually|not available/i)
+    await expect(runtime.probeModels("keyless")).rejects.toThrow(/No API key/i)
+    await expect(runtime.probeModels("nope")).rejects.toThrow(/not configured/)
+  })
+})

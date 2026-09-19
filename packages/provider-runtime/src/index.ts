@@ -70,6 +70,9 @@ export interface ProviderRuntime {
   removeProvider(id: string): Promise<void>
   setApiKey(id: string, value: string): Promise<void>
   clearApiKey(id: string): Promise<void>
+  /** What the route's endpoint offers, WITHOUT writing anything. The read half
+   * of `discoverModels` — see that method for why the two are separate. */
+  probeModels(id: string, options?: { signal?: AbortSignal }): Promise<ModelDescriptor[]>
   discoverModels(
     id: string,
     options?: { force?: boolean; signal?: AbortSignal },
@@ -153,6 +156,45 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
   async function persistLlm(next: SettingsLlm): Promise<void> {
     await options.settings.set({ llm: next })
+  }
+
+  /** One probe, one credential resolution, no writes. The single implementation
+   * behind `probeModels` and `discoverModels`. */
+  async function probeRouteModels(
+    id: string,
+    probeOptions: { signal?: AbortSignal },
+  ): Promise<ModelDescriptor[]> {
+    probeOptions.signal?.throwIfAborted()
+
+    const view = provider(id)
+    if (view === undefined) throw new Error(`provider "${id}" is not configured`)
+    if (view.protocol === "bedrock") {
+      throw new Error("Discovery is not available for this provider; add a model ID manually.")
+    }
+
+    const ref = authRef(view)
+    if (ref === undefined) throw new Error(`No API key configured for provider "${id}"`)
+    const resolvedAuth = await auth.resolve(ref, {
+      providerId: id,
+      purpose: "discovery",
+      ...(probeOptions.signal !== undefined ? { signal: probeOptions.signal } : {}),
+    })
+    const apiKey = authValue(resolvedAuth)
+    if (apiKey === undefined) throw new Error(`No API key configured for provider "${id}"`)
+    probeOptions.signal?.throwIfAborted()
+
+    const models = await registry.probeModels(id, {
+      ...(view.modelsURL !== undefined
+        ? { modelsURL: view.modelsURL }
+        : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
+      apiKey,
+      protocol: view.protocol,
+      // M60 E: the route's configured headers (a gateway may require one for
+      // discovery too) — the probe's own auth keys still win.
+      ...(view.headers !== undefined ? { headers: view.headers } : {}),
+    })
+    // Copied: the registry's array is not a caller's to mutate.
+    return cloneModels(models)
   }
 
   return {
@@ -247,6 +289,11 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         providers: nextProviders,
         defaultModel: { ...llm.defaultModel },
       })
+    },
+
+    async probeModels(id, probeOptions = {}) {
+      assertProviderId(id)
+      return probeRouteModels(id, probeOptions)
     },
 
     async discoverModels(id, discoveryOptions = {}) {
