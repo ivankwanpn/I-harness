@@ -451,3 +451,38 @@ describe("SettingsStore", () => {
     await rm(root, { recursive: true, force: true })
   })
 })
+
+// The roles section: each role may name a model. `provider` and `model` are
+// required TOGETHER — a half entry is not a setting, it is a guess, and the
+// normalizer drops it the same way it drops a bad baseURL.
+describe("agents.roles", () => {
+  it("round-trips a full entry and defaults to none", () => {
+    const parsed = normalizeSettings({
+      agents: {
+        roles: {
+          worker: { provider: "gw", model: "big", protocol: "anthropic-messages", reasoningEffort: "max" },
+          explore: { provider: "gw", model: "small" },
+        },
+      },
+    })
+    expect(parsed.agents.roles).toEqual({
+      worker: { provider: "gw", model: "big", protocol: "anthropic-messages", reasoningEffort: "max" },
+      explore: { provider: "gw", model: "small" },
+    })
+    expect(normalizeSettings({}).agents).toEqual({ roles: {} })
+  })
+
+  it("drops a HALF entry rather than completing it", () => {
+    const parsed = normalizeSettings({
+      agents: { roles: { general: { provider: "gw" }, worker: { model: "big" } } },
+    })
+    expect(parsed.agents.roles).toEqual({})
+  })
+
+  it("drops an invalid protocol but keeps the entry", () => {
+    const parsed = normalizeSettings({
+      agents: { roles: { general: { provider: "gw", model: "m", protocol: "grpc" } } },
+    })
+    expect(parsed.agents.roles).toEqual({ general: { provider: "gw", model: "m" } })
+  })
+})
