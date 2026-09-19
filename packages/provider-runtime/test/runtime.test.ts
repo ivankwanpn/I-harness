@@ -529,6 +529,9 @@ describe("model resolution", () => {
     const state = await runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } })
     // Actionable, not merely true: the message names the EXACT verb that fixes it.
     expect(state.status === "invalid" && state.reason).toContain("i-harness provider set gateway --protocol")
+    // And it names the SET, not a placeholder: `--protocol P` copied verbatim
+    // would fail with `unknown protocol "P"` — a second error before the fix.
+    expect(state.status === "invalid" && state.reason).toContain("one of: ")
   })
 
   it("the route's protocol still wins when it declares one, and the selection still beats the row", async () => {
@@ -1163,6 +1166,8 @@ describe("probeModels — the read half of discovery", () => {
 
     await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
     await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
+    // The repair names the SET (see the resolveModel guard test's note).
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(/one of: /)
   })
 
   it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
@@ -1353,8 +1358,9 @@ describe("protocol: the row overrides the route", () => {
             { id: "plain-model" },
           ],
         },
-        // A second route whose protocol is NOT the hard-coded default — see the
-        // assertion below for why `gw` alone cannot prove the route arm ran.
+        // A second route whose protocol is NOT openai-completions (what `gw`
+        // declares) — it is what makes the route-arm inheritance below
+        // distinguishable from a collapsed arm.
         claude: {
           baseURL: "https://claude.example",
           protocol: "anthropic-messages",
@@ -1374,10 +1380,11 @@ describe("protocol: the row overrides the route", () => {
 
     // adapterProtocol maps openai-completions → openai-compatible.
     expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
-    // This row's route protocol COINCIDES with the hard-coded default
-    // (provider-runtime's runtimeProfile falls back to openai-completions only
-    // if the route arm collapsed), so on its own it would still pass if the
-    // route arm did nothing at all.
+    // This row's route protocol happens to BE openai-completions, so this
+    // assertion alone does not show where the value came from — though a
+    // collapsed route arm can no longer produce a passing coincidence:
+    // runtimeProfile returns undefined (no build) and never falls back.
+    // The row below is the distinguishing case.
     expect(builds[1]?.profile.protocol).toBe("openai-compatible")
     // The distinguishing case: a protocol-less row on an anthropic-messages
     // route. Only inheritance from the ROUTE produces this value — a collapsed

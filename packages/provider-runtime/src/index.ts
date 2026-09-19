@@ -15,6 +15,7 @@ import {
   type ProviderRegistry,
 } from "@i-harness/provider"
 import {
+  PROVIDER_PROTOCOLS,
   resolveProviderProtocol,
   type SettingsDefaultModel,
   type SettingsInputModality,
@@ -190,6 +191,11 @@ const REASONING_EFFORTS = new Set<ReasoningEffort>([
   "max",
 ])
 
+/** The refusal names the SET, not a placeholder: `--protocol P` copied
+ * verbatim fails with `unknown protocol "P"` — a second error before the fix.
+ * Same correction as 5d0f2d89 ("P was the --provider placeholder"). */
+const PROTOCOL_CHOICES = `<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
+
 export function createProviderRuntime(options: CreateProviderRuntimeOptions): ProviderRuntime {
   const registry = options.registry ?? defaultProviderRegistry()
   const auth = options.auth ?? createProviderAuthResolver(options.credentials)
@@ -257,7 +263,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     const probeProtocol = probeOptions.protocol ?? view.protocol
     if (probeProtocol === undefined) {
       throw new Error(
-        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol P`,
+        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol ${PROTOCOL_CHOICES}`,
       )
     }
 
@@ -629,7 +635,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         // The chain ran out. Name the ROUTE (not the model): the protocol is
         // the route's declaration, and `provider set` is the verb that owns it.
         return invalidState(
-          `provider "${providerId}" declares no protocol, so "${modelId}" cannot be sent; set one with: i-harness provider set ${providerId} --protocol P`,
+          `provider "${providerId}" declares no protocol, so "${modelId}" cannot be sent; set one with: i-harness provider set ${providerId} --protocol ${PROTOCOL_CHOICES}`,
           providerId,
           modelId,
         )

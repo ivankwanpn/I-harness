@@ -75,9 +75,9 @@ describe("new keys default without migration (old file loads fine)", () => {
     })
     // T1 (providers): trailing /v1 stripped at normalize (root convention),
     // old string model entries soft-upgrade to {id}. Protocol is NOT filled
-    // (review r1: the per-route default is the consumers' seed chain —
-    // user > SEEDED_PROTOCOLS > DEFAULT — filling it here would shadow a
-    // seeded route's protocol, e.g. anthropic-messages).
+    // (review r1: resolution belongs to the consumers' seed chain —
+    // user > SEEDED_PROTOCOLS, with no tail after it — filling it here would
+    // shadow a seeded route's protocol, e.g. anthropic-messages).
     expect(s.llm.providers.gateway).toEqual({
       apiKeyEnv: "GATEWAY_KEY",
       baseURL: "https://g.local",
@@ -138,8 +138,8 @@ describe("describeSection", () => {
     expect(value.providers.gateway.baseURL).toBe("https://gateway.local") // /v1 stripped on the write path
     expect(value.providers.gateway.models).toEqual([{ id: "g1" }, { id: "g2" }])
     // a route stays protocol-free at describe (resolution is the consumers'
-    // chain: user > SEEDED_PROTOCOLS({}) > DEFAULT — the user layer never got a
-    // protocol write)
+    // chain: user > SEEDED_PROTOCOLS({}), which now ends in absence — the user
+    // layer never got a protocol write)
     expect("protocol" in value.providers.gateway).toBe(false)
     // defaultModel section default: EMPTY ("" = unset — no seeded default model)
     expect(value.defaultModel).toEqual({ provider: "", model: "" })
