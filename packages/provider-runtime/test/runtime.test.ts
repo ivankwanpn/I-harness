@@ -1047,6 +1047,28 @@ describe("probeModels — the read half of discovery", () => {
     await expect(runtime.probeModels("keyless")).rejects.toThrow(/No API key/i)
     await expect(runtime.probeModels("nope")).rejects.toThrow(/not configured/)
   })
+
+  it("an EMPTY probe result is legal — it leaves the route's models alone and does not throw", async () => {
+    const probe = vi.fn(async () => [] as { id: string }[])
+    const f = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "kept" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+        registry.registerProbe("gw", probe)
+      },
+    })
+
+    await expect(f.runtime.discoverModels("gw", { force: true })).resolves.toEqual([{ id: "kept" }])
+    expect(f.settings.get().llm.providers.gw?.models).toEqual([{ id: "kept" }])
+  })
 })
 
 describe("per-row model writes", () => {

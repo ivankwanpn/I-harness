@@ -403,6 +403,15 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       // only thing it adds to that is the memo.
       const probed = await probeRouteModels(id, discoveryOptions)
       discoveryOptions.signal?.throwIfAborted()
+      // An EMPTY result is legal, not an error: a gateway with no models listed
+      // must not turn a working route into a failing command. Nothing to merge,
+      // so nothing is written — but the memo is still filled, or the next
+      // caller would re-probe for the same nothing.
+      if (probed.length === 0) {
+        const current = cloneModels(provider(id)?.models ?? [])
+        discovered.set(id, cloneModels(current))
+        return current
+      }
       const merged = await addModelRows(id, probed)
       discovered.set(id, cloneModels(merged))
       return cloneModels(merged)
