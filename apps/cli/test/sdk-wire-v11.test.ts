@@ -15,7 +15,7 @@ import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { createHarnessClient } from "@i-harness/sdk"
 import { RewindStore, sha256Hex } from "@i-harness/rewind"
-import type { CancelResult, RewindPointsResponse, RewindPlanResponse, RewindExecuteResponse } from "@i-harness/sdk"
+import type { CancelResult, RewindPointsResponse, RewindPlanResponse, RewindExecuteResponse, SessionModelSelection } from "@i-harness/sdk"
 
 const REPO_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)))
 const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
@@ -169,6 +169,52 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         rmSync(workspace, { recursive: true, force: true })
         rmSync(sessionDir, { recursive: true, force: true })
         rmSync(configDir, { recursive: true, force: true })
+      }
+    },
+    30_000,
+  )
+
+  // THE INVARIANT, pinned: a selection carrying a `protocol` never puts one
+  // into the stored session meta (design §4.3 — "session 的協議不寫進任何檔案",
+  // repeated in §7). The cast below IS the test: the wire type deliberately has
+  // no `protocol`, so sending one is out-of-band by construction, and that is
+  // exactly the phase-B mistake the whitelist note in packages/sdk/src/server.ts
+  // warns about — widening parseModelSelection for the rebind path and letting
+  // the CLI relay forward the whole selection into updateMeta. If that lands,
+  // the header gains a protocol and this test goes red (verified by mutation:
+  // widening the parser makes it fail with `to not have property "protocol"`).
+  it(
+    "never persists a protocol to the session header (the phase-B wire mistake)",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-noproto-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-noproto-sess-"))
+      writeFileSync(join(sessionDir, "s1.jsonl"), `${JSON.stringify({
+        formatVersion: 1,
+        sessionId: "s1",
+        createdAt: "2026-09-06T00:00:00.000Z",
+      })}\n`, "utf8")
+
+      const client = createHarnessClient({
+        command: process.execPath,
+        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
+        cwd: workspace,
+        env: { IH_CONFIG_DIR: canonicalConfigDir },
+      })
+      try {
+        await expect(client.setSessionModel("s1", {
+          provider: "fixture",
+          model: "fixture-model",
+          protocol: "anthropic-messages",
+        } as SessionModelSelection)).resolves.toMatchObject({ status: "ready" })
+        const header = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
+          modelSelection?: Record<string, unknown>
+        }
+        expect(header.modelSelection).not.toHaveProperty("protocol")
+        expect(header.modelSelection).toEqual({ provider: "fixture", model: "fixture-model" })
+      } finally {
+        await client.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
       }
     },
     30_000,

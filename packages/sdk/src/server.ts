@@ -712,13 +712,16 @@ function validSessionIdResult(result: SessionIdResult, method: string): SessionI
   return { sessionId: result.sessionId }
 }
 
-// The field whitelist is DELIBERATE, and `protocol` is absent from it on
-// purpose: a session's protocol is never persisted through the SDK — ruled out
-// by owner decision (docs/superpowers/specs/2026-09-19-protocol-selection-
-// design.md §4.3: "session 的協議不寫進任何檔案", repeated in §7). The durable
-// SessionMeta field DOES carry `protocol?`; do not add it here — this parser is
-// the only path a wire selection takes into updateMeta, so widening it would
-// smuggle the excluded behavior back in.
+// The field whitelist is DELIBERATE, and the rule it serves is phase-independent:
+// a session's protocol is never PERSISTED — it must not reach `updateMeta` or the
+// session header — by owner decision (docs/superpowers/specs/2026-09-19-protocol-
+// selection-design.md §4.3: "session 的協議不寫進任何檔案", repeated in §7).
+// Spec §6/§10 do put `protocol` on this wire for the REBIND path; when that
+// lands, route it to the agent and STRIP it before anything writes a selection.
+// `updateMeta` takes the durable shape, which already carries `protocol?`, so a
+// parser that forwards the whole selection would write the header SILENTLY — the
+// guard against exactly that is the "never persists a protocol" assertion in
+// apps/cli/test/sdk-wire-v11.test.ts.
 function parseModelSelection(value: unknown): SessionModelSelection | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
   const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
