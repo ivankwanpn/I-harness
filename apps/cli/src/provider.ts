@@ -78,6 +78,9 @@ export function parseProviderArgs(args: string[]): ParsedProviderArgs {
 
   let id: string | undefined
   const fields: ProviderFields = {}
+  /** The flag tokens seen, in order — for the diagnostic that has to NAME the
+   * flag a verb cannot read (fields alone cannot spell `--base-url` back). */
+  const flagTokens: string[] = []
   for (let i = 0; i < rest.length; i += 1) {
     const token = rest[i]!
     if (!token.startsWith("-")) {
@@ -93,6 +96,7 @@ export function parseProviderArgs(args: string[]): ParsedProviderArgs {
       return { subcommand: "help", fields: {}, error: `${token} needs a non-empty value` }
     }
     i += 1
+    flagTokens.push(token)
     if (token === "--base-url") { fields.baseURL = value; continue }
     if (token === "--models-url") { fields.modelsURL = value; continue }
     if (token === "--catalog") { fields.catalog = value; continue }
@@ -108,6 +112,20 @@ export function parseProviderArgs(args: string[]): ParsedProviderArgs {
       continue
     }
     return { subcommand: "help", fields: {}, error: `unknown flag: ${token}` }
+  }
+
+  // `list` READS every route and takes nothing. It used to accept an id and
+  // flags and silently ignore both, so `provider list deepseek` printed the
+  // full list with exit 0 — the same "exit 0 having done something other than
+  // what was asked" the models tree refuses. What it takes is nothing, and the
+  // refusal says so.
+  if (sub === "list") {
+    if (id !== undefined) {
+      return { subcommand: "help", fields: {}, error: `list takes no arguments (got "${id}"); it lists every configured route` }
+    }
+    if (flagTokens.length > 0) {
+      return { subcommand: "help", fields: {}, error: `${flagTokens[0]} is not a flag of "list"; it lists every configured route` }
+    }
   }
 
   if (sub !== "list" && id === undefined) {
@@ -226,7 +244,12 @@ export async function runProviderCommand(args: string[], options: ProviderComman
         console.error(`  to create a route: i-harness provider add ${id} --base-url URL --protocol P`)
         return 1
       }
-      console.log(`updated provider "${id}"`)
+      // A no-flag `set` writes the row back unchanged (and still proves the
+      // route exists). Reporting `updated` for that is a success message for
+      // nothing — only flags change fields.
+      console.log(Object.keys(parsed.fields).length === 0
+        ? `provider "${id}": nothing to change (no flags given)`
+        : `updated provider "${id}"`)
       return 0
     }
     if (parsed.subcommand === "key") {

@@ -47,6 +47,19 @@ describe("parseProviderArgs", () => {
       .toMatch(/--base-url/)
   })
 
+  it("list takes no id and no flags, and says so rather than quietly ignoring them", () => {
+    // The rule this branch adopted in `models`: a flag a verb cannot READ is
+    // refused, not dropped. `provider list deepseek` printed the full list and
+    // exited 0, and so did `provider list --base-url X --protocol gemini`.
+    expect(parseProviderArgs(["provider", "list", "gw"]).error)
+      .toMatch(/list takes no arguments.*every configured route/)
+    expect(parseProviderArgs(["provider", "list", "--base-url", "https://gw.example"]).error)
+      .toMatch(/--base-url.*list.*every configured route/)
+    expect(parseProviderArgs(["provider", "list", "--catalog", "x"]).error)
+      .toMatch(/--catalog/)
+    expect(parseProviderArgs(["provider", "list"]).error).toBeUndefined()
+  })
+
   it("an empty value is refused for every flag whose field must be a non-empty string", () => {
     // The field these flags write is a non-empty string in settings; an empty
     // one normalizes AWAY (packages/settings/src/index.ts:446-449), so the
@@ -142,7 +155,40 @@ describe("runProviderCommand — the route round trip", () => {
 
   it("add on an existing id fails and says which verb to use", async () => {
     await runProviderCommand(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini"])
-    expect(await runProviderCommand(["provider", "add", "gw", "--base-url", "https://other.example", "--protocol", "gemini"])).toBe(1)
+    // The title is a measured claim: the exit code alone would pass for any
+    // failure, including one that names no verb.
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runProviderCommand(["provider", "add", "gw", "--base-url", "https://other.example", "--protocol", "gemini"])).toBe(1)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(lines.join("\n")).toContain("i-harness provider set gw")
+  })
+
+  it("list takes no arguments at all — an id or a flag is refused, not ignored", async () => {
+    await runProviderCommand(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini"])
+    expect(await runProviderCommand(["provider", "list"])).toBe(0)
+    expect(await runProviderCommand(["provider", "list", "gw"])).toBe(1)
+    expect(await runProviderCommand(["provider", "list", "--catalog", "x"])).toBe(1)
+  })
+
+  it("set with no flags says there was nothing to change — it is not an update", async () => {
+    await runProviderCommand(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini"])
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runProviderCommand(["provider", "set", "gw"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    const out = lines.join("\n")
+    expect(out).toContain("nothing to change")
+    expect(out).not.toContain("updated")
+    // The no-op is still a no-op: the route keeps exactly what it had.
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw)
+      .toEqual({ baseURL: "https://gw.example", protocol: "gemini" })
   })
 
   it("an empty --base-url is refused BEFORE the write — a route with no endpoint posts to a vendor", async () => {
