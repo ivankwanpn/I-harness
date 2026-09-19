@@ -55,7 +55,7 @@ const ROLES_USAGE =
   "  --provider and --model are required TOGETHER: half a selection is a guess, not a setting\n" +
   "  set REPLACES the whole entry — an omitted --protocol/--reasoning-effort CLEARS it\n" +
   `  roles: ${ROLE_NAMES.join(", ")}       (the built-in set; any other name is refused)\n` +
-  `  P = ${PROVIDER_PROTOCOLS.join(" | ")}   (no "auto": an omitted flag already clears the protocol)`
+  `  protocols: ${PROVIDER_PROTOCOLS.join(" | ")}   (no "auto": an omitted flag already clears the protocol)`
 
 export function parseRolesArgs(args: string[]): ParsedRolesArgs {
   const sub = args[1]
@@ -183,7 +183,7 @@ function describeSelection(selection: RoleSelection): string {
     ` (protocol: ${selection.protocol ?? "unset"}, reasoning effort: ${selection.reasoningEffort ?? "unset"})`
 }
 
-export function renderRoles(rows: readonly RoleRow[]): string {
+export function renderRoles(rows: readonly RoleRow[], subagentModelEnabled?: boolean): string {
   const declared = rows.filter((row) => row.selection !== undefined).length
   const lines = [`roles: ${rows.length} (${declared} declared, ${rows.length - declared} inheriting the parent's client)`]
   for (const row of rows) {
@@ -197,6 +197,13 @@ export function renderRoles(rows: readonly RoleRow[]): string {
     // The clause says only what this tool can know: the name is not one `set`
     // accepts. Whether the row is INERT is not knowable here — see RoleRow.
     lines.push(`  ${row.name}  declared: ${describeSelection(selection)}${row.builtin ? "" : "  (not one of the four built-ins)"}`)
+  }
+  // State, not decoration: with the switch off a declared row is a spawn
+  // refusal, and the rows alone cannot show that. Printed only when the caller
+  // STATES the switch is off — a caller that did not say must not be claimed
+  // to know — and only when some row would actually be refused.
+  if (subagentModelEnabled === false && declared > 0) {
+    lines.push("note: plugins.subagentModel is false — a spawn of any role declared above is refused until it is enabled")
   }
   return lines.join("\n")
 }
@@ -236,7 +243,10 @@ export async function runRolesCommand(args: string[]): Promise<number> {
 
   try {
     if (parsed.subcommand === "list") {
-      console.log(renderRoles(rowsOf(roles)))
+      // The switch travels with the read: without it the note above the rows
+      // would be a guess, and with it the listing says which of these entries
+      // can actually run.
+      console.log(renderRoles(rowsOf(roles), settings.get().plugins.subagentModel))
       return 0
     }
     const name = parsed.role!

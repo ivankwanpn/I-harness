@@ -120,6 +120,26 @@ describe("renderRoles", () => {
     expect(out).toContain("(not one of the four built-ins)")
     expect(out).not.toContain("nothing spawns it")
   })
+
+  // D2: the read verb is where a user looks to understand state, and with the
+  // shipped default every declared row is a spawn refusal — a fact the rows
+  // alone cannot show. The note appears only when the caller KNOWS the switch
+  // is off (a bare renderRoles call makes no claim) and only when there is at
+  // least one declared row to refuse.
+  it("says a declared row is refused while the switch is off, and says nothing when it is on", () => {
+    const declared = [{ name: "worker", builtin: true, selection: { provider: "gw", model: "big" } }]
+    const inheriting = [{ name: "worker", builtin: true }]
+
+    const off = renderRoles(declared, false)
+    expect(off).toContain("plugins.subagentModel is false")
+    expect(off).toContain("refused")
+    // no note while the switch is on — the rows already say everything true then
+    expect(renderRoles(declared, true)).not.toContain("plugins.subagentModel")
+    // and no note about refusals when nothing is declared
+    expect(renderRoles(inheriting, false)).not.toContain("plugins.subagentModel")
+    // a caller that did not state the switch gets no claim either way
+    expect(renderRoles(declared)).not.toContain("plugins.subagentModel")
+  })
 })
 
 describe("runRolesCommand", () => {
@@ -288,6 +308,32 @@ describe("runRolesCommand", () => {
     expect(lines.join("\n")).toContain("already inherits")
     expect(lines.join("\n")).not.toContain("now inherits")
     expect(readFileSync(join(home, "settings.json"), "utf8")).toBe(before)
+  })
+
+  it("list says a declared row is refused while the switch is off, and nothing when it is on", async () => {
+    await runRolesCommand(["roles", "set", "worker", "--provider", "gw", "--model", "big"])
+    const list = async (): Promise<string> => {
+      const lines: string[] = []
+      const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+      try {
+        expect(await runRolesCommand(["roles", "list"])).toBe(0)
+      } finally {
+        spy.mockRestore()
+      }
+      return lines.join("\n")
+    }
+
+    // the shipped default: every declared row is a spawn refusal, and the read
+    // verb is where a user looks to understand that
+    expect(await list()).toContain("plugins.subagentModel is false")
+    // …and with the switch on the same declared row is NOT a refusal
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      plugins: { subagentModel: true },
+      agents: { roles: { worker: { provider: "gw", model: "big" } } },
+    }), "utf8")
+    const on = await list()
+    expect(on).toContain("worker  declared: gw:big")
+    expect(on).not.toContain("plugins.subagentModel")
   })
 
   it("list names each role and says declared or inherited", async () => {
