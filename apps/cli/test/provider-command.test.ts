@@ -315,12 +315,14 @@ describe("renderProviderList", () => {
   })
 
   it("a modelless route gets the next step that can actually run", () => {
-    // Same rule as `models list`'s hint: `models probe` refuses on a route
-    // that declares no protocol (there is no wire to shape the request with),
-    // so the hint names the write that unblocks the probe instead. The
-    // protocol-less rendering is pinned as a WHOLE line — the route line above
-    // it names the same command, so a substring assertion would pass on that
-    // text alone.
+    // Same rule as `models list`'s hint: `models probe` refuses in two states
+    // — no declared protocol (nothing to shape the request with) and
+    // manual-only discovery (bedrock has no discovery endpoint) — so each
+    // state names the verb that can actually run instead. ALL THREE branches
+    // are pinned as WHOLE lines, the unchanged `available` arm included — the
+    // route line above the hint names the same command, so a substring
+    // assertion would pass on that text alone, and an unpinned arm is one a
+    // future edit can collapse silently.
     const protocolLess = renderProviderList(
       [{
         id: "gateway", displayName: "Gateway", configured: true,
@@ -331,6 +333,17 @@ describe("renderProviderList", () => {
     )
     expect(protocolLess).toContain(`      (none — declare a protocol first: i-harness provider set gateway --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`)
     expect(protocolLess).not.toContain("models probe gateway")
+
+    const manualOnly = renderProviderList(
+      [{
+        id: "br", displayName: "Bedrock", protocol: "bedrock", configured: true,
+        auth: { configured: true, writable: true }, models: [],
+        discovery: "manual-only", cardFamily: "br",
+      }],
+      noProvenance,
+    )
+    expect(manualOnly).toContain("      (none — discovery is unavailable for this route; add one: i-harness models add br <id...>)")
+    expect(manualOnly).not.toContain("models probe br")
 
     const declared = renderProviderList(
       [{
