@@ -156,6 +156,30 @@ export interface SettingsDefaultModel {
   reasoningEffort?: string
 }
 
+/** One role's model selection: the shape of `SettingsDefaultModel` plus the
+ * protocol, because a role may name an endpoint as well as a model. `provider`
+ * and `model` are required TOGETHER — a role that named only one would be
+ * asking us to guess the other.
+ *
+ * NOT EXPORTED. Nothing outside this file ever NAMES it: Task 4's resolver and
+ * Task 5's CLI both build object literals, which structural typing accepts. And
+ * the reachability instrument counts `export interface` as a row — an export
+ * whose consumer is three tasks away is what commit 8ec8fda0 removed. */
+interface SettingsRoleModel {
+  provider: string
+  model: string
+  protocol?: SettingsProviderProtocol
+  reasoningEffort?: string
+}
+
+/** `agents.roles.<name>`: the model a sub-agent role runs on. An ABSENT role
+ * inherits the parent's client — which is what every role did before this
+ * section existed, and what an unconfigured harness still does.
+ * Not exported; see SettingsRoleModel. */
+interface SettingsAgents {
+  roles: Record<string, SettingsRoleModel>
+}
+
 /** Canonical provider overrides + the default model. */
 export interface SettingsLlm {
   providers: Record<string, SettingsProviderConfig>
@@ -233,6 +257,9 @@ export interface Settings {
    *  as enabled (compat); unknown value normalizes to "jsonl". */
   searchBackend: SettingsSearchBackend
   plugins: SettingsPluginToggles
+  /** Agent-role configuration. A separate plane from `llm`: `llm` is the
+   * provider plane, this is which of them a ROLE runs on. */
+  agents: SettingsAgents
   /** Appended in this plan: previously-absent top-level key, additive-only. */
   llm: SettingsLlm
   onboarding: SettingsOnboarding
@@ -275,6 +302,7 @@ const SETTINGS_DEFAULTS: Settings = {
   fontSize: 14,
   searchBackend: "jsonl",
   plugins: { agentLoop: true, bash: true, webSearch: false, subagentModel: false },
+  agents: { roles: {} },
   // Appended sections: fresh documents default here without any migration path
   // (old files without these keys load with these values — D5/no-migration).
   llm: {
@@ -461,6 +489,29 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   return out
 }
 
+/** One role entry. Returns null for anything that is not a complete selection —
+ * a half entry (`provider` without `model` or vice versa) is DROPPED, not
+ * completed: completing it is the guess this design exists to avoid. */
+function normalizeRoleModel(raw: unknown): SettingsRoleModel | null {
+  if (!isRecord(raw)) return null
+  if (!isNonEmptyString(raw.provider) || !isNonEmptyString(raw.model)) return null
+  const out: SettingsRoleModel = { provider: raw.provider, model: raw.model }
+  if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
+  if (isNonEmptyString(raw.reasoningEffort)) out.reasoningEffort = raw.reasoningEffort
+  return out
+}
+
+function normalizeAgents(raw: unknown, base: SettingsAgents): SettingsAgents {
+  if (!isRecord(raw)) return { roles: { ...base.roles } }
+  const rolesRaw = isRecord(raw.roles) ? raw.roles : {}
+  const roles: Record<string, SettingsRoleModel> = {}
+  for (const [name, value] of Object.entries(rolesRaw)) {
+    const entry = normalizeRoleModel(value)
+    if (entry !== null) roles[name] = entry
+  }
+  return { roles }
+}
+
 /** M59: extra request headers — dynamic string keys, non-empty string values;
  * anything else degrades per entry (no throw, D5 no-migration). */
 function normalizeProviderHeaders(raw: unknown): Record<string, string> | undefined {
@@ -571,6 +622,7 @@ export function normalizeSettings(raw: unknown): Settings {
     return {
       ...base,
       plugins: { ...base.plugins },
+      agents: normalizeAgents(undefined, base.agents),
       llm: normalizeLlm(undefined, base.llm),
       onboarding: { ...base.onboarding },
       compaction: { ...base.compaction },
@@ -593,6 +645,7 @@ export function normalizeSettings(raw: unknown): Settings {
       webSearch: booleanOf(pluginsRaw.webSearch, base.plugins.webSearch),
       subagentModel: booleanOf(pluginsRaw.subagentModel, base.plugins.subagentModel),
     },
+    agents: normalizeAgents(raw.agents, base.agents),
     // Transition read migration: legacy TUI providers fill missing canonical
     // fields in memory only; explicit llm values win and no file is rewritten.
     llm: normalizeLlmWithLegacy(raw.llm, tuiRaw.providers, base.llm),
