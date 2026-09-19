@@ -585,7 +585,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       }
 
       const userModel = view.user?.models?.find((model) => model.id === modelId)
-      const profile = runtimeProfile(view, apiKey, userModel?.inputModalities)
+      const profile = runtimeProfile(view, apiKey, userModel?.inputModalities, userModel?.protocol)
       const contextWindow = resolveEffectiveModelContext({
         profile,
         modelId,
@@ -674,6 +674,7 @@ function runtimeProfile(
   view: ProviderView,
   apiKey: string | undefined,
   modelModalities?: SettingsInputModality[],
+  modelProtocol?: SettingsProviderProtocol,
 ): ProviderProfile {
   const template = { ...(view.template ?? {}) }
   delete template.apiKey
@@ -687,7 +688,10 @@ function runtimeProfile(
     // never has to look at `name` for a purpose it was not given.
     catalog: cardFamilyOf(view),
     displayName: view.displayName,
-    protocol: adapterProtocol(view.protocol),
+    // The MODEL's protocol wins over the route's default. The route is an
+    // endpoint, and an endpoint has one protocol — a row that declares another
+    // is naming a different endpoint path under the same host and credential.
+    protocol: adapterProtocol(modelProtocol ?? view.protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
     ...(view.headers !== undefined ? { headers: view.headers } : {}),
