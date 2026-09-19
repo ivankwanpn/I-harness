@@ -175,6 +175,35 @@ const contextWindow = resolveEffectiveModelContext(...)?.contextWindow   // 可�
 
 **（b）名字別名**：`deepseek-flash` 與 `deepseek-v4-flash` / `deepseek-v4-flash-vision-exp` **並存** —— DeepSeek 自己說舊名仍可調用、由同一顆模型服務。**DSH 的目錄就是新舊並列**，那是先例。
 
+**（d）而那張表自己的 key 就不一致 —— 這是實作前才發現的，而它會讓 D2 的欄位沒有答案。**
+
+```
+model-catalog.json
+├─ deepseek   ← 廠商
+├─ gemini     ← 廠商
+└─ bedrock    ← 協議（裡面裝的是 anthropic.claude-3-5-*，Anthropic 的模型）
+```
+
+**三個 key 混了兩種東西。** 所以 `catalog: "?"` 在 `bedrock` 那條線上**不知道該填什麼** —— 它是協議名，不是廠商名。
+
+**要嘛改名（`anthropic-bedrock` —— 廠商加傳輸），要嘛承認這個欄位允許兩種東西。**
+**建議改名**：`bedrock` 這個字在 `llm-bedrock`（協議適配器）與 `model-catalog.json`（廠商卡片）兩邊**指不同的東西**，那本身就是一個陷阱。
+
+### D3.1 — 為什麼我們的適配器是 per-protocol，而這決定了 D2 的形狀
+
+`packages/llm-*` 是**協議**適配器，不是**廠商**適配器：
+
+| | `packages/llm-anthropic` | `packages/llm-openai` | `llm-gemini` | `llm-bedrock` | `llm-openai-compatible` |
+|---|---|---|---|---|---|
+| 行數 | 272 | 244 | 269 | 253 | 244 |
+| 它知道 | Anthropic Messages 的線 | Responses | Gemini | Bedrock | chat completions |
+
+**它們加起來沒有一行知道「哪個廠商、哪顆模型、多大的窗口」。** 而 **DSH 是 per-vendor**（`llm-deepseek` 自己帶 `DEFAULT_MODELS`，含 `contextWindow`）—— **它沒有我們這個 bug，因為它的適配器就是那個廠商。**
+
+**per-protocol 是對的**（一個 `llm-anthropic` 同時服務 DeepSeek 的 `/anthropic`、真 Anthropic、Bedrock；五個適配器覆蓋 N 個廠商），**但它的代價是：適配器不知道自己在跟誰講話，所以廠商資料必須住在外面。**
+
+**而外面沒有東西可以可靠地指認「這是 DeepSeek」** —— 適配器答不出來、baseURL 猜不準（代理／閘道／區域變體）、模型名也不可靠（`claude-*` 同時是 Anthropic 與 Bedrock 的）。**所以身分只能由使用者聲明，而那就是 D2 那個欄位的理由。**
+
 **（c）fallback 值。** 未編目模型的數字，三家的選擇：
 
 | | context | output |
