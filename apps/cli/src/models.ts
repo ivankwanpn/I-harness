@@ -90,7 +90,7 @@ const MODELS_USAGE =
   "  add <route> <id...> [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  set <route> <id>    [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  rm <route> <id>\n" +
-  "  use <route>:<model> [--reasoning-effort E]   E is validated when a session resolves the model\n" +
+  "  use <route>:<model> [--reasoning-effort E]   replaces the whole default selection: omitted E clears it\n" +
   "  refresh <route>                           probe and merge everything it returns\n" +
   "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
   "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
@@ -190,14 +190,18 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
     const token = positional[0]!
     const separator = token.indexOf(":")
     if (separator === -1) return { subcommand: "help", ids: [], values: {}, error: `use needs provider:model; got "${token}"` }
-    // BOTH halves must name something. `use gw:` used to be accepted and wrote
-    // { provider: "gw", model: "" } with a success message — a typo (or a
-    // script's unset $MODEL) destroyed a working default, and the next run
-    // reported "No model configured".
-    if (token.slice(0, separator) === "" || token.slice(separator + 1) === "") {
+    // BOTH halves must name something AFTER TRIMMING. `use gw:` used to be
+    // accepted and wrote { provider: "gw", model: "" } with a success message —
+    // a typo (or a script's unset $MODEL) destroyed a working default, and the
+    // next run reported "No model configured". `use "gw: "` then walked past
+    // that guard and wrote a one-space model id. The TRIMMED halves are what
+    // this returns, so surrounding whitespace never becomes part of an id.
+    const providerId = token.slice(0, separator).trim()
+    const modelId = token.slice(separator + 1).trim()
+    if (providerId === "" || modelId === "") {
       return { subcommand: "help", ids: [], values: {}, error: `use needs BOTH a provider and a model; got "${token}"` }
     }
-    return { subcommand, route: token, ids: [], values }
+    return { subcommand, route: `${providerId}:${modelId}`, ids: [], values }
   }
   if (subcommand === "probe" || subcommand === "refresh") {
     if (positional.length !== 1) return { subcommand: "help", ids: [], values: {}, error: `${subcommand} takes exactly one route` }
@@ -373,7 +377,11 @@ export async function runModelsCommand(args: string[]): Promise<number> {
       model: route.slice(separator + 1),
       ...(parsed.values.reasoningEffort !== undefined ? { reasoningEffort: parsed.values.reasoningEffort } : {}),
     })
-    console.log(`default model: ${route}`)
+    // `use` REPLACES the whole selection, so the effort is printed even when
+    // there is none: re-running the verb to change the model silently cleared
+    // an effort set earlier, and the printed result is what makes that visible
+    // (the alternative rejected in review was a getter on the runtime API).
+    console.log(`default model: ${route} (reasoning effort: ${parsed.values.reasoningEffort ?? "none"})`)
     return 0
   } catch (error) {
     console.error(`models: ${error instanceof Error ? error.message : String(error)}`)

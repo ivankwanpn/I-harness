@@ -73,6 +73,15 @@ describe("parseModelsArgs", () => {
     expect(parseModelsArgs(["models", "add", "gw", "a", "--context-window", "1m"]).error).toBeUndefined()
   })
 
+  it("use trims both halves before the empty check", () => {
+    // `use "gw: "` passed the exact-empty guard and wrote a one-space model id.
+    expect(parseModelsArgs(["models", "use", "gw: "]).error).toMatch(/BOTH a provider and a model/)
+    expect(parseModelsArgs(["models", "use", " :deepseek-flash"]).error).toMatch(/BOTH a provider and a model/)
+    // Whitespace around the halves is not part of either name.
+    expect(parseModelsArgs(["models", "use", " gw : deepseek-flash "]))
+      .toEqual({ subcommand: "use", route: "gw:deepseek-flash", ids: [], values: {} })
+  })
+
   it("probe's --protocol is a one-off request parameter, and `auto` means the route's", () => {
     expect(probeRequestFor({ protocol: "gemini" })).toEqual({ protocol: "gemini" })
     // On a request that writes nothing, "the route decides" and "no override"
@@ -213,6 +222,43 @@ describe("runModelsCommand", () => {
     expect(await runModelsCommand(["models", "use", "gw:deepseek-flash", "--reasoning-effort", "high"])).toBe(0)
     expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.defaultModel)
       .toEqual({ provider: "gw", model: "deepseek-flash", reasoningEffort: "high" })
+  })
+
+  it("use always prints the resulting reasoning effort, and `use` replaces the WHOLE selection", async () => {
+    // setDefaultModel replaces defaultModel wholesale, so re-running
+    // `models use gw:deepseek-flash` to change the model DROPS an effort set
+    // earlier. That is this verb's documented rule (unlike `models set`, where
+    // an omitted flag leaves the field alone) — and the ruling is to make the
+    // replacement VISIBLE rather than to add a getter: the printed line states
+    // the resulting effort, including when there is none.
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "use", "gw:deepseek-flash", "--reasoning-effort", "high"])).toBe(0)
+      expect(await runModelsCommand(["models", "use", "gw:deepseek-flash"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+
+    const out = lines.join("\n")
+    expect(out).toContain("default model: gw:deepseek-flash (reasoning effort: high)")
+    expect(out).toContain("default model: gw:deepseek-flash (reasoning effort: none)")
+    // The read-back: the second run really did clear the field.
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.defaultModel)
+      .toEqual({ provider: "gw", model: "deepseek-flash" })
+  })
+
+  it("the usage line says `use` replaces the whole default selection", async () => {
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.join(" ")) })
+    try {
+      // `models help` is not a verb (a bare token is a ROUTE); the usage text
+      // reaches stderr on any refusal, which is where this claim must hold.
+      expect(await runModelsCommand(["models", "--help"])).toBe(1)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(errors.join("\n")).toMatch(/use <route>:<model>.*replaces the whole default selection/)
   })
 
   it("use refuses an empty half — a typo must not unset a working default", async () => {
