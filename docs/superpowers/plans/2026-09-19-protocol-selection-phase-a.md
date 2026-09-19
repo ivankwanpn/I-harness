@@ -220,6 +220,73 @@ function runtimeProfile(
 ```
 （`invalidState` 已經在這支檔案裡。訊息**不列舉**那五個 —— `provider set` 自己會列，而 spec §2 的範例用的就是 `P`。**不要**為此新增 `PROVIDER_PROTOCOLS` 的 import：provider-runtime 現在沒有它。）
 
+6. **`view.protocol` 有六個讀者，不是兩個 —— 逐個處置（實測清單，不要漏）**
+
+`grep -n "view\.protocol" packages/provider-runtime/src/index.ts` 會給你這六行。**每一個都要有一個處置**：
+
+| 行 | 讀者 | 處置 |
+|---|---|---|
+| :232 | `probeModels` 的 bedrock 檢查 | **不動** —— `undefined !== "bedrock"`，閘門不觸發。未知的協議**不是** bedrock 的證據。 |
+| :255 | `probeModels` → `registry.probeModels({ protocol: probeOptions.protocol ?? view.protocol })` | **要改 —— 這是第二條尾巴，見下面 item 7** |
+| :296 | `directory()` 的行 | **改成可缺席**（Type `ProviderRuntimeEntry.protocol` 已在 item 2 改了） |
+| :301 | `discovery: view.protocol === "bedrock" ? "manual-only" : "available"` | **不動**。這個欄位回答的是「這條路由有沒有發現端點」（bedrock 沒有），而**未知的協議不是「沒有」的證據**；`models probe --protocol P` 那條覆寫路仍存在。**代價**：一條沒有協議的路由在列表上仍寫 `available`，而它會拒絕 —— 由 Task 3 那一行「cannot be used」抵銷。 |
+| :587 | 認證路徑的 bedrock/ambient 判斷 | **不動** —— 非 bedrock 的路由本來就通過這個閘門，`undefined` 不改變結果。 |
+| :717 / :729 | `runtimeProfile` / `authRef` | :717 由 item 4 涵蓋；:729 **不動**（從來不可能是 bedrock）。 |
+
+7. **第二條尾巴：探測路徑（`provider/src/index.ts:348-350`）**
+
+那支檔案的註解自己寫著：*"…and passes it here; this module only applies the generic terminal fallback (**openai-completions = Bearer**)"*。**探測有自己的硬編碼尾巴。**
+
+把它也拿掉 —— spec §1/§2 的理由（**不猜**、**早一步失敗**）在這條路上逐字成立，而且留著會造出更糟的狀態：**一條永遠送不出去的路由，探測卻會成功，還把結果寫進設定。**
+
+`probeModels`（provider-runtime），在 `registry.probeModels(...)` **之前**：
+
+```ts
+    // The SECOND tail (provider/src/index.ts:348-350 had its own
+    // openai-completions/Bearer fallback). A probe must speak a wire it knows:
+    // letting discovery succeed on a route that can never be sent to writes
+    // rows onto a route that refuses, which is worse than either alternative.
+    // `--protocol P` is the escape for a gateway serving another vendor's
+    // models, and it is unchanged.
+    const probeProtocol = probeOptions.protocol ?? view.protocol
+    if (probeProtocol === undefined) {
+      throw new Error(
+        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol P`,
+      )
+    }
+```
+然後把 :255 改成 `protocol: probeProtocol,`。
+
+**這一步超出計畫原本的文字，但不超出 spec 的原則。** 理由與代價記在 ledger 的 ruling 裡。
+
+- [ ] **Step 8b: 探測尾巴的測試（紅 → 綠）**
+
+`packages/provider-runtime/test/runtime.test.ts`：
+```ts
+it("refuses to probe a route that declares no protocol, and names the fix", async () => {
+  const { runtime } = await fixture({
+    providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+    credentials: { GATEWAY_API_KEY: "k" },
+  })
+
+  await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
+  await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
+})
+
+it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
+  // The override is what makes the refusal above safe: a gateway serving
+  // another vendor's models is exactly what `--protocol` is for.
+  const { runtime, registry } = await fixture({
+    providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+    credentials: { GATEWAY_API_KEY: "k" },
+    registry: (r) => { r.registerProbe("gateway", async () => [{ id: "m" }]) },
+  })
+
+  await expect(runtime.probeModels("gateway", { protocol: "anthropic-messages" })).resolves.toEqual([{ id: "m" }])
+})
+```
+（`registerProbe` 的實際註冊方式照這支測試檔既有 case 的用法 —— 上面的 `registry` 回呼形狀要對齊 `FixtureOptions.registry`。）
+
 - [ ] **Step 9: 跑它，確認它綠**
 
 Run: `cd packages/provider-runtime && npx vitest run test/runtime.test.ts`
