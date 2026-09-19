@@ -46,6 +46,23 @@ describe("parseProviderArgs", () => {
     expect(parseProviderArgs(["provider", "add", "gw", "--protocol", "gemini"]).error)
       .toMatch(/--base-url/)
   })
+
+  it("an empty value is refused for every flag whose field must be a non-empty string", () => {
+    // The field these flags write is a non-empty string in settings; an empty
+    // one normalizes AWAY (packages/settings/src/index.ts:446-449), so the
+    // route lands with no base URL and the adapter falls back to its
+    // hard-coded vendor endpoint. The refusal names the flag.
+    expect(parseProviderArgs(["provider", "add", "gw", "--base-url", "", "--protocol", "gemini"]).error)
+      .toMatch(/--base-url/)
+    expect(parseProviderArgs(["provider", "add", "gw", "--base-url", "   ", "--protocol", "gemini"]).error)
+      .toMatch(/--base-url/)
+    expect(parseProviderArgs(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini", "--catalog", ""]).error)
+      .toMatch(/--catalog/)
+    expect(parseProviderArgs(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini", "--display-name", ""]).error)
+      .toMatch(/--display-name/)
+    expect(parseProviderArgs(["provider", "set", "gw", "--models-url", ""]).error)
+      .toMatch(/--models-url/)
+  })
 })
 
 describe("runProviderCommand — the route round trip", () => {
@@ -126,6 +143,22 @@ describe("runProviderCommand — the route round trip", () => {
   it("add on an existing id fails and says which verb to use", async () => {
     await runProviderCommand(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini"])
     expect(await runProviderCommand(["provider", "add", "gw", "--base-url", "https://other.example", "--protocol", "gemini"])).toBe(1)
+  })
+
+  it("an empty --base-url is refused BEFORE the write — a route with no endpoint posts to a vendor", async () => {
+    // Measured failure: `add gw --base-url ""` passed both guards, persisted
+    // {baseURL: ""}, settings normalized it away, and it STILL printed
+    // `created provider "gw"` — after which every adapter falls back to its
+    // hard-coded vendor endpoint (llm-openai-compatible/src/index.ts:93) with
+    // the user's prompt and stored credential.
+    expect(await runProviderCommand(["provider", "add", "gw", "--base-url", "", "--protocol", "gemini"])).toBe(1)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw).toBeUndefined()
+
+    await runProviderCommand(["provider", "add", "gw", "--base-url", "https://gw.example", "--protocol", "gemini"])
+    // `set` is the worse direction: it CLEARS a working endpoint and says
+    // `updated provider "gw"`.
+    expect(await runProviderCommand(["provider", "set", "gw", "--base-url", " "])).toBe(1)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.baseURL).toBe("https://gw.example")
   })
 
   it("set changes one field and keeps the rest", async () => {
