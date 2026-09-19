@@ -213,3 +213,37 @@ describe("M26-D4 stop_task", () => {
     await expect(stop.execute({ task_id: "task-9" }, {})).rejects.toThrow("unknown task: task-9")
   }, 15_000)
 })
+
+// The `plugins.subagentModel` gate is a PRECONDITION of the spawn, not a step
+// inside it: a refused spawn must leave nothing durable behind. Below the check
+// the tool submits a task record and appends `subagent/start`, so a refusal
+// after that point would leave an accepted task whose child never existed —
+// exactly the orphan a cold restore then has to classify.
+describe("a gated role model refuses before any durable write", () => {
+  it("spawn_agent of a model-carrying role with the switch off rejects and records no task", async () => {
+    const ctx = createContext()
+    const roles = createRoleRegistry()
+    // The builtin general, carrying a model the way a settings entry or a
+    // restored snapshot declares one.
+    for (const r of builtinRoles()) roles.register(r)
+    roles.remove("general")
+    roles.register({ ...builtinRoles()[0]!, model: { provider: "gw", model: "small" } })
+    const session = createSession()
+    const tasks = createTaskRegistry()
+    const tools = createSubagentTools({
+      table: createAgentTable(), jobs: createJobRegistry(), roles,
+      parentRegistry: createToolRegistry(ctx), parentSession: session, parentCtx: ctx,
+      parentModel: createMockClient([{ role: "assistant", text: "done" }]),
+      resolveModel: noRoleModel, exec: registerExec(createContext()),
+      agents: createAgentRegistry(), tasks,
+      allowSubagentModelSelection: false,
+    })
+    const spawn = tools.find((t) => t.name === "spawn_agent")!
+
+    await expect(spawn.execute({ message: "x", task_name: "h" }, { sessionId: "s1", callEventSeq: 0 }))
+      .rejects.toThrow(/plugins\.subagentModel/)
+
+    expect(tasks.list()).toEqual([]) // no accepted task with no child behind it
+    expect(session.events).toEqual([]) // and no subagent/start in the parent's log
+  }, 15_000)
+})

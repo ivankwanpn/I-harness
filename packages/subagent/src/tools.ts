@@ -102,6 +102,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (callerDepth >= maxDepth) {
         throw new Error(`subagent nesting depth limit reached (max ${maxDepth}) — cannot spawn from depth ${callerDepth}`)
       }
+      // `plugins.subagentModel`, as a PRECONDITION — the same refusal spawnChild
+      // makes (same helper, same message), asked here so a refused spawn writes
+      // nothing durable: below this line the call submits a task record and
+      // appends `subagent/start`, and a refusal that had already done that would
+      // leave an accepted task with no child behind it.
+      const declared = declaredRoleModel(role, deps)
+      if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
       const turns = parseForkTurns(args.fork_turns)
       const delivery = args.background === false ? "tool" : "parent"
       // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
