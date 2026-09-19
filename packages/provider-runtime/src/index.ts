@@ -259,10 +259,10 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     // The SECOND tail (provider/src/index.ts:348-350 had its own
     // openai-completions/Bearer fallback). A probe must speak a wire it knows:
-    // letting discovery succeed on a route that can never be sent to writes
-    // rows onto a route that refuses, which is worse than either alternative.
-    // `--protocol P` is the escape for a gateway serving another vendor's
-    // models, and it is unchanged.
+    // letting discovery succeed on a route that refuses unless a row or a
+    // selection names a wire writes rows a later send can still refuse on,
+    // which is worse than either alternative. `--protocol P` is the escape for
+    // a gateway serving another vendor's models, and it is unchanged.
     const probeProtocol = probeOptions.protocol ?? view.protocol
     if (probeProtocol === undefined) {
       throw new Error(
