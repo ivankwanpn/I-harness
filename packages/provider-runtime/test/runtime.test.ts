@@ -1151,3 +1151,63 @@ describe("per-row model writes", () => {
     expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "gone" })
   })
 })
+
+describe("route writes that leave the model list alone", () => {
+  async function routeFixture() {
+    return fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://old.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          displayName: "Old",
+          models: [{ id: "kept", contextWindow: 128_000 }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("patchProvider changes named fields and KEEPS models, displayName and apiKeyEnv", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.patchProvider("deepseek", { protocol: "anthropic-messages" })
+
+    const row = settings.get().llm.providers.deepseek
+    expect(row?.protocol).toBe("anthropic-messages")
+    // The three fields a naive whole-config replace would have dropped — this
+    // is the merge the deleted TUI's saveProvider() did, and why it existed.
+    expect(row?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    expect(row?.displayName).toBe("Old")
+    expect(row?.apiKeyEnv).toBe("DEEPSEEK_API_KEY")
+  })
+
+  it("patchProvider with null CLEARS a field", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.patchProvider("deepseek", { displayName: null })
+
+    expect(settings.get().llm.providers.deepseek?.displayName).toBeUndefined()
+  })
+
+  it("createProvider refuses an existing route; patchProvider refuses an absent one", async () => {
+    const { runtime, settings } = await routeFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.createProvider("deepseek", { baseURL: "https://new.example" })).rejects.toThrow(/already exists/)
+    await expect(runtime.patchProvider("nope", { baseURL: "https://new.example" })).rejects.toThrow(/not configured/)
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("createProvider writes a new route with no models at all", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.createProvider("fresh", { baseURL: "https://fresh.example", protocol: "anthropic-messages" })
+
+    expect(settings.get().llm.providers.fresh).toEqual({ baseURL: "https://fresh.example", protocol: "anthropic-messages" })
+  })
+})

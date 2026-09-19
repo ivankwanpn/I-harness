@@ -44,6 +44,17 @@ interface ModelFields {
   name?: string | null
 }
 
+/** The route fields `patchProvider` may change. `models` is absent ON PURPOSE —
+ * see the method. `null` CLEARS the field. Not exported: see `ModelFields`. */
+interface ProviderPatch {
+  baseURL?: string | null
+  protocol?: SettingsProviderProtocol | null
+  catalog?: string | null
+  displayName?: string | null
+  modelsURL?: string | null
+  apiKeyEnv?: string | null
+}
+
 export interface SessionModelBinding {
   client: ModelClient
   providerId: string
@@ -81,6 +92,13 @@ export interface ProviderRuntimeEntry {
 export interface ProviderRuntime {
   directory(): Promise<ProviderRuntimeEntry[]>
   upsertProvider(id: string, config: SettingsProviderConfig): Promise<void>
+  /** Create a route. Refuses an id that already exists — `patchProvider` is the
+   * verb for changing one, so a typo cannot silently rewrite a live route. */
+  createProvider(id: string, fields: Omit<SettingsProviderConfig, "models">): Promise<void>
+  /** Change named fields on an existing route. `models` is deliberately NOT
+   * patchable: changing a protocol or a base URL must not empty the catalog the
+   * route holds. `null` clears a field. */
+  patchProvider(id: string, patch: ProviderPatch): Promise<void>
   removeProvider(id: string): Promise<void>
   setApiKey(id: string, value: string): Promise<void>
   clearApiKey(id: string): Promise<void>
@@ -270,6 +288,47 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const llm = canonicalLlm(options.settings)
       await persistLlm({
         providers: { ...llm.providers, [id]: cloneProviderConfig(config) },
+        defaultModel: { ...llm.defaultModel },
+      })
+      discovered.delete(id)
+    },
+
+    async createProvider(id, fields) {
+      assertProviderId(id)
+      const llm = canonicalLlm(options.settings)
+      if (llm.providers[id] !== undefined) {
+        // No sibling METHOD name in the message: a library caller can act on
+        // "patchProvider", but this string also reaches a CLI user, for whom
+        // that is not a command they can type. The surface adds its own hint.
+        throw new Error(`provider "${id}" already exists`)
+      }
+      await persistLlm({
+        providers: { ...llm.providers, [id]: cloneProviderConfig({ ...fields }) },
+        defaultModel: { ...llm.defaultModel },
+      })
+      discovered.delete(id)
+    },
+
+    async patchProvider(id, patch) {
+      assertProviderId(id)
+      const llm = canonicalLlm(options.settings)
+      const current = llm.providers[id]
+      if (current === undefined) {
+        throw new Error(`provider "${id}" is not configured`)
+      }
+      const next: SettingsProviderConfig = { ...current }
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === undefined) continue
+        if (value === null) delete (next as Record<string, unknown>)[key]
+        else (next as Record<string, unknown>)[key] = value
+      }
+      // No baseURL suffix-stripping here: `SettingsStore.set` normalizes every
+      // write (normalizeSettings → normalizeProviderConfig → stripBaseURLSuffix),
+      // so a second implementation in the runtime would be a second place for
+      // the rule to live — and the helper is module-private in settings, so
+      // reaching it would mean exporting it for one caller.
+      await persistLlm({
+        providers: { ...llm.providers, [id]: cloneProviderConfig(next) },
         defaultModel: { ...llm.defaultModel },
       })
       discovered.delete(id)
