@@ -129,6 +129,8 @@ const MODEL_FIELDS: Record<string, FieldSpec> = {
   name: { type: "string" },
   contextWindow: { type: "number", validate: positiveInteger },
   maxTokens: { type: "number", validate: positiveInteger },
+  // The per-row wire protocol (absent = the route's).
+  protocol: { type: "enum", enum: [...PROVIDER_PROTOCOLS] },
   // M61: content types the model accepts (absent = text-only, M14).
   inputModalities: { type: "array", items: { type: "enum", enum: ["text", "image"] } },
 }

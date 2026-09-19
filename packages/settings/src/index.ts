@@ -67,6 +67,11 @@ export interface SettingsModel {
    * G1 mapping of this value onto `maxContextWindow` is removed). A per-model
    * override in the unified resolution chain; never a request default. */
   maxTokens?: number
+  /** The WIRE PROTOCOL for this model, overriding the route's. One endpoint can
+   * serve different models on different protocols (the gateway case), and the
+   * protocol is a property of the endpoint, so the route states the default and
+   * a row states the exception. Absent → the route's. */
+  protocol?: SettingsProviderProtocol
   /** M61: content types this MODEL accepts — the per-model override of the
    * route's declaration (see SettingsProviderConfig.inputModalities). */
   inputModalities?: SettingsInputModality[]
@@ -414,6 +419,7 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
       if (isNonEmptyString(entry.name)) model.name = entry.name
       if (isPositiveInteger(entry.contextWindow)) model.contextWindow = entry.contextWindow
       if (isPositiveInteger(entry.maxTokens)) model.maxTokens = entry.maxTokens
+      if (isProviderProtocol(entry.protocol)) model.protocol = entry.protocol
       const modalities = normalizeInputModalities(entry.inputModalities)
       if (modalities !== undefined) model.inputModalities = modalities
       models.push(model)

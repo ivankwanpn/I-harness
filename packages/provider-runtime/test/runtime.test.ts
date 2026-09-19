@@ -1232,3 +1232,32 @@ describe("route writes that leave the model list alone", () => {
     expect(settings.get().llm.providers.deepseek?.protocol).toBe("anthropic-messages")
   })
 })
+
+describe("protocol: the row overrides the route", () => {
+  it("a row's protocol wins over its route's; a row without one inherits the route's", async () => {
+    const { runtime, builds } = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [
+            { id: "anthropic-model", protocol: "anthropic-messages" },
+            { id: "plain-model" },
+          ],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+      },
+    })
+
+    await runtime.resolveModel({ override: "gw:anthropic-model" })
+    await runtime.resolveModel({ override: "gw:plain-model" })
+
+    // adapterProtocol maps openai-completions → openai-compatible.
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+    expect(builds[1]?.profile.protocol).toBe("openai-compatible")
+  })
+})
