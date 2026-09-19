@@ -337,7 +337,7 @@ git commit -m "fix(provider-runtime,settings): no protocol is a refusal, not an 
 - Modify: `packages/session-persistence/src/index.ts:36-43`
 - Modify: `packages/session-persistence/package.json`
 - Modify: `packages/session-persistence-jsonl/src/format.ts:12-25`
-- Modify: `packages/sdk/src/protocol.ts:285-292`
+- **NOT** `packages/sdk/src/protocol.ts` —— 見下面的裁定
 - Test: `packages/session-persistence-jsonl/test/meta.test.ts`
 
 **Interfaces:**
@@ -426,26 +426,27 @@ export interface SessionModelSelection {
 ```
 把 `PROVIDER_PROTOCOLS` 與型別從 `@i-harness/settings` import 進來。**`session-persistence-jsonl` 目前沒有這條 dep（已實測：它只依賴 `core-session` 與 `session-persistence`）—— 所以 `package.json` 一定要加，這不是條件句。**
 
-`packages/sdk/src/protocol.ts`（:287）—— 那句註解自己說它「Kept structurally identical to the durable SessionMeta field」，所以欄位**必須**跟著動，否則 SDK 的呼叫者取不到它。
+### ⚠ 裁定（實作後追加，覆寫本步驟原本的文字）—— **SDK 的 wire 型別不動**
 
-**但型別要鬆，不是緊的**：這支檔案開頭寫死了一條不變式 —— *"This module is pure framing — no I/O. **Zero dependencies.** … this file IS the sdk wire contract. Any change to the shapes here is a breaking protocol change for embedders."* **不要**為此把 `@i-harness/settings` 拉進 sdk（它現在沒有，實測過）。
+原本這裡寫「欄位**必須**跟著動」。**那是錯的，已回退。**
 
-```ts
-export interface SessionModelSelection {
-  provider: string
-  model: string
-  /** The wire this selection was made on, when it named one. A STRING, not
-   * settings' closed set: this file is the zero-dependency wire contract, and
-   * the closed set is already enforced where a raw value actually enters —
-   * session-persistence-jsonl's parser drops anything outside the five. Same
-   * rule as `reasoningEffort` directly below: loose on the wire, validated at
-   * the boundary. */
-  protocol?: string
-  reasoningEffort?: string
-}
-```
+**理由（spec 自己的話，使用者決定）：** §4.3 —— *「session 的協議**不寫進任何檔案**（使用者決定）」*；§7 再列一次 *「session 的協議持久化：**不做**」*。而 `setSessionModel` 呼叫的是 `coordinator.updateMeta(...)` —— **那就是寫檔案**。
 
-**兩個型別都在場，必須保持可賦值**：`packages/sdk/src/{client,server}.ts` 用的是 sdk 自己的這一份（`from "./protocol.ts"`），而 `apps/cli/src/index.ts:562` 用的是 `@i-harness/session-persistence` 那一份。因為 `SettingsProviderProtocol` 是 `string` 的子型別，**durable → wire 的方向是可賦值的** —— 那正是「structurally identical without coupling」的意思。**反向不行，也不需要。**
+**實際發生的事**：實作者照原文加了 wire 欄位，然後自己舉手 —— `packages/sdk/src/server.ts:715` 有**它自己的**白名單 parser，不認得 `protocol`。於是 **wire 宣告了一個 server 會靜默丟掉的欄位**：嵌入者送出去、收到成功、東西不見了。
+
+**裁定：把謊從源頭收掉，不是把機制加上去。**
+
+| 表面 | 處置 |
+|---|---|
+| durable 型別（`session-persistence`） | **留** —— spec §10 明列；它讓「發起時組進去」在記憶體裡有地方放 |
+| jsonl parser + 兩個測試 | **留** —— 重寫 header **不得刪掉不認得的欄位**（與 `provider`/`model`/`reasoningEffort` 同一條規則）；而且 `updateMeta` 是公開 API，手寫或外來的 header 今天就可能帶著它 |
+| **sdk wire 型別** | **不動** —— 加了就是把「宣告了卻被丟掉」引進 wire 契約 |
+| **`apps/cli/src/index.ts` 的 relay** | **不動** —— 它存在的唯一理由隨 wire 型別消失 |
+| `packages/sdk/src/server.ts:715` | **parser 不動，但已補註解**說明「不接」是刻意的，並指向 §4.3/§7 |
+
+**代價：phase B 把它加回 wire 型別 —— 一行**，而且會跟「接受它的 parser」同一個提交落地。**不選的做法**要 phase A 違反 §4.3，去服務一個現在沒人要求的欄位。
+
+**這個裁定的反命令必須在版控裡**（複審抓到它原本只活在 gitignored 的 ledger、commit 訊息和程式碼註解裡，而計畫還在教舊做法）。
 
 - [ ] **Step 5: 跑它，確認它綠**
 
