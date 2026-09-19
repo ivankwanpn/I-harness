@@ -258,4 +258,48 @@ describe("renderProviderList", () => {
     )
     expect(out).toContain("card family: deepseek (the route name)")
   })
+
+  const noProvenance = { generatedAt: "2026-09-19", families: [] }
+
+  it("marks a route with no declared protocol as unusable — not as a wire nobody declared", () => {
+    // Before Task 1 this row printed [openai-completions], a wire NOBODY
+    // declared; after its tail was removed it would print [undefined]. Both are
+    // lies in the same shape as a success message for nothing. The listing says
+    // the route cannot be used, and names the verb that fixes it.
+    const out = renderProviderList(
+      [{
+        id: "gateway", displayName: "Gateway", configured: true,
+        auth: { configured: true, writable: true }, models: [{ id: "m" }],
+        discovery: "available", cardFamily: "gateway",
+      }],
+      noProvenance,
+    )
+
+    expect(out).toContain("gateway")
+    // NOT `not.toContain("openai-completions")`: the repair NAMES the set (a
+    // metavariable, so no protocol is picked for a user who never chose one),
+    // and that set's first member IS `openai-completions` — asserting the
+    // string never appears would forbid the very tail the fix must print.
+    // What must not appear is a WIRE in the route's own bracket. Both pre-fix
+    // renderings are pinned: the defaulted tail (`gateway  [openai-completions]`)
+    // and Task 1's `gateway  [undefined]`.
+    expect(out).not.toContain("gateway  [openai-completions]")
+    expect(out).not.toContain("gateway  [undefined]")
+    expect(out).toContain("gateway  [no protocol")
+    expect(out).toContain("no protocol")
+    expect(out).toContain("i-harness provider set gateway --protocol")
+  })
+
+  it("a route that DOES declare one still prints it, unchanged", () => {
+    const out = renderProviderList(
+      [{
+        id: "gateway", displayName: "Gateway", protocol: "gemini", configured: true,
+        auth: { configured: true, writable: true }, models: [{ id: "m" }],
+        discovery: "available", cardFamily: "gateway",
+      }],
+      noProvenance,
+    )
+
+    expect(out).toContain("[gemini]")
+  })
 })

@@ -134,6 +134,34 @@ describe("renderModels", () => {
     // Absent means the route's decision — a row that overrode nothing adds no line.
     expect(out).not.toContain("plain-row  (no card)  protocol:")
   })
+
+  it("marks a route with no declared protocol as unusable, the same as provider list", () => {
+    // Task 1 made ModelsRouteView.protocol optional, so this line renders
+    // [undefined]. Its sibling in provider.ts gets the same treatment — fixing
+    // one listing and not the other just moves the user to the other command.
+    const out = renderModels([
+      {
+        id: "gw", cardFamily: "gw", declared: false, discovery: "available",
+        models: [{ id: "m", card: undefined, aliases: [] }],
+      },
+    ])
+
+    expect(out).toContain("gw")
+    expect(out).not.toContain("undefined")
+    expect(out).toContain("no protocol")
+    expect(out).toContain("i-harness provider set gw --protocol")
+  })
+
+  it("a route that DOES declare one still prints it, unchanged", () => {
+    const out = renderModels([
+      {
+        id: "gw", cardFamily: "gw", declared: false, protocol: "gemini", discovery: "available",
+        models: [{ id: "m", card: undefined, aliases: [] }],
+      },
+    ])
+
+    expect(out).toContain("[gemini]")
+  })
 })
 
 describe("runModelsCommand", () => {

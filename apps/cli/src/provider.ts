@@ -166,7 +166,19 @@ export function renderProviderList(
   for (const row of rows) {
     // Declared vs defaulted is the distinction the whole `catalog` field exists
     // for, so the listing states which one it is.
-    lines.push(`  ${row.id}  [${row.protocol}]${row.configured ? "" : "  (not configured)"}`)
+    //
+    // A route with no declared protocol is NOT a route with a default one: it
+    // is a route that cannot be sent to. The listing says so, and names the
+    // verb that fixes it — `[undefined]` would be a rendering accident, and
+    // `[openai-completions]` would be a wire nobody declared. The repair names
+    // the SET, not a placeholder — `--protocol P` copied verbatim fails with
+    // `unknown protocol "P"`, a second error before the fix (this repo already
+    // ruled on that: 5d0f2d89, "P was the --provider placeholder").
+    lines.push(
+      row.protocol === undefined
+        ? `  ${row.id}  [no protocol — cannot be used; set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
+        : `  ${row.id}  [${row.protocol}]${row.configured ? "" : "  (not configured)"}`,
+    )
     lines.push(`    card family: ${row.cardFamily} (${row.catalog !== undefined ? "declared" : "the route name"})`)
     lines.push(`    discovery: ${row.discovery}`)
     if (row.defaultModel !== undefined) lines.push(`    default model: ${row.defaultModel}`)
