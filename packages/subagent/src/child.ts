@@ -4,7 +4,10 @@ import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
+// Type-only: the selection's per-row protocol is the SAME closed set settings
+// validates (`SettingsProviderProtocol`) — a fourth copy of the five names would
+// be a fourth place to edit one enum. Erased at build time, no runtime edge.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
@@ -78,6 +81,27 @@ export function resolveRoleTools(
   return missing
 }
 
+/** A role's model selection: which route, which model, and optionally the wire
+ * protocol / reasoning effort the role asks for. A settings
+ * `agents.roles.<name>` entry satisfies this shape structurally — nothing in
+ * this package names that type. */
+export interface RoleModelSelection {
+  provider: string
+  model: string
+  protocol?: SettingsProviderProtocol
+  reasoningEffort?: string
+}
+
+/** The resolver's answer, structurally: the `status` decides, and only a
+ * `ready` state's `client` is read here. provider-runtime's own answer
+ * satisfies it as it stands (the field names and the three arms match) — kept
+ * local because this package does not depend on provider-runtime, the same
+ * reason session-executor declares its own binding result type. */
+export type RoleModelState =
+  | { status: "unconfigured"; reason: string }
+  | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
+  | { status: "ready"; binding: { client: ModelClient } }
+
 export interface SpawnOptions {
   taskName: string
   message: string
@@ -87,7 +111,14 @@ export interface SpawnOptions {
   parentCtx: PluginContext
   role: SubagentRole
   parentModel: ModelClient
-  providers: ProviderRegistry
+  /** Resolve a selection to a live client through the HOST's provider plane —
+   * the same one the session's own model went through, so a role gets the same
+   * credentials, the same card table and the same protocol chain.
+   *
+   * It replaced a `ProviderRegistry` that `assembly.ts` built empty and nothing
+   * ever registered into, which made `role.model` throw `references unknown
+   * provider` for every value it could ever hold. */
+  resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   jobs: JobRegistry
   table: AgentTable
   agents: AgentRegistry
@@ -147,12 +178,15 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const childReg = createToolRegistry(childCtx)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
 
-  // model: role model via provider, else inherit parent.
+  // model: the role's own selection through the host's resolver, else inherit
+  // the parent's client (which is what an unconfigured harness does).
   let model = opts.parentModel
   if (opts.role.model) {
-    const profile = opts.providers.get(opts.role.model.provider)
-    if (!profile) throw new Error(`role '${opts.role.name}' references unknown provider '${opts.role.model.provider}'`)
-    model = buildModelClient(profile, opts.role.model.model, opts.role.model.extra)
+    const state = await opts.resolveModel(opts.role.model)
+    if (state.status !== "ready") {
+      throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
+    }
+    model = state.binding.client
   }
 
   const controller = new AbortController()

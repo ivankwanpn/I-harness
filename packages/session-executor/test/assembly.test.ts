@@ -19,7 +19,7 @@ import type { McpMountDeps, McpServerConfig, McpServerStatusEvent } from "@i-har
 import { approxTokens } from "@i-harness/compaction"
 import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
 import type { SubagentRole } from "@i-harness/subagent"
-import { createSessionAssembly, ModelUnavailableError } from "../src/assembly.ts"
+import { createSessionAssembly, ModelUnavailableError, type AssemblyOptions } from "../src/assembly.ts"
 
 // ── Observation seams for the two wirings the M33/M56/M57 cases below cover ──
 // Neither has a read-back on the assembly handle: the overhead estimate exists
@@ -746,5 +746,55 @@ describe("createSessionAssembly — pluginAgents", () => {
     const run = await spawnVia("general")
     expect(run.agentResults).toEqual([])
     expect(run.log).not.toContain("unknown role")
+  }, 30_000)
+})
+
+// ── resolveRoleModel: the HOST's resolver is what a role's model runs on ────
+// Both ends of the seam are load-bearing. A wired resolver must be the thing a
+// model-carrying role runs on — its own reason reaching the failure is what
+// says so — and an ABSENT one must fail NAMING the selection, never let the
+// child inherit the session's model in silence (a role that names one model and
+// runs another is the wrong answer stated as a right one).
+describe("createSessionAssembly — resolveRoleModel", () => {
+  const roleWithModel: SubagentRole = {
+    name: "rolemodel",
+    description: "carries its own model",
+    systemPrompt: "You are rolemodel.",
+    tools: [],
+    model: { provider: "gw", model: "small" },
+  }
+
+  /** One turn whose model asks spawn_agent for the model-carrying role.
+   * `background: false` makes the child's turn land before the parent's
+   * continuation, and the not-ready resolver ends the whole run in a throw. */
+  async function spawnRoleWithModel(resolveRoleModel?: AssemblyOptions["resolveRoleModel"]): Promise<unknown> {
+    const cassette = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "x", task_name: "helper", agent_type: "rolemodel", background: false } }] },
+    ])
+    const model: ModelClient = { async *stream(req) { yield* cassette.stream(req) } }
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model,
+      // spawn_agent is approval-gated; the same option the pluginAgents fixture
+      // uses, so this fails (or not) for the seam's reason and no other.
+      approveAll: true,
+      pluginAgents: [roleWithModel],
+      ...(resolveRoleModel !== undefined ? { resolveRoleModel } : {}),
+    })
+    try {
+      return await assembly.agent.run("start")
+    } finally {
+      await assembly.dispose()
+    }
+  }
+
+  it("a wired but not-ready resolver fails the spawn with ITS reason", async () => {
+    await expect(spawnRoleWithModel(async () => ({ status: "invalid", reason: 'Unknown provider "gw"' })))
+      .rejects.toThrow(/role 'rolemodel' cannot resolve its model: Unknown provider "gw"/)
+  }, 30_000)
+
+  it("an ABSENT resolver fails naming the selection (no silent inherit)", async () => {
+    await expect(spawnRoleWithModel())
+      .rejects.toThrow(/no role-model resolver is configured \(role asked for gw:small\)/)
   }, 30_000)
 })

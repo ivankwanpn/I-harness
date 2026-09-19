@@ -13,7 +13,6 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
-import { createProviderRegistry } from "@i-harness/provider"
 import { registerExec } from "@i-harness/exec"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createJobRegistry } from "../src/jobs.ts"
@@ -24,6 +23,10 @@ import { registerSubagent } from "../src/index.ts"
 import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
 
+/** The seam is required; no role in these cases carries a model, so it is
+ * never reached. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
+
 function setup() {
   const ctx = createContext()
   const parentReg = createToolRegistry(ctx)
@@ -33,12 +36,11 @@ function setup() {
   const table = createAgentTable()
   const roles = createRoleRegistry()
   for (const r of builtinRoles()) roles.register(r)
-  const providers = createProviderRegistry()
   const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "child done" }])
   const deps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
-    parentModel: model, providers, exec, agents: createAgentRegistry(),
+    parentModel: model, resolveModel: noRoleModel, exec, agents: createAgentRegistry(),
     tasks: createTaskRegistry(),
   }
   return { deps, table, agents: deps.agents, jobs }
@@ -206,7 +208,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     return registerSubagent(ctx, parentReg, {
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
       exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
@@ -264,7 +266,7 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const subagent = registerSubagent(ctx, parentReg, {
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
       exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),

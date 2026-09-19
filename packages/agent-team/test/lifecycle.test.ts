@@ -18,7 +18,10 @@ import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { registerExec } from "@i-harness/exec"
-import { createProviderRegistry } from "@i-harness/provider"
+/** The seam is required; the teammate role carries no model, so it is never
+ * reached — the spawn path that reads a role's model is covered in
+ * @i-harness/subagent's child.test.ts. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 
@@ -44,7 +47,7 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
       roles: createRoleRegistry(),
       agents: createAgentRegistry(),
       exec: registerExec(createContext()),
-      providers: createProviderRegistry(),
+      resolveModel: noRoleModel,
     },
     parentModel: model(),
   }
@@ -148,7 +151,7 @@ describe("mountAgentTeams lifecycle", () => {
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
         exec: registerExec(createContext()),
-        providers: createProviderRegistry(),
+        resolveModel: noRoleModel,
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
     })
@@ -214,7 +217,7 @@ describe("mountAgentTeams lifecycle", () => {
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
         exec: registerExec(createContext()),
-        providers: createProviderRegistry(),
+        resolveModel: noRoleModel,
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
     })
@@ -366,7 +369,7 @@ describe("mountAgentTeams lifecycle", () => {
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
         exec: registerExec(createContext()),
-        providers: createProviderRegistry(),
+        resolveModel: noRoleModel,
         childSessions: { coordinator, parentSessionId: "sess-parent" },
       },
     }))

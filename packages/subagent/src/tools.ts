@@ -3,7 +3,6 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
 // M24b (spec §3.3): type-only import — the workflow executor's job store is
@@ -15,7 +14,7 @@ import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { resolveRoleTools, spawnChild } from "./child.ts"
+import { resolveRoleTools, spawnChild, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
 export interface SubagentToolDeps {
@@ -26,7 +25,14 @@ export interface SubagentToolDeps {
   parentSession: ReturnType<typeof createSession>
   parentCtx: PluginContext
   parentModel: ModelClient
-  providers: ProviderRegistry
+  /** Resolve a selection to a live client through the HOST's provider plane —
+   * the same one the session's own model went through, so a role gets the same
+   * credentials, the same card table and the same protocol chain.
+   *
+   * It replaced a `ProviderRegistry` that `assembly.ts` built empty and nothing
+   * ever registered into, which made `role.model` throw `references unknown
+   * provider` for every value it could ever hold. */
+  resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   // M9: live Agent instances retained for the child's session id, enabling
   // followup re-drives (Task 3) without re-creating the agent.
@@ -128,7 +134,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         parentCtx: deps.parentCtx,
         role,
         parentModel: deps.parentModel,
-        providers: deps.providers,
+        resolveModel: deps.resolveModel,
         jobs: deps.jobs,
         table: deps.table,
         agents: deps.agents,
@@ -346,10 +352,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (!role) throw new Error(`unknown role: ${roleName}`)
       if (!(await ensureResidentAgent(deps, existing))) {
         // After the role check the only remaining failure mode is the role's
-        // model-provider resolution — mirror spawnChild's error shape so the
-        // resume diagnostics match the spawn path.
-        if (role.model && !deps.providers.get(role.model.provider)) {
-          throw new Error(`role '${role.name}' references unknown provider '${role.model.provider}'`)
+        // model resolution — mirror spawnChild's error shape so the resume
+        // diagnostics match the spawn path.
+        if (role.model) {
+          const state = await deps.resolveModel(role.model)
+          if (state.status !== "ready") {
+            throw new Error(`role '${role.name}' cannot resolve its model: ${state.reason}`)
+          }
         }
         throw new Error(`could not resume subagent: ${args.target}`)
       }
@@ -550,13 +559,13 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const childReg = createToolRegistry(childCtx)
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
-  // model resolution identical to spawnChild (child.ts): role.model →
-  // provider → buildModelClient; else inherit the parent model.
+  // model resolution identical to spawnChild (child.ts): role.model → the
+  // host's resolver; else inherit the parent model.
   let model = deps.parentModel
   if (role.model) {
-    const profile = deps.providers.get(role.model.provider)
-    if (!profile) return false
-    model = buildModelClient(profile, role.model.model, role.model.extra)
+    const state = await deps.resolveModel(role.model)
+    if (state.status !== "ready") return false
+    model = state.binding.client
   }
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
