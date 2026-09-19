@@ -24,7 +24,6 @@ import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
-import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
@@ -560,20 +559,10 @@ async function runSdkCommand(args: string[]): Promise<number> {
             if (!known) throw new Error(`session not found: ${sessionId}`)
             return service.modelState(sessionId)
           },
-          setSessionModel: async (sessionId: string, selection: import("@i-harness/sdk").SessionModelSelection) => {
+          setSessionModel: async (sessionId: string, selection: import("@i-harness/session-persistence").SessionModelSelection) => {
             const known = service.hasAssembly(sessionId) || (await coordinator.list()).includes(sessionId)
             if (!known) throw new Error(`session not found: ${sessionId}`)
-            // The wire shape is LOOSE (`protocol?: string` — the SDK's
-            // zero-dependency contract); the durable field is settings' closed
-            // set. Translate at this boundary, dropping a protocol outside the
-            // five — the same rule the jsonl parser applies to a raw durable
-            // value, so a wire nobody can send on never reaches the header.
-            const { protocol, ...rest } = selection
-            const durable: import("@i-harness/session-persistence").SessionModelSelection =
-              typeof protocol === "string" && (PROVIDER_PROTOCOLS as readonly string[]).includes(protocol)
-                ? { ...rest, protocol: protocol as SettingsProviderProtocol }
-                : rest
-            await coordinator.updateMeta(sessionId, { modelSelection: durable })
+            await coordinator.updateMeta(sessionId, { modelSelection: selection })
           },
         }
       : {}),
