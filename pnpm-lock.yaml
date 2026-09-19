@@ -629,6 +629,9 @@ importers:
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
 
   packages/provider-runtime:
     dependencies:

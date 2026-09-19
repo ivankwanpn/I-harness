@@ -5,6 +5,10 @@ import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
 import { createGeminiClient } from "@i-harness/llm-gemini"
 import { createBedrockClient } from "@i-harness/llm-bedrock"
+// Type-only: the per-row protocol is the SAME closed set settings validates
+// (`SettingsProviderProtocol`) — a fourth copy of the five names would be a
+// fourth place to edit one enum. Erased at build time, so no runtime edge.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 
 export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages" | "gemini" | "bedrock"
 
@@ -314,6 +318,13 @@ export interface ModelDescriptor {
   contextWindow?: number
   /** Discovered response cap (maxTokens / the limit.output half of a pair). */
   maxTokens?: number
+  /** The row's OWN wire protocol, when it declares one — a settings model row
+   * may override its route's protocol (provider-runtime's `resolveModel` reads
+   * it as runtimeProfile's `modelProtocol`). `mergeModels` already spreads the
+   * settings row, so the value is present at runtime; this only names it.
+   * Probe results never carry it (a probe reports what an endpoint offers, and
+   * the endpoint's protocol is the route's). */
+  protocol?: SettingsProviderProtocol
 }
 
 /** Directory row: the UI-facing view of one registered provider route. */
