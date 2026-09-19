@@ -752,9 +752,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }))
     const subagent = registerSubagent(ctx, tools, {
       resolveModel: resolveRoleModel,
-      // The gate travels with the resolver it gates (RegisterSubagentOptions →
-      // SubagentToolDeps → spawnChild). Both are omitted when the host passed
-      // neither: an unset switch is OFF, never "enabled by omission".
+      // The gate travels with the resolver it gates, into THIS chain:
+      // RegisterSubagentOptions → SubagentToolDeps → spawnChild. The guardian
+      // and team call sites below are handed the same two options — a site that
+      // got the resolver without them would resolve nothing and inherit,
+      // silently. Both are omitted when the host passed neither: an unset
+      // switch is OFF, never "enabled by omission".
       ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
       ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
       exec: execService,
@@ -799,10 +802,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session,
         parentCtx: ctx,
         resolveModel: resolveRoleModel,
-        // The gate travels with the resolver it gates: the guardian's spawn is
-        // a role-carrying spawn, so it gets the same two options. Omitted when
-        // the host passed neither — an unset switch is OFF, never "enabled by
-        // omission".
+        // The gate travels with the resolver it gates (rule stated at the
+        // registerSubagent chain above): THIS spawn site is role-carrying too.
         ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
         ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
         parentModel: model,
@@ -831,6 +832,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           agents: subagent.agents,
           exec: execService,
           resolveModel: resolveRoleModel,
+          // The gate travels with the resolver it gates — same rule, same two
+          // options as the other spawn sites above.
           ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
           ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
           childSessions:

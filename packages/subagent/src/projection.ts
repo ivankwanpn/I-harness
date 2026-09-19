@@ -19,6 +19,7 @@ import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { ChildAgentEntry } from "./agent-table.ts"
 import type { JobRegistry, JobStatus } from "./jobs.ts"
 import type { RoleRegistry } from "./roles.ts"
+import { modelLabelOf } from "./child.ts"
 import type { TaskRecord, TaskRegistry, TaskStatus } from "./task-protocol.ts"
 
 /** Summary status union — settled and recovered states map truthfully
@@ -165,11 +166,12 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
         ...(roleName !== undefined ? { role: roleName } : {}),
         // The recorded label is the fact (what the child RAN on). The role's
         // declared model is the fallback evidence for an entry spawned before
-        // labels were recorded; with neither, say the inheritance outright.
+        // labels were recorded — spelled through `modelLabelOf`, the ONE
+        // spelling of that pair; with neither, say the inheritance outright.
         ...(entry?.modelLabel !== undefined
           ? { model: entry.modelLabel }
           : role?.model !== undefined
-            ? { model: `${role.model.provider}:${role.model.model}` }
+            ? { model: modelLabelOf(role.model) }
             : { model: "inherited from the session" }),
         ...(pool?.prompt !== undefined ? { parentPrompt: pool.prompt } : {}),
         ...(pool?.resultText ?? entry?.finalText !== undefined ? { result: pool?.resultText ?? entry?.finalText } : {}),
