@@ -308,13 +308,27 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           modelId,
         )
       }
-      if (!view.models.some((model) => model.id === modelId)) {
-        return invalidState(
-          `Model "${providerId}:${modelId}" is not in the configured catalog`,
-          providerId,
-          modelId,
-        )
-      }
+      // NO MEMBERSHIP CHECK HERE, deliberately, and please do not add one back.
+      //
+      // There was one: `if (!view.models.some(m => m.id === modelId)) invalid`.
+      // It broke on a VENDOR RENAME — `deepseek-flash` is the name DeepSeek's own
+      // docs tell you to use, and our table still listed the retired
+      // `deepseek-v4-flash` and friends, so the correct name was refused and the
+      // obsolete ones were accepted. Measured 2026-09-19.
+      //
+      // It also bought nothing: every line below tolerates an undeclared model
+      // (`userModel?.`, an optional `contextWindow` in the binding), and the one
+      // thing a check could have supplied — the model's capacity — is not in the
+      // table for this provider anyway (the entries are bare ids), so a DECLARED
+      // model resolved no context window either. Six shipping harnesses were read
+      // for this; four pass an unknown model through, one probes the provider,
+      // and the two that refuse give an actionable message and a documented
+      // escape hatch. This gave neither.
+      //
+      // The line that DOES belong is above: an unknown PROVIDER is still refused,
+      // because without its entry there is no base URL and no credential source.
+      // `view.models` remains the UI-facing directory — it is a list to choose
+      // from, not a licence to run.
 
       const reasoningEffort = normalizeReasoningEffort(selection.reasoningEffort)
       if (selection.reasoningEffort !== undefined && reasoningEffort === undefined) {
