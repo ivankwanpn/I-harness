@@ -106,9 +106,9 @@ export function parseProviderArgs(args: string[]): ParsedProviderArgs {
     if (token === "--display-name") { fields.displayName = value; continue }
     if (token === "--protocol") {
       if (!(PROVIDER_PROTOCOLS as readonly string[]).includes(value)) {
-        // Never default a protocol: the schema's fill-in is `openai-completions`
-        // (settings/src/sections.ts:116), and applying it silently is a wrong
-        // answer stated as a right one.
+        // Never default a protocol: there is NO schema fill-in anymore (the
+        // resolver stops at SEEDED_PROTOCOLS — see resolveProviderProtocol),
+        // and inventing one silently is a wrong answer stated as a right one.
         return { subcommand: "help", fields: {}, error: `unknown protocol "${value}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}` }
       }
       fields.protocol = value as CliProtocol
