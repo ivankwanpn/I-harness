@@ -507,11 +507,30 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // working, and the declaration is visible in the report rather than silent.
     const approvals = createHookTrustStore(resolveHookTrustPath())
     for (const hookConfig of pluginInputs.hookConfigs) {
-      hookRegistries.push(await createHookRegistry(assembly.ctx, {
-        configPath: hookConfig,
-        configDir: dirname(hookConfig),
-        approvals,
-      }))
+      try {
+        hookRegistries.push(await createHookRegistry(assembly.ctx, {
+          configPath: hookConfig,
+          configDir: dirname(hookConfig),
+          approvals,
+        }))
+      } catch (err) {
+        // A plugin's hooks must never brick the run — the SAME rule as an
+        // ungranted declaration (c0b941d0), through the one door it left open. A
+        // config we cannot parse contributes ZERO handlers, which is exactly
+        // what an ungranted one contributes, so the run proceeds and the reason
+        // is reported rather than swallowed.
+        //
+        // NOT a formality, and not about malformed plugins: Claude Code plugins
+        // ship `hooks/hooks.json` in CC's shape (`{hooks:{<Event>:[...]}}`) and
+        // that is the shape our plugin model reads. Letting the refusal
+        // propagate meant ANY enabled CC plugin carrying hooks failed EVERY run
+        // — measured 2026-09-19 against the real home, with `superpowers`
+        // enabled, on runs that never touch a hook.
+        console.warn(
+          `[plugins] hooks config ${hookConfig} could not be loaded; its hooks contribute nothing for this run: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        )
+      }
     }
     if (activeId !== undefined) {
       for (const registry of hookRegistries) await registry.beginSession(activeId)

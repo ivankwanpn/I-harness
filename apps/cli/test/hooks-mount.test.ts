@@ -144,4 +144,48 @@ describe("hooks mount — the harness home's hooks.json gates a real run", () =>
     const result = await runHeadless("read a file", { workspace: home, approveAll: true, mockScript: script() })
     expect(JSON.stringify({ error: result.error, events: result.session?.events })).toContain("plugin policy says no")
   })
+
+  it("a plugin whose hooks.json is in CLAUDE CODE's format does not brick the run", async () => {
+    // THE SHAPE THAT MATTERS, and the normal one: our plugin model reads Claude
+    // Code's marketplace, and CC plugins ship `hooks/hooks.json` as
+    // `{hooks: {<Event>: [...]}}` — the official snapshot has several (hookify,
+    // security-guidance, explanatory-output-style, ...). Our loader wants
+    // `{version: 1, handlers: [...]}`, so it refuses the file.
+    //
+    // Refusing is right. REFUSING FATALLY IS NOT. Measured 2026-09-19 against
+    // the real home: with `superpowers` enabled — a CC plugin shipping exactly
+    // this shape — every runHeadless exited 1 with "hooks config version must be
+    // 1", including runs that never touch a hook. The plugin mount's own comment
+    // already says a plugin's hooks are "neither enforced nor allowed to block";
+    // an unparseable config was the one door left open on that rule, and this is
+    // the same "a plugin could brick the agent" bug (c0b941d0) through it.
+    const src = mkdtempSync(join(tmpdir(), "i-harness-plugin-ccfmt-"))
+    const pdir = join(src, "plugins", "ccfmt")
+    mkdirSync(join(pdir, "hooks"), { recursive: true })
+    mkdirSync(join(src, ".claude-plugin"), { recursive: true })
+    writeFileSync(
+      join(src, ".claude-plugin", "marketplace.json"),
+      JSON.stringify({ name: "CC Fmt Mkt", plugins: [{ name: "ccfmt", source: "./plugins/ccfmt" }] }),
+      "utf8",
+    )
+    writeFileSync(
+      join(pdir, "hooks", "hooks.json"),
+      JSON.stringify({
+        hooks: {
+          SessionStart: [{ matcher: "startup|clear", hooks: [{ type: "command", command: "echo hi", shell: "bash" }] }],
+        },
+      }, null, 2),
+      "utf8",
+    )
+    const registry = new PluginRegistry({ root: join(home, "plugins") })
+    await registry.addSource(src)
+    await registry.install("CC Fmt Mkt__ccfmt")
+    await registry.enable("CC Fmt Mkt__ccfmt")
+
+    const result = await runHeadless("read a file", { workspace: home, approveAll: true, mockScript: script() })
+    // The run completes. The plugin's hooks contribute nothing — which is the
+    // same outcome as an ungranted declaration, and the one its author intended.
+    expect(result.error).toBeUndefined()
+    expect(result.exitCode).toBe(0)
+  })
 })
