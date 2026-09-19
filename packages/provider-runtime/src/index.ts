@@ -399,51 +399,13 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         const cached = discovered.get(id)
         if (cached !== undefined) return cloneModels(cached)
       }
+      // ONE merge implementation, two verbs: this is probe-then-add, and the
+      // only thing it adds to that is the memo.
+      const probed = await probeRouteModels(id, discoveryOptions)
       discoveryOptions.signal?.throwIfAborted()
-
-      const view = provider(id)
-      if (view === undefined) throw new Error(`provider "${id}" is not configured`)
-      if (view.protocol === "bedrock") {
-        throw new Error("Discovery is not available for this provider; add a model ID manually.")
-      }
-
-      const ref = authRef(view)
-      if (ref === undefined) throw new Error(`No API key configured for provider "${id}"`)
-      const resolvedAuth = await auth.resolve(ref, {
-        providerId: id,
-        purpose: "discovery",
-        ...(discoveryOptions.signal !== undefined ? { signal: discoveryOptions.signal } : {}),
-      })
-      const apiKey = authValue(resolvedAuth)
-      if (apiKey === undefined) throw new Error(`No API key configured for provider "${id}"`)
-      discoveryOptions.signal?.throwIfAborted()
-
-      const models = await registry.probeModels(id, {
-        ...(view.modelsURL !== undefined
-          ? { modelsURL: view.modelsURL }
-          : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
-        apiKey,
-        protocol: view.protocol,
-        // M60 E: the route's configured headers (a gateway may require one for
-        // discovery too) — the probe's own auth keys still win.
-        ...(view.headers !== undefined ? { headers: view.headers } : {}),
-      })
-      discoveryOptions.signal?.throwIfAborted()
-
-      const llm = canonicalLlm(options.settings)
-      const current = llm.providers[id]
-      const mergedUserModels = mergeDiscoveredModels(current?.models ?? [], models)
-      await persistLlm({
-        providers: {
-          ...llm.providers,
-          [id]: { ...(current ?? {}), models: mergedUserModels },
-        },
-        defaultModel: { ...llm.defaultModel },
-      })
-
-      const mergedCatalog = provider(id)?.models ?? mergedUserModels
-      discovered.set(id, cloneModels(mergedCatalog))
-      return cloneModels(mergedCatalog)
+      const merged = await addModelRows(id, probed)
+      discovered.set(id, cloneModels(merged))
+      return cloneModels(merged)
     },
 
     async setDefaultModel(selection) {
