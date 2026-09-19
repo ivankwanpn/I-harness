@@ -28,6 +28,7 @@ import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
+import { runProviderCommand } from "./provider.ts"
 import { failureReport, diagnosticSessionId } from "./run.ts"
 
 // M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
@@ -53,11 +54,12 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // `--sandbox read-only|workspace-write|danger-full-access` token is
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
-  "usage: i-harness [<run|sdk|acp|sessions|hooks> ...]\n" +
+  "usage: i-harness [<run|sdk|acp|sessions|hooks|provider> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
-  "  hooks <list|approve|revoke> [sha256]"
+  "  hooks <list|approve|revoke> [sha256] |\n" +
+  "  provider <list|add|set|key|rm>"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -121,6 +123,12 @@ export async function main(argv: string[]): Promise<number> {
   // own, against the same store.
   if (args[0] === "hooks") {
     return runHooksCommand(args)
+  }
+  // The provider lifecycle's route tree
+  // (docs/superpowers/specs/2026-09-19-provider-lifecycle-design.md §4). Same
+  // reason as `hooks`: M65 left seven ProviderRuntime methods with no caller.
+  if (args[0] === "provider") {
+    return runProviderCommand(args)
   }
   // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
   // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.
