@@ -703,39 +703,89 @@ EOF
 
 ---
 
-### Task 6: show the effective model where a spawn can be seen
+### Task 6: show the model a role ACTUALLY ran on
 
 **Files:**
-- Modify: `packages/subagent/src/projection.ts:158-165` (the job row's model), `apps/cli/src/roles.ts` (`roles list`'s "declared vs inherited")
-- Test: the projecting suite + `apps/cli/test/roles-command.test.ts`
+- Modify: `packages/subagent/src/agent-table.ts` (the entry type), `packages/subagent/src/child.ts` (record it at spawn), `packages/subagent/src/persist.ts` (round-trip it), `packages/subagent/src/projection.ts:163`
+- Test: `packages/subagent/test/projection.test.ts` + `packages/subagent/test/child.test.ts`
 
 **Interfaces:**
-- Consumes: `roleSelectionFor` (Task 4).
-- Produces: a job row and `roles list` both state which model a role ACTUALLY resolved to.
+- Consumes: the resolved selection from Task 4.
+- Produces: `AgentEntry.modelLabel?: string` — `"provider:model"` when the role resolved one, **absent when it inherited**.
+
+**The design point, and why it differs from the obvious one:** the row must print the model the role **actually ran on**, not re-derive today's precedence. Re-deriving needs `roleSelectionFor` plumbed into `SubagentTaskSource` (it is not there), and — worse — it would print what the settings say NOW, which for a running child is not what it is running on. **Record the fact at spawn; read the record.** That also removes the second implementation of the precedence that the previous draft of this task asked for.
 
 - [ ] **Step 1: Write the failing test**
 
-`projection.ts:163` currently prints `${role.model.provider}:${role.model.model}` — which is never set. Assert instead that the row shows the selection the role RESOLVED (settings first, then the role's own), and that `roles list` says **inherited** for a role with no entry.
+In `packages/subagent/test/projection.test.ts` (find its existing row fixture):
+
+```ts
+it("shows the model the role RESOLVED — and says so when it inherited instead", () => {
+  const withModel = projectAgentTaskDetail({
+    ...fixtureState,
+    table: tableWithEntry({ path: "root/helper", roleName: "general", modelLabel: "gw:small" }),
+  }, row)
+  expect(withModel?.model).toBe("gw:small")
+
+  const inherited = projectAgentTaskDetail({
+    ...fixtureState,
+    table: tableWithEntry({ path: "root/helper", roleName: "general" }),   // no modelLabel
+  }, row)
+  expect(inherited?.model).toBe("inherited from the session")
+})
+```
+
+And in `packages/subagent/test/child.test.ts`, extend Task 3's resolver case:
+
+```ts
+    // the spawn RECORDS what it resolved, so a later read cannot disagree with it
+    expect(f.table.get("root/helper")?.modelLabel).toBe("gw:small")
+```
 
 - [ ] **Step 2: Run it — expect RED**
 
+Expected: `modelLabel` is `undefined` on the entry and `detail.model` is absent (the current line reads `role.model`, which is never set).
+
 - [ ] **Step 3: Implement**
 
-`projection.ts` reads the same precedence as the spawn (`roleSelectionFor?.(role.name) ?? role.model`) — **the same expression, not a second implementation of it.** If that means moving the precedence into one exported helper in `packages/subagent/src/roles.ts`, do that and call it from both places.
+`agent-table.ts` — add to the entry interface:
+
+```ts
+  /** The model this child actually ran on, as `provider:model`, RECORDED at
+   * spawn. Absent = it inherited the parent's client. Never re-derived at read
+   * time: a running child's settings can change under it, and the row must say
+   * what IS, not what today's configuration would say. */
+  modelLabel?: string
+```
+
+`child.ts` — after resolving (`model = state.binding.client`), set it on the entry: `modelLabel: \`${selection.provider}:${selection.model}\``. The inherit arm sets nothing.
+
+`persist.ts` — carry it through `snapshotState` (:81-84) and `restoreState` (:123), beside `mailbox`, so a restored entry still says what it ran on.
+
+`projection.ts:163`:
+```ts
+        ...(entry?.modelLabel !== undefined
+          ? { model: entry.modelLabel }
+          : role?.model !== undefined
+            ? { model: `${role.model.provider}:${role.model.model}` }
+            : { model: "inherited from the session" }),
+```
+(The middle arm keeps a role's DECLARED model visible for a child that was spawned before this task recorded labels — decide whether to keep it once you see the existing tests; if nothing depends on it, one arm is better than two.)
 
 - [ ] **Step 4: Run it — expect GREEN**
 
-Run: `pnpm -C packages/subagent test && pnpm -C apps/cli test && pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate`
+Run: `pnpm -C packages/subagent test && pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate`
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add -A
 git commit -F - <<'EOF'
-feat(subagent): the job row and `roles list` say which model a role resolved to
+feat(subagent): the job row says which model the child actually ran on
 
-Both print the SAME expression the spawn used — a second implementation of the
-precedence is how a display starts disagreeing with the thing it describes.
+Recorded at spawn, not re-derived at read: the settings can change under a
+running child, and the row must say what IS. It also means the display cannot
+disagree with the spawn — there is one fact, written once.
 EOF
 ```
 
