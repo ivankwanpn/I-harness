@@ -1,0 +1,297 @@
+/**
+ * `i-harness models` — the model tree of the provider lifecycle
+ * (docs/superpowers/specs/2026-09-19-provider-lifecycle-design.md §4).
+ *
+ * `probe` is the ONLY verb here that touches the network, and it WRITES
+ * NOTHING — that split is the whole reason `probeModels` exists beside
+ * `discoverModels`. What the user's flow called "multi-select" is `add` with
+ * several ids.
+ *
+ * Shape follows `sessions.ts` and `hooks.ts`.
+ */
+
+import { listModelCatalogFamily, resolveModelCard, type ModelCard } from "@i-harness/provider"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
+import type { SettingsModel } from "@i-harness/settings"
+import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
+import { loadProviderRuntime } from "./provider-runtime.ts"
+
+/** A parsed `--context-window` / `--max-tokens` argument. `auto` CLEARS the
+ * override and falls back to the card — without it, a number once written
+ * could never be taken back. */
+export type TokenValue = { kind: "value"; value: number } | { kind: "clear" } | { kind: "error"; message: string }
+
+/** The two arms a PARSED flag can actually hold. `parseModelsArgs` returns
+ * before it assigns anything when a value is malformed, so `error` never lands
+ * in `values` — and saying so in the type is what keeps every reader of
+ * `values` from having to re-prove it. */
+export type SettableTokenValue = Exclude<TokenValue, { kind: "error" }>
+
+export function parseTokenValue(raw: string): TokenValue {
+  const normalized = raw.trim().toLowerCase()
+  if (normalized === "auto") return { kind: "clear" }
+  // `_` may separate digits exactly where a JS numeric literal allows it, so
+  // `1_000_000` is the same number as `1000000` — not a separate spelling.
+  const match = /^(\d(?:_?\d)*)([km]?)$/.exec(normalized)
+  if (match === null) return { kind: "error", message: `expected a positive integer, k/m suffix, or "auto"; got "${raw}"` }
+  // `k` is the BINARY kilo: every 128K context window is 131,072 tokens, and
+  // the design's own walkthrough writes `--context-window 128k` and reports
+  // `contextWindow 131,072` (design §6). `m` is the decimal million.
+  const scale = match[2] === "k" ? 1_024 : match[2] === "m" ? 1_000_000 : 1
+  const value = Number(match[1]!.replaceAll("_", "")) * scale
+  if (!Number.isSafeInteger(value) || value <= 0) return { kind: "error", message: `not a positive token count: "${raw}"` }
+  return { kind: "value", value }
+}
+
+export interface ModelValues {
+  contextWindow?: SettableTokenValue
+  maxTokens?: SettableTokenValue
+  /** A settings protocol name, or `null` for `auto` (clear the row's override
+   * and fall back to the route's default — NOT to the hard-coded one). */
+  protocol?: CliProtocol | null
+}
+
+/** What a parsed flag becomes on the way to the runtime: a number, `null` to
+ * CLEAR (`setModel`'s own rule), or absent (leave alone). */
+interface ModelFieldValues {
+  contextWindow?: number | null
+  maxTokens?: number | null
+  protocol?: CliProtocol | null
+}
+
+/** One row for `addModels`. A SETTINGS row has no `null` — a field is present
+ * or absent — so the nulls `setModel` uses to delete are dropped here: on a
+ * NEW row, `auto` means "no override", which is exactly absence. */
+function rowFor(modelId: string, fields: ModelFieldValues): SettingsModel {
+  return {
+    id: modelId,
+    ...(fields.contextWindow !== undefined && fields.contextWindow !== null ? { contextWindow: fields.contextWindow } : {}),
+    ...(fields.maxTokens !== undefined && fields.maxTokens !== null ? { maxTokens: fields.maxTokens } : {}),
+    ...(fields.protocol !== undefined && fields.protocol !== null ? { protocol: fields.protocol } : {}),
+  }
+}
+
+export interface ParsedModelsArgs {
+  subcommand: "list" | "probe" | "add" | "set" | "rm" | "use" | "refresh" | "help"
+  route?: string
+  ids: string[]
+  values: ModelValues
+  error?: string
+}
+
+const MODELS_USAGE =
+  "usage: i-harness models <list|probe|add|set|rm|use|refresh> [args]\n" +
+  "  [<route>]                                 what each model resolves, and whether the route can be probed\n" +
+  "  probe <route>                             ask the endpoint what it offers — WRITES NOTHING\n" +
+  "  add <route> <id...> [--protocol P] [--context-window V] [--max-tokens V]\n" +
+  "  set <route> <id>    [--protocol P] [--context-window V] [--max-tokens V]\n" +
+  "  rm <route> <id>\n" +
+  "  use <route>:<model> [--reasoning-effort E]\n" +
+  "  refresh <route>                           probe and merge everything it returns\n" +
+  "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
+  "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
+
+export function parseModelsArgs(args: string[]): ParsedModelsArgs {
+  const rest = args.slice(1)
+  const values: ModelValues = {}
+  const positional: string[] = []
+  let subcommand: ParsedModelsArgs["subcommand"] = "list"
+
+  for (let i = 0; i < rest.length; i += 1) {
+    const token = rest[i]!
+    if (token === "--context-window" || token === "--max-tokens") {
+      const raw = rest[i + 1]
+      if (raw === undefined) return { subcommand: "help", ids: [], values: {}, error: `${token} needs a value` }
+      i += 1
+      const parsed = parseTokenValue(raw)
+      if (parsed.kind === "error") return { subcommand: "help", ids: [], values: {}, error: parsed.message }
+      if (token === "--context-window") values.contextWindow = parsed
+      else values.maxTokens = parsed
+      continue
+    }
+    if (token === "--protocol") {
+      const raw = rest[i + 1]
+      if (raw === undefined) return { subcommand: "help", ids: [], values: {}, error: "--protocol needs a value" }
+      i += 1
+      // `auto` clears the row's override, falling back to the ROUTE's default.
+      // The hard-coded `openai-completions` arm is never a destination the CLI
+      // can name — it is the failure mode, not a choice.
+      if (raw === "auto") { values.protocol = null; continue }
+      if (!(PROVIDER_PROTOCOLS as readonly string[]).includes(raw)) {
+        return { subcommand: "help", ids: [], values: {}, error: `unknown protocol "${raw}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")} | auto` }
+      }
+      values.protocol = raw as CliProtocol
+      continue
+    }
+    if (token.startsWith("-")) return { subcommand: "help", ids: [], values: {}, error: `unknown flag: ${token}` }
+    if (positional.length === 0 && ["list", "probe", "add", "set", "rm", "use", "refresh"].includes(token)) {
+      subcommand = token as ParsedModelsArgs["subcommand"]
+      continue
+    }
+    positional.push(token)
+  }
+
+  if (subcommand === "list") {
+    if (positional.length > 1) return { subcommand: "help", ids: [], values: {}, error: "unexpected extra argument" }
+    if (positional.length > 0) return { subcommand, route: positional[0], ids: [], values }
+    return { subcommand, ids: [], values }
+  }
+  if (subcommand === "use") {
+    if (positional.length !== 1) return { subcommand: "help", ids: [], values: {}, error: "use takes <route>:<model>" }
+    if (!positional[0]!.includes(":")) return { subcommand: "help", ids: [], values: {}, error: `use needs provider:model; got "${positional[0]}"` }
+    return { subcommand, route: positional[0], ids: [], values }
+  }
+  if (subcommand === "probe" || subcommand === "refresh") {
+    if (positional.length !== 1) return { subcommand: "help", ids: [], values: {}, error: `${subcommand} takes exactly one route` }
+    return { subcommand, route: positional[0], ids: [], values }
+  }
+  if (subcommand === "rm") {
+    if (positional.length !== 2) return { subcommand: "help", ids: [], values: {}, error: "rm takes exactly one model id" }
+    return { subcommand, route: positional[0], ids: [positional[1]!], values }
+  }
+  // add / set
+  if (positional.length < 2) return { subcommand: "help", ids: [], values: {}, error: `${subcommand} takes a route and at least one model id` }
+  if (subcommand === "set" && positional.length !== 2) return { subcommand: "help", ids: [], values: {}, error: "set takes exactly one model id" }
+  return { subcommand, route: positional[0], ids: positional.slice(1), values }
+}
+
+export interface ModelsRouteView {
+  id: string
+  cardFamily: string
+  declared: boolean
+  protocol: string
+  models: Array<{ id: string; card: ModelCard | undefined; aliases: string[] }>
+}
+
+export function renderModels(routes: readonly ModelsRouteView[]): string {
+  if (routes.length === 0) return "no provider routes configured"
+  const lines: string[] = []
+  const cardless: string[] = []
+  for (const route of routes) {
+    lines.push(`${route.id}  [${route.protocol}]  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
+    if (route.models.length === 0) lines.push("  (no models — try: i-harness models probe " + route.id + ")")
+    for (const model of route.models) {
+      const numbers = model.card?.contextWindow !== undefined
+        ? `${model.card.contextWindow}${model.card.maxOutputTokens !== undefined ? ` / ${model.card.maxOutputTokens}` : ""}`
+        : "no card"
+      lines.push(`  ${model.id}  (${numbers})${model.aliases.length > 0 ? `  +retired: ${model.aliases.join(", ")}` : ""}`)
+    }
+    // The D1/D2 symptom, said out loud: a route whose family resolves nothing
+    // is exactly the state that used to fail silently.
+    if (route.models.length > 0 && route.models.every((model) => model.card === undefined)) cardless.push(route.id)
+    lines.push("")
+  }
+  if (cardless.length > 0) {
+    lines.push(`no card resolves for: ${cardless.join(", ")} — declare \`catalog\` on the route, or add the family to model-catalog.json`)
+  }
+  return lines.join("\n")
+}
+
+async function viewOf(runtime: ProviderRuntime, only?: string): Promise<ModelsRouteView[]> {
+  const rows = await runtime.directory()
+  return rows
+    .filter((row) => only === undefined || row.id === only)
+    .map((row) => {
+      const family = listModelCatalogFamily(row.cardFamily)
+      return {
+        id: row.id,
+        cardFamily: row.cardFamily,
+        declared: row.catalog !== undefined,
+        protocol: row.protocol,
+        models: row.models.map((model) => {
+          const own = family.find((entry) => entry.modelId === model.id)
+          // BOTH directions matter. A row that IS the current name carries its
+          // retired names; a row that is ITSELF retired says which name it is —
+          // and that second direction is what tells a user holding
+          // `deepseek-v4-flash` why it still resolves (design §1.2).
+          const owner = own === undefined ? family.find((entry) => entry.aliases.includes(model.id)) : undefined
+          return {
+            id: model.id,
+            card: own?.card ?? owner?.card,
+            aliases: own?.aliases ?? (owner !== undefined ? [`alias of ${owner.modelId}`] : []),
+          }
+        }),
+      }
+    })
+}
+
+export async function runModelsCommand(args: string[]): Promise<number> {
+  const parsed = parseModelsArgs(args)
+  if (parsed.error !== undefined) {
+    console.error(`models: ${parsed.error}`)
+    console.error(MODELS_USAGE)
+    return 1
+  }
+  if (parsed.subcommand === "help") {
+    console.error(MODELS_USAGE)
+    return 0
+  }
+
+  const { runtime } = await loadProviderRuntime()
+  const fields: ModelFieldValues = {
+    ...(parsed.values.contextWindow !== undefined
+      ? { contextWindow: parsed.values.contextWindow.kind === "clear" ? null : parsed.values.contextWindow.value }
+      : {}),
+    ...(parsed.values.maxTokens !== undefined
+      ? { maxTokens: parsed.values.maxTokens.kind === "clear" ? null : parsed.values.maxTokens.value }
+      : {}),
+    ...(parsed.values.protocol !== undefined ? { protocol: parsed.values.protocol } : {}),
+  }
+
+  try {
+    if (parsed.subcommand === "list") {
+      console.log(renderModels(await viewOf(runtime, parsed.route)))
+      return 0
+    }
+    const route = parsed.route!
+    if (parsed.subcommand === "probe") {
+      const models = await runtime.probeModels(route)
+      console.log(`${models.length} model(s) found — NOTHING was written:`)
+      for (const model of models) {
+        const card = resolveModelCard(
+          (await runtime.directory()).find((row) => row.id === route)?.cardFamily ?? route,
+          model.id,
+        )
+        console.log(`  ${model.id}  ${card?.contextWindow !== undefined ? `card ${card.contextWindow}` : "no card"}`)
+      }
+      if (models.length > 0) console.log(`next: i-harness models add ${route} <id> ...`)
+      return 0
+    }
+    if (parsed.subcommand === "refresh") {
+      const models = await runtime.discoverModels(route, { force: true })
+      console.log(`refreshed "${route}": ${models.length} model(s) now in its list`)
+      return 0
+    }
+    if (parsed.subcommand === "add") {
+      // Which ids already existed is REPORTED, because `addModels` follows the
+      // merge rule (an existing row wins) and a silently-ignored
+      // --context-window would be exactly the kind of quiet wrong answer this
+      // repo keeps measuring.
+      const before = new Set((await runtime.directory()).find((row) => row.id === route)?.models.map((model) => model.id) ?? [])
+      const already = parsed.ids.filter((modelId) => before.has(modelId))
+      const models = await runtime.addModels(route, parsed.ids.map((modelId) => rowFor(modelId, fields)))
+      console.log(`"${route}": ${models.length} model(s)`)
+      if (already.length > 0) {
+        console.log(`  already present and left alone: ${already.join(", ")} — use \`models set\` to change one`)
+      }
+      return 0
+    }
+    if (parsed.subcommand === "set") {
+      await runtime.setModel(route, parsed.ids[0]!, fields)
+      console.log(`"${route}"/"${parsed.ids[0]}" updated`)
+      return 0
+    }
+    if (parsed.subcommand === "rm") {
+      await runtime.removeModel(route, parsed.ids[0]!)
+      console.log(`"${route}"/"${parsed.ids[0]}" removed`)
+      return 0
+    }
+    const separator = route.indexOf(":")
+    await runtime.setDefaultModel({ provider: route.slice(0, separator), model: route.slice(separator + 1) })
+    console.log(`default model: ${route}`)
+    return 0
+  } catch (error) {
+    console.error(`models: ${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  }
+}

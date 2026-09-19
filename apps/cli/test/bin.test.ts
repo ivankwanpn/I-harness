@@ -41,7 +41,7 @@ describe("M44 global command shim (i-harness / ih)", () => {
     // describe a bare-launch default — there is none (bare-launch.test.ts pins
     // the refusal). The old case asserted "launches the TUI" here; that
     // sentence described a deleted surface, so it went with it.
-    expect(r.stderr).toContain("[<run|sdk|acp|sessions|hooks|provider> ...]")
+    expect(r.stderr).toContain("[<run|sdk|acp|sessions|hooks|provider|models> ...]")
     expect(r.stderr).not.toContain("tui")
     expect(r.stderr).not.toContain("web")
   }, 30_000)
