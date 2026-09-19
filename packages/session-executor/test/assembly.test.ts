@@ -813,9 +813,11 @@ describe("createSessionAssembly — resolveRoleModel", () => {
   // The switch itself, seen from the real assembly: ABSENT is off. Nothing was
   // passed here, which is exactly what an unwired host does — and the refusal
   // names both fixes (this is the `unconsulted-setting` row finally read).
+  // `rolemodel` is not a built-in name, so the second fix is the settings key:
+  // `roles unset` only accepts the four built-ins.
   it("without plugins.subagentModel the model-carrying spawn is refused, naming both fixes", async () => {
     await expect(spawnRoleWithModel())
-      .rejects.toThrow(/role "rolemodel" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear it with `i-harness roles unset rolemodel`/)
+      .rejects.toThrow(/role "rolemodel" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear `agents\.roles\.rolemodel` in settings\.json/)
   }, 30_000)
 
   // …and the HOST's declared selection is what a spawn asks the resolver for:

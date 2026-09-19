@@ -289,8 +289,10 @@ describe("resume_agent semantics preserved", () => {
     const tools = createSubagentTools({ ...deps, roles, allowSubagentModelSelection: false })
 
     const resume = tools.find((t) => t.name === "resume_agent")!
+    // `modelled` is not one of the four built-ins, so the message names the
+    // repair the CLI can perform for it: the settings key, not `roles unset`.
     await expect(resume.execute({ target: "root/helper" }, {})).rejects.toThrow(
-      /role "modelled" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear it with `i-harness roles unset modelled`/,
+      /role "modelled" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear `agents\.roles\.modelled` in settings\.json/,
     )
   }, 10_000)
 })

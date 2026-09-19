@@ -11,7 +11,7 @@ import type { SettingsProviderProtocol } from "@i-harness/settings"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
-import type { SubagentRole } from "./roles.ts"
+import { builtinRoles, type SubagentRole } from "./roles.ts"
 import { forkTurns } from "./fork.ts"
 
 /**
@@ -131,14 +131,26 @@ export function modelLabelOf(selection: RoleModelSelection): string {
   return `${selection.provider}:${selection.model}`
 }
 
+/** The four built-in names, read from the ONE place that declares them
+ * (`builtinRoles`). The refusal below picks its second repair by this set: the
+ * CLI's `roles unset` accepts no other name, so offering it for a
+ * plugin-contributed role or the guardian's `reviewer` sent the reader to a
+ * verb that exits 1 with "unknown role". */
+const BUILTIN_ROLE_NAMES = new Set(builtinRoles().map((role) => role.name))
+
 /** The ONE refusal for a gated selection — shared by the spawn path, the
  * restored resident rebuild and `resume_agent`'s diagnostic, so the message
  * cannot drift between them. It names BOTH fixes because the reader has both at
- * hand: turn the switch on, or clear the role's model. */
+ * hand: turn the switch on, or clear the role's model — and the second names
+ * the surface that can actually clear THIS name, since `roles unset` only
+ * accepts the four built-ins. */
 export function subagentModelSelectionDisabled(roleName: string): Error {
+  const clear = BUILTIN_ROLE_NAMES.has(roleName)
+    ? `clear it with \`i-harness roles unset ${roleName}\``
+    : `clear \`agents.roles.${roleName}\` in settings.json`
   return new Error(
     `role "${roleName}" declares a model, but sub-agent model selection is disabled: ` +
-      `set plugins.subagentModel=true in settings, or clear it with \`i-harness roles unset ${roleName}\``,
+      `set plugins.subagentModel=true in settings, or ${clear}`,
   )
 }
 

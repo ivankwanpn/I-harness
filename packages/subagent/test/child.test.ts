@@ -497,6 +497,29 @@ describe("the role's model: settings beats the role, and the toggle gates both",
     expect(calls).toEqual([])
   })
 
+  // The refusal offers TWO repairs, and the second must be one the CLI can
+  // actually perform: `roles unset` accepts only the four built-in names, so
+  // naming it for a plugin-contributed role or the guardian's `reviewer` sent
+  // the reader to a command that exits 1 with "unknown role".
+  it("names a repair that works for the name's kind", async () => {
+    const f = spawnFixture()
+    const { resolveModel } = spyResolver()
+    const refusal = (p: Promise<unknown>): Promise<string | undefined> => p.then(() => undefined, (e: Error) => e.message)
+
+    const builtin = await refusal(spawnWith(f, {
+      role: roleWith(f, { provider: "gw", model: "small" }), resolveModel,
+    }))
+    expect(builtin).toContain("`i-harness roles unset general`")
+
+    const f2 = spawnFixture()
+    const other = await refusal(spawnWith(f2, {
+      role: { ...f2.roles.get("general")!, name: "reviewer", model: { provider: "gw", model: "small" } },
+      resolveModel,
+    }))
+    expect(other).toContain("`agents.roles.reviewer` in settings.json")
+    expect(other).not.toContain("roles unset")
+  })
+
   it("an ABSENT toggle is OFF, not enabled — the same refusal, and the resolver is never reached", async () => {
     const f = spawnFixture()
     const { calls, resolveModel } = spyResolver()
