@@ -695,7 +695,7 @@ function runtimeProfile(
   view: ProviderView,
   apiKey: string | undefined,
   modelModalities?: SettingsInputModality[],
-  modelProtocol?: SettingsProviderProtocol,
+  selectionProtocol?: SettingsProviderProtocol,
 ): ProviderProfile {
   const template = { ...(view.template ?? {}) }
   delete template.apiKey
@@ -709,10 +709,12 @@ function runtimeProfile(
     // never has to look at `name` for a purpose it was not given.
     catalog: cardFamilyOf(view),
     displayName: view.displayName,
-    // The MODEL's protocol wins over the route's default. The route is an
-    // endpoint, and an endpoint has one protocol — a row that declares another
-    // is naming a different endpoint path under the same host and credential.
-    protocol: adapterProtocol(modelProtocol ?? view.protocol),
+    // SELECTION-or-row, computed by the caller: a session's/role's selection
+    // beats the model row, and both beat the route's default. The route is an
+    // endpoint, and an endpoint has one protocol — a declaration that names
+    // another is naming a different endpoint path under the same host and
+    // credential.
+    protocol: adapterProtocol(selectionProtocol ?? view.protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
     ...(view.headers !== undefined ? { headers: view.headers } : {}),

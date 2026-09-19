@@ -158,10 +158,13 @@ interface RoleRow {
    * whether the role can spawn, and this marker must not claim it: the name is
    * only what the CLI's own `set`/`unset` can type. Plugin-contributed agents
    * and the guardian's `reviewer` register into the SAME registry the spawn
-   * tools read (run.ts:429,481 → session-executor/src/assembly.ts:779-785;
-   * guard-approval/src/guardian/reviewer.ts:48-58), and a spawn resolves
-   * `agents.roles[<any name>]` (provider-runtime.ts:33-40 → child.ts:122) — so
-   * a hand-declared entry for such a role GATES every spawn of it. */
+   * tools read (apps/cli/src/run.ts:481;
+   * packages/guard-approval/src/guardian/reviewer.ts:56), and every
+   * role-carrying spawn resolves `agents.roles[<any name>]` through
+   * `declaredRoleModel` (packages/subagent/src/child.ts:122) — so a
+   * hand-declared entry decides that role's model at every spawn: refused
+   * while `plugins.subagentModel` is off, the declared selection when it is
+   * on. */
   builtin: boolean
   /** Absent = the role inherits the parent's client. A DECLARED row always
    * carries both halves, because the store DROPS a half entry when it

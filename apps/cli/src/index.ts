@@ -362,9 +362,11 @@ export async function main(argv: string[]): Promise<number> {
     // and the assembly fills it in. See the resolution above.
     compact: { auto: compactAuto },
     // `agents.roles.<name>` + `plugins.subagentModel`, from the store loaded
-    // above. Both are read at SPAWN time through the getter `roleModelOptionsFor`
-    // returns, so a settings edit applies to the next spawn — the same
-    // loaded-before-read trap the sandbox knob documents: an unloaded store
+    // above. `roleSelectionFor` is a GETTER over the store, never a snapshot of
+    // it — the selection is read at SPAWN time, so an edit applies to the next
+    // spawn without restarting the run — while `plugins.subagentModel` is read
+    // ONCE here, per dispatch, like every other flag this command passes. The
+    // same loaded-before-read trap the sandbox knob documents: an unloaded store
     // answers with defaults.
     ...roleModelOptionsFor(settings),
   }

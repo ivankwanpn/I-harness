@@ -309,7 +309,10 @@ describe("runRolesCommand", () => {
 
   it("list shows a role declared by hand that is not one of the four", async () => {
     // `reviewer` is a REAL role name here: the guardian registers it into the
-    // registry the spawn tools read, and this entry is what decides its model.
+    // registry the spawn tools read, and every role-carrying spawn (the
+    // guardian's included) forwards the declared selection — so with the
+    // switch on this entry is what decides its model, and with it off it is
+    // what refuses the spawn.
     writeFileSync(join(home, "settings.json"), JSON.stringify({
       agents: { roles: { reviewer: { provider: "gw", model: "m" }, general: { provider: "gw", model: "small" } } },
     }), "utf8")
