@@ -136,6 +136,9 @@ it("a route that declares no protocol is INVALID, and the reason names the repai
   const state = await runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } })
   // Actionable, not merely true: the message names the EXACT verb that fixes it.
   expect(state.status === "invalid" && state.reason).toContain("i-harness provider set gateway --protocol")
+  // 複審追加：`toContain("… --protocol")` 在尾巴退化時仍然會過。契約的另一半
+  // ——「列出集合」—— 要用集合本身釘，否則那半沒有守。
+  expect(state.status === "invalid" && state.reason).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
 })
 
 it("the route's protocol still wins when it declares one, and the selection still beats the row", async () => {
@@ -251,7 +254,7 @@ function runtimeProfile(
     const probeProtocol = probeOptions.protocol ?? view.protocol
     if (probeProtocol === undefined) {
       throw new Error(
-        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol P`,
+        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol ${PROTOCOL_CHOICES}`,
       )
     }
 ```
@@ -271,6 +274,11 @@ it("refuses to probe a route that declares no protocol, and names the fix", asyn
 
   await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
   await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
+  // 同上：集合那一半要用集合本身釘。（`PROVIDER_PROTOCOLS` 若這支測試檔還沒
+  // import，從 `@i-harness/settings` 加進來 —— 不要自己重寫那五個名字。）
+  await expect(runtime.probeModels("gateway")).rejects.toThrow(
+    new RegExp(`<one of: ${PROVIDER_PROTOCOLS.join(" \\| ")}>`),
+  )
 })
 
 it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
@@ -463,7 +471,7 @@ Expected: **RED**。改回來，把觀察到的訊息貼進報告。
 ```bash
 pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate
 git add -A
-git commit -m "feat(session-persistence,sdk): a session's selection may name the wire it was made on"
+git commit -m "feat(session-persistence,sdk,cli): a session's selection may name the wire it was made on"
 ```
 
 ---
@@ -560,7 +568,7 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
 
 - [ ] **Step 3: 讓那一行誠實**
 
-`apps/cli/src/provider.ts` 的 `renderList`：
+`apps/cli/src/provider.ts` 的 `renderProviderList`：
 ```ts
     // A route with no declared protocol is NOT a route with a default one — but
     // it is also NOT a route that cannot be sent to. The chain is selection >
