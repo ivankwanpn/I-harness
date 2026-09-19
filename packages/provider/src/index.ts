@@ -93,27 +93,6 @@ export interface ModelCard {
   maxOutputTokens?: number
 }
 
-/** One row of the table as WRITTEN: the row's own name, its retired names, and
- * the card they share. */
-export interface ModelCatalogRow {
-  modelId: string
-  aliases: string[]
-  card: ModelCard
-}
-
-/** Where one family's numbers came from. */
-export interface ModelCatalogFamilySource {
-  family: string
-  source: string
-}
-
-/** The table's own provenance — the answer to "how old is this, and who says?". */
-export interface ModelCatalogProvenance {
-  /** The date the numbers were last revised (YYYY-MM-DD). */
-  generatedAt: string
-  families: ModelCatalogFamilySource[]
-}
-
 const CATALOG_FILE = "provider: model-catalog.json"
 
 /** `aliases` is optional; an EMPTY array is refused rather than tolerated,
@@ -135,11 +114,7 @@ function parseAliases(value: unknown, family: string, modelId: string): string[]
   })
 }
 
-function loadModelCatalog(): {
-  catalog: ModelCatalog
-  rows: Record<string, ModelCatalogRow[]>
-  provenance: ModelCatalogProvenance
-} {
+function loadModelCatalog(): ModelCatalog {
   const text = readFileSync(new URL("./model-catalog.json", import.meta.url), "utf8")
   const parsed: unknown = JSON.parse(text)
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
@@ -158,8 +133,6 @@ function loadModelCatalog(): {
   }
 
   const catalog: ModelCatalog = {}
-  const rowsByFamily: Record<string, ModelCatalogRow[]> = {}
-  const provenance: ModelCatalogProvenance = { generatedAt, families: [] }
   for (const [family, body] of Object.entries(families as Record<string, unknown>)) {
     if (typeof body !== "object" || body === null || Array.isArray(body)) {
       throw new Error(`${CATALOG_FILE} family "${family}" is not an object`)
@@ -173,7 +146,6 @@ function loadModelCatalog(): {
     }
 
     const lookup: Record<string, ModelCard> = {}
-    const rows: ModelCatalogRow[] = []
     /** Every name this family has claimed → the row that claimed it. */
     const claimed = new Map<string, string>()
     for (const [modelId, card] of Object.entries(models as Record<string, unknown>)) {
@@ -207,17 +179,13 @@ function loadModelCatalog(): {
       // (resolveModelCard copies on the way out, so callers still cannot reach
       // this object.)
       for (const alias of aliases) lookup[alias] = entry
-      rows.push({ modelId, aliases, card: entry })
     }
     catalog[family] = lookup
-    rowsByFamily[family] = rows
-    provenance.families.push({ family, source })
   }
-  return { catalog, rows: rowsByFamily, provenance }
+  return catalog
 }
 
-const MODEL_CATALOG_LOADED = loadModelCatalog()
-const MODEL_CATALOG: ModelCatalog = MODEL_CATALOG_LOADED.catalog
+const MODEL_CATALOG: ModelCatalog = loadModelCatalog()
 
 /** Pure catalog query: the card for one model in one card FAMILY, or undefined
  * when the table has no entry (fail-closed — never a synthetic value).
@@ -230,25 +198,19 @@ export function resolveModelCard(family: string, modelId: string): ModelCard | u
   return card === undefined ? undefined : { ...card }
 }
 
-/** The table's provenance: when its numbers were last revised, and the source
- * each family declares. Read by `i-harness models`, which prints it — a table
- * whose age cannot be read is a table nobody knows to update. */
-export function resolveModelCatalogProvenance(): ModelCatalogProvenance {
-  return {
-    generatedAt: MODEL_CATALOG_LOADED.provenance.generatedAt,
-    families: MODEL_CATALOG_LOADED.provenance.families.map((entry) => ({ ...entry })),
-  }
-}
-
-/** One family's rows IN FILE ORDER, each with the aliases that also resolve to
- * it. An unknown family lists nothing — the same fail-closed answer
- * `resolveModelCard` gives, so a caller can render a miss without a special
- * case. Copies: the loaded table is not a caller's to edit. */
-export function listModelCatalogFamily(family: string): ModelCatalogRow[] {
-  const rows = MODEL_CATALOG_LOADED.rows[family]
-  if (rows === undefined) return []
-  return rows.map((row) => ({ modelId: row.modelId, aliases: [...row.aliases], card: { ...row.card } }))
-}
+// NO READER FOR THE PROVENANCE YET, deliberately. `generatedAt` and each
+// family's `source` are VALIDATED above — a family with no source is refused,
+// and a date that is not a date is refused — but nothing in production reads
+// them back: the surface that prints them (`i-harness provider list`) lands
+// with the rest of the lifecycle
+// (docs/superpowers/specs/2026-09-19-provider-lifecycle-design.md §4).
+//
+// They were exported here for one commit and the reachability gate reported
+// FIVE new rows — two readers plus their three return types — which is the
+// correct finding: a capability with no consumer is what this repo has now
+// recorded rotting four times (`runtimeInputs()`, `createHookRegistry`,
+// `discoverModels`, `directory()`). The allowlist is not the answer — every
+// one of its 30 entries argues its row is NOT a defect, and these are.
 
 // M31 T1 (M32 T1 fix): the settings-side user model row is the TOP of the
 // unified chain — userModel > profile.modelContexts[modelId] >

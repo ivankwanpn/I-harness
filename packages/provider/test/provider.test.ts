@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, resolveModelCatalogProvenance, listModelCatalogFamily, type ProviderProfile } from "../src/index.ts"
+import { readFileSync } from "node:fs"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+
+// D3: the table's own shape is asserted by reading the SHIPPED FILE, because
+// the loader's readers are not exported — they have no production consumer yet
+// (see the note in ../src/index.ts). What IS exported is the alias RESOLUTION,
+// and that is what the tests below drive.
+const CATALOG = JSON.parse(
+  readFileSync(new URL("../src/model-catalog.json", import.meta.url), "utf8"),
+) as {
+  generatedAt: string
+  families: Record<string, { source: string; models: Record<string, { aliases?: string[] }> }>
+}
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -243,11 +255,14 @@ describe("M32 model catalog", () => {
 // because there is only one row to edit.
 describe("D3 model catalog: provenance and aliases", () => {
   it("declares when the table was last revised, and a source per family", () => {
-    const provenance = resolveModelCatalogProvenance()
-    expect(provenance.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
-    const families = provenance.families.map((f) => f.family)
-    expect(families).toEqual(["deepseek", "gemini", "bedrock"])
-    for (const entry of provenance.families) expect(entry.source.trim().length).toBeGreaterThan(0)
+    expect(CATALOG.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    // Every family the loader will serve declares where its numbers came from —
+    // the loader REFUSES a table where one does not, so this is the shipped
+    // instance of an enforced invariant, not a convention.
+    expect(Object.keys(CATALOG.families)).toEqual(["deepseek", "gemini", "bedrock"])
+    for (const family of Object.values(CATALOG.families)) {
+      expect(family.source.trim().length).toBeGreaterThan(0)
+    }
   })
 
   it("a RETIRED name resolves the SAME card as the current name", () => {
@@ -257,16 +272,13 @@ describe("D3 model catalog: provenance and aliases", () => {
     expect(resolveModelCard("deepseek", "deepseek-v4-flash-vision-exp")).toEqual(current)
   })
 
-  it("the listing shows the alias, and the alias is NOT a row of its own", () => {
-    const rows = listModelCatalogFamily("deepseek")
-    expect(rows.map((r) => r.modelId)).toEqual(["deepseek-flash", "deepseek-v4-pro"])
-    const flash = rows.find((r) => r.modelId === "deepseek-flash")!
-    expect(flash.aliases).toEqual(["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"])
-    expect(flash.card).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 384_000 })
-    expect(rows.find((r) => r.modelId === "deepseek-v4-pro")?.aliases).toEqual([])
-  })
-
-  it("an unknown family lists nothing (fail-closed, like resolveModelCard)", () => {
-    expect(listModelCatalogFamily("no-such-family")).toEqual([])
+  it("an alias is NOT a row of its own — one row holds the numbers, so they cannot drift", () => {
+    const models = CATALOG.families.deepseek!.models
+    expect(Object.keys(models)).toEqual(["deepseek-flash", "deepseek-v4-pro"])
+    expect(models["deepseek-flash"]!.aliases).toEqual(["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"])
+    // The alias names appear as ALIASES and never as keys: `deepseek-v4-flash`
+    // is an entry above and MUST NOT be one here.
+    for (const alias of models["deepseek-flash"]!.aliases!) expect(models[alias]).toBeUndefined()
+    expect(models["deepseek-v4-pro"]!.aliases).toBeUndefined()
   })
 })
