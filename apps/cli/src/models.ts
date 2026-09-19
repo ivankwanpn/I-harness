@@ -93,7 +93,7 @@ const MODELS_USAGE =
   "  use <route>:<model> [--reasoning-effort E]   replaces the whole default selection: omitted E clears it\n" +
   "  refresh <route>                           probe and merge everything it returns\n" +
   "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
-  "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
+  "  P = one of the five protocols | auto  (auto clears the row's override — the route's own protocol then applies, and a route that declares none refuses at send)"
 
 /** Which flags each verb READS. The design's §4 table is the source: `--protocol`
  * belongs to probe/add/set, `--context-window`/`--max-tokens` to add/set (a row's
@@ -260,7 +260,15 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
       ? `no protocol of its own — set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
       : route.protocol
     lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
-    if (route.models.length === 0) lines.push("  (no models — try: i-harness models probe " + route.id + ")")
+    // Same rule as `provider list`'s hint: `models probe` refuses on a route
+    // that declares no protocol (there is no wire to shape the request with),
+    // so the next step named is the write that unblocks the probe. A route
+    // with a protocol of its own keeps the probe hint it always had.
+    if (route.models.length === 0) {
+      lines.push(route.protocol === undefined
+        ? `  (no models — declare a protocol first: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`
+        : `  (no models — try: i-harness models probe ${route.id})`)
+    }
     for (const model of route.models) {
       const numbers = model.card?.contextWindow !== undefined
         ? `${model.card.contextWindow}${model.card.maxOutputTokens !== undefined ? ` / ${model.card.maxOutputTokens}` : ""}`

@@ -195,7 +195,16 @@ export function renderProviderList(
         : "no card"
       return `      ${model.id}  (${numbers})${aliases.length > 0 ? `  +${aliases.length} retired name(s): ${aliases.join(", ")}` : ""}`
     })
-    lines.push("    models:", ...(cards.length > 0 ? cards : ["      (none — try: i-harness models probe " + row.id + ")"]))
+    // The next step depends on the route's OWN state: `models probe` refuses
+    // on a route that declares no protocol (there is no wire to shape the
+    // request with), so recommending it costs a round trip; the hint names the
+    // write that unblocks the probe instead. A declared protocol keeps the
+    // probe hint it always had.
+    lines.push("    models:", ...(cards.length > 0 ? cards : [
+      row.protocol === undefined
+        ? `      (none — declare a protocol first: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`
+        : `      (none — try: i-harness models probe ${row.id})`,
+    ]))
     lines.push("")
   }
   lines.push(`model table: last revised ${provenance.generatedAt}`)

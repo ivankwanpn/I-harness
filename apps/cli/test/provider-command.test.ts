@@ -313,4 +313,33 @@ describe("renderProviderList", () => {
 
     expect(out).toContain("[gemini]")
   })
+
+  it("a modelless route gets the next step that can actually run", () => {
+    // Same rule as `models list`'s hint: `models probe` refuses on a route
+    // that declares no protocol (there is no wire to shape the request with),
+    // so the hint names the write that unblocks the probe instead. The
+    // protocol-less rendering is pinned as a WHOLE line — the route line above
+    // it names the same command, so a substring assertion would pass on that
+    // text alone.
+    const protocolLess = renderProviderList(
+      [{
+        id: "gateway", displayName: "Gateway", configured: true,
+        auth: { configured: true, writable: true }, models: [],
+        discovery: "available", cardFamily: "gateway",
+      }],
+      noProvenance,
+    )
+    expect(protocolLess).toContain(`      (none — declare a protocol first: i-harness provider set gateway --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>)`)
+    expect(protocolLess).not.toContain("models probe gateway")
+
+    const declared = renderProviderList(
+      [{
+        id: "gateway", displayName: "Gateway", protocol: "gemini", configured: true,
+        auth: { configured: true, writable: true }, models: [],
+        discovery: "available", cardFamily: "gateway",
+      }],
+      noProvenance,
+    )
+    expect(declared).toContain("      (none — try: i-harness models probe gateway)")
+  })
 })
