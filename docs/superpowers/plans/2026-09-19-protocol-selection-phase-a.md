@@ -467,16 +467,27 @@ git commit -m "feat(session-persistence,sdk): a session's selection may name the
 
 ---
 
-### Task 3: `provider list` 說得出「這條路由不能用」
+### Task 3: 兩個列表都說得出「這條路由不能用」
 
-今天它印 `[${row.protocol}]`（`apps/cli/src/provider.ts:169`）—— 而Task 1 之後，一條沒宣告協議的路由會印出 `[undefined]`。**一句看起來像協議的謊，比一句缺席更糟。**
+今天它們印 `[${row.protocol}]` —— 而 Task 1 之後，一條沒宣告協議的路由會印出 `[undefined]`。**一句看起來像協議的謊，比一句缺席更糟。**
+
+**有兩個列表，同一個缺陷類別**（Task 1 的實作者回報、控制者實測確認）：
+
+| 列表 | 行 | 現況 |
+|---|---|---|
+| `i-harness provider list` | `apps/cli/src/provider.ts:169` | `[${row.protocol}]` |
+| `i-harness models list` | `apps/cli/src/models.ts:247` | `` `${route.id}  [${route.protocol}]  discovery: …` `` —— 型別（`ModelsRouteView.protocol`）在 Task 1 已被改成可選，所以它現在會印 `[undefined]` |
+
+**只修一個等於把使用者從一個列表推到另一個列表。** 兩個都修。
 
 **Files:**
-- Modify: `apps/cli/src/provider.ts`（`renderList`，約 :160-190）
+- Modify: `apps/cli/src/provider.ts`（`renderProviderList`，約 :160-190）
+- Modify: `apps/cli/src/models.ts`（`renderModels`，約 :242-248）
 - Test: `apps/cli/test/provider-command.test.ts`
+- Test: `apps/cli/test/models-command.test.ts`
 
 **Interfaces:**
-- Consumes: `ProviderRuntimeEntry.protocol?: SettingsProviderProtocol`（Task 1）
+- Consumes: `ProviderRuntimeEntry.protocol?: SettingsProviderProtocol`（Task 1）；`ModelsRouteView.protocol?: string`（Task 1 的型別 knock-on）
 - Produces: 沒有新 export。
 
 - [ ] **Step 1: 寫失敗的測試**
@@ -544,9 +555,55 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
     )
 ```
 
-- [ ] **Step 4: 跑它，確認它綠**
+- [ ] **Step 3b: `models list` 那一行（同一個缺陷，第二個檔）**
 
-Run: `cd apps/cli && npx vitest run test/provider-command.test.ts`
+`apps/cli/test/models-command.test.ts`，加進既有的 `describe("renderModels")`（約 :94）：
+
+```ts
+it("marks a route with no declared protocol as unusable, the same as provider list", () => {
+  // Task 1 made ModelsRouteView.protocol optional, so this line renders
+  // [undefined]. Its sibling in provider.ts gets the same treatment — fixing
+  // one listing and not the other just moves the user to the other command.
+  const out = renderModels([
+    {
+      id: "gw", cardFamily: "gw", declared: false, discovery: "available",
+      models: [{ id: "m", card: undefined, aliases: [] }],
+    },
+  ])
+
+  expect(out).toContain("gw")
+  expect(out).not.toContain("undefined")
+  expect(out).toContain("no protocol")
+  expect(out).toContain("i-harness provider set gw --protocol")
+})
+
+it("a route that DOES declare one still prints it, unchanged", () => {
+  const out = renderModels([
+    {
+      id: "gw", cardFamily: "gw", declared: false, protocol: "gemini", discovery: "available",
+      models: [{ id: "m", card: undefined, aliases: [] }],
+    },
+  ])
+
+  expect(out).toContain("[gemini]")
+})
+```
+
+跑它確認紅：`cd apps/cli && npx vitest run test/models-command.test.ts`
+Expected: FAIL —— `expected '…[undefined]…' not to contain 'undefined'`
+
+`apps/cli/src/models.ts`（`renderModels`，:247）—— 把那一行拆出一個區域變數，**不要複製那串長尾**：
+```ts
+    const wire = route.protocol === undefined
+      ? `no protocol — cannot be used; set one with: i-harness provider set ${route.id} --protocol P`
+      : route.protocol
+    lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
+```
+跑它確認綠。
+
+- [ ] **Step 4: 兩個測試檔都綠**
+
+Run: `cd apps/cli && npx vitest run test/provider-command.test.ts test/models-command.test.ts`
 Expected: PASS
 
 - [ ] **Step 5: 全套 + gate + commit**
@@ -554,7 +611,7 @@ Expected: PASS
 ```bash
 pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate
 git add -A
-git commit -m "feat(cli): provider list names a route that declares no protocol"
+git commit -m "feat(cli): both listings name a route that declares no protocol"
 ```
 
 ---
