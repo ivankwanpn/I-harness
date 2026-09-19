@@ -227,7 +227,10 @@ export interface ModelsRouteView {
   cardFamily: string
   declared: boolean
   protocol: string
-  models: Array<{ id: string; card: ModelCard | undefined; aliases: string[] }>
+  /** Whether the route's endpoint can be probed at all — `directory()`'s own
+   * answer (bedrock is manual-only). Spec §4's read shows 能不能 discovery. */
+  discovery: "available" | "manual-only"
+  models: Array<{ id: string; card: ModelCard | undefined; aliases: string[]; protocol?: string }>
 }
 
 export function renderModels(routes: readonly ModelsRouteView[]): string {
@@ -235,13 +238,20 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
   const lines: string[] = []
   const cardless: string[] = []
   for (const route of routes) {
-    lines.push(`${route.id}  [${route.protocol}]  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
+    lines.push(`${route.id}  [${route.protocol}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
     if (route.models.length === 0) lines.push("  (no models — try: i-harness models probe " + route.id + ")")
     for (const model of route.models) {
       const numbers = model.card?.contextWindow !== undefined
         ? `${model.card.contextWindow}${model.card.maxOutputTokens !== undefined ? ` / ${model.card.maxOutputTokens}` : ""}`
         : "no card"
-      lines.push(`  ${model.id}  (${numbers})${model.aliases.length > 0 ? `  +retired: ${model.aliases.join(", ")}` : ""}`)
+      // The ROW's protocol matters only where it DIVERGES from the route's: the
+      // route line above already printed the inherited answer, and a row that
+      // overrode nothing is not making a statement. This is the read half of
+      // `models set --protocol`, which was invisible before it.
+      const ownProtocol = model.protocol !== undefined && model.protocol !== route.protocol
+        ? `  protocol: ${model.protocol}`
+        : ""
+      lines.push(`  ${model.id}  (${numbers})${ownProtocol}${model.aliases.length > 0 ? `  +retired: ${model.aliases.join(", ")}` : ""}`)
     }
     // The D1/D2 symptom, said out loud: a route whose family resolves nothing
     // is exactly the state that used to fail silently.
@@ -265,6 +275,7 @@ async function viewOf(runtime: ProviderRuntime, only?: string): Promise<ModelsRo
         cardFamily: row.cardFamily,
         declared: row.catalog !== undefined,
         protocol: row.protocol,
+        discovery: row.discovery,
         models: row.models.map((model) => {
           const own = family.find((entry) => entry.modelId === model.id)
           // BOTH directions matter. A row that IS the current name carries its
@@ -276,6 +287,7 @@ async function viewOf(runtime: ProviderRuntime, only?: string): Promise<ModelsRo
             id: model.id,
             card: own?.card ?? owner?.card,
             aliases: own?.aliases ?? (owner !== undefined ? [`alias of ${owner.modelId}`] : []),
+            ...(model.protocol !== undefined ? { protocol: model.protocol } : {}),
           }
         }),
       }

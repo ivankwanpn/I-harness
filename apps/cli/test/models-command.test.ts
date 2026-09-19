@@ -86,11 +86,11 @@ describe("renderModels", () => {
   it("shows each model's card, its retired names, and flags a route with no card at all", () => {
     const out = renderModels([
       {
-        id: "deepseek1", cardFamily: "deepseek", declared: true, protocol: "anthropic-messages",
+        id: "deepseek1", cardFamily: "deepseek", declared: true, protocol: "anthropic-messages", discovery: "available",
         models: [{ id: "deepseek-flash", card: { contextWindow: 1_048_576, maxOutputTokens: 384_000 }, aliases: ["deepseek-v4-flash"] }],
       },
       {
-        id: "gw", cardFamily: "gw", declared: false, protocol: "openai-completions",
+        id: "gw", cardFamily: "gw", declared: false, protocol: "openai-completions", discovery: "available",
         models: [{ id: "mystery", card: undefined, aliases: [] }],
       },
     ])
@@ -99,6 +99,31 @@ describe("renderModels", () => {
     expect(out).toContain("deepseek-v4-flash")
     // The D1/D2 diagnosis, stated where a human will see it.
     expect(out).toContain("no card resolves for: gw")
+  })
+
+  it("names a row's own protocol when it differs from the route's, and the route's discovery", () => {
+    // Spec §4: this read shows 每顆模型命中哪張卡、實際協議、能不能 discovery.
+    // Before this, the row printed the ROUTE's protocol once and no discovery
+    // indicator, so a `models set --protocol` override was invisible in every
+    // read verb — the write landed and nothing could show it.
+    const out = renderModels([
+      {
+        id: "gw", cardFamily: "gw", declared: false, protocol: "openai-completions", discovery: "available",
+        models: [
+          { id: "anthropic-row", card: undefined, aliases: [], protocol: "anthropic-messages" },
+          { id: "plain-row", card: undefined, aliases: [] },
+        ],
+      },
+      {
+        id: "br", cardFamily: "br", declared: false, protocol: "bedrock", discovery: "manual-only",
+        models: [],
+      },
+    ])
+    expect(out).toContain("discovery: available")
+    expect(out).toContain("discovery: manual-only")
+    expect(out).toContain("anthropic-row  (no card)  protocol: anthropic-messages")
+    // Absent means the route's decision — a row that overrode nothing adds no line.
+    expect(out).not.toContain("plain-row  (no card)  protocol:")
   })
 })
 
@@ -145,6 +170,25 @@ describe("runModelsCommand", () => {
   it("rm takes a row out; an absent row is a failure, not a shrug", async () => {
     expect(await runModelsCommand(["models", "rm", "gw", "keep-me"])).toBe(0)
     expect(await runModelsCommand(["models", "rm", "gw", "keep-me"])).toBe(1)
+  })
+
+  it("the read path shows the row protocol written by `models set --protocol`", async () => {
+    await runModelsCommand(["models", "add", "gw", "deepseek-flash"])
+    expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--protocol", "anthropic-messages"])).toBe(0)
+
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "list", "gw"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+
+    const out = lines.join("\n")
+    // The route line carries the discovery answer; the row line carries the
+    // override the write verb landed.
+    expect(out).toContain("discovery: available")
+    expect(out).toContain("deepseek-flash  (1048576 / 384000)  protocol: anthropic-messages")
   })
 
   it("set can declare a per-model protocol, and `auto` clears it back to the route's", async () => {
