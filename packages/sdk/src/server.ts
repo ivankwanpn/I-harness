@@ -712,6 +712,13 @@ function validSessionIdResult(result: SessionIdResult, method: string): SessionI
   return { sessionId: result.sessionId }
 }
 
+// The field whitelist is DELIBERATE, and `protocol` is absent from it on
+// purpose: a session's protocol is never persisted through the SDK — ruled out
+// by owner decision (docs/superpowers/specs/2026-09-19-protocol-selection-
+// design.md §4.3: "session 的協議不寫進任何檔案", repeated in §7). The durable
+// SessionMeta field DOES carry `protocol?`; do not add it here — this parser is
+// the only path a wire selection takes into updateMeta, so widening it would
+// smuggle the excluded behavior back in.
 function parseModelSelection(value: unknown): SessionModelSelection | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
   const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
