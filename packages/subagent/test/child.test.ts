@@ -536,3 +536,78 @@ describe("the role's model: settings beats the role, and the toggle gates both",
     expect(calls).toEqual([{ provider: "gw", model: "from-role" }])
   })
 })
+
+// ── the resolved binding's reasoningEffort is HANDED TO THE CHILD ───────────
+// `roles set worker --provider gw --model big --reasoning-effort max` prints the
+// effort, and the runtime VALIDATES it (provider-runtime refuses a bad one) —
+// but the child used to run at the adapter default, because the resolution kept
+// `binding.client` and dropped the rest. A declared setting that does nothing is
+// the defect class this section exists to end, so the child's own LLMRequest is
+// what gets asserted, not the resolver's return value.
+describe("the role's resolved reasoningEffort reaches the child", () => {
+  /** A ModelClient that RECORDS every LLMRequest it is asked to serve; the
+   * mock client does not, and the request is the only surface where "the child
+   * runs at effort X" is a fact rather than a claim. */
+  function recordingClient(text: string): ModelClient & { requests: LLMRequest[] } {
+    const requests: LLMRequest[] = []
+    return {
+      requests,
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        yield { type: "text/chunk", text }
+        yield { type: "end" }
+      },
+    }
+  }
+
+  async function settled(jobs: ReturnType<typeof createJobRegistry>, jobId: string): Promise<void> {
+    for (let i = 0; i < 200 && jobs.read(jobId).status !== "completed"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(jobs.read(jobId).status).toBe("completed")
+  }
+
+  it("copies a resolved effort onto the child's request", async () => {
+    const f = spawnFixture()
+    const roleClient = recordingClient("from the role's model")
+    const resolveModel = async () => ({
+      status: "ready" as const,
+      binding: { client: roleClient, providerId: "gw", modelId: "big", label: "role", reasoningEffort: "high" as const },
+    })
+
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    expect(roleClient.requests).toHaveLength(1)
+    expect(roleClient.requests[0]!.reasoningEffort).toBe("high")
+  }, 10_000)
+
+  it("sends NONE when the resolved binding carries none", async () => {
+    const f = spawnFixture()
+    const roleClient = recordingClient("from the role's model")
+    const resolveModel = async () => ({
+      status: "ready" as const,
+      binding: { client: roleClient, providerId: "gw", modelId: "big", label: "role" },
+    })
+
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    expect(roleClient.requests).toHaveLength(1)
+    expect(roleClient.requests[0]).not.toHaveProperty("reasoningEffort")
+  }, 10_000)
+})

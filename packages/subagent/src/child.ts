@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
-import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
+import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 // Type-only: the selection's per-row protocol is the SAME closed set settings
 // validates (`SettingsProviderProtocol`) — a fourth copy of the five names would
@@ -150,15 +150,15 @@ export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleM
   return declared !== undefined && host.allowSubagentModelSelection !== true
 }
 
-/** The resolver's answer, structurally: the `status` decides, and only a
- * `ready` state's `client` is read here. provider-runtime's own answer
- * satisfies it as it stands (the field names and the three arms match) — kept
- * local because this package does not depend on provider-runtime, the same
+/** The resolver's answer, structurally: the `status` decides, and a `ready`
+ * state's `client` and `reasoningEffort` are read here. provider-runtime's own
+ * answer satisfies it as it stands (the field names and the three arms match) —
+ * kept local because this package does not depend on provider-runtime, the same
  * reason session-executor declares its own binding result type. */
 export type RoleModelState =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort } }
 
 export interface SpawnOptions extends RoleModelHost {
   taskName: string
@@ -245,6 +245,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // the host's resolver, else inherit the parent's client — which is what an
   // unconfigured harness does, and the ONLY case that inherits.
   let model = opts.parentModel
+  // The binding's OTHER field rides along: the runtime resolves and validates a
+  // selection's `reasoningEffort`, so a spawn that kept only the client would
+  // run the right model at the adapter default — the setting doing nothing,
+  // invisibly. Absent stays absent (provider default).
+  let reasoningEffort: ReasoningEffort | undefined
   // What the child ran on, RECORDED at spawn (Task 6) — the projection reads
   // this record instead of re-deriving the precedence, which it cannot do (the
   // settings getter is not on its source) and should not do (a running child's
@@ -256,6 +261,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
     }
     model = state.binding.client
+    reasoningEffort = state.binding.reasoningEffort
     modelLabel = modelLabelOf(declared)
   }
 
@@ -269,6 +275,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // project instructions remain higher priority (the contract says so).
     systemPrompt: composeSubagentPrompt(opts.role.systemPrompt),
     signal: controller.signal,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     // M19 (Ruling 24): the child's durable session id is seeded onto every
     // prepared ToolExec so the agent-team scheduler can attribute the child's
     // tool calls to its team member (the roster maps sessionId → member).

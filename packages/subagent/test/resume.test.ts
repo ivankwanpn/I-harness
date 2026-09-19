@@ -12,6 +12,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { registerExec } from "@i-harness/exec"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -165,6 +166,39 @@ describe("ensureResidentAgent", () => {
     expect(await ensureResidentAgent(reResolved, entry)).toBe(true)
     // the row says what the child runs on NOW, not what it ran on at spawn
     expect(entry.modelLabel).toBe("gw:big")
+  }, 10_000)
+
+  // The rebuild resolves through the HOST's resolver, so the binding's OTHER
+  // fields must land on the rebuilt child too: keeping only `client` would run
+  // the same model at the adapter default — a declared reasoning effort that
+  // does nothing. The child's own request is the surface where that is a fact.
+  it("the rebuilt child's requests carry the resolved binding's reasoningEffort", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "big" }),
+      resolveModel: async () => ({
+        status: "ready" as const,
+        binding: { client: roleClient, reasoningEffort: "high" as const },
+      }),
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.reasoningEffort).toBe("high")
   }, 10_000)
 
   it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
