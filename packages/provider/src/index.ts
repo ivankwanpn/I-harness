@@ -231,8 +231,8 @@ export function resolveModelCard(family: string, modelId: string): ModelCard | u
 }
 
 /** The table's provenance: when its numbers were last revised, and the source
- * each family declares. Read by `i-harness models`, which prints it — a table
- * whose age cannot be read is a table nobody knows to update. */
+ * each family declares. Read by `i-harness provider list`, which prints it — a
+ * table whose age cannot be read is a table nobody knows to update. */
 export function resolveModelCatalogProvenance(): ModelCatalogProvenance {
   return {
     generatedAt: MODEL_CATALOG_LOADED.provenance.generatedAt,
