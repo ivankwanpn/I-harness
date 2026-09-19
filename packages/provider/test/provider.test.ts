@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, resolveModelCatalogProvenance, listModelCatalogFamily, type ProviderProfile } from "../src/index.ts"
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -196,7 +196,7 @@ describe("M32 model catalog", () => {
     expect(resolveModelCard("bedrock", "anthropic.claude-3-5-haiku-20241022")).toEqual({ contextWindow: 200_000, maxOutputTokens: 8_192 })
   })
 
-  it("resolveModelCard: unknown route/model → undefined", () => {
+  it("resolveModelCard: unknown family/model → undefined", () => {
     expect(resolveModelCard("openai", "gpt-4o")).toBeUndefined()
     expect(resolveModelCard("deepseek", "gpt-4o")).toBeUndefined()
   })
@@ -231,5 +231,42 @@ describe("M32 model catalog", () => {
   it("resolveEffectiveModelContext: no card + no window anywhere → undefined (fail-closed unchanged)", () => {
     const profile: ProviderProfile = { name: "openai", displayName: "O", protocol: "openai-responses" }
     expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })).toBeUndefined()
+  })
+})
+
+// D3 (docs/superpowers/specs/2026-09-19-provider-model-catalog-design.md §3):
+// the table carries WHERE ITS NUMBERS CAME FROM, and a retired model name is an
+// ALIAS of the current row rather than a second copy of its numbers.
+//
+// Both are enforced by the loader instead of promised by a comment: a family
+// with no `source` is refused at load, and duplicated numbers cannot drift
+// because there is only one row to edit.
+describe("D3 model catalog: provenance and aliases", () => {
+  it("declares when the table was last revised, and a source per family", () => {
+    const provenance = resolveModelCatalogProvenance()
+    expect(provenance.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    const families = provenance.families.map((f) => f.family)
+    expect(families).toEqual(["deepseek", "gemini", "bedrock"])
+    for (const entry of provenance.families) expect(entry.source.trim().length).toBeGreaterThan(0)
+  })
+
+  it("a RETIRED name resolves the SAME card as the current name", () => {
+    const current = resolveModelCard("deepseek", "deepseek-flash")
+    expect(current).toBeDefined()
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash")).toEqual(current)
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash-vision-exp")).toEqual(current)
+  })
+
+  it("the listing shows the alias, and the alias is NOT a row of its own", () => {
+    const rows = listModelCatalogFamily("deepseek")
+    expect(rows.map((r) => r.modelId)).toEqual(["deepseek-flash", "deepseek-v4-pro"])
+    const flash = rows.find((r) => r.modelId === "deepseek-flash")!
+    expect(flash.aliases).toEqual(["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"])
+    expect(flash.card).toEqual({ contextWindow: 1_048_576, maxOutputTokens: 384_000 })
+    expect(rows.find((r) => r.modelId === "deepseek-v4-pro")?.aliases).toEqual([])
+  })
+
+  it("an unknown family lists nothing (fail-closed, like resolveModelCard)", () => {
+    expect(listModelCatalogFamily("no-such-family")).toEqual([])
   })
 })
