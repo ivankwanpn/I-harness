@@ -244,13 +244,17 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
   const lines: string[] = []
   const cardless: string[] = []
   for (const route of routes) {
-    // A route with no declared protocol is NOT a route with a default one: it
-    // is a route that cannot be sent to. Same sentence as `provider list`'s,
-    // and the same metavariable — naming ONE protocol would pick a wire for a
-    // user who never chose one. `[undefined]` is the rendering accident this
-    // line printed the moment Task 1 made the field optional.
+    // A route with no declared protocol of its own is not a route with a
+    // default one, and not a verdict on usability either: resolution tries the
+    // selection, then the model row, then the route
+    // (provider-runtime/src/index.ts:632 feeds :741), so this route still
+    // resolves when a row or a selection names a wire — the row's own protocol
+    // prints on its own line below. Same sentence as `provider list`'s, and the
+    // same metavariable — naming ONE protocol would pick a wire for a user who
+    // never chose one. `[undefined]` is the rendering accident this line
+    // printed the moment Task 1 made the field optional.
     const wire = route.protocol === undefined
-      ? `no protocol — cannot be used; set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
+      ? `no protocol of its own — set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
       : route.protocol
     lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
     if (route.models.length === 0) lines.push("  (no models — try: i-harness models probe " + route.id + ")")

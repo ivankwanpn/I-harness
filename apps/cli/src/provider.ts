@@ -167,16 +167,21 @@ export function renderProviderList(
     // Declared vs defaulted is the distinction the whole `catalog` field exists
     // for, so the listing states which one it is.
     //
-    // A route with no declared protocol is NOT a route with a default one: it
-    // is a route that cannot be sent to. The listing says so, and names the
-    // verb that fixes it — `[undefined]` would be a rendering accident, and
-    // `[openai-completions]` would be a wire nobody declared. The repair names
-    // the SET, not a placeholder — `--protocol P` copied verbatim fails with
-    // `unknown protocol "P"`, a second error before the fix (this repo already
-    // ruled on that: 5d0f2d89, "P was the --provider placeholder").
+    // A route with no declared protocol is NOT a route with a default one — but
+    // it is not a verdict on usability either. `[undefined]` would be a
+    // rendering accident and `[openai-completions]` a wire nobody declared;
+    // "cannot be used" would be a claim about the CHAIN that this row cannot
+    // see: resolution tries the selection, then the model row, then the route
+    // (provider-runtime/src/index.ts:632 feeds :741), so a protocol-less route
+    // still resolves whenever a row or a selection names a wire. The line
+    // states what is true of the ROUTE and names the verb that declares one.
+    // The repair names the SET, not a placeholder — `--protocol P` copied
+    // verbatim fails with `unknown protocol "P"`, a second error before the fix
+    // (this repo already ruled on that: 5d0f2d89, "P was the --provider
+    // placeholder").
     lines.push(
       row.protocol === undefined
-        ? `  ${row.id}  [no protocol — cannot be used; set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
+        ? `  ${row.id}  [no protocol of its own — set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
         : `  ${row.id}  [${row.protocol}]${row.configured ? "" : "  (not configured)"}`,
     )
     lines.push(`    card family: ${row.cardFamily} (${row.catalog !== undefined ? "declared" : "the route name"})`)
