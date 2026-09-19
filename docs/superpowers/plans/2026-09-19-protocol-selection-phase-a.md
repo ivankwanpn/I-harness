@@ -515,7 +515,13 @@ it("marks a route with no declared protocol as unusable — not as a wire nobody
   )
 
   expect(out).toContain("gateway")
-  expect(out).not.toContain("openai-completions")
+  // ⚠ 這一條原本寫 `expect(out).not.toContain("openai-completions")` —— **它不可能通過**，
+  // 因為修法要**列出整個集合**（一個字面被貼上會失敗的佔位符是前一個裁定的對象），
+  // 而集合的第一個成員**就是** `openai-completions`。那個斷言會禁止這個修正
+  // 必須印出的那串尾巴。要釘的是「**路由自己的括號裡不能是一個協議**」：
+  expect(out).not.toContain("gateway  [openai-completions]")
+  expect(out).not.toContain("gateway  [undefined]")
+  expect(out).toContain("gateway  [no protocol")
   expect(out).toContain("no protocol")
   expect(out).toContain("i-harness provider set gateway --protocol")
 })
