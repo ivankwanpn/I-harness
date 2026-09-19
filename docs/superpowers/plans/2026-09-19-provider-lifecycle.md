@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Never add a `Co-Authored-By` trailer** to any commit in this repo. (User's standing rule; it overrides the harness's attribution reminder.)
-- **A new export must land WITH its consumer in the same task.** `node scripts/audit/check-reachability.mjs --gate` must print `gate PASS -- no new rows` after every task. An export whose only caller is a test IS a new row — commit `8ec8fda0` exists because of exactly that.
+- **A new export must land WITH its consumer in the same task.** `node scripts/audit/check-reachability.mjs --gate` must print `gate PASS -- no new rows` after every task. An export whose only caller is a test IS a new row — commit `8ec8fda0` exists because of exactly that. **The instrument counts `export type` and `export interface` as rows too** (`scripts/audit/check-reachability.mjs:254` matches `type|interface`; its own self-tests pin `#OnlyAType`), so a type exported "for later" is a new row today. Keep a type module-private until a caller NAMES it — structural typing means passing an object literal never names it.
 - **TDD, and a mutation proof where a mechanism can be removed.** Red first, then green, then remove the mechanism and watch the right tests redden, then restore.
 - Gate commands, run from the repo root: `pnpm -C packages/<pkg> test`, `pnpm typecheck`, `node scripts/audit/check-reachability.mjs --gate`.
 - **stdout carries data; stderr carries diagnostics. Exit 0 on success, 1 on failure. Key material NEVER reaches stdout** — masked as `x…<last4>`.
@@ -193,7 +193,7 @@ git commit -m "feat(provider-runtime): probeModels — the read half of discover
   - `addModels(id: string, rows: readonly SettingsModel[]): Promise<ModelDescriptor[]>` — **merge, existing rows win** (the `mergeDiscoveredModels` rule).
   - `setModel(id: string, modelId: string, fields: ModelFields): Promise<ModelDescriptor[]>` — row must exist; the fields given WIN; `null` CLEARS a field.
   - `removeModel(id: string, modelId: string): Promise<ModelDescriptor[]>` — row must exist.
-  - `export interface ModelFields { protocol?: SettingsProviderProtocol | null; contextWindow?: number | null; maxTokens?: number | null; name?: string | null }`
+  - **module-private** `interface ModelFields { protocol?: SettingsProviderProtocol | null; contextWindow?: number | null; maxTokens?: number | null; name?: string | null }` — NOT exported: callers pass object literals, and the gate counts type exports as rows.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -307,8 +307,15 @@ Near the top of the module, beside `ModelResolutionState`:
 
 ```ts
 /** The per-model fields a caller may set. `null` CLEARS the field (falling back
- * to the card), which is NOT the same as omitting it (leave it alone). */
-export interface ModelFields {
+ * to the card), which is NOT the same as omitting it (leave it alone).
+ *
+ * NOT EXPORTED, deliberately. Callers pass object literals and TypeScript checks
+ * them structurally, so nothing outside this module ever needs to NAME this
+ * type — and the reachability instrument counts type exports as rows (its own
+ * allowlist carries `@i-harness/sdk#HistoryOptions` and `#QueueState` for
+ * exactly that reason). Exporting it here would open a new row that only Task 7
+ * could close, which is the shape commit 8ec8fda0 was written about. */
+interface ModelFields {
   protocol?: SettingsProviderProtocol | null
   contextWindow?: number | null
   maxTokens?: number | null
@@ -480,7 +487,7 @@ git commit -m "refactor(provider-runtime): discoverModels is probe-then-add"
 - Produces:
   - `createProvider(id: string, fields: Omit<SettingsProviderConfig, "models">): Promise<void>` — throws if the route exists.
   - `patchProvider(id: string, patch: ProviderPatch): Promise<void>` — throws if it does not; **`models` is not in the patch**.
-  - `export interface ProviderPatch { baseURL?: string | null; protocol?: SettingsProviderProtocol | null; catalog?: string | null; displayName?: string | null; modelsURL?: string | null; apiKeyEnv?: string | null }`
+  - **module-private** `interface ProviderPatch { baseURL?: string | null; protocol?: SettingsProviderProtocol | null; catalog?: string | null; displayName?: string | null; modelsURL?: string | null; apiKeyEnv?: string | null }` — NOT exported, same reason as `ModelFields`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -569,8 +576,8 @@ And the type, beside `ModelFields`:
 
 ```ts
 /** The route fields `patchProvider` may change. `models` is absent ON PURPOSE —
- * see the method. `null` CLEARS the field. */
-export interface ProviderPatch {
+ * see the method. `null` CLEARS the field. Not exported: see `ModelFields`. */
+interface ProviderPatch {
   baseURL?: string | null
   protocol?: SettingsProviderProtocol | null
   catalog?: string | null
