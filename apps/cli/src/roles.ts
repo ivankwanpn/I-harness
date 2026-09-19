@@ -154,10 +154,14 @@ export function parseRolesArgs(args: string[]): ParsedRolesArgs {
 /** One `roles list` row: the role, and WHO chose its model. */
 interface RoleRow {
   name: string
-  /** Whether a BUILT-IN role carries this name. Only the four are ever spawned
-   * (design §11 defers user-defined roles), so a declared row that is not one
-   * changes nothing — and the read verb says so rather than letting a
-   * hand-edited `agents.roles.myrole` look effective. */
+  /** Whether one of the four BUILT-IN names carries this name. It does NOT say
+   * whether the role can spawn, and this marker must not claim it: the name is
+   * only what the CLI's own `set`/`unset` can type. Plugin-contributed agents
+   * and the guardian's `reviewer` register into the SAME registry the spawn
+   * tools read (run.ts:429,481 → session-executor/src/assembly.ts:779-785;
+   * guard-approval/src/guardian/reviewer.ts:48-58), and a spawn resolves
+   * `agents.roles[<any name>]` (provider-runtime.ts:33-40 → child.ts:122) — so
+   * a hand-declared entry for such a role GATES every spawn of it. */
   builtin: boolean
   /** Absent = the role inherits the parent's client. A DECLARED row always
    * carries both halves, because the store DROPS a half entry when it
@@ -187,15 +191,19 @@ export function renderRoles(rows: readonly RoleRow[]): string {
       lines.push(`  ${row.name}  inherited`)
       continue
     }
-    lines.push(`  ${row.name}  declared: ${describeSelection(selection)}${row.builtin ? "" : "  (not a built-in role — nothing spawns it)"}`)
+    // The clause says only what this tool can know: the name is not one `set`
+    // accepts. Whether the row is INERT is not knowable here — see RoleRow.
+    lines.push(`  ${row.name}  declared: ${describeSelection(selection)}${row.builtin ? "" : "  (not one of the four built-ins)"}`)
   }
   return lines.join("\n")
 }
 
 /** Every role the read verb prints: the four built-ins in their declared
  * order, then any OTHER name the file declares. The CLI refuses unknown names;
- * the file does not (design §8: the settings key is writable by hand), and a
- * read that hid such a row would lie about the file it is reading. */
+ * the file does not (design §8: the settings key is writable by hand) — and
+ * such a name is often a plugin-contributed role or the guardian's, which a
+ * hand-written entry really does gate. A read that hid those rows would hide
+ * the very entries "who wins" is a question about. */
 function rowsOf(roles: Readonly<Record<string, RoleSelection>>): RoleRow[] {
   const extra = Object.keys(roles).filter((name) => !ROLE_NAMES.includes(name)).sort()
   return [...ROLE_NAMES, ...extra].map((name) => {
@@ -258,6 +266,13 @@ export async function runRolesCommand(args: string[]): Promise<number> {
     // set earlier — the printed line is what makes that visible (the ruling
     // `models use` made for the default model's reasoning effort).
     console.log(`role "${name}": ${describeSelection(entry)}`)
+    // Setting a model the gate will refuse is a stop, not a surprise — say it
+    // HERE, where the user just asked for it, rather than at the next spawn
+    // that fails somewhere else. A DIAGNOSTIC (stderr) and NOT an error: the
+    // write succeeded and is exactly what was asked for, so the exit stays 0.
+    if (!settings.get().plugins.subagentModel) {
+      console.error("note: plugins.subagentModel is false — spawns of this role will be refused until it is enabled")
+    }
     return 0
   } catch (error) {
     console.error(`roles: ${error instanceof Error ? error.message : String(error)}`)

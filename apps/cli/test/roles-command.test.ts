@@ -108,13 +108,17 @@ describe("renderRoles", () => {
     expect(out).toContain("reasoning effort: unset")
   })
 
-  it("marks a declared role that is not one of the four built-ins", () => {
-    // Reachable only by hand-editing the file, and `roles list` is the one
-    // surface that would otherwise let a user believe it does something: only
-    // the four built-ins are ever spawned (design §11 defers user roles).
-    const out = renderRoles([{ name: "myrole", builtin: false, selection: { provider: "gw", model: "m" } }])
-    expect(out).toContain("myrole  declared: gw:m")
-    expect(out).toContain("not a built-in role")
+  it("marks a declared role that is not one of the four built-ins, and claims no more than that", () => {
+    // Reachable only by hand-editing the file. The marker says the name is not
+    // one the CLI's own `set` accepts — and NOTHING about whether the row is
+    // live: plugin-contributed agents and the guardian's `reviewer` register
+    // into the same role registry the spawn tools read, and a spawn resolves
+    // `agents.roles[<any name>]`, so such an entry GATES that role. A
+    // "nothing spawns it" clause here was a false absolute.
+    const out = renderRoles([{ name: "reviewer", builtin: false, selection: { provider: "gw", model: "m" } }])
+    expect(out).toContain("reviewer  declared: gw:m")
+    expect(out).toContain("(not one of the four built-ins)")
+    expect(out).not.toContain("nothing spawns it")
   })
 })
 
@@ -156,6 +160,38 @@ describe("runRolesCommand", () => {
     const doc = settingsOnDisk()
     expect(doc.llm?.defaultModel).toEqual({ provider: "gw", model: "keep" })
     expect(doc.fontSize).toBe(15)
+  })
+
+  it("set says the gate will refuse the spawn, where the user just asked for it", async () => {
+    // With the shipped default (`plugins.subagentModel: false`) this entry
+    // turns every spawn of the role into a refusal. The plan accepted the
+    // refusal as "a stop, not a surprise" — but the stop arrives LATER, in
+    // another command's output. The note is a diagnostic (stderr), not an
+    // error: the write is exactly what was asked for, so the exit stays 0.
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.join(" ")) })
+    try {
+      expect(await runRolesCommand(["roles", "set", "general", "--provider", "gw", "--model", "small"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(errors.join("\n")).toContain("plugins.subagentModel is false")
+    expect(errors.join("\n")).toContain("refused")
+    // The note did not replace the write.
+    expect(rolesOnDisk()).toEqual({ general: { provider: "gw", model: "small" } })
+  })
+
+  it("no note when the switch is already on", async () => {
+    writeFileSync(join(home, "settings.json"), JSON.stringify({ plugins: { subagentModel: true } }), "utf8")
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.join(" ")) })
+    try {
+      expect(await runRolesCommand(["roles", "set", "general", "--provider", "gw", "--model", "small"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    expect(errors.join("\n")).toBe("")
+    expect(rolesOnDisk()).toEqual({ general: { provider: "gw", model: "small" } })
   })
 
   it("set carries --protocol and --reasoning-effort into the entry", async () => {
@@ -272,8 +308,10 @@ describe("runRolesCommand", () => {
   })
 
   it("list shows a role declared by hand that is not one of the four", async () => {
+    // `reviewer` is a REAL role name here: the guardian registers it into the
+    // registry the spawn tools read, and this entry is what decides its model.
     writeFileSync(join(home, "settings.json"), JSON.stringify({
-      agents: { roles: { myrole: { provider: "gw", model: "m" }, general: { provider: "gw", model: "small" } } },
+      agents: { roles: { reviewer: { provider: "gw", model: "m" }, general: { provider: "gw", model: "small" } } },
     }), "utf8")
     const lines: string[] = []
     const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
@@ -283,8 +321,9 @@ describe("runRolesCommand", () => {
       spy.mockRestore()
     }
     const out = lines.join("\n")
-    expect(out).toContain("myrole")
-    expect(out).toContain("not a built-in role")
+    expect(out).toContain("reviewer")
+    expect(out).toContain("(not one of the four built-ins)")
+    expect(out).not.toContain("nothing spawns it")
     expect(out).toContain("general  declared: gw:small")
   })
 
