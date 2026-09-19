@@ -105,6 +105,44 @@ describe("ensureResidentAgent", () => {
     expect(agents.get("child-1")).toBeUndefined() // nothing registered
     expect(entry.status).toBe("error") // untouched
   }, 10_000)
+
+  // The RESTORE half of the three-way rule: a restored child whose role carries
+  // a model must come back on that model or not at all. With the switch off it
+  // does not come back — it does NOT quietly run on the parent's client, which
+  // is the one outcome the whole rule exists to prevent.
+  it("with the switch off, a role carrying a model is NOT rebuilt on the parent's client", async () => {
+    const { deps, table, agents } = setup()
+    const roles = createRoleRegistry()
+    roles.register({ ...builtinRoles()[0]!, name: "modelled", model: { provider: "gw", model: "small" } })
+    let called = 0
+    const gated: SubagentToolDeps = {
+      ...deps, roles, allowSubagentModelSelection: false,
+      resolveModel: async () => { called += 1; return { status: "unconfigured" as const, reason: "x" } },
+    }
+    const entry = restoredEntry("child-1", "modelled")
+    table.add(entry.path, entry)
+
+    expect(await ensureResidentAgent(gated, entry)).toBe(false)
+    expect(called).toBe(0) // refused before the resolver, not after
+    expect(agents.get("child-1")).toBeUndefined()
+    expect(entry.unmount).toBeUndefined() // no scope was mounted
+  }, 10_000)
+
+  it("with the switch on, the resident rebuild asks the resolver for the HOST's declared selection", async () => {
+    const { deps, table } = setup()
+    const calls: Array<{ provider: string; model: string }> = []
+    const declared: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "general" ? { provider: "gw", model: "from-settings" } : undefined),
+      resolveModel: async (selection) => { calls.push(selection); return { status: "unconfigured" as const, reason: "no route" } },
+    }
+    const entry = restoredEntry("child-1", "general")
+    table.add(entry.path, entry)
+
+    expect(await ensureResidentAgent(declared, entry)).toBe(false) // resolver answered "no route"
+    expect(calls).toEqual([{ provider: "gw", model: "from-settings" }])
+  }, 10_000)
 })
 
 describe("driveFollowups rebuild injection (M23 wakeup no-op fix)", () => {
@@ -163,6 +201,23 @@ describe("resume_agent semantics preserved", () => {
     await entry.followupChain
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("queued handled")
+  }, 10_000)
+
+  // The restore path's DIAGNOSTIC: the rebuild refuses (no silent inherit) and
+  // this tool re-derives the reason through the same helper the spawn throws, so
+  // the operator is told the two fixes instead of a bare "could not resume".
+  it("names both fixes when the switch refuses a restored role's model", async () => {
+    const { deps, table } = setup()
+    const roles = createRoleRegistry()
+    roles.register({ ...builtinRoles()[0]!, name: "modelled", model: { provider: "gw", model: "small" } })
+    const entry = restoredEntry("child-1", "modelled")
+    table.add(entry.path, entry)
+    const tools = createSubagentTools({ ...deps, roles, allowSubagentModelSelection: false })
+
+    const resume = tools.find((t) => t.name === "resume_agent")!
+    await expect(resume.execute({ target: "root/helper" }, {})).rejects.toThrow(
+      /role "modelled" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear it with `i-harness roles unset modelled`/,
+    )
   }, 10_000)
 })
 

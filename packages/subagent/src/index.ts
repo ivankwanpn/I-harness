@@ -33,14 +33,14 @@ import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent
 import { projectAgentTasks, type AgentTaskView } from "./projection.ts"
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
 import type { SubagentToolDeps } from "./tools.ts"
-import type { RoleModelSelection, RoleModelState } from "./child.ts"
+import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { emitRestoredJobTransitions, restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 
-export interface RegisterSubagentOptions {
+export interface RegisterSubagentOptions extends RoleModelHost {
   /** Resolve a selection to a live client through the HOST's provider plane —
    * the same one the session's own model went through, so a role gets the same
    * credentials, the same card table and the same protocol chain.
@@ -154,6 +154,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
+    // The role-model gate travels with the resolver it gates: both ride
+    // RegisterSubagentOptions → SubagentToolDeps → spawnChild's opts.
+    // Omitted when the host passed none — an unset switch is OFF, and the
+    // subagent package must not read one into existence.
+    ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+    ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
     tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the
     // job_* tools see the third layer. Omitted when the host didn't pass one —

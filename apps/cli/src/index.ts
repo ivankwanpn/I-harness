@@ -25,7 +25,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
-import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
+import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
 import { runProviderCommand } from "./provider.ts"
@@ -353,6 +353,12 @@ export async function main(argv: string[]): Promise<number> {
     // The window is NOT supplied here — `runHeadless` resolves the model binding
     // and the assembly fills it in. See the resolution above.
     compact: { auto: compactAuto },
+    // `agents.roles.<name>` + `plugins.subagentModel`, from the store loaded
+    // above. Both are read at SPAWN time through the getter `roleModelOptionsFor`
+    // returns, so a settings edit applies to the next spawn — the same
+    // loaded-before-read trap the sandbox knob documents: an unloaded store
+    // answers with defaults.
+    ...roleModelOptionsFor(settings),
   }
   if (model) opts.model = model
   if (telemetry) opts.telemetry = "jsonl"
@@ -449,12 +455,16 @@ async function runSdkCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { runtime } = await loadProviderRuntime()
+  const { settings, runtime } = await loadProviderRuntime()
   const service = createSessionService({
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),
     resolveRoleModel: roleModelResolverFor(async () => runtime),
+    // The role-model gate from the same settings store the runtime loaded —
+    // `agents.roles.<name>` read live + `plugins.subagentModel`. Default false:
+    // a session that never touches either key spawns roles exactly as before.
+    ...roleModelOptionsFor(settings),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),
@@ -620,12 +630,14 @@ async function runAcpCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { runtime } = await loadProviderRuntime()
+  const { settings, runtime } = await loadProviderRuntime()
   const service = createSessionService({
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),
     resolveRoleModel: roleModelResolverFor(async () => runtime),
+    // Same two options as the sdk path, from the same store — see there.
+    ...roleModelOptionsFor(settings),
     ...(coordinator !== undefined ? { coordinator } : {}),
     ...(coordinator !== undefined ? { sessionFor: createDurableSessionLoader(coordinator) } : {}),
     ...(storeRoot !== undefined ? { sessionQuery: createFileBackedSessionQuery({ storeRoot }) } : {}),

@@ -92,6 +92,56 @@ export interface RoleModelSelection {
   reasoningEffort?: string
 }
 
+/** The host's side of the rule: the declared role models, read through a
+ * CALLBACK at spawn time so a settings edit applies to the next spawn without
+ * restarting the session, and `plugins.subagentModel` — the switch that lets a
+ * role run on a declared model at all. `SpawnOptions`, the subagent tool deps
+ * and `RegisterSubagentOptions` all carry this shape, so it is written here
+ * ONCE and the rule below is stated once. */
+export interface RoleModelHost {
+  /** Settings' `agents.roles.<name>` (or any host's equivalent): the model the
+   * host declares for a role. Absent → the role's own `model`, then inherit. */
+  roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined
+  /** The switch. ABSENT MEANS OFF — the setting's own default is false, and a
+   * host that never wired it has not enabled the feature. Off, a declared
+   * selection is refused (`subagentModelSelectionGated`) rather than run. */
+  allowSubagentModelSelection?: boolean
+}
+
+/** The role's model for THIS spawn, in order: the HOST's declared
+ * `agents.roles.<name>` selection, then the role's own `model` (the session
+ * snapshot / plugin path), then nothing — inherit the parent's client, which is
+ * what an unconfigured harness does and what every role did before this section
+ * existed. Settings wins because it is the host's deliberate decision, while a
+ * snapshot role is per-session residue.
+ *
+ * Pure: whether a returned selection may actually run is the switch's question
+ * (`subagentModelSelectionGated`) — the two are separate so the refusing call
+ * sites can fail in their own vocabulary (throw for a spawn, `false` for a
+ * lazy rebuild) without a second copy of the ordering. */
+export function declaredRoleModel(role: SubagentRole, host: RoleModelHost): RoleModelSelection | undefined {
+  return host.roleSelectionFor?.(role.name) ?? role.model
+}
+
+/** The ONE refusal for a gated selection — shared by the spawn path, the
+ * restored resident rebuild and `resume_agent`'s diagnostic, so the message
+ * cannot drift between them. It names BOTH fixes because the reader has both at
+ * hand: turn the switch on, or clear the role's model. */
+export function subagentModelSelectionDisabled(roleName: string): Error {
+  return new Error(
+    `role "${roleName}" declares a model, but sub-agent model selection is disabled: ` +
+      `set plugins.subagentModel=true in settings, or clear it with \`i-harness roles unset ${roleName}\``,
+  )
+}
+
+/** True when a declared selection must be refused: the switch is on ONLY when
+ * it is literally `true`. ABSENT is off — the setting's own default is false,
+ * and a host that never wired the option has not enabled the feature. This is
+ * the ONE place that rule is written. */
+export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleModelSelection | undefined): boolean {
+  return declared !== undefined && host.allowSubagentModelSelection !== true
+}
+
 /** The resolver's answer, structurally: the `status` decides, and only a
  * `ready` state's `client` is read here. provider-runtime's own answer
  * satisfies it as it stands (the field names and the three arms match) — kept
@@ -102,7 +152,7 @@ export type RoleModelState =
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
   | { status: "ready"; binding: { client: ModelClient } }
 
-export interface SpawnOptions {
+export interface SpawnOptions extends RoleModelHost {
   taskName: string
   message: string
   parentPath: string
@@ -133,6 +183,11 @@ export interface SpawnOptions {
 }
 
 export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string }> {
+  // The model is decided (and gated) BEFORE anything is created: a refused
+  // spawn leaves no child session, no table entry and no job behind.
+  const declared = declaredRoleModel(opts.role, opts)
+  if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
+
   const childPath = `${opts.parentPath}/${opts.taskName}`
   const childCtx = opts.parentCtx.scope.mount()
 
@@ -178,11 +233,12 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   const childReg = createToolRegistry(childCtx)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
 
-  // model: the role's own selection through the host's resolver, else inherit
-  // the parent's client (which is what an unconfigured harness does).
+  // model: the declared selection (settings first, then the role's own) through
+  // the host's resolver, else inherit the parent's client — which is what an
+  // unconfigured harness does, and the ONLY case that inherits.
   let model = opts.parentModel
-  if (opts.role.model) {
-    const state = await opts.resolveModel(opts.role.model)
+  if (declared !== undefined) {
+    const state = await opts.resolveModel(declared)
     if (state.status !== "ready") {
       throw new Error(`role '${opts.role.name}' cannot resolve its model: ${state.reason}`)
     }
