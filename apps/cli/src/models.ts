@@ -359,11 +359,12 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     if (parsed.subcommand === "probe") {
       const models = await runtime.probeModels(route, probeRequestFor(parsed.values))
       console.log(`${models.length} model(s) found — NOTHING was written:`)
+      // The card family is a property of the ROUTE, not of each model: ONE
+      // directory() read, not one per row (this used to call directory() inside
+      // the loop, N+1 reads of the same answer).
+      const family = (await runtime.directory()).find((row) => row.id === route)?.cardFamily ?? route
       for (const model of models) {
-        const card = resolveModelCard(
-          (await runtime.directory()).find((row) => row.id === route)?.cardFamily ?? route,
-          model.id,
-        )
+        const card = resolveModelCard(family, model.id)
         console.log(`  ${model.id}  ${card?.contextWindow !== undefined ? `card ${card.contextWindow}` : "no card"}`)
       }
       if (models.length > 0) console.log(`next: i-harness models add ${route} <id> ...`)
