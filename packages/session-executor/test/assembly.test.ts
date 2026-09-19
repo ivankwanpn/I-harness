@@ -766,8 +766,18 @@ describe("createSessionAssembly — resolveRoleModel", () => {
 
   /** One turn whose model asks spawn_agent for the model-carrying role.
    * `background: false` makes the child's turn land before the parent's
-   * continuation, and the not-ready resolver ends the whole run in a throw. */
-  async function spawnRoleWithModel(resolveRoleModel?: AssemblyOptions["resolveRoleModel"]): Promise<unknown> {
+   * continuation, and the not-ready resolver ends the whole run in a throw.
+   *
+   * `allowSubagentModelSelection` is passed EXPLICITLY by the cases below: the
+   * option is the `plugins.subagentModel` switch, absent means off, and a
+   * model-carrying role is refused before the resolver is reached without it —
+   * so a case asserting anything about the RESOLVER must turn it on. The one
+   * case that leaves it off asserts exactly that refusal. */
+  async function spawnRoleWithModel(
+    resolveRoleModel?: AssemblyOptions["resolveRoleModel"],
+    allowSubagentModelSelection?: boolean,
+    roleSelectionFor?: AssemblyOptions["roleSelectionFor"],
+  ): Promise<unknown> {
     const cassette = createMockClient([
       { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "x", task_name: "helper", agent_type: "rolemodel", background: false } }] },
     ])
@@ -780,6 +790,8 @@ describe("createSessionAssembly — resolveRoleModel", () => {
       approveAll: true,
       pluginAgents: [roleWithModel],
       ...(resolveRoleModel !== undefined ? { resolveRoleModel } : {}),
+      ...(allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection } : {}),
+      ...(roleSelectionFor !== undefined ? { roleSelectionFor } : {}),
     })
     try {
       return await assembly.agent.run("start")
@@ -789,12 +801,30 @@ describe("createSessionAssembly — resolveRoleModel", () => {
   }
 
   it("a wired but not-ready resolver fails the spawn with ITS reason", async () => {
-    await expect(spawnRoleWithModel(async () => ({ status: "invalid", reason: 'Unknown provider "gw"' })))
+    await expect(spawnRoleWithModel(async () => ({ status: "invalid", reason: 'Unknown provider "gw"' }), true))
       .rejects.toThrow(/role 'rolemodel' cannot resolve its model: Unknown provider "gw"/)
   }, 30_000)
 
   it("an ABSENT resolver fails naming the selection (no silent inherit)", async () => {
-    await expect(spawnRoleWithModel())
+    await expect(spawnRoleWithModel(undefined, true))
       .rejects.toThrow(/no role-model resolver is configured \(role asked for gw:small\)/)
+  }, 30_000)
+
+  // The switch itself, seen from the real assembly: ABSENT is off. Nothing was
+  // passed here, which is exactly what an unwired host does — and the refusal
+  // names both fixes (this is the `unconsulted-setting` row finally read).
+  it("without plugins.subagentModel the model-carrying spawn is refused, naming both fixes", async () => {
+    await expect(spawnRoleWithModel())
+      .rejects.toThrow(/role "rolemodel" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear it with `i-harness roles unset rolemodel`/)
+  }, 30_000)
+
+  // …and the HOST's declared selection is what a spawn asks the resolver for:
+  // settings beat the role's own `model` at the assembly end of the seam too.
+  it("the host's declared role selection reaches the spawn and WINS over the role's own", async () => {
+    await expect(spawnRoleWithModel(
+      async (selection) => ({ status: "invalid", reason: `saw ${selection.provider}:${selection.model}` }),
+      true,
+      (roleName) => (roleName === "rolemodel" ? { provider: "gw", model: "from-settings" } : undefined),
+    )).rejects.toThrow(/saw gw:from-settings/)
   }, 30_000)
 })

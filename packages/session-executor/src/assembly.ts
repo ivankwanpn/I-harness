@@ -85,6 +85,17 @@ type RoleModelResolution =
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
   | { status: "ready"; binding: { client: ModelClient } }
 
+/** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
+ * holds, and what subagent's own `RoleModelSelection` is: named here so the
+ * resolver's input and the host's declared roles cannot describe two different
+ * shapes. Nothing in this package names either concrete type. */
+type RoleModelSelection = {
+  provider: string
+  model: string
+  protocol?: SettingsProviderProtocol
+  reasoningEffort?: string
+}
+
 // The m26 mock client is destructive (one script step per turn, exhausted →
 // error). For the web path (repeated turns on ONE assembly with the default
 // mock) wrap it so every stream() call serves a fresh copy of the cycle.
@@ -190,12 +201,18 @@ export interface AssemblyOptions {
    * the spawn of such a role FAILS naming the selection rather than inheriting
    * the session's model in silence — a role that names one model and runs
    * another is the wrong answer stated as a right one. */
-  resolveRoleModel?: (selection: {
-    provider: string
-    model: string
-    protocol?: SettingsProviderProtocol
-    reasoningEffort?: string
-  }) => Promise<RoleModelResolution>
+  resolveRoleModel?: (selection: RoleModelSelection) => Promise<RoleModelResolution>
+  /** The HOST's declared role models — settings' `agents.roles.<name>`. A
+   * CALLBACK on purpose, read at SPAWN time: a settings edit applies to the
+   * next spawn without restarting the session (spec §3). Absent → no role has a
+   * declared model and every spawn inherits the session's client. */
+  roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined
+  /** `plugins.subagentModel`: whether a role may run on its own declared model
+   * at all. ABSENT MEANS OFF — the setting's own default is false, and a host
+   * that never wired it has not enabled the feature. Off, a spawn of a role
+   * with a declared model FAILS naming both fixes rather than running it on the
+   * session's model in silence. */
+  allowSubagentModelSelection?: boolean
 }
 
 /** M42 G1: the rewind slice of an assembly — the host (run.ts / the web
@@ -732,6 +749,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }))
     const subagent = registerSubagent(ctx, tools, {
       resolveModel: resolveRoleModel,
+      // The gate travels with the resolver it gates (RegisterSubagentOptions →
+      // SubagentToolDeps → spawnChild). Both are omitted when the host passed
+      // neither: an unset switch is OFF, never "enabled by omission".
+      ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+      ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
       exec: execService,
       parentModel: model,
       parentSession: session,

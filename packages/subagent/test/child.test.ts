@@ -9,7 +9,7 @@ import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
 import { forkTurns } from "../src/fork.ts"
-import { resolveRoleTools, spawnChild } from "../src/child.ts"
+import { resolveRoleTools, spawnChild, type SpawnOptions } from "../src/child.ts"
 
 function makeTool(name: string): Tool {
   return { name, description: "", inputSchema: {}, execute: async () => ({}) }
@@ -356,23 +356,25 @@ describe("resolveRoleTools", () => {
   })
 })
 
-describe("a role's model goes through the host's resolver (not a registry)", () => {
-  function spawnFixture() {
-    const parentCtx = createContext()
-    const parentReg = createToolRegistry(parentCtx)
-    parentReg.register(makeTool("read"))
-    const roles = createRoleRegistry()
-    for (const r of builtinRoles()) roles.register(r)
-    return {
-      parentCtx, parentReg, roles,
-      parentSession: createSession(),
-      jobs: createJobRegistry(),
-      table: createAgentTable(),
-      agents: createAgentRegistry(),
-      parentModel: createMockClient([{ role: "assistant", text: "parent" }]),
-    }
+/** Module scope (not a describe-local): the role-model cases and the
+ * settings/toggle cases below spawn through the SAME fixture. */
+function spawnFixture() {
+  const parentCtx = createContext()
+  const parentReg = createToolRegistry(parentCtx)
+  parentReg.register(makeTool("read"))
+  const roles = createRoleRegistry()
+  for (const r of builtinRoles()) roles.register(r)
+  return {
+    parentCtx, parentReg, roles,
+    parentSession: createSession(),
+    jobs: createJobRegistry(),
+    table: createAgentTable(),
+    agents: createAgentRegistry(),
+    parentModel: createMockClient([{ role: "assistant", text: "parent" }]),
   }
+}
 
+describe("a role's model goes through the host's resolver (not a registry)", () => {
   it("calls the resolver with the ROLE's selection and uses its client", async () => {
     const f = spawnFixture()
     const roleClient = createMockClient([{ role: "assistant", text: "from the role's model" }])
@@ -390,6 +392,9 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
       parentModel: f.parentModel, resolveModel,
+      // A role that names a model is gated by `plugins.subagentModel` (the case
+      // below); this case is about the RESOLVER, so it turns the gate on.
+      allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
 
@@ -413,6 +418,7 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
       parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
       jobs: f.jobs, table: f.table, agents: f.agents,
     })).rejects.toThrow(/Unknown provider "gw"/)
   })
@@ -431,5 +437,100 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
     })
 
     expect(called).toBe(0)
+  })
+})
+
+// ── The role's model, from settings, behind `plugins.subagentModel` ─────────
+// `plugins.subagentModel` (settings, default false) is the switch that lets a
+// role run on a model of its own at all. It shipped with the schema and had NO
+// reader until this seam. The rule, in order: the HOST's `agents.roles.<name>`
+// entry, else the role's own declaration, else inherit the parent's client.
+// With the switch off, a role that would run on its own model FAILS instead of
+// quietly running on the parent's — a role that names one model and runs
+// another is the wrong answer stated as a right one — and the message names
+// both fixes.
+describe("the role's model: settings beats the role, and the toggle gates both", () => {
+  const roleWith = (f: ReturnType<typeof spawnFixture>, model?: { provider: string; model: string }) => ({
+    ...f.roles.get("general")!, ...(model !== undefined ? { model } : {}),
+  })
+  const spyResolver = () => {
+    const calls: Array<{ provider: string; model: string }> = []
+    return {
+      calls,
+      resolveModel: async (sel: { provider: string; model: string }) => {
+        calls.push(sel)
+        return { status: "ready" as const, binding: { client: createMockClient([]), providerId: sel.provider, modelId: sel.model, label: "role" } }
+      },
+    }
+  }
+  // The brief's `Record<string, unknown>` for `opts` cannot typecheck: spreading
+  // an index-signature type drops the fields it supplies — `role` and
+  // `resolveModel` become `unknown` — and tsc rejects the call. These two are
+  // required and the rest override the fixture, which is the same thing the
+  // brief's cases pass. Same values, checked.
+  type SpawnOverrides = Pick<SpawnOptions, "role" | "resolveModel"> & Partial<Omit<SpawnOptions, "role" | "resolveModel">>
+  const spawnWith = (f: ReturnType<typeof spawnFixture>, opts: SpawnOverrides) => spawnChild({
+    taskName: "helper", message: "do the thing", parentPath: "root",
+    parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+    parentModel: f.parentModel, jobs: f.jobs, table: f.table, agents: f.agents,
+    ...opts,
+  })
+
+  it("toggle OFF + a role that declares a model → the spawn FAILS, naming both fixes", async () => {
+    const f = spawnFixture()
+    const { resolveModel } = spyResolver()
+
+    await expect(spawnWith(f, {
+      role: roleWith(f, { provider: "gw", model: "small" }),
+      resolveModel, allowSubagentModelSelection: false,
+    })).rejects.toThrow(/plugins\.subagentModel/)
+  })
+
+  it("toggle OFF + a role with NO model → inherit, unchanged from today", async () => {
+    const f = spawnFixture()
+    const { calls, resolveModel } = spyResolver()
+
+    await spawnWith(f, { role: roleWith(f), resolveModel, allowSubagentModelSelection: false })
+
+    expect(calls).toEqual([])
+  })
+
+  it("an ABSENT toggle is OFF, not enabled — the same refusal, and the resolver is never reached", async () => {
+    const f = spawnFixture()
+    const { calls, resolveModel } = spyResolver()
+
+    await expect(spawnWith(f, {
+      role: roleWith(f, { provider: "gw", model: "small" }),
+      resolveModel,
+    })).rejects.toThrow(/plugins\.subagentModel/)
+    // Refused BEFORE the resolver: a refusal that resolved first would still
+    // have built a client for a model the host did not enable.
+    expect(calls).toEqual([])
+  })
+
+  it("toggle ON → SETTINGS beat the role's own declaration", async () => {
+    const f = spawnFixture()
+    const { calls, resolveModel } = spyResolver()
+
+    await spawnWith(f, {
+      role: roleWith(f, { provider: "gw", model: "from-role" }),
+      resolveModel, allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "from-settings" }),
+    })
+
+    expect(calls).toEqual([{ provider: "gw", model: "from-settings" }])
+  })
+
+  it("toggle ON + no settings entry → the role's own declaration", async () => {
+    const f = spawnFixture()
+    const { calls, resolveModel } = spyResolver()
+
+    await spawnWith(f, {
+      role: roleWith(f, { provider: "gw", model: "from-role" }),
+      resolveModel, allowSubagentModelSelection: true,
+      roleSelectionFor: () => undefined,
+    })
+
+    expect(calls).toEqual([{ provider: "gw", model: "from-role" }])
   })
 })

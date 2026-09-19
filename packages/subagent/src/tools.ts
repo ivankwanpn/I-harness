@@ -14,10 +14,10 @@ import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { resolveRoleTools, spawnChild, type RoleModelSelection, type RoleModelState } from "./child.ts"
+import { declaredRoleModel, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
-export interface SubagentToolDeps {
+export interface SubagentToolDeps extends RoleModelHost {
   table: AgentTable
   jobs: JobRegistry
   roles: RoleRegistry
@@ -135,6 +135,10 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         role,
         parentModel: deps.parentModel,
         resolveModel: deps.resolveModel,
+        // The role-model gate rides to spawnChild with the resolver; the spawn
+        // itself is where the refusal (and the message) lives — see child.ts.
+        roleSelectionFor: deps.roleSelectionFor,
+        allowSubagentModelSelection: deps.allowSubagentModelSelection,
         jobs: deps.jobs,
         table: deps.table,
         agents: deps.agents,
@@ -351,11 +355,14 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const role = deps.roles.get(roleName)
       if (!role) throw new Error(`unknown role: ${roleName}`)
       if (!(await ensureResidentAgent(deps, existing))) {
-        // After the role check the only remaining failure mode is the role's
-        // model resolution — mirror spawnChild's error shape so the resume
-        // diagnostics match the spawn path.
-        if (role.model) {
-          const state = await deps.resolveModel(role.model)
+        // After the role check the remaining failure modes are the role's model
+        // — the switch refusing it, or the resolver — mirror spawnChild's error
+        // shape so the resume diagnostics match the spawn path. The helper IS
+        // the spawn path's helper, so the two cannot drift.
+        const declared = declaredRoleModel(role, deps)
+        if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
+        if (declared !== undefined) {
+          const state = await deps.resolveModel(declared)
           if (state.status !== "ready") {
             throw new Error(`role '${role.name}' cannot resolve its model: ${state.reason}`)
           }
@@ -555,15 +562,26 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }
   const role = deps.roles.get(entry.roleName ?? "general")
   if (!role) return false
+  // The model decision comes BEFORE the scope is mounted: a refused rebuild
+  // must leave nothing behind, and this refusal is decidable without one. A
+  // selection the `plugins.subagentModel` switch does not allow fails the
+  // rebuild — returning false, never inheriting: a restored child of a role
+  // that names a model must not come back on a different one. False (not a
+  // throw) is this function's contract — the callers decide the fail behaviour
+  // and the sweep must never throw — and `resume_agent` re-derives the message
+  // from the same helper spawnChild throws.
+  const declared = declaredRoleModel(role, deps)
+  if (subagentModelSelectionGated(deps, declared)) return false
   const childCtx = deps.parentCtx.scope.mount()
   const childReg = createToolRegistry(childCtx)
   // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
   resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
-  // model resolution identical to spawnChild (child.ts): role.model → the
-  // host's resolver; else inherit the parent model.
+  // model resolution identical to spawnChild (child.ts): the declared selection
+  // (settings first, then role.model) → the host's resolver; else inherit the
+  // parent model.
   let model = deps.parentModel
-  if (role.model) {
-    const state = await deps.resolveModel(role.model)
+  if (declared !== undefined) {
+    const state = await deps.resolveModel(declared)
     if (state.status !== "ready") return false
     model = state.binding.client
   }

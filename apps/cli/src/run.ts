@@ -22,6 +22,7 @@ import { maybeAutoTitle } from "@i-harness/session-title"
 import { createMetricsSink, createTelemetry, createJsonlSink, type Telemetry } from "@i-harness/telemetry"
 import {
   createSessionAssembly,
+  type AssemblyOptions,
   type ModelPolicy,
   type ReasoningEffort,
 } from "@i-harness/session-executor"
@@ -155,6 +156,15 @@ export interface HeadlessOptions {
    * values fail loud at the model end). Absent → the request never carries the
    * field (the provider's own default applies). */
   reasoningEffort?: ReasoningEffort
+  /** The host's declared role models (settings' `agents.roles.<name>`), read at
+   * SPAWN time through this getter — see `AssemblyOptions.roleSelectionFor`.
+   * The CLI supplies it from the loaded settings store; absent (the embedder
+   * default) → no role has a declared model. */
+  roleSelectionFor?: AssemblyOptions["roleSelectionFor"]
+  /** `plugins.subagentModel`, the switch that lets a role run on its own
+   * declared model. ABSENT MEANS OFF — see
+   * `AssemblyOptions.allowSubagentModelSelection`. */
+  allowSubagentModelSelection?: boolean
 }
 
 export interface HeadlessResult {
@@ -486,6 +496,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       resolveRoleModel: roleModelResolverFor(runtimeNow),
+      // The role-model gate, from whoever supplied the run (the CLI's main()
+      // reads it from the settings store). Omitted when the caller passed
+      // neither: an unset switch is OFF and a declared role model is refused,
+      // never resolved on the strength of an omission.
+      ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+      ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
       parentNotify,
     })
     // Plugin commands are registered FIRST, so this file's own seven — registered
