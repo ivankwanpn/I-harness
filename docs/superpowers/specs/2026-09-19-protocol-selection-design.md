@@ -53,18 +53,31 @@ role.protocol            ← 子代理角色的宣告（未來 UI 的下拉）
   > session.protocol     ← 這一次 session 的選擇（發起時組進去，**不落地**）
   > 模型列 protocol      ← 既有
   > 路由 protocol        ← 既有
-  > openai-completions   ← 既有的硬編碼尾巴（見下）
+  > （都沒有 → 錯誤，不是預設）
 ```
 
 **三個來源都寫在同一處**（`runtimeProfile`），所以「誰贏」永遠只有一個答案。
 
-### 尾巴留著，但 CLI 永遠走不到
+### 沒有尾巴：解析不到協議就是**錯誤**
 
-兩層都沒寫時 `openai-completions` 會**安靜地**套上去（`sections.ts:116`）。
+今天兩層都沒寫時，`openai-completions` 會**安靜地**套上去（`sections.ts:116`）。**這條尾巴拿掉。**
 
-- **CLI 產生的設定走不到那裡**：`provider add` **強制 `--protocol`**（不給就報錯並列出五個）。
-- **手寫的舊檔會走到**：留著它，否則每個沒有 `protocol` 的舊設定會突然拒絕。
-- **`provider list` 會把「這條路由的協議是預設來的、不是宣告的」印出來** —— 沉默的尾巴看得見，就不再是沉默的。
+理由（使用者）：協議是**使用者設的、而且必填** —— 前端是幾個按鈕，沒有「不填」的可能；CLI 的 `provider add` **強制 `--protocol`**（不給就報錯並列出五個）。**所以真實世界裡沒有「兩層都沒寫」的設定** —— 除了手寫的檔案，而那些檔案**本來就該被告知**。
+
+**而失敗本來就會發生**：`buildClient` 的 `default:` 已經在 throw（`provider/src/index.ts:880`）。這份設計只是把它**搬到對的地方、給它一句能行動的訊息**：
+
+```
+runtime.resolveModel()
+  → 解析不到協議 ⇒ invalid（不是 ready）
+      reason: 路由 "X" 沒有宣告協議；用 `i-harness provider set X --protocol P` 指定
+```
+
+**在解析時失敗，不是在建 client 時** —— 早一步、訊息帶著路由名與修法。（`--max-tokens`／模型等其它 `invalid` 狀態走的是同一條路。）
+
+**代價講清楚**：一個**手寫的、沒有 `protocol` 的舊設定**會從「默默用 `openai-completions`」變成「**大聲拒絕並告訴你怎麼修**」。**這是有意的** —— 沉默的預設正是 D1 一路在消滅的東西，而它就是使用者最初那個 bug 的成因。
+
+**`provider list` 相應地把「這條路由沒有協議、不能使用」標出來**（它不是預設來的，是**壞的**）。
+（`SEEDED_PROTOCOLS` 是空的鉤子，留著：它是「內建路由自己知道協議」的位置 —— 但**它不再是預設**，它只是一個寫死的宣告。）
 
 ---
 
@@ -212,12 +225,13 @@ resolveModel(selection: { provider: string; model: string; protocol?: SettingsPr
 
 | 對象 | 測什麼 |
 |---|---|
-| 解析序 | role > session > 模型列 > 路由 > 尾巴；每一層各一條，且**只有一個地方**在解析（`runtimeProfile`） |
+| 解析序 | role > session > 模型列 > 路由；每一層各一條，且**只有一個地方**在解析（`runtimeProfile`） |
+| **沒有協議 → invalid** | 一條沒有宣告協議、也沒有 role/session 覆寫的路由 ⇒ `resolveModel` 回 **invalid**（不是 ready），訊息**帶著路由名與修法**；**絕不 fallback 到任何協議** ← **突變目標**（把尾巴加回去 → 必須紅） |
 | **rebind 的兩個消費者** | 換 client 之後，**壓縮引擎也用新的** ← **頭號突變目標**（把 getter 改回值 → 必須紅） |
 | 觸發點② | sdk 的 `setSessionModel` 之後，**下一回合**就用新 client（今天要等下一次 assembly） |
 | 子代理 | role 宣告模型 → 走**同一條**解析（含憑證與卡片），不再是「unknown provider」；沒有 role.model → 繼承父的 client 物件 |
 | 不落地 | `run --protocol P` 之後，**settings.json 一字不變** |
-| 尾巴看得見 | `provider list` 對一條沒有宣告協議的路由，**說得出它是預設來的** |
+| 壞的路由看得見 | `provider list` 對一條沒有宣告協議的路由，**說得出它「沒有協議、不能使用」**（不是預設來的，是壞的） |
 | 突變 | 把 `model` 的 getter 換回值 → 摘要用舊端點，必須紅 |
 
 ---
@@ -249,7 +263,9 @@ resolveModel(selection: { provider: string; model: string; protocol?: SettingsPr
 ```
 階段 A  解析鏈 + 選擇型別        ← 可單獨出貨
         SessionModelSelection / role.model 加 protocol?、
-        runtimeProfile 那條鏈多兩層、provider list 印出「預設來的協議」
+        runtimeProfile 那條鏈多兩層、
+        **拿掉硬編碼尾巴**（沒有協議 ⇒ invalid + 可行動的訊息）、
+        provider list 標出「沒有協議、不能使用」的路由
 
 階段 B  rebind 機制 + 子代理     ← 疊在 A 上
         core-agent 的 model getter、agent.setModel、
