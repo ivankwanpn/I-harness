@@ -18,6 +18,7 @@ import {  buildModelClient,
   type ProviderRegistry,
 } from "@i-harness/provider"
 import {
+  PROVIDER_PROTOCOLS,
   SettingsStore,
   type SettingsDefaultModel,
   type SettingsProviderConfig,
@@ -531,7 +532,11 @@ describe("model resolution", () => {
     expect(state.status === "invalid" && state.reason).toContain("i-harness provider set gateway --protocol")
     // And it names the SET, not a placeholder: `--protocol P` copied verbatim
     // would fail with `unknown protocol "P"` — a second error before the fix.
-    expect(state.status === "invalid" && state.reason).toContain("one of: ")
+    // The SET is pinned by CONTENT, not shape: `toContain("one of: ")` also
+    // passes when the tail degrades to ONE fixed protocol (the mutation
+    // 8652dbf9 measured). Pinned against the same object the source reads
+    // (PROVIDER_PROTOCOLS from @i-harness/settings) — never re-declared here.
+    expect(state.status === "invalid" && state.reason).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
   })
 
   it("the route's protocol still wins when it declares one, and the selection still beats the row", async () => {
@@ -1166,8 +1171,10 @@ describe("probeModels — the read half of discovery", () => {
 
     await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
     await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
-    // The repair names the SET (see the resolveModel guard test's note).
-    await expect(runtime.probeModels("gateway")).rejects.toThrow(/one of: /)
+    // The repair names the SET (see the resolveModel guard test's note), and
+    // the set is pinned by CONTENT: `/one of: /` also passes when the tail
+    // degrades to ONE fixed protocol.
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
   })
 
   it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
