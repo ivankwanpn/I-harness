@@ -49,6 +49,10 @@ export interface ModelValues {
   /** A settings protocol name, or `null` for `auto` (clear the row's override
    * and fall back to the route's default — NOT to the hard-coded one). */
   protocol?: CliProtocol | null
+  /** `use`'s reasoning effort. Not validated here: the settings schema holds the
+   * closed set and a session resolving the model is where it is checked — the
+   * CLI's job is to pass the user's word through without inventing one. */
+  reasoningEffort?: string
 }
 
 /** What a parsed flag becomes on the way to the runtime: a number, `null` to
@@ -86,7 +90,7 @@ const MODELS_USAGE =
   "  add <route> <id...> [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  set <route> <id>    [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  rm <route> <id>\n" +
-  "  use <route>:<model> [--reasoning-effort E]\n" +
+  "  use <route>:<model> [--reasoning-effort E]   E is validated when a session resolves the model\n" +
   "  refresh <route>                           probe and merge everything it returns\n" +
   "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
   "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
@@ -121,6 +125,13 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
         return { subcommand: "help", ids: [], values: {}, error: `unknown protocol "${raw}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")} | auto` }
       }
       values.protocol = raw as CliProtocol
+      continue
+    }
+    if (token === "--reasoning-effort") {
+      const raw = rest[i + 1]
+      if (raw === undefined) return { subcommand: "help", ids: [], values: {}, error: "--reasoning-effort needs a value" }
+      i += 1
+      values.reasoningEffort = raw
       continue
     }
     if (token.startsWith("-")) return { subcommand: "help", ids: [], values: {}, error: `unknown flag: ${token}` }
@@ -287,7 +298,11 @@ export async function runModelsCommand(args: string[]): Promise<number> {
       return 0
     }
     const separator = route.indexOf(":")
-    await runtime.setDefaultModel({ provider: route.slice(0, separator), model: route.slice(separator + 1) })
+    await runtime.setDefaultModel({
+      provider: route.slice(0, separator),
+      model: route.slice(separator + 1),
+      ...(parsed.values.reasoningEffort !== undefined ? { reasoningEffort: parsed.values.reasoningEffort } : {}),
+    })
     console.log(`default model: ${route}`)
     return 0
   } catch (error) {

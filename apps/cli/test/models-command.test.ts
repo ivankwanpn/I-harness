@@ -141,6 +141,12 @@ describe("runModelsCommand", () => {
       .toEqual({ provider: "gw", model: "deepseek-flash" })
   })
 
+  it("use carries --reasoning-effort into llm.defaultModel", async () => {
+    expect(await runModelsCommand(["models", "use", "gw:deepseek-flash", "--reasoning-effort", "high"])).toBe(0)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.defaultModel)
+      .toEqual({ provider: "gw", model: "deepseek-flash", reasoningEffort: "high" })
+  })
+
   it("a route that cannot be probed fails loudly (bedrock is manual-only)", async () => {
     writeFileSync(join(home, "settings.json"), JSON.stringify({
       llm: { providers: { br: { baseURL: "https://br.example", protocol: "bedrock", models: [] } }, defaultModel: { provider: "", model: "" } },
