@@ -31,8 +31,8 @@
 **Interfaces:**
 - Consumes: `SettingsProviderProtocol` + the module-private `isProviderProtocol` (:332) and `isNonEmptyString`, both already in this file.
 - Produces:
-  - `export interface SettingsRoleModel { provider: string; model: string; protocol?: SettingsProviderProtocol; reasoningEffort?: string }`
-  - `export interface SettingsAgents { roles: Record<string, SettingsRoleModel> }`
+  - **module-private** `interface SettingsRoleModel { provider: string; model: string; protocol?: SettingsProviderProtocol; reasoningEffort?: string }`
+  - **module-private** `interface SettingsAgents { roles: Record<string, SettingsRoleModel> }`
   - `Settings.agents: SettingsAgents` — read by Task 4 and Task 5.
 
 - [ ] **Step 1: Write the failing test**
@@ -87,8 +87,13 @@ In `packages/settings/src/index.ts`, beside `SettingsDefaultModel`:
 /** One role's model selection: the shape of `SettingsDefaultModel` plus the
  * protocol, because a role may name an endpoint as well as a model. `provider`
  * and `model` are required TOGETHER — a role that named only one would be
- * asking us to guess the other. */
-export interface SettingsRoleModel {
+ * asking us to guess the other.
+ *
+ * NOT EXPORTED. Nothing outside this file ever NAMES it: Task 4's resolver and
+ * Task 5's CLI both build object literals, which structural typing accepts. And
+ * the reachability instrument counts `export interface` as a row — an export
+ * whose consumer is three tasks away is what commit 8ec8fda0 removed. */
+interface SettingsRoleModel {
   provider: string
   model: string
   protocol?: SettingsProviderProtocol
@@ -97,8 +102,9 @@ export interface SettingsRoleModel {
 
 /** `agents.roles.<name>`: the model a sub-agent role runs on. An ABSENT role
  * inherits the parent's client — which is what every role did before this
- * section existed, and what an unconfigured harness still does. */
-export interface SettingsAgents {
+ * section existed, and what an unconfigured harness still does.
+ * Not exported; see SettingsRoleModel. */
+interface SettingsAgents {
   roles: Record<string, SettingsRoleModel>
 }
 ```
@@ -587,7 +593,10 @@ The two options ride the SAME path `resolveModel` took in Task 3: on `RegisterSu
 ```ts
   /** The HOST's declared role models, read AT SPAWN TIME so a settings edit
    * applies to the next spawn without restarting the session. */
-  roleSelectionFor?: (roleName: string) => SettingsRoleModel | undefined
+  roleSelectionFor?: (roleName: string) => {
+    provider: string; model: string
+    protocol?: SettingsProviderProtocol; reasoningEffort?: string
+  } | undefined
   /** `plugins.subagentModel`. Default false = today's behaviour exactly: every
    * role inherits the parent's client. */
   allowSubagentModelSelection?: boolean
@@ -809,4 +818,4 @@ EOF
 
 **Placeholder scan:** clean. Tasks 3 and 4's tests were first written as assertion lists; they are now real code built on `child.test.ts`'s existing `spawnChild` fixture, read from the repo at `packages/subagent/test/child.test.ts:31-65`. Every implementation step carries code or an exact existing location to mirror.
 
-**Type consistency:** `SettingsRoleModel` (Task 1) is the type threaded through Tasks 3, 4, 5, 6; the resolver's parameter is the same shape minus the name (`{ provider, model, protocol?, reasoningEffort? }`) so a `SettingsRoleModel` is assignable to it. `SettingsProviderProtocol` is the protocol type everywhere.
+**Type consistency:** ONE shape — `{ provider, model, protocol?, reasoningEffort? }` — appears as Task 1's module-private `SettingsRoleModel`, Task 3's resolver parameter, and Task 4's `roleSelectionFor` return. It is spelled out at each boundary rather than named across packages, because the type is deliberately not exported; a value read from `settings.get().agents.roles[name]` is assignable to all three by structure. `SettingsProviderProtocol` is the protocol type everywhere.
