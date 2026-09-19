@@ -56,6 +56,16 @@ const PROVIDER_USAGE =
   "  rm <id>\n" +
   `  protocols: ${PROVIDER_PROTOCOLS.join(" | ")}`
 
+/** Flags whose settings field is a NON-EMPTY string. An empty (or blank) value
+ * is refused at parse time, and the line above each flag is why: settings
+ * DROPS an empty baseURL on normalize (packages/settings/src/index.ts:446-449),
+ * so `add gw --base-url ""` used to persist `{baseURL: ""}`, report
+ * `created provider "gw"`, and leave every adapter to fall back to its
+ * hard-coded vendor endpoint (llm-openai-compatible/src/index.ts:93), taking
+ * the user's prompt and stored credential to a host they never configured.
+ * `set` clears a working endpoint the same way. */
+const NON_EMPTY_VALUE_FLAGS = new Set(["--base-url", "--models-url", "--catalog", "--display-name"])
+
 export function parseProviderArgs(args: string[]): ParsedProviderArgs {
   const sub = args[1]
   if (sub === undefined || sub === "help" || sub === "--help" || sub === "-h") {
@@ -78,6 +88,9 @@ export function parseProviderArgs(args: string[]): ParsedProviderArgs {
     const value = rest[i + 1]
     if (value === undefined || value.startsWith("--")) {
       return { subcommand: "help", fields: {}, error: `${token} needs a value` }
+    }
+    if (NON_EMPTY_VALUE_FLAGS.has(token) && value.trim() === "") {
+      return { subcommand: "help", fields: {}, error: `${token} needs a non-empty value` }
     }
     i += 1
     if (token === "--base-url") { fields.baseURL = value; continue }
