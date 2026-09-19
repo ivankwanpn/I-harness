@@ -52,6 +52,16 @@ export interface ProviderRuntimeEntry {
   models: ModelDescriptor[]
   defaultModel?: string
   discovery: "available" | "manual-only"
+  /** The card family this route declared, if it declared one. ABSENT means the
+   * route name IS the family (the default — see ProviderProfile.catalog), which
+   * is not the same statement as "the family is the route name", so a reader
+   * that needs to tell them apart reads this field's PRESENCE. */
+  catalog?: string
+  /** The family the resolution chain actually keys `model-catalog.json` by:
+   * the declared one, else the route name. Reported instead of leaving every
+   * consumer to re-derive the rule — a listing that computes it a second time
+   * is a listing that can disagree with the chain it is describing. */
+  cardFamily: string
 }
 
 export interface ProviderRuntime {
@@ -162,6 +172,8 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           models: cloneModels(view.models),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
+          cardFamily: cardFamilyOf(view),
+          ...(view.catalog !== undefined ? { catalog: view.catalog } : {}),
         })
       }
       return rows
@@ -464,6 +476,14 @@ function providerView(
   }
 }
 
+/** The card family a route resolves against: its DECLARED `catalog`, else its
+ * own name. The single implementation of that rule — `runtimeProfile()` writes
+ * it onto the profile the chain reads, and `directory()` reports it, so what a
+ * listing SHOWS and what resolution USES are the same value. */
+function cardFamilyOf(view: ProviderView): string {
+  return view.catalog ?? view.id
+}
+
 function runtimeProfile(
   view: ProviderView,
   apiKey: string | undefined,
@@ -479,7 +499,7 @@ function runtimeProfile(
     name: view.id,
     // Declared family, else the route name. Set here so the resolution chain
     // never has to look at `name` for a purpose it was not given.
-    catalog: view.catalog ?? view.id,
+    catalog: cardFamilyOf(view),
     displayName: view.displayName,
     protocol: adapterProtocol(view.protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
