@@ -30,6 +30,7 @@ import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
 import { runProviderCommand } from "./provider.ts"
 import { runModelsCommand } from "./models.ts"
+import { runRolesCommand } from "./roles.ts"
 import { failureReport, diagnosticSessionId } from "./run.ts"
 
 // M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
@@ -55,12 +56,12 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // `--sandbox read-only|workspace-write|danger-full-access` token is
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
-  "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models> ...]\n" +
+  "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
-  "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh>"
+  "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh> | roles <list|set|unset>"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -137,6 +138,13 @@ export async function main(argv: string[]): Promise<number> {
   // the only one that touches the network and it writes NOTHING.
   if (args[0] === "models") {
     return runModelsCommand(args)
+  }
+  // The role tree — which model each of the four built-in sub-agent roles runs
+  // on (docs/superpowers/specs/2026-09-19-agent-roles-design.md §8). It is the
+  // surface `agents.roles` and Task 4's gate were landed FOR, and the verb the
+  // gate's refusal message already tells the user to run.
+  if (args[0] === "roles") {
+    return runRolesCommand(args)
   }
   // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
   // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.
