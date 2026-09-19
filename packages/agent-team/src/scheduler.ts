@@ -44,6 +44,15 @@ export interface TeamSubagentDeps {
   exec: ExecService
   /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
   resolveModel: SpawnOptions["resolveModel"]
+  /** Forwarded verbatim to `spawnChild` too — the host's declared role models
+   * and the `plugins.subagentModel` switch. WITHOUT them a spawned teammate
+   * silently inherits the parent's client: the declared selection collapses to
+   * the role's own `model` (undefined for a settings-declared entry), so the
+   * gate never fires and no message is produced — while the SAME teammate's
+   * wakeup rebuild (ensureResident, wired with the full deps) resolves the
+   * declared one. One teammate, two models, no surface saying so. */
+  roleSelectionFor?: SpawnOptions["roleSelectionFor"]
+  allowSubagentModelSelection?: boolean
   // M8 durable child sessions: coordinator + parent session id. When present,
   // spawned teammates get durable child-<uuid> sessions (lineage header) and
   // their inbox appends go through the write-behind mirror. WITHOUT it the
@@ -194,6 +203,12 @@ export async function mountAgentTeams(
         role,
         parentModel: deps.parentModel,
         resolveModel: sub.resolveModel,
+        // The role's model is decided the SAME way here as through
+        // registerSubagent's chain: the declared selection and the switch ride
+        // WITH the resolver. Omitted when the host passed neither — an unset
+        // switch is OFF, never "enabled by omission".
+        ...(sub.roleSelectionFor !== undefined ? { roleSelectionFor: sub.roleSelectionFor } : {}),
+        ...(sub.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: sub.allowSubagentModelSelection } : {}),
         jobs: sub.jobs,
         table: sub.table,
         agents: sub.agents,

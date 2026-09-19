@@ -799,6 +799,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session,
         parentCtx: ctx,
         resolveModel: resolveRoleModel,
+        // The gate travels with the resolver it gates: the guardian's spawn is
+        // a role-carrying spawn, so it gets the same two options. Omitted when
+        // the host passed neither — an unset switch is OFF, never "enabled by
+        // omission".
+        ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+        ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
@@ -825,6 +831,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           agents: subagent.agents,
           exec: execService,
           resolveModel: resolveRoleModel,
+          ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+          ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }

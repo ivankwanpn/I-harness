@@ -112,6 +112,42 @@ describe("guardian review", () => {
     expect(sub.agents.entries().size).toBe(0)
   })
 
+  // The guardian's spawn is one of the assembly's three role-carrying spawn
+  // sites, so it must resolve the reviewer's model through the SAME seam the
+  // subagent tools use: a settings-declared `agents.roles.reviewer` entry plus
+  // `plugins.subagentModel` has to reach spawnChild from these deps. Without
+  // them the declared selection collapsed to the role's own (undefined) model,
+  // so the reviewer silently inherited the parent's client here while the
+  // team/rebuild paths resolved the declared one — the same role on two models.
+  it("a settings-declared reviewer selection reaches the guardian's spawn (no silent inherit)", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    // The parent's client answers with a verdict the runner cannot parse; the
+    // DECLARED client's verdict is the one that approves. So the verdict below
+    // says which client actually ran, not merely that one was built.
+    const parentModel = createMockClient([{ role: "assistant", text: "I think it is fine." }])
+    const declaredModel = createMockClient([
+      { role: "assistant", text: '{"outcome":"approve","rationale":"declared model ran","risk_level":"none"}' },
+    ])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, parentModel)
+    const calls: Array<{ provider: string; model: string }> = []
+    const verdict = await runGuardianReview({
+      subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
+      resolveModel: async (selection) => {
+        calls.push(selection)
+        return { status: "ready" as const, binding: { client: declaredModel } }
+      },
+      parentModel,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "reviewer" ? { provider: "gw", model: "small" } : undefined),
+    }, { name: "write", reason: "write to ./x", args: { path: "./x" } })
+
+    expect(calls).toEqual([{ provider: "gw", model: "small" }])
+    expect(verdict.outcome).toBe("approve")
+    expect(verdict.rationale).toContain("declared model ran")
+  })
+
   it("registerGuardian runs the full pipeline: deny skips the human answerer", async () => {
     const ctx = createContext()
     const registry = createToolRegistry(ctx)

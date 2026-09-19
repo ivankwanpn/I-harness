@@ -33,6 +33,14 @@ export interface GuardianReviewDeps {
   parentCtx: PluginContext
   /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
   resolveModel: SpawnOptions["resolveModel"]
+  /** Forwarded verbatim to `spawnChild` too: the host's declared role models
+   * (`agents.roles`) and the `plugins.subagentModel` switch. The guardian's
+   * spawn is a role-carrying spawn like any other — without them a
+   * settings-declared `reviewer` entry is invisible at THIS site: the declared
+   * selection collapses to the role's own `model` (undefined), the gate never
+   * fires and the reviewer silently inherits the parent's client. */
+  roleSelectionFor?: SpawnOptions["roleSelectionFor"]
+  allowSubagentModelSelection?: boolean
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
   model?: ModelClient
@@ -138,6 +146,12 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     role,
     parentModel: model,
     resolveModel: deps.resolveModel,
+    // The role's model is decided the SAME way here as through
+    // registerSubagent's chain: the declared selection and the switch ride WITH
+    // the resolver. Omitted when the host passed neither — an unset switch is
+    // OFF, never "enabled by omission".
+    ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
+    ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,
     agents: deps.subagents.agents,
