@@ -716,6 +716,14 @@ In `normalizeModels` (after the `maxTokens` line, `:416`):
       if (isProviderProtocol(entry.protocol)) model.protocol = entry.protocol
 ```
 
+And in `packages/settings/src/sections.ts`, add the field to `MODEL_FIELDS` (around `:127-134`), beside `maxTokens`:
+
+```ts
+  protocol: { type: "enum", enum: [...PROVIDER_PROTOCOLS] },
+```
+
+**Why both, when only one of them is on the write path** (verified: `SettingsStore.set` routes through `normalizeSettings` → `normalizeModels`; `MODEL_FIELDS` feeds the section schema, whose only consumers are `sections.ts:300` and `:549`): the two lists are both definitions of "what a model row is", and a definition that disagrees is how a field disappears without a message. This one is one line.
+
 - [ ] **Step 4: Implement the runtime half**
 
 In `packages/provider-runtime/src/index.ts`, change `runtimeProfile`'s signature and its protocol line:
