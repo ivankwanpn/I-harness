@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseModelsArgs, parseTokenValue, probeRequestFor, renderModels, runModelsCommand } from "../src/models.ts"
+import { loadProviderRuntime } from "../src/provider-runtime.ts"
 
 describe("parseTokenValue", () => {
   it("reads plain integers, k/m suffixes, and `auto`", () => {
@@ -135,10 +136,14 @@ describe("renderModels", () => {
     expect(out).not.toContain("plain-row  (no card)  protocol:")
   })
 
-  it("marks a route with no declared protocol as unusable, the same as provider list", () => {
+  it("names a route that declares no protocol of its own — the same as provider list", () => {
     // Task 1 made ModelsRouteView.protocol optional, so this line renders
     // [undefined]. Its sibling in provider.ts gets the same treatment — fixing
     // one listing and not the other just moves the user to the other command.
+    // The line says "of its own" and NEVER "cannot be used": whether the route
+    // resolves depends on the chain (selection > row > route), which this row
+    // cannot see — `runModelsCommand`'s case below measures that against
+    // `resolveModel`.
     const out = renderModels([
       {
         id: "gw", cardFamily: "gw", declared: false, discovery: "available",
@@ -148,7 +153,11 @@ describe("renderModels", () => {
 
     expect(out).toContain("gw")
     expect(out).not.toContain("undefined")
-    expect(out).toContain("no protocol")
+    // `toContain("no protocol")` would still pass here — as a substring of the
+    // new sentence, it stops guarding anything. The exact claim is what is
+    // pinned, and the deleted claim is pinned as absent.
+    expect(out).toContain("no protocol of its own")
+    expect(out).not.toContain("cannot be used")
     expect(out).toContain("i-harness provider set gw --protocol")
   })
 
@@ -306,6 +315,40 @@ describe("runModelsCommand", () => {
     // override the write verb landed.
     expect(out).toContain("discovery: available")
     expect(out).toContain("deepseek-flash  (1048576 / 384000)  protocol: anthropic-messages")
+  })
+
+  it("a route with no protocol of its own is not told it cannot be used — a row's protocol resolves it", async () => {
+    // The measured self-contradiction this guards: with the route declaring no
+    // protocol and row `m` declaring gemini, the old line said "cannot be
+    // used" one line above `m  (no card)  protocol: gemini` — while the chain
+    // (selection > row > route; provider-runtime/src/index.ts:632 feeds :741)
+    // resolved that very route. The runtime assertion runs FIRST so a pre-fix
+    // red is visibly a listing lie, not a runtime one.
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: {
+        providers: {
+          gw: { baseURL: "https://gw.example", apiKeyEnv: "GW_API_KEY", models: [{ id: "m", protocol: "gemini" }] },
+        },
+        defaultModel: { provider: "", model: "" },
+      },
+    }), "utf8")
+
+    const { runtime } = await loadProviderRuntime()
+    await expect(runtime.resolveModel({ sessionSelection: { provider: "gw", model: "m" } }))
+      .resolves.toMatchObject({ status: "ready" })
+
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "list"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    const out = lines.join("\n")
+    expect(out).not.toContain("cannot be used")
+    expect(out).toContain("no protocol of its own")
+    // The row that makes the difference is printed on the line below.
+    expect(out).toContain("m  (no card)  protocol: gemini")
   })
 
   it("set can declare a per-model protocol, and `auto` clears it back to the route's", async () => {

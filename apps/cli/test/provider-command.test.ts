@@ -261,11 +261,14 @@ describe("renderProviderList", () => {
 
   const noProvenance = { generatedAt: "2026-09-19", families: [] }
 
-  it("marks a route with no declared protocol as unusable — not as a wire nobody declared", () => {
+  it("names a route that declares no protocol of its own — not a wire nobody declared", () => {
     // Before Task 1 this row printed [openai-completions], a wire NOBODY
-    // declared; after its tail was removed it would print [undefined]. Both are
-    // lies in the same shape as a success message for nothing. The listing says
-    // the route cannot be used, and names the verb that fixes it.
+    // declared; after its tail was removed it printed [undefined]. Both are
+    // lies in the same shape as a success message for nothing. The line states
+    // what is true of the ROUTE (and names the verb that declares one) — it
+    // must NOT claim the route cannot be used: resolution tries the selection
+    // and the model row before the route, so a protocol-less route still
+    // resolves when either names a wire (measured in models-command.test.ts).
     const out = renderProviderList(
       [{
         id: "gateway", displayName: "Gateway", configured: true,
@@ -285,8 +288,11 @@ describe("renderProviderList", () => {
     // and Task 1's `gateway  [undefined]`.
     expect(out).not.toContain("gateway  [openai-completions]")
     expect(out).not.toContain("gateway  [undefined]")
-    expect(out).toContain("gateway  [no protocol")
-    expect(out).toContain("no protocol")
+    expect(out).toContain("gateway  [no protocol of its own")
+    // `toContain("no protocol")` still passes as a substring of the new
+    // sentence — it stops guarding anything, so the exact claim is pinned and
+    // the deleted verdict is pinned as absent.
+    expect(out).not.toContain("cannot be used")
     expect(out).toContain("i-harness provider set gateway --protocol")
   })
 
