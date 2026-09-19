@@ -385,8 +385,10 @@ export async function runModelsCommand(args: string[]): Promise<number> {
       const entry = (await runtime.directory()).find((row) => row.id === route)
       const before = new Set(entry?.models.map((model) => model.id) ?? [])
       const already = parsed.ids.filter((modelId) => before.has(modelId))
-      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       const models = await runtime.addModels(route, parsed.ids.map((modelId) => rowFor(modelId, fields)))
+      // AFTER the write: the warning is about a value that was written, so a
+      // refused add must not warn about one that was not.
+      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       console.log(`"${route}": ${models.length} model(s)`)
       if (already.length > 0) {
         console.log(`  already present: ${already.join(", ")} — their own values win where set; the flags fill only the gaps. Use \`models set\` to change one.`)
@@ -395,8 +397,9 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     }
     if (parsed.subcommand === "set") {
       const entry = (await runtime.directory()).find((row) => row.id === route)
-      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       await runtime.setModel(route, parsed.ids[0]!, fields)
+      // AFTER the write — see the add branch.
+      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       // No flags = `setModel` writes the row back unchanged; it still proves
       // the row exists, which is why the call stays.
       console.log(Object.keys(fields).length === 0

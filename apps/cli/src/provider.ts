@@ -26,9 +26,9 @@ import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/se
 import { loadProviderRuntime } from "./provider-runtime.ts"
 
 /** The five wire protocols a route may declare. ONE list, and it lives in
- * settings — the CLI used to keep a second (and a third in `models`) copy of
- * the same enum, which is three places to edit for one fact. Re-exported
- * because `models.ts` validates `--protocol` against the SAME list. */
+ * settings — the CLI used to re-declare the same enum, which is two places to
+ * edit for one fact (and `models.ts` reads it through here, so its validation
+ * is against the SAME object). */
 export { PROVIDER_PROTOCOLS }
 export type CliProtocol = SettingsProviderProtocol
 
