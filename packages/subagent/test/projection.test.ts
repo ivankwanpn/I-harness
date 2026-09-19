@@ -28,6 +28,9 @@ interface FixtureAgent {
   role?: string
   status: ChildStatus
   jobId?: string
+  /** The model label the spawn RECORDED on the entry (absent = the child
+   * inherited the parent's client — see ChildAgentEntry.modelLabel). */
+  modelLabel?: string
 }
 
 interface FixtureJob {
@@ -50,6 +53,7 @@ function fixtureState(input: { agents?: FixtureAgent[]; jobs?: FixtureJob[] } = 
       mailbox: [],
       ...(a.role !== undefined ? { roleName: a.role } : {}),
       ...(a.jobId !== undefined ? { jobId: a.jobId } : {}),
+      ...(a.modelLabel !== undefined ? { modelLabel: a.modelLabel } : {}),
     })
   }
   const jobs = createJobRegistry()
@@ -213,7 +217,29 @@ describe("projectAgentTaskDetail (detail payload, server-side)", () => {
     })
     const row = projectAgentTasks(state)[0]!
     const detail = projectAgentTaskDetail(state, row)!
-    expect(detail.model).toBeUndefined() // the helper role has no model — parent's is inherited
+    // Task 6 re-specifies this one expectation: the payload used to OMIT
+    // `model` for the inherited case (it printed `role.model`, which was never
+    // set), which said nothing. An entry with no recorded label whose role
+    // declares no model ran on the parent's client, and the row now says so.
+    expect(detail.model).toBe("inherited from the session") // the helper role has no model — parent's is inherited
+  })
+
+  // Task 6: the row prints the model the spawn RECORDED, never a re-derivation
+  // of today's precedence — this payload has no settings getter to re-derive
+  // with, and for a running child today's settings are not what it runs on.
+  it("shows the model the role RESOLVED — and says so when it inherited instead", () => {
+    const withModel = fixtureState({
+      agents: [{ id: "root/helper", role: "general", status: "running", modelLabel: "gw:small" }],
+    })
+    const row = projectAgentTasks(withModel)[0]!
+    expect(projectAgentTaskDetail(withModel, row)?.model).toBe("gw:small")
+
+    // No recorded label and no declared model anywhere: the row states the
+    // inheritance outright rather than omitting the field (saying nothing).
+    const inherited = fixtureState({
+      agents: [{ id: "root/helper", role: "general", status: "running" }], // no modelLabel
+    })
+    expect(projectAgentTaskDetail(inherited, row)?.model).toBe("inherited from the session")
   })
 })
 

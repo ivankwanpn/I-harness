@@ -407,6 +407,8 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       await new Promise((r) => setTimeout(r, 20))
     }
     expect(f.jobs.read(jobId).output).toBe("from the role's model")
+    // the spawn RECORDS what it resolved, so a later read cannot disagree with it
+    expect(f.table.get("root/helper")?.modelLabel).toBe("gw:small")
   }, 10_000)
 
   it("a resolver that is not ready FAILS the spawn with the resolver's reason", async () => {
