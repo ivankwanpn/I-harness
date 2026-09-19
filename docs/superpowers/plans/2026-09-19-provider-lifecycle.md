@@ -587,7 +587,10 @@ The methods (after `upsertProvider`):
       assertProviderId(id)
       const llm = canonicalLlm(options.settings)
       if (llm.providers[id] !== undefined) {
-        throw new Error(`provider "${id}" already exists; use patchProvider to change it`)
+        // No sibling METHOD name in the message: a library caller can act on
+        // "patchProvider", but this string also reaches a CLI user, for whom
+        // that is not a command they can type. The surface adds its own hint.
+        throw new Error(`provider "${id}" already exists`)
       }
       await persistLlm({
         providers: { ...llm.providers, [id]: cloneProviderConfig({ ...fields }) },
@@ -601,7 +604,7 @@ The methods (after `upsertProvider`):
       const llm = canonicalLlm(options.settings)
       const current = llm.providers[id]
       if (current === undefined) {
-        throw new Error(`provider "${id}" is not configured; use createProvider`)
+        throw new Error(`provider "${id}" is not configured`)
       }
       const next: SettingsProviderConfig = { ...current }
       for (const [key, value] of Object.entries(patch)) {
@@ -955,8 +958,10 @@ import {
 import type { ProviderRuntimeEntry } from "@i-harness/provider-runtime"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 
-const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"] as const
-type CliProtocol = (typeof PROVIDER_PROTOCOLS)[number]
+/** The five wire protocols a route may declare. Exported because `models.ts`
+ * validates `--protocol` against the SAME list — two copies would drift. */
+export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"] as const
+export type CliProtocol = (typeof PROVIDER_PROTOCOLS)[number]
 
 /** The route fields the CLI can write. `models` is not among them — that is
  * `i-harness models`' job, and keeping them apart is what stops a protocol
@@ -1107,14 +1112,28 @@ export async function runProviderCommand(args: string[], options: ProviderComman
     }
     const id = parsed.id!
     if (parsed.subcommand === "add") {
-      await runtime.createProvider(id, { ...parsed.fields })
+      try {
+        await runtime.createProvider(id, { ...parsed.fields })
+      } catch (error) {
+        // The runtime's message deliberately names no sibling method; this is
+        // where the CLI verb the user can actually type belongs.
+        console.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(`  to change an existing route: i-harness provider set ${id} [flags]`)
+        return 1
+      }
       // The credential REF is decided by the runtime; print it so the next
       // step is a copy-paste rather than a guess.
       console.log(`created provider "${id}"\n  next: i-harness provider key ${id}`)
       return 0
     }
     if (parsed.subcommand === "set") {
-      await runtime.patchProvider(id, { ...parsed.fields })
+      try {
+        await runtime.patchProvider(id, { ...parsed.fields })
+      } catch (error) {
+        console.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
+        console.error(`  to create a route: i-harness provider add ${id} --base-url URL --protocol P`)
+        return 1
+      }
       console.log(`updated provider "${id}"`)
       return 0
     }
@@ -1237,10 +1256,25 @@ describe("parseModelsArgs", () => {
     expect(parseModelsArgs(["models", "set", "gw", "a", "--context-window", "huge"]).error).toMatch(/huge/)
   })
 
-  it("unknown subcommands and missing arguments are reported", () => {
-    expect(parseModelsArgs(["models", "discovr", "gw"]).error).toMatch(/unknown models subcommand/)
+  it("a bare first token is a ROUTE, not an unknown subcommand", () => {
+    // `models myroute` is the list-one-route form, so a bare token cannot be
+    // diagnosed as an unknown subcommand — it IS a route until a second one
+    // proves otherwise, and that second one is the error.
+    expect(parseModelsArgs(["models", "myroute"]))
+      .toEqual({ subcommand: "list", route: "myroute", ids: [], values: {} })
+    expect(parseModelsArgs(["models", "discovr", "gw"]).error).toMatch(/unexpected extra argument/)
+  })
+
+  it("missing arguments are reported", () => {
     expect(parseModelsArgs(["models", "add", "gw"]).error).toMatch(/at least one model id/)
     expect(parseModelsArgs(["models", "rm", "gw", "a", "b"]).error).toMatch(/exactly one model id/)
+  })
+
+  it("--protocol takes one of the five, or `auto` — never a guess", () => {
+    expect(parseModelsArgs(["models", "set", "gw", "a", "--protocol", "anthropic-messages"]).values.protocol)
+      .toBe("anthropic-messages")
+    expect(parseModelsArgs(["models", "set", "gw", "a", "--protocol", "auto"]).values.protocol).toBeNull()
+    expect(parseModelsArgs(["models", "set", "gw", "a", "--protocol", "grpc"]).error).toMatch(/grpc/)
   })
 })
 
@@ -1309,6 +1343,18 @@ describe("runModelsCommand", () => {
     expect(await runModelsCommand(["models", "rm", "gw", "keep-me"])).toBe(1)
   })
 
+  it("set can declare a per-model protocol, and `auto` clears it back to the route's", async () => {
+    await runModelsCommand(["models", "add", "gw", "deepseek-flash"])
+
+    expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--protocol", "anthropic-messages"])).toBe(0)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.models)
+      .toEqual([{ id: "keep-me" }, { id: "deepseek-flash", protocol: "anthropic-messages" }])
+
+    expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--protocol", "auto"])).toBe(0)
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.models)
+      .toEqual([{ id: "keep-me" }, { id: "deepseek-flash" }])
+  })
+
   it("use writes llm.defaultModel", async () => {
     expect(await runModelsCommand(["models", "use", "gw:deepseek-flash"])).toBe(0)
     expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.defaultModel)
@@ -1346,6 +1392,7 @@ Expected: FAIL — cannot resolve `../src/models.ts`.
 
 import { listModelCatalogFamily, resolveModelCard, type ModelCard } from "@i-harness/provider"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
+import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
 
 /** A parsed `--context-window` / `--max-tokens` argument. `auto` CLEARS the
@@ -1366,6 +1413,9 @@ export function parseTokenValue(raw: string): TokenValue {
 export interface ModelValues {
   contextWindow?: TokenValue
   maxTokens?: TokenValue
+  /** A settings protocol name, or `null` for `auto` (clear the row's override
+   * and fall back to the route's default — NOT to the hard-coded one). */
+  protocol?: CliProtocol | null
 }
 
 export interface ParsedModelsArgs {
@@ -1380,12 +1430,13 @@ const MODELS_USAGE =
   "usage: i-harness models <list|probe|add|set|rm|use|refresh> [args]\n" +
   "  [<route>]                                 what each model resolves, and whether the route can be probed\n" +
   "  probe <route>                             ask the endpoint what it offers — WRITES NOTHING\n" +
-  "  add <route> <id...> [--context-window V] [--max-tokens V]\n" +
-  "  set <route> <id>    [--context-window V] [--max-tokens V]\n" +
+  "  add <route> <id...> [--protocol P] [--context-window V] [--max-tokens V]\n" +
+  "  set <route> <id>    [--protocol P] [--context-window V] [--max-tokens V]\n" +
   "  rm <route> <id>\n" +
   "  use <route>:<model> [--reasoning-effort E]\n" +
   "  refresh <route>                           probe and merge everything it returns\n" +
-  "  V = 131072 | 128k | 1m | auto  (auto clears the override and falls back to the card)"
+  "  V = 131072 | 128k | 1m | auto    (auto clears the override, falling back to the card)\n" +
+  "  P = one of the five protocols | auto  (auto falls back to the ROUTE's protocol)"
 
 export function parseModelsArgs(args: string[]): ParsedModelsArgs {
   const rest = args.slice(1)
@@ -1403,6 +1454,20 @@ export function parseModelsArgs(args: string[]): ParsedModelsArgs {
       if (parsed.kind === "error") return { subcommand: "help", ids: [], values: {}, error: parsed.message }
       if (token === "--context-window") values.contextWindow = parsed
       else values.maxTokens = parsed
+      continue
+    }
+    if (token === "--protocol") {
+      const raw = rest[i + 1]
+      if (raw === undefined) return { subcommand: "help", ids: [], values: {}, error: "--protocol needs a value" }
+      i += 1
+      // `auto` clears the row's override, falling back to the ROUTE's default.
+      // The hard-coded `openai-completions` arm is never a destination the CLI
+      // can name — it is the failure mode, not a choice.
+      if (raw === "auto") { values.protocol = null; continue }
+      if (!(PROVIDER_PROTOCOLS as readonly string[]).includes(raw)) {
+        return { subcommand: "help", ids: [], values: {}, error: `unknown protocol "${raw}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")} | auto` }
+      }
+      values.protocol = raw as CliProtocol
       continue
     }
     if (token.startsWith("-")) return { subcommand: "help", ids: [], values: {}, error: `unknown flag: ${token}` }
@@ -1517,6 +1582,7 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     ...(parsed.values.maxTokens !== undefined
       ? { maxTokens: parsed.values.maxTokens.kind === "clear" ? null : parsed.values.maxTokens.value }
       : {}),
+    ...(parsed.values.protocol !== undefined ? { protocol: parsed.values.protocol } : {}),
   }
 
   try {
