@@ -229,7 +229,7 @@ function runtimeProfile(
 | :232 | `probeModels` 的 bedrock 檢查 | **不動** —— `undefined !== "bedrock"`，閘門不觸發。未知的協議**不是** bedrock 的證據。 |
 | :255 | `probeModels` → `registry.probeModels({ protocol: probeOptions.protocol ?? view.protocol })` | **要改 —— 這是第二條尾巴，見下面 item 7** |
 | :296 | `directory()` 的行 | **改成可缺席**（Type `ProviderRuntimeEntry.protocol` 已在 item 2 改了） |
-| :301 | `discovery: view.protocol === "bedrock" ? "manual-only" : "available"` | **不動**。這個欄位回答的是「這條路由有沒有發現端點」（bedrock 沒有），而**未知的協議不是「沒有」的證據**；`models probe --protocol P` 那條覆寫路仍存在。**代價**：一條沒有協議的路由在列表上仍寫 `available`，而它會拒絕 —— 由 Task 3 那一行「cannot be used」抵銷。 |
+| :301 | `discovery: view.protocol === "bedrock" ? "manual-only" : "available"` | **不動**。這個欄位回答的是「這條路由有沒有發現端點」（bedrock 沒有），而**未知的協議不是「沒有」的證據**；`models probe --protocol P` 那條覆寫路仍存在。**代價**：一條沒有協議的路由在列表上仍寫 `available`，而它會拒絕 —— 由 Task 3 那一行「no protocol of its own」抵銷。**（注意 Task 3 的複審把原本的措辭「cannot be used」判為 Important：那條路由**可以**用，只要模型行或選擇帶了協議 —— 所以那句話是這個單元要消滅的說謊方式。措辭已改成只陳述**路由自己**的事實。）** |
 | :587 | 認證路徑的 bedrock/ambient 判斷 | **不動** —— 非 bedrock 的路由本來就通過這個閘門，`undefined` 不改變結果。 |
 | :717 / :729 | `runtimeProfile` / `authRef` | :717 由 item 4 涵蓋；:729 **不動**（從來不可能是 bedrock）。 |
 
@@ -501,10 +501,17 @@ git commit -m "feat(session-persistence,sdk): a session's selection may name the
 // Appended to the existing describe("renderProviderList") block.
 const noProvenance = { generatedAt: "2026-09-19", families: [] }
 
-it("marks a route with no declared protocol as unusable — not as a wire nobody declared", () => {
+it("marks a route with no protocol OF ITS OWN — not as a wire nobody declared", () => {
   // Today this row prints [openai-completions], a wire NOBODY declared; after
   // the tail is removed it would print [undefined]. Both are lies. The listing
-  // says it cannot be used, and names the verb that fixes it.
+  // now says what is true of the ROUTE — it declares no protocol — and names
+  // the verb that fixes it.
+  //
+  // It must NOT say "cannot be used": the chain is selection > model row >
+  // route (provider-runtime:632 feeds :741), so a protocol-less route IS usable
+  // whenever a row or a selection names one. Measured: a row carrying
+  // `protocol: "gemini"` makes resolveModel return `ready` on exactly the route
+  // this row describes — the listing would have contradicted its own next line.
   const out = renderProviderList(
     [{
       id: "gateway", displayName: "Gateway", configured: true,
@@ -560,7 +567,7 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
     // ruled on that: 5d0f2d89, "P was the --provider placeholder").
     lines.push(
       row.protocol === undefined
-        ? `  ${row.id}  [no protocol — cannot be used; set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
+        ? `  ${row.id}  [no protocol of its own — set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
         : `  ${row.id}  [${row.protocol}]${row.configured ? "" : "  (not configured)"}`,
     )
 ```
@@ -605,7 +612,7 @@ Expected: FAIL —— `expected '…[undefined]…' not to contain 'undefined'`
 `apps/cli/src/models.ts`（`renderModels`，:247）—— 把那一行拆出一個區域變數，**不要複製那串長尾**：
 ```ts
     const wire = route.protocol === undefined
-      ? `no protocol — cannot be used; set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
+      ? `no protocol of its own — set one with: i-harness provider set ${route.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
       : route.protocol
     lines.push(`${route.id}  [${wire}]  discovery: ${route.discovery}  card family: ${route.cardFamily} (${route.declared ? "declared" : "the route name"})`)
 ```
