@@ -558,13 +558,16 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
 
 `apps/cli/src/provider.ts` 的 `renderList`：
 ```ts
-    // A route with no declared protocol is NOT a route with a default one: it
-    // is a route that cannot be sent to. The listing says so, and names the
-    // verb that fixes it — `[undefined]` would be a rendering accident, and
-    // `[openai-completions]` would be a wire nobody declared. The repair names
-    // the SET, not a placeholder — `--protocol P` copied verbatim fails with
-    // `unknown protocol "P"`, a second error before the fix (this repo already
-    // ruled on that: 5d0f2d89, "P was the --provider placeholder").
+    // A route with no declared protocol is NOT a route with a default one — but
+    // it is also NOT a route that cannot be sent to. The chain is selection >
+    // model row > route, so such a route IS usable whenever a row or a
+    // selection names a protocol; claiming otherwise is the same lie this unit
+    // exists to kill, one level down. The line states the fact about the ROUTE
+    // (it declares none) and names the verb that fixes it — `[undefined]` would
+    // be a rendering accident, and `[openai-completions]` a wire nobody
+    // declared. The repair names the SET, not a placeholder — `--protocol P`
+    // copied verbatim fails with `unknown protocol "P"`, a second error before
+    // the fix (this repo already ruled on that: 5d0f2d89).
     lines.push(
       row.protocol === undefined
         ? `  ${row.id}  [no protocol of its own — set one with: i-harness provider set ${row.id} --protocol <one of: ${PROVIDER_PROTOCOLS.join(" | ")}>]`
@@ -577,7 +580,7 @@ Expected: FAIL —— 第一個 case 收到 `[openai-completions]`（尾巴還�
 `apps/cli/test/models-command.test.ts`，加進既有的 `describe("renderModels")`（約 :94）：
 
 ```ts
-it("marks a route with no declared protocol as unusable, the same as provider list", () => {
+it("marks a route with no protocol of its own, the same as provider list", () => {
   // Task 1 made ModelsRouteView.protocol optional, so this line renders
   // [undefined]. Its sibling in provider.ts gets the same treatment — fixing
   // one listing and not the other just moves the user to the other command.
@@ -590,8 +593,30 @@ it("marks a route with no declared protocol as unusable, the same as provider li
 
   expect(out).toContain("gw")
   expect(out).not.toContain("undefined")
-  expect(out).toContain("no protocol")
+  // EXACT text, not `toContain("no protocol")`: the latter survives as a
+  // substring of the longer sentence and stops guarding the moment the
+  // sentence changes — measured, not assumed.
+  expect(out).toContain("no protocol of its own")
+  expect(out).not.toContain("cannot be used")
   expect(out).toContain("i-harness provider set gw --protocol")
+})
+
+it("does NOT tell a protocol-less route it is unusable when a ROW supplies the protocol", () => {
+  // The guard the review demanded, and the case the original wording failed:
+  // the chain is selection > model row > route, so a row carrying a protocol
+  // makes the route usable. Write the runtime assertion FIRST — on the buggy
+  // source it PASSES while the listing assertion fails, which is what proves
+  // the measured red is a LISTING lie and not a runtime failure.
+  const out = renderModels([
+    {
+      id: "gw", cardFamily: "gw", declared: false, discovery: "available",
+      models: [{ id: "m", card: undefined, aliases: [], protocol: "gemini" }],
+    },
+  ])
+
+  expect(out).toContain("protocol: gemini")   // the row line still reports it
+  expect(out).not.toContain("cannot be used")
+  expect(out).toContain("no protocol of its own")
 })
 
 it("a route that DOES declare one still prints it, unchanged", () => {
