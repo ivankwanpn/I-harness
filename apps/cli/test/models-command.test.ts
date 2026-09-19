@@ -152,7 +152,10 @@ describe("runModelsCommand", () => {
         defaultModel: { provider: "", model: "" },
       },
     }), "utf8")
-    writeFileSync(join(home, "credentials.json"), JSON.stringify({ GW_API_KEY: "fixture-key" }), "utf8")
+    // The store's document shape is { refs: {…} } (credentials/src/index.ts:213);
+    // the flat map this fixture used to write loaded as EMPTY, so the credential
+    // was inert and no test noticed until one actually probed.
+    writeFileSync(join(home, "credentials.json"), JSON.stringify({ refs: { GW_API_KEY: "fixture-key" } }), "utf8")
   })
 
   afterEach(() => {
@@ -378,9 +381,42 @@ describe("runModelsCommand", () => {
     writeFileSync(join(home, "settings.json"), JSON.stringify({
       llm: { providers: { br: { baseURL: "https://br.example", protocol: "bedrock", models: [] } }, defaultModel: { provider: "", model: "" } },
     }), "utf8")
-    expect(await runModelsCommand(["models", "probe", "br"])).toBe(1)
-    // The one-off override shapes a REQUEST; it cannot give the route a
-    // discovery endpoint it does not have.
-    expect(await runModelsCommand(["models", "probe", "br", "--protocol", "openai-completions"])).toBe(1)
+    // "Fails loudly" is a claim about the MESSAGE, not only the status: an exit
+    // code alone is also produced by a crash with no explanation.
+    const errors: string[] = []
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "probe", "br"])).toBe(1)
+      // The one-off override shapes a REQUEST; it cannot give the route a
+      // discovery endpoint it does not have.
+      expect(await runModelsCommand(["models", "probe", "br", "--protocol", "openai-completions"])).toBe(1)
+    } finally {
+      spy.mockRestore()
+    }
+    const out = errors.join("\n")
+    expect(out).toMatch(/discovery is not available/i)
+    expect(out).toContain("manually")
+  })
+
+  it("a successful probe prints the cards it resolved and writes nothing", async () => {
+    // No test drove a successful probe before this (deferred finding). The
+    // builtin probe fetches {base}/v1/models; the card family comes from the
+    // ROUTE's declared catalog (gw → deepseek).
+    const before = readFileSync(join(home, "settings.json"), "utf8")
+    vi.stubGlobal("fetch", vi.fn(async () =>
+      new Response(JSON.stringify({ data: [{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }] }), { status: 200 })))
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runModelsCommand(["models", "probe", "gw"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+      vi.unstubAllGlobals()
+    }
+    const out = lines.join("\n")
+    expect(out).toContain("2 model(s) found — NOTHING was written:")
+    expect(out).toContain("deepseek-flash  card 1048576")
+    expect(out).toContain("next: i-harness models add gw <id>")
+    expect(readFileSync(join(home, "settings.json"), "utf8")).toBe(before)
   })
 })
