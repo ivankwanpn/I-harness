@@ -11,7 +11,7 @@
  */
 
 import { listModelCatalogFamily, resolveModelCard, type ModelCard } from "@i-harness/provider"
-import type { ProviderRuntime } from "@i-harness/provider-runtime"
+import type { ProviderRuntime, ProviderRuntimeEntry } from "@i-harness/provider-runtime"
 import type { SettingsModel } from "@i-harness/settings"
 import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
@@ -268,10 +268,9 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
   return lines.join("\n")
 }
 
-async function viewOf(runtime: ProviderRuntime, only?: string): Promise<ModelsRouteView[]> {
+async function viewOf(runtime: ProviderRuntime): Promise<ModelsRouteView[]> {
   const rows = await runtime.directory()
   return rows
-    .filter((row) => only === undefined || row.id === only)
     .map((row) => {
       const family = listModelCatalogFamily(row.cardFamily)
       return {
@@ -296,6 +295,25 @@ async function viewOf(runtime: ProviderRuntime, only?: string): Promise<ModelsRo
         }),
       }
     })
+}
+
+/** Spec §5: a `--max-tokens` ABOVE the card's `maxOutputTokens` WARNS and does
+ * not block (exit stays 0). The card is a documented limit, not a wall — the
+ * standing stance is no clamping, failing loud at the model end instead — so
+ * this only says what the write did. `auto` (a clear) writes no number, and an
+ * unknown route has no card to compare against (its own verb will refuse). */
+function warnAboveCard(
+  entry: ProviderRuntimeEntry | undefined,
+  modelIds: readonly string[],
+  maxTokens: SettableTokenValue | undefined,
+): void {
+  if (entry === undefined || maxTokens === undefined || maxTokens.kind === "clear") return
+  for (const modelId of modelIds) {
+    const cap = resolveModelCard(entry.cardFamily, modelId)?.maxOutputTokens
+    if (cap !== undefined && maxTokens.value > cap) {
+      console.error(`models: warning — "${modelId}" maxTokens ${maxTokens.value} is above its card's maxOutputTokens ${cap}; the card documents the limit, it does not enforce it`)
+    }
+  }
 }
 
 export async function runModelsCommand(args: string[]): Promise<number> {
@@ -323,7 +341,18 @@ export async function runModelsCommand(args: string[]): Promise<number> {
 
   try {
     if (parsed.subcommand === "list") {
-      console.log(renderModels(await viewOf(runtime, parsed.route)))
+      const routes = await viewOf(runtime)
+      const selected = parsed.route === undefined ? routes : routes.filter((item) => item.id === parsed.route)
+      // "no routes configured" and "no route by THAT name" are different
+      // sentences for different problems — a typo'd route used to print the
+      // first, which reads as "your configuration is empty" while it was not.
+      if (selected.length === 0 && parsed.route !== undefined) {
+        console.log(routes.length === 0
+          ? "no provider routes configured"
+          : `no route "${parsed.route}" — configured routes: ${routes.map((item) => item.id).join(", ")}`)
+        return 0
+      }
+      console.log(renderModels(selected))
       return 0
     }
     const route = parsed.route!
@@ -352,8 +381,10 @@ export async function runModelsCommand(args: string[]): Promise<number> {
       // what the merge ACTUALLY does: `{...addition, ...existing}` keeps the
       // fields the existing row HAS, so a bare row (one with no numbers of its
       // own) still absorbs the flags — "left alone" was false in that direction.
-      const before = new Set((await runtime.directory()).find((row) => row.id === route)?.models.map((model) => model.id) ?? [])
+      const entry = (await runtime.directory()).find((row) => row.id === route)
+      const before = new Set(entry?.models.map((model) => model.id) ?? [])
       const already = parsed.ids.filter((modelId) => before.has(modelId))
+      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       const models = await runtime.addModels(route, parsed.ids.map((modelId) => rowFor(modelId, fields)))
       console.log(`"${route}": ${models.length} model(s)`)
       if (already.length > 0) {
@@ -362,8 +393,14 @@ export async function runModelsCommand(args: string[]): Promise<number> {
       return 0
     }
     if (parsed.subcommand === "set") {
+      const entry = (await runtime.directory()).find((row) => row.id === route)
+      warnAboveCard(entry, parsed.ids, parsed.values.maxTokens)
       await runtime.setModel(route, parsed.ids[0]!, fields)
-      console.log(`"${route}"/"${parsed.ids[0]}" updated`)
+      // No flags = `setModel` writes the row back unchanged; it still proves
+      // the row exists, which is why the call stays.
+      console.log(Object.keys(fields).length === 0
+        ? `"${route}"/"${parsed.ids[0]}": nothing to change (no flags given)`
+        : `"${route}"/"${parsed.ids[0]}" updated`)
       return 0
     }
     if (parsed.subcommand === "rm") {
