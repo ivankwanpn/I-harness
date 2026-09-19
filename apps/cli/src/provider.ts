@@ -217,14 +217,26 @@ export async function runProviderCommand(args: string[], options: ProviderComman
       return 0
     }
     if (parsed.subcommand === "key") {
+      // The route must exist BEFORE anything is read or written, or the write
+      // below invents one: `setApiKey` persists `...(current ?? {})`, so a
+      // typo'd id stored a credential and grew a settings row that the next
+      // `provider list` showed. `set` already refuses an absent route; `key`
+      // is symmetric with it now.
+      const known = (await runtime.directory()).some((row) => row.id === id)
+      if (!known) {
+        console.error(`provider: no route "${id}" — create it first: i-harness provider add ${id} --base-url URL --protocol P`)
+        return 1
+      }
       const value = (await (options.readKey ?? readStdinLine)()).trim()
       if (value === "") {
         console.error("provider: no key on stdin")
         return 1
       }
       await runtime.setApiKey(id, value)
-      const tail = value.length > 4 ? value.slice(-4) : value
-      console.log(`stored a credential for "${id}" (x…${tail})`)
+      // A SHORT key must not be revealed by its own mask: with `value.length <= 8`
+      // the "last four" tail IS the value. The invariant is never, not usually.
+      const masked = value.length > 8 ? `x…${value.slice(-4)}` : "x…"
+      console.log(`stored a credential for "${id}" (${masked})`)
       return 0
     }
     await runtime.removeProvider(id)

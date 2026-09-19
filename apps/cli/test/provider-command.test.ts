@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -65,7 +65,7 @@ describe("runProviderCommand — the route round trip", () => {
     rmSync(home, { recursive: true, force: true })
   })
 
-  it("add → key → list, and the key never reaches stdout", async () => {
+  it("the key never reaches stdout — including a key short enough that its tail IS the key", async () => {
     expect(await runProviderCommand([
       "provider", "add", "gw",
       "--base-url", "https://gw.example",
@@ -83,12 +83,39 @@ describe("runProviderCommand — the route round trip", () => {
     })
 
     // The key is INJECTED, never pushed at process.stdin: a test that writes to
-    // the real stdin is a test that hangs on CI.
-    expect(await runProviderCommand(["provider", "key", "gw"], { readKey: async () => "sk-secret-value" })).toBe(0)
+    // the real stdin is a test that hangs on CI. stdout is CAPTURED here, so the
+    // test's own title is a measured claim rather than a description.
+    const captured: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((line: unknown) => { captured.push(String(line)) })
+    try {
+      expect(await runProviderCommand(["provider", "key", "gw"], { readKey: async () => "sk-secret-value" })).toBe(0)
+      expect(await runProviderCommand(["provider", "key", "gw"], { readKey: async () => "tiny" })).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
 
+    const out = captured.join("\n")
+    expect(out).not.toContain("sk-secret-value")
+    // "tiny" is 4 characters: a naive "last four" tail IS the whole value, so
+    // this clause is the one the first mask could not earn.
+    expect(out).not.toContain("tiny")
+    expect(out).toContain("x…")
+
+    // The store is real, and it holds the LAST run's value: `tiny` overwrote
+    // `sk-secret-value`, which is itself the evidence the write landed rather
+    // than being swallowed.
     const credentials = JSON.parse(readFileSync(join(home, "credentials.json"), "utf8"))
-    expect(JSON.stringify(credentials)).toContain("sk-secret-value")
+    expect(JSON.stringify(credentials)).toContain("tiny")
+    expect(JSON.stringify(credentials)).not.toContain("sk-secret-value")
     expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gw.apiKeyEnv).toBe("GW_API_KEY")
+  })
+
+  it("key refuses a route that does not exist, rather than storing into a phantom row", async () => {
+    expect(await runProviderCommand(["provider", "key", "gww"], { readKey: async () => "sk-secret-value" })).toBe(1)
+    // `setApiKey` writes `...(current ?? {})`, so without this refusal a typo
+    // CREATES a settings row that then shows up in `provider list` — a success
+    // message for a route that never existed.
+    expect(JSON.parse(readFileSync(join(home, "settings.json"), "utf8")).llm.providers.gww).toBeUndefined()
   })
 
   it("key refuses an empty read rather than storing nothing", async () => {
