@@ -385,7 +385,7 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
       }
     }
 
-    await spawnChild({
+    const { jobId } = await spawnChild({
       taskName: "helper", message: "do the thing", parentPath: "root",
       parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
       role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
@@ -394,7 +394,15 @@ describe("a role's model goes through the host's resolver (not a registry)", () 
     })
 
     expect(calls).toEqual([{ provider: "gw", model: "small" }])
-  })
+    // The resolved client is not merely REACHED — it is what the child RAN on.
+    // Without this the task is unasserted: resolving and then discarding the
+    // binding (keeping `opts.parentModel`) would pass every other case here,
+    // because the parent's mock answers too — just with the wrong text.
+    for (let i = 0; i < 200 && f.jobs.read(jobId).status !== "completed"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(f.jobs.read(jobId).output).toBe("from the role's model")
+  }, 10_000)
 
   it("a resolver that is not ready FAILS the spawn with the resolver's reason", async () => {
     const f = spawnFixture()
