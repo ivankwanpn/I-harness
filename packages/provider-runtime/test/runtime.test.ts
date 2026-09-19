@@ -1320,3 +1320,42 @@ describe("protocol: the row overrides the route", () => {
     expect(builds[2]?.profile.protocol).toBe("anthropic-messages")
   })
 })
+
+describe("a selection may carry its own protocol", () => {
+  async function gwFixture() {
+    return fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "plain" }, { id: "row-wins-otherwise", protocol: "gemini" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("beats the ROUTE's protocol", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain", protocol: "anthropic-messages" } })
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+  })
+
+  it("beats the model ROW's too — the selection is the most specific thing there is", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise", protocol: "anthropic-messages" } })
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+  })
+
+  it("absent → the row's, then the route's, exactly as before", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise" } })
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain" } })
+    expect(builds[0]?.profile.protocol).toBe("gemini")
+    expect(builds[1]?.profile.protocol).toBe("openai-compatible")
+  })
+})

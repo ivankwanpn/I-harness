@@ -131,7 +131,10 @@ export interface ProviderRuntime {
   ): Promise<ModelDescriptor[]>
   setDefaultModel(selection: SettingsDefaultModel): Promise<void>
   resolveModel(input: {
-    sessionSelection?: { provider: string; model: string; reasoningEffort?: string }
+    /** The explicit selection. Named for the session because that is who
+     * usually makes it, but a SUB-AGENT ROLE supplies one too — the child is a
+     * session, and both go through this one chain. */
+    sessionSelection?: { provider: string; model: string; protocol?: SettingsProviderProtocol; reasoningEffort?: string }
     override?: string
   }): Promise<ModelResolutionState>
 }
@@ -168,6 +171,9 @@ interface ProviderView {
 interface SelectedModel {
   providerId: string
   modelId: string
+  /** Rides through from the session selection to `resolveModel`'s chain — a
+   * selection's protocol is MORE specific than the model row's or the route's. */
+  protocol?: SettingsProviderProtocol
   reasoningEffort?: string
 }
 
@@ -596,7 +602,11 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       }
 
       const userModel = view.user?.models?.find((model) => model.id === modelId)
-      const profile = runtimeProfile(view, apiKey, userModel?.inputModalities, userModel?.protocol)
+      // The chain, most specific first: the SELECTION (a session's or a role's),
+      // then the model row, then the route — see runtimeProfile.
+      const profile = runtimeProfile(
+        view, apiKey, userModel?.inputModalities, selection.protocol ?? userModel?.protocol,
+      )
       const contextWindow = resolveEffectiveModelContext({
         profile,
         modelId,
@@ -737,7 +747,7 @@ function adapterProtocol(protocol: SettingsProviderProtocol): ProviderProfile["p
 
 function selectModel(
   input: {
-    sessionSelection?: { provider: string; model: string; reasoningEffort?: string }
+    sessionSelection?: { provider: string; model: string; protocol?: SettingsProviderProtocol; reasoningEffort?: string }
     override?: string
   },
   defaultModel: SettingsDefaultModel,
@@ -765,6 +775,7 @@ function selectModel(
     return {
       providerId: input.sessionSelection.provider,
       modelId: input.sessionSelection.model,
+      ...(input.sessionSelection.protocol !== undefined ? { protocol: input.sessionSelection.protocol } : {}),
       ...(input.sessionSelection.reasoningEffort !== undefined
         ? { reasoningEffort: input.sessionSelection.reasoningEffort }
         : {}),
