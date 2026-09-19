@@ -88,6 +88,9 @@ interface ProviderView {
   baseURL?: string
   modelsURL?: string
   apiKeyEnv?: string
+  /** The model-card family this route draws capability metadata from. Absent →
+   * the route name (see ProviderProfile.catalog). */
+  catalog?: string
   /** M59: literal extra request headers (user config wins over the template). */
   headers?: Record<string, string>
   /** M61: the ROUTE's declared content types (user config wins over the
@@ -441,6 +444,7 @@ function providerView(
       ? { baseURL: user.baseURL }
       : template?.baseUrl !== undefined ? { baseURL: template.baseUrl } : {}),
     ...(user?.modelsURL !== undefined ? { modelsURL: user.modelsURL } : {}),
+    ...(user?.catalog !== undefined ? { catalog: user.catalog } : {}),
     ...(user?.apiKeyEnv !== undefined
       ? { apiKeyEnv: user.apiKeyEnv }
       : template?.apiKeyEnv !== undefined ? { apiKeyEnv: template.apiKeyEnv } : {}),
@@ -473,6 +477,9 @@ function runtimeProfile(
   return {
     ...template,
     name: view.id,
+    // Declared family, else the route name. Set here so the resolution chain
+    // never has to look at `name` for a purpose it was not given.
+    catalog: view.catalog ?? view.id,
     displayName: view.displayName,
     protocol: adapterProtocol(view.protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),

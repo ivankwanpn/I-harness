@@ -15,6 +15,16 @@ export interface ProviderModelContext {
 
 export interface ProviderProfile {
   name: string
+  /** The model-card FAMILY this route's per-model metadata comes from — the top
+   * level key of `model-catalog.json` (`deepseek`, `gemini`, …).
+   *
+   * `name` is the ROUTE identity: it keys the registry and appears as the
+   * directory route, and it is the user's label. A user who opens a SECOND route
+   * for one vendor (`deepseek1`, for a second API key) therefore has a name that
+   * is not the vendor's, and before this field that route resolved no model
+   * metadata at all. Absent → the route name, which is the status quo for the
+   * common case where a route IS named after its vendor. */
+  catalog?: string
   displayName: string
   protocol: ProviderProtocol
   baseUrl?: string
@@ -141,7 +151,11 @@ export interface EffectiveModelContext {
 
 export function resolveEffectiveModelContext(input: EffectiveContextInput): EffectiveModelContext | undefined {
   const base = resolveModelContext(input.profile, input.modelId)
-  const card = resolveModelCard(input.profile.name, input.modelId)
+  // The declared family, else the route name. NOT derived from the base URL:
+  // a derivation would guess wrong on exactly the set-ups the field exists for
+  // (gateways, proxies, regional/subscription variants), and a wrong family is
+  // worse than none — it supplies ANOTHER vendor's numbers.
+  const card = resolveModelCard(input.profile.catalog ?? input.profile.name, input.modelId)
   const merged: EffectiveModelContext = {
     ...base,
     ...(card !== undefined ? { maxOutputTokens: card.maxOutputTokens } : {}),
