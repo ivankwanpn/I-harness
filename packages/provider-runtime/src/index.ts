@@ -73,7 +73,10 @@ export interface SessionModelBinding {
 export interface ProviderRuntimeEntry {
   id: string
   displayName: string
-  protocol: SettingsProviderProtocol
+  /** The route's DECLARED wire protocol. ABSENT means the route declares none
+   * — which is not a default: it is a route that refuses to resolve (see
+   * `resolveModel`), so a listing must not render the absence as a wire. */
+  protocol?: SettingsProviderProtocol
   configured: boolean
   auth: {
     configured: boolean
@@ -152,7 +155,8 @@ interface ProviderView {
   template?: ProviderProfile
   user?: SettingsProviderConfig
   displayName: string
-  protocol: SettingsProviderProtocol
+  /** Absent = nobody declared one; see resolveProviderProtocol. */
+  protocol?: SettingsProviderProtocol
   baseURL?: string
   modelsURL?: string
   apiKeyEnv?: string
@@ -244,15 +248,29 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     if (apiKey === undefined) throw new Error(`No API key configured for provider "${id}"`)
     probeOptions.signal?.throwIfAborted()
 
+    // The SECOND tail (provider/src/index.ts:348-350 had its own
+    // openai-completions/Bearer fallback). A probe must speak a wire it knows:
+    // letting discovery succeed on a route that can never be sent to writes
+    // rows onto a route that refuses, which is worse than either alternative.
+    // `--protocol P` is the escape for a gateway serving another vendor's
+    // models, and it is unchanged.
+    const probeProtocol = probeOptions.protocol ?? view.protocol
+    if (probeProtocol === undefined) {
+      throw new Error(
+        `provider "${id}" declares no protocol, so its models cannot be discovered; set one with: i-harness provider set ${id} --protocol P`,
+      )
+    }
+
     const models = await registry.probeModels(id, {
       ...(view.modelsURL !== undefined
         ? { modelsURL: view.modelsURL }
         : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
       apiKey,
-      // The one-request override wins when given; the route's protocol is the
-      // default. This is the ONLY place the override is read — nothing below it
+      // The one-request override wins when given; the route's own declaration
+      // is the fallback (and there is no fallback after it — see the refusal
+      // above). This is the ONLY place the override is read — nothing below it
       // persists, so nothing below it needs to un-do anything.
-      protocol: probeOptions.protocol ?? view.protocol,
+      protocol: probeProtocol,
       // M60 E: the route's configured headers (a gateway may require one for
       // discovery too) — the probe's own auth keys still win.
       ...(view.headers !== undefined ? { headers: view.headers } : {}),
@@ -607,6 +625,15 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const profile = runtimeProfile(
         view, apiKey, userModel?.inputModalities, selection.protocol ?? userModel?.protocol,
       )
+      if (profile === undefined) {
+        // The chain ran out. Name the ROUTE (not the model): the protocol is
+        // the route's declaration, and `provider set` is the verb that owns it.
+        return invalidState(
+          `provider "${providerId}" declares no protocol, so "${modelId}" cannot be sent; set one with: i-harness provider set ${providerId} --protocol P`,
+          providerId,
+          modelId,
+        )
+      }
       const contextWindow = resolveEffectiveModelContext({
         profile,
         modelId,
@@ -647,6 +674,9 @@ function providerView(
   template: ProviderProfile | undefined,
   user: SettingsProviderConfig | undefined,
 ): ProviderView {
+  // The chain ends in ABSENCE when nobody declared one — resolveProviderProtocol
+  // has no tail to fall through to, and every reader below must handle the
+  // absent case on its own terms.
   const protocol = user?.protocol ?? templateSettingsProtocol(template)
     ?? resolveProviderProtocol(id, user)
   const models = mergeModels(
@@ -696,7 +726,14 @@ function runtimeProfile(
   apiKey: string | undefined,
   modelModalities?: SettingsInputModality[],
   selectionProtocol?: SettingsProviderProtocol,
-): ProviderProfile {
+): ProviderProfile | undefined {
+  // SELECTION-or-row, computed by the caller: a session's/role's selection
+  // beats the model row, and both beat the route's default. NOBODY INVENTS
+  // ONE — an absent protocol is the caller's refusal to write (protocol-
+  // selection §2), because this is the one place that can tell "absent"
+  // from "declared".
+  const protocol = selectionProtocol ?? view.protocol
+  if (protocol === undefined) return undefined
   const template = { ...(view.template ?? {}) }
   delete template.apiKey
   // M61: the MODEL entry narrows/overrides the route's declaration; absent on
@@ -709,12 +746,10 @@ function runtimeProfile(
     // never has to look at `name` for a purpose it was not given.
     catalog: cardFamilyOf(view),
     displayName: view.displayName,
-    // SELECTION-or-row, computed by the caller: a session's/role's selection
-    // beats the model row, and both beat the route's default. The route is an
-    // endpoint, and an endpoint has one protocol — a declaration that names
-    // another is naming a different endpoint path under the same host and
-    // credential.
-    protocol: adapterProtocol(selectionProtocol ?? view.protocol),
+    // The route is an endpoint, and an endpoint has one protocol — a
+    // declaration that names another is naming a different endpoint path
+    // under the same host and credential.
+    protocol: adapterProtocol(protocol),
     ...(view.baseURL !== undefined ? { baseUrl: view.baseURL } : {}),
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
     ...(view.headers !== undefined ? { headers: view.headers } : {}),

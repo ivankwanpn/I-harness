@@ -508,6 +508,49 @@ describe("model resolution", () => {
     })
     expect(builds).toEqual([])
   })
+
+  it("a route that declares no protocol is INVALID, and the reason names the repair", async () => {
+    // The mutation this guards: put the tail back (`?? "openai-completions"`) and
+    // this must go RED. Silence here is the original bug.
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [{ id: "m" }] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    await expect(
+      runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } }),
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: expect.stringContaining("gateway"),
+      providerId: "gateway",
+      modelId: "m",
+    })
+
+    const state = await runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } })
+    // Actionable, not merely true: the message names the EXACT verb that fixes it.
+    expect(state.status === "invalid" && state.reason).toContain("i-harness provider set gateway --protocol")
+  })
+
+  it("the route's protocol still wins when it declares one, and the selection still beats the row", async () => {
+    const { runtime } = await fixture({
+      providers: {
+        gateway: {
+          baseURL: "https://gateway.example",
+          apiKeyEnv: "GATEWAY_API_KEY",
+          protocol: "anthropic-messages",
+          models: [{ id: "m", protocol: "gemini" }],
+        },
+      },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    // The row beats the route…
+    await expect(runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } }))
+      .resolves.toMatchObject({ status: "ready" })
+    // …and the selection beats the row.
+    await expect(runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m", protocol: "bedrock" } }))
+      .resolves.toMatchObject({ status: "ready" })
+  })
 })
 
 describe("auth and discovery", () => {
@@ -1110,6 +1153,28 @@ describe("probeModels — the read half of discovery", () => {
 
     await expect(f.runtime.discoverModels("gw", { force: true })).resolves.toEqual([{ id: "kept" }])
     expect(f.settings.get().llm.providers.gw?.models).toEqual([{ id: "kept" }])
+  })
+
+  it("refuses to probe a route that declares no protocol, and names the fix", async () => {
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
+  })
+
+  it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
+    // The override is what makes the refusal above safe: a gateway serving
+    // another vendor's models is exactly what `--protocol` is for.
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+      registry: (r) => { r.registerProbe("gateway", async () => [{ id: "m" }]) },
+    })
+
+    await expect(runtime.probeModels("gateway", { protocol: "anthropic-messages" })).resolves.toEqual([{ id: "m" }])
   })
 })
 

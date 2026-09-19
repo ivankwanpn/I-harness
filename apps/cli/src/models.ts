@@ -230,7 +230,9 @@ export interface ModelsRouteView {
   id: string
   cardFamily: string
   declared: boolean
-  protocol: string
+  /** Absent = the route declares no protocol (and refuses to resolve).
+   * Optional here because the value rides straight off `directory()`. */
+  protocol?: string
   /** Whether the route's endpoint can be probed at all — `directory()`'s own
    * answer (bedrock is manual-only). Spec §4's read shows 能不能 discovery. */
   discovery: "available" | "manual-only"

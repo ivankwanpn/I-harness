@@ -345,8 +345,10 @@ interface DirectoryEntry {
  * and is fetched exactly once. An explicit `baseURL` is a host root and keeps
  * the ordered candidate strategy. `protocol` is the route's RESOLVED wire
  * protocol — the caller runs settings' resolveProviderProtocol chain (user >
- * SEEDED_PROTOCOLS > DEFAULT) and passes it here; this module only applies
- * the generic terminal fallback (openai-completions = Bearer). Either explicit
+ * SEEDED_PROTOCOLS) and REFUSES when it runs out (provider-runtime's
+ * probeModels no longer passes the absent case down); this module's generic
+ * terminal fallback (openai-completions = Bearer) therefore only serves
+ * requests that name no protocol at all. Either explicit
  * URL makes the generic builtin probe run for ANY route (task 7 — D4: the
  * route-gate applies to the route-based preview flow only). */
 export interface ProbeRequest {

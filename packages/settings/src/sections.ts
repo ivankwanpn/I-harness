@@ -112,9 +112,6 @@ export const PROVIDER_PROTOCOLS = ["openai-completions", "openai-responses", "an
 /** The wire protocol of one llm.providers.<route> entry. */
 export type SettingsProviderProtocol = (typeof PROVIDER_PROTOCOLS)[number]
 
-/** Fill-in when a stored/raw protocol is absent or invalid (normalize level). */
-const DEFAULT_PROVIDER_PROTOCOL: SettingsProviderProtocol = "openai-completions"
-
 /** FieldSpec-level check: contextWindow/maxTokens must be positive integers. */
 function positiveInteger(value: unknown): string | undefined {
   return typeof value === "number" && Number.isInteger(value) && value > 0
@@ -175,27 +172,32 @@ export const SECTION_SCHEMAS: Record<SectionName, SectionSchema> = {
 
 /** Seed route → wire protocol map. Amendment (seeded defaults removed): every
  * provider is settings-managed — the map is EMPTY by design. The export stays
- * so the resolver chain keeps its shape
- * `user section value > SEEDED_PROTOCOLS[route] > DEFAULT_PROVIDER_PROTOCOL`
- * (see resolveProviderProtocol): a seed simply never matches, so ANY route
- * without an explicit user protocol resolves to DEFAULT_PROVIDER_PROTOCOL. */
+ * so the resolver chain keeps its shape `user section value >
+ * SEEDED_PROTOCOLS[route]`: it is where a BUILT-IN route declares its own
+ * protocol, which is a declaration, not a default — and there is no tail after
+ * it. A route that matches no seed and declares nothing resolves to
+ * `undefined`, which its callers turn into a refusal (see
+ * resolveProviderProtocol). */
 export const SEEDED_PROTOCOLS: Record<string, SettingsProviderProtocol> = {}
 
 /**
- * Provider protocol resolution chain: user section value > seeded default
- * > generic default. The user value comes from a NORMALIZED config (valid
- * or absent — normalizeSettings never stores invalid); a non-valid user
- * value (raw caller) falls through to the default (read-tolerant).
+ * Provider protocol resolution chain: user section value > seeded default.
+ * NOTHING is invented after those two: absence is absence, and the caller
+ * turns it into a refusal. The tail that used to sit here
+ * (`?? DEFAULT_PROVIDER_PROTOCOL`, always "openai-completions") was the
+ * silent default D1's line of work exists to remove — it is what let a
+ * mis-declared route send a user's key to an endpoint that never spoke its
+ * wire format. Design: protocol-selection §2.
  * @param route the provider route/key of llm.providers.<route>
  * @param user the route's (normalized) user config, if present
  */
 export function resolveProviderProtocol(
   route: string,
   user?: SettingsProviderConfig,
-): SettingsProviderProtocol {
+): SettingsProviderProtocol | undefined {
   const raw = user?.protocol
   if (raw !== undefined && (PROVIDER_PROTOCOLS as readonly string[]).includes(raw)) return raw
-  return SEEDED_PROTOCOLS[route] ?? DEFAULT_PROVIDER_PROTOCOL
+  return SEEDED_PROTOCOLS[route]
 }
 
 /**
