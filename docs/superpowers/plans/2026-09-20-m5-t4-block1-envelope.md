@@ -187,13 +187,19 @@ Expected:
 
 > **⚠ 第一版寫「兩者全綠」是錯的，而它錯的方式是要求一件做不到的事** —— 否決要等 T2 才會回到大聲。**「加一個唯讀欄位不該動任何既有測試」那個理由成立，但它證明的是「沒有新紅」，不是「全綠」。**
 
-- [ ] **Step 6: 突變 —— 證明「帶著值」那一半被釘住**
+- [ ] **Step 6: 兩個突變 —— 證明第四條的**兩半**各自被釘住**
 
-把 `isPolicyRefusal` 的 `=== true` 改成 `!== undefined`，重跑。
+> **⚠ 第一版只寫了一個突變，而且指錯了哪一條斷言會紅。** 複審實測：把 `=== true` 改成 `!== undefined` 之後，`{ policyRefusal: undefined }` **仍然回 `false`**（`undefined !== undefined` 是 `false`）—— 紅的其實是 `{ policyRefusal: false }` 那一條。**兩個 mutants 要各自配一條斷言，而它們測的是兩件不同的事。**
 
-Expected: **紅** —— 第四條（`{ policyRefusal: undefined }`）。
+**突變 A —— `=== true` 改成 `!== undefined`：**
 
-**還原**，再跑確認綠。
+Expected: **紅** —— **`{ policyRefusal: false }`**（第 30 行，`expected true to be false`）。
+
+**突變 B —— 把判定改成「鍵存在」（`"policyRefusal" in err`）：**
+
+Expected: **紅** —— **`{ policyRefusal: undefined }`**（第 29 行）。**這才是「帶著值 vs 鍵存在」那一半的守衛** —— 而它與突變 A 是**兩件事**。
+
+**各還原一次，兩次都跑回綠。**
 
 - [ ] **Step 7: Commit**
 
@@ -215,6 +221,22 @@ git commit -m "feat(core-tools,hooks): M5 T4 block 1 — a policy refusal is mar
 **Interfaces:**
 - Consumes: T1 的 `isPolicyRefusal`。
 - Produces: `export const TOOL_FAILED = "TOOL_FAILED"`。
+
+> ## ⚠ 這一條是**部分重跑** —— 先讀這一格，否則你會重做已經做過的事
+>
+> **計畫重寫之前，這個任務的前身已經落地過兩個提交**（`07057c72` ＋ 修正輪 `0a4d5e7f`）。**下面的步驟有一部分在 BASE 上已經是真的。**
+>
+> | 步驟 | BASE 上的狀態 |
+> |---|---|
+> | **Step 2**（常數 ＋ re-export） | ✅ **已存在** —— `TOOL_FAILED` 已在 `execute-tool-calls.ts` 的常數區與 `core-agent/src/index.ts` 的 re-export 區塊 |
+> | **Step 3**（改寫 `execute-tool-calls` 的契約測試） | ✅ **已改寫** —— 那一條現在叫 `"a failed call yields its OWN result and the turn continues (no rethrow)"` |
+> | **Step 5 的站點那一半** | ✅ **已存在** —— `firstRefusal` 變數、外層 catch 的 `firstRefusal ??= err`、以及 `if (firstRefusal !== undefined) { … throw firstRefusal }` 那一塊 |
+> | **Step 5 的標記那一半** | ❌ **沒有** —— dispatch 的 `.catch` 還沒有 `isPolicyRefusal(err)` 的分支 |
+> | **Step 6**（失敗路徑） | ✅ **已存在** |
+> | **Step 9**（改寫 `telemetry.test.ts`） | ❌ **沒有** |
+>
+> **⇒ 你要做的是**：Step 1（讀）、**Step 5 的標記那一半**、Step 7（重量爆炸半徑）、**Step 8（標記的突變）**、**Step 9（telemetry 的改寫）**、Step 10、Step 11。
+> **✅ 的步驟要當成「已驗證的前置」讀，不是當成待辦** —— 但**先自己 `grep -n` 核對它們真的在**，因為行號會腐化，而這份表本身也可能過期。
 
 - [ ] **Step 1: 讀懂兩條被推翻的既有測試**
 
