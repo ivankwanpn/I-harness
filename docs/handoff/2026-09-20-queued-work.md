@@ -25,7 +25,7 @@
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，629 行 —— **2026-09-20 owner 核准**） | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
-| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
+| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；**修正輪 `<SHA>`**；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
@@ -344,7 +344,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 |---|---|
 | T2 第一半（以 provider 回報為事實） | ✅ **完成** |
 | **T2 第二半（以自己的位元組為偵測）** | ✅ **完成**（見下方的完成記錄） |
-| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
+| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`；修正輪 `<SHA>`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
 
 ### W4 為什麼值得做（三件事，**本文件自己重測過，行號量於 `6b04f31d`**）
 1. **缺口不是推論出來的，是兩個 adapter 各自記下來的** —— `packages/llm-gemini/src/index.ts:239,241`（*"same gap as…"*、*"a future usage seam slot"*）與 `packages/llm-bedrock/src/index.ts:228`（*"same gap as…"*）。**它們自己寫著這個縫還沒接。**
@@ -445,13 +445,21 @@ F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z
 
 **量到的（每一個數字都來自這一輪的執行，不是推論）：**
 
-1. **每個被派送的呼叫都留下一筆 `tool/result`，而 turn 繼續。** 工具本體的失敗是軟的：失敗的那格填 `TOOL_FAILED`（`execute-tool-calls.ts:369`）、從未開始的兄弟填 `TOOL_CANCELLED_BY_SIBLING`（`:402`）——而後者的**訊息刻意不同於**中止的 `TOOL_ABORTED_BEFORE_DISPATCH`，因為「使用者停了這一步」與「同批的一個工具壞了」是兩件事，共用一句話的日誌讀不回來。
+1. **軟失敗路徑上，每個被派送的呼叫都留下一筆 `tool/result`，而 turn 繼續。** **保證是這條路徑的，不是整個函式的** —— 批次裡有拒絕 ⇒ 整批照舊被捨棄（loud 路徑如設計）；提交巷中途丟出 ⇒ 游標停在那裡、之後的格子不進日誌（已接受的代價，記在 rethrow 旁）。這條路徑上工具本體的失敗是軟的：失敗的那格填 `TOOL_FAILED`（`execute-tool-calls.ts:391`）、從未開始的兄弟填 `TOOL_CANCELLED_BY_SIBLING`（`:424`）——而後者的**訊息刻意不同於**中止的 `TOOL_ABORTED_BEFORE_DISPATCH`，因為「使用者停了這一步」與「同批的一個工具壞了」是兩件事，共用一句話的日誌讀不回來。
 2. **政策否決仍然大聲，而 `pre-tool` 否決是其中一條（量到的，不是設計時就看得出來的）。** 分類靠**丟出點**（`prepare` 的丟出 ⇒ 大聲）＋**一個有名標記**（cascade 裡的政策否決 ⇒ 大聲，spec §2.6）。**`pre-tool` 否決走的是標記那條路**：`hooks.test.ts:358` 那條測試在區塊中途真的變紅過，追下去是 `hooks/src/index.ts:343-345` 的 `pre-tool → tools/execute cascade wrap (gate)` ——**丟出點看不到它，只有標記看得到**；補上標記之後它綠，而**不是靠放寬斷言**。
 3. **T6 收窄了 T5 的 bare catch —— 它吞掉的原本是整條提交巷（`finalize`、`append`、`telemetry.emit`、`agent/post-tool`）。** 量測（形狀：軟路徑上一個丟出的 `agent/post-tool` 監聽者）：**修正前 ⇒ `RESOLVED`，日誌只提交了一半**（沒有遙測、沒有標記、`append` 的 fail-loud 路徑——M14 的圖片驗證在內——同樣消失）；**修正後 ⇒ 拒絕 `post-tool boom`，而從未開始的填補照樣落地**；**突變（拿掉 `throw commitError`）⇒ 又回到 `RESOLVED`，而釘住它的那條測試當場轉紅**。**⇒「這個 catch 只吞那個監聽者」是假的；「它是被釘住的」是真的。** 而註解在同一次改動裡對齊（軟路徑：記下來、填補照跑、之後 rethrow；中止路徑的 swallow 不變，因為它緊接著就 throw）。
 4. **`ruling A` 被推翻，而這是刻意的。** `execute-tool-calls.ts` 原文的 `Failure (throw-fails-turn, ruling A)` ＋ `NO fabricated results for unstarted calls`：**推翻的是 rethrow 那一半**；**「不捏造」那一半保留** —— 從未開始的呼叫拿到的是「因為兄弟失敗而被取消」這句**事實**，而填補本身標記 `synthetic: true`，不宣稱它是工具的輸出。留痕在 spec §5 的表（不是默默改掉），本文件留這一行。
 5. **可達性**：`node scripts/audit/check-reachability.mjs --gate` ⇒ **`gate PASS -- no new rows`**（446 rows；`--self-test` 36/36）。三個新 export（兩個常數 ＋ `core-tools` 的標記型別）**在生產裡還沒有消費者**（前兩者的唯一具名處就是宣告它們的檔案，掃描器排除它；標記型別是結構性的，沒有地方 import 它）⇒ 它們**記進 `scripts/audit/reachability-allowlist.json`，各附日期與理由**（理由是：它們的讀者在 block ②／③）。**刻意不是**把名字寫進別檔的註解讓那一列消失 —— 掃描器不剝註解，那會讓它說謊（這一塊自己量過：一句提到 `PolicyRefusal` 的探針註解就讓那一列從 3 掉到 2）。
-6. **全套（兩步讀法）**：母體 **66**（`pnpm -r --no-bail test` 的起始行數 —— **紅的時候它只跑一個前綴，所以先數母體、再比數字**）；**`2636 passed · 0 failed · 9 skipped`**；`pnpm typecheck` ⇒ **0 error**。
+6. **全套（兩步讀法）**：母體 **66**（`pnpm -r --no-bail test` 的起始行數 —— **紅的時候它只跑一個前綴，所以先數母體、再比數字**）；**`2636 passed · 0 failed · 9 skipped`**（本體提交時；修正輪之後是 **2638**，見下）；`pnpm typecheck` ⇒ **0 error**。
    ⚠ **2636，而計畫的預期是 2632（2624 ＋ 8），差 4 —— 而差在哪是量得出來的：** 計畫的表把 T2 記成「0 新增」、T4「＋1」、T5「＋3」，實際是 **T2 ＋2**（`10c74411` 修正輪的兩條：`a marked veto that lands AFTER a sibling's failure still kills the turn`、`records each failed call's OWN message, not the first failure's`）、**T4 ＋2**（`4d500ad5`）、**T5 ＋4**（`a945b719` 的四條 BOUNDARY；T5 自己的報告也寫著「BASE 19，＋4」）。逐項算式 **2624＋4（T1）＋2（T2）＋2（T4）＋4（T5）＝2636**，而每一條都在它自己的提交裡可見。**預期值不改，差別照實記在這裡。**
+
+**修正輪 —— `<SHA>`（全分支複審：SHIP，1 Important ＋ 2 Low，全部在這一輪修掉）**
+
+- **Important：填補的 `firstError` fallback 是**可達的**，而說它不是的註解是假的。** `.catch` 處理器原本先跑 `telemetry.emit` 與 `isPolicyRefusal(err)` 才 `failures.set` —— 兩者都執行樹外的程式碼（host 的 `Telemetry`、一個 `policyRefusal` getter 會丟出的 error），任一丟出就讓該 promise 拒絕；**若那是第二個失敗**（第一個已設 `hasFailed`、`runGroup` 已 break），那個拒絕被迴圈後的 `Promise.allSettled` 吸收、**沒有人再讀它** —— 那一格沒有 `failures` 條目，填補於是蓋上**兄弟的**訊息。**量到的（修正前）：** `[failA → "A error"（贏得競態）, failB → 拒絕、其 `policyRefusal` 讀取丟出]` ⇒ c1 `{error:"A error"}`；**修正後 ⇒ c1 `{error:"B error"}`**。**修法：`failures.set(index, err)` 移到 `.catch` 的第一個述詞**（語意 0 成本）。**突變證明：把它移回標記檢查之後 ⇒ 新的那條測試當場紅（`c1` 變回 `"A error"`），其餘 24 條綠。**
+- **Low：落在失敗窗口裡的中止不再支配。** `aborted` 只在 `runGroup` 內被寫，而它在第一個失敗就 break，所以**在 drain 期間才落地的中止**兩邊都看不到：修正前那批 `RESOLVED`、從未開始的呼叫被蓋 `TOOL_CANCELLED_BY_SIBLING`（真相是「使用者停了這一步」），而且 `commitReady` 還對窗口內落地的呼叫發了 `agent/post-tool`（M10a 說 aborted 時不發）。**修法：drain 提升到 `if (aborted)` 之前，並在該處重讀 `opts.signal?.aborted`**（中止分支自己那個已成為 no-op 的 drain 隨之移除）。**量到的（修正後）：** 同一批**拒絕 `agent aborted`**、從未開始的那格拿到 `TOOL_ABORTED_BEFORE_DISPATCH`、**`agent/post-tool` 零筆**。**突變證明：拿掉那一行重讀 ⇒ 新的那條測試當場紅，其餘 24 條綠。**
+- **Low：三個註解說了比程式多的事。** ①`failures` 的註解說「the drain above」，而 drain 在它下面 —— 改成指向真正的 drain，並補上「`.catch` 的第一個述詞就記錄」這個事實；②「The non-abort failure path swallows nothing」自我矛盾 —— 它是**吞下再丟出**，改為 **"suppresses nothing"**；③測試裡「本分支自己的 e2e 量到 449ms 開一個 pre-tool hook 子行程」——**`e2e/` 裡沒有 hooks e2e，那個數字在樹裡沒有出處**（子代理報告→計畫→測試檔的轉述），**移除數字**，改引存在的出處：`hooks/src/runner.ts` 用 `spawn(...)` 開子行程。
+- **記錄修正（不是程式）：** 「每個被派送的呼叫都恰好一筆 `tool/result`」讀嚴了就**兩處為假**（批次含拒絕 ⇒ 已落地的整批被捨棄；提交巷丟出 ⇒ 游標之後的格子不進日誌）—— **那個保證是軟失敗路徑的**；原始碼註解與本檔案 §5 的敘述都已在這一輪收窄範圍。
+- **量到的（修正輪）**：母體 **66**；**`2638 passed · 0 failed · 9 skipped`**（+2：兩條新的 BOUNDARY 測試，各自有突變證明）；`pnpm typecheck` ⇒ **0 error**；`check-reachability.mjs --gate` ⇒ **`gate PASS -- no new rows`**（446 rows；`--self-test` 36/36）。兩個既有 flake 都沒出現。
 
 ---
 
