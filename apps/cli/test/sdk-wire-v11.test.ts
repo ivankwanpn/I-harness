@@ -21,24 +21,38 @@ const REPO_ROOT = resolve(fileURLToPath(new URL("../../../", import.meta.url)))
 const TSX_LOADER = pathToFileURL(join(REPO_ROOT, "node_modules", "tsx", "dist", "loader.mjs")).href
 const CLI_ENTRY = join(REPO_ROOT, "apps", "cli", "src", "index.ts")
 
-async function startFixtureModel(): Promise<{ baseURL: string; close(): Promise<void> }> {
+async function startFixtureModel(): Promise<{ baseURL: string; paths: string[]; close(): Promise<void> }> {
+  // Task 4: the fixture records the request PATH per call — `/v1/chat/completions`
+  // is the openai-compatible wire, `/v1/messages` the anthropic-messages one, so
+  // the recorded path is the evidence of which protocol a client spoke. Both
+  // answer a stream carrying the same text ("fixture ok"): the path, never the
+  // body, is what a rebind test reads.
+  const paths: string[] = []
   const server = createServer((req, res) => {
-    if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+    if (req.method !== "POST" || (req.url !== "/v1/chat/completions" && req.url !== "/v1/messages")) {
       res.writeHead(404).end()
       return
     }
+    paths.push(req.url)
     res.writeHead(200, { "content-type": "text/event-stream" })
-    res.end([
-      `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
-      "data: [DONE]",
-      "",
-    ].join("\n\n"))
+    res.end((req.url === "/v1/messages"
+      ? [
+        `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "fixture ok" } })}`,
+        `data: ${JSON.stringify({ type: "message_stop" })}`,
+        "",
+      ]
+      : [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "fixture ok" } }] })}`,
+        "data: [DONE]",
+        "",
+      ]).join("\n\n"))
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const address = server.address()
   if (address === null || typeof address === "string") throw new Error("fixture model failed to listen")
   return {
     baseURL: `http://127.0.0.1:${address.port}`,
+    paths,
     close: () => new Promise<void>((resolve, reject) => {
       server.close((error) => error === undefined ? resolve() : reject(error))
       server.closeAllConnections()
@@ -174,17 +188,84 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
     30_000,
   )
 
-  // THE INVARIANT, pinned: a selection carrying a `protocol` never puts one
-  // into the stored session meta (design §4.3 — "session 的協議不寫進任何檔案",
-  // repeated in §7). The cast below IS the test: the wire type deliberately has
-  // no `protocol`, so sending one is out-of-band by construction, and that is
-  // exactly the phase-B mistake the whitelist note in packages/sdk/src/server.ts
-  // warns about — widening parseModelSelection for the rebind path and letting
-  // the CLI relay forward the whole selection into updateMeta. If that lands,
-  // the header gains a protocol and this test goes red (verified by mutation:
-  // widening the parser makes it fail with `to not have property "protocol"`).
+  // PHASE B TASK 4 — THE LIVE REBIND, half (a). The wire's `protocol` is for the
+  // LIVE session only (§4.2②): the assertable consequence is an ENDPOINT. One
+  // session, one process, one subprocess: its first turn speaks the ROUTE's
+  // protocol (openai-completions → /v1/chat/completions), then `session/model/set`
+  // names anthropic-messages, and its NEXT turn speaks that one (/v1/messages).
+  //
+  // A rebind that only took effect on the NEXT assembly could not pass this:
+  // the protocol is never persisted (§4.3), so a rebuilt assembly would resolve
+  // the route's wire again. That is exactly why (a) and (b) are two halves of
+  // one decision — (a) without (b) would mean a protocol reached a file; (b)
+  // without (a) is phase A, which already shipped.
   it(
-    "never persists a protocol to the session header (the phase-B wire mistake)",
+    "a protocol on the wire rebinds the LIVE session — the next turn moves to the new endpoint",
+    async () => {
+      const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-rebind-ws-"))
+      const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-rebind-sess-"))
+      writeFileSync(join(sessionDir, "s1.jsonl"), `${JSON.stringify({
+        formatVersion: 1,
+        sessionId: "s1",
+        createdAt: "2026-09-06T00:00:00.000Z",
+      })}\n`, "utf8")
+      const before = fixture.paths.length
+
+      const client = createHarnessClient({
+        command: process.execPath,
+        args: ["--import", TSX_LOADER, CLI_ENTRY, "sdk", "--session-dir", sessionDir],
+        cwd: workspace,
+        env: { IH_CONFIG_DIR: canonicalConfigDir },
+      })
+      try {
+        // control: before the rebind the route's declared wire is what this
+        // session speaks — so the switch below is attributable to the rebind.
+        await client.run({ sessionId: "s1", prompt: "before" })
+        expect(fixture.paths.slice(before)).toEqual(["/v1/chat/completions"])
+
+        // Annotated ON PURPOSE: `protocol` is part of the wire type now — in
+        // phase A its absence from `SessionModelSelection` was the guard.
+        const selection: SessionModelSelection = { provider: "fixture", model: "fixture-model", protocol: "anthropic-messages" }
+        await expect(client.setSessionModel("s1", selection))
+          .resolves.toMatchObject({ status: "ready", label: "fixture:fixture-model" })
+
+        // HALF (a): the LIVE session's next turn is on the NEW endpoint. The
+        // session was opened by the run above, so this is the same assembly —
+        // and its handle is what the turn reads the client through.
+        const after = await client.run({ sessionId: "s1", prompt: "after" })
+        expect(after.text).toContain("fixture ok")
+        expect(fixture.paths.slice(before)).toEqual(["/v1/chat/completions", "/v1/messages"])
+
+        // HALF (b): the rebind that made (a) true still wrote NO protocol
+        // anywhere durable (§4.3). Same invariant as the guard below, on the
+        // live path — because the live path is the new one.
+        const header = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
+          modelSelection?: Record<string, unknown>
+        }
+        expect(header.modelSelection).toEqual({ provider: "fixture", model: "fixture-model" })
+      } finally {
+        await client.close().catch(() => {})
+        rmSync(workspace, { recursive: true, force: true })
+        rmSync(sessionDir, { recursive: true, force: true })
+      }
+    },
+    60_000,
+  )
+
+  // THE INVARIANT, pinned — and this guard was REWRITTEN deliberately, not
+  // weakened. It was planted in phase A to force this decision: its old form
+  // sent `protocol` through an `as SessionModelSelection` cast and called
+  // widening the parser "the phase-B mistake". Phase B widened it — the wire
+  // now carries `protocol?` for the REBIND path (§4.2②; see the whitelist note
+  // in packages/sdk/src/server.ts) — so the cast is gone and the field is part
+  // of the contract. What did NOT change is the half this guard exists for:
+  // §4.3 — a session's protocol is written to NO file, so the header must never
+  // gain one. It is red for exactly one mistake (Task 4's mutation proof):
+  // removing the relay's strip step, i.e. handing the whole selection to
+  // `updateMeta`, whose durable type already accepts `protocol`. Half (a) — the
+  // live rebind — is pinned in the test above.
+  it(
+    "still never persists a protocol to the session header (§4.3: the half that must not change)",
     async () => {
       const workspace = mkdtempSync(join(tmpdir(), "ih-sdk-noproto-ws-"))
       const sessionDir = mkdtempSync(join(tmpdir(), "ih-sdk-noproto-sess-"))
@@ -205,12 +286,26 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
           provider: "fixture",
           model: "fixture-model",
           protocol: "anthropic-messages",
-        } as SessionModelSelection)).resolves.toMatchObject({ status: "ready" })
+        })).resolves.toMatchObject({ status: "ready" })
         const header = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
           modelSelection?: Record<string, unknown>
         }
         expect(header.modelSelection).not.toHaveProperty("protocol")
         expect(header.modelSelection).toEqual({ provider: "fixture", model: "fixture-model" })
+
+        // No silent degradation for a protocol the host cannot resolve: it is
+        // REFUSED with the five-value message (`provider add --protocol`'s same
+        // rule), and the refusal writes nothing — the header above stays the
+        // honest selection.
+        await expect(client.setSessionModel("s1", {
+          provider: "fixture",
+          model: "fixture-model",
+          protocol: "not-a-wire",
+        })).rejects.toMatchObject({ code: -32603, message: expect.stringContaining('unknown protocol "not-a-wire"') })
+        const afterRefusal = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
+          modelSelection?: Record<string, unknown>
+        }
+        expect(afterRefusal.modelSelection).toEqual({ provider: "fixture", model: "fixture-model" })
       } finally {
         await client.close().catch(() => {})
         rmSync(workspace, { recursive: true, force: true })
