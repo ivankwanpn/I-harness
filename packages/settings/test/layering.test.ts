@@ -1,7 +1,7 @@
 // M27 R-E10: layered settings (global < workspace < project, last wins),
 // polling hot-reload, comment-preserving leaf-patch writes.
 import { describe, expect, it } from "vitest"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createLayeredStore, LayeredSettingsStore, resolveLayeredSources, watchSettings, mergeRawLayers, type LayerSource, type Settings } from "../src/index.ts"
@@ -41,6 +41,23 @@ class SlowReloadStore extends LayeredSettingsStore {
     // same order the rest of this file already waits on.
     await new Promise((r) => setTimeout(r, 250))
     return settings
+  }
+}
+
+/** W1 rig for the FAILING reload: the first `reloadFromDisk` waits out a window
+ * and then throws; later ones behave. The throw stands in for the real failure
+ * the conflate must survive — `parseDocumentTolerant` on a torn read of a
+ * non-atomic write — which cannot be scheduled from outside the store (the read
+ * must see the torn bytes AND the settled write must land while that read is
+ * running). The path pinned is the same one either way: the handler's `catch`. */
+class FailingReloadStore extends LayeredSettingsStore {
+  readonly attempts: number[] = []
+  override async reloadFromDisk(): Promise<Settings> {
+    const attempt = this.attempts.length
+    this.attempts.push(Date.now())
+    await new Promise((r) => setTimeout(r, 100)) // the window a detection can land in
+    if (attempt === 0) throw new Error("reload failed (W1 pin: the torn read)")
+    return super.reloadFromDisk()
   }
 }
 
@@ -305,6 +322,79 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       await waitFor(() => changed().length >= 2)
       await new Promise((r) => setTimeout(r, 60))
       expect(changed()).toHaveLength(2)
+      expect(store.get().fontSize).toBe(16)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("two files: the report for the change detected inside a reload carries THAT file's path", async () => {
+    const root = await tmpRoot()
+    try {
+      const a = join(root, "a.json")
+      const b = join(root, "b.json")
+      await writeFile(a, JSON.stringify({ fontSize: 14 }), "utf8")
+      await writeFile(b, JSON.stringify({ model: "b0" }), "utf8")
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = new SlowReloadStore({ files: [a, b], watchIntervalMs: 10, telemetry })
+      await store.load()
+      const changed = () => events.filter((e) => e.type === "settings/changed")
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(0)
+      // a.json changes ATOMICALLY (tmp + rename — the store's own write shape):
+      // one stat transition. A plain writeFile truncates first, so the poll can
+      // see a second a.json transition; if that lands in the same tick as the
+      // b.json write below, the watcher fires a.json for that tick and advances
+      // its snapshot past b.json too (`one batch per tick`), so the b detection
+      // is swallowed and this assertion would fail for a reason it does not
+      // guard. Measured: 7 of 12 parallel runs red before the write was made
+      // atomic (received [a, a] — the state right, the path wrong).
+      const aTmp = `${a}.tmp`
+      await writeFile(aTmp, JSON.stringify({ fontSize: 15 }), "utf8")
+      await rename(aTmp, a)
+      // Gate on the reload having read BOTH files: the b change below is then
+      // strictly after that read and inside the reload's window, so its report
+      // comes from the re-check — which must name b, not the a.json that
+      // started the reload in flight (`data.path` is user-visible).
+      await waitFor(() => store.reads.length >= 1)
+      await writeFile(b, JSON.stringify({ model: "b1" }), "utf8")
+      await waitFor(() => changed().length >= 2)
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed().map((e) => e.data.path)).toEqual([a, b])
+      expect(store.get().fontSize).toBe(15)
+      expect(store.get().model).toBe("b1")
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("a detection that lands while a reload FAILS is re-checked, not dropped (the watcher will not re-detect it)", async () => {
+    const root = await tmpRoot()
+    try {
+      const file = join(root, "s.json")
+      await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = new FailingReloadStore({ files: [file], watchIntervalMs: 10, telemetry })
+      await store.load()
+      const changed = () => events.filter((e) => e.type === "settings/changed")
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(0)
+      await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
+      await waitFor(() => store.attempts.length >= 1) // the failing reload is in flight
+      await new Promise((r) => setTimeout(r, 20)) // its detection has landed
+      // The settled write, inside the failing reload's window: the watcher
+      // advances its snapshot when it fires this one, so if the failure dropped
+      // it the change would be lost until the next write — store.get() would
+      // stay at 14 and nothing would ever report.
+      await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
+      await waitFor(() => changed().length >= 1)
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(1)
+      expect(changed()[0]!.data.path).toBe(file)
       expect(store.get().fontSize).toBe(16)
     } finally {
       await rm(root, { recursive: true, force: true })
