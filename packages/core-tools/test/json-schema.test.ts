@@ -92,4 +92,54 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
       expect(() => validateJsonSchemaValue(s as JsonSchemaNode, val)).not.toThrow()
     }
   })
+
+  it("is TOTAL at a depth JSON.parse accepts — the walk is a frame list, not the JS stack (fix round 1)", () => {
+    // Measured in the T1 review round: this walk raised RangeError at 3,600-3,700
+    // nesting cold (~9,500 warm), while JSON.parse accepts at least 1,000,000.
+    // 100_000 is ~10x the warm stack limit and 10x under what parse accepts. The
+    // value is built here in memory from JSON text: JSON.stringify dies at the
+    // stack limit, so it cannot be used to build (or print) a value this deep.
+    const depth = 100_000
+    const args = JSON.parse(`{"q":"x","extra":${"[".repeat(depth)}0${"]".repeat(depth)}}`) as unknown
+    const schema: JsonSchemaNode = { type: "object", properties: { q: { type: "string" } }, required: ["q"] }
+    expect(() => validateJsonSchemaValue(schema, args)).not.toThrow()
+    // `extra` is undeclared and additionalProperties is absent, so the deep
+    // subtree is walked by the lossless check alone — the shape that died.
+    expect(validateJsonSchemaValue(schema, args)).toEqual([])
+  })
+
+  it("is TOTAL on a deep DECLARED descent too — every level is a frame (fix round 1)", () => {
+    // The case above only reaches the lossless walk. This one descends through
+    // properties/required frames 12,000 levels — above the measured warm stack
+    // limit — so the validation walk itself is the thing under test.
+    const depth = 12_000
+    let value: unknown = 0
+    let schema: JsonSchemaNode = { type: "integer" }
+    for (let i = 0; i < depth; i++) {
+      value = { a: value }
+      schema = { type: "object", properties: { a: schema }, required: ["a"] }
+    }
+    expect(() => validateJsonSchemaValue(schema, value)).not.toThrow()
+    expect(validateJsonSchemaValue(schema, value)).toEqual([])
+  })
+
+  it("compares structured `enum` members by key SET, not by JSON text (fix round 1)", () => {
+    // Measured in the T1 review round: {enum:[{a:1,b:2}]} against {b:2,a:1}
+    // falsely reported, because the members' JSON TEXT was compared.
+    expect(v({ enum: [{ a: 1, b: 2 }] }, { b: 2, a: 1 })).toEqual([])
+    expect(v({ enum: [[1, 2]] }, [1, 2])).toEqual([])
+    // A member that really differs still reports.
+    expect(v({ enum: [{ a: 1, b: 2 }] }, { a: 1, b: 3 })).toEqual(['"value" must be one of [{"a":1,"b":2}]'])
+    expect(v({ enum: [{ a: 1 }] }, { a: 1, b: 2 })).toEqual(['"value" must be one of [{"a":1}]'])
+  })
+
+  it("reads only OWN members — the prototype chain is not a property (fix round 1)", () => {
+    // Measured in the T1 review round: `properties: {toString: {type:"string"}}`
+    // against `{}` falsely reported (Object.prototype.toString is not undefined),
+    // and `required: ["toString"]` against `{}` silently did NOT report.
+    expect(v({ type: "object", properties: { toString: { type: "string" } } }, {})).toEqual([])
+    expect(v({ type: "object", required: ["toString"] }, {})).toEqual(['missing required property "value.toString"'])
+    // An OWN toString is still read, and still checked.
+    expect(v({ type: "object", properties: { toString: { type: "string" } } }, { toString: 1 })).toEqual(['"value.toString" must be a string'])
+  })
 })

@@ -11,11 +11,19 @@
 // schemas. That is the whole reason it can run on a schema this repo did not
 // write (MCP forwards the remote server's schema verbatim, mcp-client/bridge.ts).
 //
+// THE WALK IS AN EXPLICIT FRAME LIST, never the JS call stack — dsh's house rule
+// for untrusted input ("without using the JavaScript call stack"), and the T1
+// review round measured why it is not merely a style: this walk raised
+// RangeError at 3,600-3,700 nesting cold (~9,500 warm) while JSON.parse accepts
+// >= 1,000,000, so the stack — not the input — was the binding constraint, and a
+// RangeError is rethrown by the scheduler and kills the whole turn. That is the
+// failure mode this unit exists to remove, so no rule below may recurse.
+//
 // Two rules run through every keyword read, and both are measured shapes:
 //   · a keyword CARRYING `undefined` is ABSENT (§3.5 — plan-mode/src/index.ts:25
 //     writes { type: "object", properties: undefined, required: undefined });
 //   · a value member that is absent OR `undefined` is MISSING — the same rule,
-//     one level down (the value side of §3.3).
+//     one level down (and only an OWN member counts as a member at all).
 // A keyword or type name outside this subset is not a constraint: the value
 // layer checks what it recognizes and stays silent about the rest (§3.1), which
 // is what makes it safe on a foreign schema.
@@ -33,19 +41,38 @@ export interface JsonSchemaNode {
   description?: string | undefined
 }
 
+/** One unit of work for the walk: either a value to validate against a schema,
+ * or the deferred report of a closed object's undeclared members (deferred in a
+ * frame so the violations still come out in document order — schemas' declared
+ * members first, extras last — without recursing). */
+type Frame =
+  | { kind: "value"; schema: unknown; value: unknown; path: string }
+  | { kind: "undeclared"; value: Record<string, unknown>; declared: Record<string, unknown> | undefined; path: string }
+
+/** The lossless walk's frames. `exit` frames are what keep the cycle set
+ * path-scoped: a node is untracked again the moment its subtree is finished. */
+type LosslessFrame = { kind: "enter"; value: unknown } | { kind: "exit"; node: object }
+
 /** Reports every violation of `value` against `schema`, each naming its path.
  * An empty array means the value conforms. This function never throws, never
  * coerces and never mutates — for any value against any schema. */
 export function validateJsonSchemaValue(schema: JsonSchemaNode, value: unknown, path = "value"): string[] {
   const violations: string[] = []
-  collectViolations(schema, value, path, violations)
+  const frames: Frame[] = [{ kind: "value", schema, value, path }]
+  const proven = new Set<object>() // the lossless memo, shared by the whole call — see isLosslessJson
+  while (frames.length > 0) {
+    const frame = frames.pop() as Frame
+    if (frame.kind === "undeclared") reportUndeclaredMembers(frame, violations)
+    else collectViolations(frame, frames, violations, proven)
+  }
   return violations
 }
 
 // `schema` is taken as `unknown` past the entry point: a foreign schema is not
 // this repo's data, and every keyword read below must survive a shape nobody
 // promised (a null subschema, `items: true`, `required: "path"`).
-function collectViolations(schema: unknown, value: unknown, path: string, out: string[]): void {
+function collectViolations(frame: Extract<Frame, { kind: "value" }>, frames: Frame[], out: string[], proven: Set<object>): void {
+  const { schema, value, path } = frame
   if (!isRecord(schema)) return // a schema that is not an object declares nothing
 
   const declaredType = schema.type
@@ -74,16 +101,16 @@ function collectViolations(schema: unknown, value: unknown, path: string, out: s
   }
 
   if (isRecord(value)) {
-    if (!isLosslessJson(value, new Set())) {
+    if (!isLosslessJson(value, proven)) {
       out.push(`"${path}" must be a lossless JSON object`)
       return
     }
-    collectObjectViolations(schema, value, path, out)
+    collectObjectMembers(schema, value, path, frames, out)
     return
   }
 
   if (Array.isArray(value)) {
-    if (!isLosslessJson(value, new Set())) {
+    if (!isLosslessJson(value, proven)) {
       out.push(`"${path}" must be a dense lossless JSON array`)
       return
     }
@@ -93,15 +120,17 @@ function collectViolations(schema: unknown, value: unknown, path: string, out: s
     }
     const items = schema.items
     if (items !== undefined) {
-      for (let i = 0; i < value.length; i++) collectViolations(items, value[i], `${path}[${i}]`, out)
+      // Pushed in reverse so the stack pops them in index order.
+      for (let i = value.length - 1; i >= 0; i--) frames.push({ kind: "value", schema: items, value: value[i], path: `${path}[${i}]` })
     }
   }
 }
 
-function collectObjectViolations(
+function collectObjectMembers(
   schema: Record<string, unknown>,
   value: Record<string, unknown>,
   path: string,
+  frames: Frame[],
   out: string[],
 ): void {
   const properties = isRecord(schema.properties) ? schema.properties : undefined
@@ -109,33 +138,50 @@ function collectObjectViolations(
   const required = schema.required
   if (Array.isArray(required)) {
     for (const key of required) {
-      if (typeof key === "string" && value[key] === undefined) out.push(`missing required property "${path}.${key}"`)
+      if (typeof key === "string" && ownMember(value, key) === undefined) out.push(`missing required property "${path}.${key}"`)
+    }
+  }
+
+  // Queued in reverse of report order: undeclared members are pushed FIRST so
+  // they pop after every declared member's subtree, which is where the walk
+  // reported them before it became a frame list.
+  const additional = schema.additionalProperties
+  if (additional === false) {
+    frames.push({ kind: "undeclared", value, declared: properties, path })
+  } else if (isRecord(additional)) {
+    for (const key of Object.keys(value).reverse()) {
+      const member = ownMember(value, key)
+      if (member === undefined) continue // absent, by the rule below
+      if (properties !== undefined && Object.prototype.hasOwnProperty.call(properties, key)) continue
+      frames.push({ kind: "value", schema: additional, value: member, path: `${path}.${key}` })
     }
   }
 
   if (properties !== undefined) {
-    for (const [key, childSchema] of Object.entries(properties)) {
-      const member = value[key]
+    for (const key of Object.keys(properties).reverse()) {
+      const childSchema = properties[key]
+      const member = ownMember(value, key)
       // An `undefined`-valued child schema declares nothing, and a member that
       // is absent or `undefined` is missing — reported above if it is required.
       if (childSchema === undefined || member === undefined) continue
-      collectViolations(childSchema, member, `${path}.${key}`, out)
+      frames.push({ kind: "value", schema: childSchema, value: member, path: `${path}.${key}` })
     }
   }
+}
 
-  const additional = schema.additionalProperties
-  if (additional === false || isRecord(additional)) {
-    for (const key of Object.keys(value)) {
-      const member = value[key]
-      if (member === undefined) continue // absent, by the rule above
-      if (properties !== undefined && Object.prototype.hasOwnProperty.call(properties, key)) continue
-      if (additional === false) {
-        out.push(`"${path}.${key}" is not a declared property (additionalProperties: false)`)
-      } else {
-        collectViolations(additional, member, `${path}.${key}`, out)
-      }
-    }
+function reportUndeclaredMembers(frame: Extract<Frame, { kind: "undeclared" }>, out: string[]): void {
+  for (const key of Object.keys(frame.value)) {
+    if (ownMember(frame.value, key) === undefined) continue // absent, by the rule above
+    if (frame.declared !== undefined && Object.prototype.hasOwnProperty.call(frame.declared, key)) continue
+    out.push(`"${frame.path}.${key}" is not a declared property (additionalProperties: false)`)
   }
+}
+
+/** Own-member read. A member inherited from the prototype chain is not a member
+ * of this JSON value (`toString` is not a declared property of `{}`), and a
+ * member carrying `undefined` is absent (§3.5, one level down). */
+function ownMember(target: Record<string, unknown>, key: string): unknown {
+  return Object.prototype.hasOwnProperty.call(target, key) ? target[key] : undefined
 }
 
 function typeMismatch(declared: unknown, value: unknown, path: string): string | undefined {
@@ -204,54 +250,95 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/** `enum` membership is JSON equality: key ORDER is not part of a JSON value, so
+ * two structures compare by their key SETS (fix round 1 measured the old
+ * `JSON.stringify` comparison falsely reporting `{b:2,a:1}` against
+ * `{enum:[{a:1,b:2}]}`). Scalars compare by identity, so -0 is not 0 (§3.3).
+ * Both sides must first be lossless JSON: that is what forbids cycles, which is
+ * what lets the pair walk below keep its own stack instead of the JS one. */
 function isSameJsonValue(a: unknown, b: unknown): boolean {
-  // `enum` membership is JSON equality: scalars by identity (so -0 is not 0,
-  // keeping §3.3 consistent), structures by their JSON text.
   if (Object.is(a, b)) return true
   if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false
-  try {
-    return JSON.stringify(a) === JSON.stringify(b)
-  } catch {
-    return false // a cycle or a BigInt has no JSON text; it equals nothing
+  if (!isLosslessJson(a, new Set()) || !isLosslessJson(b, new Set())) return false
+  const pairs: Array<[unknown, unknown]> = [[a, b]]
+  while (pairs.length > 0) {
+    const [x, y] = pairs.pop() as [unknown, unknown]
+    if (Object.is(x, y)) continue
+    if (typeof x !== "object" || x === null || typeof y !== "object" || y === null) return false
+    if (Array.isArray(x) !== Array.isArray(y)) return false
+    if (Array.isArray(x) && Array.isArray(y)) {
+      if (x.length !== y.length) return false
+      for (let i = 0; i < x.length; i++) pairs.push([x[i], y[i]])
+      continue
+    }
+    const keys = Object.keys(x)
+    if (keys.length !== Object.keys(y).length) return false
+    for (const key of keys) {
+      // A key missing on the other side, whatever its order: same key SETS.
+      if (!Object.prototype.hasOwnProperty.call(y, key)) return false
+      pairs.push([(x as Record<string, unknown>)[key], (y as Record<string, unknown>)[key]])
+    }
   }
+  return true
 }
 
 function renderEnum(allowed: readonly unknown[]): string {
   try {
     return JSON.stringify(allowed)
   } catch {
-    return "[...]" // same reason; the message still names the path
+    return "[...]" // a cycle or a BigInt has no JSON text (and stringify itself
+    // is bounded by the JS stack); the message still names the path
   }
 }
 
 /** True when `value` survives JSON.stringify/parse unchanged: every member is a
  * JSON value, arrays are dense, and no member is dropped (symbol keys,
- * non-enumerable keys, class instances, cycles). */
-function isLosslessJson(value: unknown, seen: Set<object>): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return true
-  if (typeof value === "number") return isJsonNumber(value)
-  if (typeof value !== "object") return false // undefined, function, symbol, bigint
-  const node = value as object
-  if (seen.has(node)) return false // a cycle: JSON has no references
-  seen.add(node)
-  try {
+ * non-enumerable keys, class instances, cycles).
+ *
+ * `proven` memoises the nodes already verified WHOLE, and it is what keeps a
+ * deep DECLARED descent linear: the top call verifies every node in the tree, so
+ * each descendant's re-check is an O(1) hit instead of a re-walk of its whole
+ * subtree (without it the walk is quadratic in a deep value's depth — the same
+ * "the walk is the binding constraint" defect on a different axis). */
+function isLosslessJson(root: unknown, proven: Set<object>): boolean {
+  const frames: LosslessFrame[] = [{ kind: "enter", value: root }]
+  const onPath = new Set<object>()
+  while (frames.length > 0) {
+    const frame = frames.pop() as LosslessFrame
+    if (frame.kind === "exit") {
+      onPath.delete(frame.node)
+      proven.add(frame.node)
+      continue
+    }
+    const value = frame.value
+    if (value === null || typeof value === "string" || typeof value === "boolean") continue
+    if (typeof value === "number") {
+      if (!isJsonNumber(value)) return false
+      continue
+    }
+    if (typeof value !== "object") return false // undefined, function, symbol, bigint
+    const node = value
+    if (proven.has(node)) continue
+    if (onPath.has(node)) return false // a cycle: JSON has no references
     if (Array.isArray(node)) {
       // A hole and an `undefined` entry are the same loss, and so is an extra
       // property: JSON arrays are dense and carry indices only.
       if (Object.keys(node).length !== node.length) return false
-      for (const item of node) if (!isLosslessJson(item, seen)) return false
-      return true
+      onPath.add(node)
+      frames.push({ kind: "exit", node })
+      for (const item of node) frames.push({ kind: "enter", value: item })
+      continue
     }
     const proto = Object.getPrototypeOf(node)
     if (proto !== null && proto !== Object.prototype) return false // Date/Map/Set/class
     if (Object.getOwnPropertySymbols(node).length > 0) return false // JSON drops these
     if (Object.getOwnPropertyNames(node).length !== Object.keys(node).length) return false // ...and non-enumerables
+    onPath.add(node)
+    frames.push({ kind: "exit", node })
     for (const member of Object.values(node)) {
       if (member === undefined) continue // an `undefined` member is absent (§3.5)
-      if (!isLosslessJson(member, seen)) return false
+      frames.push({ kind: "enter", value: member })
     }
-    return true
-  } finally {
-    seen.delete(node)
   }
+  return true
 }
