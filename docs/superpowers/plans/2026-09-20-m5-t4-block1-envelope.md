@@ -125,7 +125,62 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
 
 **這就是被推翻的那條契約本身**：今天一個工具丟出，`executeToolCalls` 就拒絕。若你看到的是 export 的錯，**Step 3 沒做**。若它綠，**停手回報** —— 那代表你改錯了檔。
 
-- [ ] **Step 5: 改失敗路徑（綠）**
+- [ ] **Step 5: 分類 —— 只有「工具本體」的失敗是軟的**
+
+**這一節是 Task 1 的核心，而它不是可選的。** `firstError` 有**兩個**來源，而它們必須走不同的路：
+
+| 來源 | 在哪 | 是什麼 | 處置 |
+|---|---|---|---|
+| **dispatch `.catch`** | `execute-tool-calls.ts:150-165` | **工具本體丟出** | **軟** —— 填一筆 `TOOL_FAILED`，turn 繼續 |
+| **外層 catch** | `:210` 的 `firstError ??= err` | **`prepare` 的拒絕**（`unknown tool`／`guard denied`／`tools/pre-execute` 的 deny／`denied`／approval fail-closed／guardian denied）**以及 commit lane 裡丟出的監聽者** | **大聲** —— drain 之後照樣丟出 |
+
+**沒有這一節，`prepare` 的拒絕會變成軟的** —— 而那是 Global Constraints 明文禁止的。**量到過：13 條既有測試會轉紅**（`hooks` 的 `tools/pre-execute` deny、`session-executor` 的 `guardian denied` 與四條 role-resolver、`sdk`、`cli`、`core-agent` 的 telemetry）。
+
+**⇒ 而分類用「丟出點」而不是「一份清單」** —— 明天有人替 `prepare` 加第五種拒絕，**它自動是大聲的，不需要有人記得回來加一行**。這是本設計在別處（spec §3.7.1）用過的同一條紀律。
+
+**先在 `let firstError: unknown` 旁邊加：**
+
+```ts
+  // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
+  // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
+  // call gets a result and the turn continues. Every OTHER throw that reaches
+  // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
+  // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
+  // denied), and a throwing commit-lane listener.
+  //
+  // Structural, not a list: the SITE of the throw is the classification, so a
+  // fifth refusal added to `prepare` tomorrow is loud without anyone
+  // remembering to add it here. (A list is what gets forgotten — which is how
+  // the first draft of this task got it wrong.)
+  let firstRefusal: unknown
+```
+
+**再改外層 catch（`:210`）** —— 從 `firstError ??= err` 改成：
+
+```ts
+  } catch (err) {
+    if (firstError === undefined) firstError = err
+    // Anything thrown outside the dispatch `.catch` is a refusal. It DOMINATES:
+    // a policy refusal must never be silently downgraded by a coincident body
+    // failure, so a refusal that arrives second still wins.
+    firstRefusal ??= err
+  }
+```
+
+**然後在 `if (aborted) { … }` 區塊與 `if (firstError) { … }` 區塊之間插入：**
+
+```ts
+  // A refusal is never soft. Drain first (a started sibling must not be left
+  // running), then rethrow — this is byte-for-byte the pre-block-① behavior
+  // for every refusal, which is the point.
+  if (firstRefusal !== undefined) {
+    await Promise.allSettled([...inFlight.values()])
+    inFlight.clear()
+    throw firstRefusal
+  }
+```
+
+- [ ] **Step 6: 改失敗路徑（綠）**
 
 在 `execute-tool-calls.ts` 檔尾找到（`git grep -n "Failure: drain started"`）：
 
@@ -151,6 +206,9 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   // happened get written down" (honestly). Discarding the siblings' already
   // settled results made the M5 T4 cancellation pointless — they were
   // cancelled AND thrown away.
+  //
+  // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
+  // from a tool body. A refusal never gets here.
   if (firstError) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
@@ -172,13 +230,22 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   }
 ```
 
-- [ ] **Step 6: 跑測試（綠）**
+- [ ] **Step 7: 跑測試（綠）**
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`
 
 Expected: **全綠**。若 `M5 — a failure cancels its siblings` 變紅，**停手回報** —— 那代表 `batchAbort.abort()` 被碰掉了，而它是這一塊**不可以動**的東西（Global Constraints）。
 
-- [ ] **Step 7: 用突變證明這條測試真的在測這個**
+**然後一定要再多跑這四個套件**（Step 5 的分類就是為了它們）：
+
+```bash
+for p in hooks session-executor sdk; do pnpm --filter "@i-harness/$p" exec vitest run; done
+pnpm --filter @i-harness/cli exec vitest run
+```
+
+Expected: **全綠**。這四個是 Step 5 的分類沒有寫對時會轉紅的地方（量到過 13 條）。**它們紅 ⇒ Step 5 沒有生效，停手回報。**
+
+- [ ] **Step 8: 用突變證明這條測試真的在測這個**
 
 把 `await commitReady()` 那一行**註解掉**，重跑。
 
@@ -186,7 +253,7 @@ Expected: **紅** —— `expected [ 'c1' ] to deeply equal [ 'c0', 'c1' ]`（�
 
 **還原那一行**，再跑一次確認綠。**這一步不是儀式**：它證明這條測試紅在「兄弟沒有 commit」而不是別的。
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add packages/core-agent/src/execute-tool-calls.ts packages/core-agent/src/index.ts packages/core-agent/test/execute-tool-calls.test.ts
@@ -461,16 +528,44 @@ git grep -n "rethrows the first tool failure" packages/core-agent/src/index.ts
         // looked like from the outside.)
 ```
 
-- [ ] **Step 3: 全套**
+- [ ] **Step 3: 全套 —— ⚠ 先讀這一格，它是這一塊量到的最重要的一件事**
+
+**`pnpm -r --no-bail test` 在有任何套件紅的時候，只跑一個前綴。**
+
+2026-09-20 實測（`core-agent` 因為這一塊的初始缺陷而紅）：
+
+```
+Scope: 66 of 67 workspace projects
+…… 58 個套件回報結果 ……
+packages/core-agent test:       Tests  1 failed | 74 passed (75)
+…… 再 4 個套件 ……
+Error: ERR_PNPM_RECURSIVE_FAIL
+  × "pnpm recursive run" failed in 1 packages
+```
+
+**58 個有起始行，8 個連起始行都沒有** —— 而失敗的那一個是**倒數第 9 個**開始的：**它在哪裡失敗，排程就在哪裡停。`--no-bail` 不擋這件事。**
+
+**沒跑到的那 8 個是最大的八個**：`cli`、`session-executor`、`subagent`、`agent-team`、`hooks`、`sdk`、`acp`、`guard-approval`。
+
+**⇒ 所以「全套綠 ⇒ 一個數字」只有在全綠的時候才成立。一旦有一條紅，你讀到的數字是一個前綴，而它看起來完全像總數。** 而 `2624` 那個基線是真的 —— W4 那次全綠，66 個都跑了。
+
+**所以閘門是兩步，不是一步：**
 
 ```bash
-pnpm -r --no-bail test
+pnpm -r --no-bail test 2>&1 | tee /tmp/full.log
+echo "--- 母體（必須是 66）---"
+sed 's/\x1b\[[0-9;]*m//g' /tmp/full.log | grep -cE " test:  Test Files "
+echo "--- 逐包合計 ---"
+sed 's/\x1b\[[0-9;]*m//g' /tmp/full.log | grep -E "Tests +[0-9]+ (passed|failed|skipped)"
 pnpm typecheck
 node scripts/audit/check-reachability.mjs --gate
 ```
 
 Expected:
-- `pnpm -r --no-bail test` → **exit 0**。基線是 **`2624 passed · 0 failed · 9 skipped`**（W4 修正輪量到的，`docs/handoff/2026-09-20-queued-work.md` §5；其後只有 docs 提交，所以基線不動）。這一塊淨增 **4** 條：**Task 1 是改寫，不是新增（淨 0）**、Task 2 加 1、Task 3 加 3 ⇒ **預期 `2628 passed · 0 failed · 9 skipped`**。**動手前先把這個算式寫在旁邊**，跑完對照。
+- **母體必須是 `66`。** **不是 66 就停手回報** —— 那個合計是一個前綴，而**你不能拿它跟基線比**。補跑缺的套件（`pnpm --filter "@i-harness/<name>" exec vitest run`），然後把兩邊分開記。
+- 全綠時：**`2628 passed · 0 failed · 9 skipped`** —— 基線 **`2624`**（W4 修正輪量到的，`docs/handoff/2026-09-20-queued-work.md` §5）＋ 這一塊淨增 **4** 條（**Task 1 是改寫不是新增 ⇒ 淨 0**、Task 2 加 1、Task 3 加 3）。**動手前先把這個算式寫在旁邊**，跑完對照。
+- `pnpm typecheck` → **0 error lines**
+- `check-reachability.mjs --gate` → **`gate PASS -- no new rows`**
 - `pnpm typecheck` → **0 error lines**
 - `check-reachability.mjs --gate` → **`gate PASS -- no new rows`**
 
