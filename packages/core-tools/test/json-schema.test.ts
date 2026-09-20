@@ -115,7 +115,9 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
     // measured at 3,000-4,000 (the ~9,500 often quoted is the PARSE shape's), and
     // JIT state swings ~2.6x — a host with a larger stack could let a recursive
     // driver survive 12,000 silently. 40,000 also keeps the memo-less mutant's
-    // failure at ~2.6 min where 160,000 would take ~41 min.
+    // cost measurable: MEASURED, that mutant makes this test run ~6.0 min (two
+    // validateJsonSchemaValue calls per test, and the cost is quadratic in depth),
+    // so a larger depth would turn the pin's own run into the problem.
     const depth = 40_000
     let value: unknown = 0
     let schema: JsonSchemaNode = { type: "integer" }
@@ -128,10 +130,15 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
   })
 
   it("walks a shared-subtree DAG once, not once per path (fix round 2)", () => {
-    // 2^40 PATHS over 40 unique nodes: the lossless memo's within-call
-    // short-circuit is the only thing that makes this sub-millisecond (measured
-    // doubling per level without it). JSON.parse cannot produce sharing — but a
-    // total function is named by its contract, not by one caller.
+    // 2^40 PATHS over 40 unique nodes. Without the memo's within-call short-circuit
+    // the walk doubles per level (measured: 12.8 ms at 2^16, 2,582 ms at 2^24), so
+    // mutating it does not FAIL this test — it HANGS it: vitest applies its 5 s
+    // timeout post-hoc to a synchronous body, so the run ends only when the walk
+    // does. Probe that mutant at bounded levels instead. This case's value is
+    // ISOLATION (the cross-call memo mutant leaves it green — that pin lives in
+    // the DECLARED case above) and the exponential blowup, not sole detection.
+    // JSON.parse cannot produce sharing — but a total function is named by its
+    // contract, not by one caller.
     let node: unknown = 0
     for (let i = 0; i < 40; i++) node = { a: node, b: node }
     expect(() => validateJsonSchemaValue({ type: "object" }, node)).not.toThrow()
