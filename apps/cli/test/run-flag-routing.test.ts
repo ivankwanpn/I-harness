@@ -222,11 +222,13 @@ describe("run argv routing", () => {
     }
   })
 
-  it("advertises the flag in the usage it prints", async () => {
+  it("advertises the flag in the usage it prints, and that it excludes --model", async () => {
+    // The clause is the point (review F5): a reader who trusts the usage must
+    // not have to meet the refusal to learn the two flags are exclusive.
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
     try {
       await main(["node", "i-harness", "help"])
-      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("[--protocol P]")
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("[--protocol P (not with --model)]")
     } finally {
       err.mockRestore()
     }

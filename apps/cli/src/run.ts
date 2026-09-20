@@ -394,25 +394,28 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       // (the CLI composes `llm.defaultModel` + the flag — it is the only caller
       // that can read that layer). The two rungs are in hand ONLY here:
       //
-      //  - the durable selection is the SESSION's own, so it keeps its
+      //  - a USABLE durable selection is the SESSION's own, so it keeps its
       //    provider:model (a resumed run must not silently switch model);
       //  - the caller's protocol is layered over whichever base wins, being the
       //    most specific rung (selection > model row > route).
+      //
+      // A caller-supplied selection is NEVER discarded (review F3): dropping one
+      // because the durable half is unusable would take the caller's
+      // provider:model AND its protocol with it and let the chain resolve
+      // somewhere else — a silent success on a wire nobody named, this unit's
+      // defect class. An empty durable pair (unreachable through the shipped
+      // store, whose writers both refuse one, but this option is public) falls
+      // back to the caller's own rung, and a caller that named nothing at all is
+      // passed THROUGH so the chain refuses rather than falling through.
       //
       // No caller-supplied selection ⇒ what this block always did.
       let sessionSelection = meta?.modelSelection
       if (opts.sessionSelection !== undefined) {
         const supplied = opts.sessionSelection
-        const base = meta?.modelSelection ?? supplied
-        sessionSelection = base.provider !== "" && base.model !== ""
-          ? {
-              ...base,
-              ...(supplied.protocol !== undefined ? { protocol: supplied.protocol } : {}),
-            }
-          // Nothing to attach the wire to (no durable selection AND
-          // `llm.defaultModel` unset): the chain's own refusal below says what
-          // is actually wrong, and one is not invented here.
-          : undefined
+        const durable = meta?.modelSelection
+        sessionSelection = durable !== undefined && durable.provider !== "" && durable.model !== ""
+          ? { ...durable, ...(supplied.protocol !== undefined ? { protocol: supplied.protocol } : {}) }
+          : supplied
       }
       const state = await runtime.resolveModel({
         ...(sessionSelection !== undefined ? { sessionSelection } : {}),

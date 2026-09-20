@@ -230,7 +230,7 @@ export interface SessionAssembly {
   agent: Agent // the per-session agent; tier-1 turns flow through it
   session: Session // the live session — the source of truth
   sessionId?: string
-  model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle every holder shares. Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:694).
+  model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle every holder shares. Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:697).
   /** Swap the client this assembly's handle forwards to. Every holder follows —
    * they all hold this same object. Identity of `model` does NOT change, which
    * is deliberate: holders are never re-wired. */

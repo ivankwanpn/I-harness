@@ -57,7 +57,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles> ...]\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--protocol P] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
@@ -388,7 +388,7 @@ export async function main(argv: string[]): Promise<number> {
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--protocol P] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
     return Promise.resolve(1)
   }
 
