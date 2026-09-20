@@ -678,7 +678,13 @@ return { …, status: settled?.status ?? "unknown",
 
 #### 測試：**驅動一個真實逾時**，不是釘形狀
 
-- **300_000 沒有任何測試負擔得起** ⇒ 在**工具自己的 deps 上開一個窄縫**：`SubagentToolDeps.foregroundWaitMs?`（`packages/subagent/src/tools.ts:61`）—— **缺席 = 300_000，出貨行為不變**，而**沒有任何宿主傳它**（全 repo 只有那條測試設它）。**沒有把它接進 `RegisterSubagentOptions`**：那會把一個只有測試在用的旋鈕變成宿主契約 —— **要的是窄縫，不是旋鈕**。
+- **300_000 沒有任何測試負擔得起** ⇒ 在**工具自己的 deps 上開一個窄縫**：`SubagentToolDeps.foregroundWaitMs?`（`packages/subagent/src/tools.ts:61`）—— **缺席 = 300_000，出貨行為不變**，而**沒有任何宿主傳它**。**沒有把它接進 `RegisterSubagentOptions`**：那會把一個只有測試在用的旋鈕變成宿主契約 —— **要的是窄縫，不是旋鈕**。
+  **會重現的指令**（**掃 `.ts`；帶 `--include=*.md` 的版本會多出本文件自己那一行 —— 一寫進文件，指令的輸出就變了**）：
+  ```bash
+  grep -rn "foregroundWaitMs" --include=*.ts packages apps
+  # → 3 行：tools.ts:61（欄位）、tools.ts:190（讀取）、tools.test.ts:838（測試設 50）
+  #   沒有截斷（全掃，未取 head）
+  ```
 - 測試（`packages/subagent/test/tools.test.ts:826`）傳 **50ms**，而子代理的初始回合是**真的睡 2 秒**的模型 ⇒ 截止時任務**真的**還在跑，`wait` **真的**輪詢到自己的截止。**沒有 mock 時鐘、沒有 stub `wait`、沒有新的假 registry** —— 用的是既有的 `createTaskRegistry()`。
 - 斷言的就是**逾時那個出口**：`timed_out === true`、訊息逐字、`status === "running"`，而**record 沒有 `outcome`、table 條目還活著、`outcome`／`resultText` 沒有被捏出來**（`:841` 起）。
 
