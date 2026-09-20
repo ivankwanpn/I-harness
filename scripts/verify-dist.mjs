@@ -231,7 +231,8 @@ function aclRunnerSpawn() {
 //
 // What it asserts: `node ih.mjs sdk` re-enters the bundle, speaks NDJSON
 // JSON-RPC 2.0 over stdio, and answers `initialize` with a numeric
-// protocolVersion (packages/sdk/src/server.ts:266-275). No TUI helper is
+// protocolVersion (packages/sdk/src/server.ts, the `initialize` case — cited by
+// symbol: a line range here goes stale at the next insertion). No TUI helper is
 // involved — the frame is written by hand with the same shape the SDK client
 // sends (packages/sdk/src/protocol.ts:467 makeRequest + :534 encodeFrame), which
 // is what makes this check possible after M65 T1 deleted
