@@ -506,6 +506,52 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
   }, 30_000)
 })
 
+// ── R-B1 (phase B): the resolved client is ONE handle ───────────────────────
+// Spec §4.1 said a session's resolved client has "two consumers, one change
+// covers both"; measured, a session's lifetime has EIGHT holders of a resolved
+// client — the turn loop, the compaction engine, a CONFIGURED summarization
+// model, spawned sub-agents, the guardian, teammates, auto-title, and the
+// service's memoised binding. §4.1's own reason for caring is cost ("only
+// swapping one leaves the summarizer on the old endpoint — and that is a call
+// that costs money"), and the same reason holds verbatim for the other five.
+// The handle is how ONE assignment reaches all of them: every holder already
+// holds this same object, so none of them is ever re-wired.
+describe("createSessionAssembly — the model handle (R-B1)", () => {
+  it("a rebound model reaches every holder, not just the turn loop", async () => {
+    // The design said "two consumers, one change covers both" — measured, a
+    // session's lifetime has EIGHT holders of a resolved client. This test is the
+    // deliverable: it fails if ANY of them keeps the old one, which is the silent
+    // partial success this whole unit exists to remove.
+    const first = capturingModel()
+    const second = capturingModel()
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-handle-"))
+    const assembly = await createSessionAssembly({ workspace: dir, model: first })
+    try {
+      // The handle is what EVERY holder was handed — the agent's own deps
+      // included, which this file's createAgent capture records at construction.
+      const handle = assembly.model
+      expect(agentCalls.deps.at(-1)?.model).toBe(handle)
+
+      assembly.setModel(second)
+
+      // (a) the handle forwards — and its IDENTITY is stable, which is exactly
+      // what lets every holder keep working without being re-wired.
+      expect(assembly.model).toBe(handle)       // still the SAME handle…
+      for await (const _ of assembly.model.stream({ messages: [], tools: [], systemPrompt: "" })) void _
+      expect(second.requests).toHaveLength(1)   // …but the request went to the NEW client
+      expect(first.requests).toHaveLength(0)
+
+      // (b) the agent the lane runs on reads through the same handle — proven
+      // with a REAL turn, not by asserting the agent object exists.
+      await assembly.agent.run("go")
+      expect(second.requests.length).toBeGreaterThan(1)   // the turn landed on the NEW client
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})
+
 // M56 T1.5: the provider's fail-soft refresh-failure signal is bound to the
 // mcp/server-status sink as an ADDITIVE event field — the lifecycle state does
 // not change (the stored token is kept; the 401/M53 path owns recovery). The

@@ -231,6 +231,10 @@ export interface SessionAssembly {
   session: Session // the live session — the source of truth
   sessionId?: string
   model: ModelClient // the resolved client (owner uses it for e.g. auto-title)
+  /** Swap the client this assembly's handle forwards to. Every holder follows —
+   * they all hold this same object. Identity of `model` does NOT change, which
+   * is deliberate: holders are never re-wired. */
+  setModel(client: ModelClient): void
   modelLabel?: string
   inbox: Inbox // the per-session serial lane's inbox (owner builds the A executor over it)
   telemetry?: Telemetry
@@ -327,12 +331,28 @@ const bindAuthRefreshStatus =
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
   // Resolve before mounting resources so a required-but-missing model cannot
   // leave a partially initialized assembly behind.
-  const model: ModelClient = opts.model ?? (() => {
+  //
+  // R-B1: ONE stable handle, ONE mutable target. The handle is what EVERY
+  // holder gets — the agent's deps, the subagent tools, the guardian, the team
+  // scheduler, and `assembly.model` itself — so a rebind is a single assignment
+  // and no holder has to be told. Changing the TYPE instead (`model: () =>
+  // ModelClient`) would have reached the same goal while touching ~85
+  // `createAgent` call sites; the handle costs none of that and keeps
+  // `assembly.model`'s identity stable across a rebind, so a holder can never
+  // be left holding a stale client.
+  //
+  // Design: protocol-selection §4.1 — which said "two consumers" and was
+  // measured wrong (a session's lifetime has eight holders). See the plan's
+  // scope ruling R-B1.
+  let currentModel: ModelClient = opts.model ?? (() => {
     if (opts.modelPolicy !== "test-mock") throw new ModelUnavailableError()
     return opts.mockScript === undefined && opts.mockCycles === true
       ? cyclicMockClient([{ role: "assistant", text: "ok" }])
       : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
   })()
+  const model: ModelClient = {
+    stream: (request) => currentModel.stream(request),
+  }
   const ctx: PluginContext = createContext()
   const tools = createToolRegistry(ctx)
 
@@ -937,6 +957,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
+      // R-B1: the one mutation a running session's model surface allows. The
+      // handle above keeps its identity, so every holder that captured it —
+      // the agent's deps, the subagent tools, the guardian, the team
+      // scheduler, auto-title — follows without being told.
+      setModel: (client) => { currentModel = client },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
