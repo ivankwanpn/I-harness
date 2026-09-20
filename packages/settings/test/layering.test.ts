@@ -23,6 +23,36 @@ async function waitFor(ready: () => boolean, timeoutMs = 3000): Promise<void> {
   }
 }
 
+/** Atomic replace (tmp + rename — the shape the store itself writes): ONE stat
+ * transition per file, so a case can count exactly one change per write. A plain
+ * `writeFile` truncates first and presents a second `mtime:size` state that the
+ * poll legitimately reports. */
+async function replaceFile(target: string, text: string): Promise<void> {
+  const tmp = `${target}.tmp`
+  await writeFile(tmp, text, "utf8")
+  await rename(tmp, target)
+}
+
+/** W1 rig for the QUEUE DRAIN: the reload reads (and its window opens), and the
+ * SECOND attempt then throws — so the entry the throwing cycle drains can only
+ * be recovered if the queue kept the detections behind it. */
+class DrainRigStore extends LayeredSettingsStore {
+  readonly reads: number[] = []
+  readonly attempts: number[] = []
+  override async reloadFromDisk(): Promise<Settings> {
+    const attempt = this.attempts.length
+    this.attempts.push(Date.now())
+    if (attempt === 1) {
+      await new Promise((r) => setTimeout(r, 50))
+      throw new Error("reload failed (W1 pin: the drained queue)")
+    }
+    const settings = await super.reloadFromDisk()
+    this.reads.push(Date.now())
+    await new Promise((r) => setTimeout(r, 250))
+    return settings
+  }
+}
+
 /** W1 rig: the store with the reload latency a loaded machine produces BY LUCK
  * injected deterministically — the in-flight window the conflate has to
  * survive. `reads` is pushed the instant the reload's file read finished,
@@ -227,6 +257,42 @@ describe("watchSettings (polling hot-reload)", () => {
       await rm(root, { recursive: true, force: true })
     }
   })
+
+  it("two files changed inside ONE tick are both reported (the second is deferred, not dropped)", async () => {
+    const root = await tmpRoot()
+    try {
+      const a = join(root, "a.json")
+      const b = join(root, "b.json")
+      // Atomic replacements (see replaceFile), so each round is exactly ONE
+      // change per file and the counts below are exact.
+      await replaceFile(a, "a-0")
+      await replaceFile(b, "b-0")
+      const changed: string[] = []
+      const { dispose: stop } = watchSettings([a, b], (path) => changed.push(path), { intervalMs: 60 })
+      try {
+        // Let the initial snapshot and a tick land, so no write can race the
+        // constructor's capture (a tick that sees no change re-snapshots).
+        await new Promise((r) => setTimeout(r, 200))
+        expect(changed).toHaveLength(0)
+        for (let round = 1; round <= 3; round += 1) {
+          // Both replacements complete long before the next capture, so ONE
+          // capture sees both files changed — the case where reporting the
+          // first and advancing every marker drops the second for good (its
+          // marker is what decides whether a change is ever re-detected).
+          await Promise.all([replaceFile(a, `a-${round}`), replaceFile(b, `b-${round}`)])
+          await new Promise((r) => setTimeout(r, 250)) // 4 ticks at 60ms
+        }
+        // Each round reports BOTH files; the second may arrive a tick later.
+        expect(changed.filter((p) => p === a)).toHaveLength(3)
+        expect(changed.filter((p) => p === b)).toHaveLength(3)
+        expect(changed).toHaveLength(6)
+      } finally {
+        stop()
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe("M40 A6: settings/changed telemetry on hot-reload", () => {
@@ -396,6 +462,45 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
       expect(changed()).toHaveLength(1)
       expect(changed()[0]!.data.path).toBe(file)
       expect(store.get().fontSize).toBe(16)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("a queue with more than one entry drains one cycle at a time — no entry is lost when the cycle between them fails", async () => {
+    const root = await tmpRoot()
+    try {
+      const a = join(root, "a.json")
+      const b = join(root, "b.json")
+      const c = join(root, "c.json")
+      await replaceFile(a, JSON.stringify({ fontSize: 14 }))
+      await replaceFile(b, JSON.stringify({ model: "b0" }))
+      await replaceFile(c, JSON.stringify({ searchBackend: "jsonl" }))
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = new DrainRigStore({ files: [a, b, c], watchIntervalMs: 10, telemetry })
+      await store.load()
+      const changed = () => events.filter((e) => e.type === "settings/changed")
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(0)
+      await replaceFile(a, JSON.stringify({ fontSize: 15 }))
+      await waitFor(() => store.reads.length >= 1) // cycle 1 has read (14, b0, jsonl)
+      // TWO detections land inside cycle 1's window: they queue behind it, and
+      // the cycle that drains the first of them throws.
+      await replaceFile(b, JSON.stringify({ model: "b1" }))
+      await replaceFile(c, JSON.stringify({ searchBackend: "sqlite" }))
+      await waitFor(() => changed().length >= 2)
+      await new Promise((r) => setTimeout(r, 60))
+      // Cycle 1 reports a. Cycle 2 (draining b) fails. Cycle 3 drains c, and its
+      // reload reads b's and c's settled state — one report, named c. It exists
+      // only because c's entry outlived the failed cycle; a queue consumed
+      // whole would have dropped it, and the watcher had already advanced its
+      // snapshot for c, so nothing would ever report it again.
+      expect(changed().map((e) => e.data.path)).toEqual([a, c])
+      expect(store.get().fontSize).toBe(15)
+      expect(store.get().model).toBe("b1")
+      expect(store.get().searchBackend).toBe("sqlite")
     } finally {
       await rm(root, { recursive: true, force: true })
     }
