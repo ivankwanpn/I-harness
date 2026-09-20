@@ -24,7 +24,7 @@
 | **W1** | **修 settings watcher race** | 三 | **✅ 完成**（`65838d8b`，修正輪中） | 無 |
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **研究完成 → 卡在 Q2**（I5 把它接上了自啟） | **Q2** |
-| **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`<SHA>`；見 §5 的完成記錄） | 無 |
+| **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；見 §5 的完成記錄） | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
@@ -347,7 +347,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
    （backlog 把它寫成「現成的紅燈」，**那是措辭比事實多**；這裡改成量到的說法。）
 3. **一個實測到的缺陷，靠寫測試才發現** —— `createRetryingClient` 的重試是**靜默的**，而它的用量事件第一版是即時 `yield` 的，所以**一次完成的往返收到兩份報告**。
 
-### ✅ **W4 已完成 —— `<SHA>`**（**SHA 不能在它存在之前寫下：`<SHA>` 由下一個 docs 提交補上**）
+### ✅ **W4 已完成 —— `b36be755`**（本體：`packages/core-agent/src/index.ts` ＋ 新測試檔 ＋ `packages/telemetry/src/metrics.ts` ＋ `apps/cli/src/run.ts` ＋ 佇列文件的 §1／§5／§9。**本記錄的狀態列在該提交內先寫成 `<SHA>` 佔位，SHA 由這個 docs 提交寫入 —— 它不能在存在之前被寫下**）
 
 設計依據 `docs/superpowers/specs/2026-09-18-m5-t2-prompt-cache-continuity-design.md` **§3.2 (a)–(d)**。**第二半落地，形狀逐條對應**：掛在 `provider/call`（**沒有新 telemetry code**）、指紋狀態在 agent closure、**沒有前一次時兩個欄位都缺席**。
 
@@ -775,7 +775,7 @@ return { …, status: settled?.status ?? "unknown",
 W1  修 settings watcher race        ← 現在做。它讓後面每一件的驗證站得住
 W2  修 SDK 訂閱洩漏                 ← ✅ 完成（`2bbf0d20`）＝照修但降級：契約釘住、路徑未武裝
 W3  schedule 的 spec                ← 先寫 spec，不要先接線
-W4  M5/T2 第二半                    ← ✅ 完成（`<SHA>`）：以自己的位元組做前綴比對 —— 見 §5 的完成記錄
+W4  M5/T2 第二半                    ← ✅ 完成（`b36be755`）：以自己的位元組做前綴比對 —— 見 §5 的完成記錄
 W5  M5/T4 schema 驗證層
 W6  M3 剩下兩項（79 站點；redaction 繼續量）
 W7  M6                              ← 依賴 M5
