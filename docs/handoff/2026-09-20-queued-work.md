@@ -31,7 +31,7 @@
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
 | **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
-| **W11** | **子代理的健康訊號**（三塊） | 三 | **▶ 進行中**（`bef1080f` 起） | 無 |
+| **W11** | **子代理的健康訊號**（三塊） | 三 | **✅ 完成**（三塊都在，見 §8.5 的完成記錄） | 無 |
 | **W12** | **`wait_agent` 的門檻**（第四塊，**另一條路徑**） | 三 | **未開始** | 無 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
@@ -531,6 +531,68 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 **Q2 = 否 在這裡被滿足得很乾淨**：**沒有任何東西開一個 turn** —— 那個區段是在**主代理本來就在跑的回合裡**被渲染的。
 
 **而它與 W10 是同一個形狀**（「超過 N ⇒ 告知」），**所以門檻的註解要說明它與誰的關係** —— 與 `shellBackgroundAfterMs` vs `shellTimeoutMs` 同一條紀律。**一個永遠不會觸發、或永遠在觸發的門檻，是同一種缺陷的兩面。**
+
+### ✅ **W11 已完成 —— 三塊**（本提交；實作於 `d4-endpoint-cache`）
+
+**三塊都落地，位置與上面那張表一一對應**（欄位名 `startedAt`、`list_agents` 那條、以及「只在字改變時渲染」的性質，與設計表逐字相同）。
+
+#### 1. 事實 —— `ChildAgentEntry.startedAt`（`packages/subagent/src/agent-table.ts:35`）
+
+**紀元毫秒，記的是「當前這一輪」的開始，不是條目的年齡**：`spawnChild` 建立條目時蓋一次（`packages/subagent/src/child.ts:305`）、`driveFollowups` 每次重新驅動時再蓋一次（`packages/subagent/src/tools.ts:690`），而**那是這個套件裡唯二寫 `status = "running"` 的地方**（`grep -n "status = \"running\"" packages/subagent/src` 的兩站都在這裡）。
+
+**選「本輪」而不是「出生」是刻意的，理由寫在欄位註解裡**：一個剛被喚醒的子代理**不可以**被報成「已經跑了 20 分鐘」——**這個訊號一旦說謊就沒有價值**。**同一個套件的 `JobSnapshot.startedAt` 是另一個時鐘**（工作建立時間、永不重蓋），任何一次 followup 之後兩者就不同。
+
+**讀的規則只有一處**：`runningElapsedMs`（`agent-table.ts:71`）—— **被問的那條與不必被問的那條都讀它**，所以區段不可能列出一個 `list_agents` 說「只跑了 3 秒」的子代理（有一條測試直接釘這個一致性）。
+
+#### 2. 被問的那條 —— `list_agents` 的 `elapsed_ms`（`packages/subagent/src/tools.ts:269`）
+
+**只有 running 的條目有這一欄**（settled 的沒有 —— **缺席，不是 0**），而**工具的 description 就把它寫出來了**（`:237`）：模型是從描述知道它存在的，不是從原始碼。
+
+⚠ **測試驅動的是真實時間**：子代理那一回合被一個 promise 扣住，兩次取樣之間**真的睡 120ms**，斷言的是**兩次讀數的差 ≥ 100ms**（`packages/subagent/test/tools.test.ts:1006`）。**沒有任何時鐘被 mock、注入或 stub。**
+
+#### 3. 不必被問的那條 —— `subagents` 區段（`packages/subagent/src/section.ts:34`）
+
+**這一塊能不能用，取決於它的文字不隨時間移動。** runtime-context 只在**渲染文字改變**時 append（`packages/runtime-context/src/index.ts`；釘住這條性質的是 `packages/runtime-context/test/runtime-context.test.ts:14`），所以**一段含計時的文字等於每分鐘寫一行日誌**。因此文字的**唯一輸入是「超過門檻的那個集合」**：路徑、role、job、門檻（常數）—— **不含量時**，需要數字的人被指去 `list_agents`。**一次跨越＝一行、一次離開＝一行、中間＝零行**，而那不是主張，是量到的（見下面的證偽 C）。
+
+**沒有 start stamp 的 running 條目不會被靜默丟掉**（`section.ts:46`）：它被報成 unknown。另一條路（沉默）講的其實是「沒有東西需要注意」——**那是這個 getter 不能做的斷言**。
+
+#### 旋鈕，與那句寫在兩個數字旁的話
+
+- `AssemblyOptions.subagentStaleAfterMs`（**預設 600_000／10 分鐘**；宣告在 `packages/session-executor/src/assembly.ts:258`、解析與警告在 `:491`），CLI 的 `HeadlessOptions` 同層加了一樣的欄位並轉發（`apps/cli/src/run.ts:148`、`:498`）——「同一個層級」在**兩個宿主契約**都成立（W10 的處置）。
+- **關係寫在數字旁**（`:254` 那段註解），**兩個錨點**：**300_000**（`wait_agent` 的 clamp ＋ `spawn_agent background:false` 的等待 —— 主代理自己最多願意等多久）與**「已經跑了 20 分鐘」**（本文件 §8.5 W11）。門檻必須**高於前者**（否則報的是等待者剛剛親自等到的事）、**低於後者**（否則訊號來得太晚），而且**仍要高於一次正常的子代理回合**（否則區段在每一步都變成壁紙）。
+- **兩側的誤設都出聲**（`:492`／`:496`）：**非正數**（0／負／NaN，用 `!(x > 0)` 一次抓）＝每個子代理一啟動就「過期」；**非有限**（Infinity）＝**永遠不觸發，而它的沉默與「沒有東西需要注意」無法區分**。這是唯一同時握有兩個解析後值（含預設）的站點 —— 與 W10 F1 同一個處置。
+
+#### 量到的
+
+- **全套**：`2614 passed · 0 failed · 9 skipped`（66 個 package；**執行前先寫下預期 2614 = 2601 + 13**：subagent 9（`section.test.ts` 6 ＋ `tools.test.ts` 3）＋ session-executor 3 ＋ CLI 1）。`pnpm typecheck` 綠。`node scripts/audit/check-reachability.mjs --gate` → **`gate PASS -- no new rows`**。
+- **匯出的處置**：`createStaleSubagentsSection` 與它的消費者（assembly）**同一個提交**；**`StaleSubagentsSectionOptions` 刻意不進 barrel** —— 沒有消費者指名它，barrel 匯出會變成一列新的 row（可達性儀器把 `export interface` 算成 row）。
+- **既有測試一條沒改**：新增的全部在新檔案或新的 describe 裡。
+
+#### 「沒有任何東西會開一個 turn」—— **量到的，不是靠建構**
+
+`packages/session-executor/test/subagent-stale-section.test.ts` 的第二條：主代理的回合**已經結束**（一個 blocking 的子代理還在跑），**閒置 400ms —— 8 倍於當時的 50ms 門檻**（子代理是在那次 run 結束前建立的，所以這 400ms 是它年齡的**下界**）。實測：**新增事件 0、模型呼叫 0、`turn/start` 數不變**，而同一刻它在 `tasks()` 裡的列還是 running（證明那個視窗不是空的）。**區段是在 `agent/pre-step` 渲染的，而沒有回合就沒有 step。**
+
+#### 證偽（**每一塊一條，各有指名紅行**）
+
+| | 破壞什麼 | 紅在哪一行（實測） |
+|---|---|---|
+| **A**（第一塊） | 拿掉 `spawnChild` 的 `startedAt: Date.now()` | `packages/subagent/test/tools.test.ts:999`：`expected 'undefined' to be 'number'`；**`packages/subagent/test/section.test.ts:89`：`expected 'Sub-agent runs with no start time rec…' to be ''` —— 未知那一臂當場接手**，這就是它存在的理由；另有 `:139`／`:156`／`:196` |
+| **B**（第二塊） | `runningElapsedMs` 回固定的 `0`（時鐘凍住，但仍是一個數字） | `packages/subagent/test/tools.test.ts:1006`：`expected 0 to be greater than or equal to 100` —— **就是「驅動真實時間」那條斷言**；`section.test.ts:93`／`:123`／`:135`／`:155`／`:191` 同時紅 |
+| **C**（第三塊） | 把粗粒度的已跑時間塞進區段文字 | `packages/subagent/test/section.test.ts:124`：`expected 5 to be 1`（400ms 內五次取樣五種字）**＋** `packages/session-executor/test/subagent-stale-section.test.ts:104`：`expected [ …(2) ] to have a length of 1 but got 2` —— **日誌裡真的多了一行**，這就是「噪音」的實測 |
+| **D**（旋鈕的路由） | 拿掉 CLI 的轉發行 | `apps/cli/test/context-instructions.test.ts:50`：`expected false to be true` |
+
+#### 沒有做的（明說）
+
+- **W12 不在這裡**（`wait_agent` 上的門檻）—— 依本節的裁定另立一項：那是**另一條路徑**（阻塞的等待 vs 正在跑的迴圈），而**前三塊不因它未做而做錯**。
+- **`startedAt` 不進持久化快照**：restored 的條目**永遠不會是 running**（`restoreState` 把 running 映射成 `error`），所以那時它沒有東西可蓋；被喚醒時 `driveFollowups` 蓋新的。欄位註解寫明了這一點。
+- **CLI 那條只釘住「路由」**（值有沒有到達它指名的那個旋鈕），**不是行為** —— 行為由 assembly 層那條端到端測試釘住。**一個假裝在測出貨路徑的測試，比沒有測試更糟**（W2 的同一條處置）。
+
+#### §0 規則三的即時示範（**兩次，都是我造成的**）
+
+1. 旋鈕註解的第一版引的是 `packages/subagent/src/tools.ts:184`／`:198`（那兩個 300_000）。**那兩行是被同一個提交裡我自己加的 import 移走的** —— 它們現在是 `:185`／`:199`。**已改成符號**（`wait_agent` 的 clamp／`spawn_agent background:false`），**文件那條也已從行號改成「§8.5 W11」**（那份文件每個單元都在編輯）。
+2. **這一節自己的引用**：它先寫下 `section.ts:33`／`:45`，然後**我為了順一句註解的措辭多加了半行**，那兩個數字當場變成 `:34`／`:46`。
+
+**兩次都是「改動引用的那個檔案 ⇒ 引用當場腐」**，而兩次都是**交付前那條強制的重測**抓到的（§0 規則三的後半句就是為此存在）。§0 說這條教訓在本分支出現過四次；**這是同一類的兩次**，而它多給了一句：**同一批改動裡既要引用、又要改被引用的檔案時，先寫符號；行號只在最後一次編輯之後量。**
 
 ### **W12 —— 第四塊，另立一項（`wait_agent` 的門檻）**
 

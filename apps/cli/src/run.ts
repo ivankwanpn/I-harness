@@ -138,6 +138,14 @@ export interface HeadlessOptions {
    * `shellTimeoutMs` (at or above it the deadline wins and this never fires).
    * See AssemblyOptions.shellBackgroundAfterMs. */
   shellBackgroundAfterMs?: number
+  /** W11: how long a sub-agent may run before the main agent is told about it
+   * — the `subagents` runtime-context section names the children past this
+   * threshold at the next step boundary, and `list_agents` reports each one's
+   * `elapsed_ms`. Default 600_000 (10 min); it starts no turn (idle self-wake
+   * is a settled NO), so an idle session stays idle however long a child runs.
+   * See AssemblyOptions.subagentStaleAfterMs for the relationship between this
+   * number and the parent's own blocking waits. */
+  subagentStaleAfterMs?: number
   shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_000 headTail)
   retry?: RetryConfig // M12: opt-in tool retry-on-timeout (re-runs timed-out tools)
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10)
@@ -487,6 +495,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       approveAll: opts.approveAll,
       ...(opts.shellTimeoutMs !== undefined ? { shellTimeoutMs: opts.shellTimeoutMs } : {}),
       ...(opts.shellBackgroundAfterMs !== undefined ? { shellBackgroundAfterMs: opts.shellBackgroundAfterMs } : {}),
+      ...(opts.subagentStaleAfterMs !== undefined ? { subagentStaleAfterMs: opts.subagentStaleAfterMs } : {}),
       ...(opts.shellRetention !== undefined ? { shellRetention: opts.shellRetention } : {}),
       ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),

@@ -4,7 +4,7 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
-import type { ModelClient } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { registerExec } from "@i-harness/exec"
 import { createWorkflowExecutor, createWorkflowJobStore, type WorkflowDefinition } from "@i-harness/workflow"
 import { createJobRegistry } from "../src/jobs.ts"
@@ -926,5 +926,149 @@ describe("M26-D1 spawn_agent task records", () => {
     expect(b.task_id).toBe(a.task_id)
     expect(tasks.list()).toHaveLength(1)
     await expect(spawn.execute({ message: "different", task_name: "h" }, { sessionId: "s-main", callEventSeq: 3 })).rejects.toThrow(/identity conflict/i)
+  }, 15_000)
+})
+
+// ── W11: `list_agents` reports the elapsed of a running child ────────────────
+// Every case here runs on the REAL clock: the child's model turn is held by a
+// promise, so the child is genuinely `running` for the duration the case waits,
+// and the durations asserted are durations that actually passed. No clock is
+// mocked or injected, and the elapsed is never read from a fixture.
+describe("W11 elapsed on a running subagent", () => {
+  function gatedClient(gates: Promise<void>[]): ModelClient {
+    let call = 0
+    return {
+      async *stream(_request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        const gate = gates[Math.min(call, gates.length - 1)]
+        call += 1
+        await gate
+        yield { type: "text/chunk", text: "child done" }
+        yield { type: "end" }
+      },
+    }
+  }
+
+  function deferred(): { promise: Promise<void>; resolve: () => void } {
+    let resolve!: () => void
+    const promise = new Promise<void>((r) => { resolve = r })
+    return { promise, resolve }
+  }
+
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+  async function waitFor(cond: () => boolean, budgetMs = 5000): Promise<void> {
+    const deadline = Date.now() + budgetMs
+    while (!cond()) {
+      if (Date.now() > deadline) throw new Error("waitFor: condition not met within budget")
+      await sleep(5)
+    }
+  }
+
+  /** tools.test.ts `setup`, with the parent model swapped for a gated one (the
+   * child inherits it: no role in this file declares a model). */
+  function gatedSetup(model: ModelClient) {
+    const ctx = createContext()
+    const parentReg = createToolRegistry(ctx)
+    parentReg.register({ name: "read", description: "read", inputSchema: {}, execute: async () => ({}) })
+    const session = createSession()
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const roles = createRoleRegistry()
+    for (const r of builtinRoles()) roles.register(r)
+    const tools = createSubagentTools({
+      table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
+      parentModel: model, resolveModel: noRoleModel,
+      exec: registerExec(createContext()), agents: createAgentRegistry(), tasks: createTaskRegistry(),
+    })
+    return { table, tools }
+  }
+
+  type ListRow = { path: string; status: string; elapsed_ms?: number }
+
+  it("reports elapsed_ms for a running child, from the real clock (two samples, growing)", async () => {
+    const gate = deferred()
+    const { table, tools } = gatedSetup(gatedClient([gate.promise]))
+    const spawn = tools.find((t) => t.name === "spawn_agent")!
+    const list = tools.find((t) => t.name === "list_agents")!
+
+    await spawn.execute({ message: "work", task_name: "helper" }, {})
+    const first = ((await list.execute({}, {})) as { agents: ListRow[] }).agents
+    expect(first).toHaveLength(1)
+    expect(first[0]!.path).toBe("root/helper")
+    expect(first[0]!.status).toBe("running")
+    expect(typeof first[0]!.elapsed_ms).toBe("number")
+
+    await sleep(120) // real time passes; nothing is mocked
+    const second = ((await list.execute({}, {})) as { agents: ListRow[] }).agents
+    // The second reading is the first plus at least the sleep that really
+    // elapsed — which is what "drives real elapsed time" means: a frozen or
+    // fabricated stamp would fail this line, not merely a wrong constant.
+    expect(second[0]!.elapsed_ms! - first[0]!.elapsed_ms!).toBeGreaterThanOrEqual(100)
+
+    gate.resolve()
+    await waitFor(() => table.get("root/helper")!.status !== "running")
+  }, 15_000)
+
+  it("a re-driven child's elapsed restarts with the new run", async () => {
+    // The STAMP is asserted exactly, not by a duration bound: a stale stamp and
+    // a re-stamped one differ by the 500ms planted below, and the assertion
+    // compares against an instant the test itself recorded — immune to a loaded
+    // machine, unlike an "elapsed should be small" bound.
+    const ctx = createContext()
+    const parentReg = createToolRegistry(ctx)
+    const session = createSession()
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const roles = createRoleRegistry()
+    for (const r of builtinRoles()) roles.register(r)
+    const agents = createAgentRegistry()
+    const followup = vi.fn().mockResolvedValue({ finalText: "again", turns: 1, reasoning: [] })
+    agents.register("child-1", { run: vi.fn(), followup } as unknown as Agent)
+    const entrySession = createSession()
+    append(entrySession, { type: "subagent/inbox", messageId: "m1", message: "again" })
+    // The entry as a woken child finds it: settled, with the stamp of the run
+    // that ended 500ms ago (spawn-time semantics would have kept that stamp).
+    const staleStamp = Date.now() - 500
+    table.add("root/helper", {
+      path: "root/helper",
+      status: "waiting",
+      session: entrySession,
+      controller: new AbortController(),
+      mailbox: [],
+      sessionId: "child-1",
+      roleName: "general",
+      startedAt: staleStamp,
+    })
+    const tools = createSubagentTools({
+      table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
+      parentModel: createMockClient([{ role: "assistant", text: "unused" }]), resolveModel: noRoleModel,
+      exec: registerExec(createContext()), agents, tasks: createTaskRegistry(),
+    })
+    const follow = tools.find((t) => t.name === "followup_task")!
+    const entry = table.get("root/helper")!
+
+    const calledAt = Date.now()
+    await follow.execute({ target: "root/helper", message: "again" }, {})
+    await entry.followupChain
+    expect(followup).toHaveBeenCalledWith("again", expect.any(AbortSignal))
+    expect(entry.status).toBe("waiting")
+    expect(entry.startedAt!).toBeGreaterThanOrEqual(calledAt)
+    expect(Date.now() - entry.startedAt!).toBeLessThan(500) // a fresh clock, not the 500ms-old one
+  }, 15_000)
+
+  it("omits elapsed_ms once the run has settled — absent, never 0", async () => {
+    const gate = deferred()
+    const { table, tools } = gatedSetup(gatedClient([gate.promise]))
+    const spawn = tools.find((t) => t.name === "spawn_agent")!
+    const list = tools.find((t) => t.name === "list_agents")!
+
+    await spawn.execute({ message: "work", task_name: "helper" }, {})
+    gate.resolve()
+    await waitFor(() => table.get("root/helper")!.status !== "running")
+    const row = ((await list.execute({}, {})) as { agents: ListRow[] }).agents[0]!
+    expect(row.status).toBe("waiting")
+    // A settled child has no run in flight; a stale duration would read as if
+    // it did, and 0 would read as "just started".
+    expect(row.elapsed_ms).toBeUndefined()
   }, 15_000)
 })

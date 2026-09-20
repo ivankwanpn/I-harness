@@ -13,6 +13,7 @@ import type { WorkflowExecutor } from "@i-harness/workflow"
 import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
+import { runningElapsedMs } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
 import { declaredRoleModel, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
@@ -231,9 +232,9 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const listTool: Tool<{ path_prefix?: string; scope?: "children" | "descendants" }, { agents: { path: string; status: string; roleName?: string; jobId?: string; sessionId?: string; finalText?: string; error?: string }[] }> = {
+  const listTool: Tool<{ path_prefix?: string; scope?: "children" | "descendants" }, { agents: { path: string; status: string; elapsed_ms?: number; roleName?: string; jobId?: string; sessionId?: string; finalText?: string; error?: string }[] }> = {
     name: "list_agents",
-    description: "List live subagents in the current tree with their role/job/session details. scope 'children' lists only direct children of the prefix (default base 'root'), 'descendants' the whole subtree; without scope, path_prefix keeps the legacy startsWith filter.",
+    description: "List live subagents in the current tree with their role/job/session details. A RUNNING agent's row also carries elapsed_ms — how long its current run has been going (a re-driven child's clock restarts with the new run) — so a long-running child is distinguishable from one that just started. scope 'children' lists only direct children of the prefix (default base 'root'), 'descendants' the whole subtree; without scope, path_prefix keeps the legacy startsWith filter.",
     inputSchema: { type: "object", properties: { path_prefix: { type: "string" }, scope: { type: "string", enum: ["children", "descendants"], description: "children = direct children only; descendants = the whole subtree below the prefix." } } },
     isReadOnly: true,
     execute: async (args) => {
@@ -254,15 +255,25 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
           }
           return e.path.startsWith(prefix) // legacy behavior (backward compat)
         })
-        .map((e) => ({
-          path: e.path,
-          status: e.status,
-          ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
-          ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
-          ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
-          ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
-          ...(e.error !== undefined ? { error: e.error } : {}),
-        }))
+        .map((e) => {
+          // W11: the asked path. `elapsed_ms` is present for a RUNNING child
+          // only — a settled one has no run in flight, and a stale duration
+          // would read as if it did. Absent, never 0: `runningElapsedMs`
+          // returns undefined for both "not running" and "no stamp", and the
+          // section (the unasked path) is where a running-but-unstamped entry
+          // is called out rather than silently dropped.
+          const elapsed = runningElapsedMs(e)
+          return {
+            path: e.path,
+            status: e.status,
+            ...(elapsed !== undefined ? { elapsed_ms: elapsed } : {}),
+            ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+            ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
+            ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
+            ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
+            ...(e.error !== undefined ? { error: e.error } : {}),
+          }
+        })
       return { agents }
     },
   }
@@ -671,6 +682,12 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
       if (!deps.table.get(entry.path)) return // closed mid-drain → stop
       entry.lastInboxSeq = ev.seq ?? 0
       entry.status = "running"
+      // W11: a re-drive starts a NEW run, so the start stamp moves with the
+      // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp
+      // here would report a child woken a moment ago as one that has been
+      // running since it was spawned — the exact wrong answer W11's signal
+      // exists to prevent.
+      entry.startedAt = Date.now()
       entry.controller = new AbortController() // fresh signal per turn (interrupt targets this)
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
