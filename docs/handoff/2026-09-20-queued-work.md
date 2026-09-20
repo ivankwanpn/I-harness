@@ -22,7 +22,7 @@
 | # | 項目 | 來源 | 狀態 | 卡在 |
 |---|---|---|---|---|
 | **W1** | **修 settings watcher race** | 三 | **✅ 完成**（`65838d8b`，修正輪中） | 無 |
-| **W2** | 修 SDK 的訂閱洩漏 | 三 | **研究完成 → 照修但降級**（路徑不可達、觀測不到；見 §3） | 無 |
+| **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **研究完成 → 卡在 Q2**（I5 把它接上了自啟） | **Q2** |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | 未開始 | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
@@ -176,7 +176,7 @@ void this.reloadFromDisk().then((settings) => {
 
 ⚠ **那條以今天的接縫不可能滿足，而我當初寫的時候沒有量。** 量到的：`subscribers` 是 `core-session` 的**模組私有 `WeakMap`**（`packages/core-session/src/index.ts:308`，沒有匯出存取器）；`assemblyUnsubscribes` 是 `server.ts:170` 的**函式內 const**；`SdkServer` 只暴露 `handleLine`／`onNotify`／`close`。**沒有東西能數訂閱。**
 
-**更正後的驗收**：修好之後，**測試直接釘那個 map 的契約**（用 `assembly.ts:167` 支援的靜態 `session:` 選項驅動兩次 `onAssembly`，或對 stub 連續觸發兩次掛鉤），**並在測試裡明說它釘的是「覆寫前先退訂」這個契約、不是一條出貨路徑** —— 因為**出貨路徑今天不可達**（見下）。
+**更正後的驗收**：修好之後，**測試直接釘那個 map 的契約**（用 `AssemblyOptions.session` 支援的靜態 `session:` 選項驅動兩次 `onAssembly`，或對 stub 連續觸發兩次掛鉤），**並在測試裡明說它釘的是「覆寫前先退訂」這個契約、不是一條出貨路徑** —— 因為**出貨路徑今天不可達**（見下）。
 
 **一個假裝在測出貨路徑的單元測試，比沒有測試更糟。**
 
@@ -205,6 +205,24 @@ void this.reloadFromDisk().then((settings) => {
 
 ### 已知的坑
 階段 B **移除了 SDK server 的 `closeSession`**，所以**在 sdk 行程裡這條重建路徑現在跑不到**。修它必須**先證明路徑可達**（或在別處驅動），否則就是修一條沒有輸入的路 —— **那是這份文件在別處拒絕的那種東西。**
+
+### ✅ **W2 已完成 —— `2bbf0d20`**（**照修、降級的理由不變**）
+
+**修法（三行）**：組裝橋在 `assemblyUnsubscribes.set(...)` **之前**先做 `assemblyUnsubscribes.get(assembly.sessionId)?.()`（本提交 `server.ts:182`）—— 舊訂閱先釋放，再存新的。**順序是負載的**：若改成「先 `set`、再讀回那個槽退訂」，退掉的是**新的**那個 closure（這個反向變體實測過，見下的第二條證偽）。註解寫明 map 每個 session 只留一個、以及被覆寫的 closure 為何**永遠不可達**（`close()` 只迭代當前值）。
+
+**測試**（`packages/sdk/test/server.test.ts`，describe `createSdkServer assembly bridge (W2)`）：**它自己就寫明它釘的是 map 的契約、不是出貨路徑**（理由：見上，一個字沒改）。驅動方式：**真的 `SessionService`** ＋ `AssemblyOptions.session`（host-pre-seeded；`sessionFor` 缺席時每次建置都解析成**同一個 Session 物件** —— 那條漏掉的 closure 只有在這個形狀下才會繼續送事件），再用 **`closeSession` → `assemblyFor`** 直接驅動一次重建。三條斷言，值都是量到的：重建前 **1**（基準 —— 證明底下那條「1」不是真空的）、重建後 **1**（修正前 **2**）、`close()` 後 **0**。
+
+**證偽（兩條，各有指名紅行）**：
+- 還原成裸 `.set` → **`test/server.test.ts:1396`**：`expected 2 to be 1`。
+- 反向寫法（重建時退訂「讀回槽裡的那個」）→ 前兩條照過（所以那兩條抓不到它），**`test/server.test.ts:1404`**：`expected 1 to be +0` —— **`close()` 那條是唯一的捕捉者**，這就是它存在的理由，不是裝飾。
+
+**量到的**：`2601 passed · 0 failed · 9 skipped`（執行前先寫下預期 2601 = 2600 + 1；66 個 package）、`pnpm typecheck` 綠、`gate PASS -- no new rows`（**沒有新匯出**）。
+
+**沒有動的**：`apps/cli/src/index.ts` 的 `liveAssemblies`（同一類、隔壁那個檔）—— 依裁定不動：它正確的拆除點是**組裝銷毀**，而 `SessionService` 沒有 `onAssemblyDisposed`。**武裝那個觸發條件的人一次處理兩個。**
+
+#### ⚠ 本輪順帶更正一條過期引用，與三條重測（§0 規則三）
+
+本節驗收段原本引的 **`assembly.ts:167`** 在本提交上**已過期** —— host-pre-seeded `session` 選項今天在 **`packages/session-executor/src/assembly.ts:176`**（W10 那批插入把它移走了）。**已改成符號 `AssemblyOptions.session`**：行號會再一次被下一次插入移走，符號不會。其餘三條在同一個提交上 `grep -n` 重測，**仍然正確**：`core-session/src/index.ts:308`（模組私有 `subscribers`）、`session-executor/src/service.ts:366`（hook 唯一的觸發點）、`server.ts:170`（函式內 const）。
 
 ---
 
@@ -471,7 +489,7 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 ```
 W1  修 settings watcher race        ← 現在做。它讓後面每一件的驗證站得住
-W2  修 SDK 訂閱洩漏                 ← 但要先證明路徑可達，否則先不做
+W2  修 SDK 訂閱洩漏                 ← ✅ 完成（`2bbf0d20`）＝照修但降級：契約釘住、路徑未武裝
 W3  schedule 的 spec                ← 先寫 spec，不要先接線
 W4  M5/T2 第二半                    ← 路線圖的下一個實作
 W5  M5/T4 schema 驗證層
@@ -482,6 +500,7 @@ W8  M7                              ← 等 Q1／Q2
 
 **W1 為什麼第一**：它不只是「一個 bug」—— 它是**驗證的地基**。**一個一半機率說謊的套件，讓後面每一項的「綠」都不可信。**
 **W2 為什麼第二但可能不做**：它是真缺陷，但**階段 B 移除了它的觸發路徑** —— **先證明可達，否則就是修一條沒有輸入的路。**
+**（2026-09-20 結案）**：可達性**量測完是「不可達」**，所以裁定改成**照修但降級** —— 修的是**共享路徑上的潛伏缺陷**，而**測試明說它釘的是契約**（§3 的記錄、紅行在那裡）。**武裝那個觸發條件的人（加 `session/close`）就是重新審這個契約的人。**
 
 ---
 
