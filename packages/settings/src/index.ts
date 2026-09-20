@@ -1288,8 +1288,13 @@ export class LayeredSettingsStore {
       if (!this.reloadPending.includes(path)) this.reloadPending.push(path)
       return
     }
+    // NOTE: no queue clear here. This is also the re-check's entry point, and a
+    // re-check must not drop the detections queued behind the one it resolves
+    // (they drain one per cycle, see recheckPendingChange). Nothing is pending
+    // when a ROOT cycle starts: `reloadInFlight` is only ever false with an
+    // empty queue — the settle clears the flag and starts the next re-check in
+    // the same synchronous block, so no detection can slip between them.
     this.reloadInFlight = true
-    this.reloadPending = []
     // The pre-reload view is the change baseline: reloadFromDisk → load()
     // ALREADY assigns this.current, so comparing against this.current here
     // would always compare the merged view to itself (the dormant
@@ -1319,12 +1324,22 @@ export class LayeredSettingsStore {
   }
 
   /**
-   * Resolve the detections that arrived while a reload was in flight, from
-   * EITHER settle path: the first of them starts a fresh reload whose
-   * comparison baseline is the state the previous one produced (`this.current`
-   * — unchanged by a reload that threw). A detection that merely re-observed
-   * the change just reported compares equal and emits nothing; a write the
-   * previous reload did not read differs and reports once, under its OWN path.
+   * Resolve ONE detection that arrived while a reload was in flight, from
+   * EITHER settle path (the success path and the `catch` — a reload that threw
+   * reported nothing, so it excludes no path). The entry starts a fresh reload
+   * whose comparison baseline is the state the previous one produced
+   * (`this.current` — unchanged by a reload that threw). A detection that
+   * merely re-observed the change just reported compares equal and emits
+   * nothing; a write the previous reload did not read differs and reports once,
+   * under its OWN path.
+   *
+   * ONE entry per cycle, never the whole queue: an entry's change may be read
+   * by a later cycle than the one that drained the entry before it (this reload
+   * may itself fail, or may have read the disk before that write landed), and
+   * the watcher advanced its snapshot when it fired — so a dropped entry is a
+   * change that is never reported again. Each remaining entry gets its own
+   * cycle this way; one whose change is already covered compares equal, emits
+   * nothing, and is gone.
    *
    * `reportedPath` is the file the settled reload has ALREADY reported
    * (undefined when it reported nothing). The re-check prefers a pending path
@@ -1336,10 +1351,10 @@ export class LayeredSettingsStore {
    * file anyway; the state comparison, not this choice, decides what fires.
    */
   private recheckPendingChange(reportedPath: string | undefined): void {
-    const pending = this.reloadPending
-    this.reloadPending = []
-    if (pending.length === 0) return
-    this.handleWatchedChange(pending.find((p) => p !== reportedPath) ?? pending[0]!)
+    const index = this.reloadPending.findIndex((p) => p !== reportedPath)
+    if (index === -1 && this.reloadPending.length === 0) return
+    const next = this.reloadPending.splice(index === -1 ? 0 : index, 1)[0]!
+    this.handleWatchedChange(next)
   }
 }
 
@@ -1425,7 +1440,13 @@ export function watchSettings(
       capturing = false
       for (const [file, info] of snap) {
         if (snapshot.get(file) !== info) {
-          snapshot = snap
+          // One batch per tick — and advance ONLY the marker of the file just
+          // reported. Advancing the whole capture would record every other
+          // changed file as seen while reporting one of them, so their changes
+          // would be DROPPED rather than deferred (this snapshot is the only
+          // place a change is ever detected). The next tick re-finds them and
+          // reports the next one; the rest wait their turn.
+          snapshot.set(file, info)
           onChange(file)
           return // one batch per tick
         }
