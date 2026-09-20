@@ -70,6 +70,18 @@ export async function executeToolCalls(
   let committed = 0
   let aborted = opts.signal?.aborted ?? false
   let firstError: unknown
+  // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
+  // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
+  // call gets a result and the turn continues. Every OTHER throw that reaches
+  // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
+  // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
+  // denied), and a throwing commit-lane listener.
+  //
+  // Structural, not a list: the SITE of the throw is the classification, so a
+  // fifth refusal added to `prepare` tomorrow is loud without anyone
+  // remembering to add it here. (A list is what gets forgotten — which is how
+  // the first draft of this task got it wrong.)
+  let firstRefusal: unknown
   // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
   // path said "drain started (results discarded)" and awaited `allSettled`, so a
   // failed call left its siblings running — a `bash` still spawning, a fetch
@@ -209,7 +221,11 @@ export async function executeToolCalls(
       if (firstError || aborted) break
     }
   } catch (err) {
-    firstError ??= err
+    if (firstError === undefined) firstError = err
+    // Anything thrown outside the dispatch `.catch` is a refusal. It DOMINATES:
+    // a policy refusal must never be silently downgraded by a coincident body
+    // failure, so a refusal that arrives second still wins.
+    firstRefusal ??= err
   }
 
   // Abort dominates: drain started, commit in model order, synthesize.
@@ -253,6 +269,15 @@ export async function executeToolCalls(
     throw new Error("agent aborted")
   }
 
+  // A refusal is never soft. Drain first (a started sibling must not be left
+  // running), then rethrow — this is byte-for-byte the pre-block-① behavior
+  // for every refusal, which is the point.
+  if (firstRefusal !== undefined) {
+    await Promise.allSettled([...inFlight.values()])
+    inFlight.clear()
+    throw firstRefusal
+  }
+
   // Failure: cancel the siblings (M5 T4), then COMMIT — every DISPATCHED call
   // ends in exactly one tool/result. This used to `throw firstError` and
   // discard the batch; fs/src/error.ts records the consequence in its own
@@ -263,6 +288,9 @@ export async function executeToolCalls(
   // happened get written down" (honestly). Discarding the siblings' already
   // settled results made the M5 T4 cancellation pointless — they were
   // cancelled AND thrown away.
+  //
+  // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
+  // from a tool body. A refusal never gets here.
   if (firstError) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
