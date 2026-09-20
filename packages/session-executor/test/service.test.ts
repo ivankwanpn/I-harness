@@ -88,13 +88,13 @@ describe("createSessionService", () => {
 
   it("R-B1 holder 7 — the service dispenses the LIVE assembly, so a rebind reaches a submitted turn", async () => {
     // R-B1's table row 7 is the service's memoised binding (bindingFor →
-    // `modelBindings.set(sessionId, pending)`, service.ts:241, consumed as
-    // `model: binding.model,` at :316). What is REACHABLE from it is the
+    // `modelBindings.set(sessionId, pending)`, service.ts:243, consumed as
+    // `model: binding.model,` at :322). What is REACHABLE from it is the
     // assembly the service hands out: `assemblyFor` is cache-first and returns
-    // the stored reference (service.ts:625 `assemblyFor: getOrCreate,`), so a
+    // the stored reference (service.ts:631 `assemblyFor: getOrCreate,`), so a
     // rebind applied to that object is a rebind applied to the session the
     // service is running — the object Task 4's `SessionService.rebindModel`
-    // mutates through `assembly.setModel` (service.ts:261-277).
+    // mutates through `assembly.setModel`/`setReasoningEffort` (service.ts:263-283).
     //
     // LIMITER, recorded not asserted (Task 4's F1 named it; Task 4 resolved it
     // by making the reporting follow — the complete rebind is
@@ -168,13 +168,23 @@ describe("createSessionService", () => {
     }
     const first = recording("old endpoint")
     const second = recording("new endpoint")
-    const rebound = { model: second.model, providerId: "fixture", modelId: "two", label: "fixture:two" }
+    const rebound = {
+      model: second.model,
+      providerId: "fixture",
+      modelId: "two",
+      label: "fixture:two",
+      reasoningEffort: "high" as const,
+    }
     const service = createSessionService({
       workspace: process.cwd(),
       modelPolicy: "required",
+      // The construction-time effort is "low": Task 4 review F-1 was that a live
+      // rebind moved the client but left this frozen at the construction value —
+      // the RPC answered `ready` and the durable header recorded "high" while
+      // the wire kept sending "low".
       modelBindingFor: async () => ({
         status: "ready",
-        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one" },
+        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one", reasoningEffort: "low" },
       }),
     })
 
@@ -205,11 +215,21 @@ describe("createSessionService", () => {
       expect(deriveMessages(assembly.session).at(-1)?.content).toBe("new endpoint")
       expect(second.requests.length).toBeGreaterThan(0)
       expect(first.requests).toHaveLength(0)
+      // F-1, pinned on the WIRE: the effort the request carries is the rebind's,
+      // not the construction binding's. This asserts the request, never the
+      // binding — a frozen deps property sends "low" here.
+      expect(second.requests[0]?.reasoningEffort).toBe("high")
 
-      // A session with NO live assembly: there is nothing to retarget, so the
-      // call reports false — never a silent success — while the reporting
-      // binding still follows (the next modelState, and any build this process
-      // starts, reads the installed binding).
+      // ...and a rebind whose selection names NO effort CLEARS the old one: the
+      // previous value must not survive as a stale field on later requests.
+      service.rebindModel("s1", { model: second.model, providerId: "fixture", modelId: "two", label: "fixture:two" })
+      await service.submit("s1", "again", new AbortController().signal)
+      expect(second.requests[1]?.reasoningEffort).toBeUndefined()
+
+      // Control (the reviewer's dormant probe): with NO live assembly the new
+      // binding is what the next build — still in this process — starts from,
+      // effort included. The gap was specific to the live path; this half
+      // already worked and must keep working.
       expect(service.rebindModel("s2", rebound)).toBe(false)
       await expect(service.modelState("s2")).resolves.toEqual({
         status: "ready",
@@ -217,6 +237,9 @@ describe("createSessionService", () => {
         modelId: "two",
         label: "fixture:two",
       })
+      await service.assemblyFor("s2")
+      await service.submit("s2", "dormant", new AbortController().signal)
+      expect(second.requests[2]?.reasoningEffort).toBe("high")
     } finally {
       await service.close()
     }

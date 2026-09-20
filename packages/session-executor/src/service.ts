@@ -119,8 +119,10 @@ export interface SessionService {
    * install reach the two REPORTING surfaces as well: the memoised binding
    * (what `modelState` and the dashboard row report — previously only
    * `closeSession` cleared it) and, when the session is LIVE, the assembly's
-   * handle plus its label. It NEVER disposes an assembly: the live rebind IS
-   * the point. Returns whether a live assembly was retargeted; false means
+   * handle plus its label, and the binding's reasoning effort — the whole
+   * resolved selection, so no field of it can go stale (review F-1; an absent
+   * effort CLEARS the live one). It NEVER disposes an assembly: the live rebind
+   * IS the point. Returns whether a live assembly was retargeted; false means
    * nothing was live, and the refreshed binding is what the next build in this
    * process starts from. KNOWN BOUNDARY, not a silent one: the assembly's
    * compaction WINDOW is construction-time config (`contextWindow` →
@@ -269,8 +271,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (assembly === undefined) return false
     // The SPENDING half: one assignment on the identity-stable handle, so every
     // holder (turn loop, compaction engine, subagents, guardian, team, title)
-    // follows without being told (R-B1 / Task 1).
+    // follows without being told (R-B1 / Task 1). The effort is the second cell
+    // of the same surface (review F-1): the binding's effort — including
+    // `undefined`, which CLEARS it — must move with the client, or the wire
+    // keeps sending the construction-time value while the RPC answers `ready`.
     assembly.setModel(binding.model)
+    assembly.setReasoningEffort(binding.reasoningEffort)
     // The label is a reporting surface too — fixed at construction otherwise.
     assembly.modelLabel = binding.label
     return true
