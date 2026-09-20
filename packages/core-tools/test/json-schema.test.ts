@@ -19,7 +19,10 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
     expect(v({ type: "number" }, 3.5)).toEqual([])
   })
 
-  it("rejects non-JSON numbers — NaN, Infinity and -0 are not JSON (§3.3)", () => {
+  // §3.3, corrected 2026-09-21: NaN and ±Infinity have no JSON spelling at all,
+  // while -0 PARSES fine (`JSON.parse('-0')` is -0) and is rejected because it
+  // does not round-trip (`JSON.stringify(-0)` is `"0"`). Two reasons, one rule.
+  it("rejects numbers JSON does not carry — no spelling for NaN/±Infinity, no round-trip for -0 (§3.3)", () => {
     for (const bad of [NaN, Infinity, -Infinity, -0]) {
       expect(v({ type: "number" }, bad)).toEqual(['"value" must be a finite JSON number'])
     }
