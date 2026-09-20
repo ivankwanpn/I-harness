@@ -106,7 +106,10 @@ grep -rn "assembly\.model\|\.model\b" apps/cli/src/run.ts | head
 it("a rebound model reaches every holder, not just the turn loop", async () => {
   // The design said "two consumers, one change covers both" — measured, a
   // session's lifetime has EIGHT holders of a resolved client. This test is the
-  // deliverable: it fails if ANY of them keeps the old one, which is the silent
+  // deliverable: it fails if the handle stops forwarding — it measures the
+  // handle, the direct stream, the agent deps and the turn. The full eight-holder
+  // enumeration is Task 2's job; a name that claimed it here would be a claim
+  // wider than its measurement, which is this unit's own subject.
   // partial success this whole unit exists to remove.
   const first = /* the recording client, fresh */ null as never
   const second = /* a SECOND recording client, distinguishable from the first */ null as never
@@ -185,7 +188,13 @@ Run: `cd packages/session-executor && npx vitest run test/assembly.test.ts test/
 - [ ] **Step 6: 突變證明（不可跳過）**
 
 把把手改回直接傳 `currentModel`（即 `const model = currentModel`），重跑 Step 3。
-Expected: **RED**。**機制比第一版計畫寫的精確**：`assembly.model` 的**身分不變**（它一直都是那個把手物件）；壞掉的是**轉發** —— 請求會落到**舊** client，於是 `second.requests` 是空的。把觀察到的訊息原文貼進報告，然後改回來。
+Expected: **RED**。**這個機制預測被改過兩次，兩次都不準 —— 以實測為準，以下是最後一次量到的：**
+
+- `assembly.model` 的**身分不變**（它一直都是那個把手物件）—— 所以**不是**靠身分紅的。
+- 真正的紅在**控制斷言**：`expect(handle).not.toBe(first)` 先失敗（`Object.is` 相等，因為 `first` 就是那個被注入的 client，經由把手暴露出來）。
+- **轉發**的紅（`second.requests` 是空的）排在控制斷言**後面**，所以在這裡**看不到**。
+
+**這一題的教訓**：一個突變「會紅」很容易斷言，**「紅在哪一行、為什麼」卻要量**。把觀察到的訊息原文貼進報告，然後改回來。
 
 - [ ] **Step 7: 全套 + gate + commit**
 
