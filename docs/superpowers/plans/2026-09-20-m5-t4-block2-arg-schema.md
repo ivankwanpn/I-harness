@@ -386,6 +386,29 @@ export class ToolArgsError extends Error {
 }
 ```
 
+**(4) T2 的實作者量到一個缺口，它一起補：斷言層只檢查「關鍵字在不在子集裡」，不檢查「關鍵字的值是不是那個形狀」。**
+
+**量到**（對真的模組）：`properties: "x"`、`required: "path"`、`type: "datetime"`、`additionalProperties: true` **全部被接受**。
+
+**⇒ 而 dsh 檢查兩者**（`.properties must be an object of schemas` 是它的一條訊息）。
+
+**⇒ 而那不只是形式主義**：一個 `properties: "x"` 的 schema **通過斷言**，然後**值那一層對它做 `Object.entries("x")`** —— **一個畸形的 schema 靜默地讓驗證退化**，而**那正是斷言層存在的理由。**
+
+**補上形狀檢查（照 dsh 的判準）：**
+
+| 關鍵字 | 必須是 |
+|---|---|
+| `type` | 一個字串，**或**一個非空的字串陣列 |
+| `properties` | 一個 schema 的物件 |
+| `required` | 一個字串陣列 |
+| `additionalProperties` | 一個布林**或**一個 schema |
+| `items` | 一個 schema |
+| `enum` | 一個**非空的**陣列 |
+| `minimum`／`maximum`／`maxItems` | 一個有限的數字 |
+| `description` | 一個字串 |
+
+**⚠ 而 `type: "datetime"` 仍然要**被接受** —— 那是 §3.1 的刻意規則（**未知的型別名被忽略**，因為遠端 schema 會帶來我們不認得的型別）。形狀檢查是關於**值的形狀**，不是關於**名字在不在清單裡**。**這兩個很容易混為一談，而它們的答案相反。**
+
 - [ ] **Step 4: 跑測試（綠）**
 
 Run: `pnpm --filter @i-harness/core-tools exec vitest run`
@@ -415,7 +438,25 @@ git commit -m "feat(core-tools): M5 T4 block 2 — the schema layer rejects what
 
 ---
 
-### Task 3: MCP 的標記 —— 一個寫者、一個讀者
+### ⚠ **T3 併入 T2 —— 這是一個後補的裁定（2026-09-21，T2 施工時量到的）**
+
+**T2 的 Step 5 STOP 條件觸發了，而它觸發的方式揭示了原計畫的一個結構錯誤。**
+
+**量到**：`packages/mcp-client/test/oauth-real-as.test.ts:310` 從一個 zod shape 註冊一個真的 MCP server 工具，而 SDK 的 zod→draft-7 轉換**在 schema 根發出 `$schema`** ⇒ `register` 丟 `JsonSchemaError: "schema.$schema" is not a supported keyword`。**`$schema` 在全 repo 沒有字面出現**（普查看不見它 —— **它不是字面宣告，而是一個測試 fixture 在扮演遠端伺服器**）。
+
+**那正是 §3.8 的 foreign 情形**，而 **T3 的那一行就是它的解**。
+
+**⇒ 而原計畫把「欄位」（T2）與「它唯一的寫者」（T3）分成兩個任務。**** 中間那一段時間裡，`Tool.inputSchemaForeign` **是一個宣告了、測試了、而沒有生產者的欄位 —— 正是這一條分支的稽核工具存在的理由所要抓的東西**，而**全套會帶著一條紅**。
+
+**⇒ 裁定：T3 併入 T2。欄位與它的寫者一起落地。**
+
+**⇒ 而這一條的可檢查結果**：那個 mcp-client 的測試**在同一次改動裡回綠**，而 `--gate` 不會出現一個沒有生產者的欄位列。
+
+**⇒ 底下的 T3 保留原文（那是一份有日期的決策記錄），但它**不再是一個任務** —— 它的兩件事（`bridge.ts` 的那一行與它自己的測試）併進 T2 的 Step 3 與 Step 1。**
+
+---
+
+### ~~Task 3: MCP 的標記 —— 一個寫者、一個讀者~~（**已併入 T2**）
 
 **Files:**
 - Modify: `packages/mcp-client/src/bridge.ts`
