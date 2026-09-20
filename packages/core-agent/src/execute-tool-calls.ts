@@ -2,6 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
+import { isPolicyRefusal } from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
@@ -161,16 +162,21 @@ export async function executeToolCalls(
         slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
-        // M25: tool/error — the tool body failed (throw-fails-turn semantics).
+        // M25: tool/error — the dispatched call's promise rejected. The M5 T4
+        // classification below decides what that rejection means for the turn.
         opts.telemetry?.emit({
           type: "tool/error",
           ts: Date.now(),
           data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
         })
-        // M5 T4: on the FIRST failure, cancel the siblings. `abort()` before the
-        // drain below, so `allSettled` returns their cancellations instead of
-        // waiting out their work. Only the first, so a second failure cannot
-        // re-open a channel that is already closed.
+        if (isPolicyRefusal(err)) {
+          // A veto is not a body failure: it must keep failing the turn.
+          firstRefusal ??= err
+        }
+        // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
+        // (before the drains below), so `allSettled` returns their cancellations
+        // instead of waiting out their work. Only the first, so a second failure
+        // cannot re-open a channel that is already closed.
         if (firstError === undefined) {
           firstError = err
           batchAbort.abort()
