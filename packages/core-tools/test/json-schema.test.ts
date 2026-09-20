@@ -110,9 +110,13 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
 
   it("is TOTAL on a deep DECLARED descent too — every level is a frame (fix round 1)", () => {
     // The case above only reaches the lossless walk. This one descends through
-    // properties/required frames 12,000 levels — above the measured warm stack
-    // limit — so the validation walk itself is the thing under test.
-    const depth = 12_000
+    // properties/required frames, so the validation walk itself is under test.
+    // 40,000, not a marginal multiple: the DECLARED shape's warm stack limit is
+    // measured at 3,000-4,000 (the ~9,500 often quoted is the PARSE shape's), and
+    // JIT state swings ~2.6x — a host with a larger stack could let a recursive
+    // driver survive 12,000 silently. 40,000 also keeps the memo-less mutant's
+    // failure at ~2.6 min where 160,000 would take ~41 min.
+    const depth = 40_000
     let value: unknown = 0
     let schema: JsonSchemaNode = { type: "integer" }
     for (let i = 0; i < depth; i++) {
@@ -121,6 +125,17 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
     }
     expect(() => validateJsonSchemaValue(schema, value)).not.toThrow()
     expect(validateJsonSchemaValue(schema, value)).toEqual([])
+  })
+
+  it("walks a shared-subtree DAG once, not once per path (fix round 2)", () => {
+    // 2^40 PATHS over 40 unique nodes: the lossless memo's within-call
+    // short-circuit is the only thing that makes this sub-millisecond (measured
+    // doubling per level without it). JSON.parse cannot produce sharing — but a
+    // total function is named by its contract, not by one caller.
+    let node: unknown = 0
+    for (let i = 0; i < 40; i++) node = { a: node, b: node }
+    expect(() => validateJsonSchemaValue({ type: "object" }, node)).not.toThrow()
+    expect(validateJsonSchemaValue({ type: "object" }, node)).toEqual([])
   })
 
   it("compares structured `enum` members by key SET, not by JSON text (fix round 1)", () => {
