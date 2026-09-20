@@ -259,6 +259,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isSameJsonValue(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true
   if (typeof a !== "object" || a === null || typeof b !== "object" || b === null) return false
+  // A member that is not lossless JSON equals nothing but itself (recorded, not
+  // fixed — review round 2, Low): two DISTINCT `new Map()`s are unequal here,
+  // where the old JSON-text comparison called both "{}" and reported only the
+  // lossless violation. Message-only, unpinned, and the honest reading.
   if (!isLosslessJson(a, new Set()) || !isLosslessJson(b, new Set())) return false
   const pairs: Array<[unknown, unknown]> = [[a, b]]
   while (pairs.length > 0) {
