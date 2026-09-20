@@ -347,6 +347,38 @@ IH 有一處是 `additionalProperties: { type: "string" }`（`workflow/src/tool.
 
 **⇒ 這是本設計裡唯一一條會讓既有宣告在斷言層失敗的地方**（除 §1.5 的兩個之外），而它是一個**待辦**，不是一個驚喜：**§9 的 ① 把它列為要一起處理的第三項。**
 
+### 3.6.1 **後補（2026-09-20，施工前量到的）**：§3.6 的「現在知道了」
+
+**§3.6 選「拒絕 `additionalProperties: {schema}`」的理由是：**
+
+> **拒絕會讓它大聲失敗，然後我們知道那一站點需要什麼** —— 而「一個大聲的拒絕」比「一個我猜你要什麼的實作」便宜。
+
+**⇒ 那個問題現在有答案了，而答案是：那個站點需要的是**真的**約束。**
+
+`packages/workflow/src/tool.ts:73`：
+
+```ts
+params: { type: "object", additionalProperties: { type: "string" }, description: "Values for the workflow's declared ${param} slots…" },
+```
+
+**而 `:91` 把它當 `Record<string, string>` 用**（`deps.executor.runWorkflow(def, args.params ?? {}, …)`，而它的 TS 型別在 `:23` 就是 `params?: Record<string, string>`）。
+
+**⇒ 它的兩個替代方案都更差：**
+- **`additionalProperties: false`** ⇒ **錯的** —— `params` 的鍵是工作流程自己宣告的 `${param}` 插槽，**在 schema 的時候是任意的**
+- **拿掉 `additionalProperties`** ⇒ **失去「值必須是字串」**，而那不是一個形式主義的約束：一個 `{count: 5}` 會被餵進字串替換
+
+**⇒ 所以：v1 **支援** `additionalProperties: {schema}`。** 它是一條「對每一個未宣告的鍵套這個子 schema」的路徑，而**子集因此多一個分支**。
+
+**⇒ 而這一條的可檢查結果是好的**：**三個既有宣告，一個都不需要遷移。**
+
+| # | 宣告 | 處置 |
+|---|---|---|
+| 1 | `subagent/src/tools.ts:77` 的型別陣列 | §3.4 支援它 ⇒ **不動** |
+| 2 | `plan-mode/src/index.ts:25` 的 `properties: undefined` | §3.5 的規則涵蓋它 ⇒ **不動** |
+| 3 | `workflow/src/tool.ts:73` 的 `additionalProperties: {schema}` | **§3.6.1 支援它 ⇒ 不動** |
+
+**這正是 §3.6 那個決定想要的東西** —— **它先拒絕，讓那一站點大聲說出它要什麼，而不是替它猜。** 而答案不是「它寫錯了」。
+
 ### 3.7 強制點與**拒絕的語意**
 
 **位置：`prepare()` 裡，`tools.get` 成功的下一步**（`core-tools/src/index.ts:229-231`）。
