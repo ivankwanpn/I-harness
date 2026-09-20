@@ -90,17 +90,26 @@ describe("core-agent telemetry emit (M25)", () => {
       tools,
       model: createMockClient([
         { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+        // M5 T4 block 1: a soft body failure no longer ends the turn, so the
+        // loop runs ONE MORE step — the script must carry that step's response
+        // or the run dies on "mock script exhausted" instead of the contract
+        // this test is for.
+        { role: "assistant", text: "Report: done" },
       ]),
       systemPrompt: "p",
       telemetry,
     })
-    await expect(agent.run("read a.txt")).rejects.toThrow(/disk exploded/)
+    // M5 T4 block 1: a tool body that throws no longer fails the turn — the
+    // call gets a soft result and the turn continues. The host telemetry event
+    // is the claim this test is FOR, and it is unaffected.
+    await agent.run("read a.txt")
     const types = events.map((e) => e.type)
     expect(types).toContain("tool/start")
     expect(types).toContain("tool/error")
     const err = events.find((e) => e.type === "tool/error")!
     expect(err.data).toMatchObject({ tool: "read", error: "disk exploded" })
-    // a failed tool never commits → no tool/end for it
+    // the failed call's soft result is appended WITHOUT finalize (no
+    // tools/post-execute), so no tool/end is emitted for it
     expect(types).not.toContain("tool/end")
   })
 
