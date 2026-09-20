@@ -23,7 +23,7 @@
 |---|---|---|---|---|
 | **W1** | **修 settings watcher race** | 三 | **▶ 設計已定，未開工** | 無 |
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **研究完成 → 照修但降級**（路徑不可達、觀測不到；見 §3） | 無 |
-| **W3** | `schedule` 的 spec | 一 | 未開始 | 無 |
+| **W3** | `schedule` 的 spec | 一 | **研究完成 → 卡在 Q2**（I5 把它接上了自啟） | **Q2** |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | 未開始 | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
@@ -152,6 +152,59 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 
 ### 交付物
 **一份 spec，把那三件一次定清楚**（不是實作）。
+
+### ⚠ 研究完成（2026-09-20）—— **三個互鎖是低估了，量到九個。而其中一個是閘門。**
+
+**地形：** `packages/schedule` 是一個**純函式庫**（只依賴 `core-session`，無 I/O）：23 個匯出 ＋ `./driver` 子路徑 5 個。**而它不可達** —— `@i-harness/schedule` 在**任何 import 裡都不出現**（自己的測試除外），`createScheduleDriver` **零個非測試呼叫者**。
+
+| 三件事 | 實況 |
+|---|---|
+| **agent 用什麼工具建立排程** | **完全不存在（零）** —— 但模板在：`createTodoTool`（`todo/src/index.ts:31-65`）就是「工具自己 `append(session, …)`」 |
+| **driver 讀什麼** | **半現** —— `schedule/change` 的形狀**已經宣告在 `core-session`**（`:85-89`）且**已經註冊進 load gate**（`session-persistence/src/index.ts:199-202`）；**但從來沒有東西 append 過一個** |
+| **`onDue` 交給誰** | **參數存在、零供應者** —— 而它指名的那條線（*"the A1-inbox wire"*）是真的：`ParentInputAdmission`（`apps/cli/src/run.ts:358-372`）**就是 `onDue` 會變成的東西** |
+
+**九個互鎖（每一個都量過）：**
+
+| | |
+|---|---|
+| **I1** | **三個決定其實是一個決定** —— 選了 tier 就決定了 payload，也決定了 framing 那句話是誰在說 |
+| **I2** | **沒有任何獨佔機制**（無 lease、無鎖）。兩個驅動器對同一個 session-dir ⇒ **各 append 一次 dispatch** ⇒ 折疊器拋 `dispatch targets inactive id` ⇒ **那個 session 從此每個 tick 都被跳過** —— **一份合法日誌被自我判成損壞**。先例：`agent-team/src/scheduler.ts:97` 的 `liveTeams`（*"a second mount is a hard error, not a silent shadow"*） |
+| **I3** | **驅動器沒有 in-flight guard**（`setInterval(() => { void tick() })`，零合併）—— **而 W1 剛修的正是這個。同一個 bug 的第二個地方。** dsh 結構性解掉（一個推導計時器 ＋ 一個 per-agent 的交易鏈） |
+| **I4** | **fork 的繼承**：`foldScheduleEvents(events, seedLength)` 的接縫**就是為此存在**，而**驅動器沒用它**（`driver.ts:86` 不傳 seed）—— 而且它吃的是 `SessionEvent[]`、**不是 `Session`**，所以**讀不到 `header.seedLength`**。dsh 的規則是相反的。**這是只有宿主出現後才會顯形的 API 形狀決定** |
+| **I5** | **⚠ 閘門：那個觸發條件就是 Q2。** 見下 |
+| **I6** | **投遞側的注入防護做好了**（動態欄位 JSON 轉義、prompt 標成 untrusted、有測試）；**建立側零閘門** —— prompt 只驗非空，**工具不存在**，所以**沒有東西決定「模型能不能替自己排未來指令、幾個、多遠」**。現有的旋鈕只有一個下限（300 秒）、一個年份窗口、**沒有數量上限**。對照：cc-custom 有 `MAX_JOBS = 50` ＋ 7 天到期 ＋ kill switch；dsh 有 flush barrier ＋ maintenance claim |
+| **I7** | **讀取的成本決定 poll 模型**：driver 的契約是**逐 session 拉**，而一個誠實的宿主每個 tick 要對**每一個 stored session** 做一次完整 `coordinator.load()`（含 repair/migrate/guardIgnorable）。dsh 只讀**活的 agent 的記憶體尾段** ＋ 一個推導計時器 |
+| **I8** | **來源那側的影子最長**：session-local（寫進呼叫它的那個 session 的日誌，id 空間也是 session-local）vs 一個 store —— **會改變「投遞模式」「冷啟動後誰重送」「任何 list/cancel 要不要載入那個 session」的全部答案** |
+| **I9** | **crash 視窗的契約沒寫** —— append 與 `onDue` 之間崩潰，reminder 是重複還是丟掉？**而這個 repo 有先例說這種契約該寫在哪裡**：200ms write-behind 的損失契約**寫在崩潰報告裡**，「因為那是有人需要它的那一刻」 |
+
+### ⚠⚠ **W3 的 spec 寫不下去 —— 原因不是資料不夠，是 I5。**
+
+**一個到期的排程在閒置的 session 裡開一個新的 turn ＝ 路線圖的「無外部觸發的自啟／閒置自我喚醒」＝ Q2。**
+
+**而路線圖自己的話**（`2026-09-15-backend-polish-roadmap-design.md:225`）：
+
+> **「政策列假裝成工程列。沒有答案，任何 T5 工作都是投機。且必須等 M4 —— 沒有 attempt record 的自我喚醒就是迴圈產生器。」**
+
+| Q2 的答案 | spec 可以走的路 |
+|---|---|
+| **是** | 「排隊，讓 lane 的閒置排水開一個 turn」—— **但必須先等 M4** |
+| **否** | **「只投遞進一個已經在跑的 turn」** —— **這條現在就能寫**，而且它與 dsh 的契約**相反**（dsh：*"never calls steer() and never interrupts a current turn"*） |
+
+### ⚠ 而這是它給的警告，值得寫在這份文件裡
+
+**`cc-custom` 有一個完整實作的排程子系統，而它在自己的 build 裡完全不可達**（`cronTasks.ts` 448 行、`cronScheduler.ts` 530 行、一個 cron 工具、一個 scheduler hook —— 全都有，而沒有東西能啟動它）。
+
+**那正是 W3 在處理的形狀。** `createScheduleDriver` 今天有**零個**非測試呼叫者，而 **`schedule/change` 的形狀早就躺在 `core-session` 與 load gate 裡** —— **IH 離重複 cc-custom 只差一步，而差的那一步就是「有人記得接上去」。**
+
+### 參考專案（四份都查了）
+
+| 專案 | 排程 |
+|---|---|
+| **dsh** | **完整實作 —— 捐贈者。** 三個工具、session log 持久化、**沒有 callback**（`whenIdle()` 之後直接 `agent.followup()`，而且**先 claim maintenance 階段**）、**一個推導計時器而非輪詢**、**批次語意**（多個 overdue 的 every 併進同一個 follow-up，**用來界定 model turn 數**），而且**把自己的 crash 視窗寫成已知限制** |
+| **cc-custom** | **完整 cron，build 裡不可達**（見上） |
+| **codex** | **沒有排程器**；有 model-facing 的 `clock.sleep`（turn 內延遲）＋**客戶端持有的時鐘**＋「既有工作的閒置喚醒」 |
+| **opencode** | **找不到** —— 它把排程**外包給 GitHub Actions 的 cron** |
+| **pi** | **找不到** |
 
 ---
 
