@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { PassThrough } from "node:stream"
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, type Session, type SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { HarnessClient } from "../src/client.ts"
@@ -26,13 +26,17 @@ import {
   type SessionQueueItem,
 } from "../src/protocol.ts"
 
-async function makeService(): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
+async function makeService(session?: Session): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-"))
   const service = createSessionService({
     workspace: dir,
     approveAll: true,
     modelPolicy: "test-mock",
     mockScript: [{ role: "assistant", text: "hello from the mock" }],
+    // W2: the optional host-pre-seeded session (assembly.ts's `session:`
+    // option). When given, EVERY build of a session resolves this same object
+    // — the shape that makes a rebuild's orphaned subscription observable.
+    ...(session !== undefined ? { session } : {}),
   })
   return { service, cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
@@ -1336,6 +1340,71 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+})
+
+// W2: the server's per-session subscription map (`assemblyUnsubscribes`).
+//
+// WHAT THIS PINS, STATED PLAINLY: the CONTRACT of that map — "a second
+// assembly for the same session releases the previous subscription before the
+// new one is stored" — NOT a shipped path. The rebuild it drives
+// (closeSession → assemblyFor) is a service primitive this test calls
+// DIRECTLY; nothing in the sdk process calls closeSession today (Phase B
+// removed the server's own call — see the deliberate-change comment in
+// session/model/set — and the SDK wire has no session/close, all 19 cases
+// enumerated). So in production the server's onAssembly hook fires once per
+// session and this defect cannot bite. It is LATENT, in a shared path: whoever
+// adds session/close arms it, and this test is the contract they inherit. A
+// unit test that pretends to exercise a production path would be worse than no
+// test at all — this one says what it is.
+describe("createSdkServer assembly bridge (W2)", () => {
+  it("releases the previous subscription when the service rebuilds an assembly for the same session", async () => {
+    // The host-pre-seeded `session:` option (`AssemblyOptions.session`, M14 —
+    // "host owns durability") is a supported, typed configuration, and it is
+    // what makes the overwrite observable at all: every build resolves the SAME
+    // Session object, so a subscription the overwrite orphaned keeps delivering
+    // to the client. (A rebuild that gets a fresh Session per build leaves the
+    // orphaned closure inert — the reason this stayed latent.)
+    const session = createSession()
+    const { service, cleanup } = await makeService(session)
+    try {
+      const server = createSdkServer(service)
+      const drv = drive(server)
+      const countEvents = (text: string): number =>
+        drv.out.filter((m) => isRpcNotification(m) && m.method === "session/event"
+          && (m.params as { event?: { type?: string; text?: string } }).event?.type === "user/message"
+          && (m.params as { event?: { text?: string } }).event?.text === text).length
+
+      const first = await service.assemblyFor("s1")
+      expect(first.session).toBe(session) // the server subscribed to THIS object
+      append(session, { type: "user/message", text: "before the rebuild" })
+      // Live-baseline check: one subscription, one notification — so the "1"
+      // assertion below cannot be satisfied by a harness that delivers nothing.
+      expect(countEvents("before the rebuild")).toBe(1)
+
+      // The rebuild, driven directly: dispose the assembly, then build again
+      // for the SAME sessionId — onAssembly fires a second time.
+      await service.closeSession("s1")
+      const second = await service.assemblyFor("s1")
+      expect(second.session).toBe(session)
+
+      // Exactly ONE listener survives the overwrite. Pre-fix (the bare `.set`)
+      // this counted TWO: the first closure was never unsubscribed, and the map
+      // holds only current values, so nothing could ever reach it again.
+      append(session, { type: "user/message", text: "after the rebuild" })
+      expect(countEvents("after the rebuild")).toBe(1)
+
+      // …and the one the map KEPT is the second one: close() releases it.
+      // This half is not decoration — the inverted bug (unsubscribing the value
+      // read back AFTER the store, i.e. the new closure) leaves the FIRST
+      // listener live, which the check above alone would not catch.
+      await server.close()
+      append(session, { type: "user/message", text: "after close" })
+      expect(countEvents("after close")).toBe(0)
+    } finally {
+      await service.close()
+      await cleanup()
     }
   })
 })

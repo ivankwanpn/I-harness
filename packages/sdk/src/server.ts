@@ -170,6 +170,16 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const assemblyUnsubscribes = new Map<string, () => void>()
   const offAssembly = service.onAssembly((assembly) => {
     if (assembly.sessionId === undefined) return
+    // The map holds AT MOST ONE closure per session, so a second assembly for
+    // the same id (the service rebuilds one per closeSession → getOrCreate)
+    // must release the previous subscription first. A bare `.set` orphaned it:
+    // the map keeps only the current value, so the overwritten closure was
+    // unreachable forever and `close()` could never detach it — with a
+    // host-pre-seeded `session` (the same object on every build) the client
+    // would keep receiving session/event twice, and the orphaned delivery
+    // would outlive `close()`. The release goes BEFORE the store — reading the
+    // slot back after storing it would unsubscribe the new closure instead.
+    assemblyUnsubscribes.get(assembly.sessionId)?.()
     const unsubscribe = subscribe(assembly.session, (event) => {
       emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event }))
     })
