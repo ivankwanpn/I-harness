@@ -224,6 +224,8 @@ void this.reloadFromDisk().then((settings) => {
 
 本節驗收段原本引的 **`assembly.ts:167`** 在本提交上**已過期** —— host-pre-seeded `session` 選項今天在 **`packages/session-executor/src/assembly.ts:176`**（W10 那批插入把它移走了）。**已改成符號 `AssemblyOptions.session`**：行號會再一次被下一次插入移走，符號不會。其餘三條在同一個提交上 `grep -n` 重測，**仍然正確**：`core-session/src/index.ts:308`（模組私有 `subscribers`）、`session-executor/src/service.ts:366`（hook 唯一的觸發點）、`server.ts:170`（函式內 const）。
 
+**而這一改動自己在樹裡移走了一條引用**（掃過整個 repo 後只此一條）：`scripts/verify-dist.mjs` 的 dist 級 SDK 探針註解引 `server.ts:266-275`，**那在 base 上是準的**（base 的 275 行就是 `protocolVersion: SDK_SERVER_PROTOCOL_VERSION,`），而 W2 的 +10 行把它移走 —— **已改成符號**（`initialize` case，提交 `9b40d332`）。同句的兩條鄰居（`protocol.ts:467 makeRequest`、`:534 encodeFrame`）**在 base 上就已經是錯的**（今天在 `:483`／`:550`），依 W10 的 F3 處置：**記錄、不動**。
+
 ---
 
 ## 4. **W3 — `schedule` 的 spec**
