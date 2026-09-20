@@ -30,7 +30,7 @@
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
-| **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景） | 無 |
+| **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
 | **W11** | **子代理的健康訊號** | 三 | **未開始**（同上） | 形狀待選 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
@@ -418,6 +418,24 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 - **模型沒要求 background 卻拿到 id** —— 所以結果**說出自己是誰**：`promoted: true` + `ran_foreground_ms`，`stdout` 並寫明 *"You did NOT ask for background — the harness did."*。**只有 `{ job_id }` 不行**：那正是模型自己 `background: true` 會拿到的形狀。
 - **promoted job 的視圖從頭完整**：種子取 handle 已捕捉的文字，否則 job 會缺掉前 N 毫秒的輸出。**exec spill 有配置時那顆種子是記憶體 tail**（完整內容在該階段的 spill 檔）—— 而今天**沒有生產路徑同時配置 spill 與這個旋鈕**（`registerShell` 從不傳 spill，已量）。
 - **殘餘風險（未加執行期警告）**：宿主若把 `shellTimeoutMs` 調到**低於門檻**（預設對是安全的），promotion **會靜默地不觸發**、行為回到 W10 前。處置照裁定：**把關係寫在兩個數字旁**，並用證偽測試讓它可觀測。
+
+#### 修正輪 —— 複審的三條（`0794fbe7`）
+
+**規格 PASS，品質 NOT APPROVED：兩條必須修（一條 blocking、一條是共用路徑上的真回歸），一條是把驗收的另一半釘住。** 三條都修了，三條都有指名的紅行。
+
+| | 是什麼 | 紅行（實測） |
+|---|---|---|
+| **F1**（blocking） | **門檻 ≥ 死線時，promotion 靜默地不發生，而執行中的宿主沒有任何訊號** | `test/shell-promotion.test.ts:283`（`expected [] to have a length of 1 but got +0`，把「不會觸發」那條分支停用）；`:295`（同一條，停用非正數那條分支） |
+| **F2**（回歸） | **job 的 CRLF 是逐 chunk 正規化**，而 `done` 是整串 —— 跨兩個 `data` 的 `\r\n` 在 job 視圖裡留下 `"A\r\nB"`（前景是 `"A\nB"`，**W10 前也是**） | `packages/exec/test/exec.test.ts`「folds a CRLF split ACROSS two chunks」：修正前 `expected 'A\r\nB' to be 'A\nB'` |
+| **F4** | 端到端那條**在死線內就放行**，所以「abort 追上 promoted job」的回歸可以讓整套保持綠 | 把 `guard-timeout` 的 `clearTimeout(timer)` 拿掉 → `test/shell-promotion.test.ts:150` `expected 'error' to be 'running'` |
+
+**F1 的處置**：警告放在 `createSessionAssembly`，**唯一同時持有兩個「已解析」值（含預設）的站點**，也是每個出貨宿主（CLI／SDK／ACP）都經過的組裝根 —— 設定檔沒有這兩個數字的位置，工具呼叫則太晚且逐次。**同一類的另一端也警告**：門檻不是正數（0／負數／NaN）會讓每個前景呼叫一啟動就被轉背景（`!(x > 0)` 是刻意的判定式）。**測試檔裡故意踩這個誤設的那兩條不會把警告靜音** —— 它們踩的就是那個誤設。
+
+**F2 的處置**：記錄存**原始**字串，`jobView`（`getOutput`／`listJobs` 唯一的出口）在**讀取時對整串**做與 `doneFn` 相同的替換 —— 「同一條串流的兩個視圖一致」變成建構上的事實，而不是兩個地方各自記得。**原本那句「plain background spawn 兩者同文」是量測上為假的斷言，已改成真話**：`done` 有的是「正規化後的文字」但不是「全部文字」，所以 taps 必須是來源。
+
+**F3（無需動作，記在案）**：`sandbox-refusal.test.ts` 那兩行過期引用**在 base 上就已經是錯的** —— 是這次的改動把它們移走，不是造成它們。**那份測試檔沒有動，這個取捨複審同意。**
+
+**量到的（修正後）**：`2600 passed · 0 failed · 9 skipped`（執行前先寫下預期 2600 = 2598 + 2 條新案例；66 個 package）、`pnpm typecheck` 綠、`gate PASS -- no new rows`。**既有測試一條沒改。**
 
 ### **W11 —— 子代理的健康訊號**
 
