@@ -25,7 +25,7 @@
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，629 行 —— **2026-09-20 owner 核准**） | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
-| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；**修正輪 `<SHA>`**；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
+| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；**修正輪 `637f73e1`**；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
@@ -344,7 +344,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 |---|---|
 | T2 第一半（以 provider 回報為事實） | ✅ **完成** |
 | **T2 第二半（以自己的位元組為偵測）** | ✅ **完成**（見下方的完成記錄） |
-| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`；修正輪 `<SHA>`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
+| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`；修正輪 `637f73e1`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
 
 ### W4 為什麼值得做（三件事，**本文件自己重測過，行號量於 `6b04f31d`**）
 1. **缺口不是推論出來的，是兩個 adapter 各自記下來的** —— `packages/llm-gemini/src/index.ts:239,241`（*"same gap as…"*、*"a future usage seam slot"*）與 `packages/llm-bedrock/src/index.ts:228`（*"same gap as…"*）。**它們自己寫著這個縫還沒接。**
@@ -453,7 +453,7 @@ F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z
 6. **全套（兩步讀法）**：母體 **66**（`pnpm -r --no-bail test` 的起始行數 —— **紅的時候它只跑一個前綴，所以先數母體、再比數字**）；**`2636 passed · 0 failed · 9 skipped`**（本體提交時；修正輪之後是 **2638**，見下）；`pnpm typecheck` ⇒ **0 error**。
    ⚠ **2636，而計畫的預期是 2632（2624 ＋ 8），差 4 —— 而差在哪是量得出來的：** 計畫的表把 T2 記成「0 新增」、T4「＋1」、T5「＋3」，實際是 **T2 ＋2**（`10c74411` 修正輪的兩條：`a marked veto that lands AFTER a sibling's failure still kills the turn`、`records each failed call's OWN message, not the first failure's`）、**T4 ＋2**（`4d500ad5`）、**T5 ＋4**（`a945b719` 的四條 BOUNDARY；T5 自己的報告也寫著「BASE 19，＋4」）。逐項算式 **2624＋4（T1）＋2（T2）＋2（T4）＋4（T5）＝2636**，而每一條都在它自己的提交裡可見。**預期值不改，差別照實記在這裡。**
 
-**修正輪 —— `<SHA>`（全分支複審：SHIP，1 Important ＋ 2 Low，全部在這一輪修掉）**
+**修正輪 —— `637f73e1`（全分支複審：SHIP，1 Important ＋ 2 Low，全部在這一輪修掉）**
 
 - **Important：填補的 `firstError` fallback 是**可達的**，而說它不是的註解是假的。** `.catch` 處理器原本先跑 `telemetry.emit` 與 `isPolicyRefusal(err)` 才 `failures.set` —— 兩者都執行樹外的程式碼（host 的 `Telemetry`、一個 `policyRefusal` getter 會丟出的 error），任一丟出就讓該 promise 拒絕；**若那是第二個失敗**（第一個已設 `hasFailed`、`runGroup` 已 break），那個拒絕被迴圈後的 `Promise.allSettled` 吸收、**沒有人再讀它** —— 那一格沒有 `failures` 條目，填補於是蓋上**兄弟的**訊息。**量到的（修正前）：** `[failA → "A error"（贏得競態）, failB → 拒絕、其 `policyRefusal` 讀取丟出]` ⇒ c1 `{error:"A error"}`；**修正後 ⇒ c1 `{error:"B error"}`**。**修法：`failures.set(index, err)` 移到 `.catch` 的第一個述詞**（語意 0 成本）。**突變證明：把它移回標記檢查之後 ⇒ 新的那條測試當場紅（`c1` 變回 `"A error"`），其餘 24 條綠。**
 - **Low：落在失敗窗口裡的中止不再支配。** `aborted` 只在 `runGroup` 內被寫，而它在第一個失敗就 break，所以**在 drain 期間才落地的中止**兩邊都看不到：修正前那批 `RESOLVED`、從未開始的呼叫被蓋 `TOOL_CANCELLED_BY_SIBLING`（真相是「使用者停了這一步」），而且 `commitReady` 還對窗口內落地的呼叫發了 `agent/post-tool`（M10a 說 aborted 時不發）。**修法：drain 提升到 `if (aborted)` 之前，並在該處重讀 `opts.signal?.aborted`**（中止分支自己那個已成為 no-op 的 drain 隨之移除）。**量到的（修正後）：** 同一批**拒絕 `agent aborted`**、從未開始的那格拿到 `TOOL_ABORTED_BEFORE_DISPATCH`、**`agent/post-tool` 零筆**。**突變證明：拿掉那一行重讀 ⇒ 新的那條測試當場紅，其餘 24 條綠。**
