@@ -437,6 +437,24 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 **量到的（修正後）**：`2600 passed · 0 failed · 9 skipped`（執行前先寫下預期 2600 = 2598 + 2 條新案例；66 個 package）、`pnpm typecheck` 綠、`gate PASS -- no new rows`。**既有測試一條沒改。**
 
+#### 第二輪複審 —— 全部三條 DONE，外加 comment 級的三項（`a92a6817`）
+
+**複審自己把兩件事量得比我的回報更強**：①把「警告條件」在**出貨預設對上強制成真**，`shell-promotion.test.ts:274` 立刻紅且警告被捕捉 —— 所以那條「預設對靜默」的斷言**是活的，不是真空的**；②F2 的修法被判定為**結構性**：替換只存在於一個地方（`jobView`），兩個讀者都委派，而且**兩個視圖**都正確折疊 split-CRLF（用腳本驗的，不只斷言的那個視圖）；同時確認**沒有其他讀者**在原始記錄上算 cap 或長度。
+
+| | 是什麼 | 處置 |
+|---|---|---|
+| **Comment-1** | **`SpawnHandle.text()` 的註解在為剛修掉的 bug 辯護**：「taps 逐 chunk 正規化、`registerJob` 對種子同樣處理」——**兩句都被我自己那個提交證偽**。它比一般的過期註解更糟：不是誤導讀者，是**把讀者掉頭** —— 信它的人會把逐 chunk 正規化裝回去，split-CRLF 的洩漏就重開（測試會抓，但**註解在替那個 bug 說話**） | 改成實話：**兩邊都是 RAW，`jobView` 讀取時對整串正規化**。**並做了同句掃描**（`chunk by chunk`／`same way`／`normaliz`）：同套件只剩我這輪寫對的三處與測試檔那條，**沒有第三個** |
+| **Comment-2** | 警告每次全套跑**觸發三次**，而其中兩個（CLI 的 M10a／M12）沒有註記 —— **那個不對稱正是警告變成套件壁紙的路** | 兩站各加一行**寫明依賴**（inert pair 就是那兩條要的），並**把 `shellBackgroundAfterMs: 30_000` 明寫出來**，讓「promotion 不得觸發」的前置條件**在本地而不是繼承自預設**。**斷言一個字沒動** |
+| **Comment-3** | `exec.test.ts:179` 兩句被併到同一行 | 拆開（純空白） |
+
+**量到的（本輪後）**：`2600 passed · 0 failed · 9 skipped`（與上輪同 —— 本輪只動註解與等值的顯式參數）、`pnpm typecheck` 綠、`gate PASS -- no new rows`；全套跑裡的那三次警告**逐一對得上來源**（session-executor 的證偽案例 1 次 ＋ CLI 兩站 2 次）。
+
+**記錄在案、不動的兩件（複審自己的話）**：
+- **上一輪的提交訊息「No existing test was edited」字面上不精確** —— 有三個既有測試**被附加式地**編輯過（端到端案例多了一步、死線 5_000→1_500；證偽案例多了一行註解；`mountAssembly` 的 `shellTimeoutMs` 變成可選）。**沒有任何東西被放寬，而提交不能 amend** —— 所以那是**更正記錄**，不是待辦。
+- **第三個 flake 站點**：`shell-promotion.test.ts:208` 在複審兩次全套跑的其中一次**掛到 30 秒逾時**，隔離跑 110/110 全過，本體未被本輪改動，走在 W10 前的路徑上 —— **既有、已記錄、不追**。
+
+**同時 parked**：讀取時正規化的成本（每次讀都配一份新字串；`job_output({wait:true})` 以 50 Hz 輪詢）—— **只有效率，正確性不受影響**。
+
 ### **W11 —— 子代理的健康訊號**
 
 **原語全都在**（`packages/subagent/src/tools.ts`）：`spawn_agent`、`wait_agent`、**`list_agents`**、**`send_message`**、`interrupt_agent`、`followup_task`、`close_agent`、`resume_agent`，外加 `job_output`／`job_list`／`job_kill`／`get_task_output`。
