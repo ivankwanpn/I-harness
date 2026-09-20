@@ -270,11 +270,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     const assembly = assemblies.get(sessionId)
     if (assembly === undefined) return false
     // The SPENDING half: one assignment on the identity-stable handle, so every
-    // holder (turn loop, compaction engine, subagents, guardian, team, title)
-    // follows without being told (R-B1 / Task 1). The effort is the second cell
-    // of the same surface (review F-1): the binding's effort — including
-    // `undefined`, which CLEARS it — must move with the client, or the wire
-    // keeps sending the construction-time value while the RPC answers `ready`.
+    // handle-reachable holder (turn loop, compaction engine, subagents, the
+    // guardian's INHERITED model, team, auto-title) follows without being told
+    // (R-B1 / Task 1). The effort is the second cell of the same surface
+    // (review F-1): the binding's effort — including `undefined`, which CLEARS
+    // it — must move with the client, or the wire keeps sending the
+    // construction-time value while the RPC answers `ready`.
     assembly.setModel(binding.model)
     assembly.setReasoningEffort(binding.reasoningEffort)
     // The label is a reporting surface too — fixed at construction otherwise.

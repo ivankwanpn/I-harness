@@ -641,9 +641,10 @@ async function runSdkCommand(args: string[]): Promise<number> {
             if (resolved.status !== "ready") throw new Error(resolved.reason)
             const { client, ...binding } = resolved.binding
             // The LIVE rebind: the session's handle forwards to this client now
-            // (every holder follows), and the service refreshes the reported
-            // binding + label in the same call (F1 — without this, modelState
-            // and the dashboard row would keep naming the pre-rebind model).
+            // (every handle-reachable holder follows), and the service refreshes
+            // the reported binding + label in the same call (F1 — without this,
+            // modelState and the dashboard row would keep naming the pre-rebind
+            // model).
             service.rebindModel(sessionId, { model: client, ...binding })
             // §4.3: the DURABLE selection never carries the protocol. It is
             // stripped HERE — after the rebind, before anything writes — which
