@@ -54,9 +54,11 @@ spec 的機制（`AgentDeps.model` 改成 `() => ModelClient`、新增 `Agent.se
 
 所以：**一個身分穩定的 `ModelClient` 把手，其 `stream` 轉發給一個可變的 `current`。**
 
-- 型別零改動 ⇒ **~85 個 `createAgent` 呼叫點與 `agent.test.ts` 的 19 個 `deps.model = …` 賦值全部不用動**。
+- 型別零改動 ⇒ **56 個 `createAgent(` 呼叫點（實測；第一版計畫寫「~85」，是估的）與 `agent.test.ts` 的 19 個 `deps.model = …` 賦值全部不用動**。
 - 持有者的呼叫點零改動 ⇒ 子代理／監護者／隊友／auto-title **自動跟著換**。
-- `expect(assembly.model).toBe(model)`（`service.test.ts:69`, `:246`）**照樣成立**，而且比原本更穩（原本每次 `resolveModel` 都建新物件）。
+- ⚠ **`expect(assembly.model).toBe(model)`（`service.test.ts:69`, `:246`）不會照樣成立 —— 計畫的第一版寫錯了，實測推翻了它。**
+  有了把手，`assembly.model` **永遠是把手**，不可能是被注入的 client：**若它等於原始 client，rebind 就沒有東西可以轉發。**
+  那兩條斷言因此**必須改**，而改法是**保留各自的主題、改成行為式釘住**（那一回合的請求落在該 client 的記錄器裡；那次執行產出**第二個** client 的腳本），**不是刪掉它們、也不是放寬成什麼都接受**。（`cd47c730` 就是這樣改的。）
 
 **代價**：spec §4.2 的 `agent.setModel` **不存在**；cell 屬於組裝，所以動詞是 `assembly.setModel`。**spec §10 的「`core-agent` 的 model getter」整條作廢。**
 
@@ -106,13 +108,17 @@ it("a rebound model reaches every holder, not just the turn loop", async () => {
   const second = /* a SECOND recording client, distinguishable from the first */ null as never
   const assembly = /* build via this file's existing fixture, with model: first */ null as never
 
-  expect(assembly.model).toBe(first)
+  // ⚠ `assembly.model` is the HANDLE, never the injected client — if it were the
+  // client, a rebind would have nothing to forward through. So identity is
+  // asserted against the handle, not against `first`.
+  const handle = assembly.model
+  expect(handle).not.toBe(first)
 
   assembly.setModel(second)
 
   // (a) the handle forwards — and its IDENTITY is stable, which is exactly what
   // lets every holder keep working without being re-wired.
-  expect(assembly.model).toBe(first)          // still the SAME handle…
+  expect(assembly.model).toBe(handle)         // same handle…
   for await (const _ of assembly.model.stream(request)) void _
   expect(second.requests).toHaveLength(1)     // …but the request went to the NEW client
   expect(first.requests).toHaveLength(0)
@@ -145,8 +151,8 @@ Expected: FAIL —— `assembly.setModel is not a function`
   // — the agent's deps, the subagent tools, the guardian, the team scheduler,
   // and `assembly.model` itself — so a rebind is a single assignment and no
   // holder has to be told. Changing the TYPE instead (`model: () => ModelClient`)
-  // would have reached the same goal while touching ~85 `createAgent` call
-  // sites; the handle costs none of that and keeps `assembly.model`'s identity
+  // would have reached the same goal while touching 56 `createAgent` call
+  // sites; the handle costs none of that, and `assembly.model`'s identity — the
   // stable, which is what the service tests already pin.
   //
   // Design: protocol-selection §4.1 — which said "two consumers" and was
@@ -175,7 +181,7 @@ Run: `cd packages/session-executor && npx vitest run test/assembly.test.ts test/
 - [ ] **Step 6: 突變證明（不可跳過）**
 
 把把手改回直接傳 `currentModel`（即 `const model = currentModel`），重跑 Step 3。
-Expected: **RED** —— 因為 `assembly.model` 的身分會變，而 (a) 那條斷言會失敗。把觀察到的訊息原文貼進報告，然後改回來。
+Expected: **RED**。**機制比第一版計畫寫的精確**：`assembly.model` 的**身分不變**（它一直都是那個把手物件）；壞掉的是**轉發** —— 請求會落到**舊** client，於是 `second.requests` 是空的。把觀察到的訊息原文貼進報告，然後改回來。
 
 - [ ] **Step 7: 全套 + gate + commit**
 
