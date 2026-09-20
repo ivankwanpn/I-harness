@@ -635,13 +635,22 @@ for p in session-executor sdk; do pnpm --filter "@i-harness/$p" exec vitest run;
 pnpm --filter @i-harness/cli exec vitest run
 ```
 
-Expected: **三者全綠，零紅。**
+Expected:
+- `session-executor` → **113 passed / 0 failed（113）**（`assembly.test.ts` 38/38）
+- `sdk` → **54 passed / 0 failed（54）**（`server.test.ts` 37/37）
+- `cli` → **243 passed / 1 skipped（244）**
+
+> **⚠ cli 那一個數字是**算出來的**，而算它的方式是這一格要記住的東西。** 基準是 **242 passed / 1 failed / 1 skipped（244）** —— 改寫讓那 **1 failed 變成 passed** ⇒ **242 + 1 = 243 passed**，跳過的仍然是 1 ⇒ 總數 244 不變。
+>
+> **第一版在派工單裡寫「242 passed / 1 skipped」，而那個等式根本不成立**（242+1 ≠ 244）。**⇒ 那是把**改動前**的數字當成**改動後**的預期 —— 而這是這一塊裡第二次犯它**（第一次是 T1 的 `30/1` → `34/1`）。
+>
+> **⇒ 這一格的判準因此是**：**先寫下基準，再寫下這個任務讓哪一格從什麼變成什麼，然後才算。** 直接抄一個讀數就是這個錯。
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add packages/session-executor/test/assembly.test.ts packages/sdk/test/server.test.ts apps/cli/test/plugin-mount.test.ts
-git commit -m "test(m5): the four packages that encoded throw-fails-turn assert the same reasons through the soft channel"
+git commit -m "test(m5): the three packages that encoded throw-fails-turn assert the same reasons through the soft channel"
 ```
 
 ---
