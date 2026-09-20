@@ -22,13 +22,13 @@ import type { SandboxMode } from "@i-harness/sandbox"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
-import { encodeFrame, type SessionListEntry } from "@i-harness/sdk"
+import { encodeFrame, type SessionListEntry, type SessionModelSelection } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
-import { runProviderCommand } from "./provider.ts"
+import { PROVIDER_PROTOCOLS, runProviderCommand, type CliProtocol } from "./provider.ts"
 import { runModelsCommand } from "./models.ts"
 import { runRolesCommand } from "./roles.ts"
 import { failureReport, diagnosticSessionId } from "./run.ts"
@@ -559,10 +559,50 @@ async function runSdkCommand(args: string[]): Promise<number> {
             if (!known) throw new Error(`session not found: ${sessionId}`)
             return service.modelState(sessionId)
           },
-          setSessionModel: async (sessionId: string, selection: import("@i-harness/session-persistence").SessionModelSelection) => {
+          setSessionModel: async (sessionId: string, selection: SessionModelSelection) => {
             const known = service.hasAssembly(sessionId) || (await coordinator.list()).includes(sessionId)
             if (!known) throw new Error(`session not found: ${sessionId}`)
-            await coordinator.updateMeta(sessionId, { modelSelection: selection })
+            // Task 4 (§4.2②): the wire's `protocol` is for the REBIND only.
+            // Validate it against the five BEFORE it can reach the resolution
+            // chain — an unknown value is refused loudly, the same rule
+            // `provider add`/`models set` use for their --protocol. Dropping it
+            // silently would report "ready" for a wire the caller named and did
+            // not get; letting it through would put an unresolvable string into
+            // the chain and misreport the refusal as a route problem.
+            const protocol = selection.protocol
+            if (protocol !== undefined && !(PROVIDER_PROTOCOLS as readonly string[]).includes(protocol)) {
+              throw new Error(`unknown protocol "${protocol}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
+            }
+            // Resolve FIRST — a selection that cannot be resolved is refused
+            // before anything is written. The old order wrote the meta first
+            // and leaned on a teardown to make it take effect, so an
+            // unresolvable selection still landed durably, naming a model
+            // nothing live would use.
+            const resolved = await runtime.resolveModel({
+              sessionSelection: {
+                provider: selection.provider,
+                model: selection.model,
+                ...(protocol !== undefined ? { protocol: protocol as CliProtocol } : {}),
+                ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+              },
+            })
+            if (resolved.status !== "ready") throw new Error(resolved.reason)
+            const { client, ...binding } = resolved.binding
+            // The LIVE rebind: the session's handle forwards to this client now
+            // (every holder follows), and the service refreshes the reported
+            // binding + label in the same call (F1 — without this, modelState
+            // and the dashboard row would keep naming the pre-rebind model).
+            service.rebindModel(sessionId, { model: client, ...binding })
+            // §4.3: the DURABLE selection never carries the protocol. It is
+            // stripped HERE — after the rebind, before anything writes — which
+            // is the half the sdk-wire guard pins.
+            await coordinator.updateMeta(sessionId, {
+              modelSelection: {
+                provider: selection.provider,
+                model: selection.model,
+                ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}),
+              },
+            })
           },
         }
       : {}),

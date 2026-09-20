@@ -68,6 +68,9 @@ function makeStubService(): SessionService {
     submit: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
+    // The server itself never rebinds (the host seam does, Task 4) — present
+    // only to satisfy the interface the stub stands in for.
+    rebindModel: vi.fn(() => true),
     liveSession: () => undefined,
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
@@ -310,10 +313,10 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
     }
   })
 
-  it("round-trips create/fork/model state and invalidates the session binding after selection", async () => {
+  it("round-trips create/fork/model state and leaves the live session to the host's rebind", async () => {
     const service = makeStubService()
     const closeSession = vi.mocked(service.closeSession)
-    let selection: { provider: string; model: string; reasoningEffort?: string } | undefined
+    let selection: { provider: string; model: string; reasoningEffort?: string; protocol?: string } | undefined
     const server = createSdkServer(service, {
       createSession: async () => ({ sessionId: "created" }),
       forkSession: async (sessionId) => ({ sessionId: `${sessionId}-fork` }),
@@ -331,7 +334,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       expect((decodeFrame(before!) as RpcSuccess).result).toEqual({ status: "unconfigured", reason: "No model configured" })
       const selected = await server.handleLine(encodeFrame(makeRequest(12, "session/model/set", {
         sessionId: "created",
-        selection: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" },
+        selection: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high", protocol: "anthropic-messages" },
       })))
       expect((decodeFrame(selected!) as RpcSuccess).result).toEqual({
         status: "ready",
@@ -339,8 +342,23 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         modelId: "deepseek-chat",
         label: "deepseek:deepseek-chat",
       })
-      expect(selection).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
-      expect(closeSession).toHaveBeenCalledWith("created")
+      // Task 4: the wire now CARRIES `protocol` through to the host seam — a
+      // rebind cannot honor a protocol the parser drops. What must NOT carry it
+      // is the durable write: the host (the CLI relay) strips it before
+      // anything reaches `updateMeta` (§4.3; guarded by the sdk-wire e2e).
+      expect(selection).toEqual({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        reasoningEffort: "high",
+        protocol: "anthropic-messages",
+      })
+      // DELIBERATE CHANGE (Task 4): this used to assert closeSession WAS called
+      // here ("invalidate the session binding after selection"). That teardown
+      // existed only because the old mechanism took effect on the NEXT assembly.
+      // The change is LIVE now — the host's setSessionModel retargets the live
+      // assembly's handle — so closing would undo the very rebind it just made.
+      // The server never disposes a session on a model change; the host owns it.
+      expect(closeSession).not.toHaveBeenCalled()
     } finally {
       await server.close()
     }
@@ -359,6 +377,17 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         selection: { provider: "", model: "m" },
       })))
       expect((decodeFrame(invalid!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      // A protocol that is not a non-empty string is REFUSED, never dropped:
+      // silently ignoring it would be the degradation this unit removes (the
+      // rebind would report "ready" while the wire the caller named was
+      // discarded).
+      const badProtocol = await server.handleLine(encodeFrame(makeRequest(17, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m", protocol: 42 },
+      })))
+      expect((decodeFrame(badProtocol!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
       expect(setSessionModel).not.toHaveBeenCalled()
 
       vi.mocked(service.queueState).mockReturnValue({ running: true, queued: 0 })

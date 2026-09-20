@@ -361,8 +361,16 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INTERNAL_ERROR, `session/model/set: session busy: ${p.sessionId}`)
         }
         try {
+          // Task 4 — DELIBERATE behavior change: the `closeSession` that used to
+          // follow the host call is GONE. It existed only because the change
+          // took effect on the NEXT assembly (tear the live one down, rebuild
+          // from the freshly persisted meta). The host's `setSessionModel`
+          // rebinds the LIVE assembly in place now, so disposing it here would
+          // undo the rebind it just performed — and the selection's protocol
+          // (§4.2②) is never persisted, so a rebuilt assembly could not recover
+          // it. The wiring note is updated in server.test.ts ("leaves the live
+          // session to the host's rebind").
           await opts.setSessionModel(p.sessionId, selection)
-          await service.closeSession(p.sessionId)
           return makeSuccess(id, serializeModelState(await opts.modelState(p.sessionId)))
         } catch (error) {
           return hostMethodFailure(id, "session/model/set", error)
@@ -716,15 +724,20 @@ function validSessionIdResult(result: SessionIdResult, method: string): SessionI
 // a session's protocol is never PERSISTED — it must not reach `updateMeta` or the
 // session header — by owner decision (docs/superpowers/specs/2026-09-19-protocol-
 // selection-design.md §4.3: "session 的協議不寫進任何檔案", repeated in §7).
-// Spec §6/§10 do put `protocol` on this wire for the REBIND path; when that
-// lands, route it to the agent and STRIP it before anything writes a selection.
-// `updateMeta` takes the durable shape, which already carries `protocol?`, so a
-// parser that forwards the whole selection would write the header SILENTLY — the
-// guard against exactly that is the "never persists a protocol" assertion in
-// apps/cli/test/sdk-wire-v11.test.ts.
+// Task 4 widened this parser for the REBIND path (§6/§10): `protocol` is now
+// ACCEPTED and rides through to the host's `setSessionModel`, which resolves the
+// rebind with it and STRIPS it before anything writes a selection. The strip is
+// the load-bearing half: `updateMeta` takes the durable shape, which already
+// carries `protocol?`, so a relay that forwarded the whole selection would write
+// the header SILENTLY. The guard against exactly that is the "never persists a
+// protocol" case in apps/cli/test/sdk-wire-v11.test.ts (the live-rebind half is
+// its neighbour). The VALUE is not validated here on purpose — this file is the
+// wire contract, not the settings resolver; the host validates the five and
+// refuses an unknown one loudly (never dropping it, which would report "ready"
+// for a wire the caller named and did not get).
 function parseModelSelection(value: unknown): SessionModelSelection | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-  const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+  const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown; protocol?: unknown }
   if (typeof raw.provider !== "string" || raw.provider.trim() === ""
     || typeof raw.model !== "string" || raw.model.trim() === "") {
     return undefined
@@ -733,12 +746,17 @@ function parseModelSelection(value: unknown): SessionModelSelection | undefined 
     && (typeof raw.reasoningEffort !== "string" || raw.reasoningEffort.trim() === "")) {
     return undefined
   }
+  if (raw.protocol !== undefined
+    && (typeof raw.protocol !== "string" || raw.protocol.trim() === "")) {
+    return undefined
+  }
   return {
     provider: raw.provider.trim(),
     model: raw.model.trim(),
     ...(typeof raw.reasoningEffort === "string"
       ? { reasoningEffort: raw.reasoningEffort.trim() }
       : {}),
+    ...(typeof raw.protocol === "string" ? { protocol: raw.protocol.trim() } : {}),
   }
 }
 

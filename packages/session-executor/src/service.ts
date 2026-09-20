@@ -49,6 +49,12 @@ export type SessionModelBindingResult =
       }
     }
 
+/** Task 4: the installable half of a resolved binding — a `ready` result with
+ * the status discriminator stripped. What `rebindModel` takes from the host,
+ * which resolved it (only the host owns the runtime and the wire's optional
+ * protocol). Not exported: the public shape is `SessionModelBindingResult`. */
+type ReadyModelBinding = Extract<SessionModelBindingResult, { status: "ready" }>["binding"]
+
 /** M49 Task 11 (spec §8.1): one row of the real session queue projection.
  * `order` is the per-session FIFO ordinal; the running row is always
  * reported FIRST by queue() — the rest follow FIFO by `order`. */
@@ -107,6 +113,20 @@ export interface SessionService {
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
+  /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
+   * `session/model/set` rebind. The host resolves because only it owns the
+   * runtime and the wire's optional protocol (§4.2②); this method makes the
+   * install reach the two REPORTING surfaces as well: the memoised binding
+   * (what `modelState` and the dashboard row report — previously only
+   * `closeSession` cleared it) and, when the session is LIVE, the assembly's
+   * handle plus its label. It NEVER disposes an assembly: the live rebind IS
+   * the point. Returns whether a live assembly was retargeted; false means
+   * nothing was live, and the refreshed binding is what the next build in this
+   * process starts from. KNOWN BOUNDARY, not a silent one: the assembly's
+   * compaction WINDOW is construction-time config (`contextWindow` →
+   * assembly.ts's `budget: { contextWindow: … }`) — a rebind moves the client,
+   * not the window; a new window takes effect at the next build. */
+  rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
   hasAssembly(sessionId: string): boolean
   /** Per-session lane observation for the jobs/queue surface:
@@ -236,6 +256,24 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       modelId: result.binding.modelId,
       label: result.binding.label,
     }
+  }
+
+  function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
+    if (closed) throw new Error("session service closed")
+    // The REPORTING cell first: `modelState` (and the dashboard row that reads
+    // it) resolves through this memo, and before Task 4 only `closeSession`
+    // ever replaced it — so a rebind left those surfaces naming the OLD
+    // provider:model until something else closed the session (F1, MEDIUM).
+    modelBindings.set(sessionId, Promise.resolve({ status: "ready", binding }))
+    const assembly = assemblies.get(sessionId)
+    if (assembly === undefined) return false
+    // The SPENDING half: one assignment on the identity-stable handle, so every
+    // holder (turn loop, compaction engine, subagents, guardian, team, title)
+    // follows without being told (R-B1 / Task 1).
+    assembly.setModel(binding.model)
+    // The label is a reporting surface too — fixed at construction otherwise.
+    assembly.modelLabel = binding.label
+    return true
   }
 
   async function getOrCreate(sessionId: string): Promise<SessionAssembly> {
@@ -586,6 +624,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     submit,
     assemblyFor: getOrCreate,
     modelState,
+    rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {

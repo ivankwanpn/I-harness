@@ -142,9 +142,14 @@
  *
  * SessionModelState is serialization-only: it contains status, reason, ids,
  * and label, never credentials or a runtime client. Model changes reject an
- * active/queued session, persist the selection, invalidate the live assembly,
- * and resolve a fresh state. Unknown sessions follow the v1 history convention
- * (-32602 with an explicit not-found message).
+ * active/queued session, then rebind the LIVE session's model in place — the
+ * host resolves the selection (including an optional `protocol?`, §4.2②) and
+ * every holder follows through the assembly's handle — and answer a fresh
+ * state. The durable write that follows CARRIES NO PROTOCOL (§4.3: a session's
+ * protocol is never persisted); the pre-Task-4 teardown of the live assembly
+ * ("invalidate") is GONE, because it existed only to make the change take
+ * effect on the next assembly. Unknown sessions follow the v1 history
+ * convention (-32602 with an explicit not-found message).
  *
  * ────────────────────────────────────────────────────────────────────────────
  * Task 11 addendum — M49, 2026-09-07 (ADDITIVE-ONLY).
@@ -284,14 +289,20 @@ export interface SessionIdResult {
 
 /** Public SDK selection shape. Mirrored from the durable SessionMeta field
  * structurally, not by dependency — and it carries only what this wire lets an
- * embedder SET. The durable field may carry more: it also names the wire a
- * selection was made on (`protocol?`), which this shape deliberately does not
- * (a session's protocol is not persisted through the SDK: design §4.3, §7 —
- * see the whitelist note in server.ts). */
+ * embedder SET. `protocol?` rides the REBIND path only (design §4.2②, §6:
+ * `setSessionModel({…, protocol?})` → the LIVE session changes wire now). It is
+ * NEVER persisted (§4.3: a session's protocol is written to no file) — the host
+ * routes it to the live assembly and strips it before any durable write, and
+ * the guard for that is the sdk-wire e2e "never persists a protocol" case. The
+ * field is deliberately `string`, not the settings union: this file is the
+ * zero-dependency wire contract; the host validates it against the five
+ * protocols it can resolve, and refuses an unknown one loudly rather than
+ * dropping it. */
 export interface SessionModelSelection {
   provider: string
   model: string
   reasoningEffort?: string
+  protocol?: string
 }
 
 /** Serializable per-session model state. Runtime clients and credentials are
