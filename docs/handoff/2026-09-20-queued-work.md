@@ -30,7 +30,7 @@
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
-| **W10** | **前景 bash 的 120 秒死線** | 三 | **未開始**（2026-09-20 使用者指出） | 形狀待選 |
+| **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景） | 無 |
 | **W11** | **子代理的健康訊號** | 三 | **未開始**（同上） | 形狀待選 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
@@ -383,6 +383,41 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 | **(iii)** | **讓那個死是可續的** —— 保住部分輸出，讓模型能重跑或接手 | 最大，但它不改變任何語意，只保住**已經產生的東西** |
 
 **驗收**：一個跑超過 120 秒的前景指令，**不會靜默地失去它的工作** —— 而失敗必須讓模型**看得出是哪一種**（逾時，不是指令本身失敗）。
+
+### ✅ **W10 已完成 —— `b8bd78b0`**
+
+**形狀 (i) 落地**：前景指令跑到門檻就交回一個 job id，而**指令繼續跑**（不是重跑、不是先選 `runBackground`）。
+
+#### 旋鈕，與那句必須寫在兩個數字旁邊的話
+
+- `AssemblyOptions.shellBackgroundAfterMs`，預設 **30_000**，就在 `shellTimeoutMs`（預設 **120_000**）旁 —— 註解同時寫在**兩個數字那裡**：**門檻必須遠低於死線，否則 `guard-timeout` 的 abort 先贏，這個功能永遠不觸發**。預設對（30_000 vs 120_000）留了 90 秒給交回。
+- CLI 的 `HeadlessOptions` 同層加了一樣的欄位並轉發（`apps/cli/src/run.ts`），所以「同一個層級」在**兩個宿主契約**都成立。
+- **§0 規則三的即時示範**：上面那段引的 `assembly.ts:404` **已因這次改動過期** —— `shellTimeoutMs` 現在在 `:413`，新的 `shellBackgroundAfterMs` 在 `:426`，兩者一起交給 shell 在 `:531`。
+
+#### 縫開在哪裡（回報要求的工程問題）
+
+`run(cmd)` 等結果、`runBackground(cmd)` 先 spawn 再回 id —— **「中途轉背景」兩者都做不到，它要的是一次 spawn、兩種結局**。所以縫開在 **`ExecService.run` 的第二個 overload**（`packages/exec/src/index.ts`）：`run(cmd, { backgroundAfterMs })` 回 `ExecResult | PromotedRun`，而**同一個 `spawnChild` handle** 在門檻到時被**註冊成 job**（`registerJob` 成了 `runBackground` 與 promotion 唯一的註冊路徑，種子取自 handle 已捕捉的文字）。
+
+為什麼不是別的縫：
+
+- **不能事先選 `runBackground`** —— 那是第二次 spawn，前景那份工作就丟了，正是本項要修的東西。
+- **不能加新的必需方法** —— `ExecService` 的既有 fake（`packages/shell/test/`、`fs-search`）會編不過，**既有測試會被逼著改**；而「既有 shell/exec 測試不動」正是驗收的另一半。**可選方法**更糟：沒實作的路徑會讓 promotion **靜默地不發生**。
+- **overload 讓既有呼叫者的契約逐字不變**：`run(cmd)` 仍回 `Promise<ExecResult>`，promotion 是**呼叫者明確選擇**的。
+
+**一個被既有測試當場抓到的契約**：`spawnChild` 會**同步 throw**（受限策略、沒有 backend），而既有呼叫者遇到的是 **rejected promise**（`await expect(exec.run(...)).rejects`）—— 所以實作**必須是 `async`**；第一版寫成回傳 `handle.done` 的普通函式，兩條既有測試立刻紅。
+
+#### 驗收（量到的）
+
+- **全套**：`2592 → 2598 passed · 0 failed · 9 skipped`（66 個 package，新增 6 條：exec 2、session-executor 3、CLI 1）；`pnpm typecheck` 綠；`check-reachability.mjs --gate` → **`gate PASS -- no new rows`**（新匯出 `PromotedRun` 與它在 shell 的消費者同一個提交）。
+- **promotion 生效**：回 `{ job_id, promoted: true, ran_foreground_ms }`，`job_output` 讀得到；**「還活著」是量到的** —— 指令用一個檔案被測試扣住，promotion 之後仍在跑，放行後把它被交回時還沒做完的工作做完（`packages/session-executor/test/shell-promotion.test.ts`、`packages/exec/test/exec.test.ts`、`apps/cli/test/cli.test.ts`）。
+- **沒變的部分**：門檻以下**逐字不變** —— 沒有 id、沒有 `promoted`、沒有 job 記錄（新增測試釘住這點，**既有的 shell/exec 測試一條沒改**）。
+- **證偽**：門檻高於死線（**預設 30_000** vs 400ms 死線）→ promotion **不觸發**，指令照舊死，而**死是可辨識的**（`code: "TOOL_TIMEOUT"`、`job_list` 空）—— 那條測試同時釘住 `?? 30_000` 那個預設分支。
+
+#### 代價與 caveat（形狀 (i) 那一欄的處置）
+
+- **模型沒要求 background 卻拿到 id** —— 所以結果**說出自己是誰**：`promoted: true` + `ran_foreground_ms`，`stdout` 並寫明 *"You did NOT ask for background — the harness did."*。**只有 `{ job_id }` 不行**：那正是模型自己 `background: true` 會拿到的形狀。
+- **promoted job 的視圖從頭完整**：種子取 handle 已捕捉的文字，否則 job 會缺掉前 N 毫秒的輸出。**exec spill 有配置時那顆種子是記憶體 tail**（完整內容在該階段的 spill 檔）—— 而今天**沒有生產路徑同時配置 spill 與這個旋鈕**（`registerShell` 從不傳 spill，已量）。
+- **殘餘風險（未加執行期警告）**：宿主若把 `shellTimeoutMs` 調到**低於門檻**（預設對是安全的），promotion **會靜默地不觸發**、行為回到 W10 前。處置照裁定：**把關係寫在兩個數字旁**，並用證偽測試讓它可觀測。
 
 ### **W11 —— 子代理的健康訊號**
 
