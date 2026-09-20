@@ -121,9 +121,9 @@ grep -rn "assembly\.model\|\.model\b" apps/cli/src/run.ts | head
 ```ts
 it("a rebound model reaches every holder, not just the turn loop", async () => {
   // The design said "two consumers, one change covers both" — measured, a
-  // session's lifetime has EIGHT holders of a resolved client. This test is the
+  // session's lifetime has MANY holders of a resolved client. This test is the
   // deliverable: it fails if the handle stops forwarding — it measures the
-  // handle, the direct stream, the agent deps and the turn. The full eight-holder
+  // handle, the direct stream, the agent deps and the turn. The full holder
   // enumeration is Task 2's job; a name that claimed it here would be a claim
   // wider than its measurement, which is this unit's own subject.
   // partial success this whole unit exists to remove.
@@ -431,4 +431,39 @@ it("--protocol rides THIS session only, and never reaches settings.json", () => 
 
 **parked、不在本計畫**（偵察找到的既有缺陷）：
 - `packages/sdk/src/server.ts:170-177` —— **訂閱洩漏**：`assemblyUnsubscribes.set(...)` 覆蓋同一個 session 的前一個訂閱而沒先退訂，`close()` 只退當前那個。
-- `apps/cli/src/index.ts:500-503` —— `liveAssemblies` 從不清理，`closeSession` 之後仍握著**已銷毀的組裝**，直到下一個被建起來。**本計畫的 Task 4 會碰這條路，實作者要確認自己拿到的不是屍體。**
+- `apps/cli/src/index.ts:552-558`（原寫 `:500-503`，**在 Task 5 移動之後仍引舊值 —— 終審抓到**）—— `liveAssemblies` 從不清理，`closeSession` 之後仍握著**已銷毀的組裝**，直到下一個被建起來。**Task 4 會碰這條路，實作者要確認自己拿到的不是屍體。**（Task 4 的結論：**沒有用它、也沒有修它** —— 移除 teardown 之後，sdk 行程再也產生不出那個屍體視窗。）
+
+---
+
+## 出貨後追加 —— 計畫沒有的兩件事，而程式碼有
+
+**終審抓到的。留在這裡，因為複核者讀的是這份計畫。**
+
+### 追加 1：**effort 是第二個 cell**（計畫對它**零提及**）
+
+本計畫的 Task 1 只產出 `setModel`，Task 4 的 F1 只涵蓋**回報**面。**`grep reasoningEffort` 在這份計畫裡是 0 次。**
+
+**而實際出貨的程式碼說：**
+
+> `assembly.ts:983-997` —— *「**the PAIRING IS THE INVARIANT**」*，並警告「只描述**一個**突變的說明，就是它回歸的方式」。
+
+**那句話不是裝飾**：`reasoningEffort` 是**第二個被快照的東西** —— 沒人注意到，**因為把手的名字寫著「model」**。Task 4 的 `closeSession` 移除把「下一次組裝生效」靜默變成「下一次行程」，於是**一個帶著 effort 的 live rebind 會回報 `ready`、寫進 header、而永不套用** —— 那是終審複審判為 **MEDIUM 的回歸**，修法就是 R-B1 的形狀套上去：**cell 放整個解析出來的選擇，agent 用 getter 讀它。**
+
+**所以 `SessionAssembly` 有兩個 setter，而它們是配對的**：`setModel(client)` 與 `setReasoningEffort(effort | undefined)`。後者獨立存在（而不是 `setModel(client, effort?)`）**因為 `undefined` 必須意味著「清掉」** —— 搭在 `setModel` 上會讓**每一個既有呼叫靜默變成 clear**。
+
+**從這份計畫實作的人，會把模型搬過去、然後看著計畫同意他漏掉 effort。這一段就是為了擋住那件事。**
+
+### 追加 2：**壓縮視窗**的成本陳述——**不可與 F-1 不同標準**
+
+先前這條邊界被 park，理由寫成「**另外兩個邊界從來沒有 live 生效過**」。**終審證明：對視窗而言那是假的。**
+
+在有 teardown 的時代，`session/model/set` 寫入 meta、**強制重建**，而重建會解出**新模型的**視窗（`provider-runtime` 的 `contextWindow` 是**逐 `modelId`** 推導的）。**那是和 F-1 一模一樣的論證，只差一層。**
+
+**而代價原本沒被寫下來。** 現在寫下來：
+
+| rebind 到 | 後果 |
+|---|---|
+| **更小**視窗的模型 | `enforceBudget` 與壓縮門檻**仍用舊的、較大的視窗** —— 本來塞得下的壓縮永遠不觸發，**最後由提供者以大聲但錯的位置拒絕那一回合** |
+| **更大**視窗的模型 | **摘要被比需要的更頻繁地計費** —— **靜默的成本，正是這個單元存在的理由所要消滅的那一類** |
+
+**裁定：行為可以照樣 parked**（修它不是一行的 cell —— 壓縮引擎在建構時抓走 `contextWindow`，所以 `packages/compaction` 得重新讀它），**但理由與代價不可以與 F-1 不同標準。** 這一節就是那個更正。
