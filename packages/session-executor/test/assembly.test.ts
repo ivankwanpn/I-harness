@@ -855,6 +855,139 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
   }, 30_000)
 })
 
+// ── R-B2 (phase B), Task 3: the TWO holders named by CONFIGURATION ──────────
+// Task 2's block above enumerates every holder that FOLLOWS a rebind, and its
+// fixtures deliberately avoid both of these. These two cases pin the other side
+// of that same line, so the exception is tested and spoken instead of silent:
+//   (a) `compaction/src/index.ts` `config.summarizationModel ?? deps.model`
+//   (b) `guard-approval/src/guardian/reviewer.ts` `deps.model ?? deps.parentModel`
+//     — the host's `guardian.model`; found by Task 1's reviewer, absent from the
+//       plan's first version, and with NO production caller today (only test
+//       code sets it). A buried landmine rather than an open wound — and still
+//       treated, because a rebind that leaves even one holder behind is the
+//       silent partial success this unit exists to kill.
+// Both keep winning on purpose (R-B2: a configured model is the user's explicit
+// choice, and a rebind must not silently discard it). The cost is real and is
+// stated where the boundary lives: after a rebind, summaries / guardian reviews
+// under such a configuration keep billing the CONFIGURED endpoint.
+describe("createSessionAssembly — the two CONFIGURED holders keep winning (Task 3, R-B2)", () => {
+  /** The file's recorder shape (`capturingModel`, :462) around a
+   * `createMockClient` cassette — the same two existing pieces Task 2's
+   * `scriptedModel` joins. That helper is scoped to the Task 2 block, whose
+   * fixtures this task must not disturb, so this block joins the two pieces
+   * again rather than moving it. Not a third fixture: recorder = this file's,
+   * script = `createMockClient`'s. */
+  function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
+    const requests: LLMRequest[] = []
+    const cassette = createMockClient(script)
+    return {
+      requests,
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        yield* cassette.stream(request)
+      },
+    }
+  }
+
+  it("a CONFIGURED summarization model wins over the handle — a documented boundary, not an oversight", async () => {
+    // R-B2: the rebind does not silently discard a user's explicit summarization
+    // model. The cost is stated: for such a configuration the summarizer stays on
+    // the configured endpoint after a rebind. This test is what makes that
+    // visible instead of invisible.
+    const session = createSession()
+    // Task 2's holders 2+3 fixture, with the ONE difference that makes this the
+    // boundary: a `summarizationModel` IS configured. One user message and the
+    // default retention budget (retainTokens 0) → the whole surface is
+    // shadowable, so compact() has a region to summarize.
+    append(session, { type: "user/message", text: "kickoff ".repeat(20) })
+    const first = capturingModel()
+    // Each client's answer is unique, so the summary text names which client
+    // actually served — the script-as-proof Task 2's holder 1 uses. Both answers
+    // clear the 500-char minSummaryChars floor, so either is a clean pass and
+    // WHICH client ran is the only thing the assertions can see.
+    const configured = scriptedModel([{ role: "assistant", text: "CONFIGURED summarizer ran\n" + "configured ".repeat(60) }])
+    const second = scriptedModel([{ role: "assistant", text: "REBOUND summarizer ran\n" + "rebound ".repeat(80) }])
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      session,
+      model: first,
+      compact: { contextWindow: 100_000, summarizationModel: configured },
+    })
+    try {
+      assembly.setModel(second)
+      const result = await assembly.compactNow()
+      // The boundary line comes FIRST so breaking the `??` reds HERE:
+      // `config.summarizationModel ?? deps.model` means the CONFIGURED client
+      // takes the summary request, rebind or no rebind.
+      expect(configured.requests).toHaveLength(1)
+      expect(second.requests).toHaveLength(0)
+      expect(first.requests).toHaveLength(0)
+      // …and the configured client's answer is the one the engine used.
+      expect(result.summary).toContain("CONFIGURED summarizer ran")
+      expect(result.compacted).toBe(true)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("a CONFIGURED guardian model wins over the handle too — the same boundary, the same cost", async () => {
+    // Found by T1's reviewer, absent from this plan's first version. Same class as
+    // R-B2's summarizationModel: a host-configured model is a deliberate choice and
+    // the rebind does not discard it. Same visible cost: for such a configuration
+    // every guardian review keeps billing the configured endpoint.
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-guardian-configured-"))
+    const first = capturingModel()
+    // The verdict text is unique, so BOTH proofs name the configured client: the
+    // reviewer's REQUEST landed on it, and its ANSWER is the one the gate acted
+    // on (the run's rejection carries the rationale).
+    const configured = scriptedModel([{ role: "assistant", text: '{"outcome":"deny","rationale":"the configured reviewer denied it","risk_level":"moderate"}' }])
+    // The parent runs on the REBOUND client. Its first step is the
+    // outside-workspace write — the approval classifier's `ask` branch, which is
+    // what consults the guardian. The second step exists only so that a broken
+    // `??` (reviewer falling back to the handle) still produces a parseable
+    // verdict instead of an exhausted cassette; it is never consumed on the
+    // shipped path.
+    const second = scriptedModel([
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
+      { role: "assistant", text: '{"outcome":"approve","rationale":"the handle reviewer approved it","risk_level":"none"}' },
+    ])
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: first,
+      // `model` — the CONFIGURED case. `deps.model ?? deps.parentModel`
+      // (reviewer.ts) makes the reviewer spawn on THIS client even though the
+      // parent it inherits from moved to `second` (the assembly hands the handle
+      // as parentModel and the configured client as model).
+      guardian: { model: configured },
+    })
+    try {
+      assembly.setModel(second)
+      // The run's OUTCOME is captured, not asserted, first — same reason as Task
+      // 2's holder 5b: under a broken guardian wiring the write goes through and
+      // an outcome assertion would red before the boundary line below.
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      // The reviewer's request is the one carrying the guardian policy prompt
+      // (the reviewer role's systemPrompt), so a parent-only match cannot satisfy
+      // it. Boundary line FIRST: the configured client is the one that serves.
+      expect(configured.requests.filter((r) => r.systemPrompt.includes("You are the approval guardian."))).toHaveLength(1)
+      // …and it served instead of the rebound client, not alongside it.
+      expect(second.requests.filter((r) => r.systemPrompt.includes("You are the approval guardian."))).toHaveLength(0)
+      expect(first.requests).toHaveLength(0)
+      // The rebind itself was live: the parent's own turn ran on `second`, so
+      // the boundary above is a rebind-time fact, not a rebind that never landed.
+      expect(second.requests.length).toBeGreaterThan(0)
+      // …and the configured client's verdict is the one the gate acted on.
+      expect(await outcome).toMatch(/guardian denied: the configured reviewer denied it/)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})
+
 // M56 T1.5: the provider's fail-soft refresh-failure signal is bound to the
 // mcp/server-status sink as an ADDITIVE event field — the lifecycle state does
 // not change (the stored token is kept; the 401/M53 path owns recovery). The

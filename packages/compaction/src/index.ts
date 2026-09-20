@@ -111,6 +111,17 @@ export function createCompactionEngine(deps: {
       }
     }
     const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
+    // R-B2: a CONFIGURED summarization model WINS over `deps.model`, and that
+    // precedence is DELIBERATE — not the silent exception this unit exists to
+    // remove. `deps.model` is the session assembly's stable model handle (R-B1:
+    // one identity every holder shares, whose `stream` forwards to the CURRENT
+    // client), so every other holder follows a rebind; this one does not, because
+    // a rebind must not silently discard the user's explicit summarization
+    // choice. The cost, stated rather than implied: for such a configuration
+    // every summary keeps billing the configured endpoint after a rebind.
+    // Pinned by the boundary case "a CONFIGURED summarization model wins over
+    // the handle" in packages/session-executor/test/assembly.test.ts — do NOT
+    // "fix" this into following the handle.
     const model = config.summarizationModel ?? deps.model
     // M5/D2: replay the region as REAL messages so this call is a byte-prefix of
     // the last main request. Only when the summarizer is the same model — a
