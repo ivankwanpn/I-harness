@@ -6,10 +6,23 @@
 // `additionalProperties` is a BOOLEAN *or* a SCHEMA — workflow/src/tool.ts:73
 // declares a map of name→string with the schema form.)
 //
-// THE ONE PROPERTY THAT MATTERS: this function is TOTAL. It reports, it never
-// throws, and it never coerces — for arbitrary values against arbitrary
-// schemas. That is the whole reason it can run on a schema this repo did not
-// write (MCP forwards the remote server's schema verbatim, mcp-client/bridge.ts).
+// THE ONE PROPERTY THAT MATTERS: this function is TOTAL FOR JSON-SHAPED INPUT.
+// It reports, it never throws, and it never coerces — for arbitrary JSON-shaped
+// values against arbitrary JSON-shaped schemas. That is the whole reason it can
+// run on a schema this repo did not write (MCP forwards the remote server's
+// schema verbatim, mcp-client/bridge.ts), and it is the class that actually
+// arrives: args come from JSON.parse, schemas are literals or JSON-parsed
+// server responses.
+//
+// THE QUALIFIER IS MEASURED, not defensive wording. 4,000 randomized
+// JSON-shaped cases (schema and value both round-tripped through JSON) raised 0
+// throws; the only three throws in that fuzz were hand-built ACCESSORS — a
+// schema with a throwing `type` getter, a value with a throwing getter, and a
+// Proxy whose `get`/`ownKeys` traps throw. A getter or a Proxy is not JSON:
+// `JSON.parse` cannot construct one, so no caller on this path can reach that
+// class. Totality against arbitrary JS objects would be a DIFFERENT function —
+// it would have to read every member through accessors it cannot trust, and no
+// rule below is written for that.
 //
 // THE WALK IS AN EXPLICIT FRAME LIST, never the JS call stack — dsh's house rule
 // for untrusted input ("without using the JavaScript call stack"), and the T1
@@ -143,8 +156,18 @@ export function assertSupportedJsonSchema(schema: unknown): asserts schema is Js
  * The string arms mirror the value layer's own reads exactly: a `type` array
  * must be NON-EMPTY (an empty one constrains nothing, which is a declaration
  * mistake, not a style choice), `enum` must be non-empty for the same reason,
- * and the three bounds must be FINITE (the value layer's comparisons are false
- * against NaN and ±Infinity, so a non-finite bound never fires). */
+ * and the three bounds must be FINITE.
+ *
+ * WHY the finiteness rule, per value — the three are NOT the same (measured
+ * against the value layer, one probe each): `minimum: NaN` and `maximum: NaN`
+ * never fire (every comparison against NaN is false), and the two saturating
+ * forms `minimum: -Infinity` / `maximum: Infinity` never fire either — but
+ * `minimum: Infinity` reports `"value" must be >= Infinity` and
+ * `maximum: -Infinity` reports `"value" must be <= -Infinity`, i.e. they refuse
+ * EVERY finite value. So a non-finite bound is either a typo that silently
+ * does nothing or a constraint that rejects its whole domain, and never what
+ * its author meant. (An earlier version of this comment claimed the whole
+ * ±Infinity family "never fires"; the two rejecting arms are the correction.) */
 function shapeClause(key: string, carried: unknown): string | undefined {
   switch (key) {
     case "type":

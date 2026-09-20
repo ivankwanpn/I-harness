@@ -41,7 +41,7 @@ describe("e2e skills", () => {
     }
   })
 
-  it("skill_get on a missing skill fails closed (run exits 1 with SKILL_NOT_FOUND)", async () => {
+  it("skill_get on a missing skill fails closed — the reason reaches the model and the turn continues", async () => {
     const dir = makeWorkspace("i-harness-e2e-skills-")
     try {
       mkdirSync(join(dir, "skills", "alpha"), { recursive: true })
@@ -55,11 +55,22 @@ describe("e2e skills", () => {
         approveAll: true,
         mockScript: [
           { role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] },
+          // The model's continuation, which the soft path now reaches: the
+          // one-step cassette otherwise dies on "mock script exhausted".
+          { role: "assistant", text: "saw the failure, continuing" },
         ],
       })
-      // SkillToolError throws → throw-fails-turn → clean exitCode-1 result.
-      expect(result.exitCode).toBe(1)
-      expect(result.error).toContain("SKILL_NOT_FOUND")
+      // M5 T4 block ① made a tool BODY throw SOFT: the run no longer exits 1,
+      // because the turn continues and the reason travels with the call's
+      // tool/result instead of the turn's error. The substantive claim is
+      // unchanged — skill_get fails CLOSED and the reason is never swallowed —
+      // only the channel moved. (This file lives outside
+      // `pnpm -r --no-bail test`, which is why block ①'s rewrite census, scoped
+      // to the workspace packages, missed it.)
+      expect(result.exitCode, result.error).toBe(0)
+      const results = result.session?.events.filter((e) => e.type === "tool/result") as { name: string; output: unknown }[]
+      const failed = results.find((e) => e.name === "skill_get")
+      expect(String((failed?.output as { error?: string } | undefined)?.error)).toContain("SKILL_NOT_FOUND")
     } finally {
       removeWorkspace(dir)
     }

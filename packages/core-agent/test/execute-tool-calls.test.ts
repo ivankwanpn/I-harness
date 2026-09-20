@@ -886,6 +886,46 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     ).rejects.toThrow(/denied: policy/)
   })
 
+  it("BOUNDARY: a malformed call reaches NO policy layer — the approval seam is never asked (spec §7)", async () => {
+    // §7's checkable form: "an `ask` policy + a malformed call ⇒ the answerer
+    // is called ZERO times". The case above pins the guard/deny boundary; this
+    // pins the seam one layer further in, where §3.7's ordering actually pays:
+    // nobody is asked to approve garbage. Counters rather than throw/not-throw,
+    // because the second half measures that the seam is LIVE — the same call
+    // with valid args walks every layer — so the zeros are the refusal and not
+    // a fixture that never asks.
+    //
+    // The counter set is §2.4's, not just §7's: every channel an observer might
+    // reach for is counted, telemetry included, because the spec's candidate
+    // mitigation sentence ("watch it on tools/pre-execute or telemetry") is
+    // measured here rather than asserted in prose.
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const counts = { preExecute: 0, postExecute: 0, postTool: 0, guards: 0, guardian: 0, answerer: 0, body: 0, telemetry: 0 }
+    ctx.on("tools/pre-execute", () => { counts.preExecute += 1; return { kind: "ask", reason: "non-readonly tool" } })
+    ctx.on("tools/post-execute", () => { counts.postExecute += 1 })
+    ctx.on("agent/post-tool", () => { counts.postTool += 1 })
+    ctx.guard("tools/execute", () => { counts.guards += 1; return undefined })
+    ctx.services.register("approval/guardian", async () => { counts.guardian += 1; return { outcome: "allow", rationale: "reviewed" } })
+    ctx.services.register("approval/answerer", async () => { counts.answerer += 1; return true })
+    const telemetry = { emit: () => { counts.telemetry += 1 }, close: () => {} }
+    tools.register({
+      name: "typed", description: "", isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+      execute: async () => { counts.body += 1; return { ok: true } },
+    })
+
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "typed", args: { n: "3" } }], { maxParallel: 10, telemetry })
+    // Refused at the FIRST gate: not one of those channels ran, and the only
+    // artifact is the synthetic tool/result in the session log.
+    expect(counts).toEqual({ preExecute: 0, postExecute: 0, postTool: 0, guards: 0, guardian: 0, answerer: 0, body: 0, telemetry: 0 })
+    expect(session.events.filter((e) => e.type === "tool/result")).toHaveLength(1)
+
+    await executeToolCalls(ctx, session, tools, [{ callId: "c1", name: "typed", args: { n: 3 } }], { maxParallel: 10, telemetry })
+    expect(counts).toEqual({ preExecute: 1, postExecute: 1, postTool: 1, guards: 1, guardian: 1, answerer: 1, body: 1, telemetry: 2 })
+  })
+
   // The two REGRESSION pins below hold the same hole from its two sides. A
   // refusal fills its slot and returns WITHOUT advancing `startedUpTo` (correct:
   // the call truly never started), which leaves the refused index inside the
