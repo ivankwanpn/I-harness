@@ -11,6 +11,7 @@ import type { Telemetry } from "@i-harness/telemetry"
 export {
   executeToolCalls,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_CANCELLED_BY_SIBLING,
   TOOL_FAILED,
   type BatchCall,
   type ExecuteToolCallsOptions,
