@@ -849,3 +849,133 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     expect(results[1]!.output).not.toEqual({ error: "A error", code: TOOL_FAILED })
   })
 })
+
+// M5 T4 block ② (spec §3.7/§3.7.1): a call whose arguments violate the tool's
+// declared schema is refused at the FIRST gate — after `tools.get`, before the
+// policy waterfall, so a malformed call never reaches an approval prompt — and
+// that refusal is the ONE `prepare` throw the scheduler converts to a soft
+// failure. The model made a mistake it can fix; a veto it cannot fix. Every
+// other refusal out of the same `prepare` stays loud.
+describe("executeToolCalls — a malformed-argument refusal is a typed disposition (M5 T4 block 2)", () => {
+  it("a malformed argument call is SOFT — the model sees which field, and the turn continues", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    tools.register({
+      name: "typed", description: "", isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+      execute: async () => ({ ok: true }),
+    })
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "typed", args: { n: "3" } }], { maxParallel: 10 })
+    const results = session.events.filter((e) => e.type === "tool/result") as { output: unknown }[]
+    expect(results).toHaveLength(1)
+    expect(results[0]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+  })
+
+  it("BOUNDARY: a GUARD refusal is still loud next to the soft argument refusal (spec §3.7.1)", async () => {
+    // The vocabulary is TYPED dispositions, not a list of messages: only the
+    // argument-disposition type is converted. A veto through the same
+    // `prepare` must still kill the turn.
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    ctx.on("tools/pre-execute", () => ({ kind: "deny", reason: "policy" }))
+    tools.register({ name: "t2", description: "", inputSchema: { type: "object" }, execute: async () => ({}) })
+    await expect(
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "t2", args: {} }], { maxParallel: 10 }),
+    ).rejects.toThrow(/denied: policy/)
+  })
+
+  // The two REGRESSION pins below hold the same hole from its two sides. A
+  // refusal fills its slot and returns WITHOUT advancing `startedUpTo` (correct:
+  // the call truly never started), which leaves the refused index inside the
+  // never-started range [startedUpTo, batch.length) — so the loop that
+  // synthesizes results for never-started calls would append a SECOND result
+  // for a callId that already has one: a tool_use answered twice, the exact
+  // shape this block exists to kill. The skip that prevents it lives in both
+  // copies of that loop (this path, and the abort path), and removing either
+  // copy reddens its own test.
+  it("REGRESSION: a refused call is answered ONCE, not also as never-started (soft path)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    let ran = 0
+    tools.register({
+      name: "typed", description: "", isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+      execute: async () => { ran += 1; return { ok: true } },
+    })
+    tools.register({
+      name: "sibling", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { ran += 1; return { ok: true } },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "typed", args: { n: "3" } }, // refused → slot filled, never started
+      { callId: "c1", name: "sibling", args: {} }, // never started → cancelled by the sibling
+    ], { maxParallel: 10 })
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    // Model order, one result per call. Without the skip this reads
+    // ["c0", "c0", "c1"] — c0 twice, its second result stamped CANCELLED.
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+    expect(results[1]!.output).toMatchObject({ code: TOOL_CANCELLED_BY_SIBLING })
+    // And the refusal never reached a tool body.
+    expect(ran).toBe(0)
+  })
+
+  it("REGRESSION: a refused call an abort then sweeps is still answered ONCE (abort path)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    let cancelled = false
+    tools.register({
+      name: "ok", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async (_args: unknown, exec: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          // A refusal CANCELS the siblings still running beside it, so this
+          // body sees the batch's abort channel fire the moment the malformed
+          // call is refused — and the user's step signal stops in that same
+          // window, which is what puts this batch on the ABORT path with the
+          // refusal's slot already filled. Half a tick later the abort branch's
+          // never-started loop walks past that same index: without the skip
+          // there, this callId is appended a SECOND time, stamped
+          // TOOL_ABORTED_BEFORE_DISPATCH.
+          //
+          // The timeout is only a floor for the failure mode: if the cancel
+          // stops firing (mutation), this body still resolves and the test
+          // fails on `cancelled` / on the abort that never happened, instead of
+          // hanging on a signal nobody aborted.
+          const floor = setTimeout(resolve, 60)
+          exec.abortSignal?.addEventListener("abort", () => {
+            clearTimeout(floor)
+            cancelled = true
+            ac.abort()
+            resolve()
+          }, { once: true })
+        })
+        return { ok: true }
+      },
+    })
+    tools.register({
+      name: "typed", description: "", isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+      execute: async () => ({ ok: true }),
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "ok", args: {} },
+        { callId: "c1", name: "typed", args: { n: "3" } },
+      ], { maxParallel: 10, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    // The refusal cancelled its running sibling — the cancel channel fires on
+    // THIS path too, not only on the body-failure path.
+    expect(cancelled).toBe(true)
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    // One per call, in model order: c0's REAL result, then the refusal's own
+    // envelope — not that envelope plus an abort verdict for the same callId.
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output).toEqual({ ok: true })
+    expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+  })
+})

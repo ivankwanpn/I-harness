@@ -2,7 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
-import { isPolicyRefusal } from "@i-harness/core-tools"
+import { isPolicyRefusal, ToolArgsError } from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
@@ -54,8 +54,15 @@ export interface ExecuteToolCallsOptions {
 // TOOL_CANCELLED_BY_SIBLING result. That verdict is not fabricated: CANCELLED
 // is what happened to that call — it never started — not a made-up outcome.
 // (The FILL is a different thing and does not claim otherwise: it is written
-// `synthetic: true`.) A policy refusal (a `prepare` throw, or a cascade throw
-// carrying the `isPolicyRefusal` marker) still rethrows.
+// `synthetic: true`.) A policy refusal (a policy `prepare` throw, or a cascade
+// throw carrying the `isPolicyRefusal` marker) still rethrows.
+//
+// M5 T4 block ② adds ONE soft `prepare` throw: a malformed-argument refusal is
+// a typed disposition the model can repair, so it lands in the same soft path
+// as a body failure (that call's slot is filled, `synthetic: true`) while it
+// still never reaches the tool body. It is converted in `startCall`, by TYPE —
+// every other `prepare` refusal is untouched and loud.
+//
 // Abort: stop starting, drain started (commit what settled in model order),
 // synthesize TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls,
 // then throw "agent aborted". Abort dominates a coincident failure. M51 B3:
@@ -103,7 +110,10 @@ export async function executeToolCalls(
   // call gets a result and the turn continues. Every OTHER throw that reaches
   // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
   // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
-  // denied), and a throwing commit-lane listener.
+  // denied), and a throwing commit-lane listener. (The one `prepare` throw that
+  // is NOT loud — the malformed-argument disposition — is converted up in
+  // `startCall` and never reaches this scope, so the rule above still holds as
+  // written for everything that does.)
   //
   // Structural, not a list: the SITE of the throw is the classification, so a
   // fifth refusal added to `prepare` tomorrow is loud without anyone
@@ -161,11 +171,43 @@ export async function executeToolCalls(
     // not be counted as started — the boundary stays truthful (on abort the
     // [startedUpTo, batch.length) range decides which calls get synthesized
     // TOOL_ABORTED_BEFORE_DISPATCH results).
-    const prepared = await tools.prepare(
-      { name: call.name, args: call.args },
-      batchSignal,
-      { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
-    )
+    let prepared: PreparedCall
+    try {
+      prepared = await tools.prepare(
+        { name: call.name, args: call.args },
+        batchSignal,
+        { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
+      )
+    } catch (err) {
+      if (err instanceof ToolArgsError) {
+        // A TYPED disposition, checked by name — never a message list. The
+        // model CAN fix this one, so it is soft; every other `prepare`
+        // refusal (guard / approval / guardian / unknown tool) stays loud.
+        //
+        // THIS call's record goes down FIRST, before the slot it fills and
+        // before `abort()` — both of which run out-of-tree code (a slot
+        // build reads `err.message`, `abort()` notifies tool bodies). The
+        // same rule as the dispatch `.catch`: an unrecorded failure gets
+        // stamped with its SIBLING's message by the fill below.
+        failures.set(index, err)
+        slots[index] = {
+          name: call.name,
+          callId: call.callId,
+          synthetic: true,
+          output: { error: (err as Error).message, code: TOOL_FAILED },
+        }
+        // The flag AND the value, never one variable for both: `throw
+        // undefined` is legal, so a value used as a flag reads falsy on a
+        // failure that happened.
+        if (!hasFailed) {
+          firstError = err
+          hasFailed = true
+        }
+        batchAbort.abort()
+        return
+      }
+      throw err
+    }
     startedUpTo = index + 1
     // M4: make the boundary DURABLE, at the exact point it becomes true. The
     // in-memory `startedUpTo` above already carries this fact for the abort path;
@@ -330,6 +372,17 @@ export async function executeToolCalls(
       // swallow — abort dominates
     }
     for (let i = startedUpTo; i < batch.length; i += 1) {
+      // A call can be in the never-started range AND already have a result: a
+      // malformed-argument refusal fills its slot and returns before
+      // `startedUpTo` advances (it truly never started). Appending again would
+      // write TWO results for one callId — a `tool_use` answered twice.
+      //
+      // `slots[i] !== undefined` is the SAFE kind of "was this filled?" test:
+      // a filled slot is always an OBJECT (`Slot | SyntheticSlot` both are), so
+      // there is no "filled with `undefined`" state that a value test would
+      // confuse with "not filled" — unlike the flag/value pairs this file has
+      // collided with three times.
+      if (slots[i] !== undefined) continue
       const call = batch[i]!
       append(session, {
         type: "tool/result",
@@ -414,6 +467,17 @@ export async function executeToolCalls(
     // They get a result too, so the projection never emits a tool_use with no
     // tool_result — but their verdict is CANCELLATION, not abort.
     for (let i = startedUpTo; i < batch.length; i += 1) {
+      // A call can be in the never-started range AND already have a result: a
+      // malformed-argument refusal fills its slot and returns before
+      // `startedUpTo` advances (it truly never started). Appending again would
+      // write TWO results for one callId — a `tool_use` answered twice.
+      //
+      // `slots[i] !== undefined` is the SAFE kind of "was this filled?" test:
+      // a filled slot is always an OBJECT (`Slot | SyntheticSlot` both are), so
+      // there is no "filled with `undefined`" state that a value test would
+      // confuse with "not filled" — unlike the flag/value pairs this file has
+      // collided with three times.
+      if (slots[i] !== undefined) continue
       const call = batch[i]!
       append(session, {
         type: "tool/result",

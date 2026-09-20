@@ -1,5 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
-import { assertSupportedJsonSchema } from "./json-schema.ts"
+import { assertSupportedJsonSchema, validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 
 // M27-R-A8: get_context_remaining — registered only when a contextWindow is
 // known (fail-closed); see context-remaining.ts.
@@ -272,6 +272,12 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
+
+    // spec §3.7: BEFORE the policy layers, so a malformed call never reaches an
+    // approval prompt — nobody should be asked to approve garbage. The refusal
+    // is a TYPED disposition (§3.7.1), read by name at exactly one place.
+    const violations = validateJsonSchemaValue(tool.inputSchema as JsonSchemaNode, call.args)
+    if (violations.length > 0) throw new ToolArgsError(violations)
 
     // 1. pre-execute waterfall — resolves to a closed-vocabulary decision.
     //    Per-dispatch (M13): the decision is the emit's chain return (or the

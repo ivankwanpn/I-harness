@@ -18,8 +18,14 @@ describe("CLI guardian", () => {
     // the guardian is consulted before completion). The agent's tool call
     // therefore never executes; a second script step would leave the mock with
     // an unused step (harmless).
+    //
+    // The args are SCHEMA-VALID (`text`, the parameter `write` declares — not
+    // `content`, which this fixture used to pass): since M5 T4 block ② a call
+    // whose arguments violate the declared schema is refused before the policy
+    // layers, so malformed args would never reach the guardian this test is
+    // about.
     const parentModel = createMockClient([
-      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
     ])
     const reviewerModel = createMockClient([
       { role: "assistant", text: '{"outcome":"deny","rationale":"writes are denied today","risk_level":"moderate"}' },
