@@ -260,12 +260,20 @@ describe("executeToolCalls scheduler", () => {
       { callId: "c1", name: "nevertool", args: {} },
     ], { maxParallel: 1 })
     const results = session.events.filter((e) => e.type === "tool/result") as {
-      callId: string; output: { code?: string }
+      callId: string; output: { code?: string; error?: string }
     }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output.code).toBe(TOOL_FAILED)
     expect(results[1]!.output.code).toBe(TOOL_CANCELLED_BY_SIBLING)
     expect(results[1]!.output).not.toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
+    // The contract this test's NAME states has TWO halves, and only the `code`
+    // half was pinned. Measured (T4's review): swapping the message for the
+    // abort message while leaving the code alone left the file green — 19
+    // passed. A reader of the name ("not the abort message") would have
+    // believed the message was pinned. It is now.
+    expect(results[1]!.output.error).toBe(
+      "tool call cancelled: a sibling call in the same batch failed",
+    )
   })
 
   it("synthesizes TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls on abort", async () => {
@@ -472,6 +480,82 @@ describe("executeToolCalls scheduler", () => {
     // No tool body ever ran.
     expect(t.order).toEqual([])
     expect(t.maxConcurrent).toBe(0)
+  })
+
+  it("BOUNDARY: a PREPARE refusal still kills the turn (spec §6.1)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    // An unregistered tool makes `prepare` throw at core-tools:254. That is a
+    // POLICY/PROTOCOL refusal, not a tool failure, and it must stay loud.
+    await expect(
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "no-such-tool", args: {} }], { maxParallel: 10 }),
+    ).rejects.toThrow("unknown tool: no-such-tool")
+    expect(session.events.filter((e) => e.type === "tool/result")).toHaveLength(0)
+  })
+
+  it("BOUNDARY: an ABORT still throws 'agent aborted' (block 1 does not touch it)", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    ac.abort()
+    await expect(
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "anyTool", args: {} }], { maxParallel: 1, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+  })
+
+  it("BOUNDARY: a throwing finalize during the failure drain still fills the never-started calls", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    // Mirrors the abort-path test ("abort dominates a throwing finalize").
+    // The failure path inherits the same swallow, AND the same cost: the commit
+    // cursor stops where the throwing listener fired, so neither c0's REAL
+    // result nor c1's synthetic fill reaches the log — c2 does.
+    ctx.on("tools/post-execute", () => { throw new Error("post-execute boom") })
+    tools.register({
+      name: "okTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { await new Promise((r) => setTimeout(r, 30)); return { ok: true } },
+    })
+    tools.register({
+      name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { throw new Error("kaboom") },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "okTool", args: {} },
+      { callId: "c1", name: "boomTool", args: {} },
+      { callId: "c2", name: "okTool", args: {} }, // never started (pool full at the failure)
+    ], { maxParallel: 2 })
+    const cancelled = session.events.filter(
+      (e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === TOOL_CANCELLED_BY_SIBLING,
+    )
+    expect(cancelled.map((e) => (e as { callId: string }).callId)).toEqual(["c2"])
+  })
+
+  it("BOUNDARY: a first failure that rejects with `undefined` still writes results", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    tools.register({
+      name: "undef", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // `firstError` is BOTH the failure flag and the value. A bare
+      // `throw undefined` fires the batch abort while leaving every
+      // `if (firstError)` falsy — so nothing ran: no soft fill, no
+      // never-started fill, and the projection emits a tool_use with no
+      // tool_result. The flag must not share a variable with the value.
+      execute: async () => { throw undefined },
+    })
+    tools.register({
+      name: "nevertool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => ({ ok: true }),
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "undef", args: {} },
+      { callId: "c1", name: "nevertool", args: {} },
+    ], { maxParallel: 1 })
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
   })
 })
 

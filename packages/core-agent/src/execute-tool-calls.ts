@@ -51,10 +51,11 @@ export interface ExecuteToolCallsOptions {
 //
 // Failure (soft since M5 T4 block ①): stop starting, drain started calls,
 // fill the failed slot, commit what settled, and give never-started calls a
-// TOOL_CANCELLED_BY_SIBLING result. Nothing is fabricated — that verdict is a
-// fact about what happened, not a made-up outcome. A policy refusal (a
-// `prepare` throw, or a cascade throw carrying the `isPolicyRefusal` marker)
-// still rethrows.
+// TOOL_CANCELLED_BY_SIBLING result. That verdict is not fabricated: CANCELLED
+// is what happened to that call — it never started — not a made-up outcome.
+// (The FILL is a different thing and does not claim otherwise: it is written
+// `synthetic: true`.) A policy refusal (a `prepare` throw, or a cascade throw
+// carrying the `isPolicyRefusal` marker) still rethrows.
 // Abort: stop starting, drain started (commit what settled in model order),
 // synthesize TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls,
 // then throw "agent aborted". Abort dominates a coincident failure. M51 B3:
@@ -86,6 +87,15 @@ export async function executeToolCalls(
   let committed = 0
   let aborted = opts.signal?.aborted ?? false
   let firstError: unknown
+  // "Did anything fail?" is a SEPARATE variable from the failure's value, on
+  // purpose. `firstError` is used as a value (it is thrown on the loud paths and
+  // its message is filled into the batch), and a variable cannot carry both jobs:
+  // a body that rejects with `undefined` — `throw undefined` is legal — used to
+  // fire `batchAbort.abort()` while every `if (firstError)` read falsy, so the
+  // soft fill and the never-started fill both skipped and the projection emitted
+  // a tool_use with no tool_result. The flag is the flag; the value is the value
+  // (`firstError` is read for its content only).
+  let hasFailed = false
   // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
   // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
   // call gets a result and the turn continues. Every OTHER throw that reaches
@@ -189,14 +199,17 @@ export async function executeToolCalls(
           firstRefusal ??= err
         }
         // This call's OWN rejection, for the per-call fill on the soft path —
-        // OUTSIDE the `firstError` guard below, which only keeps the first.
+        // OUTSIDE the `hasFailed` guard below, which only keeps the first.
         failures.set(index, err)
         // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
         // (before the drains below), so `allSettled` returns their cancellations
         // instead of waiting out their work. Only the first, so a second failure
-        // cannot re-open a channel that is already closed.
-        if (firstError === undefined) {
+        // cannot re-open a channel that is already closed. "First" is read off
+        // the FLAG, not off `firstError === undefined`: the value may legitimately
+        // be `undefined`, the flag cannot.
+        if (!hasFailed) {
           firstError = err
+          hasFailed = true
           batchAbort.abort()
         }
       })
@@ -224,8 +237,8 @@ export async function executeToolCalls(
   const runGroup = async (indices: number[]): Promise<void> => {
     let gi = 0
     while (gi < indices.length || inFlight.size > 0) {
-      if (aborted || firstError) break
-      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !firstError) {
+      if (aborted || hasFailed) break
+      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !hasFailed) {
         await startCall(indices[gi]!)
         gi += 1
         await commitReady()
@@ -242,10 +255,11 @@ export async function executeToolCalls(
   try {
     for (const group of groups) {
       await runGroup(group)
-      if (firstError || aborted) break
+      if (hasFailed || aborted) break
     }
   } catch (err) {
-    if (firstError === undefined) firstError = err
+    if (!hasFailed) firstError = err
+    hasFailed = true
     // Anything thrown outside the dispatch `.catch` is a refusal. It DOMINATES:
     // a policy refusal must never be silently downgraded by a coincident body
     // failure, so a refusal that arrives second still wins.
@@ -324,9 +338,7 @@ export async function executeToolCalls(
   //
   // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
   // from a tool body. A refusal never gets here.
-  if (firstError) {
-    await Promise.allSettled([...inFlight.values()])
-    inFlight.clear()
+  if (hasFailed) {
     // Fill every STARTED slot that produced no output, so the head-of-line
     // cursor advances and an already-settled sibling commits its REAL result
     // (the SAME mechanism M51 B3 added to the abort path, one branch up).
@@ -352,7 +364,22 @@ export async function executeToolCalls(
         output: { error: message, code: TOOL_FAILED },
       }
     }
-    await commitReady()
+    try {
+      await commitReady()
+    } catch {
+      // A throwing tools/post-execute listener must not suppress the
+      // never-started fills below — the abort path swallows for exactly this
+      // reason (see its comment at the top of the abort branch).
+      //
+      // STATED COST (inherited, not introduced): the commit cursor stops where
+      // the throw fired, so every slot from there on never reaches the log — a
+      // settled sibling's REAL result AND the synthetic fills written just
+      // above (the filled slots lose their tool/result too, not only the settled
+      // siblings). The never-started calls below are appended outside the cursor
+      // and do get theirs. The abort path has the same hole and the same test
+      // shape; this block does not fix it, it makes the two paths consistent and
+      // the cost visible.
+    }
     // Calls that never started: no `prepare`, no `tool/dispatch`, no body.
     // They get a result too, so the projection never emits a tool_use with no
     // tool_result — but their verdict is CANCELLATION, not abort.
