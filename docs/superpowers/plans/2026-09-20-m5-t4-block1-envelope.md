@@ -996,8 +996,7 @@ git grep -n "block ①\|block 1"                        -- packages/core-agent/s
 
 | # | 位置 | 假的句子 |
 |---|---|---|
-| 1 | `execute-tool-calls.ts:245-246` | `The NON-abort path keeps its throw (… which is the correct throw-fails-turn behavior).` |
-| 2 | `execute-tool-calls.ts:251-252` | `Abort path ONLY — the non-abort failure path still discards (M13).` |
+| 1 | `execute-tool-calls.ts:245-246` | `The NON-abort path keeps its throw (… which is the correct throw-fails-turn behavior).` — **⚠ 這一句現在**假了兩次**：失敗路徑不再 rethrow，**而且** T5 之後連軟路徑最後那個 `commitReady()` 也不再讓它丟出去。**改寫時要描述 T5 之後的樹，不是 T2 之後的。** |
 | 3 | `index.ts:408` | `and rethrows the first tool failure.` |
 | 4 | `execute-tool-calls.ts:47-48` | **T4 負責**（它推翻的那一句正好是 T4 的題目）—— **若 T4 已經修了，這一列就是檢查它真的修了，不是重做** |
 
