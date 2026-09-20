@@ -24,7 +24,7 @@
 | **W1** | **修 settings watcher race** | 三 | **✅ 完成**（`65838d8b`，修正輪中） | 無 |
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **研究完成 → 卡在 Q2**（I5 把它接上了自啟） | **Q2** |
-| **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；見 §5 的完成記錄） | 無 |
+| **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `<SHA>`**；見 §5 的完成記錄） | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
@@ -356,7 +356,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 | | 位置 | 內容 |
 |---|---|---|
 | **生產者** | `packages/core-agent/src/index.ts` —— `prevFingerprints`（`:227`，宣告在 `steps`/`callSeq` 旁，**跨 turn 存活**）、比對與發出（`:327`） | 每個 message 一次 canonical JSON（`:113` 的本地 `canonicalJson`：物件鍵遞迴排序、陣列保序、`undefined` 與 `JSON.stringify` 同樣丟棄），與上一次請求的前綴逐位元組比對 |
-| **累加器** | `packages/telemetry/src/metrics.ts` —— `MetricsSnapshot.prefix`（`:43`）、判定（`:105`） | `observed` / `kept` / `broke` 三個計數；判定鍵在**欄位是否存在**（`"prefixKept" in ev.data`） |
+| **累加器** | `packages/telemetry/src/metrics.ts` —— `MetricsSnapshot.prefix`（`:43`）、判定（修正輪後在 `:109`） | `observed` / `kept` / `broke` 三個計數；判定鍵在**欄位是否帶著值**（**修正輪 F1 改掉的正是這裡** —— 原本是 `"prefixKept" in ev.data` 的鍵存在判定；見下面的修正輪） |
 | **讀者** | `apps/cli/src/run.ts` —— `continuity`（`:742`）、印出（`:743`） | 第二段 `prefix(broke/observed): N/M`；**D3 的 `prefix(rewritten/total)` 段逐字未動，這是加在它旁邊的第二段** |
 
 #### 三個決定（**寫下來免得被當成實作細節**）
@@ -407,6 +407,29 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 - **T4 的 schema 驗證層** —— 另一項（§5 的表）。
 - **比對的成本未量**（spec §8 自己列的那條）：每個請求一次 O(前綴) 的序列化，與既有的 `assertMessagesFromLog` 同族、**未量**。
 - **`broke` 仍然是一個觀察，不是結論** —— 它與真實快取命中率的相關性要等 T2-3 之後（spec §8 原文）。
+
+#### 修正輪 —— 複審的兩條（`<SHA>`；**規格 PASS、品質 APPROVED，無 blocking**）
+
+**複審獨立驗了兩件比我報的更強的事**：①它在**每一條路徑**上都驗了誠實規則（行程的第一個請求、真的 `--resume` 過一份 5 則訊息的 log、行程中途的**新 agent 實例**、以及**壓縮之後的 `0/true` 是一次量測而不是捏造的零**）；②它把**閉包位置**反過來證偽：把 `let prevFingerprints` 搬進 `runTurn`，紅的正是 `prefix-continuity.test.ts:196` —— **所以「狀態要在 closure」這條主張有測試釘住。** 被延長的 D3 `toEqual` 也被判定為**合法的加寬**（長了三個欄位，另外釘住「沒有比較欄位的事件不算 observed」）。
+
+| | 是什麼 | 處置 |
+|---|---|---|
+| **F1** | **判定用 `in`，而 `in` 把「顯式 `undefined` 的屬性」算成存在。** 一個寫成自然慣用法 `{ prefixKept: prev?.shared, prefixBroke: broke ? true : undefined }` 的生產者因此被判成 **observed**，落進 `else`，**替一次沒有比較的請求加一筆 `kept`** —— 正是那條註解說「這個計數器存在的理由就是讓它不可能發生」的那件事（今天沒有出貨的生產者會這樣寫，所以是**穩健性缺口，不是活的缺陷**） | 採**值檢查**（複審說這個較強）：`typeof ev.data.prefixBroke === "boolean" \|\| typeof ev.data.prefixKept === "number"`（`metrics.ts:109`），並改寫那段註解（鍵存在不是主張） |
+| **F2** | **`canonicalJson` 與樹裡另一個身分定義不一致，而沒有任何地方寫著。** `Object.entries(new Date())` 是 `[]`，所以每個 `Date` 都指紋成 `{}`，而 `assertMessagesFromLog` 的 `JSON.stringify` **分得出**那兩個 | **不改行為**（模型驅動的路徑到不了：工具 args 走 `JSON.parse`；改它會為了關一個沒人走得到的情形而改掉每一個輸入的語意）。**寫在函式旁**（`core-agent/src/index.ts` 的 `canonicalJson` JSDoc）：它把什麼當身分、`toJSON` 類的值會塌成 `{}`、以及這與樹裡另一個定義**在哪裡分歧、為什麼是刻意的** |
+
+**F1 的證偽（紅行實測）**：把判定改回 `in` 那一版 → `packages/telemetry/test/metrics.test.ts:140:33` 當場紅（`expected { requests: 1, rewritten: +0, …(3) } to deeply equal { requests: 1, rewritten: +0, …(3) }` —— 第一個請求被算成 observed＋kept）；**還原後 `17 passed`**。**沒有任何既有案例因 F1 變紅**（複審要求：若有，停手回報而不是改案例）。
+
+**F2 的量測（不是紅行，是探針）**：`canonicalJson` 是模組私有，而且它那類輸入**到不了**比較路徑，所以**沒有可指名的紅行** —— 有的是對**真函式**的量測（暫時 export ＋ 一個 probe 測試檔，量完即刪）：
+
+```
+F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z" stringify1="1970-01-01T00:00:00.001Z" equal=false | keyorder a={"a":1,"b":2} b={"a":1,"b":2} equal=true | nested=[1,{"a":3,"z":2}]
+```
+
+**它同時量到函式存在的理由**（鍵序無關：`{a,b}` 與 `{b,a}` 同一個指紋；巢狀也排序、陣列保序）。**要讓這條有紅行需要一個新 export —— 而約束明說不要新 export**，所以它留在「有註解、有量測、無測試」的狀態。
+
+**F3（複審記下、無需動作）**：報告裡「把整個功能刪掉它也會紅」那半句是**假的** —— 量到的：刪掉生產者紅的是案例 1／2／4，**案例 3 照過**（一條斷言「缺席」的測試，在功能整個消失時**不可能紅**）。那是**缺席斷言的結構性極限**，也是案例 3 的價值來自**另一個突變**（沒有前一次時報 0）的原因。佇列文件這一列沒有那半句、是準的，所以不動。
+
+**量到的（修正輪）**：`2624 passed · 0 failed · 9 skipped`（**執行前先寫下預期 2624 = 2623 + 1**：F1 的新案例）；`pnpm -r typecheck` 綠；`check-reachability.mjs --gate` → **`gate PASS -- no new rows`**（**沒有新 export** —— F2 的探針的暫時 export 已還原，且探針檔已刪除）。**三條已知 flake 這一輪都沒出現。**
 
 ---
 
@@ -775,7 +798,7 @@ return { …, status: settled?.status ?? "unknown",
 W1  修 settings watcher race        ← 現在做。它讓後面每一件的驗證站得住
 W2  修 SDK 訂閱洩漏                 ← ✅ 完成（`2bbf0d20`）＝照修但降級：契約釘住、路徑未武裝
 W3  schedule 的 spec                ← 先寫 spec，不要先接線
-W4  M5/T2 第二半                    ← ✅ 完成（`b36be755`）：以自己的位元組做前綴比對 —— 見 §5 的完成記錄
+W4  M5/T2 第二半                    ← ✅ 完成（`b36be755`；**修正輪 `<SHA>`**）：以自己的位元組做前綴比對 —— 見 §5 的完成記錄
 W5  M5/T4 schema 驗證層
 W6  M3 剩下兩項（79 站點；redaction 繼續量）
 W7  M6                              ← 依賴 M5

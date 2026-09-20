@@ -109,7 +109,22 @@ export interface Agent {
  * keys are sorted (recursively), arrays keep their order (a tool-result run is
  * ordered), and `undefined`-valued keys are dropped the way `JSON.stringify`
  * drops them. Not exported: its only consumer is the comparison in
- * `createAgent`, in this file. */
+ * `createAgent`, in this file.
+ *
+ * ⚠ WHAT IT CALLS IDENTITY — and where it DISAGREES with the tree's other
+ * definition of it. This fingerprints plain JSON structure: two values are the
+ * same iff they have the same keys (order irrelevant) and the same values, with
+ * array order significant. A value whose meaning lives in `toJSON` — a `Date`, a
+ * `Map`/`Set`, a class instance — has no enumerable properties, so it collapses
+ * to `{}`: measured, `canonicalJson(new Date(0)) === canonicalJson(new Date(1))
+ * === "{}"`, while the seam's `assertMessagesFromLog` — which compares
+ * `JSON.stringify` output — sees `"…:00.000Z"` against `"…:00.001Z"` and tells
+ * them apart. The two definitions therefore disagree on exactly that class of
+ * value. Deliberate, and NOT a behaviour to "fix": the model-visible surface is
+ * derived from the JSON-persisted session log (tool args arrive via
+ * `JSON.parse`), so nothing on this path produces such a value, and widening the
+ * definition would change what `prefixKept` means for every input in order to
+ * close a case nothing reaches. */
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`
