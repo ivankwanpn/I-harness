@@ -24,7 +24,7 @@
 | **W1** | **修 settings watcher race** | 三 | **✅ 完成**（`65838d8b`，修正輪中） | 無 |
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **研究完成 → 卡在 Q2**（I5 把它接上了自啟） | **Q2** |
-| **W4** | M5/T2 第二半（前綴偵測） | 一 | 未開始 | 無 |
+| **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`<SHA>`；見 §5 的完成記錄） | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
@@ -337,7 +337,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 | 半 | 現況 |
 |---|---|
 | T2 第一半（以 provider 回報為事實） | ✅ **完成** |
-| **T2 第二半（以自己的位元組為偵測）** | **未動** |
+| **T2 第二半（以自己的位元組為偵測）** | ✅ **完成**（見下方的完成記錄） |
 | **T4 的 schema 驗證層** | **未動** |
 
 ### W4 為什麼值得做（三件事，**本文件自己重測過，行號量於 `6b04f31d`**）
@@ -346,6 +346,67 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
    ⚠ **準確地說：那是一根「釘住現行忽略行為」的釘子，不是一個現成的紅燈。** 它的價值在於**輸入已經有了** —— 要做這一項**不需要憑空造 fixture**，而**那根釘子會從「釘住忽略」變成「要求改變」**，這是刻意的。
    （backlog 把它寫成「現成的紅燈」，**那是措辭比事實多**；這裡改成量到的說法。）
 3. **一個實測到的缺陷，靠寫測試才發現** —— `createRetryingClient` 的重試是**靜默的**，而它的用量事件第一版是即時 `yield` 的，所以**一次完成的往返收到兩份報告**。
+
+### ✅ **W4 已完成 —— `<SHA>`**（**SHA 不能在它存在之前寫下：`<SHA>` 由下一個 docs 提交補上**）
+
+設計依據 `docs/superpowers/specs/2026-09-18-m5-t2-prompt-cache-continuity-design.md` **§3.2 (a)–(d)**。**第二半落地，形狀逐條對應**：掛在 `provider/call`（**沒有新 telemetry code**）、指紋狀態在 agent closure、**沒有前一次時兩個欄位都缺席**。
+
+#### 三個站點（**符號為主；行號量於本提交**）
+
+| | 位置 | 內容 |
+|---|---|---|
+| **生產者** | `packages/core-agent/src/index.ts` —— `prevFingerprints`（`:227`，宣告在 `steps`/`callSeq` 旁，**跨 turn 存活**）、比對與發出（`:327`） | 每個 message 一次 canonical JSON（`:113` 的本地 `canonicalJson`：物件鍵遞迴排序、陣列保序、`undefined` 與 `JSON.stringify` 同樣丟棄），與上一次請求的前綴逐位元組比對 |
+| **累加器** | `packages/telemetry/src/metrics.ts` —— `MetricsSnapshot.prefix`（`:43`）、判定（`:105`） | `observed` / `kept` / `broke` 三個計數；判定鍵在**欄位是否存在**（`"prefixKept" in ev.data`） |
+| **讀者** | `apps/cli/src/run.ts` —— `continuity`（`:742`）、印出（`:743`） | 第二段 `prefix(broke/observed): N/M`；**D3 的 `prefix(rewritten/total)` 段逐字未動，這是加在它旁邊的第二段** |
+
+#### 三個決定（**寫下來免得被當成實作細節**）
+
+1. **`prefixKept` 是一個數**（前導逐位元組相同的訊息數 —— spec (a) 的 `shared`）；`prefixBroke` 是布林（上一次的 messages 已不是這次的逐位元組前綴，即 `shared < 上一次的 messages.length`）。**兩者在有前一次時一起出現**；**缺席 ⟺ 沒有前一次**。
+2. **沒有前一次 ⇒ 兩者都缺席，不是 `shared: 0`** —— 與第一半的「沒回報 ≠ 回報 0」同一條規則：`prefixKept: 0` 是一次**量測**（「整段沒了」），而行程重啟後的第一個請求**沒有做過那次量測**。
+3. **`observed` 是 `kept`/`broke` 的分母，不是 `requests`** —— 行程的第一個請求兩者皆非，所以 `0/0` 說的是「沒有比較過」，而 `0/N` 說的是「比了 N 次，沒有斷」。
+
+#### 量到的 `[metrics]` 行（**真跑，非示意**）
+
+```
+（兩次請求、純擴充）  provider/call=2 …  prefix(rewritten/total): 0/2  prefix(broke/observed): 0/1  tools(ok/total): write=1/1
+（單次請求、行程的第一個）  provider/call=1 …  prefix(rewritten/total): 0/1  prefix(broke/observed): 0/0
+```
+
+**兩個分母的差（2 vs 1）就是這一項要建立的區別**：`rewritten` 的分母是每個請求，`broke` 的分母是**有得比**的請求。
+
+#### 驗收（spec §7 第 4 條）—— 四條都在 `packages/core-agent/test/prefix-continuity.test.ts`
+
+| | 情境 | 量到的 |
+|---|---|---|
+| 1 | **純擴充** | `prefixKept` 等於上一次請求的 `messages`、`prefixBroke: false`；3 個請求 ⇒ sink `{ requests: 3, observed: 2, kept: 2, broke: 0 }` |
+| 2 | **壓縮之後** | `prefixKept: 0, prefixBroke: true`（summary 佔走 message 0）；sink `{ requests: 2, rewritten: 1, observed: 1, kept: 0, broke: 1, lastCause: "compaction/summary" }`；**D3 的 `prefixRewritten` 在同一個事件上為真** —— 兩半對同一對請求的一致說法 |
+| 3 | **行程重啟**（新 agent、同一份 log） | 兩者**皆缺席**；同一刻 `messages` 量到 **5**（log 真的有歷史 ⇒ 這條測試不是空的）；sink `observed: 0` |
+| 4 | **followup（跨 turn）** | 與**上一個 turn 的最後一個請求**比較 —— 狀態在 closure 不在 `runTurn`，這一條會抓住「把狀態搬進 runTurn」的未來重構 |
+
+#### 突變（**每一條都先改壞、跑、再還原；紅行實測**）
+
+| 突變 | 紅在哪（實測） |
+|---|---|
+| **沒有前一次時報 0**（`packages/core-agent/src/index.ts:327` 的 `...(previous === undefined ? {} : …)` 改成無條件發出，第一個請求於是帶 `prefixKept: 0`） | `packages/core-agent/test/prefix-continuity.test.ts:71:44` 與 `:168:44`（`expected true to be false`）、`:132:36`（sink 的 `observed` 1→2）；**CLI 也紅兩條**：`apps/cli/test/metrics-summary.test.ts:94:21`（`0/1`→`0/2`）與 `:107:21`（`0/0`→`0/1`） |
+| **永遠報 kept**（`prefixBroke: false`） | `test/prefix-continuity.test.ts:128:28`：`expected { Object (step, messages, ...) } to match object { prefixKept: +0, prefixBroke: true }` |
+| **永遠報 broke**（`prefixBroke: true`） | `test/prefix-continuity.test.ts:76:28`（純擴充）與 `:196:28`（followup） |
+
+#### 量到的（全套）
+
+- **`2623 passed · 0 failed · 9 skipped`**（66 個 package；**執行前先寫下預期 2623 = 2615 + 8**：core-agent 4、telemetry 2、CLI 2）。`pnpm -r typecheck` 綠；`node scripts/audit/check-reachability.mjs --gate` → **`gate PASS -- no new rows`**。
+- **沒有新 export**：新欄位都在既有的 `MetricsSnapshot.prefix` 與 `provider/call` 的 data 上；`canonicalJson` **刻意不 export**（消費者就在同一個檔案裡）。
+- ⚠ **第一次全套跑命中已知 flake**：`packages/session-executor/test/shell-promotion.test.ts:208` 在負載下 30 秒逾時（§8.5 W10 記的「第三個 flake 站點」）—— **第二次全套跑 0 紅**（同一條在該次跑過）。**沒有動任何計數。**
+- ⚠ **動了一個既有的斷言（誠實記下）**：`packages/telemetry/test/metrics.test.ts:94` —— D3 那條 `prefix` 的 `toEqual`；`prefix` 區多了三個欄位，那個 `toEqual` 就必須跟著長。**其餘既有的測試案例一條沒改。**
+
+#### §3.3 的結論（**讀過之後的處置：這一半不需要動任何 `llm-*`**）
+
+§3.3 是**第一半**的映射表（六個 adapter 的 native → normalized 用量欄位），而其中唯一帶前置條件的那條（`llm-openai-compatible` 的 `stream_options: { include_usage: true }`）**是 T2-3 的第一個決定**，與前綴比對無關。**六個 adapter 一行未動，`llm.providers` 沒有新的形狀欄位。**
+
+#### 沒有做的（明說）
+
+- **T4 的 schema 驗證層** —— 另一項（§5 的表）。
+- **比對的成本未量**（spec §8 自己列的那條）：每個請求一次 O(前綴) 的序列化，與既有的 `assertMessagesFromLog` 同族、**未量**。
+- **`broke` 仍然是一個觀察，不是結論** —— 它與真實快取命中率的相關性要等 T2-3 之後（spec §8 原文）。
 
 ---
 
@@ -714,7 +775,7 @@ return { …, status: settled?.status ?? "unknown",
 W1  修 settings watcher race        ← 現在做。它讓後面每一件的驗證站得住
 W2  修 SDK 訂閱洩漏                 ← ✅ 完成（`2bbf0d20`）＝照修但降級：契約釘住、路徑未武裝
 W3  schedule 的 spec                ← 先寫 spec，不要先接線
-W4  M5/T2 第二半                    ← 路線圖的下一個實作
+W4  M5/T2 第二半                    ← ✅ 完成（`<SHA>`）：以自己的位元組做前綴比對 —— 見 §5 的完成記錄
 W5  M5/T4 schema 驗證層
 W6  M3 剩下兩項（79 站點；redaction 繼續量）
 W7  M6                              ← 依賴 M5

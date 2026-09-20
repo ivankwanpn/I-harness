@@ -91,11 +91,38 @@ describe("createMetricsSink", () => {
     m.onEvent(ev("provider/call", { step: 1, messages: 3, tools: 2 }))
     m.onEvent(ev("provider/call", { step: 2, messages: 3, tools: 2, prefixRewritten: true, prefixCause: "compaction/summary" }))
     m.onEvent(ev("provider/call", { step: 3, messages: 4, tools: 2 }))
-    expect(m.snapshot().prefix).toEqual({ requests: 3, rewritten: 1, lastCause: "compaction/summary" })
+    expect(m.snapshot().prefix).toEqual({ requests: 3, rewritten: 1, observed: 0, kept: 0, broke: 0, lastCause: "compaction/summary" })
     // `tokens`/`reported` must stay untouched by a provider/call — its numbers
     // are positions, not measurements.
     expect(m.snapshot().tokens).toEqual({})
     expect(m.snapshot().reported).toEqual({})
+  })
+
+  // M5 T2, second half: the prefix as MEASURED against the previous request.
+  // The request that opens a process has no predecessor, so it is neither kept
+  // nor broke — it is not OBSERVED, and `observed` is the denominator that keeps
+  // "we compared and it held" apart from "there was nothing to compare".
+  it("tallies the measured prefix against `observed` — the request with no predecessor is neither", () => {
+    const m = createMetricsSink()
+    // No predecessor: carries neither field, so it is not observed.
+    m.onEvent(ev("provider/call", { step: 1, messages: 2, tools: 1 }))
+    m.onEvent(ev("provider/call", { step: 2, messages: 4, tools: 1, prefixKept: 2, prefixBroke: false }))
+    m.onEvent(ev("provider/call", { step: 3, messages: 1, tools: 1, prefixKept: 0, prefixBroke: true }))
+    expect(m.snapshot().prefix).toEqual({ requests: 3, rewritten: 0, observed: 2, kept: 1, broke: 1 })
+  })
+
+  it("'compared and shared zero' is distinguishable from 'nothing to compare'", () => {
+    // The failure this pins: a first request that reports `shared: 0` reads
+    // exactly like a measured total break. The sink must be able to tell them
+    // apart — the same rule that separates "reported zero" from "nobody
+    // reported" for the provider's own numbers.
+    const measured = createMetricsSink()
+    measured.onEvent(ev("provider/call", { messages: 1, prefixKept: 0, prefixBroke: true }))
+    expect(measured.snapshot().prefix).toEqual({ requests: 1, rewritten: 0, observed: 1, kept: 0, broke: 1 })
+
+    const nothingToCompare = createMetricsSink()
+    nothingToCompare.onEvent(ev("provider/call", { messages: 1 }))
+    expect(nothingToCompare.snapshot().prefix).toEqual({ requests: 1, rewritten: 0, observed: 0, kept: 0, broke: 0 })
   })
 
   it("'0 cached' and 'nobody reported' are distinguishable — the count is the denominator", () => {

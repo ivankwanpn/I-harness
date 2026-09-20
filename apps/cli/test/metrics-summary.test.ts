@@ -72,4 +72,38 @@ describe("runHeadless — the metrics summary", () => {
     // Our estimate keeps its own section — the two facts are never merged.
     expect(summary).toMatch(/tokens: tokens=/)
   }, 30_000)
+
+  // M5 T2, second half. Same discipline as the section above: the number is
+  // printed WITH its denominator, so "no comparison happened" stays readable
+  // apart from "the prefix held".
+  it("M5 T2: reports the measured prefix with its denominator", async () => {
+    await runHeadless("say hi", {
+      workspace: root,
+      telemetry: "jsonl",
+      approveAll: true,
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "write", args: { path: "note.txt", text: "hello" } }] },
+        { role: "assistant", text: "done" },
+      ],
+    })
+    const summary = errors.find((line) => line.includes("[metrics]"))
+    expect(summary).toBeDefined()
+    // Two requests, both sent by this process — and the denominator is 1, not 2:
+    // the process's FIRST request had nothing to compare against, so it is
+    // neither kept nor broke. A pure append is not a break.
+    expect(summary).toMatch(/prefix\(broke\/observed\): 0\/1/)
+  }, 30_000)
+
+  it("M5 T2: a run whose only request is the process's first compares nothing — 0/0", async () => {
+    await runHeadless("say hi", {
+      workspace: root,
+      telemetry: "jsonl",
+      mockScript: [{ role: "assistant", text: "hi" }],
+    })
+    const summary = errors.find((line) => line.includes("[metrics]"))
+    expect(summary).toBeDefined()
+    // The denominator is printed even when it is zero: `0/0` says out loud that
+    // nothing was compared, where a bare `0` would read as a measurement.
+    expect(summary).toMatch(/prefix\(broke\/observed\): 0\/0/)
+  }, 30_000)
 })

@@ -734,7 +734,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const prefix = m.prefix.requests === 0
         ? ""
         : `${m.prefix.rewritten}/${m.prefix.requests}${m.prefix.lastCause === undefined ? "" : ` (${m.prefix.lastCause})`}`
-      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
+      // M5 T2 (second half): broke/observed — the MEASURED half of the prefix
+      // question, beside D3's attributed half above. The denominator is
+      // `observed`, NOT `requests`: the first request of a process has nothing
+      // to compare against, so it is neither kept nor broke, and a run that
+      // printed `0` there would be claiming a measurement it never made.
+      const continuity = m.prefix.requests === 0 ? "" : `${m.prefix.broke}/${m.prefix.observed}`
+      console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${continuity === "" ? "" : `  prefix(broke/observed): ${continuity}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
     }
     emitSessionEnd(0)
     telemetry?.close()
