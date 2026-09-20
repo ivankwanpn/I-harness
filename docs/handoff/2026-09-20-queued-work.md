@@ -344,7 +344,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 |---|---|
 | T2 第一半（以 provider 回報為事實） | ✅ **完成** |
 | **T2 第二半（以自己的位元組為偵測）** | ✅ **完成**（見下方的完成記錄） |
-| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`；修正輪 `637f73e1`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
+| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`；修正輪 `637f73e1`）· **✅ block ②（參數 schema）完成**（T1 `6ee2b314` ＋ 修正 `eb31ea9f`／`5063a9f1`／`28325c38`；T2 `4d309ce9`；T4 `ad3bdd80` ＋ 修正 `ec61fdae`／`4dc3bcb3`；完成記錄在 §5 末尾）· **block ③（界）未開始** —— **交接備忘在 §5 末尾**（複審帶過來的一條，關於兩個填補的形狀）。而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
 
 ### W4 為什麼值得做（三件事，**本文件自己重測過，行號量於 `6b04f31d`**）
 1. **缺口不是推論出來的，是兩個 adapter 各自記下來的** —— `packages/llm-gemini/src/index.ts:239,241`（*"same gap as…"*、*"a future usage seam slot"*）與 `packages/llm-bedrock/src/index.ts:228`（*"same gap as…"*）。**它們自己寫著這個縫還沒接。**
@@ -460,6 +460,30 @@ F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z
 - **Low：三個註解說了比程式多的事。** ①`failures` 的註解說「the drain above」，而 drain 在它下面 —— 改成指向真正的 drain，並補上「`.catch` 的第一個述詞就記錄」這個事實；②「The non-abort failure path swallows nothing」自我矛盾 —— 它是**吞下再丟出**，改為 **"suppresses nothing"**；③測試裡「本分支自己的 e2e 量到 449ms 開一個 pre-tool hook 子行程」——**`e2e/` 裡沒有 hooks e2e，那個數字在樹裡沒有出處**（子代理報告→計畫→測試檔的轉述），**移除數字**，改引存在的出處：`hooks/src/runner.ts` 用 `spawn(...)` 開子行程。
 - **記錄修正（不是程式）：** 「每個被派送的呼叫都恰好一筆 `tool/result`」讀嚴了就**兩處為假**（批次含拒絕 ⇒ 已落地的整批被捨棄；提交巷丟出 ⇒ 游標之後的格子不進日誌）—— **那個保證是軟失敗路徑的**；原始碼註解與本檔案 §5 的敘述都已在這一輪收窄範圍。
 - **量到的（修正輪）**：母體 **66**；**`2638 passed · 0 failed · 9 skipped`**（+2：兩條新的 BOUNDARY 測試，各自有突變證明）；`pnpm typecheck` ⇒ **0 error**；`check-reachability.mjs --gate` ⇒ **`gate PASS -- no new rows`**（446 rows；`--self-test` 36/36）。兩個既有 flake 都沒出現。
+
+---
+
+### ✅ **W5 block ②（參數 schema）完成 —— 記錄摘要（T1／T2／T4／最終輪）**
+
+出貨的是一條**兩層**的 schema 管線（spec §3.1），而**斷言層只對這個 repo 自己寫的 schema**（遠端 MCP 的走 `inputSchemaForeign`）：值層 `validateJsonSchemaValue` 是**全函式的 frame machine**（不用 JS 呼叫堆疊 —— 量到的理由在 `json-schema.ts` 的檔頭：遞迴版在 3,600-3,700 層丟 `RangeError`，而 `JSON.parse` 接受 ≥ 1,000,000）；斷言層 `assertSupportedJsonSchema` 釘住關鍵字**與值的形狀**，在 `register` 跑；**強制點在 `prepare`**，`tools.get` 之後、政策瀑布之前，所以**一筆畸形呼叫永遠不會走到審批提示**，而它的拒絕是一個**具型處置**（`ToolArgsError`），由排程器**只以型別**轉成**軟失敗**（該呼叫拿到一筆合成 `tool/result`，turn 繼續）—— 其餘每一條 `prepare` 拒絕照舊大聲。
+
+**量到的（最終輪，2026-09-21，於 `4dc3bcb3`）：** 母體 **66**（先數母體再讀數字）· **`2675 passed · 0 failed · 9 skipped`** · `pnpm -r typecheck` **0 error** · `gate PASS -- no new rows`（447 rows，digest `2272cfc5…`）· **`pnpm e2e` 5 檔 / 12 測試全綠**（**這個套件不在 `pnpm -r` 裡**，見下）· `core-agent` **91 passed（10 檔）**（其中排程器那檔 31）· `core-tools` **69 passed（5 檔）**。
+
+**⚠ 而這一塊留下一個可重用的教訓（複審量到的）：`e2e/` 不在 `pnpm -r --no-bail test` 的母體裡。** block ① 的爆炸半徑表把範圍訂在 workspace 套件，所以 `e2e/skills.e2e.ts` 的**漏改**（它還在斷言 `exitCode 1` 的舊契約）**活了兩塊沒被看見**，直到全分支複審。**⇒ 兩步閘門不夠，第三步是 `pnpm e2e`。** 那個檔已在最終輪改寫（斷言移到合成 `tool/result` 上的 SKILL_NOT_FOUND，並補上軟路徑會走到的續行步驟）。
+
+### ▶ **W5 block ③（界）—— 交接備忘（複審帶過來的建議，原樣記下）**
+
+**複審的建議：在 block ③ 之前，讓兩個填補（軟失敗與中止）都帶自己的 `code`，好讓 block ③ 的述詞讀 `code` 而不是讀形狀。**（**決定留給 block ③ —— block ② 刻意不動它。**）
+
+**為什麼這條建議是具體的，不是風格偏好**（形狀量於 `4dc3bcb3`）：**合成失敗的兩半今天不同形。**
+
+| 填補 | 位置 | 輸出 |
+|---|---|---|
+| 參數拒絕 | `packages/core-agent/src/execute-tool-calls.ts:197` | `{ error, code: TOOL_FAILED }` |
+| 軟失敗（本體丟出） | 同檔 `:458` | `{ error, code: TOOL_FAILED }` |
+| **中止**（M51 B3） | 同檔 `:381` | **`{ error }` —— 沒有 `code`** |
+
+**⇒ 一個「這是合成的失敗」的述詞只有兩條路，而兩條都錯：** ①**讀 `code`** ⇒ **靜默地不設界那些中止填補**（它們沒有 `code`）；②**讀形狀**（有 `error`、沒有 `code`）⇒ **會一併設界長得像那樣的**真的**工具輸出**。**⇒ 兩個填補先同形，述詞才只剩一條路。**（這一條的形狀在 fix round 1 有前身：中止填補的**訊息**已經改成逐呼叫自己的理由，**但它的信封仍是舊形**。）
 
 ---
 
