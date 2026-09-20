@@ -587,7 +587,7 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
 //  5c   a team-mate                        — case 5  (assembly.ts:883 `parentModel: model,` → scheduler.ts:204
 //                                                    `parentModel: deps.parentModel,`)
-//  6    auto-title's model                 — case 6  (assembly.ts:982 `model,` → run.ts:661 `session, model: assembly.model,`)
+//  6    auto-title's model                 — case 6  (assembly.ts:982 `model,` → run.ts:694 `session, model: assembly.model,`)
 //  7    the service's dispensed assembly    — "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
 //                                             service.test.ts (that file owns the service harness)
 //  —    the handle + a manual stream        — Task 1's test above, not repeated here
@@ -596,7 +596,7 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //                                             A summarization model in case 2's fixture would make that case assert the REVERSE of shipped behaviour.
 //
 // DECLARED GAP — auto-title's CALL SITE: case 6 pins the value auto-title reads
-// (`assembly.model`, read at call time). The end-to-end drive (`run.ts:661` →
+// (`assembly.model`, read at call time). The end-to-end drive (`run.ts:694` →
 // `maybeAutoTitle` → `session-title/src/index.ts:56`) is NOT driven with a
 // rebind by any existing harness: `runHeadless` builds its assembly internally
 // and exposes no seam to rebind it mid-run, and this package has no dependency
@@ -605,12 +605,12 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 // CHEAPER one needs no production change: an `apps/cli` test that mock-wraps the
 // assembly — `vi.mock("@i-harness/session-executor", …)` passing through to the
 // real factory and rebinding on the returned object once `agent.run` resolves,
-// so `run.ts:661`'s read sees it. That is the pass-through-recorder pattern this
+// so `run.ts:694`'s read sees it. That is the pass-through-recorder pattern this
 // file already uses for `core-agent` (:31-41), and the mocking precedent exists
 // (apps/cli/test/cli.test.ts:102, apps/cli/test/run-flag-routing.test.ts:32).
 // The OTHER route is production surface: an `onAssembly`-style hook on
 // `HeadlessOptions` (the service already has one — `createSessionService`'s
-// hooks, used at apps/cli/src/index.ts:501 `service.onAssembly(`). The mock
+// hooks, used at apps/cli/src/index.ts:553 `service.onAssembly(`). The mock
 // route is the cheaper of the two and is the one to reach for first; neither
 // exists today, so the gap is stated here rather than asserted around.
 /** In-memory SessionCoordinator for the team case only. The team's spawn path
@@ -839,7 +839,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
     try {
       assembly.setModel(second)
       // auto-title is the ONE production reader of `assembly.model`
-      // (run.ts:661 `session, model: assembly.model,` — read AFTER the turn, at
+      // (run.ts:694 `session, model: assembly.model,` — read AFTER the turn, at
       // call time, handed to `maybeAutoTitle`, which streams through it at
       // session-title/src/index.ts:56). The read is taken here where that call
       // site takes it — after the rebind, through the same expression — and the

@@ -3,7 +3,7 @@ import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-age
 import type { CompactionRequest, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { SessionCoordinator } from "@i-harness/session-persistence"
+import type { SessionCoordinator, SessionModelSelection } from "@i-harness/session-persistence"
 import type { ShellRetentionOptions } from "@i-harness/shell"
 import type { RetryConfig } from "@i-harness/guard-retry"
 import type { SandboxMode } from "@i-harness/sandbox"
@@ -116,6 +116,17 @@ export interface HeadlessOptions {
   /** Production defaults to required. `test-mock` is reserved for explicit
    * test fixtures; supplying mockScript is itself an explicit mock fixture. */
   modelPolicy?: ModelPolicy
+  /** The session's INITIAL model selection for THIS run, when the caller has
+   * one — provider:model plus, for `i-harness run --protocol P`, the wire the
+   * run speaks. It rides the resolution below and is written to NO file (§4.3:
+   * a session's protocol is not persisted). A protocol named here is the most
+   * specific rung of the chain (selection > model row > route), so it wins over
+   * both the route's declaration and a resumed session's durable selection —
+   * which keeps its own provider:model, because that is the session's. Absent ⇒
+   * the chain resolves exactly as it did before this option existed. A caller
+   * naming a protocol has to name provider:model with it: there is no rung to
+   * attach a wire to otherwise, and inventing one is what §4.3 forbids. */
+  sessionSelection?: SessionModelSelection
   /** Injectable runtime for hermetic composition tests. Absent uses the
    * canonical settings/credentials paths. */
   providerRuntime?: ProviderRuntime
@@ -379,10 +390,32 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const meta = opts.coordinator !== undefined && activeId !== undefined
         ? (await opts.coordinator.profile(activeId)).meta
         : undefined
+      // §4.3: the CLI's `run --protocol P` arrives as `opts.sessionSelection`
+      // (the CLI composes `llm.defaultModel` + the flag — it is the only caller
+      // that can read that layer). The two rungs are in hand ONLY here:
+      //
+      //  - the durable selection is the SESSION's own, so it keeps its
+      //    provider:model (a resumed run must not silently switch model);
+      //  - the caller's protocol is layered over whichever base wins, being the
+      //    most specific rung (selection > model row > route).
+      //
+      // No caller-supplied selection ⇒ what this block always did.
+      let sessionSelection = meta?.modelSelection
+      if (opts.sessionSelection !== undefined) {
+        const supplied = opts.sessionSelection
+        const base = meta?.modelSelection ?? supplied
+        sessionSelection = base.provider !== "" && base.model !== ""
+          ? {
+              ...base,
+              ...(supplied.protocol !== undefined ? { protocol: supplied.protocol } : {}),
+            }
+          // Nothing to attach the wire to (no durable selection AND
+          // `llm.defaultModel` unset): the chain's own refusal below says what
+          // is actually wrong, and one is not invented here.
+          : undefined
+      }
       const state = await runtime.resolveModel({
-        ...(meta?.modelSelection !== undefined
-          ? { sessionSelection: meta.modelSelection }
-          : {}),
+        ...(sessionSelection !== undefined ? { sessionSelection } : {}),
       })
       if (state.status !== "ready") throw new Error(state.reason)
       providerBinding = state.binding

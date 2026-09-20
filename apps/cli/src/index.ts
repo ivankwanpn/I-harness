@@ -57,7 +57,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles> ...]\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--protocol P] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
@@ -177,24 +177,32 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   // M1 Phase B: a FLAG must never become the prompt. `--help`/`-h` are handled at
-  // :109-116 as `args[0]` only, so `i-harness run --help` fell through to the
-  // filter at :291-295 -- which knows only the eight flags it strips (it read "seven" until 2026-09-15; the list at :292 carries eight names) -- and
+  // :165-168 as `args[0]` only, so `i-harness run --help` fell through to the
+  // filter at :384-388 -- which knows only the flags it strips (it read "seven" until 2026-09-15; the list at :385 carries nine names) -- and
   // reached runHeadless as a real turn whose prompt was "--help". The same hole
-  // sent `--no-compact` (parsed at :169, absent from that filter) into the prompt
+  // sent `--no-compact` (parsed at :257, absent from that filter) into the prompt
   // as `do x --no-compact`.
   //
-  // The TOP-LEVEL `help`/`--help`/`-h` command at :109-116 is deliberately left
-  // alone -- it is test-pinned as the documentation surface (bin.test.ts:36-47,
-  // and ":73-76" forces a new run flag to appear in it). The run path gets no
+  // The TOP-LEVEL `help`/`--help`/`-h` command at :165-168 is deliberately left
+  // alone -- it is test-pinned as the documentation surface (bin.test.ts:36-49,
+  // and ":75-78" forces a new run flag to appear in it). The run path gets no
   // `--help` case for a different reason: `--help` AFTER `run` is not a help
   // request, it is an unrecognised flag, and unrecognised flags are errors here.
-  // That mirrors the file's own fail-loud stance (`--session-backend`: ":78-84";
-  // `--resume`: ":212-223") rather than inventing a second help contract.
+  // That mirrors the file's own fail-loud stance (`--session-backend`: ":105-108";
+  // `--resume`: ":308-311") rather than inventing a second help contract.
   // M65 T1 renumbered every citation in this comment: the frontend removal
   // deleted ~50 lines ABOVE it and this note adds three, so the targets below
   // moved and every number here was re-derived from the file, not guessed.
-  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact"])
-  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox"])
+  // Protocol-selection phase B task 5 moved them once more (the `--protocol`
+  // block below); every number above, including the count, was re-measured
+  // after that edit, the same way.
+  // `--protocol` takes a VALUE, so it is in BOTH sets below. The two sets are
+  // what the guard reads; the task filter further down spells the same two lists
+  // out again, and a flag missing from EITHER chain there leaks into the prompt
+  // (the `--no-compact` defect: `run "do x" --no-compact` sent the model
+  // `do x --no-compact`).
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact", "--protocol"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--protocol"])
   const runArgs = args.slice(1)
   for (let i = 0; i < runArgs.length; i += 1) {
     const a = runArgs[i]!
@@ -204,6 +212,34 @@ export async function main(argv: string[]): Promise<number> {
       console.error(`i-harness run: unknown flag ${a} (a flag-like token would otherwise become the prompt)\n${USAGE}`)
       return Promise.resolve(1)
     }
+  }
+
+  // §4.3 (protocol-selection design): `run --protocol P` — THIS session runs on
+  // wire P and P is written to NO file. Validated HERE, OUTSIDE the settings
+  // chain: routing the value through the settings normalizer would FILL IN a
+  // default, and that silent tail is exactly what phase A removed. The refusal
+  // is `provider add`'s verbatim — the set named by content, never a default.
+  const protocolIdx = args.indexOf("--protocol")
+  let protocol: CliProtocol | undefined
+  if (protocolIdx !== -1) {
+    const value = args[protocolIdx + 1]
+    if (value === undefined) {
+      console.error(`--protocol requires one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
+      return Promise.resolve(1)
+    }
+    if (!(PROVIDER_PROTOCOLS as readonly string[]).includes(value)) {
+      console.error(`unknown protocol "${value}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
+      return Promise.resolve(1)
+    }
+    // `--model` builds its client from the flag's own route and never enters
+    // the settings chain, so there is no session selection for the protocol to
+    // ride. The combination is REFUSED rather than accepted-and-dropped: a
+    // silently unused protocol is the degradation this design removed.
+    if (args.includes("--model")) {
+      console.error("--protocol cannot be combined with --model (--model builds its client outside the settings chain, so there is no session selection for --protocol to ride)")
+      return Promise.resolve(1)
+    }
+    protocol = value as CliProtocol
   }
 
   const yes = args.includes("--yes")
@@ -340,14 +376,19 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   // task = everything after the "run" command, excluding flag tokens/values.
+  // TWO chains, because a value-taking flag has two tokens to remove: the flag
+  // itself, and the value after it. `--protocol` must be in BOTH, like every
+  // other member of `RUN_VALUE_FLAGS` above — a member missing from chain 1
+  // reaches the model as task text (the `--no-compact` defect this test file
+  // pins), and one missing from chain 2 leaks its VALUE.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox" || a === "--no-compact") return false
+    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox" || a === "--no-compact" || a === "--protocol") return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--sandbox"
+    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--sandbox" && prev !== "--protocol"
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
+    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--protocol P] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
     return Promise.resolve(1)
   }
 
@@ -372,6 +413,17 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (model) opts.model = model
   if (telemetry) opts.telemetry = "jsonl"
+  if (protocol !== undefined) {
+    // §4.3: the ONE-SHOT selection. `--protocol P` rides THIS session's model
+    // resolution and is written to NO file. It is composed here, in the CLI,
+    // because a protocol has nowhere to ride without a provider:model under it
+    // and `llm.defaultModel` is the rung the chain would otherwise use — the
+    // store is loaded above (an unloaded one answers with defaults). run.ts
+    // layers this on top of a resumed session's durable selection, the caller's
+    // protocol being the most specific rung of selection > model row > route.
+    // A `--model` run never reaches here; that combination is refused above.
+    opts.sessionSelection = { ...settings.get().llm.defaultModel, protocol }
+  }
   if (coordinator) {
     opts.coordinator = coordinator
     if (sessionId) opts.sessionId = sessionId
