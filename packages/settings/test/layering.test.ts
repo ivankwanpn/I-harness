@@ -4,12 +4,44 @@ import { describe, expect, it } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createLayeredStore, resolveLayeredSources, watchSettings, mergeRawLayers, type LayerSource } from "../src/index.ts"
+import { createLayeredStore, LayeredSettingsStore, resolveLayeredSources, watchSettings, mergeRawLayers, type LayerSource, type Settings } from "../src/index.ts"
 import { mutateSection } from "../src/sections.ts"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 
 async function tmpRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ih-layers-"))
+}
+
+/** Poll until `ready()`. W1's two-write case must not guess a sleep long
+ * enough for the first change to have settled — that distance is what it
+ * measures — so it waits for the observed event instead. */
+async function waitFor(ready: () => boolean, timeoutMs = 3000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!ready()) {
+    if (Date.now() > deadline) throw new Error("waitFor: timed out")
+    await new Promise((r) => setTimeout(r, 2))
+  }
+}
+
+/** W1 rig: the store with the reload latency a loaded machine produces BY LUCK
+ * injected deterministically — the in-flight window the conflate has to
+ * survive. `reads` is pushed the instant the reload's file read finished,
+ * while the reload is still in flight, so a test can land a second change
+ * strictly after that read and strictly inside the window (no sleep needed to
+ * guess where the read fell, which is the one thing such a test could not
+ * otherwise observe). */
+class SlowReloadStore extends LayeredSettingsStore {
+  readonly reads: number[] = []
+  override async reloadFromDisk(): Promise<Settings> {
+    const settings = await super.reloadFromDisk()
+    this.reads.push(Date.now())
+    // 250ms, not "long enough": the case below asserts that nothing was
+    // reported BEFORE the second write lands, so an over-loaded worker that
+    // stalls past this delay would break the test, not the fix. 250ms is the
+    // same order the rest of this file already waits on.
+    await new Promise((r) => setTimeout(r, 250))
+    return settings
+  }
 }
 
 describe("resolveLayeredSources (global < workspace < project)", () => {
@@ -207,6 +239,73 @@ describe("M40 A6: settings/changed telemetry on hot-reload", () => {
       await new Promise((r) => setTimeout(r, 200))
       expect(notified).toBe(file)
       expect(events.filter((e) => e.type === "settings/changed")).toHaveLength(2)
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("W1: the hot-reload conflate compares state, not time", () => {
+  it("two genuinely separate writes report 2 settings/changed (a conflate that swallows the second is the failure mode)", async () => {
+    const root = await tmpRoot()
+    try {
+      const file = join(root, "s.json")
+      await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = createLayeredStore({ files: [file], watchIntervalMs: 10, telemetry })
+      await store.load()
+      const changed = () => events.filter((e) => e.type === "settings/changed")
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(0)
+      // "Separate" is measured in REPORTED changes, not wall-clock: the second
+      // write goes out as soon as the first report lands, so a conflate that
+      // merges by time window (the debounce this fix rejects) has to swallow
+      // it here, while one that compares state cannot — the disk moved after
+      // the reload that reported the first write read it.
+      await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
+      await waitFor(() => changed().length >= 1)
+      await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
+      await waitFor(() => changed().length >= 2)
+      // Let further poll ticks land: the absorbed duplicates must not add a
+      // third report (exactly 2, not "at least 2" — the conflate's whole job).
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(2)
+      expect(store.get().fontSize).toBe(16)
+      expect(changed().map((e) => e.data.path)).toEqual([file, file])
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it("a change detected inside an in-flight reload is still reported when that reload did not read it", async () => {
+    const root = await tmpRoot()
+    try {
+      const file = join(root, "s.json")
+      await writeFile(file, JSON.stringify({ fontSize: 14 }), "utf8")
+      const events: TelemetryEvent[] = []
+      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
+      const store = new SlowReloadStore({ files: [file], watchIntervalMs: 10, telemetry })
+      await store.load()
+      const changed = () => events.filter((e) => e.type === "settings/changed")
+      // First tick snapshots only: the pre-existing state emits nothing.
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(0)
+      await writeFile(file, JSON.stringify({ fontSize: 15 }), "utf8")
+      // Gate on the in-flight reload having READ the file (it read 15): the
+      // next write is therefore strictly after that read, and the reload is
+      // still in flight for ~250ms after this point — the one window in which
+      // "absorb the pending detection" and "re-check its state" differ.
+      await waitFor(() => store.reads.length >= 1)
+      expect(changed()).toHaveLength(0) // nothing reported yet: the window is open
+      await writeFile(file, JSON.stringify({ fontSize: 16 }), "utf8")
+      // The report for 16 must survive the conflate: the reload that was in
+      // flight never saw 16, so only a re-check that compares STATE finds it.
+      await waitFor(() => changed().length >= 2)
+      await new Promise((r) => setTimeout(r, 60))
+      expect(changed()).toHaveLength(2)
+      expect(store.get().fontSize).toBe(16)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

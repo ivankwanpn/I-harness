@@ -1125,6 +1125,10 @@ export class LayeredSettingsStore {
   private revision: Record<string, number> = {}
   private listeners = new Set<(path: string) => void>()
   private watcher: { dispose: () => void } | undefined
+  /** W1 conflate state: a reload is in flight, and a detection arrived while it
+   * was (the settle path resolves the pending one — see handleWatchedChange). */
+  private reloadInFlight = false
+  private reloadPending = false
 
   constructor(options: LayeredStoreOptions = {}) {
     this.options = options
@@ -1240,7 +1244,8 @@ export class LayeredSettingsStore {
    * source's mtime/size changed, reload merged view + notify (settings/changed
    * analog at the store surface: `onChange`). M40 A6: the DETECTED CHANGE
    * (subsequent ticks only — the first tick snapshots, see watchSettings)
-   * also emits `settings/changed` to the injected telemetry stream. */
+   * also emits `settings/changed` to the injected telemetry stream. W1: the
+   * reload itself is conflated — see handleWatchedChange. */
   private ensureWatcher(): void {
     if (this.watcher !== undefined || this.options.watchIntervalMs === false) return
     const intervalMs = this.options.watchIntervalMs ?? 500
@@ -1248,19 +1253,62 @@ export class LayeredSettingsStore {
       .map((s) => s.path)
       .filter((p): p is string => p !== null && p !== undefined)
     if (paths.length === 0) return
-    this.watcher = watchSettings(paths, (path) => {
-      // The pre-reload view is the change baseline: reloadFromDisk → load()
-      // ALREADY assigns this.current, so comparing against this.current here
-      // would always compare the merged view to itself (the dormant
-      // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
-      const before = this.current
-      void this.reloadFromDisk().then((settings) => {
-        if (JSON.stringify(settings) !== JSON.stringify(before)) {
-          for (const cb of [...this.listeners]) cb(path)
-          this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
-        }
-      }).catch(() => {})
-    }, { intervalMs })
+    this.watcher = watchSettings(paths, (path) => this.handleWatchedChange(path), { intervalMs })
+  }
+
+  /**
+   * W1 conflate: at most one `reloadFromDisk()` in flight, and a detection that
+   * lands while one is in flight is absorbed UNLESS the disk moved again behind
+   * it — the settle re-check compares STATE, never time.
+   *
+   * The baseline `before` is snapshotted synchronously and compared AFTER the
+   * await, so two detections landing inside one reload's latency both compare
+   * against the same pre-change view and both emit. That is one of the three
+   * sources of the double report: the watcher can re-report one write (its own
+   * out-of-order capture — guarded there now) and a non-atomic `writeFile`
+   * (truncate → write) genuinely presents two `mtime:size` states, so a single
+   * write can legitimately deliver two detections. The conflate absorbs the
+   * second one here.
+   *
+   * The re-check is what keeps the conflate honest, and why it is not a
+   * debounce: the pending detection starts a fresh reload whose baseline is the
+   * state the in-flight reload produced. A detection that merely re-observed
+   * the change just reported compares equal and emits nothing; a genuinely
+   * separate write that the in-flight reload did not read differs and fires
+   * once. Two real writes therefore stay two reports, no matter how close.
+   */
+  private handleWatchedChange(path: string): void {
+    if (this.reloadInFlight) {
+      this.reloadPending = true
+      return
+    }
+    this.reloadInFlight = true
+    this.reloadPending = false
+    // The pre-reload view is the change baseline: reloadFromDisk → load()
+    // ALREADY assigns this.current, so comparing against this.current here
+    // would always compare the merged view to itself (the dormant
+    // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
+    const before = this.current
+    void this.reloadFromDisk().then((settings) => {
+      if (JSON.stringify(settings) !== JSON.stringify(before)) {
+        for (const cb of [...this.listeners]) cb(path)
+        this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
+      }
+      this.reloadInFlight = false
+      // Re-check once, against the state this reload produced: only a disk
+      // that moved after the reload read it fires the pending detection.
+      if (this.reloadPending) {
+        this.reloadPending = false
+        this.handleWatchedChange(path)
+      }
+    }).catch(() => {
+      // A reload that threw (a torn read of a non-atomic writer's file, a
+      // document the tolerant parser rejects) must not wedge the handler:
+      // clear the guard and drop the pending — the watcher's snapshot is at
+      // the state it failed on, so the next tick re-detects the settled one.
+      this.reloadInFlight = false
+      this.reloadPending = false
+    })
   }
 }
 
@@ -1300,7 +1348,8 @@ function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
  * Polling settings watcher (no new deps — no chokidar). `intervalMs` defaults
  * to 500. The FIRST tick only snapshots (a pre-existing state never fires);
  * a change fires the callback with the changed path. Returns a dispose() that
- * stops polling.
+ * stops polling. W1/A: captures never overlap (an in-flight tick is skipped),
+ * so one write can no longer be reported twice by an out-of-order overwrite.
  */
 export function watchSettings(
   paths: string | string[],
@@ -1311,6 +1360,16 @@ export function watchSettings(
   const intervalMs = opts?.intervalMs ?? 500
   let snapshot = new Map<string, string>()
   let timer: ReturnType<typeof setInterval> | undefined
+  // W1/A: one capture at a time. `capture()` awaits a stat per file, and
+  // without this guard consecutive ticks run their captures concurrently — an
+  // OLDER capture can then resolve after a newer one and overwrite `snapshot`
+  // with its stale value, so the next tick sees the same change again and
+  // fires a SECOND onChange for one write. A tick that finds a capture in
+  // flight is SKIPPED, not queued: the next tick re-stats the current state,
+  // so skipping costs at most one poll interval of latency and can never miss
+  // a state that has settled. The initial snapshot holds the guard too —
+  // otherwise a tick could start alongside it and be overwritten by it.
+  let capturing = true
 
   const capture = async (): Promise<Map<string, string>> => {
     const snap = new Map<string, string>()
@@ -1324,9 +1383,15 @@ export function watchSettings(
     return snap
   }
 
-  void capture().then((snap) => { snapshot = snap })
+  void capture().then((snap) => {
+    snapshot = snap
+    capturing = false
+  })
   timer = setInterval(() => {
+    if (capturing) return // one capture in flight; the next tick re-reads
+    capturing = true
     void capture().then((snap) => {
+      capturing = false
       for (const [file, info] of snap) {
         if (snapshot.get(file) !== info) {
           snapshot = snap
