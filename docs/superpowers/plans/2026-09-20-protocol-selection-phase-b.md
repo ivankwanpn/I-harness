@@ -348,7 +348,13 @@ it("a protocol on the wire rebinds the LIVE session, and is never persisted", as
 三件事，順序重要：
 1. `packages/sdk/src/protocol.ts` 的 `SessionModelSelection` 加回 `protocol?: string`（**鬆的** —— 那個檔案是零依賴 wire 契約）。
 2. `server.ts` 的 `parseModelSelection` 接受它；訊息裡要說明它**只為 rebind**。
-3. `apps/cli/src/index.ts` 的 relay：**先用它 rebind**（`resolveModel` → `assemblyFor(sessionId).setModel(client)`），**再 `updateMeta` 一個不含 protocol 的選擇**。
+3. `apps/cli/src/index.ts` 的 relay：**先用它 rebind**，**再 `updateMeta` 一個不含 protocol 的選擇**。
+
+   **⚠ 這裡原本寫的是 `assemblyFor(sessionId).setModel(client)` —— 實作時量出來那是錯的**（`0807c2b0`），兩個理由：
+   - **`assemblyFor` 在 miss 時會建立** —— 用它等於讓「設定一個模型」的副作用是「**打開一個休眠的 session**」。
+   - 它**做不到 F1 的回報修正**（memo 與 label 是 service 的私有狀態）。
+
+   實際落地的是 **`SessionService.rebindModel(...)`** —— 同一個 rebind，**但只作用在活的組裝上**（沒有活的就回 `false`，不假裝 rebind 成功），並附帶回報面的更新。**這一題的 relay 呼叫它。**
 
 **注意既有的事實**：`server.ts:365` 今天會 `closeSession`（銷毀組裝）。**當場生效就不需要它了** —— 但拿掉它是行為變更，**要在報告裡明說你做了什麼、為什麼**。
 
