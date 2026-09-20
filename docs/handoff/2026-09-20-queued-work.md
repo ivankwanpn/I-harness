@@ -650,7 +650,11 @@ return { …, status: settled?.status ?? "unknown",
          message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
 ```
 
-`wait(taskId, timeoutMs): Promise<TaskRecord | undefined>` —— **逾時回 `undefined`**（`task-protocol.ts:108` 的契約）。**所以那個任務還在跑，而工具回報它「settled: unknown」。**
+`wait(taskId, timeoutMs): Promise<TaskRecord | undefined>` —— 型別上逾時可以回 `undefined`（`task-protocol.ts:108`）。
+
+> ⚠ **而我這一句原本寫「逾時回 `undefined`、所以它說 `settled: unknown`」—— 實作時量到那也不對，而錯的方向讓缺陷更明顯**：**出貨的 registry 在死線時回的是那筆仍然未終結的記錄本身**（`| undefined` 只涵蓋未知的 id）。**所以那句字面上的謊是 `settled: running`。**
+>
+> **探針抓到的原文**：`"message":"subagent root/helper settled: running"` —— 而那一刻 registry 裡的記錄仍是 `status: "running"`。**「settled: running」是自我矛盾的**，所以那不是一句模糊的訊息，**是一句在字面上就看得出來沒發生的事。**
 
 **它是一句「形狀像訊息」的謊** —— 而**它的兄弟 `wait_agent` 有 `timed_out: boolean`，它沒有**。
 
