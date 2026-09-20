@@ -208,7 +208,9 @@ void this.reloadFromDisk().then((settings) => {
 
 ### ✅ **W2 已完成 —— `2bbf0d20`**（**照修、降級的理由不變**）
 
-**修法（三行）**：組裝橋在 `assemblyUnsubscribes.set(...)` **之前**先做 `assemblyUnsubscribes.get(assembly.sessionId)?.()`（本提交 `server.ts:182`）—— 舊訂閱先釋放，再存新的。**順序是負載的**：若改成「先 `set`、再讀回那個槽退訂」，退掉的是**新的**那個 closure（這個反向變體實測過，見下的第二條證偽）。註解寫明 map 每個 session 只留一個、以及被覆寫的 closure 為何**永遠不可達**（`close()` 只迭代當前值）。
+**修法（三行）**：組裝橋在 `assemblyUnsubscribes.set(...)` **之前**先做 `assemblyUnsubscribes.get(assembly.sessionId)?.()` —— 先讀出舊訂閱並釋放，再存新的。（以**符號**記：本輪的註解修正把它從 `server.ts:182` 移到 **`server.ts:187`**，而下一段插入還會再移一次。）
+
+**⚠ 而複審把一句比事實更寬的話抓出來了（並量了四種順序）**：**負載的是「讀」，不是「釋放」的位置。** 讀取必須發生在**覆寫之前**（先把舊 closure 抓到手）；**釋放呼叫本身可以在 `set` 之後** —— `capture → set → release` 這個形狀**三條斷言全過（1/1/0）**，實作者與複審各自量過。真正會壞的只有**把讀回放在 store 之後**（讀到的是**新的** closure）：那是實測到的反向 bug，見下的第二條證偽。**原句「順序是負載的」會讓下一個人避開一個能用的寫法** —— 那才是這句話真正會造成的損失。註解（`server.ts` 與測試檔頭）都已按量到的事實改寫。
 
 **測試**（`packages/sdk/test/server.test.ts`，describe `createSdkServer assembly bridge (W2)`）：**它自己就寫明它釘的是 map 的契約、不是出貨路徑**（理由：見上，一個字沒改）。驅動方式：**真的 `SessionService`** ＋ `AssemblyOptions.session`（host-pre-seeded；`sessionFor` 缺席時每次建置都解析成**同一個 Session 物件** —— 那條漏掉的 closure 只有在這個形狀下才會繼續送事件），再用 **`closeSession` → `assemblyFor`** 直接驅動一次重建。三條斷言，值都是量到的：重建前 **1**（基準 —— 證明底下那條「1」不是真空的）、重建後 **1**（修正前 **2**）、`close()` 後 **0**。
 

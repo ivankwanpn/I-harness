@@ -1347,8 +1347,8 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
 // W2: the server's per-session subscription map (`assemblyUnsubscribes`).
 //
 // WHAT THIS PINS, STATED PLAINLY: the CONTRACT of that map — "a second
-// assembly for the same session releases the previous subscription before the
-// new one is stored" — NOT a shipped path. The rebuild it drives
+// assembly for the same session releases the previous subscription instead of
+// orphaning it" — NOT a shipped path. The rebuild it drives
 // (closeSession → assemblyFor) is a service primitive this test calls
 // DIRECTLY; nothing in the sdk process calls closeSession today (Phase B
 // removed the server's own call — see the deliberate-change comment in

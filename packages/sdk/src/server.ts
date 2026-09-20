@@ -172,13 +172,18 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     if (assembly.sessionId === undefined) return
     // The map holds AT MOST ONE closure per session, so a second assembly for
     // the same id (the service rebuilds one per closeSession → getOrCreate)
-    // must release the previous subscription first. A bare `.set` orphaned it:
-    // the map keeps only the current value, so the overwritten closure was
-    // unreachable forever and `close()` could never detach it — with a
-    // host-pre-seeded `session` (the same object on every build) the client
-    // would keep receiving session/event twice, and the orphaned delivery
-    // would outlive `close()`. The release goes BEFORE the store — reading the
-    // slot back after storing it would unsubscribe the new closure instead.
+    // must release the previous subscription instead of orphaning it. A bare
+    // `.set` orphaned it: the map keeps only the current value, so the
+    // overwritten closure was unreachable forever and `close()` could never
+    // detach it — with a host-pre-seeded `session` (the same object on every
+    // build) the client kept receiving session/event twice, and the orphan's
+    // delivery outlived `close()`.
+    //
+    // What is load-bearing is the READ, not where the release call sits: the
+    // previous closure must be CAPTURED before the store overwrites the slot.
+    // Releasing after the store is fine when the capture came first (capture →
+    // set → release measures identically), but reading the slot back AFTER the
+    // store unsubscribes the NEW closure — the inverted bug, measured.
     assemblyUnsubscribes.get(assembly.sessionId)?.()
     const unsubscribe = subscribe(assembly.session, (event) => {
       emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event }))
