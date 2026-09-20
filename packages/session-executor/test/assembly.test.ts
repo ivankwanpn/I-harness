@@ -517,11 +517,11 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 // The handle is how ONE assignment reaches all of them: every holder already
 // holds this same object, so none of them is ever re-wired.
 describe("createSessionAssembly — the model handle (R-B1)", () => {
-  it("a rebound model reaches every holder, not just the turn loop", async () => {
+  it("a rebound model reaches the handle, and the turn loop reads through it", async () => {
     // The design said "two consumers, one change covers both" — measured, a
-    // session's lifetime has EIGHT holders of a resolved client. This test is the
-    // deliverable: it fails if ANY of them keeps the old one, which is the silent
-    // partial success this whole unit exists to remove.
+    // session's lifetime has EIGHT holders of a resolved client. This test pins
+    // the handle itself and the turn loop that reads through it; the per-holder
+    // enumeration — the ones no assertion here reaches — is the plan's Task 2.
     const first = capturingModel()
     const second = capturingModel()
     const dir = mkdtempSync(join(tmpdir(), "ih-assembly-handle-"))

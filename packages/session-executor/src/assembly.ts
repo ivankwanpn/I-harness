@@ -230,7 +230,7 @@ export interface SessionAssembly {
   agent: Agent // the per-session agent; tier-1 turns flow through it
   session: Session // the live session — the source of truth
   sessionId?: string
-  model: ModelClient // the resolved client (owner uses it for e.g. auto-title)
+  model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle every holder shares. Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:661).
   /** Swap the client this assembly's handle forwards to. Every holder follows —
    * they all hold this same object. Identity of `model` does NOT change, which
    * is deliberate: holders are never re-wired. */
@@ -336,10 +336,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // holder gets — the agent's deps, the subagent tools, the guardian, the team
   // scheduler, and `assembly.model` itself — so a rebind is a single assignment
   // and no holder has to be told. Changing the TYPE instead (`model: () =>
-  // ModelClient`) would have reached the same goal while touching ~85
-  // `createAgent` call sites; the handle costs none of that and keeps
-  // `assembly.model`'s identity stable across a rebind, so a holder can never
-  // be left holding a stale client.
+  // ModelClient`) would have reached the same goal while touching 56
+  // `createAgent` call sites (measured — raw `createAgent(` occurrences
+  // repo-wide); the handle costs none of that and keeps `assembly.model`'s
+  // identity stable across a rebind, so a holder can never be left holding a
+  // stale client.
   //
   // Design: protocol-selection §4.1 — which said "two consumers" and was
   // measured wrong (a session's lifetime has eight holders). See the plan's
