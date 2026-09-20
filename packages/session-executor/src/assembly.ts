@@ -980,14 +980,20 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       session,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       model,
-      // R-B1: the one mutation a running session's model surface allows. The
-      // handle above keeps its identity, so every holder that captured it —
-      // the agent's deps, the subagent tools, the guardian, the team
-      // scheduler, auto-title — follows without being told.
+      // R-B1: the model surface's mutations — TWO of them, and they are a PAIR
+      // (F-1 added the second). Nothing in these types ties the two together, so
+      // what keeps them paired is this description. The handle above keeps its
+      // identity, so every holder that captured it — the agent's deps, the
+      // subagent tools, the guardian, the team scheduler, auto-title — follows
+      // a `setModel` without being told.
       setModel: (client) => { currentModel = client },
-      // F-1: the companion mutation. Neither setter touches the other's cell, and
-      // together they are what a rebind installs (the service's rebindModel sets
-      // both from ONE resolved binding, so the two can never disagree).
+      // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
+      // in these types forces the two calls to happen together. A rebind that
+      // goes through `setModel` alone leaves the effort frozen on the previous
+      // selection — the regression F-1 fixed; a description of the surface that
+      // names only ONE mutation is how it comes back. The service's
+      // `rebindModel` is the one production caller and installs BOTH from a
+      // single resolved binding, so the two cells cannot disagree.
       setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,

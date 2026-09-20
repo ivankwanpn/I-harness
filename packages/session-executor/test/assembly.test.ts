@@ -567,12 +567,15 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 // the exclusion this block's fixtures must avoid.
 //
 // Each case: build ONE assembly with `first` (this file's own fixtures), REBIND
-// with `assembly.setModel(second)` — the one mutation a running session's model
-// surface allows — then drive exactly one holder and assert ITS request landed
-// on `second`, with `first.requests` still empty. The empty first recorder is
-// the control: it is the assertion that fails if the holder kept the raw client
-// instead of the handle. Cases are separate (rather than one shared assembly)
-// so a targeted wiring regression reds only the case whose holder it broke.
+// the CLIENT half of the model surface with `assembly.setModel(second)` — since
+// Task 4 review F-1 the surface has TWO paired mutations (`setModel` and
+// `setReasoningEffort`, installed together by the service's `rebindModel`; these
+// cases build without an effort, so only the client half moves) — then drive
+// exactly one holder and assert ITS request landed on `second`, with
+// `first.requests` still empty. The empty first recorder is the control: it is
+// the assertion that fails if the holder kept the raw client instead of the
+// handle. Cases are separate (rather than one shared assembly) so a targeted
+// wiring regression reds only the case whose holder it broke.
 //
 // Coverage, holder by holder, and where each row is driven:
 //
