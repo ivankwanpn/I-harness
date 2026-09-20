@@ -91,34 +91,41 @@ grep -rn "assembly\.model\|\.model\b" apps/cli/src/run.ts | head
 
 `packages/session-executor/test/assembly.test.ts`：
 
+**名字是形狀，不是 API** —— `buildFixture`、`recording` 都是**佔位名**，你要用**這支測試檔既有的**東西：
+
+- **組裝怎麼建**：`packages/session-executor/test/assembly.test.ts:31-41` 已經 mock 了 `@i-harness/core-agent` 並捕捉傳進去的 deps。**用它**，把 `model` 換成你的記錄 client。
+- **記錄 client**：`packages/subagent/test/child.test.ts:253` 的 `recordingModel()`（回傳 `ModelClient & { requests: LLMRequest[] }`）。**先讀它**，用同一個形狀；`packages/provider-runtime/test/runtime.test.ts:56` 的 `capturingModel()` 是第二個先例。**不要新造第三種。**
+
 ```ts
 it("a rebound model reaches every holder, not just the turn loop", async () => {
   // The design said "two consumers, one change covers both" — measured, a
   // session's lifetime has EIGHT holders of a resolved client. This test is the
   // deliverable: it fails if ANY of them keeps the old one, which is the silent
   // partial success this whole unit exists to remove.
-  const first = recordingClient("first")
-  const second = recordingClient("second")
-  const assembly = await buildAssembly({ model: first })
+  const first = /* the recording client, fresh */ null as never
+  const second = /* a SECOND recording client, distinguishable from the first */ null as never
+  const assembly = /* build via this file's existing fixture, with model: first */ null as never
 
   expect(assembly.model).toBe(first)
 
   assembly.setModel(second)
 
-  // (a) the handle itself forwards — and its IDENTITY is stable, which is what
-  // lets every holder below keep working without being told.
-  expect(assembly.model).toBe(first)          // still the handle…
-  for await (const _ of assembly.model.stream({ /* minimal request */ })) void _
-  expect(second.seen).toHaveLength(1)          // …but it went to the NEW client
-  expect(first.seen).toHaveLength(0)
+  // (a) the handle forwards — and its IDENTITY is stable, which is exactly what
+  // lets every holder keep working without being re-wired.
+  expect(assembly.model).toBe(first)          // still the SAME handle…
+  for await (const _ of assembly.model.stream(request)) void _
+  expect(second.requests).toHaveLength(1)     // …but the request went to the NEW client
+  expect(first.requests).toHaveLength(0)
 
   // (b) the agent the lane runs on reads through the same handle — proven with a
   // REAL turn, not by asserting the agent object exists.
   await assembly.agent.run("go")
-  expect(second.seen).toHaveLength(2)   // the turn's request landed on the NEW client
-  expect(first.seen).toHaveLength(0)
+  expect(second.requests.length).toBeGreaterThan(1)   // the turn landed on the NEW client
+  expect(first.requests).toHaveLength(0)
 })
 ```
+
+**上面那三個 `null as never` 不是要你照抄 —— 它們標出「這三個值要從既有 fixture 來」。** 把它們換成真的值，`as never` 一個都不准留。
 
 **兩個細節，實作者要自己核對，不要發明**：
 - **請求記錄用的 client 這個 repo 已經有了**：`packages/subagent/test/child.test.ts` 的 `recordingModel()`（它回傳 `ModelClient & { requests: LLMRequest[] }`）。**先讀它**，用同一個形狀；若那個檔案裡沒有，`packages/provider-runtime/test/runtime.test.ts` 的 `capturingModel()` 是另一個先例。**不要新造第三種。**
