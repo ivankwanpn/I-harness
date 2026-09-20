@@ -21,6 +21,10 @@
 - **不新增 export，除了那三個常數**（`TOOL_FAILED`、`TOOL_CANCELLED_BY_SIBLING`）與 `core-tools` 的 `isPolicyRefusal`／`PolicyRefusal` 型別。
 - **⚠ 可達性閘門的 `PASS` 是 T6 的要求，不是每一個任務的要求。** 常數與標記先落地、**由後面的任務在生產檔案裡消費**，所以在區塊中途它的讀數本來就會是 `N NEW rows`（`TOOL_FAILED` 是上一個任務留下的，標記是 T1 的）。**每一個任務要做的是「記下讀數、確認它只增不減」，而 `gate PASS` 在 T6 才被要求。** 第一版把「維持 PASS」寫成每一個任務的約束 —— **那是不可能的，而它錯的方式是要求一件做不到的事。**
 - **⚠ 全套閘門是兩步**：`pnpm -r --no-bail test` 在任何套件紅的時候**只跑一個前綴**（T6 Step 3 有量測）。**先數母體（必須 66），再比數字。**
+- **⚠ 不要在註解裡寫一個「沒有生產消費者」的 export 名字。** 可達性掃描器**不剝註解**，所以**一個別的生产檔的註解提到那個名字，那一列就會消失**。
+  **量到的**（2026-09-20，我自己跑的）：在 `execute-tool-calls.ts` 的開頭加一行 `// probe: mentions PolicyRefusal in a comment` ⇒ `core-tools#PolicyRefusal` **從 3 NEW rows 變成 2**，那一列**不見了**。
+  **⇒ 那是一條**假陰性** —— 而這個工具存在的理由正是抓「宣告了、測試了、從來沒接上」。一句「這個有接上」的註解會讓工具同意。**
+  **⇒ 而本計畫的多處註解文字原本寫著 `PolicyRefusal`／`isPolicyRefusal`** —— **照著寫就會把這個工具教會說謊。** 有消費者的名字（`isPolicyRefusal`）提到無妨；**沒有消費者的那個（`PolicyRefusal`）不要提。**
 - **行號會腐化。** 每一處引用動手前先 `grep -n` 核對。
 
 ---
@@ -769,6 +773,12 @@ export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 
 > **複審量到的對照**：head 丟 `read disabled`；base（drain 在決策之後）解析成軟的，而兩格都記著 `{"error":"boom"}`。**⇒ 這一條改寫之後仍然必須在突變（刪掉那個 drain）下紅。** 若它不再紅，**停手回報** —— 那代表確定性的版本沒有測到同一件事。
 
+> **⚠ 而這一格的「零跳」版本量到**行不通**：** 照字面實作（在批次 abort 的同一刻醒來、立刻丟出）⇒ **在刪掉 drain 的突變下仍然綠** —— 因為那個否決的 `.catch` 落點**比決策測試早一個 microtask**，於是 drain **觀察不到**。
+>
+> **⇒ 實作時在醒來之後**多插一個 microtask 邊界**（`execute-tool-calls.test.ts:579` 有註解與量測），那個突變才真的紅。**
+>
+> **殘留風險（要寫下來）**：那條測試的敏感性是**一個 microtask 深** —— **一次在決策測試之前多一個 `await` 的重構，會讓它靜默地再次不可證偽。** **只有那個突變抓得到它。**
+
 - [ ] **Step 4: 跑測試（綠）**
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`
@@ -800,7 +810,15 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
 - Consumes: T2／T4 的失敗路徑。
 - Produces: 無新 export。**這一條是防守。**
 
-- [ ] **Step 1: 寫三條界線的測試**
+- [ ] **Step 1: 寫四條界線的測試**
+
+> **⚠ 第四條是 T4 量到的一個洞，而它不屬於 T4 的四件事。** T4 的探針：**一個兩呼叫的批次、`maxParallel: 1`、c0 的 body `throw undefined`** ⇒ **`tool/result` 是空的 `[]`** —— **同一個 `tool_use` 沒有 `tool_result` 的洞，從另一個形狀走進來。**
+>
+> **機制**：`firstError` **同時是旗標與值**。`throw undefined` 會讓 `batchAbort.abort()` 觸發，**但它讓每一個 `if (firstError)` 讀到 falsy** ⇒ 軟路徑不跑、從未開始的填補也不跑。
+>
+> **⇒ 而這是這一塊裡同一個區別的**第五次**：旗標不能與值共用一個變數。** 修法與 `failures.has(i)` 同形：**一個獨立的布林**（T4 已經用 `firstRefusal !== undefined` 做了同一件事，而 `firstError` 沒有）。
+>
+> **一個它與 `failures` 的差別**：`firstRefusal` 的判準是 `!== undefined`（那是對的，因為它從來不被當值用），**而 `firstError` 被當值用**（它是被丟出來的那個、是被填進訊息的那個）⇒ **它需要的是 `hasFailed`，不是把判準改掉。**
 
 在 `describe("executeToolCalls scheduler")` 的最後加：
 
@@ -853,6 +871,31 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
     )
     expect(cancelled.map((e) => (e as { callId: string }).callId)).toEqual(["c2"])
   })
+
+  it("BOUNDARY: a first failure that rejects with `undefined` still writes results", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    tools.register({
+      name: "undef", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // `firstError` is BOTH the failure flag and the value. A bare
+      // `throw undefined` fires the batch abort while leaving every
+      // `if (firstError)` falsy — so nothing ran: no soft fill, no
+      // never-started fill, and the projection emits a tool_use with no
+      // tool_result. The flag must not share a variable with the value.
+      execute: async () => { throw undefined },
+    })
+    tools.register({
+      name: "nevertool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => ({ ok: true }),
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "undef", args: {} },
+      { callId: "c1", name: "nevertool", args: {} },
+    ], { maxParallel: 1 })
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+  })
 ```
 
 - [ ] **Step 2: 跑它們**
@@ -861,7 +904,21 @@ Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-call
 
 Expected: **前兩條綠、第三條紅** —— 第三條會因為 `commitReady()` 的丟出**逃出 `executeToolCalls`**，於是 `cancelled` 是空的。**若三條全綠，停手回報** —— 那代表第三條沒有測到它要測的東西。
 
-- [ ] **Step 3: 加 try/catch，並移除一行現在死掉的 drain**
+- [ ] **Step 3: 加 try/catch、移除死掉的 drain、並把旗標與值分開**
+
+**先做第三件（它會讓第一條新測試轉綠）：**
+
+在 `let firstError: unknown` 旁邊加 **`let hasFailed = false`**，然後：
+
+- 在**兩個**寫入 `firstError` 的地方（dispatch 的 `.catch`、外層 catch）**同時設 `hasFailed = true`**
+- 把**讀取端**從 `if (firstError)` 改成 `if (hasFailed)`：`:190`／`:208` 的 `if (firstError || aborted) break`，以及檔尾的 `if (firstError) {`
+- **`firstError` 本身留著當值用**（它是被丟出來的那個、是被填進訊息的那個）—— **它是什麼就繼續是什麼**
+
+> **⚠ 不要只把判準從 `if (firstError)` 改成 `if (firstError !== undefined)` 就交差。** 那在 `throw undefined` 上會**通過**，但它是靠一個**沒被寫下來的巧合**過的。旗標與值分開是那個洞的修法；判準的改寫只是它的影子。
+
+**跑 `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`** —— 第四條必須綠。**然後把 `hasFailed` 拿掉（全部改回 `if (firstError)`）再跑一次 —— 第四條必須紅。** 還原。
+
+再處理前兩件：
 
 > **⚠ 先移除那一行，再加 try/catch** —— 它們在同一個區塊，而你正在編輯它。
 >
