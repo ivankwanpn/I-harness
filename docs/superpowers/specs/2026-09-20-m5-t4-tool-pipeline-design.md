@@ -202,7 +202,9 @@ inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
 | **模型現在會看到失敗並可能重試** | 一個真的壞掉的工具會被模型一直重試，而 turn 不會大聲失敗。**緩解**：這是既有的 `softFail()` 行為，現在只是變成管線保證而不是每個工具自己實作 |
 | **錯誤變成 tool result 之後會被壓縮／剪枝** | 一條「這個工具壞了」的訊息在長 session 裡會像其他結果一樣被 `compaction/prune` 剪掉 |
 | **`agent/post-tool` 的語意** | 今天只對「完成的分派」發（`:107-110` 的註解）。**合成失敗不跑 `finalize`、不發 `post-tool`** —— 沿用中止路徑已定的規則（`:63-64`、`:93-99`） |
-| **`tools/post-execute` 因此看不到參數違反** | §3.7.1 的具型錯誤在 `prepare` 就結束了，所以**一個 `tools/post-execute` 監聽者永遠不會看到一筆參數違反**。**這與 dsh 一致**（它明文禁止 post-execute 替一個失敗的結果換值），而代價是：**想在事後觀察畸形呼叫的監聽者要改用 `tools/pre-execute` 或 telemetry** |
+| **`tools/post-execute` 因此看不到參數違反** | §3.7.1 的具型錯誤在 `prepare` 就結束了，所以**一個 `tools/post-execute` 監聽者永遠不會看到一筆參數違反**。**這與 dsh 一致**（它明文禁止 post-execute 替一個失敗的結果換值），而代價是：**想在事後觀察畸形呼叫的監聽者要改用 `tools/pre-execute` 或 telemetry**（**← 這半句錯了，見更正**） |
+
+> **更正（2026-09-21，全分支複審量到的）。** 上面最後一格原本的緩解建議是「**想在事後觀察畸形呼叫的監聽者要改用 `tools/pre-execute` 或 telemetry**」，**而兩個管道都到不了**。量到（一筆畸形呼叫、八條計數器全開；這組數字現在由 `packages/core-agent/test/execute-tool-calls.test.ts` 的 §7 pin 釘著）：**`tools/pre-execute` 0 次**（§3.7 的強制點在 emit **之前** —— 那正是它存在的理由）、**`tools/post-execute` 0 次**、**`agent/post-tool` 0 次**、**guard 0 次**、**telemetry 0 筆**（`startCall` 的拒絕分支不發任何遙測）、**工具本體 0 次**。**⇒ 唯一的痕跡是 session log 裡那筆合成的 `tool/result`**（`{ error, code: TOOL_FAILED }`、`synthetic: true`）。**想觀察的人讀那裡；而唯一能「觀察到」的時機是事後讀 log。** §3.7 **本身**照設計實作（強制點就在那裡，順序也對）—— **錯的只有這一格的緩解句。**
 
 ### 2.5 **不做**：接縫的錯誤旗標（這一條要寫清楚，因為它最容易被想當然）
 
@@ -313,7 +315,9 @@ dsh 的設計有一句是整個移植的負載軸承：
 
 1. **`validateJsonSchemaValue` 回 `string[]`，不回布林、不拋、不轉型。** 路徑限定的字串是可操作的；布林不是。
 2. **`integer` 與 `number` 分開。** IH 用 `integer` **恰好 2 次**（`session-query/src/tools.ts:14` 的 `limit`、`:38` 的 `depth`）。
-3. **物件與陣列通過之後還要「是無損 JSON」。** 這是 `undefined` 值的屬性、稀疏陣列、迴圈、怪原型被抓到的地方。**`-0`、`NaN`、`Infinity` 不是 JSON 數字。**
+3. **物件與陣列通過之後還要「是無損 JSON」。** 這是 `undefined` 值的屬性、稀疏陣列、迴圈、怪原型被抓到的地方。**`-0`、`NaN`、`Infinity` 不是 JSON 數字。**（**← 最後這半句的 `-0` 錯了，見更正**）
+
+   **更正（2026-09-21，全分支複審量到的）。** 原文寫「**`-0`、`NaN`、`Infinity` 不是 JSON 數字**」，**而 `-0` 那一項與量測相反**：`JSON.parse('{"n":-0}')` **回 `-0`**（`JSON.parse('-0')` 亦然，`Object.is(...)` 為 `true`）—— **`-0` 是 JSON 文法裡的數字**；只有 `NaN` 與 `±Infinity` **沒有 JSON 拼法**。**拒絕 `-0` 的決定不變、也照舊釘著**（`json-schema.ts:434` 的 `isJsonNumber` 以 `Object.is` 排除它，`json-schema.test.ts:22` 斷言它被拒），**理由是它無損不了**：`JSON.stringify(-0)` 是 `"0"`，**它過不了往返**。**⇒ 對的理由是「JSON 載不動它」，不是「JSON 產生不了它」—— 前者對 `-0` 成立，後者只對 `NaN`／`±Infinity` 成立。**
 
 **⇒ 而 IH 不需要 dsh 的跨 realm 防護**（`hasIntrinsicConstructor` 那一套）—— **IH 是單一 realm**，那些測試存在是因為 dsh 在 `runInNewContext` 裡跑。
 
