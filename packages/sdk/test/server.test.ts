@@ -272,23 +272,43 @@ describe("createSdkServer", () => {
     }
   })
 
-  it("a failed turn rejects the prompt (error response carries the message)", async () => {
-    // Service whose lane rejects on the first turn failure: a mock that calls
-    // a missing skill (SKILL_NOT_FOUND throw) fails the turn.
+  it("a failing tool body no longer fails the prompt — its reason reaches the client in the tool/result", async () => {
+    // M5 T4 block ①: a tool BODY that throws is SOFT — the turn continues and
+    // the reason reaches the model in the tool/result, which the server also
+    // streams to the client (session/event). Before that block the skill_get
+    // throw failed the TURN, so the prompt got an INTERNAL_ERROR response
+    // carrying SKILL_NOT_FOUND. The claim is unchanged ("the reason is never
+    // swallowed"); only the channel moved. The cassette's second step is the
+    // model's continuation, which the soft path now reaches — retrying with the
+    // error visible is the point of the contract.
     const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-fail-"))
     const service = createSessionService({
       workspace: dir,
       approveAll: true,
       modelPolicy: "test-mock",
-      mockScript: [{ role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] }],
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] },
+        { role: "assistant", text: "saw the failure" },
+      ],
     })
     try {
       const server = createSdkServer(service)
+      const driveState = drive(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(7, "session/prompt", { sessionId: "s2", prompt: "go" })))
-      const msg = decodeFrame(reply!) as RpcFailure
+      const msg = decodeFrame(reply!) as RpcSuccess
       expect(msg.id).toBe(7)
-      expect(msg.error.code).toBe(INTERNAL_ERROR)
-      expect(String(msg.error.message)).toContain("SKILL_NOT_FOUND")
+      // The turn SURVIVED the tool failure — the contract change itself.
+      expect(msg.result).toEqual({ sessionId: "s2", ok: true })
+
+      // …and the reason is visible on the channel that replaced the error
+      // response: the tool/result for that call, as streamed to the client.
+      const events = driveState.out
+        .filter(isRpcNotification)
+        .filter((n) => n.method === "session/event")
+        .map((n) => (n.params as { event: SessionEvent }).event)
+      const failed = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
+        e.type === "tool/result" && e.name === "skill_get")
+      expect(String((failed?.output as { error?: string } | undefined)?.error)).toContain("SKILL_NOT_FOUND")
       await server.close()
     } finally {
       await service.close()
