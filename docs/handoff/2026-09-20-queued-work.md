@@ -490,7 +490,7 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 **F3（無需動作，記在案）**：`sandbox-refusal.test.ts` 那兩行過期引用**在 base 上就已經是錯的** —— 是這次的改動把它們移走，不是造成它們。**那份測試檔沒有動，這個取捨複審同意。**
 
-**量到的（修正後）**：`2600 passed · 0 failed · 9 skipped`（執行前先寫下預期 2600 = 2598 + 2 條新案例；66 個 package）、`pnpm typecheck` 綠、`gate PASS -- no new rows`。**既有測試一條沒改。**
+**量到的（修正後）**：`2600 passed · 0 failed · 9 skipped`（執行前先寫下預期 2600 = 2598 + 2 條新案例；66 個 package）、`pnpm typecheck` 綠、`gate PASS -- no new rows`。**既有的測試案例一條沒改**（見下方對這句措辭的更正）。
 
 #### 第二輪複審 —— 全部三條 DONE，外加 comment 級的三項（`a92a6817`）
 
@@ -544,7 +544,22 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 #### 1. 事實 —— `ChildAgentEntry.startedAt`（`packages/subagent/src/agent-table.ts:35`）
 
-**紀元毫秒，記的是「當前這一輪」的開始，不是條目的年齡**：`spawnChild` 建立條目時蓋一次（`packages/subagent/src/child.ts:305`）、`driveFollowups` 每次重新驅動時再蓋一次（`packages/subagent/src/tools.ts:690`），而**那是這個套件裡唯二寫 `status = "running"` 的地方**（`grep -n "status = \"running\"" packages/subagent/src` 的兩站都在這裡）。
+**紀元毫秒，記的是「當前這一輪」的開始，不是條目的年齡**：`spawnChild` 建立條目時蓋一次（`packages/subagent/src/child.ts:305`）、`driveFollowups` 每次重新驅動時再蓋一次（`packages/subagent/src/tools.ts:690`），而**那是這個套件裡唯二寫 entry 的 running 狀態的地方**。
+
+> ⚠ **原本這裡引的證據指令是 `grep -n "status = \"running\"" packages/subagent/src`，而它不重現那個主張**（複審量到的：它回**三**行 —— 一個註解、一個 **TaskRecord** 的 `t.status = "running"`、以及 `tools.ts` 那一處 —— 而**漏掉 `child.ts` 的 spawn 那處**，因為那是物件字面量形式）。**主張本身是真的，但被引的指令證明不了它。**
+>
+> **會重現的指令**（要核這條就照它跑）：
+>
+> ```bash
+> grep -rn -E '(entry\.status = |^ +status: )"running"' packages/subagent/src
+> # → 恰好 child.ts:301 與 tools.ts:684
+> ```
+>
+> **這是 §0 規則三與 W2 那一課存在的理由**：**誰照被引的指令重跑，就會拿到不同的行，然後分不出是記錄錯還是樹錯。**
+
+> **⚠ 一個已裁定、但沒有在本輪修的後續（複審的裁定，而我同意）**：`startedAt` 這個名字**與既有的 `JobSnapshot.startedAt`（「job 建立」、**從不重新蓋章**）撞名，而語意相反**。**它現在在公開表面上**（`ChildAgentEntry` 與 `AgentTaskView` 都從 barrel 匯出）。
+>
+> **裁定：不值得為它開一輪** —— 那個欄位的 JSDoc **指名了另一個時鐘**，而 re-drive 的測試**釘住了語意**。**改名的時機是這個檔案下一次被碰到的時候**（`runStartedAt`，約 6 處：`agent-table.ts` ×3、`child.ts` ×1、`tools.ts` ×1、測試 ×1）。**寫在這裡，因為「下次順手改」是一個不會自己發生的承諾。**
 
 **選「本輪」而不是「出生」是刻意的，理由寫在欄位註解裡**：一個剛被喚醒的子代理**不可以**被報成「已經跑了 20 分鐘」——**這個訊號一旦說謊就沒有價值**。**同一個套件的 `JobSnapshot.startedAt` 是另一個時鐘**（工作建立時間、永不重蓋），任何一次 followup 之後兩者就不同。
 
@@ -560,19 +575,25 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 **這一塊能不能用，取決於它的文字不隨時間移動。** runtime-context 只在**渲染文字改變**時 append（`packages/runtime-context/src/index.ts`；釘住這條性質的是 `packages/runtime-context/test/runtime-context.test.ts:14`），所以**一段含計時的文字等於每分鐘寫一行日誌**。因此文字的**唯一輸入是「超過門檻的那個集合」**：路徑、role、job、門檻（常數）—— **不含量時**，需要數字的人被指去 `list_agents`。**一次跨越＝一行、一次離開＝一行、中間＝零行**，而那不是主張，是量到的（見下面的證偽 C）。
 
+> ⚠ **而複審量到一件比上面的解釋更寬的事，而且是好的方向**：**那個區段也會在「子代理」的 step 上渲染** —— 子代理的 `parentEmit` 就是組裝的 emit，而它會轉發到父的 scope，所以**跨界那一行可以在父的日誌裡出現，而父的迴圈是閒置的**（它用臨時探針量到：父的 run 早已結束、`turn/start` 從 1 到 1，而父的日誌仍然拿到了 `## subagents` 快照）。
+>
+> **所以上面的「在主代理本來就在跑的回合裡」窄於實作。** **Q2 仍然成立**（**沒有 turn**、仍然每跨界一次一行），而**一次落在工具呼叫中途的 append 是安全的**（`deriveMessages` 會延後落在開啟中的工具區塊裡的使用者訊息）。
+>
+> **它是覆蓋的「超集」而不是過度宣稱，所以程式碼沒有東西要改** —— 但**解釋要改準**，而那正是這一段在做的事。
+
 **沒有 start stamp 的 running 條目不會被靜默丟掉**（`section.ts:46`）：它被報成 unknown。另一條路（沉默）講的其實是「沒有東西需要注意」——**那是這個 getter 不能做的斷言**。
 
 #### 旋鈕，與那句寫在兩個數字旁的話
 
 - `AssemblyOptions.subagentStaleAfterMs`（**預設 600_000／10 分鐘**；宣告在 `packages/session-executor/src/assembly.ts:258`、解析與警告在 `:491`），CLI 的 `HeadlessOptions` 同層加了一樣的欄位並轉發（`apps/cli/src/run.ts:148`、`:498`）——「同一個層級」在**兩個宿主契約**都成立（W10 的處置）。
-- **關係寫在數字旁**（`:254` 那段註解），**兩個錨點**：**300_000**（`wait_agent` 的 clamp ＋ `spawn_agent background:false` 的等待 —— 主代理自己最多願意等多久）與**「已經跑了 20 分鐘」**（本文件 §8.5 W11）。門檻必須**高於前者**（否則報的是等待者剛剛親自等到的事）、**低於後者**（否則訊號來得太晚），而且**仍要高於一次正常的子代理回合**（否則區段在每一步都變成壁紙）。
+- **關係寫在數字旁**（`packages/session-executor/src/assembly.ts:234-250` 那段註解；複審指出原本引的 `:254` 會落在**同一塊 JSDoc 裡、但錨點的下方**），**兩個錨點**：**300_000**（`wait_agent` 的 clamp ＋ `spawn_agent background:false` 的等待 —— 主代理自己最多願意等多久）與**「已經跑了 20 分鐘」**（本文件 §8.5 W11）。門檻必須**高於前者**（否則報的是等待者剛剛親自等到的事）、**低於後者**（否則訊號來得太晚），而且**仍要高於一次正常的子代理回合**（否則區段在每一步都變成壁紙）。
 - **兩側的誤設都出聲**（`:492`／`:496`）：**非正數**（0／負／NaN，用 `!(x > 0)` 一次抓）＝每個子代理一啟動就「過期」；**非有限**（Infinity）＝**永遠不觸發，而它的沉默與「沒有東西需要注意」無法區分**。這是唯一同時握有兩個解析後值（含預設）的站點 —— 與 W10 F1 同一個處置。
 
 #### 量到的
 
 - **全套**：`2614 passed · 0 failed · 9 skipped`（66 個 package；**執行前先寫下預期 2614 = 2601 + 13**：subagent 9（`section.test.ts` 6 ＋ `tools.test.ts` 3）＋ session-executor 3 ＋ CLI 1）。`pnpm typecheck` 綠。`node scripts/audit/check-reachability.mjs --gate` → **`gate PASS -- no new rows`**。
 - **匯出的處置**：`createStaleSubagentsSection` 與它的消費者（assembly）**同一個提交**；**`StaleSubagentsSectionOptions` 刻意不進 barrel** —— 沒有消費者指名它，barrel 匯出會變成一列新的 row（可達性儀器把 `export interface` 算成 row）。
-- **既有測試一條沒改**：新增的全部在新檔案或新的 describe 裡。
+- **既有的測試「案例」一條沒改** —— 新增的全部在新檔案或新的 describe 裡。（**⚠ 複審指出措辭不精確**：**兩個既有測試檔的 import 行被改過**（`packages/subagent/test/tools.test.ts:3`、`apps/cli/test/context-instructions.test.ts:1`），而**沒有任何既有的測試案例被改動** —— 完整的刪除行清單就是那兩行 import。**與 W10 被指出的同一個說法問題**，所以在這裡一次講準。）
 
 #### 「沒有任何東西會開一個 turn」—— **量到的，不是靠建構**
 
