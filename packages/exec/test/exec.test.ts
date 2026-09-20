@@ -134,6 +134,24 @@ describe("exec background jobs", () => {
     expect(done.status).toBe("completed")
     expect(done.stdout).toContain("late")
   }, 10_000)
+
+  // W10 regression (review F2): the job's text must be normalized the way the
+  // foreground result is — over the whole string — not chunk by chunk. A CRLF
+  // SPLIT across two `data` events is in neither chunk, so per-chunk
+  // normalization cannot fold it, and the model-visible `job_output` view said
+  // `"A\r\nB"` where the same command run in the foreground said `"A\nB"`.
+  it("folds a CRLF split ACROSS two chunks exactly as a foreground run does", async () => {
+    const exec = registerExec(createContext())
+    // "A\r" now, "\nB" 150ms later: one logical CRLF, two `data` events.
+    const script = "process.stdout.write('A\\r');setTimeout(()=>process.stdout.write('\\nB'),150)"
+    const foreground = await exec.run({ argv: [process.execPath, "-e", script] })
+    expect(foreground.stdout).toBe("A\nB") // the pre-existing foreground contract
+    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", script] })
+    await waitForStatus(exec, jobId, (s) => s === "completed")
+    // RED before the fix: "A\r\nB" — measured. The job view is what job_output
+    // renders to the model, so this is model-visible, not internal.
+    expect(exec.getOutput(jobId).stdout).toBe("A\nB")
+  }, 10_000)
 })
 
 // W10: the foreground promotion overload. The property is "one spawn, either
@@ -158,8 +176,7 @@ describe("exec foreground promotion (W10)", () => {
     expect(exec.listJobs()).toEqual([])
   })
 
-  it("a run that outlives the threshold is handed back as a job that KEEPS RUNNING and finishes its work", async () => {
-    const exec = registerExec(createContext())
+  it("a run that outlives the threshold is handed back as a job that KEEPS RUNNING and finishes its work", async () => {    const exec = registerExec(createContext())
     const dir = mkdtempSync(join(tmpdir(), "ih-w10-"))
     const marker = join(dir, "done.txt")
     try {
