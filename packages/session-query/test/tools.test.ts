@@ -36,8 +36,13 @@ describe("session-query tools", () => {
       const res = await registry.execute({ name: "lineage", args: { session_id: "parent", direction: "children" } })
       const nodes = (res.output as { nodes: { sessionId: string; hasChildren: boolean }[] }).nodes
       expect(nodes.map((n) => n.sessionId)).toEqual(["child"])
+      // A bad direction is still rejected — but since M5 T4 block ② the
+      // DECLARED schema is enforced in `prepare`, before the tool body, so the
+      // refusal is the schema's own message (this tool declares the enum) and
+      // the body's `invalid direction` check is no longer reachable for this
+      // input. The assertion follows the earlier, more precise refusal.
       await expect(registry.execute({ name: "lineage", args: { session_id: "parent", direction: "sideways" } }))
-        .rejects.toThrow(/invalid direction/)
+        .rejects.toThrow(/must be one of \["ancestors","descendants","children"\]/)
     } finally {
       closeSessionQueries()
       rmSync(dir, { recursive: true, force: true })

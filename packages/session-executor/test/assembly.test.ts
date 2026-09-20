@@ -785,8 +785,12 @@ describe("createSessionAssembly — every handle-reachable holder follows a rebi
     const second = scriptedModel([
       // the parent's step: a write OUTSIDE the workspace → the approval
       // classifier's `ask` branch → the guardian is consulted (core-tools
-      // prepare step 3; assembly mounts the policy at :636)
-      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
+      // prepare step 3; assembly mounts the policy at :636). The args are
+      // SCHEMA-VALID (`text`, the parameter `write` declares — not `content`):
+      // since M5 T4 block ② a call that violates the declared schema is refused
+      // BEFORE the policy layers, so malformed args would never reach the
+      // guardian this holder test is about.
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
       // the REVIEWER's own turn (forkTurns "none": it sees only the request)
       { role: "assistant", text: '{"outcome":"deny","rationale":"writes are denied today","risk_level":"moderate"}' },
     ])
@@ -975,9 +979,11 @@ describe("createSessionAssembly — the two CONFIGURED holders keep winning (Tas
     // what consults the guardian. The second step exists only so that a broken
     // `??` (reviewer falling back to the handle) still produces a parseable
     // verdict instead of an exhausted cassette; it is never consumed on the
-    // shipped path.
+    // shipped path. The write's args are `text`, the parameter `write` declares
+    // (see holder 5b): a malformed call is refused before the policy layers
+    // since M5 T4 block ②.
     const second = scriptedModel([
-      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
       { role: "assistant", text: '{"outcome":"approve","rationale":"the handle reviewer approved it","risk_level":"none"}' },
     ])
     const assembly = await createSessionAssembly({
