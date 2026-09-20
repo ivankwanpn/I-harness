@@ -2,7 +2,7 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
-import type { ExecService } from "@i-harness/exec"
+import type { ExecService, PromotedRun } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
 import { ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
@@ -138,6 +138,17 @@ export interface ShellRetentionOptions {
 export interface ShellToolDeps {
   exec: ExecService
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
+  /** W10: a FOREGROUND bash/pwsh command still running after this many ms is
+   * handed back as a background job id (the command keeps running) instead of
+   * waiting — the escape hatch for commands that outlive `timeoutMs`, which
+   * must be applied BEFORE the call rather than guessed before it.
+   *
+   * IT MUST BE WELL UNDER `timeoutMs`. The two knobs are read together for a
+   * reason: `timeoutMs` is this tool's declared deadline, and at that deadline
+   * guard-timeout aborts the call and exec kills the process tree — so a
+   * threshold AT or ABOVE it never fires, and every long command still dies
+   * mid-flight. Absent → no promotion (pre-W10 behavior, byte for byte). */
+  backgroundAfterMs?: number
   retention?: ShellRetentionOptions
   // D1 (m55): the working directory for every shell execution — the assembly
   // workspace. Absent → no cwd field, so exec keeps its own contract (the
@@ -225,9 +236,12 @@ async function resolveShellCall(
 /**
  * M62 Task 3 (Step 7): a REFUSAL the model can read, not a turn that dies.
  *
- * `exec`'s `resolveArgv` throws `SandboxUnavailableError` synchronously — both
- * from `run` and from `runBackground` (`packages/exec/src/index.ts:112,122,241-246`)
- * — when a confined policy reaches it with no provider composed. A throwing tool
+ * `exec`'s `resolveArgv` throws `SandboxUnavailableError` synchronously — from
+ * `run` (either overload: there is ONE implementation behind them, so W10's
+ * promotion cannot diverge here) and from `runBackground`, both through
+ * `spawnChild` — when a confined policy reaches it with no provider composed.
+ * (Named by SYMBOL, not by line number: W10 moved every line in that file, and
+ * the shell test's own note records the same lesson.) A throwing tool
  * body fails the whole turn and appends no `tool/result`, so ONE bash call ended
  * the turn and the model never learned why. The bash-absent branch below already
  * returns a legible failure for the same class of fact ("this host cannot run
@@ -266,6 +280,42 @@ function sandboxUnavailableFailure(
   // exitCode -1 mirrors the bash-absent branch at each call site: -1 means "this
   // host could not run it", never "it ran and failed".
   return { stdout: "", stderr: JSON.stringify(denial), exitCode: -1 }
+}
+
+/**
+ * W10: exec handed a FOREGROUND command back as a job because it outlived the
+ * promotion threshold. The result must say exactly that, because the one thing
+ * it must never look like is a choice the model made: a bare `{ job_id }` is
+ * what the model's OWN `background: true` call returns, so on that shape it
+ * would believe it had asked for background. `promoted: true` plus the elapsed
+ * time is the difference, and `stdout` states it in words as well — that is
+ * the field the model reads first.
+ *
+ * The partial output is deliberately NOT repeated here. It is not lost: it is
+ * already in the job record this id names (the same record `job_output` reads),
+ * and copying it into the tool result would show the model a snapshot frozen at
+ * the hand-back while the job keeps writing.
+ */
+function promotedResult(
+  promoted: PromotedRun,
+  tool: "bash" | "pwsh",
+  deadlineMs: number | undefined,
+): { stdout: string; job_id: string; promoted: true; ran_foreground_ms: number } {
+  // The deadline is named only when the host declared one: a mount without
+  // `timeoutMs` has no deadline to explain, and quoting 120_000 here would be
+  // asserting a number this layer never saw.
+  const why = deadlineMs === undefined
+    ? ""
+    : ` A foreground ${tool} call is killed at ${deadlineMs}ms and its work is lost, so the harness promotes instead of waiting for that.`
+  return {
+    job_id: promoted.jobId,
+    promoted: true,
+    ran_foreground_ms: promoted.ranForegroundMs,
+    stdout:
+      `[i-harness] the ${tool} command was still running after ${promoted.ranForegroundMs}ms, so the harness promoted it to background job ` +
+      `${promoted.jobId} and returned this id instead of waiting. You did NOT ask for background — the harness did.${why} ` +
+      `The command is STILL RUNNING. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`,
+  }
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
@@ -338,7 +388,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   // bash-absent branch and `sandboxUnavailableFailure` both carry the reason in
   // `stderr` (the field the model reads). It was absent from this type, so the
   // refusal's most important field sat outside the declared output shape.
-  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string }> = {
+  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "bash",
     description: "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
@@ -389,7 +439,16 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
-        const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+        // W10: the command spec is built ONCE — the promotion overload takes
+        // the very same ExecCommand, so the two calls below differ in nothing
+        // but the threshold. The overload (not a second code path) is what
+        // keeps a non-promoting call's result shape untouched.
+        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const result = deps.backgroundAfterMs === undefined
+          ? await deps.exec.run(cmd)
+          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
+        // The threshold is the trigger; ONLY a run that outlived it lands here.
+        if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
         return retainedRunResult(result, "bash-stdout")
       } catch (err) {
         // M62 Step 7: exec refuses this command because no backend is composed
@@ -400,7 +459,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       }
     },
   }
-  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string }> = {
+  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "pwsh",
     description: "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
@@ -429,7 +488,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
-        const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+        // W10 — same two calls as the bash tool above; see the note there.
+        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const result = deps.backgroundAfterMs === undefined
+          ? await deps.exec.run(cmd)
+          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
+        if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)
         return retainedRunResult(result, "pwsh-stdout")
       } catch (err) {
         // M62 Step 7 — see the bash tool above.
@@ -446,6 +510,10 @@ export function registerShell(
   registry: { register(t: Tool): void },
   opts?: {
     timeoutMs?: number
+    /** W10: the foreground promotion threshold, forwarded to both tools — see
+     * ShellToolDeps.backgroundAfterMs. It MUST stay well under `timeoutMs`; the
+     * assembly is the layer that knows both numbers and states the relation. */
+    backgroundAfterMs?: number
     retention?: ShellRetentionOptions
     sandbox?: import("@i-harness/sandbox").SandboxProvider
     // M62: a resolver thunk passed straight through to the tools — see
@@ -464,6 +532,7 @@ export function registerShell(
   for (const tool of createShellTools({
     exec,
     timeoutMs: opts?.timeoutMs,
+    backgroundAfterMs: opts?.backgroundAfterMs,
     retention: opts?.retention,
     sandboxPolicy: opts?.sandboxPolicy,
     ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
