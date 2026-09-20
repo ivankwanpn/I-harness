@@ -26,7 +26,8 @@ node scripts/audit/check-reachability.mjs --gate   # gate PASS -- no new rows
 
 ### ⚠ 兩條既有的 flake —— **都不是這個單元的回歸**
 
-1. **`packages/settings` 的 `test/layering.test.ts:201`** 在**平行全套跑裡約一半的機率**以 `expected 2 to be 1` 失敗，隔離跑必過。機制：`watchSettings`（`packages/settings/src/index.ts:1305-1349`）用 **10ms 的 `setInterval`** 比對 `${mtimeMs}:${size}`、**沒有 in-flight guard**，而 `writeFile` **不是原子的** —— 一次寫入可以呈現兩次 stat 變化，於是**一次改動發出兩個 `settings/changed`**。**既有的產品缺陷，不是測試假陽性。**
+1. ~~**`packages/settings` 的 `test/layering.test.ts`** 在**平行全套跑裡約一半的機率**以 `expected 2 to be 1` 失敗~~ —— **⚠ 2026-09-20 已修好（`65838d8b`）。** 原文保留（那是當時的事實）。**行號也不再有效**：斷言現在在 `:233`，而 `watchSettings` 從 `:1305-1349` 移到 `:1354-1414`。今天的權威是 `docs/handoff/2026-09-20-queued-work.md` §2（W1），那裡寫明**證據證明的是「機制被關上」，不是「比率歸零」**。
+   當時記下的機制：`watchSettings` 用 **10ms 的 `setInterval`** 比對 `${mtimeMs}:${size}`、**沒有 in-flight guard**，而 `writeFile` **不是原子的** —— 一次寫入可以呈現兩次 stat 變化，於是**一次改動發出兩個 `settings/changed`**。
 2. **`apps/cli/test/input-tiers.test.ts`** 的 executor 案例在**滿載**下被看過一次紅，隔離跑必過。
 
 **看到它們紅：重跑一次、繼續。** 修 1 很小且獨立（加 in-flight guard），**但不在這個單元**。

@@ -39,6 +39,8 @@ node scripts/audit/check-reachability.mjs --gate   # gate PASS -- no new rows
 
 ### ⚠ 全套跑有一半的機率會紅一條 —— **那不是這個單元的回歸**
 
+> **⚠ 2026-09-20 更新：這一條已經修好了（`65838d8b`）。** 這段文字**寫於它還活著的時候**，所以**原文保留** —— 那是當時的事實。今天讀到這裡的人請去看 `docs/handoff/2026-09-20-queued-work.md` §2（W1）：那裡有修正、以及**證據證明了什麼**（「機制被關上」，**不是**「比率歸零」—— 那個區別在那份文件裡是明文寫著的）。
+
 `packages/settings` 的 `test/layering.test.ts:201`（*"M40 A6 settings/changed hot-reload"*）會以 `expected 2 to be 1` 失敗，**在平行全套跑裡大約一半的機率**，而隔離跑必定通過。
 
 **機制（從程式碼推出來的，不是靠反覆跑）：** `watchSettings`（`packages/settings/src/index.ts:1305-1349`）用 **10ms 的 `setInterval`** 比對 `${mtimeMs}:${size}`，**沒有 in-flight guard**；`writeFile` **不是原子的**，所以一次寫入可以呈現兩次 stat 變化；store 回呼（`:1251-1263`）**先同步快照 `before`，然後才** await `reloadFromDisk()` —— 落在同一次 reload 延遲內的兩次偵測**都看到改動前的狀態**，於是**各發一次 `settings/changed`**。
@@ -113,7 +115,7 @@ node scripts/audit/check-reachability.mjs --gate   # gate PASS -- no new rows
 | **P1** | 拒絕訊息的 `<one of: …>` 尾巴**貼進 shell 不安全**（`<` 重導向、`|` 管線）。**這條是衝著我的處方來的** | **維持。** 單行裡「能跑」與「列出全部」**不可兼得**：指令必須結束在最後一個參數上，任何尾註都會讓整行不能貼。**能跑就必須指名一個具體協議 —— 那正是這個單元要消滅的事** | 貼了會吃 shell 錯誤。緩解：值已經印在同一行，不需要貼 |
 | **P2** | 形狀釘而非成員釘的斷言（runtime 那兩條在 `5836ab58` 已改為成員釘；剩下的同類在別處） | **park** —— 間接覆蓋是真的（清空 `PROVIDER_PROTOCOLS` 會讓 `settings` 的決定性斷言變紅） | 未來清空清單會通過兩條本該失敗的斷言 |
 | **P3** | `provider/src/index.ts:723` 的 `?? "openai-completions"` **留著、不可達、已加註解** | **park。** 刪它會動公開契約與約 15 個測試 —— **另一個變更** | 未來一個非 runtime 的呼叫者傳入無協議的請求，會拿到靜默的 Bearer 尾巴 |
-| **P4** | **`packages/settings` 的 watcher race**（見 §2） | **park。** 缺陷在一個**這個單元完全不碰**的套件裡；把它的修補塞進這條分支，等於在人家要複核的 diff 裡混進無關套件的修改 | **約一半的全套跑會紅一條，而那條訊息看起來像我們的回歸** —— 所以它寫在這裡 |
+| **P4** | **`packages/settings` 的 watcher race**（見 §2） | **park。** 缺陷在一個**這個單元完全不碰**的套件裡；把它的修補塞進這條分支，等於在人家要複核的 diff 裡混進無關套件的修改。**⚠ 已於 2026-09-20 修好（`65838d8b`）—— park 的理由是「不要污染複核分支」，而那個理由隨分支推上去就過期了** | **約一半的全套跑會紅一條，而那條訊息看起來像我們的回歸** —— 所以它寫在這裡 |
 | **P5** | `apps/cli/src/models.ts` 新 JSDoc 的兩個措辭 nit（其中一條把**優先序寫反**） | **park。** 兩者都**沒有假陳述**，而正確的優先序就在同檔 14 行下 | 讀型別註解的人可能把順序當成優先序 |
 | **P6** | `MODELS_USAGE` 的 `auto` 那行省略了鏈的最上層（session/role 的選擇仍然能解析） | **park** —— 比它取代的那句溫和得多，而且與 runtime 自己的拒絕措辭一致 | 字面上不是普適的 |
 | **P7** | `docs/CAPABILITIES-DETAIL.md` 的 `（M31 空）` 把 `SEEDED_PROTOCOLS` 的空指向 M31，而它自 M26 就是空的 | **park** —— M31 自己的設計文件確實寫著「seed 現在為空」，所以當作「M31 所記錄的」是可辯護的 | 出處標註略偏 |

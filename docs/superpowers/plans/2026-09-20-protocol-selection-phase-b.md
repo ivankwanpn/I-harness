@@ -22,7 +22,9 @@
 
 ## ⚠ 已知的既有 flake
 
-`packages/settings` 的 `test/layering.test.ts:201` 在**平行全套跑裡約一半的機率**會以 `expected 2 to be 1` 失敗，隔離跑必過。機制是既有的 `watchSettings` race（**沒有 in-flight guard** 的 10ms 輪詢 + 非原子 `writeFile`）。**重跑一次、記錄、繼續 —— 不要追，更不要為了讓數字好看去改測試。**
+~~`packages/settings` 的 `test/layering.test.ts:201` 在**平行全套跑裡約一半的機率**會以 `expected 2 to be 1` 失敗~~ —— **⚠ 2026-09-20 已修好（`65838d8b`）**；原文保留，行號已失效（斷言現在在 `:233`）。權威是 `docs/handoff/2026-09-20-queued-work.md` §2（W1）。
+
+當時記下的機制：既有的 `watchSettings` race（**沒有 in-flight guard** 的 10ms 輪詢 + 非原子 `writeFile`）。**而當時的建議——「重跑一次、記錄、繼續 —— 不要追，更不要為了讓數字好看去改測試」——那條仍然成立**，因為另一條 flake（`apps/cli/test/input-tiers.test.ts` 在滿載下）還在。
 
 ---
 
