@@ -353,18 +353,32 @@ export async function executeToolCalls(
     // M51 B3: every STARTED slot that produced no output failed; leaving it
     // undefined stalled the head-of-line cursor forever, so a sibling that had
     // already settled successfully never got a tool/result. Fill each with a
-    // synthetic failure (the first error's message) so the cursor advances and
-    // the settled siblings commit their REAL outputs in model order. This fill
-    // belongs to the abort path; the soft failure path below fills the same
-    // holes, but per call — each slot there carries its OWN failure's message
-    // rather than one shared message, because it can attribute them.
-    const failureMessage = firstError instanceof Error
+    // synthetic failure so the cursor advances and the settled siblings commit
+    // their REAL outputs in model order.
+    //
+    // Per call, from the SAME map the soft fill reads. (M5 T4 block ②: the
+    // shared message was merely imprecise while `firstError` could only be a
+    // tool-body failure; `firstError` can now be a TYPED ARGUMENT REFUSAL, and
+    // stamping it on every slot told a sibling killed by the cancel about a
+    // DIFFERENT call's arguments.)
+    const fallbackMessage = firstError instanceof Error
       ? firstError.message
       : firstError === undefined ? "tool call aborted before dispatch" : String(firstError)
     for (let i = committed; i < startedUpTo; i += 1) {
       if (slots[i] !== undefined) continue
       const call = batch[i]!
-      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: failureMessage } }
+      // THIS call's own message when it has one. The test is `failures.has(i)`
+      // — NOT `failures.get(i) !== undefined`: a body that rejects with
+      // `undefined` DOES record itself (`set(i, undefined)`), and a value test
+      // cannot tell that record from "no entry" — so that call would be stamped
+      // with its SIBLING's message, the misattribution this map exists to kill.
+      // `fallbackMessage` is only for a slot that never got an entry of its own
+      // (the defensive fallback the soft fill below also keeps).
+      const own = failures.get(i)
+      const message = failures.has(i)
+        ? (own instanceof Error ? own.message : String(own))
+        : fallbackMessage
+      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: message } }
     }
     try {
       await commitReady()
