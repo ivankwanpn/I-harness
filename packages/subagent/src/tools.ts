@@ -54,15 +54,20 @@ export interface SubagentToolDeps extends RoleModelHost {
   // M26-D1: the durable task protocol registry — spawn_agent submissions go
   // through it (identity-keyed submit/claim/terminalize; cancelTree/wait read it).
   tasks: TaskRegistry
+  // W12: the bound on the `background: false` settle-wait. Absent = 300_000 (the
+  // shipped behavior; no host passes it). The wait is a REAL poll to this
+  // deadline, so this is what lets a test drive a genuine timeout through the
+  // real registry instead of pinning the timeout arm's shape with a mock.
+  foregroundWaitMs?: number
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   const spawnTool: Tool<
     { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
-    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string }
+    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean }
   > = {
     name: "spawn_agent",
-    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary.",
+    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary; if it has not settled by the bound it returns timed_out: true instead — the task is still running.",
     inputSchema: {
       type: "object",
       properties: {
@@ -182,7 +187,18 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       deps.tasks.claim(task.id, executed.sessionId)
       const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
       if (args.background === false) {
-        const settled = await deps.tasks.wait(task.id, 300_000)
+        const settled = await deps.tasks.wait(task.id, deps.foregroundWaitMs ?? 300_000)
+        // W12: a wait that returns without a terminal outcome means it TIMED OUT
+        // (createTaskRegistry returns the still-non-terminal record; the
+        // TaskRegistry contract also admits `undefined`). The task is still
+        // running then — this used to fall through to the settle line below and
+        // report "settled: <status>", a message-shaped lie about something that
+        // did not happen. Same shape as wait_agent's timeout arm below:
+        // `timed_out` + "(still running)".
+        if (settled === undefined || settled.outcome === undefined) {
+          const latest = settled ?? deps.tasks.get(task.id)
+          return { ...base, status: latest?.status ?? "unknown", message: `wait timed out for ${executed.path} (still running)`, timed_out: true }
+        }
         return { ...base, status: settled?.status ?? "unknown", ...(settled?.outcome !== undefined ? { outcome: settled.outcome } : {}), ...(settled?.resultText !== undefined ? { resultText: settled.resultText } : {}), ...(settled?.error !== undefined ? { error: settled.error } : {}), message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
       }
       return base
