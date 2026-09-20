@@ -424,6 +424,26 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // it (and a host that sets the pair equal has configured the death, not the
   // escape hatch).
   const shellBackgroundAfterMs = opts.shellBackgroundAfterMs ?? 30_000
+  // W10 review F1: the comment above protects a READER and the falsification
+  // test protects CI — a HOST running the misconfiguration has neither, and the
+  // failure it gets is the pre-W10 one: every long foreground command dies at
+  // the deadline with TOOL_TIMEOUT and the escape hatch it asked for never
+  // fires. Nothing else can report this: settings has no schema field for either
+  // number, the tool call is too late and per-call, and THIS is the only site
+  // that holds both RESOLVED values (defaults included) on the composition root
+  // every shipped host passes through (CLI, SDK, ACP).
+  if (!(shellBackgroundAfterMs > 0)) {
+    // `!(x > 0)` on purpose: it catches 0 AND negative AND NaN (a NaN threshold
+    // makes setTimeout fire immediately), all of which promote every foreground
+    // call the moment it starts.
+    console.warn(
+      `[i-harness] shellBackgroundAfterMs is ${shellBackgroundAfterMs} (not a positive number), so EVERY foreground bash/pwsh call is promoted to a background job as soon as it starts: the model gets a job id where it expected a result. Set a positive threshold well under shellTimeoutMs (${shellTimeoutMs}ms).`,
+    )
+  } else if (shellBackgroundAfterMs >= shellTimeoutMs) {
+    console.warn(
+      `[i-harness] shellBackgroundAfterMs (${shellBackgroundAfterMs}ms) is not under shellTimeoutMs (${shellTimeoutMs}ms), so foreground promotion will NEVER fire: a command that reaches the deadline is still aborted and its work is lost — the pre-W10 death. Lower shellBackgroundAfterMs (default 30_000) or raise shellTimeoutMs (default 120_000); a host that sets the pair this way on purpose has turned the escape hatch off.`,
+    )
+  }
   // M16w final review (win32 composition): the sandbox-local wrapper returns a
   // bare SandboxProvider and DROPS the backend's dispose(), so this compose
   // site keeps the raw backend and tears it down in dispose() — otherwise the

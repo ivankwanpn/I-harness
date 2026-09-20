@@ -299,6 +299,19 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
   let bashCounter = 0
   const jobs = new Map<string, BackgroundJobView & { handle: SpawnHandle }>()
   const provider = deps?.sandbox
+  // The one place a job record becomes a view. CRLF normalization happens HERE,
+  // over the whole accumulated text, because that is what the foreground path
+  // does (`doneFn` replaces over the full string): a pair split across two
+  // `data` events folds in both views, and neither can disagree about a stream
+  // the model reads through `job_output`. `owner` is not copied, as before —
+  // the per-session projection reads it from its own registry.
+  const jobView = (job: BackgroundJobView & { handle: SpawnHandle }): BackgroundJobView => ({
+    id: job.id,
+    status: job.status,
+    stdout: job.stdout.replace(/\r\n/g, "\n"),
+    stderr: job.stderr.replace(/\r\n/g, "\n"),
+    ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}),
+  })
   // M21 A-tier spill is foreground-only: run() spills via OutputCollector while
   // runBackground keeps plain stream-observable accumulation into job.stdout.
   // A PROMOTED run is the one case where a job was spawned WITH spill (its
@@ -316,6 +329,14 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
   // configured the seed is the collector's memory TAIL — the same text the
   // foreground phase itself would have reported in memory, with the complete
   // stream in that phase's spill file.
+  //
+  // The record holds the RAW text and `jobView` normalizes on read, ON PURPOSE:
+  // a CRLF can be SPLIT across two `data` events ("A\r" now, "\nB" later), and
+  // normalizing chunk by chunk cannot fold a pair that is in neither chunk —
+  // measured, the job view leaked `"A\r\nB"` where the foreground result had
+  // `"A\nB"` (test/exec.test.ts, "split across two chunks"). Whole-string
+  // normalization is exactly what `doneFn` does to a foreground run, so the two
+  // views of the same stream agree.
   function registerJob(handle: SpawnHandle): string {
     bashCounter += 1
     const jobId = `bash-${bashCounter}`
@@ -323,13 +344,13 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
     const job: BackgroundJobView & { handle: SpawnHandle } = {
       id: jobId,
       status: "running",
-      stdout: seed.stdout.replace(/\r\n/g, "\n"),
-      stderr: seed.stderr.replace(/\r\n/g, "\n"),
+      stdout: seed.stdout,
+      stderr: seed.stderr,
       handle,
     }
     jobs.set(jobId, job)
-    handle.child.stdout?.on("data", (d: Buffer) => { job.stdout += d.toString("utf-8").replace(/\r\n/g, "\n") })
-    handle.child.stderr?.on("data", (d: Buffer) => { job.stderr += d.toString("utf-8").replace(/\r\n/g, "\n") })
+    handle.child.stdout?.on("data", (d: Buffer) => { job.stdout += d.toString("utf-8") })
+    handle.child.stderr?.on("data", (d: Buffer) => { job.stderr += d.toString("utf-8") })
     handle.done.then(
       ({ exitCode, timedOut }) => {
         const j = jobs.get(jobId)
@@ -338,8 +359,9 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
         // they are the COMPLETE stream by construction; `done`'s stdout/stderr
         // are the memory TAIL when the spawn carried spill, so writing them
         // back would silently DROP bytes a promoted job had already
-        // accumulated. (For a plain background spawn the two are the same text,
-        // so this is the same value it always was.)
+        // accumulated. (`done` holds the whole-string-normalized text, but not
+        // the whole text — the taps have to stay the source, with the same
+        // normalization applied by jobView.)
         j.exitCode = exitCode
         j.status = timedOut ? "killed" : exitCode === 0 ? "completed" : "error"
       },
@@ -399,10 +421,10 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
     getOutput(jobId: string): BackgroundJobView {
       const job = jobs.get(jobId)
       if (!job) throw new Error(`unknown job: ${jobId}`)
-      return { id: job.id, status: job.status, stdout: job.stdout, stderr: job.stderr, ...(job.exitCode !== undefined ? { exitCode: job.exitCode } : {}) }
+      return jobView(job)
     },
     listJobs(): BackgroundJobView[] {
-      return [...jobs.values()].map((j) => ({ id: j.id, status: j.status, stdout: j.stdout, stderr: j.stderr, ...(j.exitCode !== undefined ? { exitCode: j.exitCode } : {}) }))
+      return [...jobs.values()].map(jobView)
     },
     killJob(jobId: string): "cancellation-requested" | "already-finished" {
       const job = jobs.get(jobId)

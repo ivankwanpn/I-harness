@@ -29,7 +29,7 @@
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import { append, createSession } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
@@ -80,7 +80,8 @@ function toolResult(session: SessionAssembly["session"], name: string): ToolResu
 async function mountAssembly(
   workspace: string,
   model: ReturnType<typeof createMockClient>,
-  shellTimeoutMs: number,
+  /** Absent → the assembly's own default (120_000) applies. */
+  shellTimeoutMs?: number,
   /** Absent → the assembly's own default (30_000) applies. */
   shellBackgroundAfterMs?: number,
 ): Promise<SessionAssembly> {
@@ -91,7 +92,7 @@ async function mountAssembly(
     session,
     model,
     approveAll: true,
-    shellTimeoutMs,
+    ...(shellTimeoutMs !== undefined ? { shellTimeoutMs } : {}),
     ...(shellBackgroundAfterMs !== undefined ? { shellBackgroundAfterMs } : {}),
   })
 }
@@ -112,9 +113,10 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       { role: "assistant", toolCalls: [{ name: shell, args: { command: heldOpenCommand(shell, release, donePath) } }] },
       { role: "assistant", text: "waiting" },
     ]
-    // The deadline is 5s and the threshold 300ms: the hand-back must happen long
-    // before the abort, which is the relationship the assembly's comment states.
-    const assembly = await mountAssembly(workspace, createMockClient(script), 5_000, 300)
+    // The deadline is 1500ms and the threshold 300ms: the hand-back must happen
+    // long before the abort, which is the relationship the assembly's comment
+    // states.
+    const assembly = await mountAssembly(workspace, createMockClient(script), 1_500, 300)
     try {
       await runTurn(assembly)
 
@@ -132,10 +134,23 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       //    command is held open by a file this test has not written yet, so
       //    "running" here cannot be a race.
       const exec = assembly.ctx.services.get<ExecService>("exec/service")
+      const firstSeenAt = Date.now()
       expect(exec.getOutput(jobId).status).toBe("running")
       expect(existsSync(donePath)).toBe(false)
 
-      // 3. job_output — the surface the model reaches for — reads the promoted
+      // 3. THE DEADLINE HAS PASSED and the job is STILL RUNNING. Without this
+      //    step the suite would stay green through a regression that let the
+      //    deadline's abort reach a promoted job (guard-timeout clears its timer
+      //    in `finally`, which is what makes the hand-back final): every other
+      //    assertion here releases the command well inside the deadline. The wait
+      //    is measured from the moment the job was FIRST SEEN running, i.e.
+      //    strictly AFTER the deadline was armed, so no load can shorten it.
+      const pastDeadline = firstSeenAt + 1_500 + 500
+      if (Date.now() < pastDeadline) await new Promise((r) => setTimeout(r, pastDeadline - Date.now()))
+      expect(exec.getOutput(jobId).status).toBe("running")
+      expect(existsSync(donePath)).toBe(false) // not green because it finished
+
+      // 4. job_output — the surface the model reaches for — reads the promoted
       //    job, including the output produced BEFORE the hand-back.
       script.push(
         { role: "assistant", toolCalls: [{ name: "job_output", args: { job_id: jobId } }] },
@@ -146,7 +161,7 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       expect(read.text).toContain("started")
       expect(read.text).toContain("[status: running]")
 
-      // 4. The work is NOT lost: release the command and watch it complete.
+      // 5. The work is NOT lost: release the command and watch it complete.
       writeFileSync(release, "go")
       await waitFor(() => exec.getOutput(jobId).status === "completed")
       expect(exec.getOutput(jobId).exitCode).toBe(0)
@@ -204,7 +219,8 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
     // moved under this deadline would flip this test red rather than silently
     // hollow it out.) The command is the same held-open one as above; it can
     // only end by being killed or by the release file, which this test never
-    // writes.
+    // writes. The assembly also prints its F1 warning on this pair — expected,
+    // and deliberately not silenced: this case IS the misconfiguration.
     const assembly = await mountAssembly(
       workspace,
       createMockClient([
@@ -230,6 +246,57 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       expect(existsSync(donePath)).toBe(false)
     } finally {
       await assembly.dispose()
+      rmWorkspaceSync(base)
+    }
+  }, 30_000)
+
+  // W10 review F1. The pair above is a MISCONFIGURATION, and until this case it
+  // was a silent one: this file's falsification case (shellTimeoutMs 400, no
+  // threshold) is the exact shape a host reaches by shortening the deadline
+  // alone — and it prints the warning below, which is the point. A comment
+  // protects a reader and a test protects CI; a host running it needs a signal
+  // at the only site that holds both RESOLVED values.
+  it("F1: an inert pair WARNS at construction, and the shipped defaults do not", async () => {
+    const base = mkdtempSync(join(tmpdir(), "i-harness-w10-warn-"))
+    const workspace = join(base, "ws")
+    mkdirSync(workspace, { recursive: true })
+    const idleModel = (): ReturnType<typeof createMockClient> => createMockClient([{ role: "assistant", text: "ok" }])
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    // Filtered by subject: the assertion is about THIS warning, not about the
+    // assembly being globally quiet (which is not a property anyone promised).
+    const shellWarnsSince = (from: number): string[] =>
+      warn.mock.calls.slice(from).map(([m]) => String(m)).filter((m) => m.includes("shellBackgroundAfterMs"))
+    try {
+      // (a) The shipped pair (120_000 / 30_000): silent. The default is the
+      //     configuration the record claims it is.
+      let seen = warn.mock.calls.length
+      const defaults = await mountAssembly(workspace, idleModel())
+      expect(shellWarnsSince(seen)).toEqual([])
+      await defaults.dispose()
+
+      // (b) The inert shape: a host shortens the deadline and leaves the default
+      //     threshold above it. Promotion can never fire — the warning names both
+      //     numbers and says so.
+      seen = warn.mock.calls.length
+      const inert = await mountAssembly(workspace, idleModel(), 5_000)
+      const inertWarns = shellWarnsSince(seen)
+      expect(inertWarns).toHaveLength(1)
+      expect(inertWarns[0]).toContain("30000")
+      expect(inertWarns[0]).toContain("5000")
+      expect(inertWarns[0]).toContain("NEVER fire")
+      await inert.dispose()
+
+      // (c) The other end of the same class: a non-positive threshold promotes
+      //     every foreground call the moment it starts (NaN rides this branch
+      //     too — `!(x > 0)` is the test on purpose).
+      seen = warn.mock.calls.length
+      const instant = await mountAssembly(workspace, idleModel(), 120_000, 0)
+      const instantWarns = shellWarnsSince(seen)
+      expect(instantWarns).toHaveLength(1)
+      expect(instantWarns[0]).toContain("not a positive number")
+      await instant.dispose()
+    } finally {
+      warn.mockRestore()
       rmWorkspaceSync(base)
     }
   }, 30_000)
