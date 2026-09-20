@@ -32,7 +32,7 @@
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
 | **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
 | **W11** | **子代理的健康訊號**（三塊） | 三 | **✅ 完成**（`22b20c30`，三塊都在，見 §8.5 的完成記錄） | 無 |
-| **W12** | ~~`wait_agent` 的門檻~~ → **換成：`spawn_agent background:false` 逾時時說「settled」** | 三 | **✅ 完成**（本提交；見 §8.5 的完成記錄） | 無 |
+| **W12** | ~~`wait_agent` 的門檻~~ → **換成：`spawn_agent background:false` 逾時時說「settled」** | 三 | **✅ 完成**（`ad8dca47`；見 §8.5 的完成記錄） | 無 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
 | **P·B1–B9** | 階段 B 的 parked | 三 | 已記錄 | — |
@@ -656,7 +656,7 @@ return { …, status: settled?.status ?? "unknown",
 
 **驗收**：逾時的時候，那個結果**要說出它逾時了**（而且**要看得出那個任務還在跑**）；**沒逾時的時候，行為逐位元不變**。**照 `wait_agent` 已經在做的那個形狀** —— 那個 repo 已經有正確答案，只是這一條路沒有用它。
 
-### ✅ **W12 已完成 —— 逾時的 `spawn_agent background:false` 不再說「settled」**（本提交；實作於 `d4-endpoint-cache`）
+### ✅ **W12 已完成 —— 逾時的 `spawn_agent background:false` 不再說「settled」**（`ad8dca47`；實作於 `d4-endpoint-cache`）
 
 **形狀照兄弟，沒有第三種**：那條路先問「這次等待有沒有拿到終態」（`packages/subagent/src/tools.ts:198` 的守衛），沒拿到就走 **`wait_agent` 的逾時形狀** —— `timed_out: true` ＋ `wait timed out for <path> (still running)`（`:200`）。**成功的那一 return 逐字未動**（`:202`）：**「沒逾時時逐位元不變」因此是建構出來的，不是被斷言出來的** —— 而它被走到的條件（`settled` 有終態）與舊碼會報「settled」的條件是同一個。
 
