@@ -547,7 +547,17 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a body failure goes soft, a p
     }
 ```
 
-**而 `failures.get(i)` 的 fallback 是防禦性的、不是路徑** —— 上面那個 Drain 註解寫了為什麼：`allSettled` 保證每個已開始的呼叫都落地了，而落地的分派**要嘛寫了 `slots[i]`、要嘛跑了 `.catch`**。
+**⇒ 而 `failures.get(i)` 的 fallback 是**可達的** —— 這是複審量到的，而計畫原本寫它「是防禦性的、不是路徑」，那是**假的**。**
+
+**機制**：一個**以 `undefined` 拒絕**的工具本體 ⇒ `failures.set(i, undefined)` 確實發生了，而填補迴圈測的是 `own !== undefined` —— **它分不出「記了一個 undefined」與「沒有這一筆」** ⇒ 那個用 `undefined` 失敗的呼叫，被蓋上**兄弟的**訊息。
+
+**複審量到的**（探針 P3）：`failA` 的 body `await bStartedP; throw undefined`，`failB` 的 body 丟 `Error("B error")` ⇒ **兩筆都讀到 `{"error":"B error"}`**。
+
+**修法是一個 token：`failures.has(i)`。**
+
+> **⚠ 而這是這一塊裡同一個區別的第四次出現。** W4 的 F1（`c621567c`）修的正是「**判定鍵在欄位是否帶著值，不在鍵是否存在**」—— 而**這裡是它的鏡像**：`own !== undefined` 把「沒有這一筆」與「這一筆的值是 undefined」**混成同一件事**。
+>
+> **⇒ 兩個方向都要對。** 值檢查與鍵檢查各有各的盲點，而**這一塊在兩個方向上都撞了一次**。
 
 **回歸測試（兩條，都放在 `execute-tool-calls.test.ts`）：**
 
@@ -738,7 +748,17 @@ export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 // still rethrows.
 ```
 
-> **⚠ 為什麼這一條是你的而不是 T6 的**：T6 是一個**掃蕩**，而掃蕩排在最後。**而這一段註解就住在你正在編輯的檔案裡、正在教「不要替從未開始的呼叫填結果」** —— 一個讀它的實作者會做出與你這一步相反的決定。**一個會誤導下一個任務的假註解，由製造它的任務修。**
+> **⚠ 為什麼這一條是你的而不是 T6 的**：T6 是一個**掃蕩**，而掃蕩排在最後。**而這一段註解就住在你正在編輯的檔案裡、正在教「不要替從未開始的呼叫填結果」** —— 一個讀它的實作者會做出與你這一步相反的決定。**⇒ 一個會誤導下一個任務的假註解，由製造它的任務修。**
+
+**再處理兩個住在同一個區塊裡的殘留** —— 它們是 T2 的複審留下的，而**你正在重寫這個區塊**：
+
+**(1) `failures.get(i)` 的判定要改成 `failures.has(i)`。** 一個**以 `undefined` 拒絕**的工具本體會 `failures.set(i, undefined)`，而 `own !== undefined` 分不出「記了一個 undefined」與「沒有這一筆」⇒ **那個呼叫被蓋上兄弟的訊息**。**那是這個 map 被加進來要消滅的同一種誤歸因。** 修法是**一個 token**。
+
+**(2) 把 T2 修正輪的迴歸測試 1 改成**確定性的**。** 它現在用 `setTimeout(50)` 去賭那個順序 —— **那是 timing 賭注，不是行為斷言**。**這個 repo 已經為這件事留下過一條註解**（`execute-tool-calls.test.ts` 的 M61 段：*"That is a timing assertion, not a behaviour assertion"*）。
+
+**確定性的構造（複審的探針 P1 用的就是這個，而它比延遲強）**：讓那個否決的 cascade 監聽者**在 `batchAbort.abort()` 觸發的那個同步區塊裡被喚醒** —— 也就是 `firstError` 被設定的同一刻 —— **然後才丟出**。這樣「`firstError` 已經設好」是**構造出來的**，不是賽出來的。
+
+> **複審量到的對照**：head 丟 `read disabled`；base（drain 在決策之後）解析成軟的，而兩格都記著 `{"error":"boom"}`。**⇒ 這一條改寫之後仍然必須在突變（刪掉那個 drain）下紅。** 若它不再紅，**停手回報** —— 那代表確定性的版本沒有測到同一件事。
 
 - [ ] **Step 4: 跑測試（綠）**
 
