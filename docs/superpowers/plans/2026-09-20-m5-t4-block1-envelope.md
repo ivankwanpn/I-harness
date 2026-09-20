@@ -445,19 +445,11 @@ Expected: **紅** —— `expected [Function] to throw error matching /read disa
 
 **這一條的實質主張是「宿主遙測看得到工具錯誤」** —— 而它**在新契約下仍然成立**，只是換了通道：turn 不再拒絕，而 `tool/error` 遙測事件照樣帶著 `error: "disk exploded"`。
 
-**改成**（`:102` 那條 `err.data` 的斷言本來就在斷言那個遙測事件 —— 把它變成主要的斷言）：
+> **⚠ 這一格的程式碼片段在第一版是**做不到的**，而那個錯的形狀與這一塊前面每一個一樣。** 複審後量到：那個 mock 是**一步**的，而軟失敗會讓 turn **繼續** ⇒ `await agent.run("read a.txt")` **解析不了** —— 它會以 `model stream error: mock script exhausted` 拒絕。**正確的做法是把那個 mock 加一步**（第二個 scripted step 是迴圈會去消費的那一個）。
+>
+> **⇒ 所以這一步的判準是下面那句話，不是下面那段碼**：**那條測試的實質主張必須原樣活下來**，而**通道**從「turn 拒絕」換成「遙測事件帶著那個錯誤」。**照該檔既有的 fixture 形狀改**，並在報告裡寫下你改了什麼。若你發現你需要**弱化**那個斷言才過得了，**停手回報**。
 
-```ts
-    // M5 T4 block 1: a tool body that throws no longer fails the turn — the
-    // call gets a soft result and the turn continues. The host telemetry
-    // event is the claim this test is FOR, and it is unaffected.
-    await agent.run("read a.txt")
-    expect(err?.data).toMatchObject({ tool: "read", error: "disk exploded" })
-```
-
-（`err` 是既有的遙測收集變數 —— **照著該檔既有的形狀改**，不要假設它的名字。若該檔的收集方式是別的形狀，**用它的形狀**，並在報告裡寫下你改了什麼。）
-
-**不要弱化這條測試**：它必須仍然斷言 `error: "disk exploded"` 真的到達了遙測。**只是不再斷言 turn 拒絕。**
+**要保住的斷言**：`err.data` 帶著 `{ tool: "read", error: "disk exploded" }`（`:102` 那條本來就在斷言它 —— 現在它是**主要的**斷言，而不是附帶的）。**新增的只是那一步 scripted step。**
 
 - [ ] **Step 10: 再跑一次**
 
@@ -638,6 +630,26 @@ export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
     }
 ```
 
+**然後修那個被你這一步變成假的註解** —— `execute-tool-calls.ts:47-48`，**那個檔案自己的契約摘要**：
+
+```ts
+// Failure (throw-fails-turn, ruling A): stop starting, drain started calls,
+// rethrow the first error — NO fabricated results for unstarted calls.
+```
+
+**它現在是假的**（失敗路徑不再 rethrow），**而它假的那一句正好是你這一步在推翻的** —— `NO fabricated results for unstarted calls`。**⇒ 它屬於你，不屬於 T6。** 改成：
+
+```ts
+// Failure (soft since M5 T4 block ①): stop starting, drain started calls,
+// fill the failed slot, commit what settled, and give never-started calls a
+// TOOL_CANCELLED_BY_SIBLING result. Nothing is fabricated — that verdict is a
+// fact about what happened, not a made-up outcome. A policy refusal (a
+// `prepare` throw, or a cascade throw carrying the PolicyRefusal marker)
+// still rethrows.
+```
+
+> **⚠ 為什麼這一條是你的而不是 T6 的**：T6 是一個**掃蕩**，而掃蕩排在最後。**而這一段註解就住在你正在編輯的檔案裡、正在教「不要替從未開始的呼叫填結果」** —— 一個讀它的實作者會做出與你這一步相反的決定。**一個會誤導下一個任務的假註解，由製造它的任務修。**
+
 - [ ] **Step 4: 跑測試（綠）**
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`
@@ -772,15 +784,32 @@ git commit -m "test(core-agent): M5 T4 block 1 — the three boundaries that mus
 - Consumes: T1–T5 全部。
 - Produces: 無。
 
-- [ ] **Step 1: 找出說謊的註解**
+- [ ] **Step 1: 掃蕩那個類別 —— 不是修幾個 grep 命中**
+
+> **⚠ 這一格的第一版只列了 `index.ts` 的一處，而實際上有四處。** 我在派 T2 的時候犯了「**修實例而不是修類別**」—— **而那正是 `docs/handoff/2026-09-20-protocol-selection-phase-b.md:155` 早在這條分支上記過我犯的同一件事。**
+
+**這一類是「被 M5 T4 block ① 變成假的註解」。先跑這個 —— 它是類別的定義，不是清單：**
 
 ```bash
-git grep -n "rethrows the first tool failure" packages/core-agent/src/index.ts
+git grep -n "throw-fails-turn"                        -- packages/*/src apps/cli/src
+git grep -n "rethrows the first\|results discarded\|still discards\|keeps its throw" -- packages/core-agent/src
+git grep -n "block ①\|block 1"                        -- packages/core-agent/src
 ```
 
-**那段話在 T2 落地的那一刻就變成假的。**
+**已知的四處**（**先 `grep -n` 核對行號再改；這份清單是起點，不是全部**）：
 
-- [ ] **Step 2: 改寫它**
+| # | 位置 | 假的句子 |
+|---|---|---|
+| 1 | `execute-tool-calls.ts:245-246` | `The NON-abort path keeps its throw (… which is the correct throw-fails-turn behavior).` |
+| 2 | `execute-tool-calls.ts:251-252` | `Abort path ONLY — the non-abort failure path still discards (M13).` |
+| 3 | `index.ts:408` | `and rethrows the first tool failure.` |
+| 4 | `execute-tool-calls.ts:47-48` | **T4 負責**（它推翻的那一句正好是 T4 的題目）—— **若 T4 已經修了，這一列就是檢查它真的修了，不是重做** |
+
+**已核對、判定為**不需要動**的一處（免得你把它當成漏掉的）**：`execute-tool-calls.ts:87` 的 `the path said "drain started (results discarded)"` —— **那是一句歷史引述**（「那段程式碼以前這樣寫」），而它在描述為什麼要加 `batchAbort`。**歷史在加了之後仍然是對的。**
+
+- [ ] **Step 2: 改寫這三處**
+
+`index.ts:408` 那段換成：
 
 ```ts
         // M13: concurrent execution. The scheduler appends tool/result in model
@@ -794,6 +823,14 @@ git grep -n "rethrows the first tool failure" packages/core-agent/src/index.ts
         // marker. (Before M5 T4 block ① every failure threw and the batch was
         // discarded; fs/src/error.ts records what that looked like outside.)
 ```
+
+**然後跑同一組 sweep 指令第二次。** **回傳必須是空的**（或只剩你剛剛寫的那段，而它是**合格的**）。
+
+> **⚠ 這不是儀式。** phase-B 的交接文件（`:159`）記著那一輪的收尾動作：
+>
+> > **一個修正可以生出下一個實例** —— 所以複審的收尾動作是**再掃一次**，不是宣告完成。
+>
+> **⇒ 「三處都改了」不是類別被關上的證據；「同一組指令第二次回傳空」才是。**
 
 - [ ] **Step 3: 全套 —— ⚠ 先讀這一格**
 
