@@ -261,9 +261,13 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
     done,
     text() {
       // W10: with spill the retained text lives in the collectors; without it,
-      // in the plain accumulators `doneFn` finalizes. Neither is normalized
-      // here — the job taps normalize chunk by chunk exactly as `doneFn` does
-      // per stream, and registerJob normalizes this seed the same way.
+      // in the plain accumulators `doneFn` finalizes. Either way this is the
+      // RAW text: the job record it seeds holds the raw concatenation too, and
+      // `jobView` normalizes over the WHOLE string on read — the one rule
+      // `doneFn` applies to a foreground run. Normalizing here, or chunk by
+      // chunk in the taps, is the F2 leak: a CRLF split across two `data`
+      // events is in neither chunk, so it stays `"\r\n"` in the job view while
+      // the foreground result folds it.
       return stdoutCollector !== undefined && stderrCollector !== undefined
         ? { stdout: stdoutCollector.peek(), stderr: stderrCollector.peek() }
         : { stdout, stderr }
