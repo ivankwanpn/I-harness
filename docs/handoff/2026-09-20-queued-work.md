@@ -22,7 +22,7 @@
 | # | 項目 | 來源 | 狀態 | 卡在 |
 |---|---|---|---|---|
 | **W1** | **修 settings watcher race** | 三 | **▶ 設計已定，未開工** | 無 |
-| **W2** | 修 SDK 的訂閱洩漏 | 三 | 未開始 | 無 |
+| **W2** | 修 SDK 的訂閱洩漏 | 三 | **研究完成 → 照修但降級**（路徑不可達、觀測不到；見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | 未開始 | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | 未開始 | 無 |
 | **W5** | M5/T4 schema 驗證層 | 一 | 未開始 | 無 |
@@ -103,8 +103,38 @@ void this.reloadFromDisk().then((settings) => {
 ### 代價
 **每次 assembly 重建洩漏一個訂閱。**
 
-### 驗收
-一個重建路徑（`closeSession` → 重建）之後，訂閱數回到基準；**而且觀測得到**（不是靠讀程式碼）。
+### 驗收（**原本寫錯了，已量測後更正**）
+
+**原文寫的是**：「一個重建路徑之後，訂閱數回到基準；**而且觀測得到**（不是靠讀程式碼）。」
+
+⚠ **那條以今天的接縫不可能滿足，而我當初寫的時候沒有量。** 量到的：`subscribers` 是 `core-session` 的**模組私有 `WeakMap`**（`packages/core-session/src/index.ts:308`，沒有匯出存取器）；`assemblyUnsubscribes` 是 `server.ts:170` 的**函式內 const**；`SdkServer` 只暴露 `handleLine`／`onNotify`／`close`。**沒有東西能數訂閱。**
+
+**更正後的驗收**：修好之後，**測試直接釘那個 map 的契約**（用 `assembly.ts:167` 支援的靜態 `session:` 選項驅動兩次 `onAssembly`，或對 stub 連續觸發兩次掛鉤），**並在測試裡明說它釘的是「覆寫前先退訂」這個契約、不是一條出貨路徑** —— 因為**出貨路徑今天不可達**（見下）。
+
+**一個假裝在測出貨路徑的單元測試，比沒有測試更糟。**
+
+### ⚠ 這條為什麼被降級（量測，2026-09-20）
+
+**重建的觸發路徑在 sdk 行程裡不可達**，而這是追出來的、不是推論的：
+
+- `onAssembly` 全 repo **只在一個地方觸發**（`packages/session-executor/src/service.ts:366`），而 `assemblies` 只有三個寫入點：`set`（首次建立）、`delete`（只在 `closeSession` 內）、`clear`（只在 `close()` 內，之後建立會 throw）。**所以 `closeSession` 是唯一的重建使能者。**
+- **階段 B 移除了 SDK server 的 `closeSession`**（`0807c2b0` 的 diff 可見 `- await service.closeSession(p.sessionId)`；今天 grep `server.ts` 的 `closeSession` 只剩那句說明它是刻意的註解）。
+- **全 repo 的 `closeSession(` 呼叫者**：ACP 的 `session/close`（**另一個子指令、另一個 service**）、定義本身、測試。**`apps/cli` 零、`packages/sdk` 零。**
+- **SDK 的 wire 沒有 `session/close`**（19 個 case 全部列過）。
+
+**而修好它不會拿走任何東西**：`subscribe` **以 `Session` 物件身分為鍵**，而**每一條出貨的重建都拿到全新的 `Session`**（`durable-session.ts:12`、`assembly.ts:394`）—— 所以那個漏掉的 closure **坐在一個已經死掉的物件上**，沒有事件會再抵達它。
+
+### 裁定：**照修，但標示清楚它測的是什麼**
+
+它**不是一個功能，是一個共享路徑上的潛伏缺陷**。**任何人加上 `session/close`（一個很自然的下一個功能），它就上膛。** 三行的修正、修法顯而易見，**所以照修** —— **但測試必須誠實標示它釘的是契約、不是出貨路徑。**
+
+### ⚠ 同一個類別的第二個實例 —— **它修不了同樣乾淨**
+
+`apps/cli/src/index.ts` 的 `liveAssemblies`（`service.onAssembly` 裡 `Map.set`、**全檔無清理**）握著的是**整個已銷毀的組裝**，比一個 closure 重。
+
+**而它不能照抄同樣的修法**：語意上正確的拆除點是**組裝銷毀**，而 **`SessionService` 沒有 `onAssemblyDisposed` 這種掛鉤** —— `onAssembly` 給你一個組裝，沒給你它的死亡通知。**所以這一條要嘛等那個鉤子出現，要嘛在同一批加上它。**
+
+**兩者共享同一個不可達的觸發條件 —— 所以武裝那個觸發條件的人，要一次處理兩個。**
 
 ### 已知的坑
 階段 B **移除了 SDK server 的 `closeSession`**，所以**在 sdk 行程裡這條重建路徑現在跑不到**。修它必須**先證明路徑可達**（或在別處驅動），否則就是修一條沒有輸入的路 —— **那是這份文件在別處拒絕的那種東西。**
