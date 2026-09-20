@@ -376,22 +376,42 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         sessionId: "s1",
         selection: { provider: "", model: "m" },
       })))
-      expect((decodeFrame(invalid!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      const invalidError = (decodeFrame(invalid!) as RpcFailure).error
+      expect(invalidError.code).toBe(INVALID_PARAMS)
+      // The provider/model message is the one case where it belongs — it is
+      // pinned here so the field-specific branches below cannot have been
+      // bought by making this one vaguer.
+      expect(String(invalidError.message)).toContain("provider and model")
       expect(setSessionModel).not.toHaveBeenCalled()
 
       // A protocol that is not a non-empty string is REFUSED, never dropped:
       // silently ignoring it would be the degradation this unit removes (the
       // rebind would report "ready" while the wire the caller named was
       // discarded).
-      const badProtocol = await server.handleLine(encodeFrame(makeRequest(17, "session/model/set", {
+      const badProtocol = await server.handleLine(encodeFrame(makeRequest(14, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "p", model: "m", protocol: 42 },
       })))
-      expect((decodeFrame(badProtocol!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      const protocolError = (decodeFrame(badProtocol!) as RpcFailure).error
+      expect(protocolError.code).toBe(INVALID_PARAMS)
+      // F-2: the refusal names the field that is actually wrong — this used to
+      // answer "requires non-empty provider and model", telling the caller to fix
+      // the field that was fine.
+      expect(String(protocolError.message)).toContain("protocol to be a non-empty string")
+      expect(String(protocolError.message)).not.toContain("provider and model")
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      const badEffort = await server.handleLine(encodeFrame(makeRequest(15, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m", reasoningEffort: 42 },
+      })))
+      const effortError = (decodeFrame(badEffort!) as RpcFailure).error
+      expect(effortError.code).toBe(INVALID_PARAMS)
+      expect(String(effortError.message)).toContain("reasoningEffort to be a non-empty string")
       expect(setSessionModel).not.toHaveBeenCalled()
 
       vi.mocked(service.queueState).mockReturnValue({ running: true, queued: 0 })
-      const busy = await server.handleLine(encodeFrame(makeRequest(14, "session/model/set", {
+      const busy = await server.handleLine(encodeFrame(makeRequest(16, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "p", model: "m" },
       })))
@@ -399,14 +419,14 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       expect(setSessionModel).not.toHaveBeenCalled()
 
       vi.mocked(service.queueState).mockReturnValue({ running: false, queued: 1 })
-      const queued = await server.handleLine(encodeFrame(makeRequest(15, "session/model/set", {
+      const queued = await server.handleLine(encodeFrame(makeRequest(17, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "p", model: "m" },
       })))
       expect((decodeFrame(queued!) as RpcFailure).error.message).toContain("busy")
       expect(setSessionModel).not.toHaveBeenCalled()
 
-      const unavailable = await server.handleLine(encodeFrame(makeRequest(16, "session/create", {})))
+      const unavailable = await server.handleLine(encodeFrame(makeRequest(18, "session/create", {})))
       expect((decodeFrame(unavailable!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
     } finally {
       await server.close()

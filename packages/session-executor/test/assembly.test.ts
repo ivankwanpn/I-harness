@@ -576,15 +576,15 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //
 // Coverage, holder by holder, and where each row is driven:
 //
-//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:938 `session, tools, model,`)
+//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:955 `session, tools, model,`)
 //  2+3  the compaction engine              — case 2  (construction core-agent/src/index.ts:142 `model: deps.model,`;
 //                                                    its own read compaction/src/index.ts:125)
-//  5a   a spawned sub-agent                — case 3  (assembly.ts:785 `parentModel: model,`)
-//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:830 `parentModel: model,` → reviewer.ts:149's
+//  5a   a spawned sub-agent                — case 3  (assembly.ts:802 `parentModel: model,`)
+//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:847 `parentModel: model,` → reviewer.ts:149's
 //                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
-//  5c   a team-mate                        — case 5  (assembly.ts:866 `parentModel: model,` → scheduler.ts:204
+//  5c   a team-mate                        — case 5  (assembly.ts:883 `parentModel: model,` → scheduler.ts:204
 //                                                    `parentModel: deps.parentModel,`)
-//  6    auto-title's model                 — case 6  (assembly.ts:960 `model,` → run.ts:661 `session, model: assembly.model,`)
+//  6    auto-title's model                 — case 6  (assembly.ts:982 `model,` → run.ts:661 `session, model: assembly.model,`)
 //  7    the service's dispensed assembly    — "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
 //                                             service.test.ts (that file owns the service harness)
 //  —    the handle + a manual stream        — Task 1's test above, not repeated here
@@ -765,7 +765,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       workspace: dir,
       model: first,
       // `{}` — the INHERITED case: no `guardian.model`, so the reviewer runs on
-      // `parentModel` (assembly.ts:830), which is the handle. A configured
+      // `parentModel` (assembly.ts:847), which is the handle. A configured
       // `guardian.model` wins by construction (`deps.model ?? deps.parentModel`,
       // reviewer.ts:149) and is Task 3's boundary, not this case's.
       guardian: {},

@@ -235,6 +235,13 @@ export interface SessionAssembly {
    * they all hold this same object. Identity of `model` does NOT change, which
    * is deliberate: holders are never re-wired. */
   setModel(client: ModelClient): void
+  /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
+   * `setModel` rather than an optional second parameter on it, deliberately:
+   * `undefined` here means "the new selection names no effort — clear it", and
+   * that meaning cannot ride on `setModel(client)` without silently turning every
+   * existing call into a clear. `setModel`'s meaning is unchanged. The agent's
+   * deps read the effort through a getter, so the next request carries it. */
+  setReasoningEffort(effort: ReasoningEffort | undefined): void
   modelLabel?: string
   inbox: Inbox // the per-session serial lane's inbox (owner builds the A executor over it)
   telemetry?: Telemetry
@@ -351,6 +358,16 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ? cyclicMockClient([{ role: "assistant", text: "ok" }])
       : createMockClient(opts.mockScript ?? [{ role: "assistant", text: "ok" }])
   })()
+  // The SECOND cell of the live model surface (Task 4 review F-1): the resolved
+  // selection carries an effort as well as a client, and the effort has exactly
+  // the same "read at use, not at construction" need. Before this, the agent's
+  // deps held `opts.reasoningEffort` as a plain property, so a live rebind moved
+  // the client while the per-request effort stayed frozen — `session/model/set`
+  // answered `ready` and the header recorded the new effort, while the wire kept
+  // sending the old one. core-agent already reads `deps.reasoningEffort` per
+  // request; a getter is all it takes to make that read live (see the deps
+  // literal below).
+  let currentReasoningEffort: ReasoningEffort | undefined = opts.reasoningEffort
   const model: ModelClient = {
     stream: (request) => currentModel.stream(request),
   }
@@ -946,7 +963,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
-      ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+      // M32 T3, made live (Task 4 review F-1): a GETTER, not the construction
+      // value — the same discipline as the model handle above (R-B1). core-agent
+      // reads `deps.reasoningEffort` when it builds each request
+      // (core-agent/src/index.ts — "verbatim effort passthrough"), so a rebind
+      // reaches the wire without core-agent knowing a cell exists.
+      get reasoningEffort() { return currentReasoningEffort },
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
       stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
     })
@@ -963,6 +985,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // the agent's deps, the subagent tools, the guardian, the team
       // scheduler, auto-title — follows without being told.
       setModel: (client) => { currentModel = client },
+      // F-1: the companion mutation. Neither setter touches the other's cell, and
+      // together they are what a rebind installs (the service's rebindModel sets
+      // both from ONE resolved binding, so the two can never disagree).
+      setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),

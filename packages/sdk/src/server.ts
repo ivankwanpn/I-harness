@@ -352,10 +352,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/model/set requires a non-empty sessionId")
         }
-        const selection = parseModelSelection(p.selection)
-        if (selection === undefined) {
-          return makeFailure(id, INVALID_PARAMS, "session/model/set requires non-empty provider and model")
-        }
+        const parsed = parseModelSelection(p.selection)
+        if (!parsed.ok) return makeFailure(id, INVALID_PARAMS, parsed.message)
+        const selection = parsed.selection
         const queue = service.queueState(p.sessionId)
         if (queue.running || queue.queued > 0) {
           return makeFailure(id, INTERNAL_ERROR, `session/model/set: session busy: ${p.sessionId}`)
@@ -735,28 +734,38 @@ function validSessionIdResult(result: SessionIdResult, method: string): SessionI
 // wire contract, not the settings resolver; the host validates the five and
 // refuses an unknown one loudly (never dropping it, which would report "ready"
 // for a wire the caller named and did not get).
-function parseModelSelection(value: unknown): SessionModelSelection | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+function parseModelSelection(value: unknown):
+  | { ok: true; selection: SessionModelSelection }
+  | { ok: false; message: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "session/model/set requires a selection object" }
+  }
   const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown; protocol?: unknown }
   if (typeof raw.provider !== "string" || raw.provider.trim() === ""
     || typeof raw.model !== "string" || raw.model.trim() === "") {
-    return undefined
+    return { ok: false, message: "session/model/set requires non-empty provider and model" }
   }
+  // Task 4 review F-2: the refusal names the FIELD that is wrong. One generic
+  // "provider and model" message for every malformed field told a caller whose
+  // `protocol` or `reasoningEffort` was bad to fix the field that was fine.
   if (raw.reasoningEffort !== undefined
     && (typeof raw.reasoningEffort !== "string" || raw.reasoningEffort.trim() === "")) {
-    return undefined
+    return { ok: false, message: "session/model/set requires reasoningEffort to be a non-empty string when present" }
   }
   if (raw.protocol !== undefined
     && (typeof raw.protocol !== "string" || raw.protocol.trim() === "")) {
-    return undefined
+    return { ok: false, message: "session/model/set requires protocol to be a non-empty string when present" }
   }
   return {
-    provider: raw.provider.trim(),
-    model: raw.model.trim(),
-    ...(typeof raw.reasoningEffort === "string"
-      ? { reasoningEffort: raw.reasoningEffort.trim() }
-      : {}),
-    ...(typeof raw.protocol === "string" ? { protocol: raw.protocol.trim() } : {}),
+    ok: true,
+    selection: {
+      provider: raw.provider.trim(),
+      model: raw.model.trim(),
+      ...(typeof raw.reasoningEffort === "string"
+        ? { reasoningEffort: raw.reasoningEffort.trim() }
+        : {}),
+      ...(typeof raw.protocol === "string" ? { protocol: raw.protocol.trim() } : {}),
+    },
   }
 }
 
