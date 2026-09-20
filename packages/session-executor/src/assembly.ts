@@ -339,19 +339,27 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // Resolve before mounting resources so a required-but-missing model cannot
   // leave a partially initialized assembly behind.
   //
-  // R-B1: ONE stable handle, ONE mutable target. The handle is what EVERY
-  // holder gets — the agent's deps, the subagent tools, the guardian, the team
-  // scheduler, and `assembly.model` itself — so a rebind is a single assignment
-  // and no holder has to be told. Changing the TYPE instead (`model: () =>
-  // ModelClient`) would have reached the same goal while touching 56
-  // `createAgent` call sites (measured — raw `createAgent(` occurrences
-  // repo-wide); the handle costs none of that and keeps `assembly.model`'s
-  // identity stable across a rebind, so a holder can never be left holding a
-  // stale client.
+  // R-B1: ONE stable handle, ONE mutable target. The SIX holders that follow it
+  // — the agent's deps, the compaction engine (its construction-time copy and its
+  // own read are ONE consumer), the subagent tools, the guardian's INHERITED
+  // model, the team scheduler, and auto-title (which reads `assembly.model`
+  // itself) — all get the handle: one assignment, and no holder has to be told.
+  // Changing the TYPE instead (`model: () => ModelClient`) would have reached the
+  // same goal while touching 56 sites (measured — raw `createAgent(` occurrences
+  // under `packages/`, this comment's own literal excluded); the handle costs
+  // none of those edits and keeps `assembly.model`'s identity stable across a
+  // rebind.
   //
-  // Design: protocol-selection §4.1 — which said "two consumers" and was
-  // measured wrong (a session's lifetime has eight holders). See the plan's
-  // scope ruling R-B1.
+  // It does NOT reach everything, and the grouping — not a total, which changes
+  // with how you group (the plan's R-B1 ruling) — is the fact: TWO are
+  // CONFIGURED and deliberately keep billing their own endpoint (a
+  // `summarizationModel` and the guardian's own model, each a `??` that WINS over
+  // the handle; see compaction's R-B2 note), and ONE is a REPORTER, not a
+  // spender — the service's memoised binding, which a raw `setModel` does not
+  // move and `service.rebindModel` refreshes.
+  //
+  // Design: protocol-selection §4.1 — which said "two consumers" and was measured
+  // wrong. See the plan's scope ruling R-B1.
   let currentModel: ModelClient = opts.model ?? (() => {
     if (opts.modelPolicy !== "test-mock") throw new ModelUnavailableError()
     return opts.mockScript === undefined && opts.mockCycles === true

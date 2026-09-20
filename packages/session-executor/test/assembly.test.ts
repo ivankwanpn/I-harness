@@ -556,15 +556,31 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
   }, 30_000)
 })
 
-// ── R-B1 (phase B), Task 2: EVERY holder follows a rebind — enumerated ──────
-// Task 1 proved the HANDLE; this block proves each HOLDER, one case each, so a
-// holder that stops following fails HERE, by name, rather than silently billing
-// an old endpoint. "Holder" = a place that captured a resolved client at
-// construction (R-B1's table) and will make real, billable requests through it.
-// R-B1's table enumerates NINE such places; EIGHT are reachable by the handle
-// (rows 1, 2, 3, 5a, 5b, 5c, 6, 7) and the ninth — a CONFIGURED
-// `summarizationModel` — is not, so it is Task 3's row and appears here only as
-// the exclusion this block's fixtures must avoid.
+// ── R-B1 (phase B), Task 2: every HANDLE-REACHABLE holder follows a rebind ──
+// Task 1 proved the HANDLE; this block proves each HOLDER that follows it, one
+// case each, so a holder that stops following fails HERE, by name, rather than
+// silently billing an old endpoint. "Holder" = a place that captured a resolved
+// client at construction (R-B1's table) and will make real, billable requests
+// through it.
+//
+// The enumeration is a GROUPING, never a total — this header used to quote one
+// ("EIGHT are reachable by the handle", with row 7 in the list and one exception
+// named), and BOTH halves of that sentence were false: row 7 is not
+// handle-reachable, and "configured" names TWO exceptions. A maintainer auditing
+// "which holders can be left on an old endpoint" reads this block first, so the
+// grouping is spelled out here and the two exceptions are pinned below by name:
+//   - SIX follow the handle: the agent's turn loop; the compaction engine (its
+//     construction-time copy and its own read are ONE consumer); a spawned
+//     sub-agent; the guardian's INHERITED model; a team-mate; auto-title.
+//   - TWO are CONFIGURED and do not follow it: a `summarizationModel` and the
+//     guardian's own model. Each is a `??` that WINS over the handle and keeps
+//     billing its configured endpoint after a rebind — deliberately (R-B2), so
+//     neither may be "fixed" into following it.
+//   - ONE is a REPORTER, not a holder in the billing sense: the service's
+//     memoised binding. A raw `setModel` does not move it — it keeps naming the
+//     old provider:model until `service.rebindModel` refreshes it (the sibling
+//     test "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
+//     service.test.ts states the same limit in its own words).
 //
 // Each case: build ONE assembly with `first` (this file's own fixtures), REBIND
 // the CLIENT half of the model surface with `assembly.setModel(second)` — since
@@ -579,21 +595,25 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //
 // Coverage, holder by holder, and where each row is driven:
 //
-//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:955 `session, tools, model,`)
+//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:963 `session, tools, model,`)
 //  2+3  the compaction engine              — case 2  (construction core-agent/src/index.ts:142 `model: deps.model,`;
 //                                                    its own read compaction/src/index.ts:125)
-//  5a   a spawned sub-agent                — case 3  (assembly.ts:802 `parentModel: model,`)
-//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:847 `parentModel: model,` → reviewer.ts:149's
+//  5a   a spawned sub-agent                — case 3  (assembly.ts:810 `parentModel: model,`)
+//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:855 `parentModel: model,` → reviewer.ts:149's
 //                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
-//  5c   a team-mate                        — case 5  (assembly.ts:883 `parentModel: model,` → scheduler.ts:204
+//  5c   a team-mate                        — case 5  (assembly.ts:891 `parentModel: model,` → scheduler.ts:204
 //                                                    `parentModel: deps.parentModel,`)
-//  6    auto-title's model                 — case 6  (assembly.ts:982 `model,` → run.ts:697 `session, model: assembly.model,`)
-//  7    the service's dispensed assembly    — "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
-//                                             service.test.ts (that file owns the service harness)
+//  6    auto-title's model                 — case 6  (assembly.ts:990 `model,` → run.ts:697 `session, model: assembly.model,`)
+//  7    the service's memoised binding     — the REPORTER, and NOT handle-reachable: a raw `setModel` does not move it.
+//                                             "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
+//                                             service.test.ts (that file owns the service harness); `service.rebindModel`
+//                                             installs the live mutation AND refreshes the binding it reports through.
 //  —    the handle + a manual stream        — Task 1's test above, not repeated here
-//  4    a CONFIGURED `summarizationModel`   — Task 3's boundary, deliberately ABSENT from this block's fixtures:
+//  4    a CONFIGURED `summarizationModel`   — a documented BOUNDARY (R-B2), deliberately ABSENT from this block's fixtures:
 //                                             a configured model WINS over the handle (`config.summarizationModel ?? deps.model`).
-//                                             A summarization model in case 2's fixture would make that case assert the REVERSE of shipped behaviour.
+//                                             A summarization model in case 2's fixture would make that case assert the REVERSE of shipped
+//                                             behaviour. Its twin is the guardian's own model — "configured" names TWO exceptions, never one —
+//                                             and both are driven below by the two "a CONFIGURED … wins over the handle" cases.
 //
 // DECLARED GAP — auto-title's CALL SITE: case 6 pins the value auto-title reads
 // (`assembly.model`, read at call time). The end-to-end drive (`run.ts:697` →
@@ -768,7 +788,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       workspace: dir,
       model: first,
       // `{}` — the INHERITED case: no `guardian.model`, so the reviewer runs on
-      // `parentModel` (assembly.ts:847), which is the handle. A configured
+      // `parentModel` (assembly.ts:855), which is the handle. A configured
       // `guardian.model` wins by construction (`deps.model ?? deps.parentModel`,
       // reviewer.ts:149) and is Task 3's boundary, not this case's.
       guardian: {},
