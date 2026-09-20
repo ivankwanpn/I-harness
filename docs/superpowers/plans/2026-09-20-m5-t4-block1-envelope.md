@@ -179,9 +179,11 @@ pnpm --filter @i-harness/core-tools exec vitest run
 Expected:
 - **`policy-refusal.test.ts` → 4 passed / 0 failed**
 - **`core-tools` → 全綠**
-- **`hooks` → 30 passed / 1 failed（31）。而那 1 條是既有的紅，不是你的** —— `test/hooks.test.ts:358`（*"a pre-tool handler that blocks 'read' fails the agent turn fail-closed"*），**它在這一塊開始之前就紅了**（上一個任務的軟路徑已經落地，而否決的分類在 T2 才修）。
+- **`hooks` → 34 passed / 1 failed（35）。而那 1 條是既有的紅，不是你的** —— `test/hooks.test.ts:358`（*"a pre-tool handler that blocks 'read' fails the agent turn fail-closed"*），**它在這一塊開始之前就紅了**（上一個任務的軟路徑已經落地，而否決的分類在 T2 才修）。
 
-**⇒ 這一條的判準是「條數與測試名與動手前一致」。** 動手前先跑一次 `hooks` 記下 `30 passed / 1 failed` 與那個測試名。**多了任何一條、或名字不同 ⇒ 停手回報。**
+**⇒ 這一條的判準是「條數與測試名與動手前一致」。** **先量基準**：在建立新測試檔**之前**跑一次 `hooks`，記下讀數（**`30 passed / 1 failed`**）與那個測試的名字。**建檔之後的讀數必須恰好是基準 ＋ 4。** 多了任何一條、或名字不同 ⇒ **停手回報**。
+
+> **⚠ `34/1` 這個數字是量到的，不是算出來的。** 第一版把搬移**之後**的預期寫成搬移**之前**的數字（`30/1`）—— 而那個錯的形狀與這一塊前面六個一樣：**寫下一個沒有先確認的數字。**
 
 > **⚠ 第一版寫「兩者全綠」是錯的，而它錯的方式是要求一件做不到的事** —— 否決要等 T2 才會回到大聲。**「加一個唯讀欄位不該動任何既有測試」那個理由成立，但它證明的是「沒有新紅」，不是「全綠」。**
 
