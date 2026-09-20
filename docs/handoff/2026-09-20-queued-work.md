@@ -471,6 +471,8 @@ F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z
 
 **⚠ 而這一塊留下一個可重用的教訓（複審量到的）：`e2e/` 不在 `pnpm -r --no-bail test` 的母體裡。** block ① 的爆炸半徑表把範圍訂在 workspace 套件，所以 `e2e/skills.e2e.ts` 的**漏改**（它還在斷言 `exitCode 1` 的舊契約）**活了兩塊沒被看見**，直到全分支複審。**⇒ 兩步閘門不夠，第三步是 `pnpm e2e`。** 那個檔已在最終輪改寫（斷言移到合成 `tool/result` 上的 SKILL_NOT_FOUND，並補上軟路徑會走到的續行步驟）。
 
+**⇒ 而那個教訓現在是一個指令，不是一條筆記：`pnpm verify:all`**（`scripts/verify-all.mjs`，2026-09-21 加入）。它跑五步 —— `pnpm -r --no-bail test`（**串流同時捕獲**）→ **母體檢查** → `pnpm -r typecheck` → `pnpm e2e` → `--gate` —— 並在**任何一步失敗或母體不完整時非零退出**。母體是從 `pnpm-workspace.yaml` **推出來的**（不是寫死的 66，那會腐爛）；**母體檢查是承載的那一半**，因為遞迴跑法印出的是**前綴**，而前綴讀起來與總數一模一樣。**它量到的形狀（一個臨時探針套件，test script 會跑但不印任何可數的東西）：遞迴那步 exit 0、`2675 passed | 9 skipped | 0 failed`（一個看起來完整的總數），而母體讀 `66 of 67` ⇒ 只有母體檢查抓到它。** 它自己的極限寫在檔頭（照 reachability 工具的體例）：**它讓「跑了多少」可見，它不讓測試變得有意義。**
+
 ### ▶ **W5 block ③（界）—— 交接備忘（複審帶過來的建議，原樣記下）**
 
 **複審的建議：在 block ③ 之前，讓兩個填補（軟失敗與中止）都帶自己的 `code`，好讓 block ③ 的述詞讀 `code` 而不是讀形狀。**（**決定留給 block ③ —— block ② 刻意不動它。**）
