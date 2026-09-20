@@ -25,7 +25,7 @@
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，629 行 —— **2026-09-20 owner 核准**） | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
-| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；**修正輪 `637f73e1`**；**終審 `SHIP`**；**完整執行記錄：`docs/handoff/2026-09-20-m5-t4-block1-soft-failure-envelope.md`**）；量化：**`2638 passed · 0 failed · 9 skipped`**（母體 66）· `gate PASS` · 9 個程式提交 +713/−71。**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
+| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（**記錄：`docs/handoff/2026-09-20-m5-t4-block1-soft-failure-envelope.md`**）· **✅ block ②（參數 schema）完成**（`4022f607`…`0bb85599`，**13 個提交**，15 程式檔 +1488/−26；**終審 `SHIP WITH FIXES`**，五件已修；**記錄：`docs/handoff/2026-09-20-m5-t4-block2-argument-schema.md`**）。**驗這一塊用 `pnpm verify:all`**（block ② 加的五步閘門）—— `pnpm -r --no-bail test` 單獨跑**不是**閘門。**block ③（界）未開始**，而**它的前置已指名**（見 §5 的 W5 完成記錄）。spec 已於 **2026-09-20 owner 核准** | **block ③ 未開始** |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
