@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
-import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH } from "../src/index.ts"
+import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_FAILED } from "../src/index.ts"
 
 function makeTracker() {
   const tracker = {
@@ -200,7 +200,7 @@ describe("executeToolCalls scheduler", () => {
     expect(resultsOf(session).map((r) => r.name)).toEqual(["psafe", "pexcl", "psafe"])
   })
 
-  it("drains started calls and rethrows the first failure (no fabrication)", async () => {
+  it("a failed call yields its OWN result and the turn continues (no rethrow)", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
@@ -218,13 +218,22 @@ describe("executeToolCalls scheduler", () => {
       isConcurrencySafe: true,
       execute: async () => { throw new Error("kaboom") },
     })
-    await expect(
-      executeToolCalls(ctx, session, tools, [
-        { callId: "c0", name: "oktool", args: {} },
-        { callId: "c1", name: "boomtool", args: {} },
-      ], { maxParallel: 10 }),
-    ).rejects.toThrow("kaboom")
-    expect(resultsOf(session).length).toBeLessThan(2)
+    // NO .rejects — the whole point of this contract is that it resolves.
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "oktool", args: {} },
+      { callId: "c1", name: "boomtool", args: {} },
+    ], { maxParallel: 10 })
+    // Every dispatched call has exactly one result, in MODEL order: the
+    // failing slot is filled synthetically so the head-of-line cursor
+    // advances and the settled sibling commits its REAL output.
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string
+      name: string
+      output: unknown
+    }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output).toEqual({ ok: true })
+    expect(results[1]!.output).toEqual({ error: "kaboom", code: TOOL_FAILED })
   })
 
   it("synthesizes TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls on abort", async () => {

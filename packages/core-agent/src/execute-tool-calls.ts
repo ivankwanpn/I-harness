@@ -5,6 +5,7 @@ import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
+export const TOOL_FAILED = "TOOL_FAILED"
 
 export interface BatchCall {
   callId: string
@@ -252,10 +253,33 @@ export async function executeToolCalls(
     throw new Error("agent aborted")
   }
 
-  // Failure: drain started (results discarded), rethrow the first error.
+  // Failure: cancel the siblings (M5 T4), then COMMIT — every DISPATCHED call
+  // ends in exactly one tool/result. This used to `throw firstError` and
+  // discard the batch; fs/src/error.ts records the consequence in its own
+  // words ("no tool/result and no turn/end are appended ... read as hung").
+  //
+  // Cancelling and committing are different questions: cancellation answers
+  // "do the siblings keep working" (no), committing answers "how does what
+  // happened get written down" (honestly). Discarding the siblings' already
+  // settled results made the M5 T4 cancellation pointless — they were
+  // cancelled AND thrown away.
   if (firstError) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
-    throw firstError
+    // Fill every STARTED slot that produced no output, so the head-of-line
+    // cursor advances and an already-settled sibling commits its REAL result
+    // (the SAME mechanism M51 B3 added to the abort path, one branch up).
+    const message = firstError instanceof Error ? firstError.message : String(firstError)
+    for (let i = committed; i < startedUpTo; i += 1) {
+      if (slots[i] !== undefined) continue
+      const call = batch[i]!
+      slots[i] = {
+        name: call.name,
+        callId: call.callId,
+        synthetic: true,
+        output: { error: message, code: TOOL_FAILED },
+      }
+    }
+    await commitReady()
   }
 }
