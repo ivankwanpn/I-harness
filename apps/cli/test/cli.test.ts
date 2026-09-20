@@ -1290,6 +1290,64 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
   }, 20_000)
 })
 
+describe("headless CLI W10 foreground promotion", () => {
+  // The M10a case above shows the death: a command that outlives
+  // `shellTimeoutMs` is aborted there and the result carries TOOL_TIMEOUT. This
+  // is the other side of the same deadline — with `shellBackgroundAfterMs` set
+  // under it, the SAME kind of command is handed back as a job id instead, and
+  // this is the run the users meet: the CLI's option, the assembly's wiring, the
+  // shell tool, the guard and exec's job registry, in one pass.
+  it("a shell call that outlives shellBackgroundAfterMs returns a job id, and the command outlives the run to finish its work", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-w10-cli-"))
+    try {
+      const shell = resolveShell().name
+      const release = join(dir, "release")
+      const donePath = join(dir, "done.txt")
+      const fwd = (p: string): string => p.replace(/\\/g, "/")
+      // The command WAITS for the release file, so "still running" at the point
+      // of the assertion is a fact, not a race: nothing can complete it before
+      // this test writes that file.
+      const command = shell === "bash"
+        ? `echo started; while [ ! -f "${fwd(release)}" ]; do sleep 0.2; done; echo finished > "${fwd(donePath)}"`
+        : `Write-Output started; while (!(Test-Path '${fwd(release)}')) { Start-Sleep -Milliseconds 200 }; Set-Content -Path '${fwd(donePath)}' -Value finished`
+      const result = await runHeadless("slow", {
+        workspace: dir,
+        approveAll: true,
+        shellTimeoutMs: 5_000, // the deadline this run must NOT reach
+        shellBackgroundAfterMs: 300, // the threshold it must reach
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: shell, args: { command } }] },
+          { role: "assistant", toolCalls: [{ name: "job_list", args: {} }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      const toolResults = result.session?.events.filter((e) => e.type === "tool/result") ?? []
+      const shellResult = toolResults.find((e) => e.name === shell) as { output: { job_id?: string; promoted?: boolean; ran_foreground_ms?: number; code?: string } } | undefined
+      expect(shellResult).toBeDefined()
+      // Promoted — announced as a promotion, not as the model's own background
+      // choice and not as the timeout death.
+      expect(shellResult!.output.promoted).toBe(true)
+      expect(shellResult!.output.ran_foreground_ms).toBeGreaterThanOrEqual(300)
+      expect(shellResult!.output.job_id).toMatch(/^bash-\d+$/)
+      expect(shellResult!.output.code).toBeUndefined()
+      // The job surface the model reads agrees: the promoted command is a live
+      // bash job while the run is still going.
+      const jobList = toolResults.find((e) => e.name === "job_list") as { output: { jobs: { id: string; kind: string; status: string }[] } } | undefined
+      expect(jobList).toBeDefined()
+      expect(jobList!.output.jobs.some((j) => j.kind === "bash" && j.status === "running")).toBe(true)
+      // THE WORK SURVIVES THE RUN: the foreground call would have been killed at
+      // 5s and lost; released here, it keeps running after runHeadless returned
+      // and finishes what it was doing.
+      writeFileSync(release, "go")
+      const finished = await pollUntil(async () => (existsSync(donePath) ? true : undefined), 10_000)
+      expect(finished).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})
+
 describe("headless CLI M12 retry + retention", () => {
   let dir: string
   beforeEach(() => {

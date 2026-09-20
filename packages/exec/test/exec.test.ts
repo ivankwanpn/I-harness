@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest"
+import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { createContext } from "@i-harness/core-plugin"
 import { registerExec, type ExecService } from "../src/index.ts"
 import { SandboxUnavailableError, type SandboxProvider, type SandboxPolicy } from "@i-harness/sandbox"
@@ -130,6 +133,58 @@ describe("exec background jobs", () => {
     const done = exec.getOutput(jobId)
     expect(done.status).toBe("completed")
     expect(done.stdout).toContain("late")
+  }, 10_000)
+})
+
+// W10: the foreground promotion overload. The property is "one spawn, either
+// outcome": the same process that would have been awaited is REGISTERED as a
+// job at the threshold, so the command keeps running and the job surfaces
+// (`getOutput`, `listJobs`, `killJob`) reach it. Both halves matter — an id for
+// a dead process would pass a shape-only assertion and fail this one.
+describe("exec foreground promotion (W10)", () => {
+  it("a run that finishes under the threshold returns the ordinary result and registers NO job", async () => {
+    const exec = registerExec(createContext())
+    const result = await exec.run(
+      { argv: [process.execPath, "-e", "process.stdout.write('quick')"] },
+      { backgroundAfterMs: 2000 },
+    )
+    // The threshold never fired: the caller gets today's result, not a job id.
+    if ("promoted" in result) throw new Error("expected an ordinary ExecResult, got a promotion")
+    expect(result.stdout).toBe("quick")
+    expect(result.exitCode).toBe(0)
+    expect(result.timedOut).toBe(false)
+    // Nothing was promoted — a job record here would be a record for a run the
+    // caller was told had finished.
+    expect(exec.listJobs()).toEqual([])
+  })
+
+  it("a run that outlives the threshold is handed back as a job that KEEPS RUNNING and finishes its work", async () => {
+    const exec = registerExec(createContext())
+    const dir = mkdtempSync(join(tmpdir(), "ih-w10-"))
+    const marker = join(dir, "done.txt")
+    try {
+      // The write lands AFTER the threshold, so the marker exists only if the
+      // child survived the hand-back and completed the work it was doing.
+      const script =
+        `setTimeout(()=>{require('fs').writeFileSync(${JSON.stringify(marker)},'done');console.log('late')},600)`
+      const result = await exec.run({ argv: [process.execPath, "-e", script] }, { backgroundAfterMs: 150 })
+      if (!("promoted" in result)) throw new Error("expected a PromotedRun")
+      expect(result.promoted).toBe(true)
+      expect(result.jobId).toMatch(/^bash-\d+$/)
+      expect(result.ranForegroundMs).toBeGreaterThanOrEqual(150)
+      // Registered, not restarted: the id is already a live job record, and the
+      // record is seeded with what the foreground phase had produced.
+      const live = exec.getOutput(result.jobId)
+      expect(live.status).toBe("running")
+      expect(existsSync(marker)).toBe(false) // still running, not already done
+      await waitForStatus(exec, result.jobId, (s) => s === "completed")
+      const view = exec.getOutput(result.jobId)
+      expect(view.exitCode).toBe(0)
+      expect(view.stdout).toContain("late") // output written after the promotion
+      expect(existsSync(marker)).toBe(true) // the work was not lost
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   }, 10_000)
 })
 

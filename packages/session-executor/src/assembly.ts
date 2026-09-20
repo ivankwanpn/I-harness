@@ -129,6 +129,15 @@ export interface AssemblyOptions {
   approveAll?: boolean // true → auto-approve; false/unset → NO answerer (host wires the bridge; fail-closed)
   sandbox?: SandboxMode
   shellTimeoutMs?: number // default 120_000
+  /** W10: a FOREGROUND bash/pwsh command still running after this many ms is
+   * handed back as a job id — and keeps running — instead of dying at
+   * `shellTimeoutMs` with its work lost. Default 30_000.
+   *
+   * MUST stay WELL UNDER `shellTimeoutMs` (default 120_000): the deadline kills
+   * the command outright, so a threshold at or above it never fires and this
+   * whole feature is dead config. See the note at the two defaults in the
+   * body. */
+  shellBackgroundAfterMs?: number
   shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output
   retry?: RetryConfig // M12: opt-in tool retry-on-timeout
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step
@@ -402,6 +411,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // default cwd — the fs tools already resolve against it (LSP too, below);
   // without this the shell/PTY ran in the PROCESS cwd, a different tree.
   const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
+  // W10 — THE RELATIONSHIP BETWEEN THESE TWO NUMBERS IS THE FEATURE. A
+  // foreground shell call that reaches `shellTimeoutMs` is ABORTED there (the
+  // tool's declared `timeoutMs` drives guard-timeout, whose abort kills exec's
+  // process tree), and the work is lost mid-flight. `shellBackgroundAfterMs` is
+  // the escape hatch: at the threshold the command is handed back as a job id
+  // and KEEPS RUNNING. That only works while the threshold is WELL UNDER the
+  // deadline — at or above it, the abort wins the race and the promotion never
+  // fires, silently reverting to the pre-W10 death. 30_000 against 120_000
+  // leaves three quarters of the deadline for the hand-back to happen on a
+  // loaded machine; a host that lowers `shellTimeoutMs` must lower this with
+  // it (and a host that sets the pair equal has configured the death, not the
+  // escape hatch).
+  const shellBackgroundAfterMs = opts.shellBackgroundAfterMs ?? 30_000
   // M16w final review (win32 composition): the sandbox-local wrapper returns a
   // bare SandboxProvider and DROPS the backend's dispose(), so this compose
   // site keeps the raw backend and tears it down in dispose() — otherwise the
@@ -507,6 +529,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // arguments and the approver below, not through this resolver.
   registerShell(ctx, tools, {
     timeoutMs: shellTimeoutMs,
+    // W10: the pair travels together — the shell layer needs both to keep the
+    // threshold under the deadline it declares to guard-timeout.
+    backgroundAfterMs: shellBackgroundAfterMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
     ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),

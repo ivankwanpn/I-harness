@@ -132,6 +132,12 @@ export interface HeadlessOptions {
   providerRuntime?: ProviderRuntime
   approveAll?: boolean
   shellTimeoutMs?: number // default 120_000; the shipped harness deadline
+  /** W10: foreground bash/pwsh promotion threshold — a command still running
+   * after this many ms is handed back as a job id and keeps running, instead of
+   * dying at `shellTimeoutMs`. Default 30_000; MUST stay well under
+   * `shellTimeoutMs` (at or above it the deadline wins and this never fires).
+   * See AssemblyOptions.shellBackgroundAfterMs. */
+  shellBackgroundAfterMs?: number
   shellRetention?: ShellRetentionOptions // M12: cap bash/pwsh output (default 64_000 headTail)
   retry?: RetryConfig // M12: opt-in tool retry-on-timeout (re-runs timed-out tools)
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10)
@@ -480,6 +486,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.mockScript !== undefined ? { mockScript: opts.mockScript } : {}),
       approveAll: opts.approveAll,
       ...(opts.shellTimeoutMs !== undefined ? { shellTimeoutMs: opts.shellTimeoutMs } : {}),
+      ...(opts.shellBackgroundAfterMs !== undefined ? { shellBackgroundAfterMs: opts.shellBackgroundAfterMs } : {}),
       ...(opts.shellRetention !== undefined ? { shellRetention: opts.shellRetention } : {}),
       ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
