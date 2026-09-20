@@ -224,7 +224,9 @@ void this.reloadFromDisk().then((settings) => {
 
 本節驗收段原本引的 **`assembly.ts:167`** 在本提交上**已過期** —— host-pre-seeded `session` 選項今天在 **`packages/session-executor/src/assembly.ts:176`**（W10 那批插入把它移走了）。**已改成符號 `AssemblyOptions.session`**：行號會再一次被下一次插入移走，符號不會。其餘三條在同一個提交上 `grep -n` 重測，**仍然正確**：`core-session/src/index.ts:308`（模組私有 `subscribers`）、`session-executor/src/service.ts:366`（hook 唯一的觸發點）、`server.ts:170`（函式內 const）。
 
-**而這一改動自己在樹裡移走了一條引用**（掃過整個 repo 後只此一條）：`scripts/verify-dist.mjs` 的 dist 級 SDK 探針註解引 `server.ts:266-275`，**那在 base 上是準的**（base 的 275 行就是 `protocolVersion: SDK_SERVER_PROTOCOL_VERSION,`），而 W2 的 +10 行把它移走 —— **已改成符號**（`initialize` case，提交 `9b40d332`）。同句的兩條鄰居（`protocol.ts:467 makeRequest`、`:534 encodeFrame`）**在 base 上就已經是錯的**（今天在 `:483`／`:550`），依 W10 的 F3 處置：**記錄、不動**。
+**而這一改動會機械地移走一批**（**完整掃描、沒有截斷**：`git grep -l -E "sdk/src/server\.ts:[0-9]"` → **13 個檔案、39 個相異行號**；其中 **29 個在插入點之後**（base ≥ 173）**被 +10 移走**，其餘 **10 個**在插入點之前、**仍然準確**：`5,6,22,69,70,73,74,150,170,171`）。**唯一一條活在程式碼／腳本裡的是 `scripts/verify-dist.mjs`** 的探針註解 —— 引 `server.ts:266-275`，**在 base 上是準的**（base 的 275 就是 `protocolVersion: SDK_SERVER_PROTOCOL_VERSION,`），**已改成符號**（`initialize` case，提交 `9b40d332`）。**其餘 29 條全部在日期化文件裡**（2026-09-08…09-20 的 audit／research／plan／handoff，另有一個活設定 `scripts/audit/reachability-allowlist.json`，但它引的 `:5-39` 不受影響）：**依 W10 F3 的處置 —— 記錄、不改寫**（記錄文件是那一天的快照，而 §0 規則三本來就叫人「不要相信行號、引用前先 `grep -n`」）。兩端各有一個實測錨點：base **`:174` 正是** `session/event` 的 `emitMessage`（所以那一條**曾是準的**），base **`:715` 已經是** `validSessionIdResult`（那一條**當時就已過期** —— 白名單 parser 那天就在 `:737`）。同句的兩條鄰居（`protocol.ts:467 makeRequest`、`:534 encodeFrame`）**在 base 上就已經是錯的**（今天在 `:483`／`:550`）。
+
+**⚠ 第一輪掃描是被截斷的，而它差點把一個錯的事實送出門**：Grep 工具的預設上限是 30 條，我第一版只看了那 30 條就寫下「全 repo 只此一條」。**重跑（`head_limit: 0`）才看到 13 個檔案 39 條。**記在這裡，因為「掃描必須報截斷」是這個 repo 的規則，而這次是它當場生效的一次。
 
 ---
 
