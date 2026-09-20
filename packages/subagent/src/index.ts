@@ -6,6 +6,13 @@ export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { SubagentRole, RoleRegistry } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
+// W11: the runtime-context section naming sub-agents past the staleness
+// threshold. Its consumer is the assembly (`createSessionAssembly`), which
+// registers it under the "subagents" section name. The section's options type
+// is deliberately NOT re-exported: no consumer names it, so a barrel export
+// would be a declared name with no reader (the reachability gate reports it as
+// a new row, and the assembly passes an object literal).
+export { createStaleSubagentsSection } from "./section.ts"
 export { forkTurns } from "./fork.ts"
 export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"

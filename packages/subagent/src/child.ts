@@ -299,6 +299,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   opts.table.add(childPath, {
     path: childPath,
     status: "running",
+    // W11: the initial run starts HERE — one of the two sites that write
+    // `status: "running"` and therefore one of the two that must stamp it (see
+    // ChildAgentEntry.startedAt; the other is driveFollowups).
+    startedAt: Date.now(),
     session: childSession,
     controller,
     mailbox: [],

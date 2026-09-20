@@ -36,7 +36,7 @@ import { createFsSearchTools } from "@i-harness/fs-search"
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { registerSkills } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -225,6 +225,37 @@ export interface AssemblyOptions {
    * with a declared model FAILS naming both fixes rather than running it on the
    * session's model in silence. */
   allowSubagentModelSelection?: boolean
+  /** W11: how long a sub-agent may RUN before the `subagents` runtime-context
+   * section names it to the main agent. Default 600_000 (10 min). It is a
+   * threshold on the CURRENT run, not on the entry's age, and it starts no
+   * turn: the section renders at the next `agent/pre-step` the session is
+   * already taking (idle self-wake is a settled product NO — 2026-09-20).
+   *
+   * THE TWO NUMBERS THIS ONE IS READ AGAINST, both measured on this tree:
+   * `wait_agent`'s clamp and `spawn_agent background:false` both cap the
+   * PARENT's blocking wait at 300_000 (both in `packages/subagent/src/tools.ts`
+   * — cited by SYMBOL, deliberately: they sit a dozen lines apart in a file
+   * this unit edits, and the first draft of THIS comment named two line numbers
+   * that its own import moved), so a parent that chose to
+   * block already spends up to five minutes learning "still running" — a
+   * threshold at or below that reports children whose answer the waiter just
+   * received. On the other side, the problem W11 exists for is a child
+   * "already running 20 minutes" nobody has been told about —
+   * `docs/handoff/2026-09-20-queued-work.md` §8.5 (W11), cited by section
+   * because that document is edited by every unit and the line moves with it:
+   * a threshold at or above the example arrives after the run stopped being
+   * interesting. 600_000 sits between them — above the parent's own wait
+   * ceiling, half of the example — and it must also stay above a normal
+   * child turn's duration, or the section becomes wallpaper in every parent
+   * step.
+   *
+   * One consistency law, because two clocks could not drift apart silently:
+   * the section lists an agent only when `runningElapsedMs(entry)` is at least
+   * this threshold, and `list_agents` reports that SAME number as
+   * `elapsed_ms` — so a listed agent's own row can never say it has been
+   * running for less. A host that changes one path's clock must change
+   * `runningElapsedMs`, which is both readers' single source. */
+  subagentStaleAfterMs?: number
 }
 
 /** M42 G1: the rewind slice of an assembly — the host (run.ts / the web
@@ -442,6 +473,29 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   } else if (shellBackgroundAfterMs >= shellTimeoutMs) {
     console.warn(
       `[i-harness] shellBackgroundAfterMs (${shellBackgroundAfterMs}ms) is not under shellTimeoutMs (${shellTimeoutMs}ms), so foreground promotion will NEVER fire: a command that reaches the deadline is still aborted and its work is lost — the pre-W10 death. Lower shellBackgroundAfterMs (default 30_000) or raise shellTimeoutMs (default 120_000); a host that sets the pair this way on purpose has turned the escape hatch off.`,
+    )
+  }
+  // W11: the same two-sided misconfiguration W10's F1 names, one knob over.
+  // The relationship cannot be an inequality between two NUMBERS here — there
+  // is no deadline to stay under — so the failure modes are the two ends of
+  // the value's own domain, and each is silent in its own way:
+  //   - not a positive number (0 / negative / NaN, spelled `!(x > 0)` so NaN is
+  //     caught): EVERY running child is past the threshold the instant it
+  //     starts, so the section says "stale" about a healthy spawn.
+  //   - not finite (Infinity): NOTHING is ever past it, and the failure is
+  //     invisible — the section is simply never there, which reads exactly
+  //     like "no agent needs attention" (the silent degradation W11 forbids).
+  // This is the one site holding the RESOLVED value (default included) on the
+  // composition root every shipped host passes through, so it is where a host
+  // can be told; a comment protects only readers.
+  const subagentStaleAfterMs = opts.subagentStaleAfterMs ?? 600_000
+  if (!(subagentStaleAfterMs > 0)) {
+    console.warn(
+      `[i-harness] subagentStaleAfterMs is ${subagentStaleAfterMs} (not a positive number), so EVERY running sub-agent is past the staleness threshold as soon as its run starts: the runtime-context "subagents" section stops being a signal. Set a positive threshold — the default is 600_000 (10 min).`,
+    )
+  } else if (!Number.isFinite(subagentStaleAfterMs)) {
+    console.warn(
+      `[i-harness] subagentStaleAfterMs is ${subagentStaleAfterMs} (not finite), so no sub-agent is EVER past it: the runtime-context "subagents" section never renders, and its silence is indistinguishable from "no agent needs attention". Use a finite threshold — the default is 600_000 (10 min).`,
     )
   }
   // M16w final review (win32 composition): the sandbox-local wrapper returns a
@@ -757,8 +811,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   tools.register(createReadImageTool({ workspace: opts.workspace }))
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary
-  // via the agent/pre-step hook. Instructions load as one section.
-  installRuntimeContext(ctx, session).registerSection(
+  // via the agent/pre-step hook. Instructions load as one section; W11 adds a
+  // second one below, once the subagent mount has produced the table it reads.
+  const runtimeContext = installRuntimeContext(ctx, session)
+  runtimeContext.registerSection(
     "instructions",
     createInstructionsSection({ workspace: opts.workspace }),
   )
@@ -872,6 +928,21 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.restoredState !== undefined ? { restoredState: opts.restoredState } : {}),
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
+    // W11 — the unasked path, registered HERE because this is the first point
+    // that holds both the runtime-context service and the agent table the
+    // section reads (`subagent.table`, which is the persistence-wrapped table
+    // the tools write, so the section sees the same entries they do).
+    //
+    // Nothing below starts a turn: the getter runs at `agent/pre-step` — a
+    // step the session is already taking — and the section's text is a
+    // function of the SET of children past `subagentStaleAfterMs` (paths,
+    // role/job, the constant threshold), never of the ticking elapsed, so
+    // runtime-context's change-only append yields one log line per crossing
+    // and one per leaving. See `createStaleSubagentsSection`.
+    runtimeContext.registerSection(
+      "subagents",
+      createStaleSubagentsSection({ table: subagent.table, thresholdMs: subagentStaleAfterMs }),
+    )
     // Plugin subagent roles. AFTER registerSubagent on purpose: that call is
     // where the snapshot's roles are restored and where the persistence wrapper
     // replaces `subagent.roles`, so registering here means the role is saved on
