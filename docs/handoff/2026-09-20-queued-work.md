@@ -32,7 +32,7 @@
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
 | **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
 | **W11** | **子代理的健康訊號**（三塊） | 三 | **✅ 完成**（`22b20c30`，三塊都在，見 §8.5 的完成記錄） | 無 |
-| **W12** | **`wait_agent` 的門檻**（第四塊，**另一條路徑**） | 三 | **未開始** | 無 |
+| **W12** | ~~`wait_agent` 的門檻~~ → **換成：`spawn_agent background:false` 逾時時說「settled」** | 三 | **▶ 前提被量測推翻、換成新缺陷**（見 §8.5） | 無 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
 | **P·B1–B9** | 階段 B 的 parked | 三 | 已記錄 | — |
@@ -628,6 +628,33 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 **那需要的是 `wait_agent` 上的門檻**：等超過 N 就**交回控制**、附一句「它還在跑，跑了多久」。
 
 **為什麼另立一項而不是塞進 W11**：**它是另一條路徑**（阻塞的等待 vs 正在跑的迴圈），而**前三塊不會因為它還沒做而做錯**。**而這是 W10 那個形狀第三次出現** —— 值得被看見，而不是被埋在 W11 的尾巴裡。
+
+### ⚠ W12 的前提**被量測推翻了** —— 所以它被**換掉**，而不是被實作（2026-09-20）
+
+**原本的前提是「主代理可能卡在一個無界的等待上」。量到的：兩條阻塞路徑都是有界的。**
+
+| 路徑 | 量到的 |
+|---|---|
+| **`wait_agent`** | `timeout_ms` **預設 30_000、夾在 [100, 300_000]**；逾時回 `{ timed_out: true, message: "wait timed out … (still running)" }` —— **它本來就把控制交回來** |
+| **`spawn_agent background:false`** | `await deps.tasks.wait(task.id, 300_000)` —— **同樣有界** |
+
+**所以 W11 的第三塊到得了它** —— 最多晚 300 秒，而那是它自己要的。**這一項的原始形狀因此結案：不需要做。**
+
+### ✅ 但同一輪量測找到一條**更好的**，而它取代了 W12
+
+**`spawn_agent background:false` 在逾時時說它「settled」。**
+
+```ts
+const settled = await deps.tasks.wait(task.id, 300_000)   // 逾時 → undefined
+return { …, status: settled?.status ?? "unknown",
+         message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
+```
+
+`wait(taskId, timeoutMs): Promise<TaskRecord | undefined>` —— **逾時回 `undefined`**（`task-protocol.ts:108` 的契約）。**所以那個任務還在跑，而工具回報它「settled: unknown」。**
+
+**它是一句「形狀像訊息」的謊** —— 而**它的兄弟 `wait_agent` 有 `timed_out: boolean`，它沒有**。
+
+**驗收**：逾時的時候，那個結果**要說出它逾時了**（而且**要看得出那個任務還在跑**）；**沒逾時的時候，行為逐位元不變**。**照 `wait_agent` 已經在做的那個形狀** —— 那個 repo 已經有正確答案，只是這一條路沒有用它。
 
 ---
 
