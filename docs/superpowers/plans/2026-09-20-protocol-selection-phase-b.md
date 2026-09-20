@@ -1,0 +1,348 @@
+# 協議選擇 — 階段 B 實作計畫
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** 一個正在跑的 session 能夠**當場換掉模型 client**，而且**每一個會發真的、要花錢的請求的持有者都跟著換** —— 不留任何一個在舊端點上。
+
+**Architecture:** 一個**身分穩定的把手**（`ModelClient` 物件，其 `stream` 轉發給一個可變的 `current`），在組裝建立時就交給所有持有者。持有者的型別與呼叫點**都不動**；rebind 是對那個 cell 的一次賦值。
+
+**Tech Stack:** pnpm/TypeScript ESM monorepo · vitest · 既有 `ProviderRuntime.resolveModel`
+
+**Spec:** `docs/superpowers/specs/2026-09-19-protocol-selection-design.md`（§4、§4.1、§4.2、§4.3、§6、§10 階段 B）
+**前置：** 階段 A 已完成並推送（`083d2eb0..f9997e10`）；其記錄是 `docs/handoff/2026-09-19-protocol-selection-phase-a.md`。
+
+## Global Constraints
+
+- **一個新 export 必須與它的消費者同一個任務落地。** 可達性儀器把 `export interface` / `export type` 也算成 row。
+- **提交不得有 `Co-Authored-By` trailer。**
+- **不靜默降級。** 這一整個單元的存在就是為了消除一個靜默的部分成功 —— **一個持有者沒換到，就是那個缺陷**。
+- **不碰 `llm-*` 五個適配器。**
+- **不改 `llm.providers` 的設定形狀。**
+- 每個任務結束時：`pnpm -r --no-bail test`、`pnpm typecheck`、`node scripts/audit/check-reachability.mjs --gate` 印 `gate PASS -- no new rows`。
+
+## ⚠ 已知的既有 flake
+
+`packages/settings` 的 `test/layering.test.ts:201` 在**平行全套跑裡約一半的機率**會以 `expected 2 to be 1` 失敗，隔離跑必過。機制是既有的 `watchSettings` race（**沒有 in-flight guard** 的 10ms 輪詢 + 非原子 `writeFile`）。**重跑一次、記錄、繼續 —— 不要追，更不要為了讓數字好看去改測試。**
+
+---
+
+## 範圍修正 —— spec §10 的階段 B 機制**不足以達成它自己的目的**（實測）
+
+spec §4.1 說模型 client 有「**兩個**消費者」，而「**一個改動涵蓋兩個消費者**」（`:125`）。
+
+**偵察量到的：一個 session 生命週期裡有八個持有者或讀者。**
+
+| # | 持有者 | 抓取時機 | `agent.setModel` 碰得到嗎 |
+|---|---|---|---|
+| 1 | 回合迴圈（`core-agent/src/index.ts:290`） | 使用時 | ✓ |
+| 2 | 壓縮引擎的**建構**（`core-agent/src/index.ts:142`） | **建構時** | ✗ |
+| 3 | 引擎自己的讀取（`compaction/src/index.ts:114`） | 使用時，讀它自己的字面量 | 取決於 2 |
+| 4 | **`config.summarizationModel`**（`compaction/src/config.ts`） | **在設定裡，扛過任何 rebind** | ✗（且它 `??` **勝過** `deps.model`） |
+| 5a | 子代理（`assembly.ts:764` → `subagent/src/child.ts:259,275,281`） | 建構時，逐次 spawn 讀 | ✗ |
+| 5b | 監護者（`assembly.ts:809` → `guard-approval/.../reviewer.ts:137`） | 建構時 | ✗ |
+| 5c | 隊友（`assembly.ts:845` → `agent-team/src/scheduler.ts:77,204`） | 建構時 | ✗ |
+| 6 | auto-title（`assembly.ts:939` → `run.ts:661` → `session-title/src/index.ts:56`） | 建構時 | ✗ |
+| 7 | service 的 memoized binding（`service.ts:211-224`, `:278`） | 建構時輸入 | ✗ |
+
+**§4.1 的理由是**「只換一個 → 摘要會留在舊端點上 —— 而那是**要花錢的呼叫**」。**同一個理由對 5a/5b/5c/6 逐字成立**：rebind 之後 spawn 的子代理、監護者檢視、隊友、auto-title 全部**用舊 client 發真的請求，而且沒有任何東西會說出來**。
+
+**依 spec 字面實作階段 B，就是出貨一個靜默的部分成功 —— 這個單元存在的理由所要消滅的東西。**
+
+### 裁定 R-B1：用**把手**，不用 getter
+
+spec 的機制（`AgentDeps.model` 改成 `() => ModelClient`、新增 `Agent.setModel`）是為了繞過「建構時抓走」。**偵察量到那條路不必走：八個持有者每一個都持有同一個物件**。
+
+所以：**一個身分穩定的 `ModelClient` 把手，其 `stream` 轉發給一個可變的 `current`。**
+
+- 型別零改動 ⇒ **~85 個 `createAgent` 呼叫點與 `agent.test.ts` 的 19 個 `deps.model = …` 賦值全部不用動**。
+- 持有者的呼叫點零改動 ⇒ 子代理／監護者／隊友／auto-title **自動跟著換**。
+- `expect(assembly.model).toBe(model)`（`service.test.ts:69`, `:246`）**照樣成立**，而且比原本更穩（原本每次 `resolveModel` 都建新物件）。
+
+**代價**：spec §4.2 的 `agent.setModel` **不存在**；cell 屬於組裝，所以動詞是 `assembly.setModel`。**spec §10 的「`core-agent` 的 model getter」整條作廢。**
+
+### 裁定 R-B2：`config.summarizationModel` **維持勝出**，但必須**說出來**
+
+`compaction/src/index.ts:114` 是 `config.summarizationModel ?? deps.model`。一個明確設定的摘要模型**是使用者的選擇**，rebind 不該靜默丟掉它。
+
+**但這代表「rebind 之後摘要仍在舊端點」對那樣的設定是真的** —— 所以 Task 3 必須把它**測出來並寫下來**，不是讓它隱形。
+
+---
+
+### Task 1: 組裝的模型變成一個把手
+
+**Files:**
+- Modify: `packages/session-executor/src/assembly.ts`（`:330` 的 `const model`，`:228` 的 `SessionAssembly`）
+- Test: `packages/session-executor/test/assembly.test.ts`、`packages/session-executor/test/service.test.ts`
+
+**Interfaces:**
+- Consumes: 今天的 `const model: ModelClient = opts.model ?? (…)()`（`assembly.ts:330`）
+- Produces: `SessionAssembly.setModel(client: ModelClient): void` —— **`ModelClient` 型別不變**，所以下游零改動。
+
+- [ ] **Step 1: 先量持有者（在任何修改之前）**
+
+```bash
+grep -rn "parentModel" packages/ --include=*.ts | grep -v test
+grep -rn "assembly\.model\|\.model\b" apps/cli/src/run.ts | head
+```
+
+把「有幾個地方會在 rebind 之後仍持有舊 client」的數字寫進報告。**任務結束時測試的增減要對得上它。**
+
+- [ ] **Step 2: 寫失敗的測試 —— 這一條就是整個單元的價值**
+
+`packages/session-executor/test/assembly.test.ts`：
+
+```ts
+it("a rebound model reaches every holder, not just the turn loop", async () => {
+  // The design said "two consumers, one change covers both" — measured, a
+  // session's lifetime has EIGHT holders of a resolved client. This test is the
+  // deliverable: it fails if ANY of them keeps the old one, which is the silent
+  // partial success this whole unit exists to remove.
+  const first = recordingClient("first")
+  const second = recordingClient("second")
+  const assembly = await buildAssembly({ model: first })
+
+  expect(assembly.model).toBe(first)
+
+  assembly.setModel(second)
+
+  // (a) the handle itself forwards — and its IDENTITY is stable, which is what
+  // lets every holder below keep working without being told.
+  expect(assembly.model).toBe(first)          // still the handle…
+  for await (const _ of assembly.model.stream({ /* minimal request */ })) void _
+  expect(second.seen).toHaveLength(1)          // …but it went to the NEW client
+  expect(first.seen).toHaveLength(0)
+
+  // (b) the agent the lane runs on reads through the same handle — proven with a
+  // REAL turn, not by asserting the agent object exists.
+  await assembly.agent.run("go")
+  expect(second.seen).toHaveLength(2)   // the turn's request landed on the NEW client
+  expect(first.seen).toHaveLength(0)
+})
+```
+
+**兩個細節，實作者要自己核對，不要發明**：
+- **請求記錄用的 client 這個 repo 已經有了**：`packages/subagent/test/child.test.ts` 的 `recordingModel()`（它回傳 `ModelClient & { requests: LLMRequest[] }`）。**先讀它**，用同一個形狀；若那個檔案裡沒有，`packages/provider-runtime/test/runtime.test.ts` 的 `capturingModel()` 是另一個先例。**不要新造第三種。**
+- 上面 `stream({ … })` 的請求物件要符合 `LLMRequest`（`packages/llm-seam/src/index.ts`）——它的必填欄位是 `messages` / `tools` / `systemPrompt`。**照既有測試怎麼建請求物件的樣子寫。**
+
+- [ ] **Step 3: 跑它，確認它紅**
+
+Run: `cd packages/session-executor && npx vitest run test/assembly.test.ts`
+Expected: FAIL —— `assembly.setModel is not a function`
+
+- [ ] **Step 4: 把 `const` 換成 cell + 把手**
+
+`packages/session-executor/src/assembly.ts`（`:330` 附近）：
+
+```ts
+  // ONE stable handle, ONE mutable target. The handle is what EVERY holder gets
+  // — the agent's deps, the subagent tools, the guardian, the team scheduler,
+  // and `assembly.model` itself — so a rebind is a single assignment and no
+  // holder has to be told. Changing the TYPE instead (`model: () => ModelClient`)
+  // would have reached the same goal while touching ~85 `createAgent` call
+  // sites; the handle costs none of that and keeps `assembly.model`'s identity
+  // stable, which is what the service tests already pin.
+  //
+  // Design: protocol-selection §4.1 — which said "two consumers" and was
+  // measured wrong (eight). See the plan's scope ruling R-B1.
+  let currentModel: ModelClient = opts.model ?? (() => { /* the existing resolution */ })()
+  const model: ModelClient = {
+    stream: (request) => currentModel.stream(request),
+  }
+```
+
+然後在 `SessionAssembly`（`:228`）加：
+
+```ts
+  /** Swap the client this assembly's handle forwards to. Every holder follows —
+   * they all hold this same object. Identity of `model` does NOT change, which
+   * is deliberate: holders are never re-wired. */
+  setModel(client: ModelClient): void
+```
+
+並在組裝的回傳字面量（`:936` 附近）加 `setModel: (client) => { currentModel = client }`。
+
+- [ ] **Step 5: 跑它，確認它綠**
+
+Run: `cd packages/session-executor && npx vitest run test/assembly.test.ts test/service.test.ts`
+
+- [ ] **Step 6: 突變證明（不可跳過）**
+
+把把手改回直接傳 `currentModel`（即 `const model = currentModel`），重跑 Step 3。
+Expected: **RED** —— 因為 `assembly.model` 的身分會變，而 (a) 那條斷言會失敗。把觀察到的訊息原文貼進報告，然後改回來。
+
+- [ ] **Step 7: 全套 + gate + commit**
+
+```bash
+pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate
+git add -A
+git commit -m "feat(session-executor): one model handle every holder reads through"
+```
+
+---
+
+### Task 2: 證明**每一個**持有者都跟著換
+
+Task 1 證明的是把手本身。**這一題證明八個持有者逐個跟隨** —— 少了這一題，把手只是一個好主意。
+
+**Files:**
+- Test: `packages/session-executor/test/assembly.test.ts`（或既有的 subagent/guardian/team 測試檔，**用既有 harness**）
+
+- [ ] **Step 1: 逐個持有者寫一條斷言**
+
+至少覆蓋：**agent 回合迴圈**、**壓縮引擎**、**子代理 spawn**、**監護者**、**隊友**、**auto-title 讀到的 `assembly.model`**。
+
+```ts
+it("every holder follows a rebind — enumerated, not sampled", async () => {
+  // Each assertion names the holder and the plan's ruling it belongs to (R-B1's
+  // table). A holder that stops following must fail HERE, by name, rather than
+  // silently billing an old endpoint.
+})
+```
+
+**若某個持有者**在既有的 harness 下**無法被驅動**（例如監護者只在一條特定的審批路徑上跑），**不要假裝測到**：把它列進報告的「無法在此 harness 覆蓋」清單，並說明需要什麼。**一個誠實的缺口比一條假的斷言有價值。**
+
+- [ ] **Step 2: 突變證明**
+
+把把手換回 `currentModel`，逐條確認哪些斷言紅。**沒有紅的那一條，就是沒有真的測到。**
+
+- [ ] **Step 3: 全套 + gate + commit**
+
+```bash
+pnpm -r --no-bail test && pnpm typecheck && node scripts/audit/check-reachability.mjs --gate
+git add -A
+git commit -m "test(session-executor): every holder follows the rebind, enumerated"
+```
+
+---
+
+### Task 3: `config.summarizationModel` 的邊界**被測出來並寫下來**
+
+`compaction/src/index.ts:114` 的 `config.summarizationModel ?? deps.model` 意味著：**一個明確設定的摘要模型在 rebind 之後仍留在舊端點。**
+
+**照 R-B2 它維持勝出** —— 它是使用者的設定。**但這個後果必須是可見的**，否則它就是那個單元要消滅的靜默例外。
+
+**Files:**
+- Test: `packages/compaction/test/`（既有的 engine 測試檔）
+- Modify: 該 `??` 上方的註解（若它沒說出這件事）
+
+- [ ] **Step 1: 寫一條測試把這個邊界釘住**
+
+```ts
+it("a CONFIGURED summarization model wins over the handle — a documented boundary, not an oversight", () => {
+  // R-B2: the rebind does not silently discard a user's explicit summarization
+  // model. The cost is stated: for such a configuration the summarizer stays on
+  // the configured endpoint after a rebind. This test is what makes that
+  // visible instead of invisible.
+})
+```
+
+- [ ] **Step 2: 讓註解說出它**
+
+若 `:114` 上方的註解沒說「設定勝過把手，而這是刻意的」，補上，並引用 R-B2。
+
+- [ ] **Step 3: 全套 + gate + commit**
+
+---
+
+### Task 4: SDK 的 `setSessionModel` 當場生效
+
+**這是階段 B 的第一次真正的 rebind** —— 也是**我上一個單元刻意設下的陷阱會觸發的地方**。
+
+`packages/sdk/src/server.ts:715` 的註解已經寫著這件事該怎麼做（那是上一個單元留下的），而 `apps/cli/test/sdk-wire-v11.test.ts:177-214` 那條守衛**會變紅 —— 那是設計，不是意外**。它存在的目的就是逼出一個**刻意的**決定。
+
+**Files:**
+- Modify: `packages/sdk/src/protocol.ts`（wire 型別加回 `protocol?: string`）
+- Modify: `packages/sdk/src/server.ts`（parser 接受它；傳給 relay）
+- Modify: `apps/cli/src/index.ts`（relay 用**它**rebind，並在寫入前**剝掉**它）
+- Modify: `apps/cli/test/sdk-wire-v11.test.ts`（**刻意地**改那條守衛）
+- Test: 同上
+
+**Interfaces:**
+- Consumes: `SessionAssembly.setModel`（Task 1）、`SessionService.assemblyFor`（回傳**活的**組裝 —— 偵察確認快取優先且回傳存進去的那個參考）
+- Produces: `session/model/set` 帶著協議 ⇒ **當場** rebind，且**不落地**。
+
+- [ ] **Step 1: 先讀那條守衛的理由**
+
+Read `packages/sdk/src/server.ts:715-743`（上一單元留下的註解）與 `apps/cli/test/sdk-wire-v11.test.ts:177-214`。**在動任何一行之前，在報告裡寫下：這條守衛為什麼存在、以及這次要怎麼「刻意地」改它。**
+
+- [ ] **Step 2: 寫失敗的測試**
+
+```ts
+it("a protocol on the wire rebinds the LIVE session, and is never persisted", async () => {
+  // Two halves, and BOTH matter:
+  //  (a) the live assembly's handle now forwards to the newly resolved client —
+  //      §4.2②'s "當場生效", not "next assembly";
+  //  (b) the session HEADER still carries no protocol — §4.3, owner's decision.
+  // (a) without (b) is the phase-B mistake the previous unit's guard was built
+  // to catch; (b) without (a) is phase A, which already shipped.
+})
+```
+
+- [ ] **Step 3: 跑它，確認它紅**
+
+- [ ] **Step 4: 實作**
+
+三件事，順序重要：
+1. `packages/sdk/src/protocol.ts` 的 `SessionModelSelection` 加回 `protocol?: string`（**鬆的** —— 那個檔案是零依賴 wire 契約）。
+2. `server.ts` 的 `parseModelSelection` 接受它；訊息裡要說明它**只為 rebind**。
+3. `apps/cli/src/index.ts` 的 relay：**先用它 rebind**（`resolveModel` → `assemblyFor(sessionId).setModel(client)`），**再 `updateMeta` 一個不含 protocol 的選擇**。
+
+**注意既有的事實**：`server.ts:365` 今天會 `closeSession`（銷毀組裝）。**當場生效就不需要它了** —— 但拿掉它是行為變更，**要在報告裡明說你做了什麼、為什麼**。
+
+- [ ] **Step 5: 刻意地改那條守衛**
+
+它會紅。**紅是對的** —— 改成「header 仍然沒有 protocol」（(b) 那半），**不要**把它刪掉或放寬成什麼都接受。在測試裡寫下為什麼這次的改動是刻意的。
+
+- [ ] **Step 6: 突變證明**
+
+把 relay 裡「剝掉 protocol」那一步拿掉，確認 (b) 那半變紅。**那就是這個單元最重要的那條守衛。**
+
+- [ ] **Step 7: 全套 + gate + commit**
+
+---
+
+### Task 5: `run --protocol`（一次性，不落地）
+
+**Files:**
+- Modify: `apps/cli/src/index.ts`（`RUN_FLAGS` `:196`、`RUN_VALUE_FLAGS` `:197`、任務過濾 `:342-348`、`USAGE` `:58-64`）
+- Modify: `apps/cli/src/run.ts`（`HeadlessOptions` 加欄位；`:377-389` 的 `resolveModel` 把協議帶進去）
+- Test: `apps/cli/test/run-flag-routing.test.ts`（**既有的路由契約，加一條 value-flag case**）
+
+**Interfaces:**
+- Consumes: Task 1/4 的機制
+- Produces: `i-harness run --protocol P "任務"` —— **只對這一次 session 生效，settings.json 一字不變。**
+
+- [ ] **Step 1: 寫失敗的測試**
+
+```ts
+it("--protocol rides THIS session only, and never reaches settings.json", () => {
+  // Two halves: the flag is routed (not swallowed into the task — see the
+  // existing strip list at index.ts:342-348), AND after the run the settings
+  // file is byte-identical to before. §4.3: the session's protocol is not
+  // written to any file.
+})
+```
+
+- [ ] **Step 2: 跑它，確認它紅**
+
+- [ ] **Step 3: 實作四個清單 + 解析**
+
+`--protocol` 是**取值旗標**，所以它同時要進 `RUN_FLAGS` 與 `RUN_VALUE_FLAGS`，也要進任務過濾的**兩個** chain（旗標本身、以及它前面的那個 token）。**漏掉任何一個，`run "do x" --protocol P` 就會把 `--protocol` 當成任務文字送給模型** —— 這正是同一個檔案裡 `--no-compact` 曾經犯過的錯（見 `run-flag-routing.test.ts` 開頭的註解）。
+
+值要在**設定鏈之外**驗證：不合法就拒絕並列出五個（與 `provider add` 同一個規矩）。
+
+- [ ] **Step 4: 跑它，確認它綠**
+
+- [ ] **Step 5: 全套 + gate + commit**
+
+---
+
+## 完成之後
+
+**這條分支要留給工作電腦複核**：**不合併、不改名、不刪。**
+
+**階段 B 仍然不包含**（spec §7）：session 協議的**持久化**（`run --protocol` 與 SDK 的協議都**不落地**，這是使用者的決定）、角色的 UI。
+
+**parked、不在本計畫**（偵察找到的既有缺陷）：
+- `packages/sdk/src/server.ts:170-177` —— **訂閱洩漏**：`assemblyUnsubscribes.set(...)` 覆蓋同一個 session 的前一個訂閱而沒先退訂，`close()` 只退當前那個。
+- `apps/cli/src/index.ts:500-503` —— `liveAssemblies` 從不清理，`closeSession` 之後仍握著**已銷毀的組裝**，直到下一個被建起來。**本計畫的 Task 4 會碰這條路，實作者要確認自己拿到的不是屍體。**
