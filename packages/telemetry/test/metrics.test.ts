@@ -125,6 +125,27 @@ describe("createMetricsSink", () => {
     expect(nothingToCompare.snapshot().prefix).toEqual({ requests: 1, rewritten: 0, observed: 0, kept: 0, broke: 0 })
   })
 
+  // F1 (review round). Key PRESENCE is not a claim. A producer writing the
+  // natural "absent when not applicable" idiom
+  // (`{ prefixKept: prev?.shared, prefixBroke: broke ? true : undefined }`)
+  // carries the KEYS with `undefined` VALUES — `"prefixKept" in ev.data` is
+  // true for those, so a presence test would count a request that compared
+  // NOTHING as observed and kept: the exact fabrication this counter exists to
+  // make impossible, reintroduced by the test that decides what "present" means.
+  it("an explicitly-undefined field is NOT a comparison — key presence would count it as kept", () => {
+    const m = createMetricsSink()
+    // No previous request, written the idiomatic way: both keys exist, neither
+    // carries a value.
+    m.onEvent(ev("provider/call", { step: 1, messages: 2, tools: 1, prefixKept: undefined, prefixBroke: undefined }))
+    expect(m.snapshot().prefix).toEqual({ requests: 1, rewritten: 0, observed: 0, kept: 0, broke: 0 })
+    // A number on `prefixKept` IS the claim, even with the break field left
+    // undefined ...
+    m.onEvent(ev("provider/call", { step: 2, messages: 4, tools: 1, prefixKept: 2, prefixBroke: undefined }))
+    // ... and so is a boolean on `prefixBroke`.
+    m.onEvent(ev("provider/call", { step: 3, messages: 1, tools: 1, prefixKept: undefined, prefixBroke: true }))
+    expect(m.snapshot().prefix).toEqual({ requests: 3, rewritten: 0, observed: 2, kept: 1, broke: 1 })
+  })
+
   it("'0 cached' and 'nobody reported' are distinguishable — the count is the denominator", () => {
     // The failure this pins: a summary showing `cacheReadTokens: 0` reads as
     // "the cache did nothing" when the truth may be "no provider ever told us".

@@ -97,12 +97,16 @@ export function createMetricsSink(): MetricsSink {
           if (typeof ev.data.prefixCause === "string") prefix.lastCause = ev.data.prefixCause
         }
         // M5 T2 (second half): the MEASURED half of the same question. Keyed on
-        // the FIELDS' PRESENCE, not their values: `prefixKept: 0` with
-        // `prefixBroke: true` is a real, measured full break, while an event
-        // carrying neither field holds no comparison at all (the first request
-        // of a process). Counting that absent case as "kept" is precisely what
-        // this counter exists to make impossible.
-        if ("prefixKept" in ev.data || "prefixBroke" in ev.data) {
+        // a field actually CARRYING a value, not on key presence: a producer
+        // writing the natural "absent when not applicable" idiom
+        // (`{ prefixKept: prev?.shared, prefixBroke: broke ? true : undefined }`)
+        // carries the KEYS with `undefined` VALUES, and `"prefixKept" in
+        // ev.data` would count that non-comparison as observed AND kept — the
+        // fabricated "we compared and it held" this counter exists to make
+        // impossible. `prefixKept: 0` with `prefixBroke: true` is a real,
+        // measured full break; an event whose fields carry no value holds no
+        // comparison at all (the first request of a process).
+        if (typeof ev.data.prefixBroke === "boolean" || typeof ev.data.prefixKept === "number") {
           prefix.observed += 1
           if (ev.data.prefixBroke === true) prefix.broke += 1
           else prefix.kept += 1
