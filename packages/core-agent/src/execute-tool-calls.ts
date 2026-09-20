@@ -66,6 +66,12 @@ export async function executeToolCalls(
   // (tools/post-execute) or agent/post-tool (M10a ordering ruling).
   interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true }
   const slots: ((Slot | SyntheticSlot) | undefined)[] = batch.map(() => undefined)
+  // Each call's OWN failure, so the fill below can record what actually
+  // happened to THAT call rather than stamping the first failure's message on
+  // every sibling. After the drain above, an unfilled STARTED slot always has
+  // an entry here (allSettled guarantees it settled, and a settled dispatch
+  // either wrote `slots[i]` or ran the `.catch`).
+  const failures = new Map<number, unknown>()
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
   let committed = 0
@@ -173,6 +179,9 @@ export async function executeToolCalls(
           // A veto is not a body failure: it must keep failing the turn.
           firstRefusal ??= err
         }
+        // This call's OWN rejection, for the per-call fill on the soft path —
+        // OUTSIDE the `firstError` guard below, which only keeps the first.
+        failures.set(index, err)
         // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
         // (before the drains below), so `allSettled` returns their cancellations
         // instead of waiting out their work. Only the first, so a second failure
@@ -275,12 +284,21 @@ export async function executeToolCalls(
     throw new Error("agent aborted")
   }
 
-  // A refusal is never soft. Drain first (a started sibling must not be left
-  // running), then rethrow — this is byte-for-byte the pre-block-① behavior
-  // for every refusal, which is the point.
+  // Drain BEFORE the disposition tests. Every write to `firstError` and
+  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
+  // promises have settled neither is final — and a refusal that settles one
+  // microtask late is tested as "not a refusal" and silently downgraded to
+  // the soft path. (Measured before this drain existed: the same marked veto
+  // threw when its own .catch ran first, and resolved softly — recorded
+  // against a sibling's error message — when a sibling's failure got there
+  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
+  // case, not the exotic one.)
+  await Promise.allSettled([...inFlight.values()])
+  inFlight.clear()
+
+  // A refusal is never soft. The drain above has already settled every
+  // in-flight dispatch, so `firstRefusal` is final here.
   if (firstRefusal !== undefined) {
-    await Promise.allSettled([...inFlight.values()])
-    inFlight.clear()
     throw firstRefusal
   }
 
@@ -303,10 +321,16 @@ export async function executeToolCalls(
     // Fill every STARTED slot that produced no output, so the head-of-line
     // cursor advances and an already-settled sibling commits its REAL result
     // (the SAME mechanism M51 B3 added to the abort path, one branch up).
-    const message = firstError instanceof Error ? firstError.message : String(firstError)
     for (let i = committed; i < startedUpTo; i += 1) {
       if (slots[i] !== undefined) continue
       const call = batch[i]!
+      // THIS call's own message. `firstError` is only a defensive fallback:
+      // after the drain, a settled started call either wrote `slots[i]` or ran
+      // its `.catch` and recorded its own error in `failures`.
+      const own = failures.get(i)
+      const message = own !== undefined
+        ? (own instanceof Error ? own.message : String(own))
+        : firstError instanceof Error ? firstError.message : String(firstError)
       slots[i] = {
         name: call.name,
         callId: call.callId,
