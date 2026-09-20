@@ -13,7 +13,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
-import { createMockClient } from "@i-harness/llm-mock"
+import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { McpMountDeps, McpServerConfig, McpServerStatusEvent } from "@i-harness/mcp-client"
 import { approxTokens } from "@i-harness/compaction"
@@ -549,6 +549,297 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
       // with a REAL turn, not by asserting the agent object exists.
       await assembly.agent.run("go")
       expect(second.requests.length).toBeGreaterThan(1)   // the turn landed on the NEW client
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})
+
+// ── R-B1 (phase B), Task 2: EVERY holder follows a rebind — enumerated ──────
+// Task 1 proved the HANDLE; this block proves each HOLDER, one case each, so a
+// holder that stops following fails HERE, by name, rather than silently billing
+// an old endpoint. "Holder" = a place that captured a resolved client at
+// construction (R-B1's table) and will make real, billable requests through it.
+// R-B1's table enumerates NINE such places; EIGHT are reachable by the handle
+// (rows 1, 2, 3, 5a, 5b, 5c, 6, 7) and the ninth — a CONFIGURED
+// `summarizationModel` — is not, so it is Task 3's row and appears here only as
+// the exclusion this block's fixtures must avoid.
+//
+// Each case: build ONE assembly with `first` (this file's own fixtures), REBIND
+// with `assembly.setModel(second)` — the one mutation a running session's model
+// surface allows — then drive exactly one holder and assert ITS request landed
+// on `second`, with `first.requests` still empty. The empty first recorder is
+// the control: it is the assertion that fails if the holder kept the raw client
+// instead of the handle. Cases are separate (rather than one shared assembly)
+// so a targeted wiring regression reds only the case whose holder it broke.
+//
+// Coverage, holder by holder, and where each row is driven:
+//
+//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:938 `session, tools, model,`)
+//  2+3  the compaction engine              — case 2  (construction core-agent/src/index.ts:142 `model: deps.model,`;
+//                                                    its own read compaction/src/index.ts:114)
+//  5a   a spawned sub-agent                — case 3  (assembly.ts:785 `parentModel: model,`)
+//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:830 `parentModel: model,` → reviewer.ts:137's
+//                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
+//  5c   a team-mate                        — case 5  (assembly.ts:866 `parentModel: model,` → scheduler.ts:204
+//                                                    `parentModel: deps.parentModel,`)
+//  6    auto-title's model                 — case 6  (assembly.ts:960 `model,` → run.ts:661 `session, model: assembly.model,`)
+//  7    the service's dispensed assembly    — "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
+//                                             service.test.ts (that file owns the service harness)
+//  —    the handle + a manual stream        — Task 1's test above, not repeated here
+//  4    a CONFIGURED `summarizationModel`   — Task 3's boundary, deliberately ABSENT from this block's fixtures:
+//                                             a configured model WINS over the handle (`config.summarizationModel ?? deps.model`).
+//                                             A summarization model in case 2's fixture would make that case assert the REVERSE of shipped behaviour.
+//
+// DECLARED GAP — auto-title's CALL SITE: case 6 pins the value auto-title reads
+// (`assembly.model`, read at call time). The end-to-end drive (`run.ts:661` →
+// `maybeAutoTitle` → `session-title/src/index.ts:56`) is NOT driven with a
+// rebind by any existing harness: `runHeadless` builds its assembly internally
+// and exposes no seam to rebind it mid-run, and this package has no dependency
+// edge to `@i-harness/session-title` (adding one for a test would be a new
+// dependency, which this task does not take). What would close it: an
+// `onAssembly`-style hook on `HeadlessOptions` — the service already has one
+// (`createSessionService`'s hooks; `apps/cli/src/index.ts:501` `service.onAssembly(` uses it as
+// `service.onAssembly`) — so a test could rebind between the run and the title
+// call. Until then the gap is stated here rather than asserted around.
+/** In-memory SessionCoordinator for the team case only. The team's spawn path
+ * needs durable child sessions, and this package declares no JSONL backend (so
+ * no real coordinator is constructible here). Shape copied from the precedent at
+ * packages/agent-team/test/lifecycle.test.ts:515 (`const coordinator = {`
+ * … `as unknown as SessionCoordinator` at :533): a coordinator double, NOT a
+ * model client — the recorder shapes above are untouched. */
+function memoryCoordinator(): SessionCoordinator {
+  const events = new Map<string, SessionEvent[]>()
+  return {
+    create: async (meta?: { sessionId?: string }) => {
+      const id = meta?.sessionId ?? `mem-${events.size}`
+      events.set(id, [])
+      return { id }
+    },
+    append: async (sessionId: string, evs: SessionEvent[]) => { events.get(sessionId)?.push(...evs) },
+    enqueue: (sessionId: string, evs: SessionEvent[]) => {
+      const list = events.get(sessionId) ?? []
+      list.push(...evs)
+      events.set(sessionId, list)
+    },
+    load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(events.get(sessionId) ?? [])] } }),
+    list: async () => [...events.keys()],
+    flush: async () => {},
+    close: async () => {},
+    putDocument: async () => {},
+    getDocument: async () => undefined,
+  } as unknown as SessionCoordinator
+}
+
+describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)", () => {
+  /** This file's recording-client shape (`capturingModel`, :462 — the same shape
+   * as `recordingModel`, subagent/test/child.test.ts:253) with the replies served
+   * by the file's own `createMockClient` cassette — exactly the recorder+cassette
+   * composition the pluginAgents fixture uses at :1021. Not a fourth fixture: the
+   * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
+   * the two existing pieces are joined, because these holders are driven by
+   * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
+  function scriptedModel(script: MockStep[]): ModelClient & { requests: LLMRequest[] } {
+    const requests: LLMRequest[] = []
+    const cassette = createMockClient(script)
+    return {
+      requests,
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        yield* cassette.stream(request)
+      },
+    }
+  }
+
+  it("holder 1 — the agent's turn loop runs on the rebound client", async () => {
+    const first = capturingModel()
+    // The proof is the SCRIPT: only `second` can produce this finalText — a turn
+    // that stayed on `first` would answer "inspect done".
+    const second = scriptedModel([{ role: "assistant", text: "turn ran on the rebound client" }])
+    const assembly = await createSessionAssembly({ workspace: process.cwd(), model: first })
+    try {
+      assembly.setModel(second)
+      await expect(assembly.agent.run("go")).resolves.toMatchObject({ finalText: "turn ran on the rebound client" })
+      expect(second.requests.length).toBeGreaterThan(0)
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("holders 2+3 — the compaction engine follows a rebind, with NO summarizationModel configured", async () => {
+    const session = createSession()
+    // One user message and nothing else: with the default retention budget
+    // (retainTokens 0) the whole surface is shadowable, so compact() has a
+    // region to summarize (compaction/src/region.ts selectShadowableRange).
+    append(session, { type: "user/message", text: "kickoff ".repeat(20) })
+    const first = capturingModel()
+    // ≥ 500 chars: the M34 ⑦c minSummaryChars floor, so this is a clean success
+    // rather than the degenerate-retry path.
+    const second = scriptedModel([{ role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(80) }])
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      session,
+      model: first,
+      // ⚠ NO `summarizationModel` — deliberately. With one CONFIGURED, the engine
+      // keeps it across a rebind (R-B2 — `config.summarizationModel ?? deps.model`,
+      // compaction/src/index.ts:114), which is Task 3's boundary. Setting one in
+      // THIS fixture would make the assertion below assert the reverse of shipped
+      // behaviour.
+      compact: { contextWindow: 100_000 },
+    })
+    try {
+      assembly.setModel(second)
+      const result = await assembly.compactNow()
+      // The holder assertion comes FIRST so it can red on its own line: the
+      // summarizer's call is the evidence of BOTH capture sites — the engine
+      // CONSTRUCTED from the agent's deps (core-agent/src/index.ts:142
+      // `model: deps.model,`) and its own read at compact time
+      // (compaction/src/index.ts:114). Exactly one call: the engine's reply was
+      // a clean summary, not the degenerate-retry path.
+      expect(second.requests).toHaveLength(1)
+      expect(first.requests).toHaveLength(0)
+      expect(result.compacted).toBe(true)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("holder 5a — a spawned sub-agent inherits the rebound client", async () => {
+    const first = capturingModel()
+    const second = scriptedModel([
+      // the parent's step: spawn, blocking, so the child's turn lands first
+      { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "inspect code", task_name: "helper", background: false } }] },
+      { role: "assistant", text: "child finished" }, // the child's own turn
+      { role: "assistant", text: "parent finished" }, // the parent's continuation
+    ])
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model: first,
+      // spawn_agent is approval-gated; absent an answerer the mount is fail-closed
+      // (the same option the pluginAgents fixture below uses).
+      approveAll: true,
+    })
+    try {
+      assembly.setModel(second)
+      // The run is captured, NOT asserted first: under a broken subagent wiring
+      // the child answers from `first` and the parent's continuation then eats
+      // the child's script step — so a run-level assertion would red first and
+      // MASK the holder-specific line below (measured: exactly that, before this
+      // reordering).
+      const run = await assembly.agent.run("start")
+      // The CHILD's request is what this assertion names — only the child
+      // carries the general role's prompt, so the parent's own requests on
+      // `second` cannot satisfy it.
+      expect(second.requests.filter((r) => r.systemPrompt.includes("You are a general-purpose coding agent."))).toHaveLength(1)
+      expect(first.requests).toHaveLength(0)
+      // …and the run completed through the handle: the parent saw its OWN
+      // continuation step, not the child's.
+      expect(run.finalText).toBe("parent finished")
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("holder 5b — the guardian's INHERITED model follows (its configured model is Task 3's boundary)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-guardian-rebind-"))
+    const first = capturingModel()
+    const second = scriptedModel([
+      // the parent's step: a write OUTSIDE the workspace → the approval
+      // classifier's `ask` branch → the guardian is consulted (core-tools
+      // prepare step 3; assembly mounts the policy at :607)
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
+      // the REVIEWER's own turn (forkTurns "none": it sees only the request)
+      { role: "assistant", text: '{"outcome":"deny","rationale":"writes are denied today","risk_level":"moderate"}' },
+    ])
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: first,
+      // `{}` — the INHERITED case: no `guardian.model`, so the reviewer runs on
+      // `parentModel` (assembly.ts:830), which is the handle. A configured
+      // `guardian.model` wins by construction (`deps.model ?? deps.parentModel`,
+      // reviewer.ts:137) and is Task 3's boundary, not this case's.
+      guardian: {},
+    })
+    try {
+      assembly.setModel(second)
+      // The run's OUTCOME is captured, not asserted, first — same reason as 5a:
+      // a broken guardian wiring lets the write through, so asserting the
+      // rejection first would mask the holder-specific line below.
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      // The review RAN on the rebound client — the reviewer is the request
+      // carrying the guardian policy prompt, so a parent-only match cannot
+      // satisfy this.
+      expect(second.requests.filter((r) => r.systemPrompt.includes("You are the approval guardian."))).toHaveLength(1)
+      expect(first.requests).toHaveLength(0)
+      // …and the verdict was the one the run acted on, so the reviewer's call
+      // was a real one whose answer reached the tool gate.
+      expect(await outcome).toMatch(/guardian denied: writes are denied today/)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("holder 5c — a team-mate's first turn inherits the rebound client", async () => {
+    const coordinator = memoryCoordinator()
+    const first = capturingModel()
+    const second = scriptedModel([
+      { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
+      { role: "assistant", text: "teammate finished" }, // the teammate's own turn
+      { role: "assistant", text: "lead finished" }, // the lead's continuation
+    ])
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model: first,
+      approveAll: true,
+      team: {},
+      // The team's spawn path REQUIRES durable child sessions (roster.ts:
+      // "durable child sessions required", then the holdsPrompt checkpoint read
+      // through `coordinator.load`), which the assembly only wires when BOTH
+      // sessionId and coordinator are present. The shared cassette makes the
+      // teammate's turn and the lead's continuation race for the next script
+      // step, so the assertions below never depend on WHO got which step.
+      sessionId: "lead-1",
+      coordinator,
+    })
+    try {
+      assembly.setModel(second)
+      // A rejected lead turn needs no assertion to fail this case (it rejects
+      // out of the await below); the holder assertion is the waitFor, whose
+      // subject is the TEAMMATE's request — only a teammate turn carries the
+      // teammate role's prompt.
+      await assembly.agent.run("use the team")
+      await waitFor(() => second.requests.some((r) => r.systemPrompt.includes("You are a teammate in an agent team.")))
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("holder 6 — auto-title's model: `assembly.model` read at CALL time forwards to the rebound client", async () => {
+    const first = capturingModel()
+    const second = scriptedModel([{ role: "assistant", text: "a title" }])
+    const assembly = await createSessionAssembly({ workspace: process.cwd(), model: first })
+    try {
+      assembly.setModel(second)
+      // auto-title is the ONE production reader of `assembly.model`
+      // (run.ts:661 `session, model: assembly.model,` — read AFTER the turn, at
+      // call time, handed to `maybeAutoTitle`, which streams through it at
+      // session-title/src/index.ts:56). The read is taken here where that call
+      // site takes it — after the rebind, through the same expression — and the
+      // client it yields is then exercised with one request. What this measures
+      // is the VALUE the call site reads; the request's shape is incidental
+      // (session-title builds its own, and it is tested there). Scope, stated
+      // plainly: the call site itself is the declared gap at the top of this
+      // block — no existing harness can rebind a runHeadless run mid-flight.
+      const readsAtCallTime = assembly.model
+      for await (const _ of readsAtCallTime.stream({ messages: [{ role: "user", content: "hello" }], tools: [], systemPrompt: "title" })) void _
+      expect(second.requests).toHaveLength(1)
       expect(first.requests).toHaveLength(0)
     } finally {
       await assembly.dispose()

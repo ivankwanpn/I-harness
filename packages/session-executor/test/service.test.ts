@@ -86,6 +86,67 @@ describe("createSessionService", () => {
     }
   }, 60_000)
 
+  it("R-B1 holder 7 — the service dispenses the LIVE assembly, so a rebind reaches a submitted turn", async () => {
+    // R-B1's table row 7 is the service's memoised binding (bindingFor →
+    // modelBindings.set, service.ts:211/:221, consumed as `model: binding.model`
+    // at :278). What is REACHABLE from it is the assembly the service hands out:
+    // `assemblyFor` is cache-first and returns the stored reference
+    // (service.ts:587 `assemblyFor: getOrCreate`), so a rebind applied to that
+    // object is a rebind applied to the session the service is running — the
+    // exact object Task 4's `assemblyFor(id).setModel(client)` will mutate.
+    //
+    // LIMITER, recorded not asserted (it is Task 4's F1 to resolve, and this
+    // task must not fix it): the REPORTING surfaces do not follow. The memoised
+    // binding still holds the old client, so `modelState` (which reads it) and
+    // `assembly.modelLabel` (fixed at construction) keep naming the OLD
+    // provider:model after a rebind. Only `closeSession` clears modelBindings
+    // (:574 `modelBindings.delete(sessionId)`). Pinning that staleness here
+    // would pre-empt the choice Task 4's plan explicitly leaves open (make the
+    // reporting follow, OR record the limitation), so it is stated in this
+    // comment and in the task report instead of asserted.
+    const recording = (text: string) => {
+      const requests: LLMRequest[] = []
+      const model: ModelClient = {
+        async *stream(request) {
+          requests.push(request)
+          yield { type: "text/chunk", text }
+          yield { type: "end" }
+        },
+      }
+      return { model, requests }
+    }
+    const first = recording("old endpoint")
+    const second = recording("new endpoint")
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one" },
+      }),
+    })
+
+    try {
+      const assembly = await service.assemblyFor("s1")
+      // cache-first: the SAME live object on every call — the property the
+      // rebind path depends on. (`modelBindings` is where `first.model` is held;
+      // this is the assembly, not the binding.)
+      await expect(service.assemblyFor("s1")).resolves.toBe(assembly)
+
+      assembly.setModel(second.model)
+
+      await service.submit("s1", "go", new AbortController().signal)
+      // The turn ran through the service's own lane and its answer is the SECOND
+      // client's script — a turn that stayed on the binding's client would have
+      // answered "old endpoint".
+      expect(deriveMessages(assembly.session).at(-1)?.content).toBe("new endpoint")
+      expect(second.requests.length).toBeGreaterThan(0)
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await service.close()
+    }
+  }, 60_000)
+
   it("normalizes compaction off when a ready binding has no contextWindow", async () => {
     const session = createSession()
     append(session, { type: "user/message", text: "initial work" })
