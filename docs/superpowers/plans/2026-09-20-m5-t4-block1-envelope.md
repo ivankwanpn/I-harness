@@ -800,7 +800,19 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
 
 ---
 
-### Task 5: 三條**不可以動**的界線
+### Task 5: 四條界線 ＋ **三個修法** ＋ T4 複審交棒的三件
+
+> **⚠ T4 的複審帶回三件，而它們都住在你正在編輯的檔案／測試裡。它們不在下面的步驟裡 —— 這一格才是它們的家。**
+>
+> **(a) Important：那個契約註解被一個 throw 的 `tools/post-execute` 監聽者推翻。** T4 寫的 `:52-57` 說「give never-started calls a `TOOL_CANCELLED_BY_SIBLING` result」，**而複審量到**：一批 c0 慢-成功／c1 快-丟出／c2 從未開始 ⇒ `executeToolCalls` **拒絕 `post-execute boom`**，而 **`session.events` 是兩筆 `tool/dispatch` 與**零筆** `tool/result`**。**原因**：填補與那個新迴圈**坐在一個沒有守衛的 `await commitReady()` 之後**（`:355`），**而 abort 分支替同一個危險加了 try/catch，並解釋了為什麼**（`:259-264`：使用者／政策控制的監聽者「must NOT suppress the synthetic results」）。
+> **⇒ 你 Step 3 的那個 try/catch 就是它的修法** —— 加了之後，填補與那個迴圈都會跑。**而殘留要寫準**：一個 throw 的監聽者仍然會讓**排在它後面的**格子拿不到結果（那是 abort 分支也有的既有代價，Step 3 的 STATED COST 現在要**把「填補的格子」也算進去**，不只是「已落地的兄弟」）。
+> **它同時是既有的**（同一個探針打 `8fd91957` 也是 0 筆）—— **新的是那句沒有加註的契約文字。**
+>
+> **(b) Low：那條測試只釘了 code，沒釘 message。** 它的名字說 *"not the abort message"*，而它的斷言（`:268`）只檢查 `code`。**複審量到**：把訊息換成 abort 的訊息、code 不動 ⇒ **19 passed**。**⇒ 補一條斷言，把訊息也釘住。** 那一條的合約是**兩半**（code **與** message），而只釘一半的測試會讓另一半在未來某次編輯裡靜默消失。
+>
+> **(c) Low：那句 `Nothing is fabricated` 比它的理由寬。** 同一條分支**確實**寫了 `synthetic: true` 的格子（`:348-353`），而 abort 分支把同一個機制叫 *synthetic failure*（`:265-266`）。**⇒ 破折號後面那句把主張圈在 CANCELLED 那個判決上，但 `Nothing` 沒有。** 改成那個被圈住的說法。
+
+
 
 **Files:**
 - Modify: `packages/core-agent/src/execute-tool-calls.ts`（`commitReady()` 的 try/catch）
