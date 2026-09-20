@@ -66,9 +66,17 @@ describe("createSessionService", () => {
         label: "deepseek:deepseek-chat",
       })
       const assembly = await assemblyPromise
-      expect(assembly.model).toBe(model)
+      // R-B1 (phase B): `assembly.model` is the assembly's ONE stable handle —
+      // not the binding's client object. Every holder reads through the handle,
+      // and the handle is what FORWARDS to the bound client, so the identity
+      // form of this assertion ("assembly.model IS the pending binding's
+      // client") no longer holds by construction. The fact it pinned is pinned
+      // behaviorally instead: the turn's request lands in THIS client's own
+      // recorder (exactly one request), and the resolution count stays 1. The
+      // handle's identity across a rebind is pinned in test/assembly.test.ts.
       expect(assembly.modelLabel).toBe("deepseek:deepseek-chat")
       await expect(assembly.agent.run("hello")).resolves.toMatchObject({ finalText: "real" })
+      expect(requests).toHaveLength(1)
       expect(requests[0]?.reasoningEffort).toBe("high")
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("get_context_remaining")
       expect(calls).toBe(1)
@@ -243,7 +251,13 @@ describe("createSessionService", () => {
       await service.closeSession("s1")
 
       const assembly = await service.assemblyFor("s1")
-      expect(assembly.model).toBe(models[1])
+      // R-B1 (phase B): the assembly exposes a stable handle, not the binding's
+      // client object, so the identity form of this assertion ("assembly.model
+      // IS models[1]") no longer holds by construction. What it pinned — the
+      // invalidated FIRST resolution is not in force; this assembly runs on the
+      // SECOND client — is pinned behaviorally: "second" is the second client's
+      // script step, which the first client does not carry.
+      await expect(assembly.agent.run("go")).resolves.toMatchObject({ finalText: "second" })
       expect(assembly.modelLabel).toBe("fixture:second")
       await expect(service.modelState("s1")).resolves.toMatchObject({
         status: "ready",
