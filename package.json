@@ -15,6 +15,7 @@
     "typecheck": "pnpm -r typecheck",
     "e2e": "vitest run e2e/ --config e2e/vitest.config.ts",
     "verify:reachability": "node scripts/audit/check-reachability.mjs --gate",
+    "verify:all": "node scripts/verify-all.mjs",
   "bench": "tsx scripts/bench/run-bench.mts",
   "verify:bench": "tsx scripts/bench/run-bench.mts --gate",
     "verify:store": "bash scripts/check-store.sh"

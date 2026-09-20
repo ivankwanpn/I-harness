@@ -431,7 +431,14 @@ function typeClause(name: string): string {
 }
 
 function isJsonNumber(value: unknown): value is number {
-  // §3.3: a JSON number is FINITE, and -0 is not one — Object.is keeps its sign.
+  // §3.3, CORRECTED 2026-09-21 — the two exclusions have DIFFERENT reasons, and
+  // an earlier version of this comment gave -0 the wrong one ("a JSON number is
+  // FINITE, and -0 is not one"): measured, `JSON.parse('-0')` IS -0, so JSON
+  // expresses it perfectly well. What -0 fails is ROUND-TRIPPING —
+  // `JSON.stringify(-0)` is `"0"` — and losslessness is the property this walk
+  // is about, so -0 is rejected as not-carried, not as not-expressible.
+  // NaN and ±Infinity are the expressibility case: no JSON spelling exists for
+  // them at all. Object.is keeps -0's sign out of the set.
   return typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0)
 }
 
