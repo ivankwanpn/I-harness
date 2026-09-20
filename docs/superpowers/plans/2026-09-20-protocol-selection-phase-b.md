@@ -263,8 +263,8 @@ git commit -m "test(session-executor): every holder follows the rebind, enumerat
 **照 R-B2 兩者都維持勝出** —— 它們是使用者的設定，rebind 不該靜默丟掉它們。**但這個後果必須是可見的**，否則它就是那個單元要消滅的靜默例外。（**R-B2 原本只寫給 (a)；這一題把它擴到 (b)** —— 同一個規則、同一個代價。）
 
 **Files:**
-- Test: `packages/compaction/test/`（既有的 engine 測試檔）
-- Test: `packages/guard-approval/test/`（既有的監護者測試檔）
+- Test: **`packages/session-executor/test/assembly.test.ts`** —— **不是**兩個套件自己的測試目錄。
+  **這是實作時量出來的**（`aff09ea1`）：**只有這個 harness 能 rebind**（`setModel`；`compaction` 與 `guard-approval` 都沒有 rebind 的概念，兩者都在建構時抓走 client —— 那正是這個單元要處理的缺陷類別）。而且**`compaction` 套件裡根本沒有測試設過 `summarizationModel`**，所以組裝那一條是**唯一**覆蓋該分支的測試。審查確認這個偏離**正確且更強**。
 - Modify: 兩處 `??` 上方的註解（若它們沒說出這件事）
 
 - [ ] **Step 1: 寫測試把 (a) 的邊界釘住**
