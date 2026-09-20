@@ -484,7 +484,11 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a body failure goes soft, a p
 | 否決的 `.catch` 先跑（`vetoDelay=0ms`） | **`THREW: read disabled`** —— 大聲 ✓ |
 | 否決的 `.catch` 晚 100ms | **`RESOLVED (soft path)`**，而 **c1 的結果是 `{"error":"boom","code":"TOOL_FAILED"}`** —— **它被記成「用兄弟的訊息失敗了」** |
 
-**⇒ 同一個具型錯誤，只因為 microtask 的先後，就大聲或變軟。** 而可達性是普通的：`pre-tool` 是一個**子行程**（這條分支自己的 e2e 量到 449ms），所以任何先失敗的兄弟都會贏這個競態。
+**⇒ 同一個具型錯誤，只因為 microtask 的先後，就大聲或變軟。** 而可達性是普通的：**`pre-tool` 是一個子行程** —— `packages/hooks/src/runner.ts:105` 用 `spawn(…)` 啟動它 —— 所以任何先失敗的兄弟都會贏這個競態。
+
+> **⚠ 這一格原本寫著「這條分支自己的 e2e 量到 449ms」，而那個數字**在樹裡沒有 artifact**：`e2e/` 沒有 hooks 的 e2e（只有 apply-patch、sandbox、skills、team、workflow）。那個數字是一個子代理在**它的報告**裡量到的，我把它寫進計畫，而**它從那裡走進一個已提交的測試註解**。
+>
+> **⇒ 每一跳都讓它看起來更有權威，而沒有一跳有 artifact。** 這正是「不要引用未量測的數字」要防的東西 —— **而我在傳遞它的那一跳。** 數字已移除，換成本行的那個**真的** citation。
 
 **修法（複審指的方向，而它與 `:279-280` 那句假註解的修正一起做）：**
 
