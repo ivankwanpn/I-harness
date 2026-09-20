@@ -17,7 +17,8 @@
 - **`prepare` 的政策丟出仍然殺掉整個 turn**（spec §6.1）—— `unknown tool`、`guard denied`、`tools/pre-execute` 的 deny、`denied`、approval fail-closed、guardian denied。
 - **cascade 裡的政策否決仍然殺掉整個 turn**（spec §2.6）—— 靠 `PolicyRefusal` 標記，不靠一份清單。
 - **合成失敗不跑 `finalize`、不發 `agent/post-tool`**（M10a 的既有裁定，經 `"synthetic" in slot` 那條分支）。
-- **不新增 export，除了那三個常數**（`TOOL_FAILED`、`TOOL_CANCELLED_BY_SIBLING`）與 `core-tools` 的 `isPolicyRefusal`／`PolicyRefusal` 型別 —— `node scripts/audit/check-reachability.mjs --gate` 必須維持 `gate PASS -- no new rows`。
+- **不新增 export，除了那三個常數**（`TOOL_FAILED`、`TOOL_CANCELLED_BY_SIBLING`）與 `core-tools` 的 `isPolicyRefusal`／`PolicyRefusal` 型別。
+- **⚠ 可達性閘門的 `PASS` 是 T6 的要求，不是每一個任務的要求。** 常數與標記先落地、**由後面的任務在生產檔案裡消費**，所以在區塊中途它的讀數本來就會是 `N NEW rows`（`TOOL_FAILED` 是上一個任務留下的，標記是 T1 的）。**每一個任務要做的是「記下讀數、確認它只增不減」，而 `gate PASS` 在 T6 才被要求。** 第一版把「維持 PASS」寫成每一個任務的約束 —— **那是不可能的，而它錯的方式是要求一件做不到的事。**
 - **⚠ 全套閘門是兩步**：`pnpm -r --no-bail test` 在任何套件紅的時候**只跑一個前綴**（T6 Step 3 有量測）。**先數母體（必須 66），再比數字。**
 - **行號會腐化。** 每一處引用動手前先 `grep -n` 核對。
 
@@ -46,7 +47,7 @@
 | `packages/core-agent/test/execute-tool-calls.test.ts` | 這一塊的核心測試 | T2／T4／T5 |
 | `packages/core-agent/test/telemetry.test.ts` | 編碼了舊契約 | **T2**（改寫） |
 | `packages/sdk/test/server.test.ts` · `packages/session-executor/test/assembly.test.ts` · `apps/cli/test/plugin-mount.test.ts` | 同上 | **T3**（改寫 7 條） |
-| `packages/core-agent/test/policy-refusal.test.ts` | 新的、極小的單元測試 | **T1** |
+| `packages/hooks/test/policy-refusal.test.ts` | 新的、極小的單元測試 | **T1** |
 
 **為什麼標記住在 `core-tools`**：依賴方向是 `hooks → core-tools` 與 `core-agent → core-tools`，兩者互不依賴（量過，無環）。**用 `instanceof` 會讓 `core-agent` 依賴 `hooks`，那條依賴不該存在。**
 
@@ -57,7 +58,9 @@
 **Files:**
 - Modify: `packages/core-tools/src/index.ts`（加型別與判定函式）
 - Modify: `packages/hooks/src/types.ts:121`（`HookBlockedError` 帶上標記）
-- Test: `packages/core-agent/test/policy-refusal.test.ts`（新檔）
+- Test: `packages/hooks/test/policy-refusal.test.ts`（新檔）
+
+> **⚠ 測試為什麼住在 `hooks` 而不是 `core-agent`**（第一版寫錯了，量測推翻）：`@i-harness/hooks` **不是** `core-agent` 的宣告依賴，所以從那裡 import `HookBlockedError` **解析不到** —— 而加那條依賴是被禁止的。`hooks` 則**同時**構得到兩邊：`@i-harness/core-tools` 是它的宣告依賴（`hooks/package.json`），而 `HookBlockedError` 是它自己的。**所以這個測試的唯一正確住處是 `hooks/test/`。**
 
 **Interfaces:**
 - Consumes: `HookBlockedError`（`hooks/src/types.ts:121`，**已經**有 `readonly code = "hook-blocked"`）。
@@ -67,12 +70,12 @@
 
 - [ ] **Step 1: 寫紅測試**
 
-建立 `packages/core-agent/test/policy-refusal.test.ts`：
+建立 `packages/hooks/test/policy-refusal.test.ts`：
 
 ```ts
 import { describe, expect, it } from "vitest"
 import { isPolicyRefusal } from "@i-harness/core-tools"
-import { HookBlockedError } from "@i-harness/hooks"
+import { HookBlockedError } from "../src/types.ts"
 
 // spec §2.6: a POLICY refusal — "you may not do this" — must be
 // distinguishable from a tool body that tried and failed. The distinction is
@@ -107,7 +110,7 @@ describe("isPolicyRefusal", () => {
 
 - [ ] **Step 2: 跑它，確認它紅**
 
-Run: `pnpm --filter @i-harness/core-agent exec vitest run test/policy-refusal.test.ts`
+Run: `pnpm --filter @i-harness/hooks exec vitest run test/policy-refusal.test.ts`
 
 Expected: **紅在 import** —— `@i-harness/core-tools` 沒有 `isPolicyRefusal`。**這一條的紅就是「東西還不存在」，那是這一條全部要證明的東西，所以這裡的紅-first 是誠實的**（它不像 T2 那樣需要一個實質的紅）。
 
@@ -165,12 +168,22 @@ export class HookBlockedError extends Error {
 }
 ```
 
-- [ ] **Step 5: 跑測試（綠）**
+- [ ] **Step 5: 跑測試 —— 判準是「沒有新的紅」，不是「全綠」**
 
-Run: `pnpm --filter @i-harness/core-agent exec vitest run test/policy-refusal.test.ts`
-Run: `pnpm --filter @i-harness/hooks exec vitest run`
+```bash
+pnpm --filter @i-harness/hooks exec vitest run test/policy-refusal.test.ts
+pnpm --filter @i-harness/hooks exec vitest run
+pnpm --filter @i-harness/core-tools exec vitest run
+```
 
-Expected: **兩者全綠**（`hooks` 的是回歸檢查 —— 加一個唯讀欄位不該動任何既有測試）。
+Expected:
+- **`policy-refusal.test.ts` → 4 passed / 0 failed**
+- **`core-tools` → 全綠**
+- **`hooks` → 30 passed / 1 failed（31）。而那 1 條是既有的紅，不是你的** —— `test/hooks.test.ts:358`（*"a pre-tool handler that blocks 'read' fails the agent turn fail-closed"*），**它在這一塊開始之前就紅了**（上一個任務的軟路徑已經落地，而否決的分類在 T2 才修）。
+
+**⇒ 這一條的判準是「條數與測試名與動手前一致」。** 動手前先跑一次 `hooks` 記下 `30 passed / 1 failed` 與那個測試名。**多了任何一條、或名字不同 ⇒ 停手回報。**
+
+> **⚠ 第一版寫「兩者全綠」是錯的，而它錯的方式是要求一件做不到的事** —— 否決要等 T2 才會回到大聲。**「加一個唯讀欄位不該動任何既有測試」那個理由成立，但它證明的是「沒有新紅」，不是「全綠」。**
 
 - [ ] **Step 6: 突變 —— 證明「帶著值」那一半被釘住**
 
@@ -183,7 +196,7 @@ Expected: **紅** —— 第四條（`{ policyRefusal: undefined }`）。
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/core-tools/src/index.ts packages/hooks/src/types.ts packages/core-agent/test/policy-refusal.test.ts
+git add packages/core-tools/src/index.ts packages/hooks/src/types.ts packages/hooks/test/policy-refusal.test.ts
 git commit -m "feat(core-tools,hooks): M5 T4 block 1 — a policy refusal is marked, so a veto stays loud when a body failure goes soft"
 ```
 
