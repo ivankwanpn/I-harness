@@ -527,9 +527,13 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-assembly-handle-"))
     const assembly = await createSessionAssembly({ workspace: dir, model: first })
     try {
-      // The handle is what EVERY holder was handed — the agent's own deps
-      // included, which this file's createAgent capture records at construction.
+      // ⚠ `assembly.model` is the HANDLE, never the injected client — if it
+      // were the client, a rebind would have nothing to forward through. So
+      // identity is asserted against the handle, not against `first` — and the
+      // handle is what EVERY holder was handed, the agent's own deps included,
+      // which this file's createAgent capture records at construction.
       const handle = assembly.model
+      expect(handle).not.toBe(first)
       expect(agentCalls.deps.at(-1)?.model).toBe(handle)
 
       assembly.setModel(second)
