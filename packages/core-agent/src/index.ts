@@ -101,6 +101,24 @@ export interface Agent {
   compact?(instructions?: string): Promise<CompactionResult>
 }
 
+/** M5 T2 (second half): one message as canonical JSON, for the per-request
+ * prefix comparison. "The same message" has to mean the same CONTENT, not the
+ * same construction order — a message rebuilt from a resumed log, or by a
+ * producer that assembles its object in another order, must fingerprint
+ * identically or the comparison reports a break that never happened. So object
+ * keys are sorted (recursively), arrays keep their order (a tool-result run is
+ * ordered), and `undefined`-valued keys are dropped the way `JSON.stringify`
+ * drops them. Not exported: its only consumer is the comparison in
+ * `createAgent`, in this file. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`
+}
+
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
   const maxTurns = deps.maxTurns ?? 20
   const maxParallel = deps.maxParallelToolCalls ?? 10
@@ -200,6 +218,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // request: a resumed session has no predecessor to compare against, so the
   // first request claims nothing rather than guessing.
   let rewriteMarkers: number | undefined
+  // M5 T2, second half: the PREVIOUS request's per-message fingerprints. It
+  // lives here, beside `steps`/`callSeq`, for the same reason they do — a
+  // followup continues the same conversation, so its first request must be
+  // compared against the previous turn's LAST request, not against nothing.
+  // Undefined before the first request: this process has sent nothing yet, so a
+  // resumed session has no predecessor to compare with and claims none.
+  let prevFingerprints: string[] | undefined
 
   async function runTurn(message: string, signal?: AbortSignal): Promise<AgentResult> {
     const abort = signal ?? deps.signal
@@ -267,6 +292,20 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       const rewrite = deriveProjectionRewrite(deps.session)
       const prefixRewritten = rewriteMarkers !== undefined && rewrite.markers > rewriteMarkers
       rewriteMarkers = rewrite.markers
+      // M5 T2 (second half): the same question asked of our OWN bytes — this
+      // request's message prefix against the previous request's. D3 above
+      // attributes a count of rewrite MARKERS (the cause); this measures the
+      // bytes themselves (the effect), so the two are read together. `shared` is
+      // the number of leading messages that are byte-identical, and the previous
+      // request is "still a prefix" only when every one of its messages is.
+      const fingerprints = messages.map(canonicalJson)
+      let shared = 0
+      if (prevFingerprints !== undefined) {
+        const limit = Math.min(fingerprints.length, prevFingerprints.length)
+        while (shared < limit && fingerprints[shared] === prevFingerprints[shared]) shared += 1
+      }
+      const previous = prevFingerprints
+      prevFingerprints = fingerprints
       deps.telemetry?.emit({
         type: "provider/call",
         ts: Date.now(),
@@ -277,6 +316,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           ...(prefixRewritten
             ? { prefixRewritten: true, ...(rewrite.lastCause !== undefined ? { prefixCause: rewrite.lastCause } : {}) }
             : {}),
+          // M5 T2 (second half), the honesty rule: present ONLY when there was a
+          // previous request to compare against. A resumed session's first
+          // request reports NEITHER field — absent, never `shared: 0`, which is
+          // a measurement it did not make and would read as a regression.
+          // `prefixKept` is that measurement when it exists: how many of the
+          // previous request's messages are still the identical head of this
+          // one. `prefixBroke` says the rest is gone — a compaction's summary
+          // takes the head, so this is 0/true on the request that follows one.
+          ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
         },
       })
 

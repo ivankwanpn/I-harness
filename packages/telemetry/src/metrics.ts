@@ -30,11 +30,24 @@ export interface MetricsSnapshot {
    * provider reported zero" stays distinguishable from "nobody reported"; an
    * unreported field is ABSENT, never a fabricated 0. */
   reported: Record<string, number>
-  /** M5/D3: how many provider round-trips ran on a REWRITTEN prefix, out of how
-   * many ran at all. A tally rather than a sum — `provider/call` carries
-   * positions (step, message count), not measurements, and those must never be
-   * added up. `requests` is the denominator that makes `rewritten` readable. */
-  prefix: { requests: number; rewritten: number; lastCause?: string }
+  /** M5/D3 + M5 T2 (second half): how many provider round-trips ran on a
+   * REWRITTEN prefix (D3, derived from the log's rewrite markers), and how many
+   * ran on a prefix that was MEASURED to still extend the previous request's
+   * bytes. A tally rather than a sum — `provider/call` carries positions (step,
+   * message count), not measurements, and those must never be added up.
+   * `requests` is the denominator that makes `rewritten` readable;
+   * `observed` is the denominator that makes `kept`/`broke` readable — it counts
+   * only the requests that HAD a previous one, because the process's first
+   * request has nothing to compare against and is neither kept nor broke.
+   * M5 T2 (second half). */
+  prefix: {
+    requests: number
+    rewritten: number
+    observed: number
+    kept: number
+    broke: number
+    lastCause?: string
+  }
   /** Tool outcomes by tool name (`tool/end` vs `tool/error`). */
   tools: Record<string, { ok: number; error: number }>
 }
@@ -47,7 +60,14 @@ export function createMetricsSink(): MetricsSink {
   const events = new Map<string, number>()
   const tokens = new Map<string, number>()
   const reported = new Map<string, number>()
-  const prefix = { requests: 0, rewritten: 0 } as { requests: number; rewritten: number; lastCause?: string }
+  const prefix = { requests: 0, rewritten: 0, observed: 0, kept: 0, broke: 0 } as {
+    requests: number
+    rewritten: number
+    observed: number
+    kept: number
+    broke: number
+    lastCause?: string
+  }
   const tools = new Map<string, { ok: number; error: number }>()
 
   return {
@@ -75,6 +95,17 @@ export function createMetricsSink(): MetricsSink {
         if (ev.data.prefixRewritten === true) {
           prefix.rewritten += 1
           if (typeof ev.data.prefixCause === "string") prefix.lastCause = ev.data.prefixCause
+        }
+        // M5 T2 (second half): the MEASURED half of the same question. Keyed on
+        // the FIELDS' PRESENCE, not their values: `prefixKept: 0` with
+        // `prefixBroke: true` is a real, measured full break, while an event
+        // carrying neither field holds no comparison at all (the first request
+        // of a process). Counting that absent case as "kept" is precisely what
+        // this counter exists to make impossible.
+        if ("prefixKept" in ev.data || "prefixBroke" in ev.data) {
+          prefix.observed += 1
+          if (ev.data.prefixBroke === true) prefix.broke += 1
+          else prefix.kept += 1
         }
         return
       }
