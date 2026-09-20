@@ -211,12 +211,59 @@ Expected: **全綠**。
 
 **各還原，跑回綠。**
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: 🔴 修法（複審的 Critical ＋ Important ＋ Low）—— T1 的修正輪**
+
+> **T1 的複審量到**全函式是假的**，而它是可達的。** 這一格是它的修法，**而它同時是 T1 的第一個版本沒有做到的事**。
+
+**(a) CRITICAL —— 遞迴用 JS 呼叫堆疊，而深度可達。**
+
+**量到**（Node v24.15.0，每個資料點一個新行程，值在記憶體裡建）：
+
+| | |
+|---|---|
+| 驗證器第一次 `RangeError` | **3,600–3,700**（冷）／**~9,500**（JIT 暖機後） |
+| **`JSON.parse` 的最大嵌套** | **≥ 1,000,000**（走訪驗證到 100 萬層） |
+
+**決定性的重現**：`{"q":"x","extra":[[[…]]]}`、**4,000 層 = 8,019 bytes** ⇒ **`JSON.parse` 過、驗證器 `RangeError`**。**而 `isLosslessJson`（`:77`）走**整棵** args 樹，不管 schema 宣告了什麼 ⇒ **任何一個 args schema 是 `type:"object"` 的工具都暴露。**
+
+**⇒ 而 `RangeError` 會被重拋 ⇒ 殺掉 turn ⇒ 那正是 spec §1.1／§2 存在的理由所要消滅的失敗模式。**
+
+**修法：把遞迴改寫成**顯式的工作清單**（dsh 的 frame machine）。** 三個遞迴點（`collectViolations`／`collectObjectViolations`，以及 `isLosslessJson` 的兩處）**全部**改成 `const frames: …[]` ＋ `while (frames.length > 0)`。
+
+**⇒ 為什麼不是「加一個深度預算」（那個約 10 行的版本）：**
+- **用在 `isLosslessJson` 上，一個**完全無損**的深層值會被報成 `"value" must be a lossless JSON object`** —— 那是一個**捏造的違反**，正是這一塊一路在消滅的形狀
+- **用在驗證器上，它把一個**合法**的值變成拒絕**
+
+**而 dsh 的原始碼是那個參考**（它的 `json-schema.ts` 有 `const frames: ValueFrame[]` 與 "without using the JavaScript call stack"，而那個檔案 656 行就是為了這個）。**⇒ 而我的計畫第一版寫「a recursive validator has identical semantics」，那句話錯了** —— **語意相同，而韌性不同**，而那個「房屋規則」是關於**不可信輸入**的。
+
+**(b) IMPORTANT —— 結構化的 `enum` 成員按 JSON 文字比較 ⇒ 鍵序假陽性。**
+
+**量到**：`{enum:[{a:1,b:2}]}` 對 `{b:2,a:1}` ⇒ **誤報**；同鍵序 ⇒ `[]`。
+
+**修法**：成員比較改成**鍵序無關**（遞迴排序鍵後再比，或深層相等）。**而注意**：**dsh 的 enum 是純量**（`JsonSchemaScalar[]`）—— **IH 接受了 dsh 根本不接受的東西**，所以這一條沒有參考可抄。
+
+**(c) LOW —— 物件走訪讀原型鏈。**
+
+**量到**：`{type:"object",properties:{toString:{type:"string"}}}` 對 `{}` ⇒ **誤報**；`{required:["toString"]}` 對 `{}` ⇒ **靜默不報**。**而 `:131` 已經用了 `hasOwnProperty`** —— **不一致在同一個函式裡。**
+
+**修法**：那個函式裡的每一次成員讀取都用**自有屬性**判定。
+
+**(d) 那一條缺席的回歸測試 —— 而它是這個洞沒有被測到的原因。**
+
+現有的「is TOTAL」案例用的是**淺**的值。**加一條**：**在記憶體裡建一個深的巢狀值**（`JSON.stringify` 會先爆，所以**不能用它建**）**並斷言驗證器不拋。**
+
+**突變證明（三個都要）**：把 frame machine 改回遞迴 ⇒ **深層那條必須紅**；把 enum 的比較改回 `JSON.stringify` ⇒ **鍵序那條必須紅**；把 `hasOwnProperty` 拿掉 ⇒ **原型鏈那條必須紅**。
+
+- [ ] **Step 7: Commit（修正輪）**
+
+> **Step 6 的那個提交（`6ee2b314`）已經存在了** —— **修正輪是**新的一個提交**，不 amend。** 上面 (a)–(d) 四件事一起提交，訊息要**指名那個 Critical 與它的量測**。
 
 ```bash
 git add packages/core-tools/src/json-schema.ts packages/core-tools/test/json-schema.test.ts
-git commit -m "feat(core-tools): M5 T4 block 2 — the value layer validates a measured subset, totally"
+git commit -m "fix(core-tools): M5 T4 block 2 T1 review round — the walk uses an explicit frame machine, so totality survives a value JSON.parse accepts"
 ```
+
+**（T1 的第一個提交是 `feat(core-tools): M5 T4 block 2 — the value layer validates a measured subset, totally`，而那個訊息裡的 "totally" 在修正輪之前是假的。）**
 
 ---
 
