@@ -38,10 +38,12 @@ spec §4.1 說模型 client 有「**兩個**消費者」，而「**一個改動�
 | 2 | 壓縮引擎的**建構**（`core-agent/src/index.ts:142`） | **建構時** | ✗ |
 | 3 | 引擎自己的讀取（`compaction/src/index.ts:114`） | 使用時，讀它自己的字面量 | 取決於 2 |
 | 4 | **`config.summarizationModel`**（`compaction/src/config.ts`） | **在設定裡，扛過任何 rebind** | ✗（且它 `??` **勝過** `deps.model`） |
-| 5a | 子代理（`assembly.ts:764` → `subagent/src/child.ts:259,275,281`） | 建構時，逐次 spawn 讀 | ✗ |
-| 5b | 監護者（`assembly.ts:809` → `guard-approval/.../reviewer.ts:137`） | 建構時 | ✗ |
-| 5c | 隊友（`assembly.ts:845` → `agent-team/src/scheduler.ts:77,204`） | 建構時 | ✗ |
-| 6 | auto-title（`assembly.ts:939` → `run.ts:661` → `session-title/src/index.ts:56`） | 建構時 | ✗ |
+| 5a | 子代理（`assembly.ts:785` 的 `parentModel: model` → `subagent/src/child.ts:259,275,281`） | 建構時，逐次 spawn 讀 | ✗ |
+| 5b | 監護者（`assembly.ts:830` 的 `parentModel: model` → `guard-approval/.../reviewer.ts:137`） | 建構時 | ✗ |
+| 5c | 隊友（`assembly.ts:866` 的 `parentModel: model` → `agent-team/src/scheduler.ts:77,204`） | 建構時 | ✗ |
+| 6 | auto-title（`assembly.ts:960` 的 `model,` → `run.ts:661` → `session-title/src/index.ts:56`） | 建構時 | ✗ |
+
+> **行號基準：`cd47c730`。** 這張表的第一版引的是**加把手之前**的行號（`764`/`809`/`845`/`939`），加把手把它們整體推移了 —— **T1 的審查抓到這件事**。**引用一律附上該行的內容**（`parentModel: model`、`model,`），因為 Task 1 的後續修正仍在改同一支檔案的註解，**行號會再動，內容不會**。**動任何一行之前先 `grep -n` 量一次。**
 | 7 | service 的 memoized binding（`service.ts:211-224`, `:278`） | 建構時輸入 | ✗ |
 
 **§4.1 的理由是**「只換一個 → 摘要會留在舊端點上 —— 而那是**要花錢的呼叫**」。**同一個理由對 5a/5b/5c/6 逐字成立**：rebind 之後 spawn 的子代理、監護者檢視、隊友、auto-title 全部**用舊 client 發真的請求，而且沒有任何東西會說出來**。
@@ -56,9 +58,11 @@ spec 的機制（`AgentDeps.model` 改成 `() => ModelClient`、新增 `Agent.se
 
 - 型別零改動 ⇒ **56 個 `createAgent(` 呼叫點（實測；第一版計畫寫「~85」，是估的）與 `agent.test.ts` 的 19 個 `deps.model = …` 賦值全部不用動**。
 - 持有者的呼叫點零改動 ⇒ 子代理／監護者／隊友／auto-title **自動跟著換**。
-- ⚠ **`expect(assembly.model).toBe(model)`（`service.test.ts:69`, `:246`）不會照樣成立 —— 計畫的第一版寫錯了，實測推翻了它。**
-  有了把手，`assembly.model` **永遠是把手**，不可能是被注入的 client：**若它等於原始 client，rebind 就沒有東西可以轉發。**
-  那兩條斷言因此**必須改**，而改法是**保留各自的主題、改成行為式釘住**（那一回合的請求落在該 client 的記錄器裡；那次執行產出**第二個** client 的腳本），**不是刪掉它們、也不是放寬成什麼都接受**。（`cd47c730` 就是這樣改的。）
+- ⚠ **`expect(assembly.model).toBe(model)`（`service.test.ts:69`, `:246`）不會照樣成立。** 計畫的第一版說它「照樣成立，而且更穩」—— **假的**。
+  **但第二版給的理由也是假的。** 我寫「若它等於原始 client，rebind 就沒有東西可以轉發」—— **審查員跑了反事實把它推翻**：把 `get model() { return currentModel }` 放進回傳字面量，**配著未修改的 `service.test.ts`，29/29 全綠**，兩條身分斷言都成立。
+  **理由**：持有者捕捉的是**區域的把手**（`assembly.ts:785/:830/:866`、agent deps `:938` —— 行號基準 `cd47c730`），它們**不讀 `assembly.model`**。那個屬性只有**一個**生產讀者（auto-title，`run.ts:661`，使用時讀取），而 getter 一樣服務得了它。
+  **所以「那兩條測試必須改」是設計選擇，不是必然。** 而把手真正的好處在**另一個方向**：**一個提早快照 `assembly.model` 的持有者，在把手下會跟著換，在 getter 下會變舊。** 那才是 R-B1 的理由。
+  改法是**保留各自的主題、改成行為式釘住**（那一回合的請求落在該 client 的記錄器裡，且**恰好一次**；那次執行產出**第二個** client 的腳本），**不是刪掉它們、也不是放寬成什麼都接受**。審查員用**獨立突變**驗過：兩條各自仍會為**原本的那個缺陷**變紅。（`cd47c730` 就是這樣改的。）
 
 **代價**：spec §4.2 的 `agent.setModel` **不存在**；cell 屬於組裝，所以動詞是 `assembly.setModel`。**spec §10 的「`core-agent` 的 model getter」整條作廢。**
 
@@ -228,17 +232,23 @@ git commit -m "test(session-executor): every holder follows the rebind, enumerat
 
 ---
 
-### Task 3: `config.summarizationModel` 的邊界**被測出來並寫下來**
+### Task 3: **兩個「設定的模型」**的邊界 —— 都被測出來、都寫下來
 
-`compaction/src/index.ts:114` 的 `config.summarizationModel ?? deps.model` 意味著：**一個明確設定的摘要模型在 rebind 之後仍留在舊端點。**
+**有兩個持有者由「設定」指名，因而繞過把手。它們是同一類，所以同一題。**
 
-**照 R-B2 它維持勝出** —— 它是使用者的設定。**但這個後果必須是可見的**，否則它就是那個單元要消滅的靜默例外。
+**(a) `config.summarizationModel`** —— `compaction/src/index.ts:114` 是 `config.summarizationModel ?? deps.model`。**一個明確設定的摘要模型在 rebind 之後仍留在舊端點。**
+
+**(b) 宿主設定的 guardian model** ——（**T1 的審查找到，計畫的第一版漏了它**）`assembly.ts:831` 的 `...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {})` 把它傳給監護者，而 `guard-approval/src/guardian/reviewer.ts:137` 是 `deps.model ?? deps.parentModel` —— **設定的贏，而且它在建構時被捕捉**，所以 rebind 之後**每一次監護者檢視仍計費在舊端點**。
+**它今天只有測試碼設定**（`apps/cli/test/guardian.test.ts:30`），**沒有生產呼叫者** —— 所以它是一個**埋著的地雷，不是一個正在流血的傷口**。**照樣要處理**：一個「只換了 8 個持有者中的 7 個」的 rebind，正是這個單元要消滅的東西，而它不會等到有人用了才變成真的。
+
+**照 R-B2 兩者都維持勝出** —— 它們是使用者的設定，rebind 不該靜默丟掉它們。**但這個後果必須是可見的**，否則它就是那個單元要消滅的靜默例外。（**R-B2 原本只寫給 (a)；這一題把它擴到 (b)** —— 同一個規則、同一個代價。）
 
 **Files:**
 - Test: `packages/compaction/test/`（既有的 engine 測試檔）
-- Modify: 該 `??` 上方的註解（若它沒說出這件事）
+- Test: `packages/guard-approval/test/`（既有的監護者測試檔）
+- Modify: 兩處 `??` 上方的註解（若它們沒說出這件事）
 
-- [ ] **Step 1: 寫一條測試把這個邊界釘住**
+- [ ] **Step 1: 寫測試把 (a) 的邊界釘住**
 
 ```ts
 it("a CONFIGURED summarization model wins over the handle — a documented boundary, not an oversight", () => {
@@ -249,9 +259,24 @@ it("a CONFIGURED summarization model wins over the handle — a documented bound
 })
 ```
 
-- [ ] **Step 2: 讓註解說出它**
+- [ ] **Step 1b: 寫測試把 (b) 的邊界釘住**
 
-若 `:114` 上方的註解沒說「設定勝過把手，而這是刻意的」，補上，並引用 R-B2。
+**這條要用既有 harness 驅動一次監護者檢視**，然後斷言：一個**設定了** `guardian.model` 的組裝，在 rebind 之後**仍走那個設定的 client**。
+
+```ts
+it("a CONFIGURED guardian model wins over the handle too — the same boundary, the same cost", () => {
+  // Found by T1's reviewer, absent from this plan's first version. Same class as
+  // R-B2's summarizationModel: a host-configured model is a deliberate choice and
+  // the rebind does not discard it. Same visible cost: for such a configuration
+  // every guardian review keeps billing the configured endpoint.
+})
+```
+
+**若那個 harness 驅動不了監護者**，**不要假裝測到**：把它列進報告的「無法在此 harness 覆蓋」清單，說明需要什麼，並**在 (b) 的註解裡寫下這件事還沒被測試釘住**。**一個誠實的缺口比一條假的斷言有價值。**
+
+- [ ] **Step 2: 讓兩處註解都說出它**
+
+若 `compaction/src/index.ts:114` 或 `guard-approval/src/guardian/reviewer.ts:137` 上方的註解沒說「設定勝過把手，而這是刻意的」，補上，並引用 R-B2。
 
 - [ ] **Step 3: 全套 + gate + commit**
 
@@ -301,6 +326,23 @@ it("a protocol on the wire rebinds the LIVE session, and is never persisted", as
 3. `apps/cli/src/index.ts` 的 relay：**先用它 rebind**（`resolveModel` → `assemblyFor(sessionId).setModel(client)`），**再 `updateMeta` 一個不含 protocol 的選擇**。
 
 **注意既有的事實**：`server.ts:365` 今天會 `closeSession`（銷毀組裝）。**當場生效就不需要它了** —— 但拿掉它是行為變更，**要在報告裡明說你做了什麼、為什麼**。
+
+### ⚠ 前一題的審查找到的**前置條件**（F1，MEDIUM）—— 這一題不處理就會出貨一個新的說謊面
+
+`setModel` **只動那個 closure cell**。而**回報用的**兩個表面不會跟著動：
+
+- `assembly.modelLabel` 在**建構時固定**（`assembly.ts:966`、`service.ts:279` —— 行號基準 `cd47c730`）
+- `SessionService.modelState` 讀的是 **memoized binding**（`service.ts:208-218`），而**只有 `closeSession` 會清它**（`service.ts:572`）
+
+**而這一題的計畫要拿掉那個 `closeSession`。** 於是：**花費移到新端點，而 `session/model/state` 與 `session/list.modelLabel`（`server.ts:342/:366/:536-543`）繼續回報舊的 `provider:model`**，直到別的東西關掉 session。
+
+**那正是這個單元要消滅的東西 —— 一個說的和做的不同的表面。**
+
+**所以這一題要二選一，並在報告裡說你選了哪個、為什麼：**
+1. **讓回報跟著換**（rebind 時重新解析 binding 並更新 label），**或**
+2. **在計畫與程式碼裡明確記下這個限制**，讓它是一個**已知的邊界**而不是一個意外的謊。
+
+**選 2 是可接受的，選「什麼都不做也不說」不是。**
 
 - [ ] **Step 5: 刻意地改那條守衛**
 
