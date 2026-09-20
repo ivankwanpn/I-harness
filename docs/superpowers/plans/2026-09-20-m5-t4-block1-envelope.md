@@ -4,60 +4,220 @@
 
 **Goal:** 一個被派送的工具呼叫，無論成功或丟出，都在日誌裡留下**恰好一筆** `tool/result` —— 而且 turn 繼續。
 
-**Architecture:** `executeToolCalls` 的失敗路徑停止 `rethrow`，改走中止路徑**已經在跑**的那條：填補沒有輸出的格子、讓頭部游標前進、讓已經落地的兄弟 commit 它們**真的**結果、替從未開始的呼叫填一筆（訊息與中止不同）。
+**Architecture:** `executeToolCalls` 的失敗路徑停止 `rethrow`，改走中止路徑**已經在跑**的那條（填補格子、讓頭部游標前進、讓落地的兄弟 commit 它們**真的**結果）。**哪些失敗是軟的由三件事結構性地決定**：丟出點（`prepare` ⇒ 大聲）、一個有名標記（cascade 裡的政策否決 ⇒ 大聲）、其餘（cascade 裡的工具本體 ⇒ 軟）。
 
-**Tech Stack:** TypeScript ESM · pnpm workspaces · vitest · 純函式排程器（`core-agent`）
+**Tech Stack:** TypeScript ESM · pnpm workspaces · vitest
 
-**Spec:** `docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`（**§2 是這一塊的全部依據**；§2.2／§2.3／§2.4 是它的理由與代價）。區塊 ②（參數 schema）與 ③（界）另有計畫。
+**Spec:** `docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`（**§2 是這一塊的依據；§2.6 是施工期間量到的增補**）。區塊 ②（參數 schema）與 ③（界）另有計畫。
 
 ## Global Constraints
 
 - **接縫沒有錯誤旗標，而 v1 不加**（spec §2.5）。`grep -rn "isError\|is_error" packages/llm-*/src` 必須**維持零命中**。
 - **中止路徑的 `throw new Error("agent aborted")` 不動**（spec §2）。既有的五條 abort 測試必須**一條都不改**。
-- **`prepare` 的政策丟出仍然殺掉整個 turn**（spec §6.1）：`unknown tool`、`guard denied`、`denied`、approval-denied。這一塊**不碰**它們。
+- **`prepare` 的政策丟出仍然殺掉整個 turn**（spec §6.1）—— `unknown tool`、`guard denied`、`tools/pre-execute` 的 deny、`denied`、approval fail-closed、guardian denied。
+- **cascade 裡的政策否決仍然殺掉整個 turn**（spec §2.6）—— 靠 `PolicyRefusal` 標記，不靠一份清單。
 - **合成失敗不跑 `finalize`、不發 `agent/post-tool`**（M10a 的既有裁定，經 `"synthetic" in slot` 那條分支）。
-- **不新增 export，除了那兩個常數**（`TOOL_FAILED`、`TOOL_CANCELLED_BY_SIBLING`）—— `node scripts/audit/check-reachability.mjs --gate` 必須維持 `gate PASS -- no new rows`。
-- **測試住在 `packages/core-agent/test/`**，這一塊全部改 `packages/core-agent/test/execute-tool-calls.test.ts` 一個檔。
-- **行號會腐化。** 這份計畫的每一處引用在動手前先 `grep -n` 核對。
+- **不新增 export，除了那三個常數**（`TOOL_FAILED`、`TOOL_CANCELLED_BY_SIBLING`）與 `core-tools` 的 `isPolicyRefusal`／`PolicyRefusal` 型別 —— `node scripts/audit/check-reachability.mjs --gate` 必須維持 `gate PASS -- no new rows`。
+- **⚠ 全套閘門是兩步**：`pnpm -r --no-bail test` 在任何套件紅的時候**只跑一個前綴**（T6 Step 3 有量測）。**先數母體（必須 66），再比數字。**
+- **行號會腐化。** 每一處引用動手前先 `grep -n` 核對。
 
 ---
+
+## 這份計畫為什麼比第一版大（而它是被量測逼大的）
+
+第一版說「4 個任務、改寫 1 條測試」。**兩件都錯，而兩件都是同一個原因：我沒有先量爆炸半徑就把它寫下來。**
+
+| | 第一版說 | 量到 |
+|---|---|---|
+| **範圍** | 只有 `core-agent` | **5 個套件**（`core-agent`、`hooks`、`sdk`、`session-executor`、`cli`） |
+| **測試** | 改寫 1 條 | **9 條轉紅**：**8 條是被推翻契約的既有編碼**（改寫）、**1 條是真的分類缺口**（`pre-tool` 否決，修分類） |
+| **分類** | 丟出點就夠 | 丟出點**看不見 cascade 裡的政策否決** —— 需要一個第三件東西：**一個有名標記**（spec §2.6） |
+
+**⇒ 所以任務從 4 個變成 6 個**，而新增的兩個（T1 標記、T3 爆炸半徑）**各自是一個獨立可證的單位**。
 
 ## File Structure
 
-| 檔案 | 角色 | 這一塊做什麼 |
+| 檔案 | 角色 | 哪個任務動它 |
 |---|---|---|
-| `packages/core-agent/src/execute-tool-calls.ts` | 批次排程器 —— 派送、提交、取消、**失敗** | **唯一的生產改動**：失敗路徑（檔尾的 `if (firstError)` 區塊）＋ 兩個常數 |
-| `packages/core-agent/src/index.ts` | 對外出口 ＋ 呼叫點 | `:12-16` 的 re-export 區塊加兩個名字；`:405-407` 的**契約註解**改寫 |
-| `packages/core-agent/test/execute-tool-calls.test.ts` | 這一塊的全部測試 | 改寫一條（被推翻的契約）＋ 新增四條 |
+| `packages/core-tools/src/index.ts` | 工具註冊與 **`tools/execute` 這條縫的擁有者** | **T1**（`PolicyRefusal` ＋ `isPolicyRefusal`） |
+| `packages/hooks/src/types.ts` | `HookBlockedError` | **T1**（帶上標記） |
+| `packages/core-agent/src/execute-tool-calls.ts` | 批次排程器 | **T2**（分類 ＋ 軟路徑）、**T4**（`TOOL_CANCELLED_BY_SIBLING`）、**T5**（try/catch） |
+| `packages/core-agent/src/index.ts` | 對外出口 ＋ 呼叫點 | **T2**（re-export）、**T6**（契約註解） |
+| `packages/core-agent/test/execute-tool-calls.test.ts` | 這一塊的核心測試 | T2／T4／T5 |
+| `packages/core-agent/test/telemetry.test.ts` | 編碼了舊契約 | **T2**（改寫） |
+| `packages/sdk/test/server.test.ts` · `packages/session-executor/test/assembly.test.ts` · `apps/cli/test/plugin-mount.test.ts` | 同上 | **T3**（改寫 7 條） |
+| `packages/core-agent/test/policy-refusal.test.ts` | 新的、極小的單元測試 | **T1** |
 
-**為什麼不動 `core-session`、`core-tools`、任何適配器**：這一塊只改「失敗之後**寫什麼進日誌**」。`tool/result` 的形狀、`deriveMessages` 的投影、`toolResultText` 的呈現**一個字都不改**（spec §8 的表）。
+**為什麼標記住在 `core-tools`**：依賴方向是 `hooks → core-tools` 與 `core-agent → core-tools`，兩者互不依賴（量過，無環）。**用 `instanceof` 會讓 `core-agent` 依賴 `hooks`，那條依賴不該存在。**
 
 ---
 
-### Task 1: 失敗的呼叫拿到自己的結果，落地的兄弟拿到真的結果
+### Task 1: `PolicyRefusal` —— 把一個既有的意圖變成可檢查的東西
 
 **Files:**
-- Modify: `packages/core-agent/src/execute-tool-calls.ts`（檔尾的 `if (firstError)` 區塊，`git grep -n "rethrow the first error"` 找它）
-- Modify: `packages/core-agent/src/execute-tool-calls.ts:7` 附近（常數區）
-- Test: `packages/core-agent/test/execute-tool-calls.test.ts`（改寫 `:203` 那一條，新增一條）
+- Modify: `packages/core-tools/src/index.ts`（加型別與判定函式）
+- Modify: `packages/hooks/src/types.ts:121`（`HookBlockedError` 帶上標記）
+- Test: `packages/core-agent/test/policy-refusal.test.ts`（新檔）
 
 **Interfaces:**
-- Consumes: 中止路徑既有的兩個機制 —— `SyntheticSlot`（`"synthetic" in slot` 的提交分支）與 `commitReady()`。
-- Produces: `export const TOOL_FAILED = "TOOL_FAILED"` —— 失敗那一格 `output` 的 `code`。Task 2、Task 3 會用到它。
+- Consumes: `HookBlockedError`（`hooks/src/types.ts:121`，**已經**有 `readonly code = "hook-blocked"`）。
+- Produces: `export interface PolicyRefusal { readonly policyRefusal: true }` 與 `export function isPolicyRefusal(err: unknown): err is PolicyRefusal` —— **T2 的 marker 檢查用它**。
 
-- [ ] **Step 1: 讀懂被推翻的那一條測試**
+**這一條是惰性的** —— 它不改變任何行為。它先落地，**所以 T2 的分類可以在一次編輯裡同時是完整的**（否則 T2 會留下一個已知的紅）。
 
-打開 `packages/core-agent/test/execute-tool-calls.test.ts`，找到 `describe("executeToolCalls scheduler")` 裡的：
+- [ ] **Step 1: 寫紅測試**
+
+建立 `packages/core-agent/test/policy-refusal.test.ts`：
 
 ```ts
-it("drains started calls and rethrows the first failure (no fabrication)", async () => {
+import { describe, expect, it } from "vitest"
+import { isPolicyRefusal } from "@i-harness/core-tools"
+import { HookBlockedError } from "@i-harness/hooks"
+
+// spec §2.6: a POLICY refusal — "you may not do this" — must be
+// distinguishable from a tool body that tried and failed. The distinction is
+// a NAMED MARKER on the error, not a list of class names: a future in-cascade
+// policy opts in by carrying it, and `core-agent` needs no dependency on the
+// mechanism that refuses.
+describe("isPolicyRefusal", () => {
+  it("recognises a hook veto", () => {
+    expect(isPolicyRefusal(new HookBlockedError("h1", "read disabled"))).toBe(true)
+  })
+
+  it("does NOT claim an ordinary tool-body failure", () => {
+    expect(isPolicyRefusal(new Error("disk exploded"))).toBe(false)
+  })
+
+  it("is total — a non-error never throws", () => {
+    for (const v of [undefined, null, 0, "", "boom", {}, [], () => {}]) {
+      expect(() => isPolicyRefusal(v)).not.toThrow()
+      expect(isPolicyRefusal(v)).toBe(false)
+    }
+  })
+
+  it("requires the marker to be TRUE, not merely present", () => {
+    // The same rule this branch ruled on before (W4's F1): the decision keys
+    // on a field CARRYING a value, not on the key existing.
+    expect(isPolicyRefusal({ policyRefusal: undefined })).toBe(false)
+    expect(isPolicyRefusal({ policyRefusal: false })).toBe(false)
+    expect(isPolicyRefusal({ policyRefusal: true })).toBe(true)
+  })
+})
 ```
 
-**它斷言兩件事，而兩件都要被推翻**：`.rejects.toThrow("kaboom")` 與 `expect(resultsOf(session).length).toBeLessThan(2)`。**這一條不是被刪掉，是被改寫成新契約** —— 一個刪掉的斷言不留痕，一個改寫的斷言說明契約變了。
+- [ ] **Step 2: 跑它，確認它紅**
 
-- [ ] **Step 2: 改寫那一條成為新契約（紅）**
+Run: `pnpm --filter @i-harness/core-agent exec vitest run test/policy-refusal.test.ts`
 
-把那一條**整條**換成（`describe` 的位置不變）：
+Expected: **紅在 import** —— `@i-harness/core-tools` 沒有 `isPolicyRefusal`。**這一條的紅就是「東西還不存在」，那是這一條全部要證明的東西，所以這裡的紅-first 是誠實的**（它不像 T2 那樣需要一個實質的紅）。
+
+- [ ] **Step 3: 在 `core-tools` 加型別與判定**
+
+在 `packages/core-tools/src/index.ts` 的型別區（`ToolDecision` 附近）加：
+
+```ts
+// spec §2.6: a POLICY refusal — "you may not do this" — as opposed to a tool
+// body that tried and failed. Policy refusals stay LOUD (the turn fails); a
+// body failure is soft (the failed call gets a result and the turn continues).
+//
+// Marked structurally so `core-agent` needs no dependency on the mechanism
+// that refuses: `hooks` already sits above this package, and importing it from
+// `core-agent` would point the dependency backwards.
+//
+// THE CONVENTION, and its failure mode: a future in-cascade policy that must
+// fail the turn carries this marker. One that forgets has a SOFT refusal —
+// which is why the convention is named in the spec, not left as a local
+// detail. (Contrast: block ②'s INVALID_ARGS is also typed, but its
+// disposition is SOFT — an argument violation is the model's mistake and is
+// fixable by the model, a veto is not.)
+export interface PolicyRefusal {
+  readonly policyRefusal: true
+}
+
+/** Total: never throws, and requires the marker to CARRY `true` — a present
+ *  but `undefined` field is not a marker (the same rule as W4's F1 fix). */
+export function isPolicyRefusal(err: unknown): err is PolicyRefusal {
+  return typeof err === "object" && err !== null && (err as { policyRefusal?: unknown }).policyRefusal === true
+}
+```
+
+**然後確認它在 `core-tools` 的出口上是可匯入的** —— 跟隨該檔既有的 export 風格（`git grep -n "export type { ToolExposure" packages/core-tools/src/index.ts` 看它怎麼 export 型別）。
+
+- [ ] **Step 4: `HookBlockedError` 帶上標記**
+
+`packages/hooks/src/types.ts:121`：
+
+```ts
+/** A gate/block veto: tool blocked or phase stopped (reason carried). */
+export class HookBlockedError extends Error {
+  readonly code = "hook-blocked" as const
+  // spec §2.6: this IS a policy refusal — the marker is what keeps a pre-tool
+  // veto loud now that a tool body's failure is soft. The `code` above already
+  // said so; this makes it checkable from a package that cannot import us.
+  readonly policyRefusal = true as const
+  constructor(
+    readonly handlerId: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = "HookBlockedError"
+  }
+}
+```
+
+- [ ] **Step 5: 跑測試（綠）**
+
+Run: `pnpm --filter @i-harness/core-agent exec vitest run test/policy-refusal.test.ts`
+Run: `pnpm --filter @i-harness/hooks exec vitest run`
+
+Expected: **兩者全綠**（`hooks` 的是回歸檢查 —— 加一個唯讀欄位不該動任何既有測試）。
+
+- [ ] **Step 6: 突變 —— 證明「帶著值」那一半被釘住**
+
+把 `isPolicyRefusal` 的 `=== true` 改成 `!== undefined`，重跑。
+
+Expected: **紅** —— 第四條（`{ policyRefusal: undefined }`）。
+
+**還原**，再跑確認綠。
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add packages/core-tools/src/index.ts packages/hooks/src/types.ts packages/core-agent/test/policy-refusal.test.ts
+git commit -m "feat(core-tools,hooks): M5 T4 block 1 — a policy refusal is marked, so a veto stays loud when a body failure goes soft"
+```
+
+---
+
+### Task 2: 軟失敗 ＋ 兩個分類 ＋ `core-agent` 的爆炸半徑
+
+**Files:**
+- Modify: `packages/core-agent/src/execute-tool-calls.ts`（常數區、`firstError` 宣告、外層 catch、失敗路徑）
+- Modify: `packages/core-agent/src/index.ts`（re-export）
+- Test: `packages/core-agent/test/execute-tool-calls.test.ts`（改寫 1 條、新增 1 條）
+- Test: `packages/core-agent/test/telemetry.test.ts:97`（**改寫** —— 它編碼了舊契約）
+
+**Interfaces:**
+- Consumes: T1 的 `isPolicyRefusal`。
+- Produces: `export const TOOL_FAILED = "TOOL_FAILED"`。
+
+- [ ] **Step 1: 讀懂兩條被推翻的既有測試**
+
+**(a)** `packages/core-agent/test/execute-tool-calls.test.ts`，`describe("executeToolCalls scheduler")` 裡的 `"drains started calls and rethrows the first failure (no fabrication)"`。它斷言**兩件**要被推翻的事：`.rejects.toThrow("kaboom")` 與 `expect(resultsOf(session).length).toBeLessThan(2)`。
+
+**(b)** `packages/core-agent/test/telemetry.test.ts:97`：`await expect(agent.run("read a.txt")).rejects.toThrow(/disk exploded/)`。**它的工具本體丟出 `"disk exploded"`**（`:84`）—— **那是工具本體失敗，所以在新契約下它變軟。這一條是第二個編碼舊契約的地方，而第一版計畫只找到了一條。**
+
+**兩條都不是被刪掉，是被改寫** —— 一個刪掉的斷言不留痕。
+
+- [ ] **Step 2: 加常數與 re-export（惰性）**
+
+在 `execute-tool-calls.ts` 的常數區（`git grep -n "TOOL_ABORTED_BEFORE_DISPATCH"` 找 `:7`）：`export const TOOL_FAILED = "TOOL_FAILED"`。放在它**旁邊**。
+
+在 `core-agent/src/index.ts` 的 re-export 區塊（`:12-16`）加上 `TOOL_FAILED,`。
+
+- [ ] **Step 3: 改寫 (a) 成為新契約**
+
+把那一條**整條**換成：
 
 ```ts
   it("a failed call yields its OWN result and the turn continues (no rethrow)", async () => {
@@ -65,17 +225,11 @@ it("drains started calls and rethrows the first failure (no fabrication)", async
     const session = createSession()
     const tools = createToolRegistry(ctx)
     tools.register({
-      name: "oktool",
-      description: "ok",
-      inputSchema: {},
-      isConcurrencySafe: true,
+      name: "oktool", description: "ok", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { await new Promise((r) => setTimeout(r, 20)); return { ok: true } },
     })
     tools.register({
-      name: "boomtool",
-      description: "boom",
-      inputSchema: {},
-      isConcurrencySafe: true,
+      name: "boomtool", description: "boom", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { throw new Error("kaboom") },
     })
     // NO .rejects — the whole point of this contract is that it resolves.
@@ -83,13 +237,8 @@ it("drains started calls and rethrows the first failure (no fabrication)", async
       { callId: "c0", name: "oktool", args: {} },
       { callId: "c1", name: "boomtool", args: {} },
     ], { maxParallel: 10 })
-    // Every dispatched call has exactly one result, in MODEL order: the
-    // failing slot is filled synthetically so the head-of-line cursor
-    // advances and the settled sibling commits its REAL output.
     const results = session.events.filter((e) => e.type === "tool/result") as {
-      callId: string
-      name: string
-      output: unknown
+      callId: string; name: string; output: unknown
     }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output).toEqual({ ok: true })
@@ -97,65 +246,42 @@ it("drains started calls and rethrows the first failure (no fabrication)", async
   })
 ```
 
-同時把檔頭的 import 改成（加 `TOOL_FAILED`）：
+import 改成 `import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_FAILED } from "../src/index.ts"`。
 
-```ts
-import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_FAILED } from "../src/index.ts"
-```
-
-- [ ] **Step 3: 先加常數與 re-export（它們是惰性的，不改變行為）**
-
-**先加它們的理由**：否則 Step 4 的紅會是「模組匯不出這個名字」—— 那個紅**證明不了任何關於契約的事**。加了之後，紅才是**真的紅**（那個 promise 拒絕）。
-
-在 `execute-tool-calls.ts` 的常數區（`git grep -n "TOOL_ABORTED_BEFORE_DISPATCH"` 找 `:7` 那一行），加：
-
-```ts
-export const TOOL_FAILED = "TOOL_FAILED"
-```
-
-放在 `TOOL_ABORTED_BEFORE_DISPATCH` **旁邊**（不要另開一區）。
-
-然後在 `core-agent/src/index.ts` 的 re-export 區塊（`git grep -n "TOOL_ABORTED_BEFORE_DISPATCH" packages/core-agent/src/index.ts` 找 `:12-16`）把 `TOOL_FAILED,` 加進去，跟隨既有的排列風格。
-
-- [ ] **Step 4: 跑它，確認它紅 —— 而紅的理由是對的那一個**
+- [ ] **Step 4: 跑它，確認紅的理由是對的那一個**
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts -t "yields its OWN result"`
 
-Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）—— **不是** `does not provide an export named`。
+Expected: **紅在 `kaboom`**（那個 promise 拒絕）—— **不是** `does not provide an export named`。**那就是被推翻的契約本身。**
 
-**這就是被推翻的那條契約本身**：今天一個工具丟出，`executeToolCalls` 就拒絕。若你看到的是 export 的錯，**Step 3 沒做**。若它綠，**停手回報** —— 那代表你改錯了檔。
+- [ ] **Step 5: 分類 —— 丟出點 ＋ 標記（T2 的核心）**
 
-- [ ] **Step 5: 分類 —— 只有「工具本體」的失敗是軟的**
-
-**這一節是 Task 1 的核心，而它不是可選的。** `firstError` 有**兩個**來源，而它們必須走不同的路：
+`firstError` 有**兩個來源**，而 cascade 裡還有**第三種**丟出：
 
 | 來源 | 在哪 | 是什麼 | 處置 |
 |---|---|---|---|
-| **dispatch `.catch`** | `execute-tool-calls.ts:150-165` | **工具本體丟出** | **軟** —— 填一筆 `TOOL_FAILED`，turn 繼續 |
-| **外層 catch** | `:210` 的 `firstError ??= err` | **`prepare` 的拒絕**（`unknown tool`／`guard denied`／`tools/pre-execute` 的 deny／`denied`／approval fail-closed／guardian denied）**以及 commit lane 裡丟出的監聽者** | **大聲** —— drain 之後照樣丟出 |
-
-**沒有這一節，`prepare` 的拒絕會變成軟的** —— 而那是 Global Constraints 明文禁止的。**量到過：13 條既有測試會轉紅**（`hooks` 的 `tools/pre-execute` deny、`session-executor` 的 `guardian denied` 與四條 role-resolver、`sdk`、`cli`、`core-agent` 的 telemetry）。
-
-**⇒ 而分類用「丟出點」而不是「一份清單」** —— 明天有人替 `prepare` 加第五種拒絕，**它自動是大聲的，不需要有人記得回來加一行**。這是本設計在別處（spec §3.7.1）用過的同一條紀律。
+| **外層 catch** | `:210` 的 `firstError ??= err` | **`prepare` 的拒絕** | **大聲** |
+| **外層 catch** | 同上（commit lane 裡丟出的監聽者） | 不是工具本體 | **大聲** |
+| **dispatch `.catch`** | `:150-165` | 工具本體丟出 | **軟** |
+| **dispatch `.catch`** | 同上 | **`isPolicyRefusal(err)`** —— cascade 裡的政策否決（`HookBlockedError`） | **大聲** |
 
 **先在 `let firstError: unknown` 旁邊加：**
 
 ```ts
   // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
-  // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
-  // call gets a result and the turn continues. Every OTHER throw that reaches
-  // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
-  // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
-  // denied), and a throwing commit-lane listener.
-  //
-  // Structural, not a list: the SITE of the throw is the classification, so a
-  // fifth refusal added to `prepare` tomorrow is loud without anyone
-  // remembering to add it here. (A list is what gets forgotten — which is how
-  // the first draft of this task got it wrong.)
+  // Two structural tests, no list:
+  //   - the SITE: anything reaching the outer catch is a `prepare` refusal
+  //     (unknown tool / guard denied / a tools/pre-execute deny / denied /
+  //     approval fail-closed / guardian denied) or a throwing commit-lane
+  //     listener. Loud.
+  //   - the MARKER: a cascade throw that carries `policyRefusal` is a veto
+  //     (hooks' pre-tool). Loud. Without it a pre-tool veto would be
+  //     classified as a body failure and go soft — which is exactly what
+  //     happened before spec §2.6 existed.
   let firstRefusal: unknown
 ```
 
-**再改外層 catch（`:210`）** —— 從 `firstError ??= err` 改成：
+**改外層 catch（`:210`）：**
 
 ```ts
   } catch (err) {
@@ -167,12 +293,32 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   }
 ```
 
-**然後在 `if (aborted) { … }` 區塊與 `if (firstError) { … }` 區塊之間插入：**
+**改 dispatch 的 `.catch`（`:150-165`）** —— 原本的 `if (firstError === undefined) { firstError = err; batchAbort.abort() }` 換成：
+
+```ts
+        opts.telemetry?.emit({
+          type: "tool/error", ts: Date.now(),
+          data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
+        })
+        if (isPolicyRefusal(err)) {
+          // A veto is not a body failure: it must keep failing the turn.
+          firstRefusal ??= err
+        }
+        // M5 T4: on the FIRST failure, cancel the siblings. Only the first, so
+        // a second failure cannot re-open a channel that is already closed.
+        if (firstError === undefined) {
+          firstError = err
+          batchAbort.abort()
+        }
+```
+
+> ⚠ **`batchAbort.abort()` 的條件不可以改。** 一個否決**仍然取消兄弟**（今天就是這樣：`prepare` 的拒絕會讓 `:208` 不再啟動後面的組）。**把它移到 `if (isPolicyRefusal)` 之外會改變取消語意**，而 `4c85a04` 的測試會紅。
+
+**然後在 `if (aborted) { … }` 與 `if (firstError) { … }` 之間插入：**
 
 ```ts
   // A refusal is never soft. Drain first (a started sibling must not be left
-  // running), then rethrow — this is byte-for-byte the pre-block-① behavior
-  // for every refusal, which is the point.
+  // running), then rethrow.
   if (firstRefusal !== undefined) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
@@ -180,9 +326,11 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   }
 ```
 
+**外層的 import 加上** `isPolicyRefusal`（從 `@i-harness/core-tools`）。
+
 - [ ] **Step 6: 改失敗路徑（綠）**
 
-在 `execute-tool-calls.ts` 檔尾找到（`git grep -n "Failure: drain started"`）：
+在檔尾找到（`git grep -n "Failure: drain started"`）：
 
 ```ts
   // Failure: drain started (results discarded), rethrow the first error.
@@ -207,8 +355,7 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   // settled results made the M5 T4 cancellation pointless — they were
   // cancelled AND thrown away.
   //
-  // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
-  // from a tool body. A refusal never gets here.
+  // Reached ONLY when `firstRefusal` is undefined (checked above).
   if (firstError) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
@@ -220,9 +367,7 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
       if (slots[i] !== undefined) continue
       const call = batch[i]!
       slots[i] = {
-        name: call.name,
-        callId: call.callId,
-        synthetic: true,
+        name: call.name, callId: call.callId, synthetic: true,
         output: { error: message, code: TOOL_FAILED },
       }
     }
@@ -230,54 +375,164 @@ Expected: **紅**，而紅的訊息是 **`kaboom`**（那個 promise 拒絕）�
   }
 ```
 
-- [ ] **Step 7: 跑測試（綠）**
-
-Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`
-
-Expected: **全綠**。若 `M5 — a failure cancels its siblings` 變紅，**停手回報** —— 那代表 `batchAbort.abort()` 被碰掉了，而它是這一塊**不可以動**的東西（Global Constraints）。
-
-**然後一定要再多跑這四個套件**（Step 5 的分類就是為了它們）：
+- [ ] **Step 7: 跑它 —— 並且量出**完整的**爆炸半徑**
 
 ```bash
+pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts
 for p in hooks session-executor sdk; do pnpm --filter "@i-harness/$p" exec vitest run; done
 pnpm --filter @i-harness/cli exec vitest run
 ```
 
-Expected: **全綠**。這四個是 Step 5 的分類沒有寫對時會轉紅的地方（量到過 13 條）。**它們紅 ⇒ Step 5 沒有生效，停手回報。**
+Expected:
+- **`execute-tool-calls.test.ts` 全綠**。若 `M5 — a failure cancels its siblings` 紅，**停手回報** —— `batchAbort.abort()` 被碰掉了。
+- **`hooks` 全綠** —— T1 的標記生效（`pre-tool` 否決維持大聲）。
+- **其餘四個套件：預期 7 條紅，而它們全部是工具本體失敗。** 逐條確認是那 7 條（**多一條或少一條都要停手回報**）：
 
-- [ ] **Step 8: 用突變證明這條測試真的在測這個**
+| 套件 | 條數 | 在哪 |
+|---|---|---|
+| `session-executor` | **5** | `test/assembly.test.ts` 的 `resolveRoleModel` 家族：`:1221`、`:1314`、`:1319`、`:1329`、`:1336` |
+| `sdk` | **1** | `test/server.test.ts:291`（`SKILL_NOT_FOUND`） |
+| `cli` | **1** | `test/plugin-mount.test.ts` |
 
-把 `await commitReady()` 那一行**註解掉**，重跑。
+**這 7 條是 T3 的工作。不要在 T2 動它們。**
 
-Expected: **紅** —— `expected [ 'c1' ] to deeply equal [ 'c0', 'c1' ]`（兄弟的結果沒有 commit）。
+- [ ] **Step 8: 突變 —— 證明分類真的在分類**
 
-**還原那一行**，再跑一次確認綠。**這一步不是儀式**：它證明這條測試紅在「兄弟沒有 commit」而不是別的。
+把 `if (isPolicyRefusal(err))` 那一段**刪掉**，重跑 `pnpm --filter @i-harness/hooks exec vitest run`。
 
-- [ ] **Step 9: Commit**
+Expected: **紅** —— `expected [Function] to throw error matching /read disabled/`（否決變軟了）。**還原**，再跑確認綠。
+
+- [ ] **Step 9: 改寫 `telemetry.test.ts`**
+
+`packages/core-agent/test/telemetry.test.ts:97` 的 `await expect(agent.run("read a.txt")).rejects.toThrow(/disk exploded/)`。
+
+**這一條的實質主張是「宿主遙測看得到工具錯誤」** —— 而它**在新契約下仍然成立**，只是換了通道：turn 不再拒絕，而 `tool/error` 遙測事件照樣帶著 `error: "disk exploded"`。
+
+**改成**（`:102` 那條 `err.data` 的斷言本來就在斷言那個遙測事件 —— 把它變成主要的斷言）：
+
+```ts
+    // M5 T4 block 1: a tool body that throws no longer fails the turn — the
+    // call gets a soft result and the turn continues. The host telemetry
+    // event is the claim this test is FOR, and it is unaffected.
+    await agent.run("read a.txt")
+    expect(err?.data).toMatchObject({ tool: "read", error: "disk exploded" })
+```
+
+（`err` 是既有的遙測收集變數 —— **照著該檔既有的形狀改**，不要假設它的名字。若該檔的收集方式是別的形狀，**用它的形狀**，並在報告裡寫下你改了什麼。）
+
+**不要弱化這條測試**：它必須仍然斷言 `error: "disk exploded"` 真的到達了遙測。**只是不再斷言 turn 拒絕。**
+
+- [ ] **Step 10: 再跑一次**
+
+Run: `pnpm --filter @i-harness/core-agent exec vitest run`
+
+Expected: **`core-agent` 全綠**（這一刻 `session-executor`／`sdk`／`cli` 仍有 7 條紅 —— **那是 T3 的**）。
+
+- [ ] **Step 11: Commit**
 
 ```bash
-git add packages/core-agent/src/execute-tool-calls.ts packages/core-agent/src/index.ts packages/core-agent/test/execute-tool-calls.test.ts
-git commit -m "feat(core-agent): M5 T4 block 1 — a failed tool call yields its own result, and its settled siblings keep theirs"
+git add packages/core-agent/src/execute-tool-calls.ts packages/core-agent/src/index.ts packages/core-agent/test/execute-tool-calls.test.ts packages/core-agent/test/telemetry.test.ts
+git commit -m "feat(core-agent): M5 T4 block 1 — a body failure goes soft, a policy refusal stays loud, and the site is not the only test"
 ```
 
 ---
 
-### Task 2: 從未開始的呼叫拿到一筆**與中止不同**的結果
+### Task 3: 被推翻契約的其餘編碼（7 條，3 個套件）
 
 **Files:**
-- Modify: `packages/core-agent/src/execute-tool-calls.ts`（Task 1 寫的那個 `if (firstError)` 區塊的尾巴）
+- Modify: `packages/session-executor/test/assembly.test.ts`（5 條）
+- Modify: `packages/sdk/test/server.test.ts`（1 條）
+- Modify: `apps/cli/test/plugin-mount.test.ts`（1 條）
+
+**Interfaces:**
+- Consumes: T2 的行為（一個工具本體丟出 ⇒ 軟結果，turn 繼續）。
+- Produces: 無新 export。
+
+**這一條是「改寫而不是刪除」那一條規則的延伸。** 7 條測試各自有一個**實質主張**，而每一個在新契約下**仍然成立，只是換了通道** —— 舊通道是「turn 拒絕」，新通道是「那筆 `tool/result` 帶著那個原因」。
+
+> ⚠ **這一條的步驟刻意是「先讀、再寫」而不是貼好的測試碼。** 7 條測試住在 3 個不同的 harness 裡，而**替它們編一份沒讀過的測試碼，比讓實作者去讀更糟** —— 這一條分支上已經有一個計畫因為「沒有先量就寫下」而被推翻（見上面的表）。**而每一條的改寫都有硬性檢查（Step 3），所以「讀」不會變成「自由發揮」。**
+
+- [ ] **Step 1: 逐條讀，並寫下實質主張**
+
+**每一條測試**，在動手前記下兩件事：
+
+1. **它真正在斷言什麼**（那句話，不是那個 matcher）
+2. **那個主張在新契約下還成不成立** —— 如果**不成立**，**停手回報**，那是設計問題不是測試問題
+
+七條在哪裡（`grep -n "it(" <file>` 核對行號，它們會腐化）：
+
+| # | 檔案 | 測試名 |
+|---|---|---|
+| 1 | `packages/session-executor/test/assembly.test.ts:~1221` | `a plugin role is what spawn_agent resolves against; without the option the same call does not` |
+| 2 | `:~1314` | `a wired but not-ready resolver fails the spawn with ITS reason` |
+| 3 | `:~1319` | `an ABSENT resolver fails naming the selection (no silent inherit)` |
+| 4 | `:~1329` | `without plugins.subagentModel the model-carrying spawn is refused, naming both fixes` |
+| 5 | `:~1336` | `the host's declared role selection reaches the spawn and WINS over the role's own` |
+| 6 | `packages/sdk/test/server.test.ts:~283` | 一個缺失的 skill（`SKILL_NOT_FOUND`） |
+| 7 | `apps/cli/test/plugin-mount.test.ts` | plugin mount |
+
+**五條 `session-executor` 的形狀是**：`expect(() => …).toThrow(/<原因>/)`，而**它們的實質主張是「那個原因必須看得見」** —— 在新契約下**它仍然看得見，在 `tool/result` 的 `output.error` 裡**。
+
+- [ ] **Step 2: 逐條改寫**
+
+**改寫的形狀**（以 `session-executor` 的為例 —— **照該檔既有的 fixture 改，不要假設名字**）：
+
+```ts
+    // Before: the spawn THREW and the turn died.
+    //   expect(() => run(...)).toThrow(/role 'rolemodel' cannot resolve its model/)
+    // After (M5 T4 block 1): the spawn fails SOFT — the turn continues and the
+    // reason reaches the model in the tool result. The claim is unchanged
+    // ("the reason must be visible"); only the channel moved.
+    await run(...)
+    const result = <the session's tool/result for that callId>
+    expect(String((result.output as { error: string }).error))
+      .toMatch(/role 'rolemodel' cannot resolve its model/)
+```
+
+- [ ] **Step 3: 硬性檢查 —— 每一條改寫都要有突變證明**
+
+**對每一條改寫**，找一個能讓它紅的突變。**最便宜的那個對全部七條都適用**：把 T2 的 `if (firstRefusal !== undefined) { … throw firstRefusal }` 區塊**暫時**改成也涵蓋它們的路徑……
+
+**不行 —— 那不會紅。** 這七條走的是**軟**路徑，所以它們的突變是：**把 T2 的軟路徑改回 `throw firstError`**。那個突變會讓**七條全部紅**（那正是舊契約）。
+
+**⇒ 所以 Step 3 是**：做那一個突變一次，確認**七條全部紅**，然後還原、確認七條全綠。
+
+**若某一條在突變下仍然綠，那一條的改寫是空的 —— 停手回報。** 這一步是這一整條任務唯一能證明「改寫不是把斷言刪掉」的東西。
+
+- [ ] **Step 4: 逐套件跑**
+
+```bash
+for p in session-executor sdk; do pnpm --filter "@i-harness/$p" exec vitest run; done
+pnpm --filter @i-harness/cli exec vitest run
+```
+
+Expected: **三者全綠，零紅。**
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add packages/session-executor/test/assembly.test.ts packages/sdk/test/server.test.ts apps/cli/test/plugin-mount.test.ts
+git commit -m "test(m5): the four packages that encoded throw-fails-turn assert the same reasons through the soft channel"
+```
+
+---
+
+### Task 4: 從未開始的呼叫拿到一筆**與中止不同**的結果
+
+**Files:**
+- Modify: `packages/core-agent/src/execute-tool-calls.ts`（T2 寫的 `if (firstError)` 區塊的尾巴）
 - Modify: `packages/core-agent/src/index.ts`（re-export）
 - Test: `packages/core-agent/test/execute-tool-calls.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1 的 `TOOL_FAILED`；中止路徑既有的 `TOOL_ABORTED_BEFORE_DISPATCH`（`execute-tool-calls.ts:7`）與它的 `append` 迴圈（`:243-251`）。
+- Consumes: T2 的 `TOOL_FAILED` 與失敗路徑；既有的 `TOOL_ABORTED_BEFORE_DISPATCH`（`:7`）與它的 `append` 迴圈。
 - Produces: `export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"`。
 
-**為什麼需要一條新的訊息**：spec §2.3 —— 「被中止」與「因為同批的兄弟失敗而被取消」**是兩件不同的事，不可以共用一句話**。共用會讓一份日誌分不出「使用者按了停」與「工具壞了」。
+**為什麼需要一條新的訊息**（spec §2.3）：「被中止」與「因為同批的兄弟失敗而被取消」**是兩件不同的事，不可以共用一句話**。
 
 - [ ] **Step 1: 寫紅測試**
 
-在 `describe("executeToolCalls scheduler")` 裡，Task 1 那一條的**後面**加：
+在 `describe("executeToolCalls scheduler")` 裡加：
 
 ```ts
   it("a never-started call is CANCELLED, and says so — not the abort message", async () => {
@@ -285,19 +540,13 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a failed tool call yields its
     const session = createSession()
     const tools = createToolRegistry(ctx)
     tools.register({
-      name: "boomtool",
-      description: "boom",
-      inputSchema: {},
-      isConcurrencySafe: true,
+      name: "boomtool", description: "boom", inputSchema: {}, isConcurrencySafe: true,
       // Throws IMMEDIATELY: c0 fails before c1's prepare ever runs, so c1 is
       // never started and lands in the [startedUpTo, batch.length) range.
       execute: async () => { throw new Error("kaboom") },
     })
     tools.register({
-      name: "nevertool",
-      description: "never started",
-      inputSchema: {},
-      isConcurrencySafe: true,
+      name: "nevertool", description: "never started", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => ({ ok: true }),
     })
     await executeToolCalls(ctx, session, tools, [
@@ -305,30 +554,24 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a failed tool call yields its
       { callId: "c1", name: "nevertool", args: {} },
     ], { maxParallel: 1 })
     const results = session.events.filter((e) => e.type === "tool/result") as {
-      callId: string
-      output: { code?: string }
+      callId: string; output: { code?: string }
     }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output.code).toBe(TOOL_FAILED)
     expect(results[1]!.output.code).toBe(TOOL_CANCELLED_BY_SIBLING)
-    // The two must NOT share a message: one is "the user stopped the step",
-    // the other is "a sibling in the same batch failed". A log that cannot
-    // tell them apart is the defect this pins.
     expect(results[1]!.output).not.toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
   })
 ```
 
-import 那一行再加上 `TOOL_CANCELLED_BY_SIBLING`。
+import 加上 `TOOL_CANCELLED_BY_SIBLING`。
 
 - [ ] **Step 2: 跑它，確認它紅**
 
-Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts -t "CANCELLED, and says so"`
-
-Expected: **紅** —— `TOOL_CANCELLED_BY_SIBLING` 尚未 export（import 失敗），或 `results` 只有 `["c0"]`。
+Expected: **紅** —— `results` 只有 `["c0"]`。**如果你看到的是 import 的錯，先加常數（Step 3 的宣告部分）再重跑** —— 紅必須紅在「c1 沒有結果」。
 
 - [ ] **Step 3: 加常數並實作**
 
-`execute-tool-calls.ts` 常數區（`TOOL_FAILED` 旁邊）：
+`execute-tool-calls.ts` 常數區：
 
 ```ts
 // A call that never started because a SIBLING failed. Deliberately a
@@ -338,9 +581,9 @@ Expected: **紅** —— `TOOL_CANCELLED_BY_SIBLING` 尚未 export（import 失�
 export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 ```
 
-`core-agent/src/index.ts` 的 re-export 區塊加上它。
+`core-agent/src/index.ts` re-export 區塊加上它。
 
-然後在 `if (firstError)` 區塊的**尾巴**（`await commitReady()` 之後）加：
+然後在 `if (firstError)` 區塊的**尾巴**（`await commitReady()` 之後）：
 
 ```ts
     // Calls that never started: no `prepare`, no `tool/dispatch`, no body.
@@ -349,9 +592,7 @@ export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
     for (let i = startedUpTo; i < batch.length; i += 1) {
       const call = batch[i]!
       append(session, {
-        type: "tool/result",
-        callId: call.callId,
-        name: call.name,
+        type: "tool/result", callId: call.callId, name: call.name,
         output: {
           error: "tool call cancelled: a sibling call in the same batch failed",
           code: TOOL_CANCELLED_BY_SIBLING,
@@ -366,13 +607,11 @@ Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-call
 
 Expected: **全綠**。
 
-- [ ] **Step 5: 突變 —— 證明「不同」這一半被釘住**
+- [ ] **Step 5: 突變 —— 證明「不同」那一半被釘住**
 
 把新迴圈的 `code: TOOL_CANCELLED_BY_SIBLING` 改成 `code: TOOL_ABORTED_BEFORE_DISPATCH`，重跑。
 
-Expected: **紅** —— `expected 'TOOL_ABORTED_BEFORE_DISPATCH' to be 'TOOL_CANCELLED_BY_SIBLING'`。
-
-**還原**，再跑確認綠。
+Expected: **紅** —— `expected 'TOOL_ABORTED_BEFORE_DISPATCH' to be 'TOOL_CANCELLED_BY_SIBLING'`。**還原**，再跑確認綠。
 
 - [ ] **Step 6: Commit**
 
@@ -383,24 +622,22 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
 
 ---
 
-### Task 3: 三條**不可以動**的界線
+### Task 5: 三條**不可以動**的界線
 
 **Files:**
 - Modify: `packages/core-agent/src/execute-tool-calls.ts`（`commitReady()` 的 try/catch）
 - Test: `packages/core-agent/test/execute-tool-calls.test.ts`
 
 **Interfaces:**
-- Consumes: Task 1／2 的失敗路徑。
-- Produces: 無新 export。**這一條是防守** —— 它把 spec §2、§6.1 的三條界線釘成測試。
+- Consumes: T2／T4 的失敗路徑。
+- Produces: 無新 export。**這一條是防守。**
 
-**為什麼這一條要獨立**：前兩條動的是失敗路徑，而失敗路徑**緊貼著**中止路徑與 `prepare` 的丟出。**一個「順手統一一下」的編輯會把三條界線一起抹掉，而前面所有的測試都會照樣綠** —— 除非有東西單獨釘住它們。
-
-- [ ] **Step 1: 寫三條界線的測試（紅 or 綠 —— 見下）**
+- [ ] **Step 1: 寫三條界線的測試**
 
 在 `describe("executeToolCalls scheduler")` 的最後加：
 
 ```ts
-  it("BOUNDARY: a PREPARE refusal still kills the turn (spec §6.1 — only a dispatched failure is soft)", async () => {
+  it("BOUNDARY: a PREPARE refusal still kills the turn (spec §6.1)", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
@@ -419,9 +656,7 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
     const ac = new AbortController()
     ac.abort()
     await expect(
-      executeToolCalls(ctx, session, tools, [
-        { callId: "c0", name: "anyTool", args: {} },
-      ], { maxParallel: 1, signal: ac.signal }),
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "anyTool", args: {} }], { maxParallel: 1, signal: ac.signal }),
     ).rejects.toThrow("agent aborted")
   })
 
@@ -456,13 +691,11 @@ git commit -m "feat(core-agent): M5 T4 block 1 — a never-started call is CANCE
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts -t "BOUNDARY"`
 
-Expected: **前兩條綠、第三條紅** —— 第三條會因為 `commitReady()` 的丟出**逃出 `executeToolCalls`**，於是 `cancelled` 是空的（而且測試會以 `post-execute boom` 失敗）。
-
-**若三條全綠，停手回報**：那代表第三條沒有測到它要測的東西。
+Expected: **前兩條綠、第三條紅** —— 第三條會因為 `commitReady()` 的丟出**逃出 `executeToolCalls`**，於是 `cancelled` 是空的。**若三條全綠，停手回報** —— 那代表第三條沒有測到它要測的東西。
 
 - [ ] **Step 3: 加 try/catch**
 
-在 Task 1 寫的 `await commitReady()` 外面加：
+在 T2 寫的 `await commitReady()` 外面加：
 
 ```ts
     try {
@@ -481,8 +714,6 @@ Expected: **前兩條綠、第三條紅** —— 第三條會因為 `commitReady
 
 - [ ] **Step 4: 跑測試（綠）**
 
-Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts`
-
 Expected: **全綠**。
 
 - [ ] **Step 5: Commit**
@@ -494,14 +725,14 @@ git commit -m "test(core-agent): M5 T4 block 1 — the three boundaries that mus
 
 ---
 
-### Task 4: 過期的契約註解，與全套閘門
+### Task 6: 過期的契約註解，與**兩步**的全套閘門
 
 **Files:**
-- Modify: `packages/core-agent/src/index.ts`（`git grep -n "rethrows the first tool failure"` 找那段）
-- Modify: `docs/handoff/2026-09-20-queued-work.md`（§1 的 W5 列 ＋ §5 的完成記錄）
+- Modify: `packages/core-agent/src/index.ts`（`git grep -n "rethrows the first tool failure"`）
+- Modify: `docs/handoff/2026-09-20-queued-work.md`
 
 **Interfaces:**
-- Consumes: Task 1–3 全部。
+- Consumes: T1–T5 全部。
 - Produces: 無。
 
 - [ ] **Step 1: 找出說謊的註解**
@@ -510,29 +741,28 @@ git commit -m "test(core-agent): M5 T4 block 1 — the three boundaries that mus
 git grep -n "rethrows the first tool failure" packages/core-agent/src/index.ts
 ```
 
-它會指向 `core-agent/src/index.ts` 呼叫點上方那段（大約 `:405-407`）。**那段話在 Task 1 落地的那一刻就變成假的。**
+**那段話在 T2 落地的那一刻就變成假的。**
 
 - [ ] **Step 2: 改寫它**
-
-把那三行**整段**換成：
 
 ```ts
         // M13: concurrent execution. The scheduler appends tool/result in model
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
-        // never-started calls). A tool failure does NOT throw: the failed call
-        // is filled with a TOOL_FAILED result, its never-started siblings get
-        // TOOL_CANCELLED_BY_SIBLING, and the turn continues so the model sees
-        // the error and can retry. (Before M5 T4 block ① this rethrew the first
-        // failure and discarded the batch; fs/src/error.ts records what that
-        // looked like from the outside.)
+        // never-started calls). A tool BODY failure does not throw: the failed
+        // call is filled with a TOOL_FAILED result, its never-started siblings
+        // get TOOL_CANCELLED_BY_SIBLING, and the turn continues so the model
+        // sees the error and can retry. A POLICY refusal still throws — a
+        // `prepare` refusal by site, a cascade veto by its PolicyRefusal
+        // marker. (Before M5 T4 block ① every failure threw and the batch was
+        // discarded; fs/src/error.ts records what that looked like outside.)
 ```
 
-- [ ] **Step 3: 全套 —— ⚠ 先讀這一格，它是這一塊量到的最重要的一件事**
+- [ ] **Step 3: 全套 —— ⚠ 先讀這一格**
 
 **`pnpm -r --no-bail test` 在有任何套件紅的時候，只跑一個前綴。**
 
-2026-09-20 實測（`core-agent` 因為這一塊的初始缺陷而紅）：
+2026-09-20 實測（`core-agent` 因這一塊的初始缺陷而紅）：
 
 ```
 Scope: 66 of 67 workspace projects
@@ -543,13 +773,9 @@ Error: ERR_PNPM_RECURSIVE_FAIL
   × "pnpm recursive run" failed in 1 packages
 ```
 
-**58 個有起始行，8 個連起始行都沒有** —— 而失敗的那一個是**倒數第 9 個**開始的：**它在哪裡失敗，排程就在哪裡停。`--no-bail` 不擋這件事。**
+**58 個有起始行，8 個連起始行都沒有** —— 失敗的那一個是**倒數第 9 個**開始的：**它在哪裡失敗，排程就在哪裡停。`--no-bail` 不擋這件事。** 沒跑到的是最大的八個（`cli`、`session-executor`、`subagent`、`agent-team`、`hooks`、`sdk`、`acp`、`guard-approval`）。
 
-**沒跑到的那 8 個是最大的八個**：`cli`、`session-executor`、`subagent`、`agent-team`、`hooks`、`sdk`、`acp`、`guard-approval`。
-
-**⇒ 所以「全套綠 ⇒ 一個數字」只有在全綠的時候才成立。一旦有一條紅，你讀到的數字是一個前綴，而它看起來完全像總數。** 而 `2624` 那個基線是真的 —— W4 那次全綠，66 個都跑了。
-
-**所以閘門是兩步，不是一步：**
+**⇒ 一個紅的全套數字是一個前綴，而它看起來完全像總數。** `2624` 那個基線是真的（W4 全綠 ⇒ 66 個都跑），但**拿一個紅的數字去比它，是在比兩個不同的母體**。
 
 ```bash
 pnpm -r --no-bail test 2>&1 | tee /tmp/full.log
@@ -562,10 +788,20 @@ node scripts/audit/check-reachability.mjs --gate
 ```
 
 Expected:
-- **母體必須是 `66`。** **不是 66 就停手回報** —— 那個合計是一個前綴，而**你不能拿它跟基線比**。補跑缺的套件（`pnpm --filter "@i-harness/<name>" exec vitest run`），然後把兩邊分開記。
-- 全綠時：**`2628 passed · 0 failed · 9 skipped`** —— 基線 **`2624`**（W4 修正輪量到的，`docs/handoff/2026-09-20-queued-work.md` §5）＋ 這一塊淨增 **4** 條（**Task 1 是改寫不是新增 ⇒ 淨 0**、Task 2 加 1、Task 3 加 3）。**動手前先把這個算式寫在旁邊**，跑完對照。
-- `pnpm typecheck` → **0 error lines**
-- `check-reachability.mjs --gate` → **`gate PASS -- no new rows`**
+- **母體必須是 `66`。不是 66 就停手回報** —— 那個合計是一個前綴。補跑缺的套件，兩邊分開記。
+- 全綠時：**基線 `2624`**（W4 修正輪，`docs/handoff/2026-09-20-queued-work.md` §5）**＋ 這一塊的淨增**。**淨增要在動手前先算出來寫在旁邊：**
+
+  | 任務 | 新增 | 改寫（淨 0） |
+  |---|---|---|
+  | **T1** | **+4**（`policy-refusal.test.ts`） | — |
+  | **T2** | 0 | 2（`execute-tool-calls` 1、`telemetry` 1） |
+  | **T3** | 0 | 7 |
+  | **T4** | **+1** | — |
+  | **T5** | **+3** | — |
+
+  ⇒ **預期 `2624 + 4 + 1 + 3 = 2632 passed · 0 failed · 9 skipped`**。**跑完對照；不符就停手回報，不要改數字去迎合。**
+
+  ⚠ **「改寫淨 0」的前提是一條換一條。** 若某條改寫把它拆成兩條，計數就會動 —— **那樣子就照實記下差在哪，不要事後把預期改成量到的值。**
 - `pnpm typecheck` → **0 error lines**
 - `check-reachability.mjs --gate` → **`gate PASS -- no new rows`**
 
@@ -573,15 +809,9 @@ Expected:
 1. `packages/session-executor/test/shell-promotion.test.ts` 在負載下 30 秒逾時
 2. `apps/cli/test/input-tiers.test.ts` 的 executor 案例在滿載下紅，隔離跑必過
 
-**預期不符就停手回報** —— 不要改那個數字去迎合結果。
-
 - [ ] **Step 4: 更新佇列文件**
 
-`docs/handoff/2026-09-20-queued-work.md`：
-- §1 的 **W5** 列：`實作未開始` → **`✅ block ①（信封）完成`**
-- §5 的 **T4 的工具管線** 那列底下，加一段完成記錄：**三塊的哪一塊完成了**、**量到什麼**、**`ruling A` 被推翻而它是刻意的**
-
-**規則（文件自己的 §0）**：**做完一件，就在同一個提交裡把它的狀態改掉。** 而 **SHA 不能在它存在之前被寫下** —— 狀態列先寫成 `<SHA>` 佔位。
+`docs/handoff/2026-09-20-queued-work.md`：§1 的 **W5** 列改成 `✅ block ①（信封）完成`，§5 的 **T4 的工具管線** 那列底下加完成記錄（哪一塊完成、量到什麼、**`ruling A` 被推翻而它是刻意的**、**`pre-tool` 否決仍然是 loud**）。狀態列的 SHA 先寫 `<SHA>` 佔位。
 
 - [ ] **Step 5: Commit**
 
@@ -590,36 +820,32 @@ git add packages/core-agent/src/index.ts docs/handoff/2026-09-20-queued-work.md
 git commit -m "docs(core-agent): M5 T4 block 1 — the call site's contract comment catches up, and the queue records the block"
 ```
 
-- [ ] **Step 6: 補上 SHA**
+- [ ] **Step 6: 補 SHA**
 
-```bash
-git log --oneline -4
-```
-
-把該列的 `<SHA>` 換成真的 SHA，另開一個 docs 提交（**這是這條分支的既有慣例：一個 SHA 不能在它存在之前被寫下**）。
+把 `<SHA>` 換成真的 SHA，另開一個 docs 提交（**這條分支的既有慣例：一個 SHA 不能在它存在之前被寫下**）。
 
 ---
 
 ## Self-Review
 
-**1 · Spec coverage（§2 的每一條對照一個任務）**
+**1 · Spec coverage**
 
 | spec | 在哪 |
 |---|---|
-| §2.1 步驟 1（停止啟動） | **不動** —— 既有的 `:190`／`:208` 已經正確 |
-| §2.1 步驟 2（取消在飛的兄弟） | **不動** —— `4c85a04` 已經正確，Task 1 Step 7 的「若紅停手」守它 |
-| §2.1 步驟 3（不再 rethrow） | Task 1 |
-| §2.1 步驟 4（填失敗那一格） | Task 1 |
-| §2.1 步驟 5（落地的兄弟 commit） | Task 1 |
-| §2.1 步驟 6（從未開始的填） | Task 2 |
-| §2.3（訊息必須不同） | Task 2 Step 5 的突變 |
-| §2.4 的四條代價 | 前三條由 Task 3 與 Global Constraints 守住；第四條（post-tool）由既有的 `"synthetic" in slot` 分支維持，`M51 B3` 那條測試仍然綠 |
+| §2.1 步驟 1（停止啟動） | 不動（既有的 `:190`／`:208`） |
+| §2.1 步驟 2（取消兄弟） | 不動（`4c85a04`；T2 Step 7 的「若紅停手」守它） |
+| §2.1 步驟 3–5（不 rethrow／填失敗格／兄弟 commit） | **T2** |
+| §2.1 步驟 6（從未開始的填） | **T4** |
+| §2.3（訊息必須不同） | T4 Step 5 的突變 |
+| §2.4 的四條代價 | 前三條由 T5 與 Global Constraints 守；第四條由既有的 `"synthetic" in slot` 分支維持 |
 | §2.5（不加錯誤旗標） | Global Constraints 第 1 條 |
-| §6.1（政策丟出仍然大聲） | Task 3 第 1 條 |
-| §7 的測試表（前兩列） | Task 1、Task 2 |
+| **§2.6（後補：cascade 的政策否決）** | **T1（標記）＋ T2 Step 5（檢查）＋ T2 Step 8（突變）** |
+| **§2.6.2（爆炸半徑 8 條）** | **T2（`core-agent` 的 1 條）＋ T3（其餘 7 條）** |
+| §6.1（政策丟出仍然大聲） | T5 Step 1 第一條 |
+| §7 的測試表（前兩列） | T2、T4、T5 |
 
-**2 · Placeholder scan** —— 無 TBD／TODO；每個 code step 都有完整可貼的內容。
+**2 · Placeholder scan** —— 無 TBD／TODO。**唯一的「描述而非貼碼」是 T3**，而它**明說自己是描述**、附了每一條的硬性檢查（突變必須讓七條全紅），並說明了為什麼（替 3 個沒讀過的 harness 編測試碼比讓實作者去讀更糟）。
 
-**3 · Type consistency** —— `TOOL_FAILED` 與 `TOOL_CANCELLED_BY_SIBLING` 在 Task 1／2 定義，在 Task 1／2／3 使用，拼字一致；`SyntheticSlot` 與 `commitReady` 是既有的名字（`execute-tool-calls.ts:65`、`:88`）。
+**3 · Type consistency** —— `TOOL_FAILED`（T2）、`TOOL_CANCELLED_BY_SIBLING`（T4）、`isPolicyRefusal`／`PolicyRefusal`（T1）在定義處與使用處拼字一致；`SyntheticSlot`、`commitReady`、`firstError` 是既有的名字。
 
-**4 · 一個刻意的缺口（寫出來免得被當成漏做）** —— **`deriveMessages` 端到端那一條**（spec §7 第三列：「每一個 `tool/call` 都有對應的 `tool/result`，用 `deriveMessages` 的輸出斷言」）**不在這一塊**。理由：`deriveMessages` 住在 `core-session`，而這一塊的 Global Constraints 明說不動它；把它寫成 `core-session` 的一條測試會**假裝這一塊改了它**。**它是 block ②／③ 的計畫要處理的**，或者是一個獨立的小項。**這裡記著，不假裝做了。**
+**4 · 明說的缺口** —— spec §7 第三列（用 `deriveMessages` 端到端斷言「每個 `tool/call` 都有 `tool/result`」）**不在這一塊**：`deriveMessages` 住在 `core-session`，而這一塊的約束明說不動它。**它是 block ②／③ 或一個獨立小項的**。**記著，不假裝做了。**
