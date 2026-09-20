@@ -392,7 +392,7 @@ const shellTimeoutMs = opts.shellTimeoutMs ?? 120_000
 
 - `AssemblyOptions.shellBackgroundAfterMs`，預設 **30_000**，就在 `shellTimeoutMs`（預設 **120_000**）旁 —— 註解同時寫在**兩個數字那裡**：**門檻必須遠低於死線，否則 `guard-timeout` 的 abort 先贏，這個功能永遠不觸發**。預設對（30_000 vs 120_000）留了 90 秒給交回。
 - CLI 的 `HeadlessOptions` 同層加了一樣的欄位並轉發（`apps/cli/src/run.ts`），所以「同一個層級」在**兩個宿主契約**都成立。
-- **§0 規則三的即時示範**：上面那段引的 `assembly.ts:404` **已因這次改動過期** —— `shellTimeoutMs` 現在在 `:413`，新的 `shellBackgroundAfterMs` 在 `:426`，兩者一起交給 shell 在 `:531`。
+- **§0 規則三的即時示範**：上面那段引的 `assembly.ts:404` **已因這次改動過期** —— `shellTimeoutMs` 現在在 `:413`，新的 `shellBackgroundAfterMs` 在 `:426`；兩者交給 shell 的那一行**以符號記**（`registerShell(ctx, tools, { timeoutMs: shellTimeoutMs, backgroundAfterMs: shellBackgroundAfterMs, … })`）—— 行號會再一次被下一次插入移走，符號不會（`packages/shell/test/sandbox-refusal.test.ts` 的註記是同一條教訓）。
 
 #### 縫開在哪裡（回報要求的工程問題）
 
