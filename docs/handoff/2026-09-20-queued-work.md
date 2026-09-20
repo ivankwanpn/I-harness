@@ -32,7 +32,7 @@
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
 | **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
 | **W11** | **子代理的健康訊號**（三塊） | 三 | **✅ 完成**（`22b20c30`，三塊都在，見 §8.5 的完成記錄） | 無 |
-| **W12** | ~~`wait_agent` 的門檻~~ → **換成：`spawn_agent background:false` 逾時時說「settled」** | 三 | **▶ 前提被量測推翻、換成新缺陷**（見 §8.5） | 無 |
+| **W12** | ~~`wait_agent` 的門檻~~ → **換成：`spawn_agent background:false` 逾時時說「settled」** | 三 | **✅ 完成**（本提交；見 §8.5 的完成記錄） | 無 |
 | **Q1–Q8** | 四題產品決定 | 二 | **等使用者** | — |
 | **P·A1–A7** | 階段 A 的 parked | 三 | 已記錄 | — |
 | **P·B1–B9** | 階段 B 的 parked | 三 | 已記錄 | — |
@@ -655,6 +655,46 @@ return { …, status: settled?.status ?? "unknown",
 **它是一句「形狀像訊息」的謊** —— 而**它的兄弟 `wait_agent` 有 `timed_out: boolean`，它沒有**。
 
 **驗收**：逾時的時候，那個結果**要說出它逾時了**（而且**要看得出那個任務還在跑**）；**沒逾時的時候，行為逐位元不變**。**照 `wait_agent` 已經在做的那個形狀** —— 那個 repo 已經有正確答案，只是這一條路沒有用它。
+
+### ✅ **W12 已完成 —— 逾時的 `spawn_agent background:false` 不再說「settled」**（本提交；實作於 `d4-endpoint-cache`）
+
+**形狀照兄弟，沒有第三種**：那條路先問「這次等待有沒有拿到終態」（`packages/subagent/src/tools.ts:198` 的守衛），沒拿到就走 **`wait_agent` 的逾時形狀** —— `timed_out: true` ＋ `wait timed out for <path> (still running)`（`:200`）。**成功的那一 return 逐字未動**（`:202`）：**「沒逾時時逐位元不變」因此是建構出來的，不是被斷言出來的** —— 而它被走到的條件（`settled` 有終態）與舊碼會報「settled」的條件是同一個。
+
+#### 量到的（**同一個真實逾時，修前／修後**）
+
+修前那一行（把舊碼放回去、只留可注入的縫，探針在 `background: false` 逾時時印出）：
+
+```
+{"agent_path":"root/helper","job_id":"subagent-1","task_id":"task-1","status":"running","message":"subagent root/helper settled: running"}
+```
+
+**同一刻 registry 的 record**：`status: "running"`、`timeStarted` 已蓋、**`outcome` 是 `undefined`** —— **任務還在跑，而訊息說它 settled。**
+
+修後：`timed_out: true`、`status: "running"`、`message: "wait timed out for root/helper (still running)"`，**且沒有 `outcome`／`resultText`** —— **沒有替一個沒發生的結算捏造 summary 欄位。**
+
+#### ⚠ 這一區自己的字有一處量到得不夠準（**本節的修正**）
+
+上一段說「逾時回 `undefined`」。**量到的：出貨的 `createTaskRegistry.wait` 在截止時回的是那筆還在跑的 record**（實作在 `packages/subagent/src/task-protocol.ts:263`；`:108` 型別上的 `| undefined` 涵蓋的是**未知 id**）。**所以那句的字面版本（工具回報「settled: unknown」）不成立 —— 它實際回報的是「settled: running」**（上面那行就是量到的原文）。**缺陷本身成立且範圍更大**（`running` 一樣被說成 settled），而修法**把兩種慣例收進同一臂**：守衛是 `settled === undefined || settled.outcome === undefined`，所以**一個照契約回 `undefined` 的實作也落在逾時臂**（那一支有守衛、沒有測試驅動它 —— 出貨的 registry 走不到，明說）。
+
+#### 測試：**驅動一個真實逾時**，不是釘形狀
+
+- **300_000 沒有任何測試負擔得起** ⇒ 在**工具自己的 deps 上開一個窄縫**：`SubagentToolDeps.foregroundWaitMs?`（`packages/subagent/src/tools.ts:61`）—— **缺席 = 300_000，出貨行為不變**，而**沒有任何宿主傳它**（全 repo 只有那條測試設它）。**沒有把它接進 `RegisterSubagentOptions`**：那會把一個只有測試在用的旋鈕變成宿主契約 —— **要的是窄縫，不是旋鈕**。
+- 測試（`packages/subagent/test/tools.test.ts:826`）傳 **50ms**，而子代理的初始回合是**真的睡 2 秒**的模型 ⇒ 截止時任務**真的**還在跑，`wait` **真的**輪詢到自己的截止。**沒有 mock 時鐘、沒有 stub `wait`、沒有新的假 registry** —— 用的是既有的 `createTaskRegistry()`。
+- 斷言的就是**逾時那個出口**：`timed_out === true`、訊息逐字、`status === "running"`，而**record 沒有 `outcome`、table 條目還活著、`outcome`／`resultText` 沒有被捏出來**（`:841` 起）。
+
+#### 證偽（**把舊的那一行放回去**）
+
+舊形狀放回、同一條測試再跑：**`packages/subagent/test/tools.test.ts:841` 當場紅** —— `expected undefined to be true`（**舊碼裡沒有 `timed_out` 這個欄位**）。**探針那一輪另外量到舊碼實際回的字**（就是上面那行 `settled: running`）。
+
+#### 順手改準的一句（**模型看得到的字也是訊息**）
+
+工具 description 原本說 `background: false` **阻塞到任務 settle**（`:70`）—— **逾時的出口不在描述裡**。現在它寫了：沒在界內 settle 就回 `timed_out: true`，且**任務還在跑**。
+
+#### 量到的（全套）
+
+- **`2615 passed · 0 failed · 9 skipped`**（66 個 package；**執行前先寫下預期 2615 = 2614 + 1**）。**沒有動任何既有測試案例**，新增的是一條新測試。
+- `pnpm -r typecheck` 綠；`node scripts/audit/check-reachability.mjs --gate` → **`gate PASS -- no new rows`**。
+- **沒有新 export**：新欄位在既有的 `SubagentToolDeps` 上，而 `timed_out?` 在工具結果的**行內字面型別**上（`:67`）—— 所以這一項不需要「export 與消費者同提交」的處置。
 
 ---
 

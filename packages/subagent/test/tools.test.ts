@@ -819,6 +819,37 @@ describe("M26-D2 background delivery", () => {
     expect(table.get("root/helper")?.status).toBe("waiting")
   }, 15_000)
 
+  // W12: this drives a REAL timeout — the injected bound (50ms) is passed to the
+  // real registry's `wait`, which polls to that deadline against a child that is
+  // still mid-turn, so the tool returns from the timeout arm and not from a mock.
+  // (Without the seam the bound is 300_000, which no test can afford to reach.)
+  it("background:false that times out says so — the task is still running, not 'settled'", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec } = setup()
+    // The child must outlive the 50ms wait: its initial turn streams a chunk and
+    // then sleeps well past it, so at the deadline the task is still non-terminal.
+    const slowModel: ModelClient = {
+      async *stream() {
+        yield { type: "text/chunk", text: "working" }
+        await new Promise((r) => setTimeout(r, 2_000))
+        yield { type: "end" }
+      },
+    }
+    const tasks = createTaskRegistry()
+    const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: slowModel, resolveModel, exec, agents: createAgentRegistry(), tasks, foregroundWaitMs: 50 })
+    const spawn = all.find((t) => t.name === "spawn_agent")!
+    const out = await spawn.execute({ message: "do it", task_name: "helper", background: false }, { sessionId: "s-main", callEventSeq: 5 }) as { task_id: string; status?: string; outcome?: string; resultText?: string; timed_out?: boolean; message?: string }
+    expect(out.timed_out).toBe(true)
+    expect(out.message).toBe("wait timed out for root/helper (still running)")
+    expect(out.status).toBe("running")
+    // …and it really is still running: no outcome on the durable record, a live
+    // table entry, and no summary fields invented for a settlement that has not
+    // happened.
+    expect(tasks.get(out.task_id)!.outcome).toBeUndefined()
+    expect(table.get("root/helper")?.status).toBe("running")
+    expect(out.outcome).toBeUndefined()
+    expect(out.resultText).toBeUndefined()
+  }, 15_000)
+
   it("terminalize delivers to the parent immediately (drain hooked to onTerminalized)", async () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
