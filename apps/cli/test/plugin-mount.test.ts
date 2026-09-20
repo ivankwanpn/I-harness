@@ -188,9 +188,23 @@ describe("plugin mount — a plugin's subagent role reaches the agent", () => {
       mockScript: script(),
     })
 
-    // The spawn tool throws and the run ends non-zero. THIS is the control that
-    // makes the case above meaningful: the wiring is the only difference.
-    expect(result.exitCode).not.toBe(0)
-    expect(String(result.error)).toContain("unknown role: code-simplifier")
+    // THIS is the control that makes the case above meaningful: the wiring is
+    // the only difference. Before M5 T4 block ① the spawn tool's throw ended
+    // the run non-zero, and `result.error` — not a tool result — carried the
+    // reason. A tool BODY throw is now soft (the turn continues), so the reason
+    // is asserted on the channel it travels: the spawn's tool/result.
+    expect(result.exitCode).toBe(0)
+    const toolResults = result.session!.events.filter((e) => e.type === "tool/result") as {
+      name: string
+      output: unknown
+    }[]
+    const spawn = toolResults.find((e) => e.name === "spawn_agent")
+    expect(String((spawn?.output as { error?: string } | undefined)?.error)).toContain("unknown role: code-simplifier")
+
+    // …and the role really did not resolve: no child consumed the second script
+    // step, so the parent's continuation takes it and says "child done" — while
+    // the plugin case (above) reaches "parent done" only because a child DID.
+    expect(result.finalText).toContain("child done")
+    expect(result.finalText).not.toContain("parent done")
   })
 })

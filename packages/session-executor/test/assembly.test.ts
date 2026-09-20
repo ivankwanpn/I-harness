@@ -1177,18 +1177,33 @@ describe("createSessionAssembly — MCP auth refresh-failure binding (M56/M57)",
 // The RoleRegistry is deliberately NOT on the assembly handle ("the projection
 // owns NO registry object — rows only"), so the contract is checked where it IS
 // observable: the per-role result map, and a REAL spawn through the mounted
-// spawn_agent — which resolves roles by name and throws `unknown role: X` when
-// one is absent. The first case runs the same fixture with and without the
+// spawn_agent — which resolves roles by name and fails with `unknown role: X`
+// when one is absent. The first case runs the same fixture with and without the
 // option, so it is the OPTION that makes the difference rather than an
 // assertion that merely passes.
+
+/** The message a soft-failed tool call handed the model: the `error` field of
+ * the `tool/result` this session recorded for `name`. M5 T4 block ① moved a
+ * tool BODY failure here — the call used to throw out of `agent.run` and end
+ * the turn, now it yields a result and the turn continues — so the cases below
+ * assert the SAME reason on the channel it travels. Returns the string
+ * "undefined" when no such result exists, so a missing result fails the match
+ * instead of raising a shape error. */
+function toolErrorOf(events: SessionEvent[], name: string): string {
+  const result = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
+    e.type === "tool/result" && e.name === name)
+  return String((result?.output as { error?: string } | undefined)?.error)
+}
+
 describe("createSessionAssembly — pluginAgents", () => {
   /** One turn whose model asks spawn_agent for `roleName`. `background: false`
    * makes the child's turn land before the parent's continuation, so the
    * cassette order is deterministic. Returns what the model saw (a role's
-   * identity becomes observable through the child's systemPrompt) plus the whole
-   * recorded turn. An UNRESOLVABLE role makes the spawn tool throw straight out
-   * of `agent.run` — so the control case asserts a rejection, which is the
-   * sharper form of the same fact rather than a weaker one. */
+   * identity becomes observable through the child's systemPrompt) plus the
+   * session's events. An UNRESOLVABLE role fails the spawn tool's BODY — soft
+   * since M5 T4 block ① — so the control case asserts the spawn's `tool/result`
+   * carries `unknown role: X` rather than asserting a rejection (which WAS the
+   * old contract). */
   async function spawnVia(roleName: string, pluginAgents?: SubagentRole[]) {
     const cassette = createMockClient([
       { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "simplify this", task_name: "helper", agent_type: roleName, background: false } }] },
@@ -1211,6 +1226,7 @@ describe("createSessionAssembly — pluginAgents", () => {
       return {
         requests,
         agentResults: [...assembly.pluginAgentResults],
+        events: [...assembly.session.events],
         log: JSON.stringify({ run, events: assembly.session.events }),
       }
     } finally {
@@ -1226,9 +1242,13 @@ describe("createSessionAssembly — pluginAgents", () => {
       tools: ["read"],
     }
 
-    // Control: the SAME fixture, option absent — the role does not exist, and
-    // the spawn tool's throw ends the run.
-    await expect(spawnVia("code-simplifier")).rejects.toThrow(/unknown role: code-simplifier/)
+    // Control: the SAME fixture, option absent — the role does not exist, so
+    // the spawn tool's BODY fails with `unknown role` and, since M5 T4 block ①,
+    // that failure is SOFT: the reason reaches the model in the spawn's
+    // tool/result and the turn continues. Asserted on that result rather than
+    // as a rejection, which is what the old contract was.
+    const control = await spawnVia("code-simplifier")
+    expect(toolErrorOf(control.events, "spawn_agent")).toMatch(/unknown role: code-simplifier/)
 
     const withRole = await spawnVia("code-simplifier", [role])
     expect(withRole.log).not.toContain("unknown role")
@@ -1262,10 +1282,12 @@ describe("createSessionAssembly — pluginAgents", () => {
 
 // ── resolveRoleModel: the HOST's resolver is what a role's model runs on ────
 // Both ends of the seam are load-bearing. A wired resolver must be the thing a
-// model-carrying role runs on — its own reason reaching the failure is what
+// model-carrying role runs on — its own reason reaching the tool result is what
 // says so — and an ABSENT one must fail NAMING the selection, never let the
 // child inherit the session's model in silence (a role that names one model and
-// runs another is the wrong answer stated as a right one).
+// runs another is the wrong answer stated as a right one). Each case below
+// names the failure reason in full, so each asserts the spawn's `tool/result`
+// (the soft channel since M5 T4 block ①) rather than a rejection.
 describe("createSessionAssembly — resolveRoleModel", () => {
   const roleWithModel: SubagentRole = {
     name: "rolemodel",
@@ -1277,7 +1299,11 @@ describe("createSessionAssembly — resolveRoleModel", () => {
 
   /** One turn whose model asks spawn_agent for the model-carrying role.
    * `background: false` makes the child's turn land before the parent's
-   * continuation, and the not-ready resolver ends the whole run in a throw.
+   * continuation. Every case here fails the spawn's BODY, which since M5 T4
+   * block ① is SOFT: the reason lands in the spawn's `tool/result`, the turn
+   * survives, and the model is asked for its next step — the cassette's LAST
+   * entry. (Without it the run dies on an exhausted script, which would be this
+   * fixture's artifact rather than the seam's behavior.)
    *
    * `allowSubagentModelSelection` is passed EXPLICITLY by the cases below: the
    * option is the `plugins.subagentModel` switch, absent means off, and a
@@ -1288,9 +1314,10 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     resolveRoleModel?: AssemblyOptions["resolveRoleModel"],
     allowSubagentModelSelection?: boolean,
     roleSelectionFor?: AssemblyOptions["roleSelectionFor"],
-  ): Promise<unknown> {
+  ): Promise<{ run: unknown; events: SessionEvent[] }> {
     const cassette = createMockClient([
       { role: "assistant", toolCalls: [{ name: "spawn_agent", args: { message: "x", task_name: "helper", agent_type: "rolemodel", background: false } }] },
+      { role: "assistant", text: "parent saw the failure" }, // the continuation the soft path reaches
     ])
     const model: ModelClient = { async *stream(req) { yield* cassette.stream(req) } }
     const assembly = await createSessionAssembly({
@@ -1305,20 +1332,25 @@ describe("createSessionAssembly — resolveRoleModel", () => {
       ...(roleSelectionFor !== undefined ? { roleSelectionFor } : {}),
     })
     try {
-      return await assembly.agent.run("start")
+      const run = await assembly.agent.run("start")
+      return { run, events: [...assembly.session.events] }
     } finally {
       await assembly.dispose()
     }
   }
 
   it("a wired but not-ready resolver fails the spawn with ITS reason", async () => {
-    await expect(spawnRoleWithModel(async () => ({ status: "invalid", reason: 'Unknown provider "gw"' }), true))
-      .rejects.toThrow(/role 'rolemodel' cannot resolve its model: Unknown provider "gw"/)
+    const { events } = await spawnRoleWithModel(async () => ({ status: "invalid", reason: 'Unknown provider "gw"' }), true)
+    // The resolver's OWN reason, in full — a generic "spawn failed" would not
+    // match, so this still says the wired resolver was the one consulted.
+    expect(toolErrorOf(events, "spawn_agent"))
+      .toMatch(/role 'rolemodel' cannot resolve its model: Unknown provider "gw"/)
   }, 30_000)
 
   it("an ABSENT resolver fails naming the selection (no silent inherit)", async () => {
-    await expect(spawnRoleWithModel(undefined, true))
-      .rejects.toThrow(/no role-model resolver is configured \(role asked for gw:small\)/)
+    const { events } = await spawnRoleWithModel(undefined, true)
+    expect(toolErrorOf(events, "spawn_agent"))
+      .toMatch(/no role-model resolver is configured \(role asked for gw:small\)/)
   }, 30_000)
 
   // The switch itself, seen from the real assembly: ABSENT is off. Nothing was
@@ -1327,17 +1359,21 @@ describe("createSessionAssembly — resolveRoleModel", () => {
   // `rolemodel` is not a built-in name, so the second fix is the settings key:
   // `roles unset` only accepts the four built-ins.
   it("without plugins.subagentModel the model-carrying spawn is refused, naming both fixes", async () => {
-    await expect(spawnRoleWithModel())
-      .rejects.toThrow(/role "rolemodel" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear `agents\.roles\.rolemodel` in settings\.json/)
+    const { events } = await spawnRoleWithModel()
+    expect(toolErrorOf(events, "spawn_agent"))
+      .toMatch(/role "rolemodel" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear `agents\.roles\.rolemodel` in settings\.json/)
   }, 30_000)
 
   // …and the HOST's declared selection is what a spawn asks the resolver for:
   // settings beat the role's own `model` at the assembly end of the seam too.
   it("the host's declared role selection reaches the spawn and WINS over the role's own", async () => {
-    await expect(spawnRoleWithModel(
+    const { events } = await spawnRoleWithModel(
       async (selection) => ({ status: "invalid", reason: `saw ${selection.provider}:${selection.model}` }),
       true,
       (roleName) => (roleName === "rolemodel" ? { provider: "gw", model: "from-settings" } : undefined),
-    )).rejects.toThrow(/saw gw:from-settings/)
+    )
+    // The resolver ECHOES what it was handed: `gw:from-settings` is the
+    // settings-declared selection, not the role's own `gw:small`.
+    expect(toolErrorOf(events, "spawn_agent")).toMatch(/saw gw:from-settings/)
   }, 30_000)
 })
