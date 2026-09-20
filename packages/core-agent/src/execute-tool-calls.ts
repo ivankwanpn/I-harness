@@ -7,6 +7,11 @@ import type { Telemetry } from "@i-harness/telemetry"
 
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 export const TOOL_FAILED = "TOOL_FAILED"
+// A call that never started because a SIBLING failed. Deliberately a
+// different code AND a different message from TOOL_ABORTED_BEFORE_DISPATCH:
+// "the user stopped the step" and "a tool in this batch broke" are different
+// facts, and a log that conflates them cannot be read back.
+export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 
 export interface BatchCall {
   callId: string
@@ -44,8 +49,12 @@ export interface ExecuteToolCallsOptions {
 // run sequentially (full drain between), so an exclusive call never overlaps
 // anything.
 //
-// Failure (throw-fails-turn, ruling A): stop starting, drain started calls,
-// rethrow the first error — NO fabricated results for unstarted calls.
+// Failure (soft since M5 T4 block ①): stop starting, drain started calls,
+// fill the failed slot, commit what settled, and give never-started calls a
+// TOOL_CANCELLED_BY_SIBLING result. Nothing is fabricated — that verdict is a
+// fact about what happened, not a made-up outcome. A policy refusal (a
+// `prepare` throw, or a cascade throw carrying the `isPolicyRefusal` marker)
+// still rethrows.
 // Abort: stop starting, drain started (commit what settled in model order),
 // synthesize TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls,
 // then throw "agent aborted". Abort dominates a coincident failure. M51 B3:
@@ -324,11 +333,16 @@ export async function executeToolCalls(
     for (let i = committed; i < startedUpTo; i += 1) {
       if (slots[i] !== undefined) continue
       const call = batch[i]!
-      // THIS call's own message. `firstError` is only a defensive fallback:
-      // after the drain, a settled started call either wrote `slots[i]` or ran
-      // its `.catch` and recorded its own error in `failures`.
+      // THIS call's own message. The test is `failures.has(i)` — NOT
+      // `failures.get(i) !== undefined`: a body that rejects with `undefined`
+      // DOES record itself (`set(i, undefined)`), and a value test cannot tell
+      // that record from "no entry" — so that call would be stamped with its
+      // SIBLING's message, the exact misattribution this map was added to
+      // kill. `firstError` is only a defensive fallback: after the drain, a
+      // settled started call either wrote `slots[i]` or ran its `.catch` and
+      // recorded its own error here.
       const own = failures.get(i)
-      const message = own !== undefined
+      const message = failures.has(i)
         ? (own instanceof Error ? own.message : String(own))
         : firstError instanceof Error ? firstError.message : String(firstError)
       slots[i] = {
@@ -339,5 +353,20 @@ export async function executeToolCalls(
       }
     }
     await commitReady()
+    // Calls that never started: no `prepare`, no `tool/dispatch`, no body.
+    // They get a result too, so the projection never emits a tool_use with no
+    // tool_result — but their verdict is CANCELLATION, not abort.
+    for (let i = startedUpTo; i < batch.length; i += 1) {
+      const call = batch[i]!
+      append(session, {
+        type: "tool/result",
+        callId: call.callId,
+        name: call.name,
+        output: {
+          error: "tool call cancelled: a sibling call in the same batch failed",
+          code: TOOL_CANCELLED_BY_SIBLING,
+        },
+      })
+    }
   }
 }

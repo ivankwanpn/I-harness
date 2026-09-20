@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
-import { executeToolCalls, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_FAILED } from "../src/index.ts"
+import {
+  executeToolCalls,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+} from "../src/index.ts"
 
 function makeTracker() {
   const tracker = {
@@ -234,6 +239,33 @@ describe("executeToolCalls scheduler", () => {
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output).toEqual({ ok: true })
     expect(results[1]!.output).toEqual({ error: "kaboom", code: TOOL_FAILED })
+  })
+
+  it("a never-started call is CANCELLED, and says so — not the abort message", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    tools.register({
+      name: "boomtool", description: "boom", inputSchema: {}, isConcurrencySafe: true,
+      // Throws IMMEDIATELY: c0 fails before c1's prepare ever runs, so c1 is
+      // never started and lands in the [startedUpTo, batch.length) range.
+      execute: async () => { throw new Error("kaboom") },
+    })
+    tools.register({
+      name: "nevertool", description: "never started", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => ({ ok: true }),
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "boomtool", args: {} },
+      { callId: "c1", name: "nevertool", args: {} },
+    ], { maxParallel: 1 })
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string; output: { code?: string }
+    }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output.code).toBe(TOOL_FAILED)
+    expect(results[1]!.output.code).toBe(TOOL_CANCELLED_BY_SIBLING)
+    expect(results[1]!.output).not.toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
   })
 
   it("synthesizes TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls on abort", async () => {
@@ -483,7 +515,7 @@ describe("M26 tool identity plumbing", () => {
   })
 })
 
-// M5 T4 block ① fix round (review). Two measured defects, each test below is
+// M5 T4 block ① fix round (review). Three measured defects, each test below is
 // the regression for one of them:
 //   1. the disposition test (`firstRefusal !== undefined`) read a value written
 //      only by `.catch` handlers, and nothing awaited the in-flight dispatches
@@ -491,10 +523,15 @@ describe("M26 tool identity plumbing", () => {
 //      judged "not a refusal" and silently took the soft path. Measured before
 //      the drain existed: the same veto threw when its own `.catch` ran first,
 //      and RESOLVED (recorded against a sibling's failure) when a sibling's
-//      failure got there first.
+//      failure got there first. (M5 T4 block ① T4: the veto now lands on the
+//      batch abort signal instead of a `setTimeout` — see the M61 note above.)
 //   2. the soft path's fill loop stamped `firstError`'s message on EVERY
 //      unfilled slot, so a body that failed with "B error" was written down as
 //      "A error".
+//   3. that loop's `failures.get(i) !== undefined` test could not tell "this
+//      call recorded `undefined`" from "no entry" — so a body that rejected
+//      with `undefined` was stamped with a sibling's message, the same
+//      misattribution in the one shape the VALUE test misses.
 describe("executeToolCalls — fix round: disposition is not raced, each failure keeps its own message", () => {
   it("a marked veto that lands AFTER a sibling's failure still kills the turn", async () => {
     const ctx = createContext()
@@ -506,12 +543,40 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     // dependency points the other way), which is exactly why the marker is
     // duck-typed instead of an `instanceof` check.
     const veto = Object.assign(new Error("read disabled"), { policyRefusal: true as const })
+    // Which sibling fails is decided by the fixture, not by scheduling: the
+    // veto's listener ARMS (below) before boomTool is allowed to throw.
+    let vetoArmed!: () => void
+    const vetoArmedP = new Promise<void>((r) => { vetoArmed = r })
     ctx.onCascade("tools/execute", async (input, next) => {
-      if ((input as { name: string }).name !== "vetoTool") return next()
+      const { name, exec } = input as { name: string; exec: { abortSignal?: AbortSignal } }
+      if (name !== "vetoTool") return next()
       // A pre-tool hook is a SUBPROCESS (this branch's own e2e measures 449ms
       // to boot one) — a veto landing after a fast sibling's failure is the
       // ordinary case, not the exotic one.
-      await new Promise((r) => setTimeout(r, 50))
+      //
+      // Constructed, not raced. This used to `setTimeout(50)` here — the M61
+      // note above in miniature: that is a timing assertion, not a behaviour
+      // assertion, and it fails under load for the same reason.
+      // `batchAbort.abort()` fires this signal in the SAME synchronous block
+      // that sets `firstError`, so the veto's listener is WOKEN at the instant
+      // the sibling's failure is recorded and only then throws: "a sibling
+      // already failed" is a fact of the construction, not a bet on the clock.
+      const signal = exec.abortSignal
+      const woke = new Promise<void>((resolve) => {
+        if (signal?.aborted === true) resolve()
+        else signal?.addEventListener("abort", () => resolve(), { once: true })
+      })
+      vetoArmed()
+      await woke
+      // `woke` is resolved inside the synchronous block that set `firstError`;
+      // this boundary makes the THROW one microtask later, so the veto's
+      // rejection is still OUTSTANDING when the group loop breaks. Measured
+      // (this file, mutating away the drain before the disposition test):
+      // without it the veto's `.catch` runs one hop BEFORE that test — the
+      // turn still died, so the drain was unobservable and the test could not
+      // fail. A real veto arrives from a hook's own promise chain (a subprocess
+      // round trip), never as the abort's own reaction.
+      await Promise.resolve()
       throw veto
     })
     tools.register({
@@ -520,10 +585,10 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     })
     tools.register({
       name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
-      // The sibling fails FIRST (immediately), so the batch's group loop breaks
-      // out while the veto is still in flight — which is what the drain after
-      // that loop exists to absorb.
-      execute: async () => { throw new Error("boom") },
+      // The sibling fails FIRST — once the veto is armed, so the batch's group
+      // loop breaks out while the veto is still in flight, which is what the
+      // drain after that loop exists to absorb.
+      execute: async () => { await vetoArmedP; throw new Error("boom") },
     })
     // NO .resolves: a refusal is never soft, whenever it lands.
     await expect(executeToolCalls(ctx, session, tools, [
@@ -562,5 +627,45 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output).toEqual({ error: "A error", code: TOOL_FAILED })
     expect(results[1]!.output).toEqual({ error: "B error", code: TOOL_FAILED })
+  })
+
+  it("a body that rejects with `undefined` keeps its OWN entry, not its sibling's message", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    let bStarted!: () => void
+    const bStartedP = new Promise<void>((r) => { bStarted = r })
+    tools.register({
+      name: "failA", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // The REAL failure ("A error") is the one `firstError` holds. A waits for
+      // B to be dispatched so the batch cannot stop starting before B runs —
+      // the same construction as the test above.
+      execute: async () => { await bStartedP; throw new Error("A error") },
+    })
+    tools.register({
+      name: "failB", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // B rejects with `undefined` — a `throw undefined` is legal, and it is
+      // recorded as `failures.set(1, undefined)`. That is the whole point: the
+      // map has an entry for B, and its value happens to be undefined. A
+      // `failures.get(i) !== undefined` test cannot tell that record from "no
+      // entry", so B would be stamped with A's message — the misattribution
+      // this map exists to kill, in the one shape the value test misses.
+      execute: async () => { bStarted(); throw undefined },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "failA", args: {} },
+      { callId: "c1", name: "failB", args: {} },
+    ], { maxParallel: 10 })
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string; output: unknown
+    }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output).toEqual({ error: "A error", code: TOOL_FAILED })
+    // "undefined" is the honest rendering of what B reported. The assertion
+    // that matters is the NEGATIVE half: it is not A's message. Mutation
+    // (`failures.has(i)` → `failures.get(i) !== undefined`) reddens exactly
+    // here, with B reading `{ error: "A error" }`.
+    expect(results[1]!.output).toEqual({ error: "undefined", code: TOOL_FAILED })
+    expect(results[1]!.output).not.toEqual({ error: "A error", code: TOOL_FAILED })
   })
 })
