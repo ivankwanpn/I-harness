@@ -1,13 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { isPolicyRefusal } from "@i-harness/core-tools"
-// Source-relative, NOT the `@i-harness/hooks` bare specifier the brief sketched:
-// `core-agent` has no dependency on `hooks` and must not grow one (measured:
-// `Cannot find package '@i-harness/hooks' imported from
-// .../core-agent/test/policy-refusal.test.ts`). The marker exists precisely so
-// that `core-agent` never needs the package — but this ONE test asserts the
-// link between the two, so it reaches the class at its source path instead of
-// declaring an edge the production code is forbidden to have.
-import { HookBlockedError } from "../../hooks/src/types.ts"
+import { HookBlockedError } from "../src/types.ts"
 
 // spec §2.6: a POLICY refusal — "you may not do this" — must be
 // distinguishable from a tool body that tried and failed. The distinction is
