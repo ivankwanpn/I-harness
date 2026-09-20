@@ -578,9 +578,9 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //
 //  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:938 `session, tools, model,`)
 //  2+3  the compaction engine              — case 2  (construction core-agent/src/index.ts:142 `model: deps.model,`;
-//                                                    its own read compaction/src/index.ts:114)
+//                                                    its own read compaction/src/index.ts:125)
 //  5a   a spawned sub-agent                — case 3  (assembly.ts:785 `parentModel: model,`)
-//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:830 `parentModel: model,` → reviewer.ts:137's
+//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:830 `parentModel: model,` → reviewer.ts:149's
 //                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
 //  5c   a team-mate                        — case 5  (assembly.ts:866 `parentModel: model,` → scheduler.ts:204
 //                                                    `parentModel: deps.parentModel,`)
@@ -644,7 +644,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
    * as `recordingModel`, subagent/test/child.test.ts:253) with the replies served
    * by the file's own `createMockClient` cassette — exactly the recorder+cassette
    * composition the pluginAgents fixture's `spawnVia` uses — `async function
-   * spawnVia(roleName: string, pluginAgents?: SubagentRole[])` at :1030. Not a fourth fixture: the
+   * spawnVia(roleName: string, pluginAgents?: SubagentRole[])` at :1163. Not a fourth fixture: the
    * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
    * the two existing pieces are joined, because these holders are driven by
    * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
@@ -692,7 +692,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       model: first,
       // ⚠ NO `summarizationModel` — deliberately. With one CONFIGURED, the engine
       // keeps it across a rebind (R-B2 — `config.summarizationModel ?? deps.model`,
-      // compaction/src/index.ts:114), which is Task 3's boundary. Setting one in
+      // compaction/src/index.ts:125), which is Task 3's boundary. Setting one in
       // THIS fixture would make the assertion below assert the reverse of shipped
       // behaviour.
       compact: { contextWindow: 100_000 },
@@ -704,7 +704,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       // summarizer's call is the evidence of BOTH capture sites — the engine
       // CONSTRUCTED from the agent's deps (core-agent/src/index.ts:142
       // `model: deps.model,`) and its own read at compact time
-      // (compaction/src/index.ts:114). Exactly one call: the engine's reply was
+      // (compaction/src/index.ts:125). Exactly one call: the engine's reply was
       // a clean summary, not the degenerate-retry path.
       expect(second.requests).toHaveLength(1)
       expect(first.requests).toHaveLength(0)
@@ -767,7 +767,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       // `{}` — the INHERITED case: no `guardian.model`, so the reviewer runs on
       // `parentModel` (assembly.ts:830), which is the handle. A configured
       // `guardian.model` wins by construction (`deps.model ?? deps.parentModel`,
-      // reviewer.ts:137) and is Task 3's boundary, not this case's.
+      // reviewer.ts:149) and is Task 3's boundary, not this case's.
       guardian: {},
     })
     try {
