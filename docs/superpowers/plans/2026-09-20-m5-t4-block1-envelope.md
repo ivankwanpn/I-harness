@@ -13,7 +13,8 @@
 ## Global Constraints
 
 - **接縫沒有錯誤旗標，而 v1 不加**（spec §2.5）。`grep -rn "isError\|is_error" packages/llm-*/src` 必須**維持零命中**。
-- **中止路徑的 `throw new Error("agent aborted")` 不動**（spec §2）。既有的五條 abort 測試必須**一條都不改**。
+- **中止路徑的 `throw new Error("agent aborted")` 不動**（spec §2）。既有的 **四條** abort 測試（`execute-tool-calls.test.ts` 的 `:261`、`:309`、`:392`、`:434`）必須**一條都不改**。
+  > ⚠ 第一版寫「五條」—— **那是量出來的，不是數出來的**（`agent.test.ts` 用的是 `/aborted/i`，那是**不同的字串**）。數字已更正。
 - **`prepare` 的政策丟出仍然殺掉整個 turn**（spec §6.1）—— `unknown tool`、`guard denied`、`tools/pre-execute` 的 deny、`denied`、approval fail-closed、guardian denied。
 - **cascade 裡的政策否決仍然殺掉整個 turn**（spec §2.6）—— 靠 `PolicyRefusal` 標記，不靠一份清單。
 - **合成失敗不跑 `finalize`、不發 `agent/post-tool`**（M10a 的既有裁定，經 `"synthetic" in slot` 那條分支）。
@@ -463,6 +464,95 @@ Expected: **`core-agent` 全綠**（這一刻 `session-executor`／`sdk`／`cli`
 git add packages/core-agent/src/execute-tool-calls.ts packages/core-agent/src/index.ts packages/core-agent/test/execute-tool-calls.test.ts packages/core-agent/test/telemetry.test.ts
 git commit -m "feat(core-agent): M5 T4 block 1 — a body failure goes soft, a policy refusal stays loud, and the site is not the only test"
 ```
+
+---
+
+#### 🔴 T2 修正輪 —— 複審的 Critical（**這一節是後補的，量到才寫下來的**）
+
+**Critical：一個還在飛的否決會被靜默降級成軟的。**
+
+`:281` 的 `if (firstRefusal !== undefined)` 是**決策點**，而 `firstRefusal` 的兩個寫入點（`:174`、`:234`）**都在 `.catch` 裡** —— 而 `:281` **之前沒有任何地方 await 過在飛的 promise**（那一次的 `Promise.allSettled` 在 `:284`，**在決策之後**）。
+
+**複審量到的**（用真的 `HookBlockedError`，從真的 `tools/execute` cascade 監聽者丟出）：
+
+| | 結果 |
+|---|---|
+| 否決的 `.catch` 先跑（`vetoDelay=0ms`） | **`THREW: read disabled`** —— 大聲 ✓ |
+| 否決的 `.catch` 晚 100ms | **`RESOLVED (soft path)`**，而 **c1 的結果是 `{"error":"boom","code":"TOOL_FAILED"}`** —— **它被記成「用兄弟的訊息失敗了」** |
+
+**⇒ 同一個具型錯誤，只因為 microtask 的先後，就大聲或變軟。** 而可達性是普通的：`pre-tool` 是一個**子行程**（這條分支自己的 e2e 量到 449ms），所以任何先失敗的兄弟都會贏這個競態。
+
+**修法（複審指的方向，而它與 `:279-280` 那句假註解的修正一起做）：**
+
+**在 abort 分支與 `if (firstRefusal !== undefined)` **之間**插入一次 drain：**
+
+```ts
+  // Drain BEFORE the disposition tests. Every write to `firstError` and
+  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
+  // promises have settled neither is final — and a refusal that settles one
+  // microtask late is tested as "not a refusal" and silently downgraded to
+  // the soft path. (Measured before this drain existed: the same marked veto
+  // threw when its own .catch ran first, and resolved softly — recorded
+  // against a sibling's error message — when a sibling's failure got there
+  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
+  // case, not the exotic one.)
+  await Promise.allSettled([...inFlight.values()])
+  inFlight.clear()
+```
+
+**然後把 `:279-280` 的假話改掉** —— `// this is byte-for-byte the pre-block-① behavior for every refusal, which is the point.` **在這一點上是假的**（它只有在 drain 之後才成立）。換成：
+
+```ts
+  // A refusal is never soft. The drain above has already settled every
+  // in-flight dispatch, so `firstRefusal` is final here.
+```
+
+**Important：軟路徑把**第一個**錯誤的訊息蓋在每一格上。**
+
+`:311` 的 `const message = firstError instanceof Error ? … : String(firstError)` 被**每一個**沒有輸出的格子共用 ⇒ 一個 `boomB → "B error"` 的呼叫，日誌裡記的是 `{"error":"A error"}`。**而 `:292-296` 的註解自己寫著 `(honestly)`。**
+
+**修法：記住每一個呼叫自己的錯誤。**
+
+在 `const slots: … = batch.map(…)` 旁邊加：
+
+```ts
+  // Each call's OWN failure, so the fill below can record what actually
+  // happened to THAT call rather than stamping the first failure's message on
+  // every sibling. After the drain above, an unfilled STARTED slot always has
+  // an entry here (allSettled guarantees it settled, and a settled dispatch
+  // either wrote `slots[i]` or ran the `.catch`).
+  const failures = new Map<number, unknown>()
+```
+
+在 dispatch 的 `.catch` 裡加一行（**放在 `firstError` 那個 if 之外**）：
+
+```ts
+        failures.set(index, err)
+```
+
+填補迴圈改成：
+
+```ts
+    for (let i = committed; i < startedUpTo; i += 1) {
+      if (slots[i] !== undefined) continue
+      const call = batch[i]!
+      const own = failures.get(i)
+      const message = own !== undefined
+        ? (own instanceof Error ? own.message : String(own))
+        : firstError instanceof Error ? firstError.message : String(firstError)
+      slots[i] = {
+        name: call.name, callId: call.callId, synthetic: true,
+        output: { error: message, code: TOOL_FAILED },
+      }
+    }
+```
+
+**而 `failures.get(i)` 的 fallback 是防禦性的、不是路徑** —— 上面那個 Drain 註解寫了為什麼：`allSettled` 保證每個已開始的呼叫都落地了，而落地的分派**要嘛寫了 `slots[i]`、要嘛跑了 `.catch`**。
+
+**回歸測試（兩條，都放在 `execute-tool-calls.test.ts`）：**
+
+1. **一個否決晚於兄弟的失敗落地 ⇒ 必須大聲。** 用 `ctx.onCascade("tools/execute", …)` 丟一個帶 `policyRefusal` 標記的錯誤（延遲 50ms），而第一批裡另一個呼叫立刻失敗。**斷言 `executeToolCalls` 拒絕，而且 `rejects.toThrow` 帶的是否決的訊息。** 把那個新的 drain 拿掉 ⇒ **必須紅**。
+2. **兩個都失敗的呼叫，各自記自己的訊息。** 兩個 body 都丟，訊息不同。**斷言兩筆 `tool/result` 的 `output.error` 各自是自己的那一句。** 把 `failures.get(i)` 改回 `firstError` ⇒ **必須紅**。
 
 ---
 
