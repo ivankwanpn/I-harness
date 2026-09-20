@@ -406,7 +406,16 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // M13: concurrent execution. The scheduler appends tool/result in model
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
-        // never-started calls) and rethrows the first tool failure.
+        // never-started calls). A tool BODY failure does not throw: the failed
+        // call is filled with a synthetic failure result, its never-started
+        // siblings get a cancellation result, and the turn continues so the
+        // model sees the error and can retry. A POLICY refusal still throws — a
+        // `prepare` refusal by site, a cascade veto by the marker
+        // `isPolicyRefusal` reads. A failure of the commit lane itself is not
+        // swallowed either: the fills still run and the lane's error is
+        // rethrown, so a lost durable write fails the turn. (Before M5 T4
+        // block ① every failure threw and the batch was discarded;
+        // fs/src/error.ts records what that looked like outside.)
         await executeToolCalls(ctx, deps.session, deps.tools, batch, {
           maxParallel,
           signal: abort,

@@ -270,18 +270,23 @@ export async function executeToolCalls(
   if (aborted) {
     await Promise.allSettled([...inFlight.values()])
     inFlight.clear()
-    // Abort dominates a coincident finalize failure: `commitReady` runs
+    // Abort dominates a coincident commit-lane failure: `commitReady` runs
     // user/policy-controlled tools/post-execute listeners that can throw, and
     // that must NOT suppress the synthetic TOOL_ABORTED_BEFORE_DISPATCH results
     // or the "agent aborted" throw — the turn is aborting regardless. The
-    // NON-abort path keeps its throw (it flows into `firstError` via the outer
-    // try → drain + rethrow, which is the correct throw-fails-turn behavior).
+    // swallow is safe HERE and only here, because this branch throws on the
+    // very next line: a swallowed error cannot leave behind a turn that keeps
+    // running. The non-abort failure path swallows nothing — it records the
+    // lane's error, lets the fills run, and rethrows it (M5 T6), so a lost
+    // durable write fails the turn instead of continuing it in silence.
     // M51 B3: every STARTED slot that produced no output failed; leaving it
     // undefined stalled the head-of-line cursor forever, so a sibling that had
     // already settled successfully never got a tool/result. Fill each with a
     // synthetic failure (the first error's message) so the cursor advances and
-    // the settled siblings commit their REAL outputs in model order. Abort
-    // path ONLY — the non-abort failure path still discards (M13).
+    // the settled siblings commit their REAL outputs in model order. This fill
+    // belongs to the abort path; the soft failure path below fills the same
+    // holes, but per call — each slot there carries its OWN failure's message
+    // rather than one shared message, because it can attribute them.
     const failureMessage = firstError instanceof Error
       ? firstError.message
       : firstError === undefined ? "tool call aborted before dispatch" : String(firstError)
@@ -364,21 +369,24 @@ export async function executeToolCalls(
         output: { error: message, code: TOOL_FAILED },
       }
     }
+    let commitError: unknown
+    let hasCommitError = false
     try {
       await commitReady()
-    } catch {
-      // A throwing tools/post-execute listener must not suppress the
-      // never-started fills below — the abort path swallows for exactly this
-      // reason (see its comment at the top of the abort branch).
-      //
-      // STATED COST (inherited, not introduced): the commit cursor stops where
-      // the throw fired, so every slot from there on never reaches the log — a
-      // settled sibling's REAL result AND the synthetic fills written just
-      // above (the filled slots lose their tool/result too, not only the settled
-      // siblings). The never-started calls below are appended outside the cursor
-      // and do get theirs. The abort path has the same hole and the same test
-      // shape; this block does not fix it, it makes the two paths consistent and
-      // the cost visible.
+    } catch (err) {
+      // A throwing commit-lane listener must not suppress the never-started
+      // fills below — the abort path swallows for exactly this reason (see its
+      // comment at the top of the abort branch). But this catch must not
+      // swallow the WHOLE commit lane either, the way a BARE `catch {}` did
+      // before M5 T6: `commitReady` also runs `append`, whose fail-loud paths
+      // (core-session's image validation among them) must stay loud, and a turn
+      // that keeps running after a lost durable write is worse than a turn that
+      // fails. So: record the error, let the fills run, rethrow it after them.
+      // The flag carries "it threw" and the value carries what it threw — one
+      // variable cannot do both jobs, because `throw undefined` is legal (the
+      // same split `hasFailed`/`firstError` makes above).
+      hasCommitError = true
+      commitError = err
     }
     // Calls that never started: no `prepare`, no `tool/dispatch`, no body.
     // They get a result too, so the projection never emits a tool_use with no
@@ -395,5 +403,14 @@ export async function executeToolCalls(
         },
       })
     }
+    // STATED COST (inherited, not introduced): the cursor stopped where the
+    // commit lane threw, so every slot from there on never reached the log — a
+    // settled sibling's REAL result AND the synthetic fills written just above
+    // (the filled slots lose their tool/result too, not only the settled
+    // siblings). The never-started calls are appended outside the cursor, so
+    // they do get theirs. The abort path has the same hole. The rethrow below
+    // does not repair the cursor; it makes the half-committed log fail the turn
+    // loudly instead of letting the turn continue in silence.
+    if (hasCommitError) throw commitError
   }
 }
