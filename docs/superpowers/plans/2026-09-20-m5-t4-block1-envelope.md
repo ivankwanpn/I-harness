@@ -832,7 +832,15 @@ Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-call
 
 Expected: **前兩條綠、第三條紅** —— 第三條會因為 `commitReady()` 的丟出**逃出 `executeToolCalls`**，於是 `cancelled` 是空的。**若三條全綠，停手回報** —— 那代表第三條沒有測到它要測的東西。
 
-- [ ] **Step 3: 加 try/catch**
+- [ ] **Step 3: 加 try/catch，並移除一行現在死掉的 drain**
+
+> **⚠ 先移除那一行，再加 try/catch** —— 它們在同一個區塊，而你正在編輯它。
+>
+> T2 的修正輪把 drain 提到三個分支**之前**（那是 Critical 的修法）。**而軟路徑開頭那兩行 `await Promise.allSettled([...inFlight.values()])` / `inFlight.clear()` 因此變成 no-op** —— `inFlight` 已經被前面那次 drain 清空了。
+>
+> **它不是無害的**：一個讀到它的人會以為「軟路徑在這裡 drain」，**而那正是 Critical 之前的那個（錯的）形狀**。**它留著就是一個關於執行順序的假陳述。**
+>
+> **把它刪掉。** 刪完跑 `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts` —— **必須仍然全綠**（含 T2 修正輪那兩條回歸測試）。**若刪了會紅，停手回報** —— 那代表前面那次 drain 不涵蓋這條路徑。
 
 在 T2 寫的 `await commitReady()` 外面加：
 
