@@ -25,7 +25,7 @@
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
 | **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，629 行 —— **2026-09-20 owner 核准**） | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
-| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`<SHA>`；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
+| **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（`99434417`；見 §5 的完成記錄）；**block ②（參數 schema）與 ③（界）未開始** —— spec 已於 **2026-09-20 owner 核准**（`docs/superpowers/specs/2026-09-20-m5-t4-tool-pipeline-design.md`，486 行） | 無 |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
 | **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **依賴 M5** |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1／Q2** |
@@ -344,7 +344,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 |---|---|
 | T2 第一半（以 provider 回報為事實） | ✅ **完成** |
 | **T2 第二半（以自己的位元組為偵測）** | ✅ **完成**（見下方的完成記錄） |
-| **T4 的工具管線** | **✅ block ①（信封）完成**（`<SHA>`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
+| **T4 的工具管線** | **✅ block ①（信封）完成**（`99434417`，完成記錄在 §5 末尾）；**block ②／③ 未開始** —— 而 spec 把這一項**擴大並改名**：roadmap 的字面「tool-result schema 驗證層」**結果那一半零主體**（`outputSchema` 全樹 1 處，就是宣告），有主體的是**參數**那一半。三塊：**信封（軟失敗）＋ 參數 schema ＋ 界** |
 
 ### W4 為什麼值得做（三件事，**本文件自己重測過，行號量於 `6b04f31d`**）
 1. **缺口不是推論出來的，是兩個 adapter 各自記下來的** —— `packages/llm-gemini/src/index.ts:239,241`（*"same gap as…"*、*"a future usage seam slot"*）與 `packages/llm-bedrock/src/index.ts:228`（*"same gap as…"*）。**它們自己寫著這個縫還沒接。**
@@ -437,7 +437,7 @@ F2PROBE date0={} date1={} equal=true | JSON.stringify0="1970-01-01T00:00:00.000Z
 
 **量到的（修正輪）**：`2624 passed · 0 failed · 9 skipped`（**執行前先寫下預期 2624 = 2623 + 1**：F1 的新案例）；`pnpm -r typecheck` 綠；`check-reachability.mjs --gate` → **`gate PASS -- no new rows`**（**沒有新 export** —— F2 的探針的暫時 export 已還原，且探針檔已刪除）。**三條已知 flake 這一輪都沒出現。**
 
-### ✅ **W5 block ①（信封）已完成 —— `<SHA>`**
+### ✅ **W5 block ①（信封）已完成 —— `99434417`**
 
 （本體：`packages/core-agent/src/execute-tool-calls.ts` ＋ `packages/core-agent/src/index.ts` ＋ `packages/core-tools/src/index.ts`（標記）＋ `packages/hooks/src/types.ts` ＋ 六個測試檔 —— `core-agent` 2、`hooks` 1（新檔）、`sdk`／`session-executor`／`apps/cli` 各 1（改寫）＋ `scripts/audit/reachability-allowlist.json` ＋ 佇列文件的 §1／§5。**本記錄的狀態列在該提交內先寫成 `<SHA>` 佔位，SHA 由這個 docs 提交寫入 —— 它不能在存在之前被寫下**）
 
