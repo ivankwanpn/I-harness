@@ -40,6 +40,30 @@ export type ToolDecision =
   | { kind: "deny"; reason: string }
   | { kind: "ask"; reason: string }
 
+// spec §2.6: a POLICY refusal — "you may not do this" — as opposed to a tool
+// body that tried and failed. Policy refusals stay LOUD (the turn fails); a
+// body failure is soft (the failed call gets a result and the turn continues).
+//
+// Marked structurally so `core-agent` needs no dependency on the mechanism
+// that refuses: `hooks` already sits above this package, and importing it from
+// `core-agent` would point the dependency backwards.
+//
+// THE CONVENTION, and its failure mode: a future in-cascade policy that must
+// fail the turn carries this marker. One that forgets has a SOFT refusal —
+// which is why the convention is named in the spec, not left as a local
+// detail. (Contrast: block ②'s INVALID_ARGS is also typed, but its
+// disposition is SOFT — an argument violation is the model's mistake and is
+// fixable by the model, a veto is not.)
+export interface PolicyRefusal {
+  readonly policyRefusal: true
+}
+
+/** Total: never throws, and requires the marker to CARRY `true` — a present
+ *  but `undefined` field is not a marker (the same rule as W4's F1 fix). */
+export function isPolicyRefusal(err: unknown): err is PolicyRefusal {
+  return typeof err === "object" && err !== null && (err as { policyRefusal?: unknown }).policyRefusal === true
+}
+
 export interface ToolCall {
   name: string
   args: unknown

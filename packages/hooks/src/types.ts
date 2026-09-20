@@ -120,6 +120,10 @@ export class HookOutputError extends Error {
 /** A gate/block veto: tool blocked or phase stopped (reason carried). */
 export class HookBlockedError extends Error {
   readonly code = "hook-blocked" as const
+  // spec §2.6: this IS a policy refusal — the marker is what keeps a pre-tool
+  // veto loud now that a tool body's failure is soft. The `code` above already
+  // said so; this makes it checkable from a package that cannot import us.
+  readonly policyRefusal = true as const
   constructor(
     readonly handlerId: string,
     message: string,
