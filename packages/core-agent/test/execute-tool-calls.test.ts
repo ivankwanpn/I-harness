@@ -505,14 +505,20 @@ describe("executeToolCalls scheduler", () => {
     ).rejects.toThrow("agent aborted")
   })
 
-  it("BOUNDARY: a throwing finalize during the failure drain still fills the never-started calls", async () => {
+  it("BOUNDARY: a throwing finalize during the failure drain still fills the never-started calls, and the lane's error is rethrown", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
-    // Mirrors the abort-path test ("abort dominates a throwing finalize").
-    // The failure path inherits the same swallow, AND the same cost: the commit
-    // cursor stops where the throwing listener fired, so neither c0's REAL
-    // result nor c1's synthetic fill reaches the log — c2 does.
+    // Mirrors the abort-path test ("abort dominates a throwing finalize") in
+    // the FILLS, and differs in the disposition: the abort path swallows
+    // because it throws "agent aborted" immediately after, while this path is
+    // not aborting — so the commit lane's error is rethrown once the fills have
+    // run (M5 T6). Before that it was swallowed by a bare `catch {}`, and a
+    // lost durable write (an `append` fail-loud path among them) left a turn
+    // that resolved and continued in silence.
+    // The inherited cost is unchanged by the rethrow: the commit cursor stops
+    // where the throwing listener fired, so neither c0's REAL result nor c1's
+    // synthetic fill reaches the log — c2 does.
     ctx.on("tools/post-execute", () => { throw new Error("post-execute boom") })
     tools.register({
       name: "okTool", description: "", inputSchema: {}, isConcurrencySafe: true,
@@ -522,11 +528,13 @@ describe("executeToolCalls scheduler", () => {
       name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { throw new Error("kaboom") },
     })
-    await executeToolCalls(ctx, session, tools, [
-      { callId: "c0", name: "okTool", args: {} },
-      { callId: "c1", name: "boomTool", args: {} },
-      { callId: "c2", name: "okTool", args: {} }, // never started (pool full at the failure)
-    ], { maxParallel: 2 })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "okTool", args: {} },
+        { callId: "c1", name: "boomTool", args: {} },
+        { callId: "c2", name: "okTool", args: {} }, // never started (pool full at the failure)
+      ], { maxParallel: 2 }),
+    ).rejects.toThrow("post-execute boom")
     const cancelled = session.events.filter(
       (e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === TOOL_CANCELLED_BY_SIBLING,
     )
