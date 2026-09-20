@@ -218,6 +218,63 @@ inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
 
 ---
 
+### 2.6 **後補（2026-09-20，實作時量到的）**：cascade 裡的政策否決
+
+**這一節是施工期間才發現的問題，而不是設計時想到的。** 它記在這裡因為**它改了 §2 的形狀**。
+
+**問題**：§2 的分類原本靠**丟出點** —— dispatch 的 `.catch`（工具本體）軟，外層 catch（`prepare` 的拒絕）大聲。**那條線看得見 `prepare`，看不見另一種拒絕：**
+
+`packages/hooks/src/index.ts:343-345` 自己寫著：
+
+> `pre-tool/post-tool → tools/execute cascade wrap (gate)`
+
+**⇒ 一個 `pre-tool` 的否決是在 `dispatch` 裡面丟出的**（`:379-393` 的 `ctx.onCascade("tools/execute", …)` ＋ `runHandlers(…, true)` ⇒ `:295` 的 `throw new HookBlockedError`）。**所以站點規則把它判成「工具本體」，於是它變軟了。**
+
+**量到的**：`packages/hooks/test/hooks.test.ts:358`（*"a pre-tool handler that blocks 'read' fails the agent turn fail-closed"*）轉紅。
+
+**裁定：政策否決維持大聲。** 這**不是新決定** —— §6.1 已經說了「那些是 fail-closed 的安全態勢，不是模型可以重試的東西」，而那句話對一個 `pre-tool` 否決**逐字成立**。**是這一節的機制沒有實作它。**
+
+#### 2.6.1 機制：**一個有名標記**，住在 `core-tools`
+
+**靠 `instanceof` 不行** —— 那會讓 `core-agent` 依賴 `hooks`，而依賴方向是 `hooks → core-tools`、`core-agent → core-tools`，兩者互不依賴（無環，量過）。
+
+**決定：標記住在 `core-tools`**（它擁有 `tools/execute` 這條縫），形狀是**鴨子型別的欄位**：
+
+```ts
+// core-tools
+/** 一個「你不准做這件事」的拒絕 —— 與「工具試了但失敗」不同。
+ *  政策否決維持大聲（spec §2.6）：它們是 fail-closed，不是模型可以重試的東西。 */
+export interface PolicyRefusal { readonly policyRefusal: true }
+export function isPolicyRefusal(err: unknown): err is PolicyRefusal
+```
+
+**`HookBlockedError`（`hooks/src/types.ts:121`）帶上它** —— 它**已經**有 `readonly code = "hook-blocked"`，所以這是把一個既有的意圖變成可檢查的東西。
+
+**⇒ 而失敗模式要寫下來**：**一個將來的政策機制若否決而沒有帶標記，它的否決會變成軟的。** 緩解是這個約定**寫在 spec 裡**（而 block ② 的 `INVALID_ARGS` 也走同一條路 —— 只是它的處置是軟的，因為那一種是**模型可以修**的）。
+
+**⇒ 所以「哪一些拒絕是軟的」由三件事決定，而每一件都是結構性的：**
+
+| 丟出點 | 型別 | 處置 |
+|---|---|---|
+| `prepare` | 任何 | **大聲**（站點） |
+| `dispatch` 的 cascade | **`PolicyRefusal`** | **大聲**（標記） |
+| `dispatch` 的 cascade | 其他 | **軟**（預設） |
+
+#### 2.6.2 而它量出了這一塊真正的爆炸半徑
+
+**9 條既有測試轉紅，散在 5 個套件**（計畫原本寫「改寫一條」—— **那是錯的，而錯的方式是低估**）：
+
+| 條數 | 套件 | 是什麼 | 處置 |
+|---|---|---|---|
+| **1** | `hooks` | `pre-tool` 否決 | **修分類**（§2.6.1）—— 它該維持大聲 |
+| **8** | `core-agent`／`sdk`／`session-executor` ×5／`cli` | **工具本體丟出**（`"disk exploded"`、`SKILL_NOT_FOUND` 在 skill 工具裡、role／spawn 在 subagent 工具裡） | **改寫測試** —— 它們編碼的是**被推翻的那條契約**，而它們的**實質主張保留**（「原因必須看得見」），改的是**通道**（結果裡，不是 turn 的失敗） |
+
+**⇒ 而那 8 條的實質主張在新契約下仍然成立，只是換了地方** —— 這正是「改寫而不是刪除」的理由，與 §2 對第一條測試的處置同一條規則。
+
+**⇒ 代價（接受的）**：**block ① 因此跨 5 個套件，不是 1 個。** 計畫的 File Structure 說「只有 `core-agent`」是錯的，而那個錯是**沒有先量爆炸半徑就寫下它**造成的 —— 這條分支一路在消滅的就是這個。
+
+---
+
 ## 3. 決定 B：**參數 schema 層** —— 兩層，而子集是量出來的
 
 ### 3.1 兩層的分工（dsh 的形狀，理由是它自己寫的）
