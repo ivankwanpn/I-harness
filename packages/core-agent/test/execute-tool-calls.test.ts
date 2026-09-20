@@ -978,4 +978,54 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     expect(results[0]!.output).toEqual({ ok: true })
     expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
   })
+
+  it("REGRESSION: an abort fill keeps each killed call's OWN reason, not the refusal's", async () => {
+    // The abort path's fill (M51 B3) used to stamp ONE message — `firstError`'s
+    // — onto every started-but-empty slot. That substitution was merely
+    // imprecise while `firstError` was always a tool-body failure; a typed
+    // argument refusal can now BE `firstError`, and then a sibling killed by
+    // the cancel is told about a DIFFERENT call's arguments. The reason is
+    // per-call, and the map that carries it already has this slot's entry.
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    tools.register({
+      name: "kill", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async (_args: unknown, exec: { abortSignal?: AbortSignal }) => {
+        await new Promise<void>((resolve) => {
+          // Killed in the refusal's cancel window: the malformed sibling's
+          // cancel reaches this signal, this body stops the step signal in the
+          // same breath, and then it REJECTS — so its own reason is a body
+          // failure on record while the batch is on its way to the abort path.
+          // The floor keeps the mutant's failure a failure rather than a hang.
+          const floor = setTimeout(resolve, 60)
+          exec.abortSignal?.addEventListener("abort", () => {
+            clearTimeout(floor)
+            ac.abort()
+            resolve()
+          }, { once: true })
+        })
+        throw new Error("body killed by cancel")
+      },
+    })
+    tools.register({
+      name: "typed", description: "", isConcurrencySafe: true,
+      inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
+      execute: async () => ({ ok: true }),
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "kill", args: {} },
+        { callId: "c1", name: "typed", args: { n: "3" } },
+      ], { maxParallel: 10, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    // c0 died BY THE CANCEL and says so — not about c1's argument.
+    expect(results[0]!.output).toEqual({ error: "body killed by cancel" })
+    expect(results[0]!.output).not.toMatchObject({ error: expect.stringContaining("invalid arguments") })
+    // …and c1 keeps its own refusal, not c0's body failure.
+    expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+  })
 })
