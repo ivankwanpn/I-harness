@@ -598,11 +598,18 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 // rebind by any existing harness: `runHeadless` builds its assembly internally
 // and exposes no seam to rebind it mid-run, and this package has no dependency
 // edge to `@i-harness/session-title` (adding one for a test would be a new
-// dependency, which this task does not take). What would close it: an
-// `onAssembly`-style hook on `HeadlessOptions` — the service already has one
-// (`createSessionService`'s hooks; `apps/cli/src/index.ts:501` `service.onAssembly(` uses it as
-// `service.onAssembly`) — so a test could rebind between the run and the title
-// call. Until then the gap is stated here rather than asserted around.
+// dependency, which this task does not take). TWO routes close it, and the
+// CHEAPER one needs no production change: an `apps/cli` test that mock-wraps the
+// assembly — `vi.mock("@i-harness/session-executor", …)` passing through to the
+// real factory and rebinding on the returned object once `agent.run` resolves,
+// so `run.ts:661`'s read sees it. That is the pass-through-recorder pattern this
+// file already uses for `core-agent` (:31-41), and the mocking precedent exists
+// (apps/cli/test/cli.test.ts:102, apps/cli/test/run-flag-routing.test.ts:32).
+// The OTHER route is production surface: an `onAssembly`-style hook on
+// `HeadlessOptions` (the service already has one — `createSessionService`'s
+// hooks, used at apps/cli/src/index.ts:501 `service.onAssembly(`). The mock
+// route is the cheaper of the two and is the one to reach for first; neither
+// exists today, so the gap is stated here rather than asserted around.
 /** In-memory SessionCoordinator for the team case only. The team's spawn path
  * needs durable child sessions, and this package declares no JSONL backend (so
  * no real coordinator is constructible here). Shape copied from the precedent at
@@ -636,7 +643,8 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
   /** This file's recording-client shape (`capturingModel`, :462 — the same shape
    * as `recordingModel`, subagent/test/child.test.ts:253) with the replies served
    * by the file's own `createMockClient` cassette — exactly the recorder+cassette
-   * composition the pluginAgents fixture uses at :1021. Not a fourth fixture: the
+   * composition the pluginAgents fixture's `spawnVia` uses — `async function
+   * spawnVia(roleName: string, pluginAgents?: SubagentRole[])` at :1030. Not a fourth fixture: the
    * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
    * the two existing pieces are joined, because these holders are driven by
    * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
