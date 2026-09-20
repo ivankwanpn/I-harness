@@ -134,6 +134,18 @@ export interface GuardianReviewVerdict extends GuardianVerdict {
 export async function runGuardianReview(deps: GuardianReviewDeps, request: GuardianRequest): Promise<GuardianReviewVerdict> {
   const role = ensureReviewerRole(deps.subagents.roles)
   const timeoutMs = deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS
+  // R-B2, extended to this boundary: a CONFIGURED `deps.model` (the host's
+  // `guardian.model`, handed in by the assembly) WINS over `deps.parentModel`,
+  // and that precedence is DELIBERATE — not the silent exception this unit
+  // exists to remove. `deps.parentModel` is the session assembly's stable model
+  // handle (R-B1: one identity every holder shares, whose `stream` forwards to
+  // the CURRENT client), so an INHERITED reviewer follows a rebind; a configured
+  // one does not, because a rebind must not silently discard the host's explicit
+  // choice. The cost, stated rather than implied: for such a configuration every
+  // guardian review keeps billing the configured endpoint after a rebind.
+  // Pinned by the boundary case "a CONFIGURED guardian model wins over the
+  // handle too" in packages/session-executor/test/assembly.test.ts — do NOT
+  // "fix" this into following the handle.
   const model = deps.model ?? deps.parentModel
   const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
   const { path, jobId, sessionId } = await spawnChild({
