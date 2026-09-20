@@ -78,9 +78,11 @@ export async function executeToolCalls(
   const slots: ((Slot | SyntheticSlot) | undefined)[] = batch.map(() => undefined)
   // Each call's OWN failure, so the fill below can record what actually
   // happened to THAT call rather than stamping the first failure's message on
-  // every sibling. After the drain above, an unfilled STARTED slot always has
-  // an entry here (allSettled guarantees it settled, and a settled dispatch
-  // either wrote `slots[i]` or ran the `.catch`).
+  // every sibling. Two facts make the fill's `firstError` branch dead: the
+  // drain below (ahead of both dispositions, the abort test included) lets
+  // every in-flight dispatch settle, and a settled dispatch either wrote
+  // `slots[i]` or ran its `.catch`, whose FIRST statement records this map —
+  // before the emit and the marker check, either of which can throw.
   const failures = new Map<number, unknown>()
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
@@ -187,6 +189,15 @@ export async function executeToolCalls(
         slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
+        // This call's OWN rejection is recorded FIRST — the order is
+        // load-bearing. `telemetry.emit` and `isPolicyRefusal` below both run
+        // out-of-tree code (a host Telemetry, an error whose `policyRefusal`
+        // getter throws), so either can reject this handler; when that happens
+        // to a SECOND failure the post-loop drain absorbs the rejection and
+        // nobody re-reads it. A slot left with no entry here is stamped with
+        // its SIBLING's message by the fill below — the exact misattribution
+        // this map exists to prevent.
+        failures.set(index, err)
         // M25: tool/error — the dispatched call's promise rejected. The M5 T4
         // classification below decides what that rejection means for the turn.
         opts.telemetry?.emit({
@@ -198,9 +209,6 @@ export async function executeToolCalls(
           // A veto is not a body failure: it must keep failing the turn.
           firstRefusal ??= err
         }
-        // This call's OWN rejection, for the per-call fill on the soft path —
-        // OUTSIDE the `hasFailed` guard below, which only keeps the first.
-        failures.set(index, err)
         // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
         // (before the drains below), so `allSettled` returns their cancellations
         // instead of waiting out their work. Only the first, so a second failure
@@ -266,17 +274,38 @@ export async function executeToolCalls(
     firstRefusal ??= err
   }
 
-  // Abort dominates: drain started, commit in model order, synthesize.
+  // Drain BEFORE the disposition tests. Every write to `firstError` and
+  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
+  // promises have settled neither is final — and a refusal that settles one
+  // microtask late is tested as "not a refusal" and silently downgraded to
+  // the soft path. (Measured before this drain existed: the same marked veto
+  // threw when its own .catch ran first, and resolved softly — recorded
+  // against a sibling's error message — when a sibling's failure got there
+  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
+  // case, not the exotic one.)
+  await Promise.allSettled([...inFlight.values()])
+  inFlight.clear()
+  // …and the drain is also where a late ABORT is read. `aborted` is only
+  // written inside `runGroup`, which breaks out of its loop on the first
+  // failure, so an abort that fires while this drain is running — the user
+  // stopping the step just after a tool broke — otherwise reaches the
+  // dispositions as "not aborted": the soft path commits, and the
+  // never-started calls are stamped CANCELLED BY A SIBLING, which is not what
+  // happened to them. Measured before this re-read: that batch RESOLVED, with
+  // `TOOL_CANCELLED_BY_SIBLING` on the never-started call, and `agent/post-tool`
+  // was emitted for the call that settled inside the window although
+  // `commitReady` suppresses post-tool when aborted (M10a).
+  if (opts.signal?.aborted) aborted = true
+
+  // Abort dominates: commit what settled in model order, synthesize.
   if (aborted) {
-    await Promise.allSettled([...inFlight.values()])
-    inFlight.clear()
     // Abort dominates a coincident commit-lane failure: `commitReady` runs
     // user/policy-controlled tools/post-execute listeners that can throw, and
     // that must NOT suppress the synthetic TOOL_ABORTED_BEFORE_DISPATCH results
     // or the "agent aborted" throw — the turn is aborting regardless. The
     // swallow is safe HERE and only here, because this branch throws on the
     // very next line: a swallowed error cannot leave behind a turn that keeps
-    // running. The non-abort failure path swallows nothing — it records the
+    // running. The non-abort failure path suppresses nothing — it records the
     // lane's error, lets the fills run, and rethrows it (M5 T6), so a lost
     // durable write fails the turn instead of continuing it in silence.
     // M51 B3: every STARTED slot that produced no output failed; leaving it
@@ -312,28 +341,21 @@ export async function executeToolCalls(
     throw new Error("agent aborted")
   }
 
-  // Drain BEFORE the disposition tests. Every write to `firstError` and
-  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
-  // promises have settled neither is final — and a refusal that settles one
-  // microtask late is tested as "not a refusal" and silently downgraded to
-  // the soft path. (Measured before this drain existed: the same marked veto
-  // threw when its own .catch ran first, and resolved softly — recorded
-  // against a sibling's error message — when a sibling's failure got there
-  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
-  // case, not the exotic one.)
-  await Promise.allSettled([...inFlight.values()])
-  inFlight.clear()
-
   // A refusal is never soft. The drain above has already settled every
   // in-flight dispatch, so `firstRefusal` is final here.
   if (firstRefusal !== undefined) {
     throw firstRefusal
   }
 
-  // Failure: cancel the siblings (M5 T4), then COMMIT — every DISPATCHED call
-  // ends in exactly one tool/result. This used to `throw firstError` and
-  // discard the batch; fs/src/error.ts records the consequence in its own
-  // words ("no tool/result and no turn/end are appended ... read as hung").
+  // Failure: cancel the siblings (M5 T4), then COMMIT — on THIS path every
+  // DISPATCHED call ends in exactly one tool/result. The guarantee is the soft
+  // failure path's, not the function's: a refusal (checked just above) still
+  // discards the batch by design, and a throw from the commit lane below stops
+  // the cursor where it fired, leaving the slots from there on out of the log
+  // (the accepted cost recorded at that rethrow). This path used to
+  // `throw firstError` and discard the batch; fs/src/error.ts records the
+  // consequence in its own words ("no tool/result and no turn/end are appended
+  // ... read as hung").
   //
   // Cancelling and committing are different questions: cancellation answers
   // "do the siblings keep working" (no), committing answers "how does what

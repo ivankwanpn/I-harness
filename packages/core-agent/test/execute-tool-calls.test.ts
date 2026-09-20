@@ -565,6 +565,91 @@ describe("executeToolCalls scheduler", () => {
     const results = session.events.filter((e) => e.type === "tool/result") as { callId: string }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
   })
+
+  it("BOUNDARY: a SECOND failure whose own classification throws still keeps its OWN message", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    // The `.catch` handler records the call's own error as its FIRST statement,
+    // ahead of `telemetry.emit` and the marker check — both of which run
+    // out-of-tree code (a host Telemetry, an error whose `policyRefusal` getter
+    // throws). A SECOND failure's handler that throws there is absorbed by the
+    // post-loop drain (`Promise.allSettled`), so nothing re-reads it; if its
+    // entry were recorded after the throw, the fill would fall back to
+    // `firstError` and stamp the FIRST failure's message on it — the
+    // misattribution the `failures` map exists to prevent. Measured before the
+    // move: c1 came out as `{ error: "A error" }` below.
+    tools.register({
+      name: "failA", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { throw new Error("A error") },
+    })
+    tools.register({
+      name: "failB", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => {
+        await new Promise((r) => setTimeout(r, 20)) // A settles first ⇒ A wins firstError
+        throw Object.defineProperty(new Error("B error"), "policyRefusal", {
+          get() { throw new Error("poisoned marker read") },
+        })
+      },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "failA", args: {} },
+      { callId: "c1", name: "failB", args: {} },
+    ], { maxParallel: 2 })
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string
+      output: { error: string; code?: string }
+    }[]
+    expect(results.map((r) => [r.callId, r.output.error, r.output.code])).toEqual([
+      ["c0", "A error", TOOL_FAILED],
+      ["c1", "B error", TOOL_FAILED],
+    ])
+  })
+
+  it("BOUNDARY: an abort that lands inside the failure window still dominates", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    const postTool: string[] = []
+    ctx.on("agent/post-tool", (p) => { postTool.push((p as { name: string }).name) })
+    // `aborted` is written inside `runGroup`, which breaks out of its loop on
+    // the first failure — so an abort fired while the post-loop drain is
+    // running is seen by neither the loop nor (before the re-read) the
+    // dispositions. The slow body settles AFTER the failure and fires the
+    // outer abort before returning, so the abort lands inside that window by
+    // construction, not by a bet on the clock. Pre-fix the turn RESOLVED, the
+    // never-started call was stamped CANCELLED BY A SIBLING, and post-tool was
+    // emitted for the call that settled in the window.
+    tools.register({
+      name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { throw new Error("boom") },
+    })
+    tools.register({
+      name: "slowTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => {
+        await new Promise((r) => setTimeout(r, 30))
+        ac.abort()
+        return { ok: true }
+      },
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [
+        { callId: "c0", name: "boomTool", args: {} },
+        { callId: "c1", name: "slowTool", args: {} },
+        { callId: "c2", name: "slowTool", args: {} }, // never started (pool full at the failure)
+      ], { maxParallel: 2, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    const byCode = (code: string) => session.events
+      .filter((e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === code)
+      .map((e) => (e as { callId: string }).callId)
+    // Abort, not cancellation: "the user stopped the step" is the fact here.
+    expect(byCode(TOOL_CANCELLED_BY_SIBLING)).toEqual([])
+    expect(byCode(TOOL_ABORTED_BEFORE_DISPATCH)).toEqual(["c2"])
+    // M10a: `commitReady` suppresses post-tool when aborted — the call that
+    // settled inside the window must not be announced as a completed dispatch.
+    expect(postTool).toEqual([])
+  })
 })
 
 describe("M26 tool identity plumbing", () => {
@@ -642,9 +727,12 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     ctx.onCascade("tools/execute", async (input, next) => {
       const { name, exec } = input as { name: string; exec: { abortSignal?: AbortSignal } }
       if (name !== "vetoTool") return next()
-      // A pre-tool hook is a SUBPROCESS (this branch's own e2e measures 449ms
-      // to boot one) — a veto landing after a fast sibling's failure is the
-      // ordinary case, not the exotic one.
+      // A pre-tool hook is a SUBPROCESS — `hooks/src/runner.ts` boots the
+      // handler with `spawn(...)` (:105 as of this commit) — so a veto landing
+      // after a fast sibling's failure is the ordinary case, not the exotic
+      // one. (An earlier draft of this comment carried a startup latency
+      // figure; it was relayed from a report without an artifact in the tree,
+      // and there is no hooks e2e under `e2e/` to back it, so it is gone.)
       //
       // Constructed, not raced. This used to `setTimeout(50)` here — the M61
       // note above in miniature: that is a timing assertion, not a behaviour
