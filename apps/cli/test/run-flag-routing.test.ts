@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest"
+import { PROVIDER_PROTOCOLS } from "../src/provider.ts"
 
 /**
  * `i-harness run` ARGUMENT ROUTING — the router that turns argv into a prompt.
@@ -137,6 +138,95 @@ describe("run argv routing", () => {
       expect(separator).toBe(1)
       expect(calls).toHaveLength(0)
       expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("unknown flag --")
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  // ── `--protocol P` (protocol-selection §4.3, phase B task 5) ────────────────
+  // A VALUE-TAKING flag, which is why it exercises BOTH chains of the strip
+  // list: the token itself, and the token after it. Missing the first leaks
+  // `--protocol` into the prompt (exactly the `--no-compact` defect at the head
+  // of this file); missing the second leaks `gemini`.
+  it("--protocol is routed away from the task, and rides THIS session's resolution only", async () => {
+    const settingsPath = join(configDir, "settings.json")
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({ llm: { defaultModel: { provider: "gw", model: "m" } } }, null, 2) + "\n",
+      "utf8",
+    )
+    const before = readFileSync(settingsPath)
+
+    const code = await main(["node", "i-harness", "run", "do x", "--protocol", "gemini"])
+
+    expect(code).toBe(0)
+    // Half (a): the router. Neither the flag nor its value is part of the task.
+    expect(calls.map((c) => c.task)).toEqual(["do x"])
+    // Half (a), second hop: the protocol reaches the resolution run.ts performs.
+    // It is composed with the layer the chain would otherwise use
+    // (`llm.defaultModel`) because a protocol has nowhere to ride without a
+    // provider:model under it — and run.ts layers it over a resumed session's
+    // durable selection, the protocol being the most specific rung of
+    // selection > model row > route.
+    expect(calls[0]!.opts.sessionSelection).toEqual({ provider: "gw", model: "m", protocol: "gemini" })
+    // Half (b), §4.3 — BYTE-IDENTICAL, not merely "the same JSON": the one-shot
+    // protocol is written to no file, so the operator's document must come out
+    // exactly as it went in.
+    expect(readFileSync(settingsPath).equals(before)).toBe(true)
+  })
+
+  it("refuses an unknown protocol and names the five", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "do x", "--protocol", "gpt-9"])
+      expect(code).toBe(1)
+      expect(calls).toHaveLength(0)
+      // `provider add`'s refusal verbatim, and the SET named by content. The
+      // value is validated OUTSIDE the settings chain on purpose: the settings
+      // normalizer FILLS IN a default, which is the silent tail phase A removed.
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain(
+        `unknown protocol "gpt-9"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}`,
+      )
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it("refuses --protocol with no value instead of treating the next token as one", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "do x", "--protocol"])
+      expect(code).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain(
+        `--protocol requires one of: ${PROVIDER_PROTOCOLS.join(" | ")}`,
+      )
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it("refuses --protocol combined with --model rather than dropping the protocol", async () => {
+    // `--model` builds its client from the flag's own route and never enters the
+    // settings chain, so there is no selection for the protocol to ride. The
+    // combination is REFUSED, loudly: accepting it would be the silent drop this
+    // whole design removed.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      const code = await main(["node", "i-harness", "run", "do x", "--model", "deepseek:deepseek-chat", "--api-key", "sk-x", "--protocol", "gemini"])
+      expect(code).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("--protocol cannot be combined with --model")
+    } finally {
+      err.mockRestore()
+    }
+  })
+
+  it("advertises the flag in the usage it prints", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      await main(["node", "i-harness", "help"])
+      expect(err.mock.calls.map((c) => c.join(" ")).join("\n")).toContain("[--protocol P]")
     } finally {
       err.mockRestore()
     }

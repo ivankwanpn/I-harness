@@ -158,7 +158,7 @@ interface RoleRow {
    * whether the role can spawn, and this marker must not claim it: the name is
    * only what the CLI's own `set`/`unset` can type. Plugin-contributed agents
    * and the guardian's `reviewer` register into the SAME registry the spawn
-   * tools read (apps/cli/src/run.ts:481;
+   * tools read (apps/cli/src/run.ts:514;
    * packages/guard-approval/src/guardian/reviewer.ts:56), and every
    * role-carrying spawn resolves `agents.roles[<any name>]` through
    * `declaredRoleModel` (packages/subagent/src/child.ts:122) — so a
