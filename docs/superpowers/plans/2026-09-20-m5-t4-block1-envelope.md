@@ -1027,6 +1027,42 @@ git grep -n "block ①\|block 1"                        -- packages/core-agent/s
 >
 > **⇒ 「三處都改了」不是類別被關上的證據；「同一組指令第二次回傳空」才是。**
 
+- [ ] **Step 2b: 🔴 把 T5 那個 bare catch 收窄 —— 它吞掉的是**整條提交巷**，不只那個監聽者**
+
+> **T5 的複審量到，而這是 T5 引進的、不是既有的：** `src:367-382` 的那個 **bare `catch`** 包住的是**整個 `commitReady()`** —— 而裡面有 `finalize`、**`append(session, …)`**、`telemetry.emit`、以及 `ctx.emit("agent/post-tool")`。
+>
+> **量到（PROBE5）**：軟路徑上一個丟出的 **`agent/post-tool`** 監聽者 ⇒ **`RESOLVED`**，`result c0` ＋ `result c2 (CANCELLED)`，**而 c1 的填補丟失**；**把 try/catch 拿掉**，同一個形狀**拒絕 `post-tool boom`**，連 c2 也丟失。
+>
+> **⇒ 修正前，提交巷的丟出會讓 turn 大聲失敗；修正後它們**消失** —— 沒有遙測、沒有標記、日誌只提交了一半。**
+>
+> **而它包含 `append` 的 fail-loud 路徑**（`packages/core-session/src/index.ts:325,334,338,343-344` —— **M14 的圖片驗證是其中一條**）。
+>
+> **⇒ 而 abort 分支的同一個 swallow 是安全的，差別在**它緊接著就 throw**（`"agent aborted"`）—— 所以它的 swallow **不可能留下一個繼續跑的 turn**。軟路徑的可以。**
+>
+> **修法（最小且與 abort 分支同形）：填補照跑，然後**把那個錯誤丟出去**。**
+
+```ts
+    let commitError: unknown
+    try {
+      await commitReady()
+    } catch (err) {
+      // A throwing tools/post-execute listener must not suppress the fills
+      // below — but the catch must not swallow the WHOLE commit lane either.
+      // `commitReady` also runs `append`, whose fail-loud paths
+      // (core-session's image validation among them) must stay loud, and a
+      // silently-continuing turn after a lost durable write is worse than a
+      // failed one. So: record, let the fills run, rethrow after them — the
+      // same shape the abort branch uses (it fills, then throws).
+      commitError = err
+    }
+    // …the never-started loop…
+    if (commitError !== undefined) throw commitError
+```
+
+**突變證明**：把最後那個 `throw commitError` 拿掉 ⇒ **一個丟出的 `agent/post-tool` 監聽者必須讓 turn 失敗**（現在它會靜默）。**若它不紅，停手回報。**
+
+> **⚠ 而這一條是 T6 的，因為 T6 已經擁有那個區塊的註解** —— 而**註解與行為必須在同一次改動裡對齊**。
+
 - [ ] **Step 3: 全套 —— ⚠ 先讀這一格**
 
 **`pnpm -r --no-bail test` 在有任何套件紅的時候，只跑一個前綴。**
