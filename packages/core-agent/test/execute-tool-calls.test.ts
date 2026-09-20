@@ -482,3 +482,85 @@ describe("M26 tool identity plumbing", () => {
     expect(seen).toEqual([{ callId: "c0", callEventSeq: undefined }])
   })
 })
+
+// M5 T4 block ① fix round (review). Two measured defects, each test below is
+// the regression for one of them:
+//   1. the disposition test (`firstRefusal !== undefined`) read a value written
+//      only by `.catch` handlers, and nothing awaited the in-flight dispatches
+//      before it — so a marked veto whose `.catch` ran one microtask late was
+//      judged "not a refusal" and silently took the soft path. Measured before
+//      the drain existed: the same veto threw when its own `.catch` ran first,
+//      and RESOLVED (recorded against a sibling's failure) when a sibling's
+//      failure got there first.
+//   2. the soft path's fill loop stamped `firstError`'s message on EVERY
+//      unfilled slot, so a body that failed with "B error" was written down as
+//      "A error".
+describe("executeToolCalls — fix round: disposition is not raced, each failure keeps its own message", () => {
+  it("a marked veto that lands AFTER a sibling's failure still kills the turn", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    // A real veto from a real cascade listener at the SAME seam hooks throw
+    // from (`tools/execute`). The marker is constructed here rather than by
+    // importing @i-harness/hooks: core-agent cannot depend on hooks (the
+    // dependency points the other way), which is exactly why the marker is
+    // duck-typed instead of an `instanceof` check.
+    const veto = Object.assign(new Error("read disabled"), { policyRefusal: true as const })
+    ctx.onCascade("tools/execute", async (input, next) => {
+      if ((input as { name: string }).name !== "vetoTool") return next()
+      // A pre-tool hook is a SUBPROCESS (this branch's own e2e measures 449ms
+      // to boot one) — a veto landing after a fast sibling's failure is the
+      // ordinary case, not the exotic one.
+      await new Promise((r) => setTimeout(r, 50))
+      throw veto
+    })
+    tools.register({
+      name: "vetoTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => ({ ok: true }),
+    })
+    tools.register({
+      name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // The sibling fails FIRST (immediately), so the batch's group loop breaks
+      // out while the veto is still in flight — which is what the drain after
+      // that loop exists to absorb.
+      execute: async () => { throw new Error("boom") },
+    })
+    // NO .resolves: a refusal is never soft, whenever it lands.
+    await expect(executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "vetoTool", args: {} },
+      { callId: "c1", name: "boomTool", args: {} },
+    ], { maxParallel: 10 })).rejects.toThrow(/read disabled/)
+  })
+
+  it("records each failed call's OWN message, not the first failure's", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    let bStarted!: () => void
+    const bStartedP = new Promise<void>((r) => { bStarted = r })
+    tools.register({
+      name: "failA", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // Waits for B to be dispatched before failing: otherwise the batch could
+      // stop starting after the first failure, B would never run, and there
+      // would be nothing to mis-record.
+      execute: async () => { await bStartedP; throw new Error("A error") },
+    })
+    tools.register({
+      name: "failB", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { bStarted(); throw new Error("B error") },
+    })
+    await executeToolCalls(ctx, session, tools, [
+      { callId: "c0", name: "failA", args: {} },
+      { callId: "c1", name: "failB", args: {} },
+    ], { maxParallel: 10 })
+    const results = session.events.filter((e) => e.type === "tool/result") as {
+      callId: string; output: unknown
+    }[]
+    // Both failed, both committed, and each carries ITS OWN error. Measured
+    // under the mutation that reverted this fill to `firstError`: results[1]
+    // read "A error" — the FIRST failure's message — instead of "B error".
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results[0]!.output).toEqual({ error: "A error", code: TOOL_FAILED })
+    expect(results[1]!.output).toEqual({ error: "B error", code: TOOL_FAILED })
+  })
+})
