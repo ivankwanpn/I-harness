@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { validateJsonSchemaValue, type JsonSchemaNode } from "../src/json-schema.ts"
+import { assertSupportedJsonSchema, JsonSchemaError, validateJsonSchemaValue, type JsonSchemaNode } from "../src/json-schema.ts"
 
 const v = (schema: JsonSchemaNode, value: unknown, path = "value") => validateJsonSchemaValue(schema, value, path)
 
@@ -163,5 +163,142 @@ describe("validateJsonSchemaValue — the value layer (spec §3.1)", () => {
     expect(v({ type: "object", required: ["toString"] }, {})).toEqual(['missing required property "value.toString"'])
     // An OWN toString is still read, and still checked.
     expect(v({ type: "object", properties: { toString: { type: "string" } } }, { toString: 1 })).toEqual(['"value.toString" must be a string'])
+  })
+})
+
+describe("assertSupportedJsonSchema — the schema layer (spec §3.1)", () => {
+  it("accepts every shape this repo actually writes", () => {
+    const ok: unknown[] = [
+      { type: "object", properties: { a: { type: "string" } }, required: ["a"] },
+      { type: "array", items: { type: "string" }, maxItems: 10 },
+      { type: "number", minimum: 1, maximum: 20 },
+      { type: ["string", "number"] },                       // §3.4
+      { type: "object", properties: undefined, required: undefined },  // §3.5
+      { type: "object", additionalProperties: { type: "string" } },    // §3.6.1
+      { type: "object", additionalProperties: false },
+      { type: "string", enum: ["a", "b"], description: "d" },
+    ]
+    for (const s of ok) expect(() => assertSupportedJsonSchema(s)).not.toThrow()
+  })
+
+  it("rejects a keyword outside the measured subset, by NAME", () => {
+    for (const s of [{ type: "string", format: "date" }, { type: "string", pattern: "^a" }, { type: "array", minItems: 1 }]) {
+      expect(() => assertSupportedJsonSchema(s)).toThrow(/not a supported keyword/)
+    }
+  })
+
+  it("is TOTAL on garbage", () => {
+    for (const s of [undefined, null, 0, "x", [] as unknown[]]) {
+      expect(() => assertSupportedJsonSchema(s)).toThrow()
+      expect(() => assertSupportedJsonSchema(s)).not.toThrow(TypeError)
+    }
+  })
+})
+
+// The brief's cases above only exercise the ROOT. These three pin the parts of
+// Step 3's sentence "walk the whole schema tree, collect every violation" that
+// a walk of zero depth would also satisfy.
+describe("assertSupportedJsonSchema — the whole tree, not just the root", () => {
+  it("names an unsupported keyword at any depth, by its path", () => {
+    const nested = {
+      type: "object",
+      properties: { d: { type: "string", format: "date" } },
+      items: { type: "array", minItems: 1 },
+      additionalProperties: { type: "number", multipleOf: 2 },
+    }
+    // All three are violations; the message is the ONE error, so this pins the
+    // first in document order.
+    expect(() => assertSupportedJsonSchema(nested)).toThrow(/"schema\.properties\.d\.format" is not a supported keyword/)
+  })
+
+  it("collects EVERY violation into one typed error, in document order", () => {
+    let caught: unknown
+    try {
+      assertSupportedJsonSchema({ type: "string", format: "date", pattern: "^a", properties: { x: { minItems: 1 } } })
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBeInstanceOf(JsonSchemaError)
+    const err = caught as JsonSchemaError
+    expect(err.code).toBe("UNSUPPORTED_SCHEMA")
+    expect(err.violations).toHaveLength(3)
+    expect(err.violations[0]).toMatch(/^"schema\.format" is not a supported keyword \(subset: /)
+    expect(err.violations[1]).toMatch(/^"schema\.pattern" is not a supported keyword/)
+    expect(err.violations[2]).toMatch(/^"schema\.properties\.x\.minItems" is not a supported keyword/)
+  })
+
+  it("is TOTAL on garbage at depth too — a non-object where a subschema belongs is a violation, not a TypeError", () => {
+    for (const s of [
+      { type: "object", properties: { a: null } },
+      { type: "object", properties: { a: "x" } },
+      { type: "array", items: 5 },
+      { type: "object", additionalProperties: "anything" },
+    ]) {
+      expect(() => assertSupportedJsonSchema(s)).toThrow()
+      expect(() => assertSupportedJsonSchema(s)).not.toThrow(TypeError)
+    }
+  })
+
+  it("terminates on a schema that points a subschema at itself — the walk is a frame list with a memo", () => {
+    // A literal cannot be cyclic, but a JS object graph can, and the cost of
+    // not memoising it is a registration that never returns (a hang, not a red
+    // — the same shape as the T1 DAG case's mutant).
+    const self: Record<string, unknown> = { type: "object", properties: {} }
+    ;(self.properties as Record<string, unknown>).self = self
+    expect(() => assertSupportedJsonSchema(self)).not.toThrow()
+  })
+})
+
+// The subset has two halves: WHICH keywords are supported, and WHAT SHAPE each
+// one's value must have. A keyword that is on the list but carries the wrong
+// value passes the first half and then degrades validation silently — the value
+// layer reads `properties` with `Object.entries`, so `properties: "x"` checks
+// nothing at all. That is the failure the assertion layer exists to prevent.
+describe("assertSupportedJsonSchema — the SHAPE of each keyword's value", () => {
+  it("rejects every wrong shape the brief's table names, by path", () => {
+    const bad: Array<[unknown, RegExp]> = [
+      [{ type: 5 }, /^unsupported schema: "schema\.type" must be a string or a non-empty array of strings/],
+      [{ type: [] }, /^unsupported schema: "schema\.type" must be a string or a non-empty array of strings/],
+      [{ type: ["string", 5] }, /^unsupported schema: "schema\.type" must be a string or a non-empty array of strings/],
+      [{ type: "object", properties: "x" }, /^unsupported schema: "schema\.properties" must be an object of schemas/],
+      [{ required: "path" }, /^unsupported schema: "schema\.required" must be an array of strings/],
+      [{ required: ["a", 5] }, /^unsupported schema: "schema\.required" must be an array of strings/],
+      [{ type: "object", additionalProperties: "anything" }, /^unsupported schema: "schema\.additionalProperties" must be a boolean or a schema/],
+      [{ items: 5 }, /^unsupported schema: "schema\.items" must be a schema/],
+      [{ enum: [] }, /^unsupported schema: "schema\.enum" must be a non-empty array/],
+      [{ enum: "a" }, /^unsupported schema: "schema\.enum" must be a non-empty array/],
+      [{ minimum: Number.NaN }, /^unsupported schema: "schema\.minimum" must be a finite number/],
+      [{ maximum: Number.POSITIVE_INFINITY }, /^unsupported schema: "schema\.maximum" must be a finite number/],
+      [{ maxItems: "3" }, /^unsupported schema: "schema\.maxItems" must be a finite number/],
+      [{ description: 5 }, /^unsupported schema: "schema\.description" must be a string/],
+    ]
+    for (const [s, re] of bad) expect(() => assertSupportedJsonSchema(s)).toThrow(re)
+  })
+
+  it("still ACCEPTS an unknown type NAME — the check is the value's shape, not a list of names", () => {
+    // §3.1's deliberate rule, and the mistake this test exists to forbid: a
+    // remote schema brings type names this repo does not know.
+    expect(() => assertSupportedJsonSchema({ type: "datetime" })).not.toThrow()
+    expect(() => assertSupportedJsonSchema({ type: ["string", "datetime"] })).not.toThrow()
+  })
+
+  it("reports a bad shape and an unsupported keyword in the SAME typed error, and does not walk into a rejected node", () => {
+    let caught: unknown
+    try {
+      assertSupportedJsonSchema({ type: "object", properties: "x", format: "date" })
+    } catch (err) {
+      caught = err
+    }
+    const err = caught as JsonSchemaError
+    expect(err).toBeInstanceOf(JsonSchemaError)
+    // Exactly two: the bad shape is NOT also walked as an object of schemas.
+    expect(err.violations).toHaveLength(2)
+    expect(err.violations[0]).toMatch(/^"schema\.properties" must be an object of schemas/)
+    expect(err.violations[1]).toMatch(/^"schema\.format" is not a supported keyword/)
+  })
+
+  it("names a bad shape at depth too", () => {
+    expect(() => assertSupportedJsonSchema({ type: "object", properties: { a: { type: "array", maxItems: "3" } } }))
+      .toThrow(/^unsupported schema: "schema\.properties\.a\.maxItems" must be a finite number/)
   })
 })

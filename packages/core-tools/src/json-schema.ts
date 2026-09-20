@@ -27,6 +27,15 @@
 // A keyword or type name outside this subset is not a constraint: the value
 // layer checks what it recognizes and stays silent about the rest (§3.1), which
 // is what makes it safe on a foreign schema.
+//
+// THE FILE HAS TWO LAYERS, and the difference is the load-bearing part of the
+// design (§3.1): the value layer IGNORES a keyword it does not recognize — the
+// right reading for a schema this repo did not write — while
+// `assertSupportedJsonSchema` REJECTS it — the right reading for a schema this
+// repo did write. Port the value layer alone and an unknown keyword is silently
+// ignored, which is what the assertion layer exists to turn into a loud refusal.
+// It runs once, at registration, and only for this repo's own declarations:
+// `Tool.inputSchemaForeign` marks the schemas an MCP server forwards verbatim.
 
 export interface JsonSchemaNode {
   type?: string | readonly string[]
@@ -64,6 +73,163 @@ export function validateJsonSchemaValue(schema: JsonSchemaNode, value: unknown, 
     const frame = frames.pop() as Frame
     if (frame.kind === "undeclared") reportUndeclaredMembers(frame, violations)
     else collectViolations(frame, frames, violations, proven)
+  }
+  return violations
+}
+
+// ——— the ASSERT layer (§3.1, §3.2) ————————————————————————————————————————————
+//
+// The ten keywords of the measured subset, in the order the violation message
+// renders them. This list is this repo's CONTRACT WITH ITSELF: a declaration is
+// rejected at the moment it is written, rather than a keyword it uses being
+// silently ignored on every call. It is deliberately NOT dsh's list — the two
+// subsets contain each other in neither direction (§1.4) — and it is the same
+// list the value layer recognizes, minus the §3.1 tolerance.
+const SUPPORTED_KEYWORDS: readonly string[] = [
+  "additionalProperties",
+  "description",
+  "enum",
+  "items",
+  "maximum",
+  "maxItems",
+  "minimum",
+  "properties",
+  "required",
+  "type",
+]
+
+/** One unit of work for the assertion walk: a node, and the path naming it. */
+type SchemaFrame = { node: unknown; path: string }
+
+/** Thrown by `assertSupportedJsonSchema` for a schema outside the subset: ONE
+ * error carrying EVERY violation, so an author sees the whole repair at once
+ * (dsh's typed-violation shape, one layer up). `code` is the disposition other
+ * layers match on; the message is for the human. */
+export class JsonSchemaError extends Error {
+  readonly code = "UNSUPPORTED_SCHEMA"
+  constructor(readonly violations: readonly string[]) {
+    super(`unsupported schema: ${violations.join("; ")}`)
+    this.name = "JsonSchemaError"
+  }
+}
+
+/** §3.1's assert layer: a schema this repo wrote must stay inside the measured
+ * subset, so this walk rejects every keyword the value layer would silently
+ * ignore. Throws one typed error naming all of them; returns otherwise.
+ *
+ * The subset has TWO halves, and both are checked here: WHICH keywords exist
+ * (§3.2), and WHAT SHAPE each one's value has. The second half is not
+ * formalism — a keyword on the list carrying the wrong value passes a
+ * keyword-only check and then degrades validation silently, because the value
+ * layer reads what it is given (`properties` goes to `Object.entries`, a
+ * non-finite bound compares false forever). It is the NAME side the check
+ * deliberately does not police: an unknown type name stays legal (§3.1), since
+ * a remote schema brings types this repo does not have.
+ *
+ * TOTAL in the assertion layer's sense: any input at all either returns or
+ * raises THAT error — a schema that is not an object is a violation, not a
+ * TypeError from reading keywords off it. It also follows the file's two rules
+ * on every keyword read: a keyword CARRYING `undefined` is ABSENT (§3.5), and
+ * the walk is an explicit frame list, never the JS call stack. */
+export function assertSupportedJsonSchema(schema: unknown): asserts schema is JsonSchemaNode {
+  const violations = collectSchemaViolations(schema)
+  if (violations.length > 0) throw new JsonSchemaError(violations)
+}
+
+/** What shape each supported keyword's value must have, rendered as the clause
+ * that completes `"<path>.<key>"` in the message. `undefined` means the value
+ * has the one shape this keyword accepts.
+ *
+ * The string arms mirror the value layer's own reads exactly: a `type` array
+ * must be NON-EMPTY (an empty one constrains nothing, which is a declaration
+ * mistake, not a style choice), `enum` must be non-empty for the same reason,
+ * and the three bounds must be FINITE (the value layer's comparisons are false
+ * against NaN and ±Infinity, so a non-finite bound never fires). */
+function shapeClause(key: string, carried: unknown): string | undefined {
+  switch (key) {
+    case "type":
+      if (typeof carried === "string") return undefined
+      if (Array.isArray(carried) && carried.length > 0 && carried.every((name) => typeof name === "string")) return undefined
+      return "must be a string or a non-empty array of strings"
+    case "properties":
+      return isRecord(carried) ? undefined : "must be an object of schemas"
+    case "required":
+      return Array.isArray(carried) && carried.every((name) => typeof name === "string") ? undefined : "must be an array of strings"
+    case "additionalProperties":
+      return typeof carried === "boolean" || isRecord(carried) ? undefined : "must be a boolean or a schema"
+    case "items":
+      return isRecord(carried) ? undefined : "must be a schema"
+    case "enum":
+      return Array.isArray(carried) && carried.length > 0 ? undefined : "must be a non-empty array"
+    case "minimum":
+    case "maximum":
+    case "maxItems":
+      return typeof carried === "number" && Number.isFinite(carried) ? undefined : "must be a finite number"
+    case "description":
+      return typeof carried === "string" ? undefined : "must be a string"
+    default:
+      // Unreachable for the ten keywords above; a keyword added to the list
+      // without a rule here would be checked by the keyword half alone, which is
+      // where the assert layer stood before this function existed.
+      return undefined
+  }
+}
+
+/** The walk behind `assertSupportedJsonSchema`. Short of the value layer it has
+ * no value to bottom out against, so it memoises the nodes it has read: a
+ * subschema pointing at itself (a JS object graph can; a JSON literal cannot)
+ * would otherwise never finish, and a shared subschema would be re-reported once
+ * per path. */
+function collectSchemaViolations(root: unknown): string[] {
+  const violations: string[] = []
+  const frames: SchemaFrame[] = [{ node: root, path: "schema" }]
+  const walked = new Set<object>()
+  while (frames.length > 0) {
+    const frame = frames.pop() as SchemaFrame
+    const { node, path } = frame
+    if (!isRecord(node)) {
+      // Nothing here carries keywords, so the whole node is the violation.
+      violations.push(`"${path}" must be a schema object`)
+      continue
+    }
+    if (walked.has(node)) continue
+    walked.add(node)
+    // Keys are read in REVERSE so the subschema frames pop in document order
+    // (the value layer's rule for its own frames); the node's own violations
+    // are held aside and appended in reverse for the same reason, which makes
+    // the message's order the schema's order, parents before children.
+    const own: string[] = []
+    for (const key of Object.keys(node).reverse()) {
+      const carried = ownMember(node, key)
+      if (carried === undefined) continue // §3.5: a keyword CARRYING `undefined` is ABSENT
+      if (!SUPPORTED_KEYWORDS.includes(key)) {
+        own.push(`"${path}.${key}" is not a supported keyword (subset: ${SUPPORTED_KEYWORDS.join(", ")})`)
+        continue
+      }
+      const shape = shapeClause(key, carried)
+      if (shape !== undefined) {
+        // Reported and NOT descended into: the value is not a schema graph, so
+        // a second message about its members would only bury the first.
+        own.push(`"${path}.${key}" ${shape}`)
+        continue
+      }
+      // The three keyword positions that carry a subschema. `properties` carries
+      // a MAP of them, `items` one, and `additionalProperties` a boolean OR a
+      // schema (§3.6.1); nothing else in the subset descends. The shape check
+      // above has already established which of them is a record here.
+      if (key === "properties") {
+        for (const name of Object.keys(carried as Record<string, unknown>).reverse()) {
+          const child = ownMember(carried as Record<string, unknown>, name)
+          if (child === undefined) continue // absent, one level down (§3.5)
+          frames.push({ node: child, path: `${path}.properties.${name}` })
+        }
+      } else if (key === "items") {
+        frames.push({ node: carried, path: `${path}.items` })
+      } else if (key === "additionalProperties" && isRecord(carried)) {
+        frames.push({ node: carried, path: `${path}.additionalProperties` })
+      }
+    }
+    violations.push(...own.reverse())
   }
   return violations
 }

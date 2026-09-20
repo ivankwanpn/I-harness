@@ -17,6 +17,10 @@ export function createMcpTool(
   return {
     name: publicName,
     description: tool.description ?? "MCP tool",
+    // spec §3.8: this schema came from the REMOTE server verbatim. It is not
+    // this repo's contract, so the assertion layer does not govern it — the
+    // value layer still checks every keyword it recognises.
+    inputSchemaForeign: true,
     inputSchema: tool.inputSchema ?? { type: "object", properties: {} },
     timeoutMs: config.toolCallTimeoutMs,
     ...(exposure !== undefined ? { exposure } : {}),

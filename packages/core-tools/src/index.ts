@@ -1,4 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import { assertSupportedJsonSchema } from "./json-schema.ts"
 
 // M27-R-A8: get_context_remaining — registered only when a contextWindow is
 // known (fail-closed); see context-remaining.ts.
@@ -19,6 +20,11 @@ export interface Tool<Args = unknown, Output = unknown> {
   getArgv?(args: Args): string[]
   exposure?: ToolExposure
   searchHint?: string
+  // spec §3.8: the schema was written by someone else (an MCP server forwards
+  // its own verbatim). The ASSERT layer governs this repo's own declarations;
+  // a remote server's dialect is not ours to reject. Additive, and read in
+  // exactly one place: `register`.
+  inputSchemaForeign?: true
 }
 
 export interface ToolExec {
@@ -62,6 +68,18 @@ export interface PolicyRefusal {
  *  but `undefined` field is not a marker (the same rule as W4's F1 fix). */
 export function isPolicyRefusal(err: unknown): err is PolicyRefusal {
   return typeof err === "object" && err !== null && (err as { policyRefusal?: unknown }).policyRefusal === true
+}
+
+/** spec §3.7.1: a TYPED disposition. `prepare` throws it; exactly this type is
+ *  converted to a soft failure by the scheduler. The vocabulary stays "typed
+ *  dispositions", never a list of messages. */
+export const INVALID_ARGS = "INVALID_ARGS"
+export class ToolArgsError extends Error {
+  readonly code = INVALID_ARGS
+  constructor(readonly violations: readonly string[]) {
+    super(`invalid arguments: ${violations.join("; ")}`)
+    this.name = "ToolArgsError"
+  }
 }
 
 export interface ToolCall {
@@ -202,6 +220,8 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // Same-layer duplicate name fails loud (audit F03-5); child scopes create
     // their own registry instance and shadow freely by name.
     if (tools.has(tool.name)) throw new Error(`duplicate tool registration: ${tool.name}`)
+    // The assertion is IH's contract with itself — see Tool.inputSchemaForeign.
+    if (tool.inputSchemaForeign !== true) assertSupportedJsonSchema(tool.inputSchema)
     tools.set(tool.name, tool)
   }
 
