@@ -508,20 +508,24 @@ describe("createSessionAssembly — default prompt composition (spec §11)", () 
 
 // ── R-B1 (phase B): the resolved client is ONE handle ───────────────────────
 // Spec §4.1 said a session's resolved client has "two consumers, one change
-// covers both"; measured, a session's lifetime has EIGHT holders of a resolved
-// client — the turn loop, the compaction engine, a CONFIGURED summarization
-// model, spawned sub-agents, the guardian, teammates, auto-title, and the
-// service's memoised binding. §4.1's own reason for caring is cost ("only
-// swapping one leaves the summarizer on the old endpoint — and that is a call
-// that costs money"), and the same reason holds verbatim for the other five.
-// The handle is how ONE assignment reaches all of them: every holder already
-// holds this same object, so none of them is ever re-wired.
+// covers both"; measured, the grouping is (never a total — see the Task 2 block
+// below, which owns the enumeration): SIX holders follow the handle — the turn
+// loop, the compaction engine, spawned sub-agents, the guardian's INHERITED
+// model, teammates, auto-title — TWO are CONFIGURED and deliberately do NOT
+// follow it (a `summarizationModel` and the guardian's own model, each a `??`
+// that wins), and ONE is a reporter, not a spender (the service's memoised
+// binding, which a raw `setModel` does not move; `service.rebindModel` refreshes
+// it). §4.1's own reason for caring is cost ("only swapping one leaves the
+// summarizer on the old endpoint — and that is a call that costs money"), and
+// the same reason holds verbatim for the rest of the six. The handle is how ONE
+// assignment reaches THOSE six: they already hold this same object, so none of
+// them is ever re-wired.
 describe("createSessionAssembly — the model handle (R-B1)", () => {
   it("a rebound model reaches the handle, and the turn loop reads through it", async () => {
-    // The design said "two consumers, one change covers both" — measured, a
-    // session's lifetime has EIGHT holders of a resolved client. This test pins
-    // the handle itself and the turn loop that reads through it; the per-holder
-    // enumeration — the ones no assertion here reaches — is the plan's Task 2.
+    // The design said "two consumers, one change covers both"; measured, the
+    // grouping is in the block header above. This test pins the handle itself
+    // and the turn loop that reads through it; the per-holder enumeration — the
+    // rows no assertion here reaches — is the Task 2 block below.
     const first = capturingModel()
     const second = capturingModel()
     const dir = mkdtempSync(join(tmpdir(), "ih-assembly-handle-"))
@@ -530,8 +534,9 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
       // ⚠ `assembly.model` is the HANDLE, never the injected client — if it
       // were the client, a rebind would have nothing to forward through. So
       // identity is asserted against the handle, not against `first` — and the
-      // handle is what EVERY holder was handed, the agent's own deps included,
-      // which this file's createAgent capture records at construction.
+      // handle is what the holders that FOLLOW IT were handed (the agent's own
+      // deps included), which this file's `createAgent` capture records at
+      // construction.
       const handle = assembly.model
       expect(handle).not.toBe(first)
       expect(agentCalls.deps.at(-1)?.model).toBe(handle)
@@ -539,7 +544,8 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
       assembly.setModel(second)
 
       // (a) the handle forwards — and its IDENTITY is stable, which is exactly
-      // what lets every holder keep working without being re-wired.
+      // what lets the holders that follow it keep working without being
+      // re-wired.
       expect(assembly.model).toBe(handle)       // still the SAME handle…
       for await (const _ of assembly.model.stream({ messages: [], tools: [], systemPrompt: "" })) void _
       expect(second.requests).toHaveLength(1)   // …but the request went to the NEW client
@@ -595,15 +601,15 @@ describe("createSessionAssembly — the model handle (R-B1)", () => {
 //
 // Coverage, holder by holder, and where each row is driven:
 //
-//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:963 `session, tools, model,`)
+//  1    the agent's turn loop              — case 1  (agent deps, assembly.ts:967 `session, tools, model,`)
 //  2+3  the compaction engine              — case 2  (construction core-agent/src/index.ts:142 `model: deps.model,`;
 //                                                    its own read compaction/src/index.ts:125)
-//  5a   a spawned sub-agent                — case 3  (assembly.ts:810 `parentModel: model,`)
-//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:855 `parentModel: model,` → reviewer.ts:149's
+//  5a   a spawned sub-agent                — case 3  (assembly.ts:814 `parentModel: model,`)
+//  5b   the guardian, INHERITED model      — case 4  (assembly.ts:859 `parentModel: model,` → reviewer.ts:149's
 //                                                    `deps.model ?? deps.parentModel` — its CONFIGURED model is Task 3's)
-//  5c   a team-mate                        — case 5  (assembly.ts:891 `parentModel: model,` → scheduler.ts:204
+//  5c   a team-mate                        — case 5  (assembly.ts:895 `parentModel: model,` → scheduler.ts:204
 //                                                    `parentModel: deps.parentModel,`)
-//  6    auto-title's model                 — case 6  (assembly.ts:990 `model,` → run.ts:697 `session, model: assembly.model,`)
+//  6    auto-title's model                 — case 6  (assembly.ts:994 `model,` → run.ts:697 `session, model: assembly.model,`)
 //  7    the service's memoised binding     — the REPORTER, and NOT handle-reachable: a raw `setModel` does not move it.
 //                                             "R-B1 holder 7 — the service dispenses the LIVE assembly…" in
 //                                             service.test.ts (that file owns the service harness); `service.rebindModel`
@@ -662,12 +668,12 @@ function memoryCoordinator(): SessionCoordinator {
   } as unknown as SessionCoordinator
 }
 
-describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)", () => {
+describe("createSessionAssembly — every handle-reachable holder follows a rebind (Task 2, R-B1)", () => {
   /** This file's recording-client shape (`capturingModel`, :462 — the same shape
    * as `recordingModel`, subagent/test/child.test.ts:253) with the replies served
    * by the file's own `createMockClient` cassette — exactly the recorder+cassette
    * composition the pluginAgents fixture's `spawnVia` uses — `async function
-   * spawnVia(roleName: string, pluginAgents?: SubagentRole[])` at :1163. Not a fourth fixture: the
+   * spawnVia(roleName: string, pluginAgents?: SubagentRole[])` at :1192. Not a fourth fixture: the
    * recorder is `capturingModel`'s and the script is `createMockClient`'s; only
    * the two existing pieces are joined, because these holders are driven by
    * TOOL CALLS and so need scripted replies `capturingModel`'s fixed text cannot give. */
@@ -779,7 +785,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
     const second = scriptedModel([
       // the parent's step: a write OUTSIDE the workspace → the approval
       // classifier's `ask` branch → the guardian is consulted (core-tools
-      // prepare step 3; assembly mounts the policy at :607)
+      // prepare step 3; assembly mounts the policy at :636)
       { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), content: "x" } }] },
       // the REVIEWER's own turn (forkTurns "none": it sees only the request)
       { role: "assistant", text: '{"outcome":"deny","rationale":"writes are denied today","risk_level":"moderate"}' },
@@ -788,7 +794,7 @@ describe("createSessionAssembly — every holder follows a rebind (Task 2, R-B1)
       workspace: dir,
       model: first,
       // `{}` — the INHERITED case: no `guardian.model`, so the reviewer runs on
-      // `parentModel` (assembly.ts:855), which is the handle. A configured
+      // `parentModel` (assembly.ts:859), which is the handle. A configured
       // `guardian.model` wins by construction (`deps.model ?? deps.parentModel`,
       // reviewer.ts:149) and is Task 3's boundary, not this case's.
       guardian: {},

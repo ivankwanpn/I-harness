@@ -230,10 +230,14 @@ export interface SessionAssembly {
   agent: Agent // the per-session agent; tier-1 turns flow through it
   session: Session // the live session — the source of truth
   sessionId?: string
-  model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle every holder shares. Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:697).
-  /** Swap the client this assembly's handle forwards to. Every holder follows —
-   * they all hold this same object. Identity of `model` does NOT change, which
-   * is deliberate: holders are never re-wired. */
+  model: ModelClient // R-B1: NOT the resolved client — the ONE stable handle the six handle-reachable holders share (the two CONFIGURED holders win over it; the service's memoised binding is a reporter). Its identity never changes; its `stream` forwards to the assembly's CURRENT client. The owner reads it at call time (e.g. auto-title, run.ts:697).
+  /** Swap the client this assembly's handle forwards to. Every HANDLE-REACHABLE
+   * holder follows — they all hold this same object. It is deliberately NOT the
+   * whole model surface: a CONFIGURED `summarizationModel` and a configured
+   * `guardian.model` win over the handle and keep billing their own endpoint,
+   * and the service's memoised binding is refreshed by
+   * `SessionService.rebindModel`, not by this call. Identity of `model` does NOT
+   * change, which is deliberate: a rebind is one assignment, never a re-wiring. */
   setModel(client: ModelClient): void
   /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
    * `setModel` rather than an optional second parameter on it, deliberately:
@@ -343,7 +347,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // — the agent's deps, the compaction engine (its construction-time copy and its
   // own read are ONE consumer), the subagent tools, the guardian's INHERITED
   // model, the team scheduler, and auto-title (which reads `assembly.model`
-  // itself) — all get the handle: one assignment, and no holder has to be told.
+  // itself) — all get the handle: one assignment, and none of them has to be told.
   // Changing the TYPE instead (`model: () => ModelClient`) would have reached the
   // same goal while touching 56 sites (measured — raw `createAgent(` occurrences
   // under `packages/`, this comment's own literal excluded); the handle costs
@@ -991,9 +995,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // R-B1: the model surface's mutations — TWO of them, and they are a PAIR
       // (F-1 added the second). Nothing in these types ties the two together, so
       // what keeps them paired is this description. The handle above keeps its
-      // identity, so every holder that captured it — the agent's deps, the
-      // subagent tools, the guardian, the team scheduler, auto-title — follows
-      // a `setModel` without being told.
+      // identity, so every handle-reachable holder that captured it — the agent's
+      // deps, the compaction engine, the subagent tools, the guardian's INHERITED
+      // model, the team scheduler, auto-title (the six of the R-B1 note above)
+      // — follows a `setModel` without being told.
       setModel: (client) => { currentModel = client },
       // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
       // in these types forces the two calls to happen together. A rebind that

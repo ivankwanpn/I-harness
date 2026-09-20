@@ -67,13 +67,13 @@ describe("createSessionService", () => {
       })
       const assembly = await assemblyPromise
       // R-B1 (phase B): `assembly.model` is the assembly's ONE stable handle —
-      // not the binding's client object. Every holder reads through the handle,
-      // and the handle is what FORWARDS to the bound client, so the identity
-      // form of this assertion ("assembly.model IS the pending binding's
-      // client") no longer holds by construction. The fact it pinned is pinned
-      // behaviorally instead: the turn's request lands in THIS client's own
-      // recorder (exactly one request), and the resolution count stays 1. The
-      // handle's identity across a rebind is pinned in test/assembly.test.ts.
+      // not the binding's client object. Every handle-reachable holder reads
+      // through the handle, and the handle is what FORWARDS to the bound client,
+      // so the identity form of this assertion ("assembly.model IS the pending
+      // binding's client") no longer holds by construction. The fact it pinned
+      // is pinned behaviorally instead: the turn's request lands in THIS client's
+      // own recorder (exactly one request), and the resolution count stays 1.
+      // The handle's identity across a rebind is pinned in test/assembly.test.ts.
       expect(assembly.modelLabel).toBe("deepseek:deepseek-chat")
       await expect(assembly.agent.run("hello")).resolves.toMatchObject({ finalText: "real" })
       expect(requests).toHaveLength(1)
@@ -91,10 +91,10 @@ describe("createSessionService", () => {
     // `modelBindings.set(sessionId, pending)`, service.ts:243, consumed as
     // `model: binding.model,` at :322). What is REACHABLE from it is the
     // assembly the service hands out: `assemblyFor` is cache-first and returns
-    // the stored reference (service.ts:631 `assemblyFor: getOrCreate,`), so a
+    // the stored reference (service.ts:632 `assemblyFor: getOrCreate,`), so a
     // rebind applied to that object is a rebind applied to the session the
     // service is running — the object Task 4's `SessionService.rebindModel`
-    // mutates through `assembly.setModel`/`setReasoningEffort` (service.ts:263-283).
+    // mutates through `assembly.setModel`/`setReasoningEffort` (service.ts:263-284).
     //
     // LIMITER, recorded not asserted (Task 4's F1 named it; Task 4 resolved it
     // by making the reporting follow — the complete rebind is

@@ -144,7 +144,8 @@
  * and label, never credentials or a runtime client. Model changes reject an
  * active/queued session, then rebind the LIVE session's model in place — the
  * host resolves the selection (including an optional `protocol?`, §4.2②) and
- * every holder follows through the assembly's handle — and answer a fresh
+ * every handle-reachable holder follows through the assembly's handle — and
+ * answer a fresh
  * state. The durable write that follows CARRIES NO PROTOCOL (§4.3: a session's
  * protocol is never persisted); the pre-Task-4 teardown of the live assembly
  * ("invalidate") is GONE, because it existed only to make the change take
