@@ -176,7 +176,8 @@ describe("exec foreground promotion (W10)", () => {
     expect(exec.listJobs()).toEqual([])
   })
 
-  it("a run that outlives the threshold is handed back as a job that KEEPS RUNNING and finishes its work", async () => {    const exec = registerExec(createContext())
+  it("a run that outlives the threshold is handed back as a job that KEEPS RUNNING and finishes its work", async () => {
+    const exec = registerExec(createContext())
     const dir = mkdtempSync(join(tmpdir(), "ih-w10-"))
     const marker = join(dir, "done.txt")
     try {

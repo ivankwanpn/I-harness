@@ -1237,6 +1237,12 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
         workspace: dir,
         approveAll: true,
         shellTimeoutMs: 300,
+        // The RELIANCE, stated: an INERT pair (threshold ≥ deadline) is what this
+        // case wants — the death at the deadline is the assertion. The explicit
+        // value is the default written out, so the precondition is local rather
+        // than inherited; the assembly warns on this pair by design (W10 F1),
+        // and this case is one of the places that warning is expected.
+        shellBackgroundAfterMs: 30_000,
         mockScript: [
           { role: "assistant", toolCalls: [{
             name: shell,
@@ -1370,6 +1376,11 @@ describe("headless CLI M12 retry + retention", () => {
       // than 300ms to start on Windows. The first attempt still sleeps for 5s,
       // while the retry has enough budget to prove that it exits normally.
       shellTimeoutMs,
+      // Same reliance as the M10a case above: an INERT pair, so the first
+      // attempt really does time out (a promotion would hand back a job id and
+      // the retry path would never run). Explicit so it cannot be inherited
+      // from a default; the assembly's F1 warning on this pair is expected here.
+      shellBackgroundAfterMs: 30_000,
       retry,
       mockScript: [
         { role: "assistant", toolCalls: [{ name: shell, args: { command } }] },
