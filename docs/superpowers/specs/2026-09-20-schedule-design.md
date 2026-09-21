@@ -112,13 +112,17 @@ apps/cli/src/sessions.ts:178:  const coordinator = createSessionCoordinator(crea
 ### 修正 2：`schedule` 群組是**第四個**零來源的位置（原本只列了三個）
 
 ```
-packages/subagent/src/projection.ts:15-17
+packages/subagent/src/projection.ts:15-19
   // The "schedule" group is part of the summary union for hosts
-  // that mount a schedule source; no source exists in this repo's assemblies
-  // today, so the projection emits no schedule rows (honestly).
+  // that mount a schedule source; an assembly now MOUNTS a real schedule driver
+  // (session-executor's schedule delivery mount, 2026-09-21), but no schedule
+  // source is fed to THIS projection yet — rows stay absent until a host provides
+  // one (honestly).
 ```
 
-`AgentTaskGroup` 的成員是 `"subagent" | "job" | "workflow" | "schedule"` —— **排程那一格已經在型別裡，而且它自己在註解裡承認沒有來源**。原本那份框架列的三個缺件沒有它。
+> **重測（2026-09-21，`m66` 的 Task 5 掛載後）：** 這段引文已隨實況改準 —— assembly 現在**掛載**一個真的 schedule driver，但**沒有來源餵給這個 projection**，所以 schedule rows 仍然缺席（缺席的理由從「沒有實作」變成「沒有人餵它」，行為不變）。行號同時重測：`15-17` → `15-19`（`grep -n` 逐行）。
+
+`AgentTaskGroup` 的成員是 `"subagent" | "job" | "workflow" | "schedule"` —— **排程那一格已經在型別裡，而且它原本自己在註解裡承認沒有來源**。原本那份框架列的三個缺件沒有它。
 
 ### 修正 3：IH **沒有** dsh 的維護相位（原本的參考對照把 dsh 當成「可以搬」的形狀）
 

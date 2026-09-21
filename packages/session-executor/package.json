@@ -35,6 +35,7 @@
     "@i-harness/sandbox-local": "workspace:*",
     "@i-harness/sandbox-policy": "workspace:*",
     "@i-harness/sandbox-windows-acl": "workspace:*",
+    "@i-harness/schedule": "workspace:*",
     "@i-harness/session-persistence": "workspace:*",
     "@i-harness/session-query": "workspace:*",
     "@i-harness/settings": "workspace:*",
