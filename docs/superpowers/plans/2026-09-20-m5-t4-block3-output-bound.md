@@ -389,7 +389,7 @@ const SYNTHETIC_FAILURE_CODES = new Set([
   TOOL_FAILED,                    // a body that tried and failed
   TOOL_ABORTED_BEFORE_DISPATCH,   // a call that never started
   TOOL_CANCELLED_BY_SIBLING,      // a call a sibling's failure cancelled
-  TOOL_ABORTED_MID_FLIGHT,        // a call killed mid-flight
+  TOOL_ABORTED_MID_FLIGHT,        // the abort path wrote this verdict
 ])
 const isSyntheticFailure = (out: unknown): boolean =>
   typeof out === "object" && out !== null && SYNTHETIC_FAILURE_CODES.has((out as { code?: string }).code as string)
@@ -445,11 +445,46 @@ pnpm verify:all
 
 Expected: `suite` 全綠 · **母體 66** · typecheck 0 · **e2e 5 檔** · **`gate PASS`**。**任何一步不是預期 ⇒ 停手回報，不要改數字去迎合。**
 
-**而順手清一件事**（T1 量到的，而它屬於最後碰那個檔的人）：**`scripts/audit/reachability-allowlist.json` 有兩條已經**失效**的條目** —— `@i-harness/core-agent#TOOL_FAILED` 與 `#TOOL_CANCELLED_BY_SIBLING`。**它們的那兩列消失了**（`447 → 445`），**因為搬遷之後那兩個名字在 `core-tools/src/index.ts` 出現** ⇒ 掃描器把它算成「有人用」。
+**🔴 而順手那一件事**被我裁定錯了，而 T1 的複審把它翻了過來 —— 這一格現在是那一格。**
 
-**⇒ 一條失效的 allowlist 條目是一個**已經不再為真的陳述**，而它每跑一次都會印一個警告。** **⇒ 把它們刪掉**（而**刪之前先確認那兩列真的不會回來** —— 跑一次 `--gate` 看警告還在不在）。
+**`scripts/audit/reachability-allowlist.json` 有兩條條目**（`@i-harness/core-agent#TOOL_FAILED`、`#TOOL_CANCELLED_BY_SIBLING`）**現在對不上任何活列**（`447 → 445`）。
 
-**⇒ 不要為了讓警告消失去改別的東西。** 如果刪了之後那兩列回來了，**停手回報** —— 那代表那個「有人用」是假的。
+**而**為什麼**那兩列消失，已經量出來了 —— 而它不是「有人用了」：**
+
+```
+#TOOL_FAILED  origins=["packages/core-agent/src/execute-tool-calls.ts"]
+              used=true  users=["packages/core-tools/src/index.ts"]      ← 唯一一個
+```
+
+**⇒ 那個檔案就是**宣告它的那一個**（搬遷把它搬過去了）。**
+
+**⇒ 所以這是一個**遮蔽**：** 掃描器**刻意**把宣告模組排除在 used-scan 之外，**但 `resolveModule` 拒絕裸的套件 specifier ⇒ 一個跨套件的宣告者逃掉了那個排除。**
+
+**它的兩個反事實（都量到）**：把**宣告的那個 token** 改名 ⇒ 那一列**回來**；把同樣兩行**純宣告**加進 BASE 樹的 `core-tools`（**沒有讀者、零行為改動**）⇒ `used` 從 `false` 變 `true`、**那兩列消失**。
+
+**⇒ 處置（而它與第一版相反）：**
+
+1. **不要靜默地刪。** 那兩列**現在永遠回報不出來**（宣告自己永遠滿足那個詞彙測試），所以**刪掉條目 = 把「它為什麼死」的記錄一起刪掉。**
+2. **要嘛留著那兩條並讓它們的 `reason` 說出真相**（**那一列死於搬遷，不是死於一個讀者**），**要嘛刪掉並在同一個提交的訊息裡寫下那一句。** 兩者都可以，**而「什麼都沒說就刪掉」不可以。**
+3. **而這是一條關於**工具**的發現** —— **值得它自己的 ticket**（第 4 個盲點：**跨套件的宣告被算成使用**）。
+
+**⇒ 而最要緊的一條：** **T4 的豁免判準不可以讀掃描器的沉默。** 那個豁免讀的是**四個 code 的集合**（見下面 `SYNTHETIC_FAILURE_CODES`）—— **那本來就與掃描器無關，而這一條要寫成一句註解**，因為「列不在那裡」現在**不是**「有人用」的證據。
+
+**而 T1 的複審另外交棒三件，都屬於你（它們都住在你正要在附近編輯的東西旁邊）：**
+
+**(i) `TOOL_ABORTED_MID_FLIGHT` 的註解把話說寬了。** 那個 code 蓋在 abort 路徑**每一格** started-slot 填補上 —— **包含一個在 abort 掃過整批之前就自己失敗了的本體**（BOUNDARY 那條測試的 `boomTool` 就產生 `code: middle-flight` 而訊息是 `"boom"`）。**⇒ 它見證的是「abort 路徑寫下了這個判決」，不是「abort 殺死了那個本體」。** 改那一句。
+
+**(ii) 那個新的 code 的斷言與生產者讀**同一個綁定** ⇒ 一次**值的交換**對它是隱形的。** **⇒ 兩種加固選一個**：斷言那個**字面值**，或**把那個常量自己的值釘一次**（`expect(TOOL_ABORTED_MID_FLIGHT).toBe("TOOL_ABORTED_MID_FLIGHT")`）。**任一都好，而第二個更便宜。**
+
+**(iii) 而 T1 的 Step 2 在樹上仍然少了那條**存在**斷言**（計畫有 `Object.hasOwn(...)`，而落地的那條測試沒有 —— **量到 `grep -c hasOwn` = 0**）。**⇒ 把它補上**，因為它是那條測試**唯一的紅-first 來源**（沒有它，那條測試在實作之前是綠的）。
+
+**⚠ 而 (iii) 要寫進 `packages/core-agent/test/execute-tool-calls.test.ts`，那是 T1 的檔不是你的** —— **所以它自己一個提交，訊息要說明它是 T1 複審交棒的家務。** **不要把三件事混進你的功能提交。**
+
+**⇒ 而第五個 code 要知道（Low，不是你的範圍，但別讓它咬到你）：**
+
+`packages/session-persistence/src/repair.ts:40,167` 寫**第五個**合成 code —— **`TOOL_OUTCOME_UNKNOWN`**（而它把 `TOOL_ABORTED_BEFORE_DISPATCH` 當自己的字面值重寫一份）。
+
+**它今天碰不到你的判準**（guard 的掛載點是活的 `tools/execute` cascade，而**從修復過的日誌讀回來**的結果不在那條路上）。**⇒ 但如果將來有人把「合成」放寬到「從修復過的日誌讀回來的結果」，四個 code 的集合就不完備。** **而 `replay:false` 那個警告正是截斷會藏起來的那句話。** **⇒ 把這一格寫在 `SYNTHETIC_FAILURE_CODES` 的註解裡**（**它是一句「這個集合為什麼停在四」的說明，不是一個要修的洞**）。
 
 - [ ] **Step 7: Commit**
 
