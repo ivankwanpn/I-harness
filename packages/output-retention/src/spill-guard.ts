@@ -95,8 +95,14 @@ function modelVisibleBytes(output: unknown): number {
 // A replacement is assembled from a retained head/tail PLUS a notice whose own
 // byte cost (it carries the omitted-byte count and the spill path) is only known
 // once the retained size is — so rather than guess it, this measures the REAL
-// candidate and shrinks the retainer budget by the overage. Measured to converge
-// in two rounds on ordinary text, and in three on escape-heavy text.
+// candidate and shrinks the retainer budget by the overage. Round counts are
+// MEASURED per fixture, not assumed small (a probe counts retainer
+// constructions, and nothing else builds one): 2 rounds for 10,000 plain chars
+// at a 2,000-byte cap; 3 for 10,000 quotes; 4 for 10,000 NULs; 3 for a
+// quote-heavy object; 3 for the 34,200-quote band row at the shipped cap, and 5
+// for the 11,900-NUL one. The geometric fallback is why the escape-heavy rows
+// cost more than the linear step alone did — convergence is bounded by
+// MAX_FIT_ROUNDS, not by any small constant.
 //
 // THE STEP MUST BE GEOMETRIC WHEN LINEAR STALLS, and this loop needed that
 // lesson twice. The budget is RAW bytes while the measure is the ESCAPED
@@ -105,12 +111,13 @@ function modelVisibleBytes(output: unknown): number {
 // same overage comes back every round, and the loop can give up while a fitting
 // budget exists. Measured at the shipped 64,000 cap, STRING BRANCH ONLY — the
 // object branch retains and measures the SAME JSON string, so its budget and
-// its measure move together and the review's sweeps over it all converged:
-// `'"'.repeat(n)` for n ∈ [32,000, 34,200] came back as the
-// ORIGINAL at up to 68,402 model-visible bytes (106.9% of the cap), and
-// `"\u0000".repeat(n)` for n ∈ [11,000, 11,900] at up to 71,402 (111.6%), every
-// row on the 100-step grid giving up. A fit genuinely existed in both families:
-// a binary search for the largest fitting budget finds 31,930 and 10,643. So:
+// its measure move together (the escape-heavy object fixture converges in 3
+// rounds, counted the same way): `'"'.repeat(n)` for n ∈ [32,000, 34,200]
+// step 100 came back as the ORIGINAL at up to 68,402 model-visible bytes
+// (106.9% of the cap) at n = 34,200, and `"\u0000".repeat(n)` for n ∈ [11,000,
+// 11,900] step 100 at up to 71,402 (111.6%) at n = 11,900 — all 33 rows giving
+// up. A fit genuinely existed in both families: the fixed loop returns a
+// replacement for every one of the 33, which is the band test's green run. So:
 // subtract the overage only while the candidate actually SHRANK; when it did
 // not shrink, or the subtraction cannot stay positive, halve the budget
 // instead. A geometric descent reaches any fitting budget in ≤ log2(cap)
@@ -123,8 +130,15 @@ function modelVisibleBytes(output: unknown): number {
 // a plugin-provided tool that does — real, but not something the tree ships.
 // Stated so this fix is not read as covering a shape production produces.
 //
-// `null` is returned for one reason only: no replacement can exist, i.e. the
-// notice ALONE exceeds the cap — the caller then keeps the original (atom (iv)).
+// `null` HAS TWO EXITS: the budget is cut below 1 (nothing the retainer can
+// keep measures within the cap — the notice-alone case), or the round cap
+// expires. They coincide only while the geometric descent fits inside the round
+// cap, i.e. log2(cap) + 1 <= MAX_FIT_ROUNDS (64,000 → 17 <= 32 today). That is
+// a BOUND argument, not a sweep: the widest measurements here and in the block
+// review reach 5 rounds, and no shape is known that spends all 32 with a fit
+// still available — but a cap raised past 2^31 without raising the constant
+// would make the second exit reachable on its own. On either exit the caller
+// keeps the original (atom (iv)).
 const MAX_FIT_ROUNDS = 32
 
 /** Fit a replacement inside `cap` model-visible bytes: `assemble(budget)` runs

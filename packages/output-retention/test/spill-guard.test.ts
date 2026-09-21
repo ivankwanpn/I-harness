@@ -262,10 +262,15 @@ it("the fit loop reaches a fit across the whole failing band (string branch, shi
   // subtraction moves the budget and NOT the candidate: the same overage comes
   // back every round and eight rounds can end with the ORIGINAL returned, over
   // the cap, spill file written. Measured on the pre-fix tree at the shipped
-  // 64,000 cap: the quote rows below came back at up to 68,402 model-visible
-  // bytes and the NUL rows at up to 70,502. A fit demonstrably exists — a binary
-  // search for the largest fitting budget finds 31,930 and 10,643 — so "no
-  // replacement fits" was false for every row here.
+  // 64,000 cap, ON THE SAME GRID THIS TEST BUILDS (step 100): all 33 rows gave
+  // up — 23/23 quotes, 10/10 NULs — and the worst came back at 68,402
+  // model-visible bytes (n = 34,200, quotes) and 71,402 (n = 11,900, NULs),
+  // i.e. the ORIGINAL itself, over the cap. A fit existed for every row: the
+  // fixed loop returns a replacement for all 33, which is this test's green
+  // run. (An earlier version of this comment said the NULs topped out at
+  // 70,502 — a real value, but of a coarser step-250 grid's row n = 11,750,
+  // which this test does not build. Quoting a grid other than the code's is how
+  // that number drifted.)
   //
   // String branch only, and the rows are built from a string literal: no
   // IN-TREE tool returns a bare string result today, so the band's reachability
