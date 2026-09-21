@@ -2,7 +2,7 @@ import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createOutputSpillGuard, gcSpillStore } from "../src/spill-guard.ts"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, utimesSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -16,10 +16,13 @@ it("string output over the budget is truncated head-tail + notice with the spill
     name: "big", description: "", inputSchema: {},
     execute: async () => "A".repeat(10_000),
   } as Tool)
-  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 100, spillRoot: root }))
+  // The cap must leave room for the notice, which is charged INSIDE it (a
+  // 100-byte cap can no longer hold any replacement at all — see the
+  // "keeps the original when no replacement fits" test below).
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
   const result = await registry.execute({ name: "big", args: {} })
   const out = result.output as string
-  expect(out.length).toBeLessThan(500)
+  expect(Buffer.byteLength(out, "utf-8")).toBeLessThanOrEqual(2_000)
   expect(out).toContain("Full result stored at:")
   expect(out).toContain("A") // retained tail
   const path = /Full result stored at: (.+?)\. Use read/.exec(out)![1]
@@ -40,8 +43,8 @@ it("object output over budget becomes { output, outputPaths, spill } envelope", 
   const root = mkdir()
   const ctx = createContext()
   const registry = createToolRegistry(ctx)
-  registry.register({ name: "obj", description: "", inputSchema: {}, execute: async () => ({ blob: "B".repeat(5000) }) } as Tool)
-  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 100, spillRoot: root }))
+  registry.register({ name: "obj", description: "", inputSchema: {}, execute: async () => ({ blob: "B".repeat(20_000) }) } as Tool)
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
   const result = await registry.execute({ name: "obj", args: {} })
   const out = result.output as { output: string; outputPaths: string[]; spill: { omittedBytes: number } }
   expect(Array.isArray(out.outputPaths)).toBe(true)
@@ -57,7 +60,7 @@ it("never replaces a `read` result — a truncated read would send the model bac
   const big = "A".repeat(10_000) // ONE oversized string, served by BOTH tools
   registry.register({ name: "read", description: "", inputSchema: {}, execute: async () => big } as Tool)
   registry.register({ name: "other", description: "", inputSchema: {}, execute: async () => big } as Tool)
-  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 100, spillRoot: root }))
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
   // SAME registry, SAME oversized string, different tool name only — so the two
   // outcomes below can be attributed to the name and to nothing else.
   const other = await registry.execute({ name: "other", args: {} })
@@ -74,11 +77,90 @@ it("the skip covers the object path too — a real `read` returns `{ content }`,
   const big = { content: "A".repeat(10_000) } // the shape the fs package's `read` really returns
   registry.register({ name: "read", description: "", inputSchema: {}, execute: async () => big } as Tool)
   registry.register({ name: "other", description: "", inputSchema: {}, execute: async () => big } as Tool)
-  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 100, spillRoot: root }))
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
   const other = await registry.execute({ name: "other", args: {} })
   expect((other.output as { spill?: unknown }).spill).toBeDefined() // the envelope branch IS live here
   const read = await registry.execute({ name: "read", args: {} })
   expect(read.output).toBe(big) // same object back — no { output, outputPaths, spill } envelope
+  rmSync(root, { recursive: true, force: true })
+})
+
+it("never emits a replacement larger than the cap — the notice counts against it", async () => {
+  const root = mkdir()
+  const ctx = createContext()
+  const registry = createToolRegistry(ctx)
+  const big = "A".repeat(10_000)
+  registry.register({ name: "big", description: "", inputSchema: {}, execute: async () => big } as Tool)
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
+  const result = await registry.execute({ name: "big", args: {} })
+  const out = result.output as string
+  expect(out).not.toBe(big) // it IS a replacement, not the untouched original ...
+  expect(out).toContain("Full result stored at:")
+  expect(out).toContain("A")
+  // ... and the notice's own bytes are charged INSIDE the cap. The raw byte
+  // length is the rule as written; the JSON-quoted length is what
+  // `toolResultText` actually hands the model for a string result, so it is the
+  // stronger of the two and the one the guard must keep.
+  expect(Buffer.byteLength(out, "utf-8")).toBeLessThanOrEqual(2_000)
+  expect(Buffer.byteLength(JSON.stringify(out), "utf-8")).toBeLessThanOrEqual(2_000)
+  rmSync(root, { recursive: true, force: true })
+})
+
+it("keeps the original when no replacement fits — it never emits something larger than what it replaced", async () => {
+  const root = mkdir()
+  const ctx = createContext()
+  const registry = createToolRegistry(ctx)
+  const original = "A".repeat(51) // ONE byte over a 50-byte cap
+  registry.register({ name: "barely", description: "", inputSchema: {}, execute: async () => original } as Tool)
+  // The notice alone is ~200 bytes (its fixed text plus this spill path), so a
+  // 50-byte cap cannot hold ANY replacement: assembling one would enlarge a
+  // 51-byte result several times over. The original must come back untouched.
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 50, spillRoot: root }))
+  const result = await registry.execute({ name: "barely", args: {} })
+  expect(result.output).toBe(original)
+  rmSync(root, { recursive: true, force: true })
+})
+
+it("an image result whose MODEL-VISIBLE text fits is not spilled — 100 KiB of base64 is a ~40-byte descriptor", async () => {
+  const root = mkdir()
+  const ctx = createContext()
+  const registry = createToolRegistry(ctx)
+  // The `read_image` shape (packages/attachment/src/read-image.ts): inline
+  // base64, 10 MiB by default. 100 KiB of it is ~136 KB of JSON — well over the
+  // SHIPPED 64_000-byte default — but the model never sees those bytes as text:
+  // `toolResultText` strips the array and hands over a short descriptor, and
+  // the bytes ride as image parts.
+  const image = { mediaType: "image/png", dataBase64: "A".repeat(100_000) }
+  registry.register({ name: "read_image", description: "", inputSchema: {}, execute: async () => ({ images: [image] }) } as Tool)
+  ctx.mount(createOutputSpillGuard(ctx, { spillRoot: root })) // the shipped default cap
+  const result = await registry.execute({ name: "read_image", args: {} })
+  expect(result.output).toEqual({ images: [image] }) // untouched — the picture reaches the model
+  expect(readdirSync(root)).toEqual([]) // and nothing was spilled
+  rmSync(root, { recursive: true, force: true })
+})
+
+it("a spilled object replacement still carries a real `images` array, and the cap measures the whole envelope", async () => {
+  const root = mkdir()
+  const ctx = createContext()
+  const registry = createToolRegistry(ctx)
+  const image = { mediaType: "image/png", dataBase64: "A".repeat(400) }
+  const payload = { note: "N".repeat(10_000), images: [image] } // oversized TEXT beside a real image
+  registry.register({ name: "shot", description: "", inputSchema: {}, execute: async () => payload } as Tool)
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
+  const result = await registry.execute({ name: "shot", args: {} })
+  const out = result.output as { output: string; outputPaths: string[]; spill: { omittedBytes: number }; images?: unknown }
+  expect(out.spill.omittedBytes).toBeGreaterThan(5_000) // the text WAS bounded ...
+  expect(out.images).toEqual([image]) // ... and the picture rides the replacement
+  // What the model sees for this replacement is the WHOLE envelope stringified
+  // (the authority's rule), with the images counted at descriptor size:
+  const descriptor = `\nimage: unnamed ?x? ${Math.ceil((image.dataBase64.length * 3) / 4)}B base64:${image.dataBase64.slice(0, 8)}`
+  const visible = JSON.stringify({ output: out.output, outputPaths: out.outputPaths, spill: out.spill }) + descriptor
+  expect(Buffer.byteLength(visible, "utf-8")).toBeLessThanOrEqual(2_000)
+  // The base64 is not text: it must not come back as a wall of it in `output`,
+  // and the durable copy holds the same text (a wall of base64 is no more
+  // readable in a file than it was in the prompt).
+  expect(out.output).not.toContain(image.dataBase64.slice(0, 40))
+  expect(readFileSync(out.outputPaths![0], "utf-8")).not.toContain(image.dataBase64.slice(0, 40))
   rmSync(root, { recursive: true, force: true })
 })
 

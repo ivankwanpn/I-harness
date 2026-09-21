@@ -13,6 +13,96 @@ const DEFAULT_MAX_OUTPUT_BYTES = 64_000
 const DEFAULT_MAX_AGE_MS = 86_400_000
 const DEFAULT_MAX_TOTAL_BYTES = 512 * 1024 * 1024
 
+// ── What the cap measures ────────────────────────────────────────────────────
+// The authority for the model-visible text of a tool result is `toolResultText`
+// in packages/core-session/src/index.ts — `deriveMessages` hands the model
+// exactly its output. This copy is DELIBERATE: output-retention does not depend
+// on core-session (its deps are core-plugin + core-tools), and this repo has
+// ruled that a duplication is the cheaper defect. If the two ever disagree,
+// THAT one is the authority; change this one to match it.
+//
+// The bound has four parts, each with its own test in test/spill-guard.test.ts:
+//   (i)  the notice's own byte length is charged INSIDE the cap;
+//   (ii) the size measured is the authority's text, never `JSON.stringify(out)`
+//        — the two differ in both directions: a `{ output, outputPaths, spill }`
+//        envelope is counted IN FULL (the model does see all of it), while a
+//        real `images` array is measured at descriptor size (the model never
+//        sees those bytes as text — they ride a follow-up user message as image
+//        parts, M61);
+//   (iii) a real `images` array is CARRIED THROUGH a replacement, not dropped —
+//        `deriveMessages` reads `output.images`, so dropping the key deletes
+//        the picture;
+//   (iv) when no replacement fits, the original is kept: dsh's rule (spec §4.2)
+//        is "the policy NEVER emits a replacement larger than the cap", so a
+//        bound whose own replacement would exceed it is the defect this guard
+//        exists to remove.
+function imageDescriptor(images: readonly unknown[]): string {
+  return (
+    "\n" +
+    images
+      .map((image) => {
+        const i = image as { name?: string; width?: number; height?: number; dataBase64: string }
+        return `image: ${i.name ?? "unnamed"} ${i.width ?? "?"}x${i.height ?? "?"} ${Math.ceil((i.dataBase64.length * 3) / 4)}B base64:${i.dataBase64.slice(0, 8)}`
+      })
+      .join("\n")
+  )
+}
+
+/** An OBJECT result split the way the authority splits it: the text with a real
+ *  `images` array removed (empty when there is nothing else), and the array
+ *  itself — `undefined` when the member is absent, empty or malformed, because
+ *  only a REAL array is stripped; anything else stays part of the faithful
+ *  payload (the authority's defensive rule). */
+function splitRealImages(output: object): { text: string; images: unknown[] | undefined } {
+  const record = output as Record<string, unknown>
+  const images = record["images"]
+  if (!Array.isArray(images) || images.length === 0) {
+    return { text: JSON.stringify(output) ?? String(output), images: undefined }
+  }
+  const { images: _images, ...rest } = record
+  const hasRest = Object.keys(rest).length > 0
+  return { text: hasRest ? (JSON.stringify(rest) ?? String(rest)) : "", images }
+}
+
+/** The model-visible text of a tool result — see the block comment above. */
+function modelVisibleText(output: unknown): string {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) {
+    return JSON.stringify(output) ?? String(output)
+  }
+  const { text, images } = splitRealImages(output)
+  if (images === undefined) return text
+  const descriptor = imageDescriptor(images)
+  return text.length > 0 ? text + descriptor : descriptor.trimStart()
+}
+
+function modelVisibleBytes(output: unknown): number {
+  return Buffer.byteLength(modelVisibleText(output), "utf-8")
+}
+
+// A replacement is assembled from a retained head/tail PLUS a notice whose own
+// byte cost (it carries the omitted-byte count and the spill path) is only known
+// once the retained size is — so rather than guess it, this measures the REAL
+// candidate and shrinks the retainer budget by the overage. Measured to converge
+// in two rounds on ordinary text; more than a handful of rounds means
+// pathological JSON escaping (up to 6 bytes per input byte), and then `null` is
+// returned and the caller keeps the original (atom (iv)).
+const MAX_FIT_ROUNDS = 8
+
+/** Fit a replacement inside `cap` model-visible bytes: `assemble(budget)` runs
+ *  the retainer at `budget` and returns the real candidate. `null` = no
+ *  replacement fits. */
+function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unknown | null {
+  let budget = cap
+  for (let round = 0; round < MAX_FIT_ROUNDS; round++) {
+    if (budget < 1) return null
+    const candidate = assemble(budget)
+    const bytes = modelVisibleBytes(candidate)
+    if (bytes <= cap) return candidate
+    budget -= bytes - cap
+  }
+  return null
+}
+
 /** registry 級統一落盤（opencode/dsh spill policy 吸收）。string 超限 → 截斷字串 + spill notice
  *  （notice 內含完整路徑）；object 超限 → { output, outputPaths, spill } 信封。**core-tools 零改動**
  *  ——core-tools 的 tools/execute cascade 縫（guard-timeout 先例）是唯一接入點。 */
@@ -37,24 +127,43 @@ export function createOutputSpillGuard(_ctx: PluginContext, config?: OutputSpill
         // the cascade seam, which is the only place this guard can see it.
         if (d.name === "read") return out
         if (typeof out === "string") {
-          if (Buffer.byteLength(out, "utf-8") <= maxBytes) return out
-          const r = createTextRetainer({ maxBytes, mode: "headTail" })
-          r.push(out)
-          const kept = r.finish()
+          // Atom (ii): what the model sees for a string result is the
+          // authority's JSON-quoted form, so that — not the raw byte length —
+          // is what the cap is checked and measured against.
+          if (modelVisibleBytes(out) <= maxBytes) return out
           const path = await store.saveText(out, `${d.name}-output`)
-          return kept.text + "\n" + spillNotice(kept.omittedBytes, path)
+          // Atoms (i) and (iv): the notice is inside the budget this loop
+          // measures, and a fit that cannot be found keeps the original.
+          return fitWithinCap(maxBytes, (budget) => {
+            const r = createTextRetainer({ maxBytes: budget, mode: "headTail" })
+            r.push(out)
+            const kept = r.finish()
+            return kept.text + "\n" + spillNotice(kept.omittedBytes, path)
+          }) ?? out
         }
-        const json = JSON.stringify(out)
-        if (Buffer.byteLength(json, "utf-8") <= maxBytes) return out
-        const r = createTextRetainer({ maxBytes, mode: "headTail" })
-        r.push(json)
-        const kept = r.finish()
-        const path = await store.saveText(json, `${d.name}-output`)
-        return {
-          output: kept.text + "\n" + spillNotice(kept.omittedBytes, path),
-          outputPaths: [path],
-          spill: { omittedBytes: kept.omittedBytes, label: d.name },
-        }
+        // Atom (ii), both halves: the authority counts the envelope in full and
+        // a real `images` array at descriptor size — so a 10 MiB `read_image`
+        // result passes through here untouched instead of being spilled into a
+        // replacement that deletes the picture and puts base64 in its place.
+        if (modelVisibleBytes(out) <= maxBytes) return out
+        // The text a spill can bound is the authority's text: with a real
+        // `images` array in play the base64 is not text, and re-retaining it
+        // would put a wall of it back in front of the model.
+        const { text, images } = splitRealImages(out as object)
+        const path = await store.saveText(text, `${d.name}-output`)
+        const envelope = fitWithinCap(maxBytes, (budget) => {
+          const r = createTextRetainer({ maxBytes: budget, mode: "headTail" })
+          r.push(text)
+          const kept = r.finish()
+          return {
+            output: kept.text + "\n" + spillNotice(kept.omittedBytes, path),
+            outputPaths: [path],
+            spill: { omittedBytes: kept.omittedBytes, label: d.name },
+            // Atom (iii): carried through, so `deriveMessages` still finds them.
+            ...(images !== undefined ? { images } : {}),
+          }
+        })
+        return envelope ?? out
       })
     },
   }
