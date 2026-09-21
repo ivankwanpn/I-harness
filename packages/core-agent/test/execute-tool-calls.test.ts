@@ -322,6 +322,20 @@ describe("executeToolCalls scheduler", () => {
     ).rejects.toThrow("agent aborted")
     const results = session.events.filter((e) => e.type === "tool/result") as { output: { code?: string } }[]
     expect(results).toHaveLength(1)
+    // THE KEY'S EXISTENCE FIRST — this is the only red-first assertion here.
+    // `TOOL_ABORTED_MID_FLIGHT` and the fill's `code` value read the SAME
+    // binding, so before the work landed BOTH sides were `undefined` and the
+    // equality below passed (`undefined === undefined`; measured by T1: a
+    // missing named export resolves to `undefined` under vitest rather than
+    // throwing). An absent key and a key whose value is `undefined` are
+    // different facts, and only `Object.hasOwn` tells them apart.
+    expect(Object.hasOwn(results[0]!.output, "code")).toBe(true)
+    // Pin the constant's LITERAL once. The assertion above and the producer are
+    // the same binding, so a value swap (the code re-valued to another code) is
+    // invisible to this file; T1's review measured exactly that — the
+    // prescribed swap left THIS test green while two value-comparing siblings
+    // reddened. This line is what makes the value itself part of the test.
+    expect(TOOL_ABORTED_MID_FLIGHT).toBe("TOOL_ABORTED_MID_FLIGHT")
     expect(results[0]!.output.code).toBe(TOOL_ABORTED_MID_FLIGHT)
   })
 
