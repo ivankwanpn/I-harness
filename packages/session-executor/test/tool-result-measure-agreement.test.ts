@@ -29,17 +29,17 @@ import { createOutputSpillGuard } from "@i-harness/output-retention"
 // write happens iff the guard's measure exceeded the cap, and the assertions
 // can tell "untouched because it fits" from "untouched because nothing fits".
 //
-// THE CORPUS HAS FOUR MEMBERS — a plain string, a real `images` array, a mixed
-// object, an empty `images` array — and one KNOWN GAP, stated rather than
-// faked. The authority is defensive about a malformed (non-array) `images`
-// member on persisted events, and this corpus cannot reach that branch: `append`
-// THROWS for every non-array member (`image attachment: images must be an
-// array` — null, "nope", {}, 0, false all measured), and the branch is
-// reachable only by reading a log back (`fromJSONL`, or pushing the event
-// directly). A corpus driven through `append` would throw instead of compare.
-// So the non-array `images` branch has NO cross-package agreement evidence; the
-// unit tests on each side are all of it. Building that fixture is a separate
-// unit of work, not a test's convenience.
+// THE CORPUS HAS SEVEN MEMBERS: a plain string, a real `images` array, a mixed
+// object, an empty `images` array, and the three malformed (non-array) `images`
+// members a persisted log can carry — null, a string, an object. The last three
+// are the authority's defensive branch (M14), and they need a DIFFERENT ROAD IN:
+// `append` VALIDATES and throws for every non-array member (`image attachment:
+// images must be an array` — null, "nope", {}, 0, false all measured), so those
+// rows push the event directly, which is the road a log read back takes
+// (`fromJSONL` does the same). The rule under test is applied on the way OUT,
+// by `deriveMessages`, which is unchanged by the road in. All seven agree.
+const VIA_APPEND = "append" // the validating road: the normal producer path
+const VIA_PUSH = "push"     // the persisted-log road: skips append's validation
 
 const mkdir = () => mkdtempSync(join(tmpdir(), "m5-agree-"))
 
@@ -49,20 +49,28 @@ const image = (rawBytes: number, extra: Record<string, unknown> = {}) => ({
   ...extra,
 })
 
-const CORPUS: Array<[string, unknown]> = [
-  ["a plain string", "The quick brown fox jumps over the lazy dog. ".repeat(40)],
-  ["a real images array", { images: [image(4_000, { name: "shot.png", width: 12, height: 7 })] }],
-  ["a mixed object", { note: "N".repeat(600), images: [image(4_000)] }],
-  ["an empty images array", { images: [] }],
+const CORPUS: Array<[string, unknown, typeof VIA_APPEND | typeof VIA_PUSH]> = [
+  ["a plain string", "The quick brown fox jumps over the lazy dog. ".repeat(40), VIA_APPEND],
+  ["a real images array", { images: [image(4_000, { name: "shot.png", width: 12, height: 7 })] }, VIA_APPEND],
+  ["a mixed object", { note: "N".repeat(600), images: [image(4_000)] }, VIA_APPEND],
+  ["an empty images array", { images: [] }, VIA_APPEND],
+  ["a malformed images member (null)", { images: null }, VIA_PUSH],
+  ["a malformed images member (a string)", { images: "nope" }, VIA_PUSH],
+  ["a malformed images member (an object)", { images: { mediaType: "image/png" } }, VIA_PUSH],
 ]
 
 /** The model-visible text, through the AUTHORITY and only through it: the tool
  *  message `deriveMessages` hands the model. The function is module-private, so
  *  the projection is the only observable form it has. */
-function authorityText(output: unknown): string {
+function authorityText(output: unknown, via: typeof VIA_APPEND | typeof VIA_PUSH): string {
   const session = createSession()
   append(session, { type: "tool/call", callId: "c0", name: "corpus", args: {} } as never)
-  append(session, { type: "tool/result", callId: "c0", name: "corpus", output } as never)
+  const result = { type: "tool/result", callId: "c0", name: "corpus", output } as never
+  // Deliberately NOT a try/catch around append: the road is declared per row, so
+  // a row marked VIA_APPEND that starts throwing is a red test rather than a
+  // silently different drive.
+  if (via === VIA_APPEND) append(session, result)
+  else session.events.push(result)
   const tool = deriveMessages(session).find((m) => m.role === "tool")
   expect(tool).toBeDefined() // the corpus member reached the model at all
   return tool!.content as string
@@ -92,9 +100,9 @@ async function guardAt(output: unknown, cap: number): Promise<{ out: unknown; fi
 const MIXED = "a mixed object"
 
 describe("the guard's measure agrees with core-session's toolResultText", () => {
-  for (const [label, output] of CORPUS) {
+  for (const [label, output, via] of CORPUS) {
     it(`agrees on ${label}`, async () => {
-      const text = authorityText(output)
+      const text = authorityText(output, via)
       const cap = Buffer.byteLength(text, "utf-8")
       // At the cap the AUTHORITY itself computed, the guard must consider the
       // result within budget: untouched, and no spill file written.
