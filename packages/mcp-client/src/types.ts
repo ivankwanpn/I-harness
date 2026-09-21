@@ -39,6 +39,16 @@ export interface McpTokenStore {
   put(key: string, data: unknown): Promise<void>
 }
 
+// M6-D1: the catalogue drain's DEFENSIVE bounds. The drain follows cursors the
+// SERVER supplies, so without a bound a broken or hostile server spends
+// unbounded work. These are not policy numbers: each sits orders of magnitude
+// above a real catalogue, and sync.test.ts pins that (the stdio stub's 1 tool,
+// a synthetic 100 — both far below MAX_TOOL_ITEMS).
+export const MAX_TOOL_ITEMS = 10_000
+export const MAX_CURSOR_LENGTH = 4_096
+/** Extracted by name from bridge.ts's inline `100`; the value is unchanged. */
+export const MAX_TOOL_PAGES = 100
+
 export type McpServerConfig =
   | {
       transport: "stdio"
@@ -48,6 +58,8 @@ export type McpServerConfig =
       env?: Record<string, string>
       cwd?: string
       toolCallTimeoutMs?: number
+      /** M6-D1: cap on tools LISTED across the drain's pages (blocked ones included). Default MAX_TOOL_ITEMS. */
+      catalogMaxItems?: number
       failOnStartupError?: boolean
       reconnect?: McpReconnectConfig
       /** M26-B1b: roots 設定——絕對路徑 → file://，http(s) URL 原樣，相對路徑對 cwd 解析。 */
@@ -63,6 +75,8 @@ export type McpServerConfig =
       url: string
       headers?: Record<string, string>
       toolCallTimeoutMs?: number
+      /** M6-D1: cap on tools LISTED across the drain's pages (blocked ones included). Default MAX_TOOL_ITEMS. */
+      catalogMaxItems?: number
       failOnStartupError?: boolean
       reconnect?: McpReconnectConfig
       auth?: McpOAuthConfig
@@ -92,6 +106,9 @@ export function validateMcpConfig(config: McpServerConfig): void {
   }
   if (config.toolCallTimeoutMs !== undefined && (!Number.isInteger(config.toolCallTimeoutMs) || config.toolCallTimeoutMs <= 0)) {
     throw new Error(`mcp-client: toolCallTimeoutMs must be a positive integer (got ${config.toolCallTimeoutMs})`)
+  }
+  if (config.catalogMaxItems !== undefined && (!Number.isInteger(config.catalogMaxItems) || config.catalogMaxItems <= 0)) {
+    throw new Error(`mcp-client: catalogMaxItems must be a positive integer (got ${config.catalogMaxItems})`)
   }
   const rc = config.reconnect
   if (rc !== undefined) {
