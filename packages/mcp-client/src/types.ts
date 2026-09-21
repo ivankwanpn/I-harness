@@ -60,6 +60,9 @@ export type McpServerConfig =
       toolCallTimeoutMs?: number
       /** M6-D1: cap on tools LISTED across the drain's pages (blocked ones included). Default MAX_TOOL_ITEMS. */
       catalogMaxItems?: number
+      /** M6-D2: overall deadline for the catalogue drain (one budget for the whole cursor walk).
+       *  Each page is bounded by the REMAINING total; default 60_000. */
+      catalogTimeoutMs?: number
       failOnStartupError?: boolean
       reconnect?: McpReconnectConfig
       /** M26-B1b: roots 設定——絕對路徑 → file://，http(s) URL 原樣，相對路徑對 cwd 解析。 */
@@ -77,6 +80,9 @@ export type McpServerConfig =
       toolCallTimeoutMs?: number
       /** M6-D1: cap on tools LISTED across the drain's pages (blocked ones included). Default MAX_TOOL_ITEMS. */
       catalogMaxItems?: number
+      /** M6-D2: overall deadline for the catalogue drain (one budget for the whole cursor walk).
+       *  Each page is bounded by the REMAINING total; default 60_000. */
+      catalogTimeoutMs?: number
       failOnStartupError?: boolean
       reconnect?: McpReconnectConfig
       auth?: McpOAuthConfig
@@ -109,6 +115,9 @@ export function validateMcpConfig(config: McpServerConfig): void {
   }
   if (config.catalogMaxItems !== undefined && (!Number.isInteger(config.catalogMaxItems) || config.catalogMaxItems <= 0)) {
     throw new Error(`mcp-client: catalogMaxItems must be a positive integer (got ${config.catalogMaxItems})`)
+  }
+  if (config.catalogTimeoutMs !== undefined && (!Number.isInteger(config.catalogTimeoutMs) || config.catalogTimeoutMs <= 0)) {
+    throw new Error(`mcp-client: catalogTimeoutMs must be a positive integer (got ${config.catalogTimeoutMs})`)
   }
   const rc = config.reconnect
   if (rc !== undefined) {

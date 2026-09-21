@@ -49,7 +49,10 @@ export function resolveRootUris(roots: string[]): string[] {
 }
 
 export interface ConnectedMcpClient {
-  listTools(cursor?: string): Promise<{ tools: McpTool[]; nextCursor?: string }>
+  /** M6-D2: `opts` is optional — the drain passes the page's bound (the
+   *  remaining total budget) through to the SDK request; every pre-existing
+   *  fake/implementation that omits it keeps compiling unchanged. */
+  listTools(cursor?: string, opts?: { timeout?: number; maxTotalTimeout?: number }): Promise<{ tools: McpTool[]; nextCursor?: string }>
   callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult>
   listResources(server?: string, signal?: AbortSignal): Promise<unknown[]>
   readResource(server: string, uri: string, signal?: AbortSignal): Promise<unknown>
@@ -216,10 +219,13 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
 
     return {
       // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).
-      async listTools(cursor) {
+      // M6-D2: the drain's per-page bound travels as the SDK's third argument
+      // (RequestOptions); absent opts keep the SDK's own default timeout.
+      async listTools(cursor, opts) {
         const response = await guardAuth(() => client.request(
           { method: "tools/list", params: cursor !== undefined ? { cursor } : {} } as never,
           ListToolsResultSchema,
+          opts,
         ))
         return {
           tools: response.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),
