@@ -46,48 +46,54 @@ describe("the skills catalogue through the assembly (M6 C1)", () => {
     // test. `$IH_CONFIG_DIR` is this repo's isolation contract (e2e/helpers.ts:29);
     // without pinning it the snapshot would carry the developer's own skills.
     process.env.IH_CONFIG_DIR = home
-    const session = createSession()
-    const assembly = await createSessionAssembly({
-      workspace: ws,
-      session,
-      model: createMockClient([{ role: "assistant", text: "ok" }]),
-      approveAll: true,
-    })
+    // The OUTER finally owns the env var, not just the assertions: a mount that
+    // throws must not leave this worker pinned to a temp home that the inner
+    // cleanup then deletes — later files sharing the worker would read it.
     try {
-      const step = async (): Promise<void> => {
-        await assembly.ctx.emit("agent/pre-step", { task: "step", session: assembly.session })
-      }
-
-      await step()
-      const first = snapshots(session)
-      expect(first).toHaveLength(1)
-      const text = first[0]!
-      expect(text).toContain("## skills\n\n- `alpha` — Alpha skill")
-      expect(text.indexOf("## instructions")).toBeGreaterThanOrEqual(0)
-      expect(text.indexOf("## instructions")).toBeLessThan(text.indexOf("## skills"))
-      // Harness bookkeeping, not something the user typed (M59's internal flag,
-      // the same one every runtime-context snapshot carries).
-      expect(session.events.find((e) => e.type === "user/message")).toMatchObject({
-        type: "user/message",
-        internal: true,
-        source: { kind: "plugin", plugin: RUNTIME_CONTEXT_SOURCE_PLUGIN },
+      const session = createSession()
+      const assembly = await createSessionAssembly({
+        workspace: ws,
+        session,
+        model: createMockClient([{ role: "assistant", text: "ok" }]),
+        approveAll: true,
       })
+      try {
+        const step = async (): Promise<void> => {
+          await assembly.ctx.emit("agent/pre-step", { task: "step", session: assembly.session })
+        }
 
-      // The set is unchanged: the next boundary appends NOTHING.
-      const afterFirstStep = session.events.length
-      await step()
-      expect(session.events.length).toBe(afterFirstStep)
-      expect(snapshots(session)).toHaveLength(1)
+        await step()
+        const first = snapshots(session)
+        expect(first).toHaveLength(1)
+        const text = first[0]!
+        expect(text).toContain("## skills\n\n- `alpha` — Alpha skill")
+        expect(text.indexOf("## instructions")).toBeGreaterThanOrEqual(0)
+        expect(text.indexOf("## instructions")).toBeLessThan(text.indexOf("## skills"))
+        // Harness bookkeeping, not something the user typed (M59's internal flag,
+        // the same one every runtime-context snapshot carries).
+        expect(session.events.find((e) => e.type === "user/message")).toMatchObject({
+          type: "user/message",
+          internal: true,
+          source: { kind: "plugin", plugin: RUNTIME_CONTEXT_SOURCE_PLUGIN },
+        })
 
-      // One new skill ⇒ exactly one new snapshot, carrying both lines.
-      writeSkill(ws, "beta", "Beta skill")
-      await step()
-      const all = snapshots(session)
-      expect(all).toHaveLength(2)
-      expect(all[1]).toContain("- `alpha` — Alpha skill")
-      expect(all[1]).toContain("- `beta` — Beta skill")
+        // The set is unchanged: the next boundary appends NOTHING.
+        const afterFirstStep = session.events.length
+        await step()
+        expect(session.events.length).toBe(afterFirstStep)
+        expect(snapshots(session)).toHaveLength(1)
+
+        // One new skill ⇒ exactly one new snapshot, carrying both lines.
+        writeSkill(ws, "beta", "Beta skill")
+        await step()
+        const all = snapshots(session)
+        expect(all).toHaveLength(2)
+        expect(all[1]).toContain("- `alpha` — Alpha skill")
+        expect(all[1]).toContain("- `beta` — Beta skill")
+      } finally {
+        await assembly.dispose()
+      }
     } finally {
-      await assembly.dispose()
       if (previousHome === undefined) delete process.env.IH_CONFIG_DIR
       else process.env.IH_CONFIG_DIR = previousHome
       rmWorkspaceSync(ws)
