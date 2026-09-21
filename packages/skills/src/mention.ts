@@ -11,10 +11,13 @@
 //     case-insensitively would hand the caller a name that `skill_get` then
 //     refuses — a hit the rest of the stack cannot honour is worse than the
 //     miss it replaces.
-//   - no PARTIAL matches, structurally: the capture consumes the whole
+//   - no partial match WITHIN the name alphabet: the capture is the maximal
 //     `[a-z0-9-]` run after the sigil, and a registered name is exactly such a
 //     run, so the capture is either a name the registry has or a token it does
-//     not (`$deploy-dbx` captures `deploy-dbx`, never `deploy-db`).
+//     not (`$deploy-dbx` captures `deploy-dbx`, never `deploy-db`). It ends at
+//     the first character OUTSIDE that alphabet, so `$deploy_db` captures
+//     `deploy` — and a registered `deploy` IS announced; the cut is the
+//     alphabet's edge, not a word boundary.
 //   - `isValidSkillName` (registry.ts:76-78) is NOT called: `list()` only ever
 //     yields names that already passed it, so a second grammar check could only
 //     disagree with the registry it just read.
