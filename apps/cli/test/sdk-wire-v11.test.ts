@@ -218,6 +218,10 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       try {
+        // v3 (M68 batch B): initialize is the GATE — the handshake must come
+        // before the first method, and `run` below is one.
+        await client.initialize()
+
         // control: before the rebind the route's declared wire is what this
         // session speaks — so the switch below is attributable to the rebind.
         await client.run({ sessionId: "s1", prompt: "before" })
@@ -282,6 +286,9 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       try {
+        // v3 (M68 batch B): initialize is the GATE — handshake before the
+        // first method call (`session/model/set` here).
+        await client.initialize()
         await expect(client.setSessionModel("s1", {
           provider: "fixture",
           model: "fixture-model",
@@ -352,12 +359,13 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
         env: { IH_CONFIG_DIR: canonicalConfigDir },
       })
       try {
-        // handshake: v1.1 capability rows (protocolVersion stays 2)
+        // handshake: v1.1 capability rows (protocolVersion is 3 since M68
+        // batch B — the v1.1 rows themselves are unchanged)
         const info = (await client.request("initialize", {})) as {
           protocolVersion: number
           capabilities: Record<string, string[]>
         }
-        expect(info.protocolVersion).toBe(2)
+        expect(info.protocolVersion).toBe(3)
         expect(info.capabilities["session-cancel"]).toEqual(["1"])
         expect(info.capabilities["session-rewind"]).toEqual(["1"])
         expect(info.capabilities["session-create"]).toEqual(["1"])
