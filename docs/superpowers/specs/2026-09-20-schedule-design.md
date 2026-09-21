@@ -5,6 +5,8 @@
 **前置：** `docs/handoff/2026-09-20-queued-work.md` §4（W3 的九個互鎖）· `2026-09-15-backend-polish-roadmap-design.md` §5 **Q2**（2026-09-20 已裁定：**否**）
 **這不是施工計畫。** 本文件不連任何線；計畫等這份被核准之後才寫。
 
+> **計畫已執行（2026-09-21，`m66`）：** `docs/superpowers/plans/2026-09-21-schedule-delivery.md` —— 六個任務全數落地。提交：引擎接縫 `742bc96f` · in-flight 守衛 `700e81b9` · 批次 `b0d29271` · 三個工具 `3ee94dcd` · assembly 掛載 `a7a84a7a` · 收尾（torn-tail 量測、transcript 案例）`a4d07e63`。**執行期間量到的更正已就地補在這份文件裡**：§3.2.1（pump 路徑的訊息不帶 `source`）、§3.4（torn tail 的實測）、§4.6（重測的行號）。
+
 > **行號重測（2026-09-21，`m66`，於 `8dbca025`）：** 本文件釘在 `c8c920b9`；在它之後的第 88 個提交上，把**每一條 `檔案:行號` 引用**重新對照過。**4 處漂移，已就地更正**：`core-agent/src/index.ts` 的 step 邊界區 **+42 行**（`:221/:222/:233/:235` → `:263/:264/:275/:277`）；`core-tools/src/index.ts` 的 `ToolRegistry` 介面 **+79 行**（`:119-134` → `:198-213`）；`run.ts` 的 `finally` 段（原 `:769` 是 `assembly?.dispose()` —— 現在 `:762` 是 `} finally {`、`:784` 是 `dispose`）；`run.ts:570-571` 的 hooks「缺席即關」註解 → `:579-580`。**1 處精度修正（非漂移）**：`settings/src/index.ts` 的 guard 本體在 `:1437`（`:1410-1418` 只是那段註解；該檔自 `c8c920b9` 起 0 個提交）。**其餘全部重測為真**：6 條 grep 指令的逐行輸出（1／6／4／0／3／0 行）、`§6.3.1` 的四個 byte 數（重算 192／77／79／119 逐字相同）與 229 chars → 62 tokens（`ceil(229/4) + 4`）。
 
 ---
@@ -211,6 +213,8 @@ append(this.session, {
 
 **沒有 `internal`。** 所以那則訊息**同時是模型可見與使用者可見的**，而 `source` 讓日誌不必假稱使用者打過它。**「兩者都要」就是這條路徑的預設行為，零額外成本。**
 
+> **⚠ 更正（2026-09-21，`m66`，執行期間量到的）：上面那條 `source` 只描述 claim 路徑。** 提醒如果走到 **pump 路徑**（§4.4：turn 在 claim 前結束 ⇒ executor 的 pump 把 admission 跑成一個新 turn），那則 `user/message` 是 **`agent.run` 直接寫的普通訊息** —— `append(deps.session, { type: "user/message", text: message })`（`packages/core-agent/src/index.ts:252`，函式在 `:246`；pump 的呼叫在 `packages/core-agent/src/executor.ts:103` 的 `await deps.agent.run(next.text, sig)`）—— **不帶 `source`**。`claimAtStepBoundary`（`packages/core-session/src/inbox.ts:106`）是這個 sourced 形狀**唯一的生產者**。**O1 不受影響**：兩條路徑都**沒有 `internal`**，所以「使用者看得到」兩條都成立；但 pump 路徑上「日誌誠實」由**提醒文字本身**承擔（`[SCHEDULE REMINDER]` framing），不是由 `source` 承擔。**兩個面各有測試**：模型面與 pump 路徑的 `internal` 缺席在 T5 的掛載測試，使用者面在 `apps/cli/test/sessions.test.ts` 的 `renderTranscript` 案例（`❯ [SCHEDULE REMINDER]`）。
+
 **⇒ 這也給 §3.2 的選擇補上一個先前沒看到的理由：** `intent: "system"` ＋ `steer` **就是**「模型看到、使用者看到、日誌誠實」三件事同時成立的那個組合。`followup` 做不到（日誌說謊）；一個新的通知型別則要從零建。
 
 **唯一會讓它變成「只給模型」的東西是有人加上 `internal`。** 樹裡加它的只有兩處，兩處都是刻意的模型專用提示（`guard-repeat-tool/src/index.ts:76`、`runtime-context/src/index.ts:57`）：
@@ -275,6 +279,16 @@ await handle.sync()
 > **同一個 backend append**（失敗 ⇒ 兩筆都不在），而記憶體／鏡像／訂閱者三者一致。
 > **殘餘視窗**：例外路徑 both-or-neither；torn write 由 repair 截到最後一條完整行，理論上可留下 dispatch
 > 而丟掉 admitted —— 那是 jsonl 中每一組相鄰事件對共有的曝光（promote ＋ user/message 同型），不是排程特有。
+>
+> **量到的（2026-09-21，`m66`，不再是「理論上」）：** 把 `[dispatch, admitted]` 的兩事件批次寫進真實的
+> jsonl 後端（一個 348-byte 的檔：header 75 ＋ dispatch 行 79 ＋ admitted 行 191，各帶一個換行），
+> 再把檔**位元組級截在第二條的中間**（348 → 251；admitted 行自第 156 byte 起），跑 `repair` 之後留下的
+> **就是 header ＋ dispatch 一條（156 bytes），admitted 消失** —— 「截到最後一條完整行」在真實後端上
+> 的實際長相，逐條斷言在 `packages/session-persistence-jsonl/test/jsonl.test.ts`（"torn MID-SECOND-LINE
+> keeps the dispatch and drops the admitted (measured)"）。**⇒ 這一條是「把視窗寫成事實」，不是缺陷修復：
+> 量到的結果與本節預期一致**（沒有意外的一側），而它把代價說得更精確 —— torn 的那一刀落在 **admitted**
+> 上時，durable 的 dispatch 留著，而修好的 log 裡**沒有 admission**（`pending()` 折的是日誌裡的
+> `agent/input/admitted`，`core-session/src/inbox.ts:83`），所以那一則提醒不會再成為 pending input。
 
 ### 3.5 `inputId` 必須是**每一次 occurrence**，不是每一個 record
 
@@ -341,6 +355,8 @@ const messages = deriveMessages(deps.session) // :277
 
 **還有一個量得到的邊界 —— 它已經被 O2 的裁定涵蓋，所以它是決定，不是問題：** 如果那個 turn 在它被 claim 之前就結束了，它會留在 `pending()` 裡，而 executor 的 pump 迴圈會把它當成 `pending()[0]` **跑成一個新的 turn**（`executor.ts:89-111` 的 `for (;;)`，`submit()` 在 `:131` 是 pump 唯一的呼叫點）。
 
+**⚠ 量到的（2026-09-21，`m66`）：這條 pump 路徑寫進日誌的 `user/message` 不帶 `source` 標記** —— 它是 `agent.run` 直接寫的（`core-agent/src/index.ts:252`），而 §3.2.1 的 `source` 形狀只有 `claimAtStepBoundary` 生產。**O1 的「使用者看得到」兩條路徑都成立（都沒有 `internal`）；pump 路徑上日誌的誠實由提醒文字自己承擔。** 詳見 §3.2.1 的更正註記。
+
 **O2 裁定「等」，而這就是「等」在 turn 邊界上的樣子：**
 
 - **它不是自啟。** pump 只由 `submit()` 啟動，所以沒有使用者（或宿主）的 submit，就沒有 pump。**規則的不變式「閒置不動」完好。**
@@ -359,7 +375,9 @@ const messages = deriveMessages(deps.session) // :277
 
 ### 4.6 掛在哪裡、以及它讀什麼（I2 的收尾）
 
-**決定：驅動器掛在 assembly 裡**（`createSessionAssembly`，`assembly.ts:382`；生命週期由 `dispose()` 收，`assembly.ts:322-325`，實作 `:1174`；CLI 的界線是 `run.ts:486` → `finally`（`:762`）裡的 `assembly?.dispose()`（`:784`））。三個接縫變成：
+**決定：驅動器掛在 assembly 裡**（`createSessionAssembly`，`assembly.ts:384`；生命週期由 `dispose()` 收（介面 `assembly.ts:324-327`），實作 `:1206`；CLI 的界線是 `run.ts:486` → `finally`（`:762`）裡的 `assembly?.dispose()`（`:784`））。三個接縫變成：
+
+> **行號重測（2026-09-21，`m66`，於 `a4d07e63`）：** 本句的三個 `assembly.ts` 行號**已就地更正** —— `createSessionAssembly` `:382` → **`:384`**（＋2）；`dispose()` 的介面 `:322-325` → **`:324-327`**（＋2）；實作 `:1174` → **`:1206`**（＋32，T5 的排程掛載插在 `:815` 之後）。`run.ts` 的三處重測**仍然正確**（`:486`／`:762`／`:784`）。**本文件其餘行號未在這一輪重測**：它們是 `8dbca025` 的快照，而 T1–T5 的實作又移動了其中一些（例如 §5 的 `driver.ts:86`，今天在 `:119`）—— 引用前當場 `grep -n`。
 
 | 接縫 | 裝什麼 |
 |---|---|

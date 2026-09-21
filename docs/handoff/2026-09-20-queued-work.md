@@ -58,7 +58,7 @@ grep -n "<你引用的符號>" <檔案>      # 行號是基準，不是事實
 |---|---|---|---|---|
 | **W1** | **修 settings watcher race** | 三 | **✅ 完成**（`65838d8b`，修正輪中） | 無 |
 | **W2** | 修 SDK 的訂閱洩漏 | 三 | **✅ 完成**（`2bbf0d20`；**照修但降級** —— 契約已釘住、路徑仍未武裝，見 §3） | 無 |
-| **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，629 行 —— **2026-09-20 owner 核准**） | 無 |
+| **W3** | `schedule` 的 spec | 一 | **✅ 完成並核准**（`docs/superpowers/specs/2026-09-20-schedule-design.md`，**629 行 → 663 行**（2026-09-21 重測，`m66`：行號重測註 ＋ 執行期間的三則更正）—— **2026-09-20 owner 核准**） | 無 |
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
 | **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（**記錄：`docs/handoff/2026-09-20-m5-t4-block1-soft-failure-envelope.md`**）· **✅ block ②（參數 schema）完成**（`4022f607`…`0bb85599`，**13 個提交**，15 程式檔 +1488/−26；**終審 `SHIP WITH FIXES`**，五件已修；**記錄：`docs/handoff/2026-09-20-m5-t4-block2-argument-schema.md`**）。**驗這一塊用 `pnpm verify:all`**（block ② 加的五步閘門）—— `pnpm -r --no-bail test` 單獨跑**不是**閘門。**✅ block ③（界）完成**（`6ad4685`…`7eb8333`，**23 個提交**，14 檔 **+1,071／−64**；**終審 `SHIP WITH FIXES`**，兩輪修正各自再複審一次；**記錄：`docs/handoff/2026-09-20-m5-t4-block3-output-bound.md`**）—— **⚠ 接手前先讀那份記錄的 B1**：「界掛在 CLI 上」**只對 `runHeadless` 為真**，`sdk` 與 `acp` 兩條線今天**沒有界**（指名的界線，不是遺漏）。**M5／T4 三塊到此完成。** | 無（**M5/T4 完成**；**B1 的兩條線是另一個單元**） |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
@@ -365,7 +365,7 @@ backlog §6.1：**它是五個零消費者套件裡唯一不需要前端的**，
 
 ### ✅ **W3 已解除 —— 而解除它的不是新資料，是 Q2 的答案**
 
-**Q2 由 owner 裁定「否」（2026-09-20），所以 §302-313 的閘門消失** —— spec 走的是那一張表裡的第二列（**「只投遞進一個已經在跑的 turn」**），而它整份寫完了：`docs/superpowers/specs/2026-09-20-schedule-design.md`，**629 行，owner 已核准**。
+**Q2 由 owner 裁定「否」（2026-09-20），所以 §302-313 的閘門消失** —— spec 走的是那一張表裡的第二列（**「只投遞進一個已經在跑的 turn」**），而它整份寫完了：`docs/superpowers/specs/2026-09-20-schedule-design.md`，**629 行（2026-09-20）→ 663 行（2026-09-21 重測，`m66`），owner 已核准**。
 
 **而它比原本的框架多了三條推翻**（spec §1）：獨佔機制**存在**（`fs-lock` 租約，CLI 開著）、`schedule` 群組是**第四個**零來源的位置、以及 **IH 沒有 dsh 的維護相位**（`whenIdle`／`runMaintenance` → **0 命中**）⇒ **dsh 的驅動器不是「搬過來」就好**。
 
@@ -892,7 +892,7 @@ return { …, status: settled?.status ?? "unknown",
 ```
 W1  修 settings watcher race        ← ✅ `65838d8b`（＋修正 `2dae6439`／`361358f0`）
 W2  修 SDK 訂閱洩漏                 ← ✅ `2bbf0d20` ＝照修但降級：契約釘住、路徑未武裝（可達性量到「不可達」）
-W3  schedule 的 spec                ← ✅ 629 行、owner 2026-09-20 核准（`30fbcd2`）—— **而它只是 spec：一行實作都沒有**
+W3  schedule 的 spec                ← ✅ 629 → **663 行**（2026-09-21 重測）、owner 2026-09-20 核准（`30fbcd2`）—— **而實作已於 2026-09-21 落地**：`742bc96f`…`a4d07e63`（六個任務，見 §9.2 A1）
 W4  M5/T2 第二半                    ← ✅ `b36be755`（修正 `c621567c`）
 W5  M5/T4 工具管線                  ← ✅ 三塊：① `99434417` · ② `4022f607`…`0bb85599` · ③ `6ad4685`…`7eb8333`
 W10 前景 bash 的 120 秒死線         ← ✅ `b8bd78b0`（修正 `0794fbe7`）
@@ -930,7 +930,7 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 
 | # | 什麼 | 離「可以寫計畫」多遠 |
 |---|---|---|
-| **A1** | **`schedule` 的實作**（spec 已核准） | **最近的一項。** **✅ 行號重測已完成**（2026-09-21，`m66`，於 `8dbca025`）：**4 處漂移已就地更正**（`core-agent/src/index.ts` 的 step 邊界區 **+42**、`core-tools/src/index.ts` 的 `ToolRegistry` **+79**、`run.ts` 的 `finally` 段、`run.ts` 的 hooks「缺席即關」註解）＋ **1 處精度修正**（`settings` 的 in-flight guard 本體在 `:1437`）。**其餘全部重測為真**（含 6 條 grep 指令的逐行輸出與 §6.3.1 的 byte／token 重算：192／77／79／119 與 229→62）。**⇒ 下一步：寫計畫。** **而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
+| **A1** | **`schedule` 的實作**（spec 已核准） | **✅ 完成**（2026-09-21，`m66`）。計畫：`docs/superpowers/plans/2026-09-21-schedule-delivery.md` —— 六個任務全數落地：引擎接縫 `742bc96f` · in-flight 守衛 `700e81b9` · 批次 `b0d29271` · 三個工具 `3ee94dcd` · assembly 掛載 `a7a84a7a` · 收尾（torn-tail 量測、transcript 案例）`a4d07e63`；**文件收尾（spec 的三則更正、本格、allowlist 一筆）載於本提交**。**驗證（本提交前的一次完整跑）：`pnpm verify:all` 五步全綠**（母體 66；`--gate` → `PASS -- no new rows`）。**前置的 ✅ 行號重測**（2026-09-21，於 `8dbca025`）：**4 處漂移已就地更正**（`core-agent/src/index.ts` 的 step 邊界區 **+42**、`core-tools/src/index.ts` 的 `ToolRegistry` **+79**、`run.ts` 的 `finally` 段、`run.ts` 的 hooks「缺席即關」註解）＋ **1 處精度修正**（`settings` 的 in-flight guard 本體在 `:1437`）。**其餘全部重測為真**（含 6 條 grep 指令的逐行輸出與 §6.3.1 的 byte／token 重算：192／77／79／119 與 229→62）。**而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
 | **A2** | **W6** —— M3 剩下的 | **要先決定一件事**（見 B1）。而**站點數是 110**（不是文件上的 79），**集中在 `apps/cli`（58）**，而**另外 15 個套件的 52 個站點沒有任何 level 對照表** |
 | **A3** | **W7（M6 廣度）** | **最遠的一項。** 只有 roadmap 一條（沒有 spec、沒有計畫），而 roadmap §1.1 要求**引用的 13 列 triage 進 spec 前對現行 HEAD 重量**（那些量於 **2026-09-11**）。等級 **M** ⇒ 需完整 spec ＋ 計畫 |
 
