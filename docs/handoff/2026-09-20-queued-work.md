@@ -931,8 +931,8 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 | # | 什麼 | 離「可以寫計畫」多遠 |
 |---|---|---|
 | **A1** | **`schedule` 的實作**（spec 已核准） | **✅ 完成**（2026-09-21，`m66`）。計畫：`docs/superpowers/plans/2026-09-21-schedule-delivery.md` —— 六個任務全數落地：引擎接縫 `742bc96f` · in-flight 守衛 `700e81b9` · 批次 `b0d29271` · 三個工具 `3ee94dcd` · assembly 掛載 `a7a84a7a` · 收尾（torn-tail 量測、transcript 案例）`a4d07e63`；**文件收尾（spec 的三則更正、本格、allowlist 一筆）載於本提交**。**驗證（本提交前的一次完整跑）：`pnpm verify:all` 五步全綠**（母體 66；`--gate` → `PASS -- no new rows`）。**前置的 ✅ 行號重測**（2026-09-21，於 `8dbca025`）：**4 處漂移已就地更正**（`core-agent/src/index.ts` 的 step 邊界區 **+42**、`core-tools/src/index.ts` 的 `ToolRegistry` **+79**、`run.ts` 的 `finally` 段、`run.ts` 的 hooks「缺席即關」註解）＋ **1 處精度修正**（`settings` 的 in-flight guard 本體在 `:1437`）。**其餘全部重測為真**（含 6 條 grep 指令的逐行輸出與 §6.3.1 的 byte／token 重算：192／77／79／119 與 229→62）。**而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
-| **A2** | **W6** —— M3 剩下的 | **要先決定一件事**（見 B1）。而**站點數是 110**（不是文件上的 79），**集中在 `apps/cli`（58）**，而**另外 15 個套件的 52 個站點沒有任何 level 對照表** |
-| **A3** | **W7（M6 廣度）** | **最遠的一項。** 只有 roadmap 一條（沒有 spec、沒有計畫），而 roadmap §1.1 要求**引用的 13 列 triage 進 spec 前對現行 HEAD 重量**（那些量於 **2026-09-11**）。等級 **M** ⇒ 需完整 spec ＋ 計畫 |
+| **A2** | **W6** —— M3 剩下的 | **〈排序裁定 2026-09-21：A3 之後〉** **起手單元＝ B1 的裁定備忘** —— 而量到它的實況比 B1 原文大：**§3.3 的 `@i-harness/diagnostics` 套件從未建**（`I_HARNESS_LOG`／`createDiagnostics`／`createRedactor` 全樹 0 命中、`packages/diagnostics` 不存在；2026-09-21 實測）⇒「W6 的形狀」其實是「建不建那塊基礎」，而它按構造強制的 `redactor` 撞上既有的「**沒有已知輸入不建濾網**」裁定（§6）——所以起手要的是裁定，不是接線。**站點數 110（2026-09-21 重量；不是文件上的 79）**，集中在 `apps/cli`（58），而**另外 15 個套件的 52 個站點沒有任何 level 對照表** |
+| **A3** | **W7（M6 廣度）** | **〈排序裁定 2026-09-21：A3 先、A2 後 —— 理由：A2 卡在 B1（上列），而 B1 的實況讓它起手就要設計層裁定；A3 的閘門是純重量，且八源先例整合已完成（D3 矩陣＋ZCode 調研＋兩份 prior-art，逐列「取誰的長」——逐列整合表為本項第一單元的交付物，與重量表同批落地）〉**。只有 roadmap 一條（沒有 spec、沒有計畫），而 roadmap §1.1 要求**引用的 13 列 triage 進 spec 前對現行 HEAD 重量**（那些量於 **2026-09-11**）。等級 **M** ⇒ 需完整 spec ＋ 計畫 |
 
 **B 堆 —— 卡在決定**
 
