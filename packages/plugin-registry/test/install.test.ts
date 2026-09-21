@@ -311,6 +311,24 @@ describe("installPlugin", () => {
     expect(installedText).not.toContain("wsSrv")
   })
 
+  it("an empty .mcp.json server key is skipped with a warn (it would compose the degenerate key plugin:<id>:)", async () => {
+    const sourceDir = await tempDir("inst-mcpempty-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { "": { command: "node", args: [] }, ok: { command: "node", args: [] } } }),
+      "utf8",
+    )
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const servers = await readMcpServers(sourceDir)
+      expect(Object.keys(servers)).toEqual(["ok"])
+      const warns = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warns.some((w) => w.includes("empty name"))).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
   it("a non-string `type` is a malformed config (plugin-invalid), like every other known field", async () => {
     const sourceDir = await tempDir("inst-mcptype-bad-")
     await writeFile(
