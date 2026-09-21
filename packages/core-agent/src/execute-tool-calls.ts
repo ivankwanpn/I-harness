@@ -3,15 +3,17 @@ import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
 import { isPolicyRefusal, ToolArgsError } from "@i-harness/core-tools"
+import {
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_MID_FLIGHT,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+} from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
 
-export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
-export const TOOL_FAILED = "TOOL_FAILED"
-// A call that never started because a SIBLING failed. Deliberately a
-// different code AND a different message from TOOL_ABORTED_BEFORE_DISPATCH:
-// "the user stopped the step" and "a tool in this batch broke" are different
-// facts, and a log that conflates them cannot be read back.
-export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
+// Re-exported from @i-harness/core-tools, which owns the tool-result contract.
+// Kept here so every existing importer (and the tests) do not move.
+export { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED }
 
 export interface BatchCall {
   callId: string
@@ -378,7 +380,7 @@ export async function executeToolCalls(
       const message = failures.has(i)
         ? (own instanceof Error ? own.message : String(own))
         : fallbackMessage
-      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: message } }
+      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } }
     }
     try {
       await commitReady()
