@@ -59,6 +59,8 @@
 **執行見證**（controller 實跑）：`plugin:Marketplace_A__proxy:echo` 與**最乾淨的** `plugin:hello:mcp` 都被拒（`serverName must match ^[A-Za-z0-9_-]{1,32}$`）。
 **後果：** 生產唯一可達的 MCP 掛載路徑（plugin `.mcp.json`）**全數休眠**——`pluginMcpResults` 恆 false、（推論）`evaluatePlugin` 的 mcp 維度恆 failed；列 1–4 的「現況」在生產皆不可觀測。**32 字上限是第二把刀**（長 id＋server 會再撞）。
 
+**✅ D-MCP-1 已修（2026-09-21，`018fc373`＋`549beefb`，複審兩輪全過）**：grammar 對齊成 `[A-Za-z0-9_.:-]{1,64}`（單一常數，兩驗證器共用）、composer 逐段封頂（`8+28+28=64`，超長段保留 15 字＋12-hex sha256）、**資源工具名改走 `fitPublicName`**（provider 安全的 sanitize+hash——修復本身曾讓帶冒號的 `list_mcp_resources__plugin:…` 進模型工具表，複審抓出並在修正輪修掉）、未支援的 `type` 改 warn+skip、空 server key 同上。**已知限制（已記錄）**：修復前已安裝的副本其 `type` 已被丟棄，舊 `sse` 條目在重新安裝前仍以 streamable-http 掛。
+
 **其他斷點（各自有量測）：**
 - **D-MCP-2**：`.mcp.json` 的 `type` 被**靜默丟棄**（`install.ts:106-128` 不讀 type）⇒ `{"type":"sse",…}` 會以 streamable-http 掛——封閉 union 外的方言，無診斷。
 - **D-MCP-3**：catalog 只在 generation 建立/重連時刷新（`tools/list_changed` 未處理）；`listTools` 不吃 `toolCallTimeoutMs`（每頁吃 SDK 預設 60s）。
@@ -68,6 +70,7 @@
 - **D-PLG-1**：plugin 生命週期動詞（install/enable/…）生產**無呼叫者**；就緒詞彙無消費者（產品決定待答）。
 - **D-SKILL-1**：`allowImplicitInvocation` 無生產者；`skillsServiceName` unused export；`fs-watch` 全樹零消費者；instructions 認 `~/.claude` 而 skills 只認 harness home。
 - **D-OPR-1**：7 個 unconsulted-setting 行——operator 平面的問題是 **reach**，不是 attribution。
+- **D-MCP-5（修復輪的 out-of-scope 殘項，2026-09-21 記錄）**：`mount.ts:19` 的同類「does not import mcp-client」措辭未修（生產為真、套件層寬鬆為假）；`install.ts` 的空 key skip 排在 `isRecord` 檢查之前 ⇒ `""` 下的非物件從 fail-loud 變成 warn+skip（皆非阻擋；下次觸碰這兩檔時修）。
 
 ---
 
