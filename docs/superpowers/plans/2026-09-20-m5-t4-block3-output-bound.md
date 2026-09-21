@@ -139,7 +139,24 @@ pnpm verify:all     # block ② 加的；母體不足會 exit 1
 
 Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-calls.test.ts -t "its OWN code"`
 
-Expected: **紅** —— `TOOL_ABORTED_MID_FLIGHT` 還不存在（**那條的紅就是「東西還不存在」**）。
+> **🔴 而這一格的紅-first **在實作時量到是**綠的** —— 那是這一條分支第一次遇到這個類別，而它值得一個名字。**
+>
+> **量到**：在 vitest 底下，**一個不存在的具名 export 解析成 `undefined`（不是一個載入錯誤）**，而**那一格的 `code` 在實作之前也是 `undefined`** ⇒ `expect(output.code).toBe(TOOL_ABORTED_MID_FLIGHT)` **比的是 `undefined` 與 `undefined`** ⇒ **通過**。
+>
+> **⇒ 一個**假綠**：那條測試在**實作之前就過了**，所以它的「紅-first」是空的。**
+>
+> **修法（而它不是只在這一格成立）：斷言**那個鍵存不存在**，不要只斷言值的相等。** 一個**缺席**的鍵與一個**值為 `undefined`** 的鍵在這裡必須分得開 —— **而那是這一條分支一路在講的那個區別，只是這次要的是**存在**那一邊：**
+>
+> ```ts
+> expect(Object.hasOwn(results[0]!.output, "code")).toBe(true)
+> expect(results[0]!.output.code).toBe(TOOL_ABORTED_MID_FLIGHT)
+> ```
+>
+> **⇒ 而第一條在實作之前會**紅**（那時候 `output` 是 `{ error }`，沒有 `code` 鍵）。** 那才是真的紅-first。
+>
+> **⚠ 而它的適用範圍比這一格寬**：**任何斷言「X 等於某個可能不存在的東西」的測試都有這個形狀** —— 而這個 repo 剛剛才把一條測試的「紅-first」建立在「那個 export 還不存在」上面。
+
+Expected（**修正後**）：**第一條斷言必須紅**（`Object.hasOwn` 回 false），而第二條在實作之前**也**是綠的（`undefined === undefined`）—— **所以只有第一條是證據。**
 
 - [ ] **Step 3: 實作 —— 搬遷 ＋ 那一格**
 
@@ -196,7 +213,15 @@ Expected: **全綠**。**若 `M51 B3` 那條紅，停手回報** —— 它斷�
 
 - [ ] **Step 5: 突變**
 
-把新常數的值改成 `TOOL_ABORTED_BEFORE_DISPATCH` ⇒ **Step 1 那條必須紅**（**它證明那兩個事實被分開釘住**）。**還原。**
+> **🔴 而這一格的突變**在實作時量到是**等價突變** —— 它什麼都證明不了。**
+>
+> **我原本處方的是「把新常數的**值**改成 `TOOL_ABORTED_BEFORE_DISPATCH`」** ⇒ **而填補與斷言讀的是**同一個常量** ⇒ 改值同時改了兩邊 ⇒ **那一條測試**照樣綠**。**（它**確實**讓兩條別的測試紅了 —— `synthesizes TOOL_ABORTED_BEFORE_DISPATCH …` 與 `BOUNDARY: an abort that lands inside the failure window still dominates` —— 所以那兩條**確實**釘住了那兩個 code，**但新那一條沒有被它釘住**。）
+>
+> **⇒ 修法：**突變要打在**使用點**，不是**宣告點**。** 把那一格從 `code: TOOL_ABORTED_MID_FLIGHT` 改成 `code: TOOL_ABORTED_BEFORE_DISPATCH`（**改填補那一行，不改常數**）⇒ **新那一條必須紅。** **還原。**
+
+**⇒ 而這是這一條分支上的一個**新的形狀**：一個突變如果同時改到**生產者與斷言**，它就是等價的 —— 而**它看起來像一個突變**。** 判準是：**這次改動有沒有讓任何一個斷言看到不同的東西。**
+
+Expected：**使用點的交換讓新那一條紅**（4 failed 總計）；**宣告點的交換不讓它紅**（**那是等價突變，而它證明了那兩條別的測試釘住了那兩個 code**）。
 
 - [ ] **Step 6: Commit**
 
@@ -419,6 +444,12 @@ pnpm verify:all
 ```
 
 Expected: `suite` 全綠 · **母體 66** · typecheck 0 · **e2e 5 檔** · **`gate PASS`**。**任何一步不是預期 ⇒ 停手回報，不要改數字去迎合。**
+
+**而順手清一件事**（T1 量到的，而它屬於最後碰那個檔的人）：**`scripts/audit/reachability-allowlist.json` 有兩條已經**失效**的條目** —— `@i-harness/core-agent#TOOL_FAILED` 與 `#TOOL_CANCELLED_BY_SIBLING`。**它們的那兩列消失了**（`447 → 445`），**因為搬遷之後那兩個名字在 `core-tools/src/index.ts` 出現** ⇒ 掃描器把它算成「有人用」。
+
+**⇒ 一條失效的 allowlist 條目是一個**已經不再為真的陳述**，而它每跑一次都會印一個警告。** **⇒ 把它們刪掉**（而**刪之前先確認那兩列真的不會回來** —— 跑一次 `--gate` 看警告還在不在）。
+
+**⇒ 不要為了讓警告消失去改別的東西。** 如果刪了之後那兩列回來了，**停手回報** —— 那代表那個「有人用」是假的。
 
 - [ ] **Step 7: Commit**
 
