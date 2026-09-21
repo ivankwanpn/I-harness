@@ -92,6 +92,22 @@ export interface ToolResult {
   output: unknown
 }
 
+// The codes a SYNTHETIC tool result can carry. They live here, not in
+// core-agent, because they describe the shape of a tool result and this package
+// owns that contract — and because both core-agent (which writes them) and
+// output-retention (which must recognise one to leave it un-bounded) depend on
+// this package and NOT on each other.
+//
+// A refusal and a cancellation are DIFFERENT FACTS and carry different codes:
+// a body that tried and failed, a call that never started, a call a sibling
+// cancelled, and a call killed mid-flight are four things, and a log that
+// conflates them cannot be read back. (block ①'s §2.3 for the messages; this is
+// the same rule for the machine-readable form.)
+export const TOOL_FAILED = "TOOL_FAILED"
+export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
+export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
+export const TOOL_ABORTED_MID_FLIGHT = "TOOL_ABORTED_MID_FLIGHT"
+
 export interface PreparedCall {
   call: ToolCall
   tool: Tool

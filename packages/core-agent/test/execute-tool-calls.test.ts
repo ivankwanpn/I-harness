@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { append, createSession, type Session } from "@i-harness/core-session"
-import { createToolRegistry, type Tool } from "@i-harness/core-tools"
+import { createToolRegistry, TOOL_ABORTED_MID_FLIGHT, type Tool } from "@i-harness/core-tools"
 import {
   executeToolCalls,
   TOOL_ABORTED_BEFORE_DISPATCH,
@@ -304,6 +304,25 @@ describe("executeToolCalls scheduler", () => {
     )
     expect(aborted.length).toBe(1) // c1 never started (c0 started and aborted the signal)
     expect(aborted[0]).toMatchObject({ callId: "c1" })
+  })
+
+  it("the abort fill carries its OWN code — a mid-flight kill is not the same fact as a never-started one", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    const ac = new AbortController()
+    tools.register({
+      name: "killme", description: "", inputSchema: {}, isConcurrencySafe: true,
+      // Settles only after the abort fires, so this slot gets the ABORT FILL
+      // (started, no output) rather than a real result or a cancellation.
+      execute: async () => { await new Promise((r) => setTimeout(r, 40)); ac.abort(); throw new Error("killed") },
+    })
+    await expect(
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "killme", args: {} }], { maxParallel: 1, signal: ac.signal }),
+    ).rejects.toThrow("agent aborted")
+    const results = session.events.filter((e) => e.type === "tool/result") as { output: { code?: string } }[]
+    expect(results).toHaveLength(1)
+    expect(results[0]!.output.code).toBe(TOOL_ABORTED_MID_FLIGHT)
   })
 
   // M51 B3: the abort drain used to stall the head-of-line cursor on the
@@ -1063,7 +1082,9 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     // c0 died BY THE CANCEL and says so — not about c1's argument.
-    expect(results[0]!.output).toEqual({ error: "body killed by cancel" })
+    // (The code joined this envelope with block 3's T1: the abort fill now
+    // carries its OWN code, so this exact-shape pin carries it too.)
+    expect(results[0]!.output).toEqual({ error: "body killed by cancel", code: TOOL_ABORTED_MID_FLIGHT })
     expect(results[0]!.output).not.toMatchObject({ error: expect.stringContaining("invalid arguments") })
     // …and c1 keeps its own refusal, not c0's body failure.
     expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
