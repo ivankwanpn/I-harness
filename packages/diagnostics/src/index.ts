@@ -23,6 +23,10 @@ import type { DiagnosticPhase, DiagnosticRecord, Level, Redactor } from "./recor
 
 export type { DiagnosticPhase, DiagnosticRecord, Level, RedactedError, Redactor } from "./record.ts"
 
+// The error DERIVATION is a value, so it cannot ride the `export type` list above
+// — and with the exports map exposing only ".", this entry is the only way in.
+export { fromError } from "./record.ts"
+
 /** What a call site holds. `child(phase)` binds the phase once, so the site does
  *  not spell it at every call. */
 export interface Diagnostics {
