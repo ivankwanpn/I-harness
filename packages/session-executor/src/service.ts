@@ -112,11 +112,14 @@ export interface SessionServiceOptions extends AssemblyOptions {
    *
    * BOTH `createSessionAssembly` calls below carry it through their `...opts`
    * spread, so there is no second line to find: the spread IS the threading.
-   * Verified at execution — a service built with `outputSpill` mounts the guard
-   * and bounds an over-cap durable result, and shadowing the field at either
-   * call site reddens
-   * `packages/session-executor/test/service-output-spill.test.ts`. NARROWING a
-   * spread to an explicit field list therefore has to list `outputSpill`. */
+   * Each call site is pinned by a case of its OWN in
+   * `packages/session-executor/test/service-output-spill.test.ts` — the
+   * binding-path call by the tests that supply `modelBindingFor`, the legacy
+   * call by the third case (`modelBuilder`, which is what routes a build to it).
+   * Verified at execution one site at a time: shadowing the field at a site
+   * reddens THAT site's case and leaves the others green, and each case drives
+   * a real over-cap tool result into the durable record. NARROWING a spread to
+   * an explicit field list therefore has to list `outputSpill`. */
   outputSpill?: OutputSpillGuardConfig
 }
 

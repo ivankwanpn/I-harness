@@ -100,4 +100,35 @@ describe("createSessionService — outputSpill reaches the assembly it builds", 
       rmWorkspaceSync(workspace)
     }
   }, 60_000)
+
+  it("the LEGACY build path carries it too: `modelBuilder` (no `modelBindingFor`) takes the SECOND createSessionAssembly call", async () => {
+    // The first two tests all supply `modelBindingFor`, so they only ever
+    // execute the BINDING-path call — the legacy call site would go untested
+    // even though it is the second half of "the option survives the service's
+    // plumbing". This case takes it: `modelBindingFor` absent, `modelBuilder`
+    // supplying the client.
+    const workspace = mkdtempSync(join(tmpdir(), "m5-service-spill-legacy-ws-"))
+    const spillRoot = join(tmpdir(), `m5-service-spill-legacy-${Date.now()}-${Math.random().toString(16).slice(2)}`)
+    const shell = resolveShell().name
+    const service = createSessionService({
+      workspace,
+      modelPolicy: "required",
+      approveAll: true,
+      outputSpill: { maxOutputBytes: CAP, spillRoot },
+      modelBuilder: async () => createMockClient(script(shell)),
+    })
+    try {
+      await service.submit("s1", "run the command", new AbortController().signal)
+      const [result] = toolResults(service, "s1")
+      expect(result).toBeDefined()
+      expect(result!.output.spill).toBeDefined()
+      expect(result!.output.outputPaths?.[0]).toContain(spillRoot)
+      expect(result!.output.output).toContain("Full result stored at:")
+      expect(Buffer.byteLength(JSON.stringify(result!.output), "utf-8")).toBeLessThanOrEqual(CAP)
+    } finally {
+      await service.close()
+      rmWorkspaceSync(workspace)
+      rmSync(spillRoot, { recursive: true, force: true })
+    }
+  }, 60_000)
 })
