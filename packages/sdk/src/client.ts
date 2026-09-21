@@ -40,10 +40,20 @@ export interface ServerInfo {
 /** The connection itself failed (spawn error / exit / closed stream). */
 export class SdkConnectionError extends Error {
   readonly code = "sdk-connection" as const
+  /** M68: present when the cut arrived as a server ERROR FRAME rather than as a
+   * stream/subprocess failure. The host's bounded output queue sends exactly
+   * one such frame — SERVER_OVERLOAD (-32000) with a NULL id — and then ends
+   * the stream; the frame's numeric code and its own message ride here so a
+   * caller can tell an overload cut from any other connection loss, and log
+   * why. Absent for every other connection failure. */
+  readonly rpcCode: number | undefined
+  readonly rpcMessage: string | undefined
 
-  constructor(message: string) {
+  constructor(message: string, rpc?: { code: number; message: string }) {
     super(`[sdk-connection] ${message}`)
     this.name = "SdkConnectionError"
+    this.rpcCode = rpc?.code
+    this.rpcMessage = rpc?.message
   }
 }
 
@@ -349,6 +359,23 @@ export class HarnessClient {
 
   private onMessage(message: RpcSuccess | RpcFailure | RpcNotification): void {
     if ("result" in message || "error" in message) {
+      // M68: a failure frame with a NULL id corresponds to no request. The
+      // host's bounded output queue sends exactly one of those (SERVER_OVERLOAD)
+      // and then ends the stream; `String(null)` matches no pending entry, so
+      // without this branch the reason for the cut would be dropped here and
+      // the caller would see only a dead connection. Record it as the
+      // connection's error — the same exit-error shape a subprocess exit uses,
+      // so LATER requests fail with it too — and settle everything in flight
+      // with it.
+      if ("error" in message && message.id === null) {
+        const failure = message as RpcFailure
+        this.exitError = new SdkConnectionError(
+          `the server cut the connection with error ${failure.error.code}: ${failure.error.message}`,
+          { code: failure.error.code, message: failure.error.message },
+        )
+        this.rejectAll(this.exitError)
+        return
+      }
       const pending = this.pending.get(String(message.id))
       if (pending === undefined) return
       this.pending.delete(String(message.id))

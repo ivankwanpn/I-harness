@@ -9,13 +9,17 @@
 //      a tiny highWaterMark and NO reader — there is no real consumer here and
 //      this test says so) receives exactly ONE overload error frame and then
 //      the stream ends, with every later push dropped;
-//   3. the bound's DERIVATION: DEFAULT_WRITE_BOUND_BYTES is 2 × the serialized
+//   3. the cut is VISIBLE through the real client: the null-id overload frame
+//      settles HarnessClient's in-flight (and later) requests with a named
+//      connection error carrying the server's code — not just an EOF;
+//   4. the bound's DERIVATION: DEFAULT_WRITE_BOUND_BYTES is 2 × the serialized
 //      size of one full session/history page (1000 events), and that page size
 //      is recomputed here against the MEASURED literal.
 import { describe, expect, it } from "vitest"
 import { PassThrough } from "node:stream"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import { createBoundedWriter, DEFAULT_WRITE_BOUND_BYTES } from "../src/bounded-writer.ts"
+import { HarnessClient, SdkConnectionError } from "../src/client.ts"
 import {
   INVALID_PARAMS,
   SERVER_OVERLOAD,
@@ -135,6 +139,37 @@ describe("createBoundedWriter", () => {
     expect(writer.pendingBytes()).toBe(0)
   })
 
+  it("a synchronously throwing sink does not wedge the writer; the frame that threw is dropped", () => {
+    // Without the flush loop's `finally`, a throw left `flushing` true forever:
+    // every later flush returned early and quietly stranded the queue.
+    const attempted: string[] = []
+    let throwsLeft = 1
+    const writer = createBoundedWriter({
+      write: (chunk) => {
+        attempted.push(chunk)
+        if (throwsLeft > 0) {
+          throwsLeft -= 1
+          throw new Error("sink exploded")
+        }
+        return true
+      },
+      end: () => {},
+      onDrain: () => () => {},
+      boundBytes: 1_000_000,
+    })
+
+    const lost = makeSuccess(1, { text: "lost" })
+    expect(() => writer.push(lost)).toThrow("sink exploded")
+    // The frame reached the sink before the throw, so it is DROPPED: not
+    // re-queued (a retry could double-write) and not counted as pending.
+    expect(writer.pendingBytes()).toBe(0)
+
+    const next = makeSuccess(2, { text: "next" })
+    writer.push(next) // still usable: the flush loop reset itself
+    expect(attempted).toEqual([encodeFrame(lost), encodeFrame(next)])
+    expect(writer.pendingBytes()).toBe(0)
+  })
+
   it("pendingBytes counts BYTES (a multi-byte frame is not a String.length count)", () => {
     // highWaterMark 1: the first write lands in the stream and returns false,
     // so the SECOND frame stays queued and is what pendingBytes must measure.
@@ -151,6 +186,43 @@ describe("createBoundedWriter", () => {
   })
 })
 
+describe("the cut is visible through the real client, not just an EOF", () => {
+  it("a null-id -32000 frame settles every in-flight request with a named connection error", async () => {
+    // The client reads exactly what the writer writes. The sink is a hand-made
+    // slow writable (no real consumer — said plainly): every write reports a
+    // full buffer, so it is the writer's own queue that crosses the bound.
+    const clientInput = new PassThrough()
+    const writer = createBoundedWriter({
+      write: (chunk) => {
+        clientInput.write(chunk) // the client DOES receive what was written
+        return false
+      },
+      end: () => clientInput.end(),
+      onDrain: () => () => {},
+      boundBytes: 256,
+    })
+    const client = new HarnessClient(clientInput, new PassThrough())
+    const first = client.request("initialize", {})
+    const second = client.request("session/status", { sessionId: "s1" })
+    for (let i = 0; i < 20; i++) {
+      writer.push(makeNotification("session/event", { sessionId: "s1", event: { type: "turn/start", seq: i } }))
+    }
+
+    // Both in-flight requests settle with the SAME named connection error — the
+    // server's code and message ride on it, so the cut's reason is not lost.
+    for (const inflight of [first, second]) {
+      const reason = await inflight.then(() => undefined, (error: unknown) => error)
+      expect(reason).toBeInstanceOf(SdkConnectionError)
+      expect((reason as SdkConnectionError).rpcCode).toBe(SERVER_OVERLOAD)
+      expect((reason as SdkConnectionError).rpcMessage).toContain("output bound exceeded")
+    }
+    // The connection remembers the cut: a later request fails the same way at
+    // once, instead of waiting out its 60s timeout.
+    await expect(client.request("initialize", {})).rejects.toBeInstanceOf(SdkConnectionError)
+    await client.close()
+  })
+})
+
 // ── the bound's derivation (spec §1.2 rule 1: derived, not chosen) ──────────
 //
 // MEASURED_HISTORY_PAGE_BYTES is the measurement recorded in
@@ -161,9 +233,11 @@ const MEASURED_HISTORY_PAGE_BYTES = 947_820
 
 const PROMPT_CHARS = 240
 const REPLY_CHARS = 480
-/** The repo's own prune threshold — packages/compaction/src/config.ts:100,
- * "stringified tool/result output length beyond which it becomes a prune
- * candidate" — taken as the tool/result content size (a conservative reading). */
+/** The repo's own prune threshold — packages/compaction/src/config.ts:100: the
+ * stringified tool/result length at which the output becomes a prune CANDIDATE
+ * on the PROJECTION surface (the raw log keeps full results). Used here as a
+ * REPRESENTATIVE large tool/result size for the fixture — it is not a retention
+ * cap and not a ceiling on what a page can carry. */
 const TOOL_RESULT_CHARS = 8192
 
 function filler(n: number, seed: string): string {
@@ -209,9 +283,10 @@ function historyPageBytes(count: number): number {
 describe("DEFAULT_WRITE_BOUND_BYTES (derived from a real history page)", () => {
   it("is 2 × the serialized size of one full 1000-event session/history page", () => {
     const B = historyPageBytes(1000)
-    // The recomputation matches the measured literal: a wire-shape or mix drift
-    // fails HERE rather than silently moving the constant.
+    // The recomputation matches the measured literals: a wire-shape or mix
+    // drift fails HERE rather than silently moving the constant.
     expect(B).toBe(MEASURED_HISTORY_PAGE_BYTES)
+    expect(historyPageBytes(500)).toBe(473_865)
     // The derived rule (spec §1.2 rule 1): the page a lagging client is
     // receiving plus the next one both fit inside the bound, so a client that is
     // one full page behind is not killed while it catches up.

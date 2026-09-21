@@ -33,14 +33,15 @@ import { encodeFrame, makeFailure, SERVER_OVERLOAD, type RpcMessage } from "./pr
  * createSession/append with 10 events per turn × 100 turns:
  *   turn/start · user/message (240 chars) · step/start ·
  *   assistant/chunk (40) · assistant/message (480) · tool/call · tool/dispatch
- *   · tool/result (8192 chars — the repo's own prune threshold,
- *   packages/compaction/src/config.ts:100: "beyond which it becomes a prune
- *   candidate") · step/end · turn/end
+ *   · tool/result (8192 chars — the length at which a tool/result becomes a
+ *   prune CANDIDATE on the PROJECTION surface, packages/compaction/src/config.ts:100;
+ *   the log itself keeps full results, so this is a representative large-result
+ *   size for the fixture, not a retention cap) · step/end · turn/end
  *
  * Command: a throwaway vitest file (deleted after the run):
  *   pnpm --filter @i-harness/sdk test
  * Numbers: 1000 events → frame = 947820 B (avg 947.8 B/event);
- *          500 events  → frame = 473865 B.
+ *          500 events  → frame = 473865 B (both pinned by the unit test).
  * The throwing-away is why the unit test re-derives the same number: the mix
  * above is the measuring script's, kept verbatim beside the constant's pin. */
 const MEASURED_HISTORY_PAGE_BYTES = 947_820
@@ -92,15 +93,24 @@ export function createBoundedWriter(opts: BoundedWriterOptions): BoundedWriter {
   const flush = (): void => {
     if (over || flushing || blocked || queue.length === 0) return
     flushing = true
-    while (queue.length > 0) {
-      const chunk = queue.shift()!
-      pending -= Buffer.byteLength(chunk)
-      if (!opts.write(chunk)) {
-        blocked = true
-        break
+    try {
+      while (queue.length > 0) {
+        const chunk = queue.shift()!
+        pending -= Buffer.byteLength(chunk)
+        if (!opts.write(chunk)) {
+          blocked = true
+          break
+        }
       }
+    } finally {
+      // A sink that throws synchronously must not wedge the writer: without
+      // this reset every later flush would return early and quietly strand the
+      // queue. The frame that threw was already handed to the sink, so it is
+      // DROPPED — it is neither re-queued (a retry could double-write) nor
+      // counted in pendingBytes — and the exception propagates to the push()
+      // caller, exactly as the pre-M68 `process.stdout.write` did.
+      flushing = false
     }
-    flushing = false
     if (blocked) {
       cancelDrain = opts.onDrain(() => {
         cancelDrain = undefined
