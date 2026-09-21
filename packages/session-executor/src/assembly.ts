@@ -900,10 +900,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let lastMentionTask: string | undefined
   ctx.on("agent/pre-step", (payload) => {
     // `Listener` takes `unknown` (core-plugin/src/index.ts:2), so the payload
-    // shape is narrowed here rather than in the signature — the same cast
-    // hooks' prompt/submit handler does. core-agent emits `{ task, session }`
-    // (:275), and this listener reads only the task.
-    const { task } = payload as { task: string }
+    // shape is narrowed here rather than in the signature — the same
+    // typeof-narrowing hooks' prompt/submit handler does
+    // (hooks/src/index.ts:413,417). core-agent emits `{ task, session }` (:275),
+    // and this listener reads only the task: a payload without a string task is
+    // not this listener's, so it returns before touching the dedupe slot (a
+    // non-string tick must not become the "last task" and mask the next real
+    // one).
+    const task = (payload as { task?: unknown }).task
+    if (typeof task !== "string") return
     if (task === lastMentionTask) return
     lastMentionTask = task
     const names = scanMentionedSkillNames(task, skillsMount.registry)
@@ -992,9 +997,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // MUST return undefined (block body, awaited inside): emit() feeds a plain
     // listener's non-undefined return into the waterfall chain payload, and this
     // very event has a waterfall when a host mounts hooks. It also must not
-    // throw: a background catalogue refresh is not on the turn's critical path
-    // (the schedule driver's tick() above is the precedent), so a failure is
-    // REPORTED and the flag stays dirty — the next boundary tries again.
+    // throw: a failure is REPORTED and the flag stays dirty — the next boundary
+    // tries again.
+    //
+    // The boundary DOES await the rebuild: core-plugin's emitFn awaits every
+    // promise-returning plain listener (core-plugin/src/index.ts:264-276), so a
+    // refresh sits on the turn's critical path (the schedule driver's tick()
+    // above is the precedent — awaited for the same reason). The supervisor
+    // therefore bounds the per-step cost: a refresh is only started when the
+    // rebuild is DUE (the flag is true and the generation is ready), a failed
+    // drain is not retried until a full drain budget has passed, and a refresh
+    // asked for mid-connect returns without draining. This handler's job is the
+    // attempt; the cadence is the supervisor's.
     // Registered after BOTH MCP loops; `mcpHandles` is typed McpMountHandle[],
     // so the lsp/team handles (separate arrays) are never asked these questions.
     for (const mcpHandle of mcpHandles) {

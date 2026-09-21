@@ -11,10 +11,11 @@ export interface SkillsSectionOptions {
 }
 
 /** MEASURED 2026-09-22 (m68 batch C, T7 — the unit test recomputes the
- * literal): the rendered length of a 50-skill catalogue whose lines sit at the
- * upper end of what is actually written (name 30 chars, description 121)
- * is **7_949** chars — under this bound; the 51st such line takes the raw
- * render to **8_108**, which is where truncation starts. So the bound is
+ * literal): the rendered length of the 50-skill corpus section.test.ts seeds,
+ * whose lines carry that FIXTURE's profile — name 30 chars, description 121, a
+ * deliberate long-line profile and not a claim about the sizes real catalogues
+ * carry — is **7_949** chars — under this bound; the 51st such line takes the
+ * raw render to **8_108**, which is where truncation starts. So the bound is
  * calibrated as "a full catalogue still fits; the next entry does not".
  *
  * DERIVATION (plan §0.3): 8_000 chars ≈ 2k tokens by `estimateMessage`'s
