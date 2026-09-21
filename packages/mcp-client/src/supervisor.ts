@@ -1,5 +1,5 @@
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { ConnectedMcpClient } from "./client.ts"
+import type { ConnectedMcpClient, McpConnectOptions } from "./client.ts"
 import { syncTools } from "./bridge.ts"
 import { createResourceTools } from "./resources.ts"
 import { McpServerUnavailableError } from "./errors.ts"
@@ -35,7 +35,10 @@ export interface McpServerStatusEvent {
 }
 
 export interface SupervisorDeps {
-  connect: (c: McpServerConfig) => Promise<ConnectedMcpClient>
+  /** `opts.onToolsChanged` (M6-D3) is the generation's list_changed observation
+   *  point — the supervisor passes its own marker, so a connect implementation
+   *  that ignores the second argument (a test fake) simply never reports. */
+  connect: (c: McpServerConfig, opts?: McpConnectOptions) => Promise<ConnectedMcpClient>
   tools: ToolRegistry
   onStatus?: (ev: McpServerStatusEvent) => void
   /** Invoked when a tool call is rejected because the server is unavailable. */
@@ -51,6 +54,16 @@ export interface McpSupervisor {
   start(): Promise<void>
   /** Stop the reconnect loop, unregister all tools, close the current generation. Idempotent; no events after close. */
   close(): Promise<void>
+  /** M6-D3: true when the server announced `notifications/tools/list_changed`
+   *  and no rebuild has consumed it yet. The consumer — session-executor's
+   *  `agent/pre-step` handler — reads this to decide whether a rebuild is due;
+   *  the flag is per generation (adopt/death both clear it). */
+  catalogDirty(): boolean
+  /** M6-D3: rebuild the catalogue IN PLACE on the current generation (a fresh
+   *  drain of tools/list, no reconnect, no new process). Throws
+   *  McpServerUnavailableError when no generation is live — the same fail-fast
+   *  error a tool call gets during an outage. */
+  refreshCatalog(): Promise<void>
 }
 
 const DEFAULT_INITIAL_DELAY_MS = 1_000
@@ -85,6 +98,21 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   let disposers = new Map<string, () => void>()
   let resourceToolNames: string[] = []
 
+  // M6-D3: the catalogue's staleness. The FLAG says "the registry does not
+  // reflect the server's list"; the EPOCH counts announcements, which is what
+  // makes a rebuild's clear safe — a list that changed WHILE the drain was in
+  // flight is not the list we just installed, so that rebuild must leave the
+  // flag set for the next boundary (see resyncTools). Both are per generation:
+  // adoptGeneration and generationDown reset them, because a superseded
+  // generation's announcement says nothing about the live one.
+  let catalogDirtyFlag = false
+  let catalogEpoch = 0
+
+  const markCatalogDirty = (): void => {
+    catalogDirtyFlag = true
+    catalogEpoch += 1
+  }
+
   const emitStatus = (next: McpServerState, attemptCount?: number, err?: string): void => {
     if (closed) return
     deps.onStatus?.({
@@ -105,10 +133,14 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   // call time, so a call during an outage fails fast instead of hanging on a
   // dead transport.
   const proxy: ConnectedMcpClient = {
-    async listTools(cursor) {
+    // M6-D2/D3: `opts` travels with the call. Dropping it here would keep the
+    // drain's per-page bound (timeout / maxTotalTimeout) from ever reaching the
+    // SDK on the production path — the drain would be bounded in total but no
+    // single page request would carry its share of the budget.
+    async listTools(cursor, opts) {
       const gen = current
       if (gen === undefined) throw unavailable()
-      return gen.listTools(cursor)
+      return gen.listTools(cursor, opts)
     },
     async callTool(name, args, signal) {
       const gen = current
@@ -180,6 +212,7 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     clearRetry()
     clearStability()
     current = undefined
+    catalogDirtyFlag = false // M6-D3: nothing live to rebuild on; the tools go too
     state = "lost"
     if (err !== undefined) lastError = errText(err)
     unregisterAll()
@@ -222,11 +255,17 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     if (closed) return
     if (gen !== current) return
     current = undefined
+    // M6-D3: the dirtiness dies with its generation. The reconnect path drains
+    // a fresh catalogue anyway (attempt → resyncTools), so carrying the flag
+    // over would only make the next boundary rebuild a catalogue that was
+    // already rebuilt.
+    catalogDirtyFlag = false
     clearStability()
     failCycle(undefined)
   }
 
   const resyncTools = async (): Promise<void> => {
+    const epochAtStart = catalogEpoch
     // Two-phase swap (bridge.ts): dispose the previous generation's tools,
     // then fetch + register the fresh list from the new generation. Resource
     // tools are re-bound per generation as well.
@@ -235,6 +274,12 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     const resourceTools = createResourceTools(proxy, serverName, config)
     resourceToolNames = resourceTools.map((t) => t.name)
     for (const rt of resourceTools) deps.tools.register(rt)
+    // M6-D3: the rebuild consumed the announcement it was drained for — UNLESS
+    // a list_changed arrived while those pages were in flight: that list is
+    // newer than what we just installed, so the flag stays set and the next
+    // boundary drains again. A rebuild that THREW never reaches this line, so a
+    // failed refresh also stays dirty (retried at the next boundary).
+    if (catalogEpoch === epochAtStart) catalogDirtyFlag = false
   }
 
   const armStability = (gen: ConnectedMcpClient): void => {
@@ -250,17 +295,25 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
 
   const adoptGeneration = (gen: ConnectedMcpClient): void => {
     current = gen
+    // M6-D3: a new generation starts CLEAN — its connect() just drained the
+    // catalogue, and anything the previous generation announced is about a
+    // list that no longer exists.
+    catalogDirtyFlag = false
     // Observe transport death only when the reconnect machinery is on — the
     // default (no reconnect config) must behave exactly like a one-shot mount.
     if (reconnectEnabled) gen.onDisconnect?.(() => generationDown(gen))
   }
+
+  /** M6-D3: the generation-side observation point, handed to every connect (the
+   *  supervisor's marker is the only consumer). */
+  const connectOptions: McpConnectOptions = { onToolsChanged: markCatalogDirty }
 
   const attempt = async (n: number): Promise<void> => {
     if (closed) return
     attempts = n
     let gen: ConnectedMcpClient
     try {
-      gen = await deps.connect(config)
+      gen = await deps.connect(config, connectOptions)
     } catch (err) {
       failCycle(err)
       return
@@ -324,7 +377,7 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     emitStatus("connecting")
     let gen: ConnectedMcpClient
     try {
-      gen = await deps.connect(config)
+      gen = await deps.connect(config, connectOptions)
     } catch (err) {
       // Startup failure is a MOUNT failure (scheduler applies failOnStartupError
       // semantics) — the reconnect loop only engages once a generation exists.
@@ -358,6 +411,7 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     clearStability()
     const gen = current
     current = undefined
+    catalogDirtyFlag = false // M6-D3: a closed mount has no catalogue to rebuild
     state = "lost"
     unregisterAll()
     if (gen !== undefined) await closeWithin(gen, OVERLAP_GUARD_MS)
@@ -368,5 +422,14 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     state: () => state,
     start,
     close,
+    catalogDirty: () => catalogDirtyFlag,
+    // In place: the CURRENT generation is re-drained, never replaced (the
+    // reconnect machinery is the only thing that builds generations). No
+    // generation → the same fail-fast error the proxy throws, so the boundary
+    // consumer cannot mistake a dead mount for a refreshed catalogue.
+    refreshCatalog: async (): Promise<void> => {
+      if (current === undefined) throw unavailable()
+      await resyncTools()
+    },
   }
 }

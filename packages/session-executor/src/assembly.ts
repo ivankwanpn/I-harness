@@ -932,6 +932,30 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         pluginMcpResults.set(cfg.serverName, false)
       }
     }
+    // M6-D3: the catalogue's rebuild boundary. A server that announced
+    // `notifications/tools/list_changed` has its catalogue rebuilt HERE — at the
+    // step boundary, never inside the notification callback — and the rebuild is
+    // in place (the current generation is re-drained; no reconnect). The handler
+    // MUST return undefined (block body, awaited inside): emit() feeds a plain
+    // listener's non-undefined return into the waterfall chain payload, and this
+    // very event has a waterfall when a host mounts hooks. It also must not
+    // throw: a background catalogue refresh is not on the turn's critical path
+    // (the schedule driver's tick() above is the precedent), so a failure is
+    // REPORTED and the flag stays dirty — the next boundary tries again.
+    // Registered after BOTH MCP loops; `mcpHandles` is typed McpMountHandle[],
+    // so the lsp/team handles (separate arrays) are never asked these questions.
+    for (const mcpHandle of mcpHandles) {
+      ctx.on("agent/pre-step", async () => {
+        if (!mcpHandle.catalogDirty()) return
+        try {
+          await mcpHandle.refreshCatalog()
+        } catch (err) {
+          console.warn(
+            `[i-harness] mcp-server(${mcpHandle.serverName}) catalogue refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+          )
+        }
+      })
+    }
     for (const cfg of opts.lsp ?? []) {
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
