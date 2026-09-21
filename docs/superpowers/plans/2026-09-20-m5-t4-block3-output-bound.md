@@ -89,17 +89,26 @@ pnpm verify:all     # block ② 加的；母體不足會 exit 1
 
 ---
 
-### Task 1（**先決**）: 讓 abort 的填補帶 `code` —— 界才有一個可讀的判準
+### Task 1（**先決**）: 三個 code 搬到它們真正的家，並讓 abort 的填補帶**它自己的**
 
 **Files:**
-- Modify: `packages/core-agent/src/execute-tool-calls.ts:381`（那一格）＋ 常數區
-- Modify: `packages/core-agent/src/index.ts`（re-export）
+- Modify: `packages/core-tools/src/index.ts`（**宣告那三個常量**）
+- Modify: `packages/core-agent/src/execute-tool-calls.ts`（**改成從 `core-tools` import**、保留 re-export、`:` 那一格帶上 code）
+- Modify: `packages/core-agent/src/index.ts`（re-export 不動 —— 它仍然從 `execute-tool-calls` 轉出）
 - Test: `packages/core-agent/test/execute-tool-calls.test.ts`
 
 **Interfaces:**
-- Produces: `export const TOOL_ABORTED_MID_FLIGHT = "TOOL_ABORTED_MID_FLIGHT"` —— **Task 4 的判準讀它**（以及既有的 `TOOL_FAILED`、`TOOL_ABORTED_BEFORE_DISPATCH`）。
+- Produces: `TOOL_FAILED`、`TOOL_ABORTED_BEFORE_DISPATCH`、`TOOL_ABORTED_MID_FLIGHT` **住在 `@i-harness/core-tools`** —— **T4 的判準讀它們，而 `core-tools` 是 `core-agent` 與 `output-retention` 共同依賴的那一個。**
 
-**為什麼一條新的常數而不是重用 `TOOL_ABORTED_BEFORE_DISPATCH`**：那一格是**已開始而沒有輸出**的（body 跑了、被中止了），而 `TOOL_ABORTED_BEFORE_DISPATCH` 是**從未開始**的。**兩件不同的事不可以共用一句話** —— 那是 block ① 的 §2.3 已經立過的規則，**而這裡是它的第二個實例**。
+> **⚠ 為什麼搬遷在這一條，而不是在 T4**
+>
+> 計畫的第一版讓 T1 在 `core-agent` 宣告新常量、而 T4 把三個搬到 `core-tools`。**那把一個任務寫的東西交給另一個任務去搬 —— 兩個任務動同一組常量，而中間那個狀態是一個不完整的中間態。**
+>
+> **量到的依賴**（開工前掃描跑的）：`core-agent` 與 `output-retention` 都依賴 `core-tools`，而 **`output-retention` 不依賴 `core-agent`**（也不該 —— 一個低階工具依賴 agent 迴圈是反的）。
+>
+> **⇒ 所以那三個常量**屬於 `core-tools`** —— 它們描述的是**工具結果的形狀**，而 `core-tools` 正是擁有那份契約的套件（`ToolResult`、`Tool`、registry 都在那裡）。**一次搬完，而 T4 只是讀。**
+
+**為什麼一條**新的**常量而不是重用 `TOOL_ABORTED_BEFORE_DISPATCH`**：那一格是**已開始而沒有輸出**的（body 跑了、被中止了），而 `TOOL_ABORTED_BEFORE_DISPATCH` 是**從未開始**的。**兩件不同的事不可以共用一句話** —— 那是 block ① 的 §2.3 已經立過的規則，**而這裡是它的第二個實例**。
 
 - [ ] **Step 1: 寫紅測試（先量機制）**
 
@@ -132,21 +141,52 @@ Run: `pnpm --filter @i-harness/core-agent exec vitest run test/execute-tool-call
 
 Expected: **紅** —— `TOOL_ABORTED_MID_FLIGHT` 還不存在（**那條的紅就是「東西還不存在」**）。
 
-- [ ] **Step 3: 實作（兩行 ＋ 一個常數）**
+- [ ] **Step 3: 實作 —— 搬遷 ＋ 那一格**
 
-常數區（`TOOL_FAILED` 旁邊）：
+> **量到的現況**（開工前掃描跑的）：`execute-tool-calls.ts` 今天有 **三個** `TOOL_*` 常量 —— `:8` `TOOL_ABORTED_BEFORE_DISPATCH`、`:9` `TOOL_FAILED`、`:14` `TOOL_CANCELLED_BY_SIBLING`；而 **`core-tools` 一個都沒有**。**加上新的那一個，總共四個要搬。**
+
+**(a) 四個常量在 `core-tools/src/index.ts` 宣告**（放在 `ToolResult` 型別附近 —— **它們描述的是那張契約的形狀**）：
 
 ```ts
-// A STARTED call whose body never produced an output because the step was
-// aborted mid-flight. Deliberately NOT TOOL_ABORTED_BEFORE_DISPATCH: that one
-// is a call that never started. Two different facts, two different codes —
-// the same rule block ①'s §2.3 established for the message strings.
+// The codes a SYNTHETIC tool result can carry. They live here, not in
+// core-agent, because they describe the shape of a tool result and this package
+// owns that contract — and because both core-agent (which writes them) and
+// output-retention (which must recognise one to leave it un-bounded) depend on
+// this package and NOT on each other.
+//
+// A refusal and a cancellation are DIFFERENT FACTS and carry different codes:
+// a body that tried and failed, a call that never started, a call a sibling
+// cancelled, and a call killed mid-flight are four things, and a log that
+// conflates them cannot be read back. (block ①'s §2.3 for the messages; this is
+// the same rule for the machine-readable form.)
+export const TOOL_FAILED = "TOOL_FAILED"
+export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
+export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 export const TOOL_ABORTED_MID_FLIGHT = "TOOL_ABORTED_MID_FLIGHT"
 ```
 
-`:381` 的 `output: { error: message }` → `output: { error: message, code: TOOL_ABORTED_MID_FLIGHT }`。
+**(b) `execute-tool-calls.ts` 改成 import：**
 
-`core-agent/src/index.ts` 的 re-export 區塊加上它。
+```ts
+import {
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_MID_FLIGHT,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+} from "@i-harness/core-tools"
+```
+
+**而它自己的 `export const …` 那三行**改成 **re-export**：
+
+```ts
+// Re-exported from @i-harness/core-tools, which owns the tool-result contract.
+// Kept here so every existing importer (and the tests) do not move.
+export { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED }
+```
+
+**⇒ `core-agent/src/index.ts` 一個字都不用改**（它從 `./execute-tool-calls.ts` 轉出，而那條路仍然通）。
+
+**(c) 那一格：** `output: { error: message }` → `output: { error: message, code: TOOL_ABORTED_MID_FLIGHT }`。
 
 - [ ] **Step 4: 跑測試（綠）**
 
@@ -311,7 +351,10 @@ git commit -m "fix(output-retention): M5 T4 block 3 — the bound counts its own
 // CODE, not the shape — a body that returns `{ error }` as real data is not a
 // failure, and keying on the shape would bound it.
 const SYNTHETIC_FAILURE_CODES = new Set([
-  TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_MID_FLIGHT,
+  TOOL_FAILED,                    // a body that tried and failed
+  TOOL_ABORTED_BEFORE_DISPATCH,   // a call that never started
+  TOOL_CANCELLED_BY_SIBLING,      // a call a sibling's failure cancelled
+  TOOL_ABORTED_MID_FLIGHT,        // a call killed mid-flight
 ])
 const isSyntheticFailure = (out: unknown): boolean =>
   typeof out === "object" && out !== null && SYNTHETIC_FAILURE_CODES.has((out as { code?: string }).code as string)
@@ -331,7 +374,7 @@ core-agent 的依賴       : compaction, core-plugin, core-session, core-tools,
 
 **⇒ 裁定：那三個 code 宣告在 `core-tools`。** 理由：**它們描述的是**工具結果的形狀**，而 `core-tools` 正是擁有那份契約的套件**（`ToolResult`、`Tool`、registry 都在那裡），**而 `core-agent` 與 `output-retention` 都依賴它** ⇒ **兩邊都構得到，而沒有新邊。**
 
-**作法（最小）：** `core-tools/src/index.ts` 宣告那三個常量；`execute-tool-calls.ts` **改成從 `@i-harness/core-tools` import，並保留它自己的 re-export**（所以既有的匯入者與測試不動）。**這是一次「把一個常量搬到它真正的家」的小重構，而它不是這一塊的主題** —— **所以它自己一個提交，訊息要說出為什麼**。
+**⚠ 下面這一段是**第一版**的作法，而它已經**移到 T1**（開工前的掃描抓到：兩個任務動同一組常量，而中間是一個宣告在錯的地方的常量）。留在這裡當**記錄** —— **你在 T4 只要 import，不要搬。** 第一版說的是：** `core-tools/src/index.ts` 宣告那三個常量；`execute-tool-calls.ts` **改成從 `@i-harness/core-tools` import，並保留它自己的 re-export**（所以既有的匯入者與測試不動）。**這是一次「把一個常量搬到它真正的家」的小重構，而它不是這一塊的主題** —— **所以它自己一個提交，訊息要說出為什麼**。
 
 **⇒ 而如果實作者量到那條搬遷會動到很多呼叫點，停手回報** —— **代價要判在看得見的地方，不是在一個順手的編輯裡。**
 
