@@ -66,7 +66,12 @@ export async function syncTools(
   // bounds the TIME it can spend doing it. Computed ONCE at drain start — a
   // server whose every page is merely slow fails inside this one budget, not
   // on a per-page timeout paid once per page — and each page request is handed
-  // the REMAINING total, so a single hanging page cannot outlive the budget.
+  // the REMAINING total (timeout = min(remaining, toolCallTimeoutMs), capped by
+  // maxTotalTimeout = remaining), so a single hanging page cannot outlive the
+  // budget. NOTE: that bound holds on the production path only because the
+  // supervisor's proxy forwards these opts to the generation client — the proxy
+  // is what every tool closure and this drain actually call (M6-D3 fixed the
+  // proxy that used to drop the second argument).
   const deadline = Date.now() + (config.catalogTimeoutMs ?? 60_000)
   const pageTimeoutCap = config.toolCallTimeoutMs ?? 60_000
   let cursor: string | undefined

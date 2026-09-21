@@ -2,7 +2,7 @@ export { MAX_PUBLIC_NAME_LENGTH, assertServerName, publicToolName } from "./nami
 export type { McpServerConfig, McpReconnectConfig, McpOAuthConfig, McpTokenStore } from "./types.ts"
 export { MAX_CURSOR_LENGTH, MAX_TOOL_ITEMS, MAX_TOOL_PAGES, validateMcpConfig } from "./types.ts"
 export { createTransport } from "./transport.ts"
-export type { ConnectedMcpClient, McpCallResult, McpTool } from "./client.ts"
+export type { ConnectedMcpClient, McpCallResult, McpConnectOptions, McpTool } from "./client.ts"
 export { createConnectedClient, resolveRootUris } from "./client.ts"
 export { createMcpTool, syncTools } from "./bridge.ts"
 export { createResourceTools } from "./resources.ts"

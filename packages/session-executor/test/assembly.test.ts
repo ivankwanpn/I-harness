@@ -48,15 +48,19 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
     ...actual,
     // The real mount dials the server and a live OAuth AS is out of scope here;
     // the CONFIG the assembly built is the object under test, so record it and
-    // hand back an inert handle (dispose only ever calls `unmount`).
+    // hand back an inert handle (dispose only ever calls `unmount`). The handle
+    // still carries the full McpMountHandle surface — the assembly's
+    // `agent/pre-step` catalogue handler (M6-D3) asks `catalogDirty()` on every
+    // boundary, so a handle missing it is a broken double even when the case at
+    // hand never runs a turn.
     mountMcpClient: async (
       _ctx: unknown,
       _tools: unknown,
       config: McpServerConfig,
       deps?: McpMountDeps,
-    ): Promise<{ serverName: string; unmount(): Promise<void> }> => {
+    ): Promise<{ serverName: string; catalogDirty(): boolean; refreshCatalog(): Promise<void>; unmount(): Promise<void> }> => {
       mcpMounts.calls.push({ config, deps })
-      return { serverName: config.serverName, unmount: async () => {} }
+      return { serverName: config.serverName, catalogDirty: () => false, refreshCatalog: async () => {}, unmount: async () => {} }
     },
   }
 })

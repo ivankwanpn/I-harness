@@ -18,21 +18,40 @@ interface FakeGen extends ConnectedMcpClient {
   readonly id: string
   callCount: number
   closed: boolean
+  /** Every `listTools` call AS THE GENERATION RECEIVED IT: the cursor and the
+   *  opts the supervisor's proxy forwarded (M6-D2/D3's forwarding assertion). */
+  listToolCalls: Array<{ cursor?: string; opts?: { timeout?: number; maxTotalTimeout?: number } }>
+  /** M6-D3: the handler the mount registered through `deps.connect`'s opts — the
+   *  stand-in for the SDK's `notifications/tools/list_changed` arriving. */
+  onToolsChanged?: (() => void) | undefined
+  /** Replace the tool list (what a live server does BEFORE it notifies). */
+  setTools(names: string[]): void
+  /** Fire the registered tools/list_changed handler. */
+  notifyToolsChanged(): void
   /** Simulate the underlying transport dying on its own (fires onDisconnect). */
   die(): void
 }
 
 function makeFakeGen(id: string, toolNames: string[]): FakeGen {
   const listeners: Array<() => void> = []
+  let names = [...toolNames]
   const gen: FakeGen = {
     id,
     callCount: 0,
     closed: false,
+    listToolCalls: [],
+    setTools(next) {
+      names = [...next]
+    },
+    notifyToolsChanged() {
+      gen.onToolsChanged?.()
+    },
     die() {
       for (const cb of [...listeners]) cb()
     },
-    async listTools() {
-      return { tools: toolNames.map((name) => ({ name, description: `${id}:${name}`, inputSchema: {} })) }
+    async listTools(cursor, opts) {
+      gen.listToolCalls.push({ ...(cursor !== undefined ? { cursor } : {}), ...(opts !== undefined ? { opts } : {}) })
+      return { tools: names.map((name) => ({ name, description: `${id}:${name}`, inputSchema: {} })) }
     },
     async callTool() {
       gen.callCount += 1
@@ -306,5 +325,136 @@ describe("mcp reconnect supervisor", () => {
     expect(() => validateMcpConfig({ ...base, reconnect: { enabled: true, maxRetries: 1.5 } })).toThrow(/maxRetries/)
     expect(() => validateMcpConfig({ ...base, reconnect: { enabled: "yes" as never } })).toThrow(/enabled/)
     expect(() => validateMcpConfig({ ...base, reconnect: { enabled: true, initialDelayMs: 5, maxDelayMs: 30_000, maxRetries: 2 } })).not.toThrow()
+  })
+})
+
+// M6-D3: `tools/list_changed` → dirty flag → in-place rebuild. A server that
+// announces the notification MARKS its catalogue stale (no eager refetch — the
+// spec forbids rebuilding inside the event callback) and the catalogue is rebuilt
+// in place on the CURRENT generation when the consumer (session-executor's
+// assembly) reaches its step boundary. The forwarding case pins the D2 opts the
+// supervisor's proxy used to drop on the floor.
+describe("mcp catalogue refresh (list_changed → dirty → rebuild)", () => {
+  // Each case uses its OWN serverName: the module-level reservation is released
+  // by unmount, so a case that fails before unmounting must not poison the next.
+
+  /** Mount one fake, handing it the onToolsChanged callback the supervisor
+   *  passes through `deps.connect` — the stand-in for the SDK's handler. */
+  async function mountFake(gens: FakeGen[], serverName: string, extra: Partial<Extract<McpServerConfig, { transport: "stdio" }>> = {}) {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const config: Extract<McpServerConfig, { transport: "stdio" }> = { transport: "stdio", serverName, command: "x", args: [], toolCallTimeoutMs: 1_234, ...extra }
+    const handle = await mountMcpClient({} as never, tools, config, {
+      connect: async (_c, opts) => {
+        const gen = makeFakeGen(`gen${gens.length + 1}`, ["echo"])
+        gen.onToolsChanged = opts?.onToolsChanged
+        gens.push(gen)
+        return gen
+      },
+    })
+    return { tools, handle }
+  }
+
+  it("list_changed marks the catalogue dirty; the boundary rebuild applies the new list and clears it", async () => {
+    const gens: FakeGen[] = []
+    const { tools, handle } = await mountFake(gens, "cat1")
+    expect(handle.catalogDirty()).toBe(false)
+    expect(tools.get("mcp__cat1__echo")).toBeDefined()
+
+    // The server swaps its list, then announces it. NO eager refetch: the
+    // notification must not trigger a drain, and the registry must not change
+    // until a boundary consumes the flag.
+    gens[0]!.setTools(["echo", "fresh"])
+    gens[0]!.notifyToolsChanged()
+    expect(handle.catalogDirty()).toBe(true)
+    expect(gens[0]!.listToolCalls.length).toBe(1) // the mount's own drain
+    expect(tools.get("mcp__cat1__fresh")).toBeUndefined()
+
+    // The boundary: exactly the call the assembly's agent/pre-step handler makes.
+    await handle.refreshCatalog()
+    expect(handle.catalogDirty()).toBe(false)
+    expect(gens[0]!.listToolCalls.length).toBe(2) // re-drained, in place
+    expect(tools.get("mcp__cat1__fresh")).toBeDefined()
+    expect(tools.get("mcp__cat1__echo")).toBeDefined()
+    // The rebuilt catalogue routes to the same single generation (no reconnect).
+    await expect(tools.get("mcp__cat1__fresh")!.execute({}, exec)).resolves.toBeDefined()
+    expect(gens[0]!.callCount).toBe(1)
+
+    await handle.unmount()
+  })
+
+  it("forwards the drain's per-page opts through the proxy to the generation", async () => {
+    const gens: FakeGen[] = []
+    const { handle } = await mountFake(gens, "cat2")
+    const first = gens[0]!.listToolCalls[0]
+    // bridge.ts sends min(remaining, toolCallTimeoutMs) per page; the cap binds
+    // (the 60s drain deadline is not near), so the value is exact — and it can
+    // only be here at all if the proxy forwarded the second argument.
+    expect(first?.opts?.timeout).toBe(1_234)
+    // The page's remaining-total stays the drain's business: strictly larger.
+    expect(first?.opts?.maxTotalTimeout).toBeGreaterThan(1_234)
+    await handle.unmount()
+  })
+
+  it("generation death clears the flag, and a boundary during the outage fails fast", async () => {
+    const gens: FakeGen[] = []
+    const { handle } = await mountFake(gens, "cat3", {
+      reconnect: { enabled: true, initialDelayMs: 60_000, maxDelayMs: 60_000, maxRetries: 5 },
+    })
+    gens[0]!.setTools(["echo", "fresh"])
+    gens[0]!.notifyToolsChanged()
+    expect(handle.catalogDirty()).toBe(true)
+
+    // The flag dies with its generation: the reconnect path drains a fresh
+    // catalogue anyway, so stale dirtiness would be meaningless (plan §0.3).
+    gens[0]!.die()
+    await waitFor(() => handle.catalogDirty() === false)
+    // No generation is live: the same fail-fast error a tool call gets, not a
+    // hang on a dead transport and not a silent no-op.
+    await expect(handle.refreshCatalog()).rejects.toThrowError(McpServerUnavailableError)
+
+    await handle.unmount() // clears the pending retry timer
+  })
+
+  it("a list_changed that lands mid-rebuild leaves the catalogue dirty", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const gen = makeFakeGen("gen1", ["echo"])
+    let release: (() => void) | undefined
+    let defer = false
+    const drain = gen.listTools.bind(gen)
+    gen.listTools = async (cursor, opts) => {
+      if (defer) {
+        defer = false
+        await new Promise<void>((resolve) => { release = resolve })
+      }
+      return drain(cursor, opts)
+    }
+    const handle = await mountMcpClient({} as never, tools, {
+      transport: "stdio", serverName: "cat4", command: "x", args: [], toolCallTimeoutMs: 1_234,
+    }, {
+      connect: async (_c, opts) => { gen.onToolsChanged = opts?.onToolsChanged; return gen },
+    })
+    expect(handle.catalogDirty()).toBe(false)
+
+    defer = true
+    gen.notifyToolsChanged()
+    const rebuilding = handle.refreshCatalog()
+    await waitFor(() => release !== undefined) // the drain is genuinely in flight
+
+    // A SECOND change lands while those pages are being read: what the rebuild
+    // is about to install is already stale, so the flag must survive it —
+    // otherwise this change is lost until some later, unrelated notification.
+    gen.setTools(["echo", "later"])
+    gen.notifyToolsChanged()
+    release!()
+    await rebuilding
+
+    expect(handle.catalogDirty()).toBe(true)
+    await handle.refreshCatalog()
+    expect(handle.catalogDirty()).toBe(false)
+    expect(tools.get("mcp__cat4__later")).toBeDefined()
+
+    await handle.unmount()
   })
 })
