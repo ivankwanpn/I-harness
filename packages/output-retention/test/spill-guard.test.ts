@@ -164,6 +164,33 @@ it("a spilled object replacement still carries a real `images` array, and the ca
   rmSync(root, { recursive: true, force: true })
 })
 
+it("still emits a replacement when JSON escaping blows the first round past 2× the cap", async () => {
+  // The fit loop subtracts the overage the MEASURE reports, but the retainer
+  // budget is RAW bytes. With escape-heavy text (a quote is 1 byte / 2 escaped;
+  // a NUL is 1 byte / 6 escaped) round one measures past 2× the cap, a plain
+  // subtraction lands below 1, the loop gives up and the ORIGINAL comes back —
+  // over the cap and with no notice. Each row below is over 2× cap on round
+  // one, measured at 20,002 / 60,002 / 20,014 model-visible bytes.
+  const rows: Array<[string, unknown]> = [
+    ["quote-heavy string", `"`.repeat(10_000)],
+    ["NUL-heavy string", "\u0000".repeat(10_000)],
+    ["quote-heavy object", { content: `"`.repeat(10_000) }],
+  ]
+  for (const [label, value] of rows) {
+    const root = mkdir()
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    registry.register({ name: "esc", description: "", inputSchema: {}, execute: async () => value } as Tool)
+    ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
+    const result = await registry.execute({ name: "esc", args: {} })
+    // These fixtures carry no `images`, so what the model sees is the result
+    // stringified whole (the string branch's JSON-quoted form included).
+    const visible = Buffer.byteLength(JSON.stringify(result.output), "utf-8")
+    expect(visible, label).toBeLessThanOrEqual(2_000)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 it("gcSpillStore removes files older than maxAgeMs and trims to maxTotalBytes", async () => {
   const root = mkdir()
   for (let i = 0; i < 5; i++) {

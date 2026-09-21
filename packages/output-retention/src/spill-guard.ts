@@ -83,9 +83,10 @@ function modelVisibleBytes(output: unknown): number {
 // byte cost (it carries the omitted-byte count and the spill path) is only known
 // once the retained size is — so rather than guess it, this measures the REAL
 // candidate and shrinks the retainer budget by the overage. Measured to converge
-// in two rounds on ordinary text; more than a handful of rounds means
-// pathological JSON escaping (up to 6 bytes per input byte), and then `null` is
-// returned and the caller keeps the original (atom (iv)).
+// in two rounds on ordinary text, and in three on escape-heavy text; the round
+// cap is a loop-safety bound, and when a fit genuinely does not exist (the
+// notice alone exceeds the cap) `null` is returned and the caller keeps the
+// original (atom (iv)).
 const MAX_FIT_ROUNDS = 8
 
 /** Fit a replacement inside `cap` model-visible bytes: `assemble(budget)` runs
@@ -98,7 +99,18 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
     const candidate = assemble(budget)
     const bytes = modelVisibleBytes(candidate)
     if (bytes <= cap) return candidate
-    budget -= bytes - cap
+    // Give the overage back to the budget — but only while that keeps it
+    // positive. The budget is RAW bytes and the measure is escaped ones (a
+    // quote is 1 byte / 2 escaped, a NUL is 1 / 6), so an escape-heavy
+    // candidate can measure past 2× the budget; subtracting the whole overage
+    // would then land below 1 and give up while a fitting budget still exists
+    // (measured: a 10,000-quote string at a 2,000-byte cap measures 20,002 B on
+    // round one and the original came back at 10× the cap, notice-less). When
+    // the subtraction cannot stay positive, rescale by the escaping factor
+    // instead — the ratio between what the model sees and what the retainer
+    // spends is exactly what the next budget must be divided by.
+    const next = budget - (bytes - cap)
+    budget = next >= 1 ? next : Math.floor((budget * cap) / bytes)
   }
   return null
 }
