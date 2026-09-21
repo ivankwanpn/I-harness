@@ -166,6 +166,20 @@ it("I_HARNESS_LOG=stderr puts the JSONL record on process.stderr", () => {
   expect(warn).not.toHaveBeenCalled()
 })
 
+it("I_HARNESS_LOG='' counts as unset: delegation, not a path", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  const error = vi.spyOn(console, "error").mockImplementation(() => {})
+  // A pipeline that exports the variable EMPTY must get the unset behaviour;
+  // reading "" as a path would make the first record an ENOENT report instead.
+  process.env[ENV] = ""
+  installDiagnostics(createDiagnostics({ runId: "run-5", redactor: passthrough }))
+
+  diagnosticsFor("cli").warn("x")
+
+  expect(warn.mock.calls).toEqual([["x"]])
+  expect(error).not.toHaveBeenCalled()
+})
+
 it("I_HARNESS_LOG=<path> appends JSONL, creating the parent directory", () => {
   const root = mkdtempSync(join(tmpdir(), "diagnostics-"))
   try {
@@ -212,6 +226,35 @@ it("close() on the installed instance ends its records and detaches it", () => {
   expect(warn.mock.calls).toEqual([["after close"]])
 })
 
+it("a console-mode instance keeps delegating after close()", () => {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  // No stream and an unset env: the DELEGATION mode. close() ends a record
+  // stream, and there is no stream here to end — while silencing the human line
+  // at teardown would change bytes at the one moment the existing spies are
+  // still watching. T4's close-ordering leans on this.
+  const d = createDiagnostics({ runId: "r", redactor: passthrough })
+
+  d.warn("before close")
+  d.close()
+  d.warn("after close")
+
+  expect(warn.mock.calls).toEqual([["before close"], ["after close"]])
+})
+
+it("the ambient path follows the installed instance, with no stale view across a swap", () => {
+  const a = captureStream()
+  const b = captureStream()
+  const first = installDiagnostics(createDiagnostics({ stream: a.stream, runId: "A", redactor: passthrough }))
+  diagnosticsFor("cli").warn("one")
+
+  first()
+  installDiagnostics(createDiagnostics({ stream: b.stream, runId: "B", redactor: passthrough }))
+  diagnosticsFor("cli").warn("two")
+
+  expect(parsed(a.lines).map((r) => [r.run, r.msg])).toEqual([["A", "one"]])
+  expect(parsed(b.lines).map((r) => [r.run, r.msg])).toEqual([["B", "two"]])
+})
+
 it("installing the ambient handle itself is refused rather than routed back into it", () => {
   // `diagnosticsFor` resolves THROUGH the installed slot; installing one of its
   // handles would make that resolution route to itself (unbounded recursion) and
@@ -233,6 +276,15 @@ it("child(phase) binds the phase, on the instance and on the ambient handle", ()
     ["from the instance", "mount"],
     ["from the ambient handle", "turn"],
   ])
+})
+
+it("child(phase) hands back the same view, so a per-record call allocates nothing", () => {
+  // The ambient path calls `child(phase)` on EVERY record, so a fresh handle per
+  // call would allocate an object — and a back-pointer entry — per logged call.
+  // Pinned as a property, because that is what the cost requirement was.
+  const d = createDiagnostics({ stream: captureStream().stream, runId: "r", redactor: passthrough })
+  expect(d.child("run")).toBe(d.child("run"))
+  expect(d.child("run")).not.toBe(d.child("turn"))
 })
 
 // ------------------------------------------------------------- the unconstructible
