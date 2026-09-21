@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mkdtempSync, readdirSync, rmSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
@@ -69,24 +69,33 @@ function authorityText(output: unknown): string {
 }
 
 /** The guard's answer for one corpus member at one cap: the output it emits,
- *  and whether it wrote a spill file (its own witness that its MEASURE exceeded
- *  the cap — pass-through returns before the store is touched). */
-async function guardAt(output: unknown, cap: number): Promise<{ out: unknown; files: number }> {
+ *  whether it wrote a spill file (its own witness that its MEASURE exceeded the
+ *  cap — pass-through returns before the store is touched), and — when it did
+ *  write one — the file's text, which is the guard's durable copy of the
+ *  model-visible text. */
+async function guardAt(output: unknown, cap: number): Promise<{ out: unknown; files: number; saved?: string }> {
   const root = mkdir()
   const ctx = createContext()
   const registry = createToolRegistry(ctx)
   registry.register({ name: "corpus", description: "", inputSchema: {}, execute: async () => output } as Tool)
   ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: cap, spillRoot: root }))
   const result = await registry.execute({ name: "corpus", args: {} })
-  const files = readdirSync(root).length
+  const entries = readdirSync(root)
+  const saved = entries.length > 0 ? readFileSync(join(root, entries[0]!), "utf-8") : undefined
   rmSync(root, { recursive: true, force: true })
-  return { out: result.output, files }
+  return { out: result.output, files: entries.length, saved }
 }
+
+// The one corpus member where BOTH a non-empty rest and images coexist, so the
+// authority's text is separable and the guard's split is observable on both
+// sides of the boundary.
+const MIXED = "a mixed object"
 
 describe("the guard's measure agrees with core-session's toolResultText", () => {
   for (const [label, output] of CORPUS) {
     it(`agrees on ${label}`, async () => {
-      const cap = Buffer.byteLength(authorityText(output), "utf-8")
+      const text = authorityText(output)
+      const cap = Buffer.byteLength(text, "utf-8")
       // At the cap the AUTHORITY itself computed, the guard must consider the
       // result within budget: untouched, and no spill file written.
       const at = await guardAt(output, cap)
@@ -96,6 +105,18 @@ describe("the guard's measure agrees with core-session's toolResultText", () => 
       // must consider it over budget — the spill-file write is that judgement.
       const below = await guardAt(output, cap - 1)
       expect(below.files).toBeGreaterThan(0)
+      if (label === MIXED) {
+        // CONTENT, not only length. The assertions above pin the two measures'
+        // byte counts equal; a drift that preserves LENGTH (measured: a key
+        // reordering, or `?` rendered as `0`) is invisible to them — and the
+        // guard's copy is also the text it RETAINS, so a content drift would
+        // put the wrong text in the durable record while the boundary stayed
+        // green. The spill file holds exactly the guard's split text, and it
+        // must be the authority's rest text, character for character.
+        const rest = text.slice(0, text.indexOf("\nimage: "))
+        expect(rest.length).toBeGreaterThan(0) // the split was really exercised
+        expect(below.saved).toBe(rest)
+      }
     })
   }
 })
