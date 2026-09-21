@@ -96,34 +96,56 @@ function modelVisibleBytes(output: unknown): number {
 // byte cost (it carries the omitted-byte count and the spill path) is only known
 // once the retained size is — so rather than guess it, this measures the REAL
 // candidate and shrinks the retainer budget by the overage. Measured to converge
-// in two rounds on ordinary text, and in three on escape-heavy text; the round
-// cap is a loop-safety bound, and when a fit genuinely does not exist (the
-// notice alone exceeds the cap) `null` is returned and the caller keeps the
-// original (atom (iv)).
-const MAX_FIT_ROUNDS = 8
+// in two rounds on ordinary text, and in three on escape-heavy text.
+//
+// THE STEP MUST BE GEOMETRIC WHEN LINEAR STALLS, and this loop needed that
+// lesson twice. The budget is RAW bytes while the measure is the ESCAPED
+// (model-visible) one, so while the retainer is still keeping the WHOLE input,
+// subtracting the measured overage moves the budget and NOT the candidate: the
+// same overage comes back every round, and the loop can give up while a fitting
+// budget exists. Measured at the shipped 64,000 cap, STRING BRANCH ONLY — the
+// object branch retains and measures the SAME JSON string, so its budget and
+// its measure move together and the review's sweeps over it all converged:
+// `'"'.repeat(n)` for n ∈ [32,000, 34,200] came back as the
+// ORIGINAL at up to 68,402 model-visible bytes (106.9% of the cap), and
+// `"\u0000".repeat(n)` for n ∈ [11,000, 11,900] at up to 71,402 (111.6%), every
+// row on the 100-step grid giving up. A fit genuinely existed in both families:
+// a binary search for the largest fitting budget finds 31,930 and 10,643. So:
+// subtract the overage only while the candidate actually SHRANK; when it did
+// not shrink, or the subtraction cannot stay positive, halve the budget
+// instead. A geometric descent reaches any fitting budget in ≤ log2(cap)
+// rounds, which is why the round cap below sits well above log2 of any
+// practical cap: a bound that cannot outlast the descent would re-introduce the
+// give-up it exists to avoid.
+//
+// REACHABILITY of that band: no IN-TREE tool returns a bare string result
+// today (fs, shell and fs-search all return objects), so the band's producer is
+// a plugin-provided tool that does — real, but not something the tree ships.
+// Stated so this fix is not read as covering a shape production produces.
+//
+// `null` is returned for one reason only: no replacement can exist, i.e. the
+// notice ALONE exceeds the cap — the caller then keeps the original (atom (iv)).
+const MAX_FIT_ROUNDS = 32
 
 /** Fit a replacement inside `cap` model-visible bytes: `assemble(budget)` runs
  *  the retainer at `budget` and returns the real candidate. `null` = no
  *  replacement fits. */
 function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unknown | null {
   let budget = cap
+  let previous = Number.POSITIVE_INFINITY
   for (let round = 0; round < MAX_FIT_ROUNDS; round++) {
     if (budget < 1) return null
     const candidate = assemble(budget)
     const bytes = modelVisibleBytes(candidate)
     if (bytes <= cap) return candidate
-    // Give the overage back to the budget — but only while that keeps it
-    // positive. The budget is RAW bytes and the measure is escaped ones (a
-    // quote is 1 byte / 2 escaped, a NUL is 1 / 6), so an escape-heavy
-    // candidate can measure past 2× the budget; subtracting the whole overage
-    // would then land below 1 and give up while a fitting budget still exists
-    // (measured: a 10,000-quote string at a 2,000-byte cap measures 20,002 B on
-    // round one and the original came back at 10× the cap, notice-less). When
-    // the subtraction cannot stay positive, rescale by the escaping factor
-    // instead — the ratio between what the model sees and what the retainer
-    // spends is exactly what the next budget must be divided by.
-    const next = budget - (bytes - cap)
-    budget = next >= 1 ? next : Math.floor((budget * cap) / bytes)
+    // Linear while it makes progress: the overage the measure reports, given
+    // back to the budget that produced it. Geometric when it cannot: a
+    // candidate that did not shrink means the budget is still above everything
+    // the retainer keeps, so the same overage would be subtracted forever —
+    // halving is the step that gets below the input and moves the candidate.
+    const linear = budget - (bytes - cap)
+    budget = linear >= 1 && bytes < previous ? linear : Math.floor(budget / 2)
+    previous = bytes
   }
   return null
 }
@@ -149,6 +171,7 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
 // record had NO top-level `code` and the verdict survived only as truncated
 // text. With it in the set the verdict — and the PARTIAL output the timeout
 // guard spread under it — passes through whole.
+//
 //
 // THE PRICE, stated rather than hidden: the rule is a VALUE test, so a tool
 // body that returns one of these five strings as its own data is never bounded.
