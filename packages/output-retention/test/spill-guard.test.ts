@@ -255,6 +255,40 @@ it("still emits a replacement when JSON escaping blows the first round past 2× 
   }
 })
 
+it("the fit loop reaches a fit across the whole failing band (string branch, shipped cap)", async () => {
+  // The band the earlier fit fix did not close. The loop shrank the budget by
+  // the overage it MEASURED, but the budget is RAW bytes and the measure is the
+  // JSON-ESCAPED one — so while the retainer still keeps the whole string, the
+  // subtraction moves the budget and NOT the candidate: the same overage comes
+  // back every round and eight rounds can end with the ORIGINAL returned, over
+  // the cap, spill file written. Measured on the pre-fix tree at the shipped
+  // 64,000 cap: the quote rows below came back at up to 68,402 model-visible
+  // bytes and the NUL rows at up to 70,502. A fit demonstrably exists — a binary
+  // search for the largest fitting budget finds 31,930 and 10,643 — so "no
+  // replacement fits" was false for every row here.
+  //
+  // String branch only, and the rows are built from a string literal: no
+  // IN-TREE tool returns a bare string result today, so the band's reachability
+  // is a plugin-provided tool that does. The band is real; its producer is the
+  // shape a plugin can still hand over.
+  const rows: Array<[string, string]> = []
+  for (let n = 32_000; n <= 34_200; n += 100) rows.push([`${n} quotes`, `"`.repeat(n)])
+  for (let n = 11_000; n <= 11_900; n += 100) rows.push([`${n} NULs`, "\u0000".repeat(n)])
+  for (const [label, value] of rows) {
+    const root = mkdir()
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    registry.register({ name: "esc", description: "", inputSchema: {}, execute: async () => value } as Tool)
+    ctx.mount(createOutputSpillGuard(ctx, { spillRoot: root })) // the shipped cap: 64,000
+    const result = await registry.execute({ name: "esc", args: {} })
+    const out = result.output as string
+    // A REPLACEMENT, not the give-up: the give-up is the defect this pins.
+    expect(out, label).not.toBe(value)
+    expect(Buffer.byteLength(JSON.stringify(out), "utf-8"), label).toBeLessThanOrEqual(64_000)
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 it("gcSpillStore removes files older than maxAgeMs and trims to maxTotalBytes", async () => {
   const root = mkdir()
   for (let i = 0; i < 5; i++) {
