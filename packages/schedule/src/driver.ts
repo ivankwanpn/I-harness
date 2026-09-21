@@ -94,51 +94,62 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
   let timer: NodeJS.Timeout | null = null
   let running = false
 
+  let ticking = false  // one tick in flight (W1's shape, settings/src/index.ts:1437): a tick that
+                       // arrives while one is running is SKIPPED, not queued — the next tick re-reads
+                       // the fold, and a skipped tick can never miss a state that has settled. Without
+                       // this guard two overlapping ticks can both fold BEFORE either host delivery
+                       // lands, and each would deliver the same occurrence.
   async function tick(): Promise<ScheduleTickResult> {
-    const result: ScheduleTickResult = { delivered: 0, due: [], deliveryErrors: [] }
-    const accepted = nowFn()
-    for (const sessionId of opts.sessions()) {
-      const events = opts.events(sessionId)
-      if (events === undefined) continue
-      let active: readonly ScheduleRecord[]
-      try {
-        active = foldScheduleEvents(events).active
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        result.deliveryErrors.push(`${sessionId}: ${reason}`)
-        logWarn(`schedule stream of ${sessionId} is corrupt: ${reason}`)
-        continue
-      }
-      for (const record of active) {
-        if (scheduleView(record, accepted).state !== "overdue") continue
-        const occurrenceAt = record.kind === "every"
-          ? resolveEveryOccurrence(record, accepted).occurrenceAt
-          : record.scheduledAt
-        const due: ScheduleDue = { sessionId, record, occurrenceAt }
-        const delivery: ScheduleDelivery = {
-          sessionId,
-          dispatchEvents: [dispatchEventFor(record, accepted)],
-          // renderReminderFraming reads record.scheduledAt — for an every record that is the lagging
-          // target (the fold only advances it on the NEXT dispatch), so hand it the occurrence.
-          text: renderReminderFraming(record.kind === "every" ? { ...record, scheduledAt: occurrenceAt } : record),
-          inputId: scheduleOccurrenceInputId(record, occurrenceAt),
-          due: [due],
-        }
+    if (ticking) return { delivered: 0, due: [], deliveryErrors: [] }
+    ticking = true
+    try {
+      const result: ScheduleTickResult = { delivered: 0, due: [], deliveryErrors: [] }
+      const accepted = nowFn()
+      for (const sessionId of opts.sessions()) {
+        const events = opts.events(sessionId)
+        if (events === undefined) continue
+        let active: readonly ScheduleRecord[]
         try {
-          // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
-          // batch, or refuse by throwing — nothing is counted before this returns.
-          await opts.deliver(delivery)
+          active = foldScheduleEvents(events).active
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
           result.deliveryErrors.push(`${sessionId}: ${reason}`)
-          logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
+          logWarn(`schedule stream of ${sessionId} is corrupt: ${reason}`)
           continue
         }
-        result.due.push(...delivery.due)
-        result.delivered += delivery.due.length
+        for (const record of active) {
+          if (scheduleView(record, accepted).state !== "overdue") continue
+          const occurrenceAt = record.kind === "every"
+            ? resolveEveryOccurrence(record, accepted).occurrenceAt
+            : record.scheduledAt
+          const due: ScheduleDue = { sessionId, record, occurrenceAt }
+          const delivery: ScheduleDelivery = {
+            sessionId,
+            dispatchEvents: [dispatchEventFor(record, accepted)],
+            // renderReminderFraming reads record.scheduledAt — for an every record that is the lagging
+            // target (the fold only advances it on the NEXT dispatch), so hand it the occurrence.
+            text: renderReminderFraming(record.kind === "every" ? { ...record, scheduledAt: occurrenceAt } : record),
+            inputId: scheduleOccurrenceInputId(record, occurrenceAt),
+            due: [due],
+          }
+          try {
+            // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
+            // batch, or refuse by throwing — nothing is counted before this returns.
+            await opts.deliver(delivery)
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err)
+            result.deliveryErrors.push(`${sessionId}: ${reason}`)
+            logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
+            continue
+          }
+          result.due.push(...delivery.due)
+          result.delivered += delivery.due.length
+        }
       }
+      return result
+    } finally {
+      ticking = false
     }
-    return result
   }
 
   return {
