@@ -31,6 +31,11 @@ export function createOutputSpillGuard(_ctx: PluginContext, config?: OutputSpill
         const out = await next()
         if (out === undefined || out === null || typeof out === "number" || typeof out === "boolean") return out
         const d = dispatch as { name: string }
+        // A truncated `read` sends the model back to read the same file, and it
+        // gets truncated again — the loop is worse than the size. dsh skips it
+        // for exactly this reason (spec §4.2). The check is on the TOOL NAME at
+        // the cascade seam, which is the only place this guard can see it.
+        if (d.name === "read") return out
         if (typeof out === "string") {
           if (Buffer.byteLength(out, "utf-8") <= maxBytes) return out
           const r = createTextRetainer({ maxBytes, mode: "headTail" })
