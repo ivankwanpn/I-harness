@@ -173,6 +173,21 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
 // guard spread under it — passes through whole.
 //
 //
+// TOOL_TIMEOUT'S EXPOSURE, measured end to end rather than assumed — it is the
+// one member whose result is not just a message. For the SHIPPED shell tools
+// the exposure is bounded at 2× the cap, because `shellRetention` truncates
+// each stream to 64,000 BEFORE the timeout guard spreads the partial under the
+// verdict: driven through the real CLI with a real shell that outlived its
+// deadline, one stream over-retained came back at 64,153 B (1.00× the cap) and
+// both streams at 128,158 B (2.00×). The bound is NOT general, and the
+// condition is the part to remember: a tool that declares `timeoutMs` and has
+// NO self-retention resolves after the deadline with a partial nothing has
+// bounded — measured with a stand-in of exactly that shape, 1,000,101 B
+// (15.6× the cap), passed through whole. So ANY future `timeoutMs` tool
+// without self-retention makes this member unbounded; the exemption accepted
+// that when the code was admitted, deliberately. If a different treatment is
+// ever wanted, it must preserve `error` and `code` VERBATIM at the top level
+// and carry a real `images` array through — everything else is spillable.
 // THE PRICE, stated rather than hidden: the rule is a VALUE test, so a tool
 // body that returns one of these five strings as its own data is never bounded.
 // That is the cost of keying on the vocabulary instead of the shape; the
