@@ -202,8 +202,15 @@ function sanitizeSegment(s: string): string {
   return out || "~"
 }
 
+// The advice names `grep` and nothing else, because `read` cannot follow the
+// advice this used to give: IH's `read` declares `path` alone (no offset/limit,
+// packages/fs/src/index.ts), so "Use read with offset/limit" sent the model to
+// do a FULL re-read — and since M5 T4 block ③ T2, a `read` result is exempt
+// from the bound, so that re-read lands unbounded. Advice that cannot be
+// followed is worse than none. `grep` takes `path` (an absolute path is used
+// as-is, packages/fs-search/src/index.ts) and returns bounded matches.
 export function spillNotice(omittedBytes: number, path: string): string {
-  return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use read with offset/limit, or grep this path to search within it.)`
+  return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use grep with this path to search within it.)`
 }
 
 export { createOutputSpillGuard, gcSpillStore, createUnifiedSpillStore } from "./spill-guard.ts"
