@@ -28,6 +28,7 @@ import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
+import { runPluginsCommand } from "./plugins.ts"
 import { PROVIDER_PROTOCOLS, runProviderCommand, type CliProtocol } from "./provider.ts"
 import { runModelsCommand } from "./models.ts"
 import { runRolesCommand } from "./roles.ts"
@@ -56,12 +57,13 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // `--sandbox read-only|workspace-write|danger-full-access` token is
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
-  "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles> ...]\n" +
+  "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
   "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
-  "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh> | roles <list|set|unset>"
+  "  provider <list|add|set|key|rm> | models <list|probe|add|set|rm|use|refresh> | roles <list|set|unset> |\n" +
+  "  plugins [list] [--json]"
 
 export { runHeadless } from "./run.ts"
 export type { HeadlessOptions, HeadlessResult } from "./run.ts"
@@ -145,6 +147,16 @@ export async function main(argv: string[]): Promise<number> {
   // gate's refusal message already tells the user to run.
   if (args[0] === "roles") {
     return runRolesCommand(args)
+  }
+  // The plugin registry's report face (owner ruling 2026-09-21, M6 precedent
+  // synthesis #8). The registry's state/catalog/readiness vocabulary had ZERO
+  // production consumers since the frontends were removed, and that
+  // invisibility is what let every plugin MCP server fail to mount for a week
+  // with one warn line as its only trace. READ-ONLY by construction: the
+  // lifecycle verbs are a separate decision, and this dispatch reaches only the
+  // list command.
+  if (args[0] === "plugins") {
+    return runPluginsCommand(args)
   }
   // R-C7 acp subcommand: official-ACP (v1) stdio server over the SessionService.
   // Same stdout discipline as `sdk` — ONLY ACP NDJSON frames on stdout.

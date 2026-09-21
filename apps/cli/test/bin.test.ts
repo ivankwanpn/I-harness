@@ -41,9 +41,11 @@ describe("M44 global command shim (i-harness / ih)", () => {
     // describe a bare-launch default — there is none (bare-launch.test.ts pins
     // the refusal). The old case asserted "launches the TUI" here; that
     // sentence described a deleted surface, so it went with it.
-    // Extended for each tree added since: provider, models, and now roles.
-    expect(r.stderr).toContain("[<run|sdk|acp|sessions|hooks|provider|models|roles> ...]")
+    // Extended for each tree added since: provider, models, roles, and now
+    // plugins (the plugin registry's read-only report face).
+    expect(r.stderr).toContain("[<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]")
     expect(r.stderr).toContain("roles <list|set|unset>")
+    expect(r.stderr).toContain("plugins [list] [--json]")
     expect(r.stderr).not.toContain("tui")
     expect(r.stderr).not.toContain("web")
   }, 30_000)
