@@ -169,7 +169,8 @@ export interface SdkServer {
    * sent garbage, which warns instead of rejecting). Captured ONCE: a second
    * `initialize` never overwrites it. A CONNECTION-scoped fact (the session
    * event log cannot derive it), so it is deliberately not persisted or
-   * logged; this accessor is its read path. */
+   * logged; this accessor is its read path. It returns a COPY — the captured
+   * object is the server's own state, never a handle a caller can mutate. */
   clientInfo(): { name?: string; version?: string } | undefined
   /** Notification sink (server → client). */
   onNotify(cb: (message: RpcNotification) => void): () => void
@@ -211,13 +212,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const captureClientInfo = (params: unknown): { name?: string; version?: string } | undefined => {
     if (params === undefined) return undefined
     if (params === null || typeof params !== "object" || Array.isArray(params)) {
-      console.warn("sdk-server(initialize): params is not an object — the connection identity was not captured")
+      console.warn("[sdk-server] initialize: params is not an object — the connection identity was not captured")
       return undefined
     }
     const raw = (params as { clientInfo?: unknown }).clientInfo
     if (raw === undefined) return undefined
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      console.warn("sdk-server(initialize): clientInfo is not an object — the connection identity was not captured")
+      console.warn("[sdk-server] initialize: clientInfo is not an object — the connection identity was not captured")
       return undefined
     }
     const name = typeof (raw as { name?: unknown }).name === "string" ? (raw as { name: string }).name : undefined
@@ -811,7 +812,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       return encodeFrame(reply)
     },
     clientInfo() {
-      return capturedClientInfo
+      // a COPY: the capture is the server's own state — a caller must not be
+      // able to mutate it through the accessor
+      return capturedClientInfo === undefined ? undefined : { ...capturedClientInfo }
     },
     onNotify(cb) {
       notifiers.add(cb)

@@ -111,7 +111,9 @@ describe("HarnessClient (low level, in-process transport)", () => {
       const msg = decodeFrame(line)
       if (!isRpcRequest(msg)) return
       if (msg.method === "initialize") {
-        write.write(encodeFrame(makeSuccess(msg.id, { name: "i-harness", protocolVersion: 1 })))
+        // the stub answers the CURRENT wire version (v3 since M68 batch B) —
+        // the client contract takes whatever the server advertises
+        write.write(encodeFrame(makeSuccess(msg.id, { name: "i-harness", protocolVersion: 3 })))
       } else if (msg.method === "notify-me") {
         write.write(encodeFrame(makeNotification("session/event", { sessionId: "s1", event: { type: "turn/end" } })))
         write.write(encodeFrame(makeSuccess(msg.id, { ok: true })))
@@ -127,7 +129,7 @@ describe("HarnessClient (low level, in-process transport)", () => {
     serve(rl, serverWrite)
     try {
       const info = await client.request("initialize", {})
-      expect(info).toMatchObject({ name: "i-harness", protocolVersion: 1 })
+      expect(info).toMatchObject({ name: "i-harness", protocolVersion: 3 })
     } finally {
       rl.close()
       await client.close()
@@ -308,7 +310,7 @@ describe("HarnessClient session lifecycle and model helpers", () => {
           clientRead.write(encodeFrame(makeSuccess(msg.id, {
             name: "i-harness",
             version: "0.1.0",
-            protocolVersion: 2,
+            protocolVersion: 3,
             capabilities: {
               "session-create": ["1"],
               "session-fork": ["1"],

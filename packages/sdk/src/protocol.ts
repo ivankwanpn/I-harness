@@ -78,7 +78,8 @@
  *
  * A v0 client that only speaks the v0 methods is unaffected — the server
  * answers every v0 request per the v0 shapes above. Breaking-change policy
- * is unchanged: v1 (and any later version) stays additive-only.
+ * is unchanged: the default is additive-only; a breaking step bumps the
+ * version — see the v2 section at the end of this header.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * SDK Wire Contract v1.1 addendum — M41b, 2026-09-05 (ADDITIVE-ONLY).

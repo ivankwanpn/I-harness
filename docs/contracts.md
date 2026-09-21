@@ -135,7 +135,7 @@
 - **rewind wire shape 鏡像引擎**：`session/rewind/*` 的 shape 是 packages/rewind 類型的**結構鏡像**（wire 不能依賴 rewind 包——獨立）；宿主側（apps/cli）factory 於請求時做引擎型 → wire 型映射；引擎內部鍵（blob id）永不洩漏——wire 文件操作為 `{ path, op: "restore-blob" \| "delete-added" }`。
 - **list 行豐富（v1.1 源面）**：apps/cli `sdk` 命令的 `listSessions` 源在 `--session-dir` 給定時補 `updatedAt`（artifact mtime——M37b store-listing 慣例；stat 失敗回退 `meta.createdAt` 解析）+ `turnCount`（`coordinator.load` 的 turn/start 計數——唯讀路徑，非 mutating）。其餘 context 字段（contextUsed/contextTotal）仍可選缺省；單行 load 失敗 → 行保留（無 turnCount）並 loud 於 stderr（profile 敗行維持 M41a 的「唯 id 誠實行」）。
 
-### 輸出背壓（M68 批 A；additive，`PROTOCOL_VERSION` **保持 2**）
+### 輸出背壓（M68 批 A；additive——批 A 當時維持 2；批 B 依條款 bump 至 3）
 
 > 面在**宿主側**，不是伺服器側：`createSdkServer` 的 `onWrite` 仍是同步的一次回呼（既有行為不變——客戶端的響應/通知交錯語意依賴它），界在 `@i-harness/sdk` 的 `createBoundedWriter()` 裡：`onWrite` → writer（FIFO）→ 宿主的 output。apps/cli 的 `sdk` 命令以 `DEFAULT_WRITE_BOUND_BYTES` 接到 `process.stdout`。
 
