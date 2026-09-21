@@ -14,10 +14,11 @@
  * SDK Wire Contract v0 — FROZEN (M28 S-1, 2026-09-01).
  *
  * This is the public wire surface for @i-harness/sdk embedders. The version
- * anchor is `PROTOCOL_VERSION` (= 1; exposed as SDK_SERVER_PROTOCOL_VERSION by
- * server.ts). The field-level drift sentinel lives in test/server.test.ts
- * ("initialize wire contract v0 (field-level lock)") — changing any shape
- * below breaks it on purpose.
+ * anchor is `PROTOCOL_VERSION` (= 1 at v0; 3 today — see the v2 section at the
+ * end of this header; exposed as SDK_SERVER_PROTOCOL_VERSION by server.ts). The
+ * field-level drift sentinel lives in test/server.test.ts ("initialize wire
+ * contract v3 (field-level lock)") — changing any shape below breaks it on
+ * purpose.
  *
  * Framing: ONE JSON-RPC 2.0 message per NDJSON line; request ids echo into
  * responses; malformed lines are ignored (never echo, never crash).
@@ -34,8 +35,9 @@
  *   session/status { sessionId, status, error? } — lifecycle transitions
  *
  * Error shape: { jsonrpc: "2.0", id, error: { code, message, data? } }
- * Error codes: -32700 parse · -32600 invalid request (defined; v0 never emits
- *   it — malformed lines are ignored) · -32601 method not found ·
+ * Error codes: -32700 parse · -32600 invalid request (v0–v2: defined but never
+ *   emitted — malformed lines are ignored; v3 emits it for a request sent
+ *   before `initialize`, see the v2 section below) · -32601 method not found ·
  *   -32602 invalid params · -32603 internal · -32000 server overload (M68: the
  *   reserved server-error range; carries id: null — no request corresponds).
  *
@@ -218,7 +220,9 @@
  * ────────────────────────────────────────────────────────────────────────────
  * M68 batch A addendum — 2026-09-22 (ADDITIVE-ONLY).
  *
- * PROTOCOL_VERSION remains 2. ONE new error code; no existing shape changes:
+ * PROTOCOL_VERSION stays 2 in THIS batch — batch A is additive-only on its own;
+ * the SAME milestone's batch B (the `initialize` gate, the v2 section below) is
+ * what takes the number to 3. ONE new error code; no existing shape changes:
  *
  *   SERVER_OVERLOAD = -32000 — the "Reserved for implementation-defined
  *   server-errors" range (JSON-RPC 2.0, -32000…-32099). It is emitted by the
@@ -235,13 +239,51 @@
  * write path is byte-identical to v1.1 (the writer only forwards frames).
  * Embedders driving their own output stream keep the same choice they always
  * had: the bound is the host's (the CLI wires it to stdout), not the server's.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SDK Wire Contract v2 — **BREAKING** (M68 batch B, 2026-09-22).
+ *
+ * PROTOCOL_VERSION is now 3. This is NOT an additive step — the versioning
+ * rules above are what it pays: bump PROTOCOL_VERSION, document the migration.
+ *
+ *   **v2: `initialize` is the GATE.** A request sent before the connection has
+ *   handshaken is refused:
+ *
+ *     -32600 INVALID_REQUEST
+ *     message: "not initialized: send initialize first"
+ *     data:    { reason: "not_initialized" }
+ *
+ *   Sequencing is the whole change — no existing shape/field/code moved. The
+ *   refused code has been defined since v0 and had no producer until now
+ *   (malformed lines are IGNORED, so the framing path never emitted it); a
+ *   request out of order is exactly the "invalid request" it names, and the
+ *   BREAKING part is carried by the version number, not by a new error code.
+ *   `shutdown` is EXEMPT from the gate, deliberately: a half-initialized client
+ *   must have a way out.
+ *
+ *   initialize { clientInfo? } → the reply is UNCHANGED in shape (name, version,
+ *   protocolVersion: 3, capabilities — the rows are the v1.1 set, still only
+ *   additive). The PARAMS are now read: `clientInfo?: { name?: string;
+ *   version?: string }` is captured ONCE for the connection at the first
+ *   initialize (readable through the server's `clientInfo()`; a connection-
+ *   scoped fact — the session event log cannot derive it, so it is neither
+ *   persisted nor logged). A second `initialize` is IDEMPOTENT: same reply, no
+ *   error, and the FIRST captured identity wins — the params of a second call
+ *   are never read. Present-but-not-an-object params/clientInfo captures
+ *   nothing and warns; it never rejects the handshake.
+ *
+ * Migration: the client sends `initialize` before its first request.
+ * `HarnessClient.initialize()` is already an explicit method, so no client API
+ * changes; an embedder driving the raw wire adds one frame. Everything else is
+ * unchanged: every other method, every notification shape, the capability rows,
+ * the append-only session/event semantics, and the error-code meanings.
  */
 
 import { createInterface, type Interface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 import type { SessionEvent } from "@i-harness/core-session"
 
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 export const PARSE_ERROR = -32700
 export const INVALID_REQUEST = -32600

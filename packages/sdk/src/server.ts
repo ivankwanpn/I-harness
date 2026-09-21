@@ -2,13 +2,44 @@
 // handler over the C-region SessionService. The CLI wires it to stdio
 // (`i-harness sdk`); an embedder can wire it to any duplex.
 //
-// Wire contract (methods):
-//   initialize             → { name, version, protocolVersion, capabilities }
-//   session/prompt {sessionId, prompt}
-//                          → { sessionId, ok: true }    when the turn drained;
-//                            error response -32603 on a failed turn (data.event
-//                            carries the collected events)
-//   session/status {sessionId} → { running, queued }
+// Wire contract (methods) — ALL 19 switch cases below, in switch order (the
+// list was re-written from the switch on 2026-09-22; it had omitted seven
+// methods — session/create, session/fork, session/model/state,
+// session/model/set, session/tasks, session/tasks/cancel, session/dashboard):
+//   initialize {clientInfo?} [M68 v3 — THE GATE]
+//                          → { name, version, protocolVersion, capabilities };
+//                            opens the gate and captures the connection
+//                            identity ONCE; a second initialize is idempotent
+//                            (same reply, first-wins identity)
+//   session/create {}      [additive; host-gated on opts.createSession]
+//                          → { sessionId } — absent seam → -32601
+//   session/fork {sessionId} [additive; host-gated on opts.forkSession]
+//                          → { sessionId } — absent seam → -32601
+//   session/model/state {sessionId} [additive; host-gated on opts.modelState]
+//                          → SessionModelState — absent seam → -32601
+//   session/model/set {sessionId, selection} [additive; host-gated]
+//                          → the fresh SessionModelState — the host's
+//                            setSessionModel rebinds the LIVE session in place
+//                            (the server never disposes it); a busy session
+//                            refuses -32603
+//   session/status {sessionId} → { running, queued } (count-only surface)
+//   session/queue {sessionId}    [M49 Task 11]
+//                          → { items } — the real per-session queue projection
+//                            (running row first, rest FIFO)
+//   session/queue/cancel {sessionId, id} [M49 Task 11]
+//                          → { cancelled } — one queued row, honest false for
+//                            finished/running/unknown ids
+//   session/tasks {sessionId}    [M49 Task 12]
+//                          → { items } — the real per-session task projection
+//                            (serialized summary rows; an unknown-but-valid
+//                            session answers an honest empty list)
+//   session/tasks/cancel {sessionId, id} [M49 Task 12]
+//                          → { status } — cancelled through the owning
+//                            registry; an unknown id keeps the not-found
+//                            semantics (-32602 "unknown job/task")
+//   session/cancel {sessionId}   [M41b v1.1]
+//                          → { cancelled, reason? } — aborts the in-flight
+//                            submit's per-session AbortController
 //   session/history {sessionId, afterSeq?, limit?}  [M41a v1]
 //                          → { events, nextSeq }; unknown session → -32602
 //                            with an explicit "session not found" message
@@ -16,15 +47,11 @@
 //                          → { sessions, listingUnavailable? } (injectable
 //                            listSessions source; absent source → honest
 //                            listingUnavailable: true)
-//   session/cancel {sessionId}   [M41b v1.1]
-//                          → { cancelled, reason? } — aborts the in-flight
-//                            submit's per-session AbortController
-//   session/queue {sessionId}    [M49 Task 11]
-//                          → { items } — the real per-session queue projection
-//                            (running row first, rest FIFO)
-//   session/queue/cancel {sessionId, id} [M49 Task 11]
-//                          → { cancelled } — one queued row, honest false for
-//                            finished/running/unknown ids
+//   session/dashboard {}   [M49 Task 13]
+//                          → { sessions } — the LOCAL dashboard projection
+//                            (listing rows enriched with KNOWN live fields;
+//                            no cost/team member by shape; absent listing
+//                            source → the honest blank)
 //   session/rewind/points {sessionId}            [M41b v1.1]
 //   session/rewind/plan {sessionId, target, mode?}
 //   session/rewind/execute {sessionId, target, mode?}
@@ -32,11 +59,17 @@
 //                            the injectable rewindFactory (absent →
 //                            -32603 "rewind not enabled"); unknown session →
 //                            -32602 "session not found" (never auto-creates)
-//   shutdown               → { ok: true } (then onShutdown fires)
+//   session/prompt {sessionId, prompt}
+//                          → { sessionId, ok: true }    when the turn drained;
+//                            error response -32603 on a failed turn (data.event
+//                            carries the collected events)
+//   shutdown               → { ok: true } (then onShutdown fires) — EXEMPT from
+//                            the gate (a half-initialized client needs a way out)
 // Notifications (server → client):
 //   session/event  { sessionId, event }   — every appended session event
 //   session/status { sessionId, status, error? } — lifecycle transitions
-// Malformed lines are ignored; unknown methods get -32601; invalid params -32602.
+// Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
+// a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { append, subscribe, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
@@ -49,6 +82,7 @@ import {
   makeSuccess,
   decodeFrame,
   INVALID_PARAMS,
+  INVALID_REQUEST,
   METHOD_NOT_FOUND,
   INTERNAL_ERROR,
   PROTOCOL_VERSION,
@@ -130,6 +164,13 @@ export interface SdkServer {
    * Async methods (session/prompt) resolve their response late; notifications
    * are pushed as they happen via onNotify. */
   handleLine(line: string): Promise<string | null>
+  /** M68 batch B (v3): the connection identity captured at the FIRST
+   * `initialize` — `{ name?, version? }`, absent when the client sent none (or
+   * sent garbage, which warns instead of rejecting). Captured ONCE: a second
+   * `initialize` never overwrites it. A CONNECTION-scoped fact (the session
+   * event log cannot derive it), so it is deliberately not persisted or
+   * logged; this accessor is its read path. */
+  clientInfo(): { name?: string; version?: string } | undefined
   /** Notification sink (server → client). */
   onNotify(cb: (message: RpcNotification) => void): () => void
   /** Idempotent teardown: detaches the assembly bridges. */
@@ -154,6 +195,41 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const preparingHistorySessions = new Map<string, Promise<Session | undefined>>()
   const inflight = new Map<string, Inflight>()
   let closed = false
+
+  // M68 batch B (v3): the connection-scoped state — the gate and the identity
+  // captured behind it. Both are per-CONNECTION (this server object), never
+  // per-session: nothing below keys on a sessionId.
+  let initialized = false
+  let capturedClientInfo: { name?: string; version?: string } | undefined
+
+  /** Tolerant read of `params.clientInfo` (v3): a present-but-not-an-object
+   * params/clientInfo captures NOTHING and warns — the handshake is never
+   * rejected for it (the identity is informational; refusing the connection
+   * over it would be a strictly worse trade). Absent fields are dropped rather
+   * than coerced: a `{ name: 42 }` client gets `undefined`, never the string
+   * "42". */
+  const captureClientInfo = (params: unknown): { name?: string; version?: string } | undefined => {
+    if (params === undefined) return undefined
+    if (params === null || typeof params !== "object" || Array.isArray(params)) {
+      console.warn("sdk-server(initialize): params is not an object — the connection identity was not captured")
+      return undefined
+    }
+    const raw = (params as { clientInfo?: unknown }).clientInfo
+    if (raw === undefined) return undefined
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      console.warn("sdk-server(initialize): clientInfo is not an object — the connection identity was not captured")
+      return undefined
+    }
+    const name = typeof (raw as { name?: unknown }).name === "string" ? (raw as { name: string }).name : undefined
+    const version = typeof (raw as { version?: unknown }).version === "string"
+      ? (raw as { version: string }).version
+      : undefined
+    if (name === undefined && version === undefined) return undefined
+    return {
+      ...(name !== undefined ? { name } : {}),
+      ...(version !== undefined ? { version } : {}),
+    }
+  }
 
   /** One sink path for EVERY outgoing message: onWrite (the CLI's stdout
    * writer), then onNotify + subscription listeners for notifications. */
@@ -277,13 +353,34 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   }
 
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
+    // M68 batch B (v3): `initialize` is THE GATE — the one funnel every request
+    // passes, so it sits above the switch (an unknown method is gated too: "has
+    // this connection handshaken?" is answered before "does this method exist",
+    // and the -32601 answer is unchanged once past the gate). `shutdown` is
+    // EXEMPT on purpose: a half-initialized client must have a way out. The
+    // error code has existed since v0 with no producer (protocol.ts's own note);
+    // a sequencing error is exactly what it was defined for.
+    if (method !== "initialize" && method !== "shutdown" && !initialized) {
+      return makeFailure(id, INVALID_REQUEST, "not initialized: send initialize first", {
+        reason: "not_initialized",
+      })
+    }
     switch (method) {
       case "initialize": {
+        // M68 batch B (v3): open the gate and capture the identity ONCE. A
+        // second initialize is IDEMPOTENT — same reply, no error — and its
+        // params are never read again (first-wins), so nothing a client sends
+        // later can retarget the connection identity.
+        if (!initialized) {
+          initialized = true
+          capturedClientInfo = captureClientInfo(params)
+        }
         // M41a v1: protocolVersion 2; the capabilities object only GAINS rows
         // (the v0 rows are byte-identical — additive-only). M41b v1.1: four
         // more additive rows total ("session-history"/"session-list" + the
-        // "session-cancel"/"session-rewind" appendix rows) — protocolVersion
-        // STAYS 2; the v1.1 surface is capability-advertised.
+        // "session-cancel"/"session-rewind" appendix rows). M68 batch B is the
+        // one non-additive step: the value is 3 and the gate above is why — the
+        // rows below are STILL only additive.
         return makeSuccess(id, {
           name: SDK_SERVER_NAME,
           version: opts.version ?? "0.1.0",
@@ -712,6 +809,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       const reply = await handleRequest(message.method, message.params, message.id)
       emitMessage(reply)
       return encodeFrame(reply)
+    },
+    clientInfo() {
+      return capturedClientInfo
     },
     onNotify(cb) {
       notifiers.add(cb)
