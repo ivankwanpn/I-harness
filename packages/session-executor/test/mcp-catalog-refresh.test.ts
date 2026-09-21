@@ -42,8 +42,12 @@ vi.mock("@i-harness/core-agent", async (importOriginal) => {
 })
 
 // A minimal MCP server speaking newline-delimited JSON-RPC 2.0 over stdio.
-// argv[2] = the request log this test reads; argv[3] = "fail-after-swap" makes
-// the catalogue unreadable once the list has been swapped.
+// argv[2] = the request log this test reads; argv[3] = the mode:
+//   "ok"                — advertises tools.listChanged, serves the catalogue
+//   "fail-after-swap"   — same, but tools/list errors once the list has swapped
+//   "no-listChanged"    — advertises `capabilities.tools = {}` (NO listChanged)
+//                         yet still sends the notification: the server half of
+//                         the "is the low-level handler capability-gated?" case.
 const STUB = `
 import { appendFileSync } from "node:fs"
 
@@ -69,9 +73,13 @@ function dispatch(message) {
   log(message.method)
   if (message.id === undefined) return // a client notification (initialized)
   if (message.method === "initialize") {
+    const capabilities = { tools: mode === "no-listChanged" ? {} : { listChanged: true } }
+    // Logged so a test can prove WHICH handshake the server actually offered —
+    // a mode typo must not let the capability case pass for the wrong reason.
+    log("capabilities:" + JSON.stringify(capabilities))
     send({ jsonrpc: "2.0", id: message.id, result: {
       protocolVersion: message.params.protocolVersion,
-      capabilities: { tools: { listChanged: true } },
+      capabilities,
       serverInfo: { name: "cat-stub", version: "0.1.0" },
     } })
     return
@@ -216,6 +224,28 @@ describe("the MCP catalogue rebuilds at the agent/pre-step boundary (M6-D3)", ()
       expect(f.listCalls()).toBe(before + 1)
     } finally {
       console.warn = originalWarn
+      await f.assembly.dispose()
+    }
+  }, 30_000)
+
+  it("rebuilds on a server that never advertises tools.listChanged (the low-level registration is not capability-gated)", async () => {
+    // The plan chose `client.setNotificationHandler` over `ClientOptions.listChanged`
+    // partly BECAUSE the high-level path is gated on the server declaring the
+    // capability (client/index.js's `_setupListChangedHandlers`). This case is that
+    // premise measured: the server advertises `capabilities.tools = {}` — no
+    // listChanged — and announces anyway. If the premise is false, the flag never
+    // goes dirty, the boundary never drains, and `after` never appears.
+    const f = await mountCatalogueServer("no-listChanged")
+    try {
+      // The handshake this case rests on, measured rather than assumed.
+      expect(f.log()).toContain('capabilities:{"tools":{}}')
+      expect(f.registry.get("mcp__cat__before")).toBeDefined()
+      await f.registry.get("mcp__cat__swap")!.execute({}, {})
+      await boundaryUntil(f, 2)
+      expect(f.listCalls()).toBe(2)
+      expect(f.registry.get("mcp__cat__after")).toBeDefined()
+      expect(f.registry.get("mcp__cat__before")).toBeUndefined()
+    } finally {
       await f.assembly.dispose()
     }
   }, 30_000)

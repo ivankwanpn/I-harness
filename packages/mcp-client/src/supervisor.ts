@@ -107,6 +107,19 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   // generation's announcement says nothing about the live one.
   let catalogDirtyFlag = false
   let catalogEpoch = 0
+  // M6-D3 single-flight: the rebuild in flight, shared by every concurrent
+  // caller (the same idiom as oauth.ts's `refreshInFlight`). Two boundaries CAN
+  // be in flight at once — the emitter's plain listeners live on an ancestor
+  // scope and a DETACHED child turn reaches them (core-plugin's emit walks
+  // parent-ward; subagent/child.ts runs the child's turn without awaiting it),
+  // so a teammate's step and the lead's next step can both arrive here. Two
+  // overlapping drains would keep the SAME previous-disposers map: the loser
+  // disposes names the winner had just re-registered, registration throws
+  // duplicate, and bridge.ts's rollback path returns an EMPTY map — the
+  // supervisor's `disposers` would then be empty, a live tool silently missing
+  // and a stale one undesposable. One drain, one promise: every caller waits
+  // for the same rebuild.
+  let refreshing: Promise<void> | undefined
 
   const markCatalogDirty = (): void => {
     catalogDirtyFlag = true
@@ -427,9 +440,14 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     // reconnect machinery is the only thing that builds generations). No
     // generation → the same fail-fast error the proxy throws, so the boundary
     // consumer cannot mistake a dead mount for a refreshed catalogue.
-    refreshCatalog: async (): Promise<void> => {
-      if (current === undefined) throw unavailable()
-      await resyncTools()
+    // NOTE: this throws the error DIRECTLY rather than through `unavailable()`:
+    // that helper also fires deps.onToolUnavailable, whose contract is "a tool
+    // call was rejected" — which a refresh is not (and scheduler.ts's
+    // empty-mount path throws the bare error the same way).
+    refreshCatalog: (): Promise<void> => {
+      if (current === undefined) return Promise.reject(new McpServerUnavailableError(serverName))
+      refreshing ??= resyncTools().finally(() => { refreshing = undefined })
+      return refreshing
     },
   }
 }

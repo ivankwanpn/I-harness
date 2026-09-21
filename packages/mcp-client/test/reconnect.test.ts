@@ -457,4 +457,50 @@ describe("mcp catalogue refresh (list_changed → dirty → rebuild)", () => {
 
     await handle.unmount()
   })
+
+  it("concurrent refreshes share ONE drain (two boundaries can be in flight at once)", async () => {
+    // The listener lives on an ancestor scope and a DETACHED child turn reaches
+    // it, so a teammate's step and the lead's next step can both ask for a
+    // rebuild while one drain is already running. Two overlapping drains keep
+    // the same previous-disposers map: the loser disposes what the winner just
+    // registered (duplicate → rollback → an EMPTY map, a silently missing tool).
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const gen = makeFakeGen("gen1", ["echo"])
+    let starts = 0
+    let release: (() => void) | undefined
+    const drain = gen.listTools.bind(gen)
+    gen.listTools = async (cursor, opts) => {
+      starts += 1
+      // The mount's drain (start 1) runs free; the rebuild (start 2) is held
+      // open so the second caller arrives while it is genuinely in flight.
+      if (starts === 2) await new Promise<void>((resolve) => { release = resolve })
+      return drain(cursor, opts)
+    }
+    const handle = await mountMcpClient({} as never, tools, {
+      transport: "stdio", serverName: "cat5", command: "x", args: [], toolCallTimeoutMs: 1_234,
+    }, {
+      connect: async (_c, opts) => { gen.onToolsChanged = opts?.onToolsChanged; return gen },
+    })
+
+    gen.setTools(["echo", "grown"]) // the GROWN list this task exists for
+    gen.notifyToolsChanged()
+    const first = handle.refreshCatalog()
+    const second = handle.refreshCatalog()
+    await waitFor(() => release !== undefined)
+
+    // One rebuild started, not two: the second caller is sharing the first's
+    // promise. (Absent single-flight this is 3 — and the loser's drain would
+    // race the winner's registration.)
+    expect(starts).toBe(2)
+    release!()
+    await Promise.all([first, second])
+
+    expect(starts).toBe(2)
+    expect(gen.listToolCalls.length).toBe(2) // the mount's drain + ONE rebuild
+    expect(handle.catalogDirty()).toBe(false)
+    expect(tools.get("mcp__cat5__grown")).toBeDefined()
+
+    await handle.unmount()
+  })
 })

@@ -15,7 +15,7 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createSessionExecutor, type AgentConfig, type AgentDeps } from "@i-harness/core-agent"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
-import type { McpMountDeps, McpServerConfig, McpServerStatusEvent } from "@i-harness/mcp-client"
+import type { McpMountDeps, McpMountHandle, McpServerConfig, McpServerStatusEvent } from "@i-harness/mcp-client"
 import { approxTokens } from "@i-harness/compaction"
 import { createTelemetry, type TelemetryEvent } from "@i-harness/telemetry"
 import type { SubagentRole } from "@i-harness/subagent"
@@ -49,16 +49,18 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
     // The real mount dials the server and a live OAuth AS is out of scope here;
     // the CONFIG the assembly built is the object under test, so record it and
     // hand back an inert handle (dispose only ever calls `unmount`). The handle
-    // still carries the full McpMountHandle surface — the assembly's
+    // carries the REAL McpMountHandle type, not an inline shape: the assembly's
     // `agent/pre-step` catalogue handler (M6-D3) asks `catalogDirty()` on every
-    // boundary, so a handle missing it is a broken double even when the case at
-    // hand never runs a turn.
+    // boundary, so a double that drifts from the interface is a broken double
+    // even when the case at hand never runs a turn — and only the real type
+    // makes that drift a compile error (`vi.mock` factories are not checked
+    // against the module type, so an inline return type here is invisible).
     mountMcpClient: async (
       _ctx: unknown,
       _tools: unknown,
       config: McpServerConfig,
       deps?: McpMountDeps,
-    ): Promise<{ serverName: string; catalogDirty(): boolean; refreshCatalog(): Promise<void>; unmount(): Promise<void> }> => {
+    ): Promise<McpMountHandle> => {
       mcpMounts.calls.push({ config, deps })
       return { serverName: config.serverName, catalogDirty: () => false, refreshCatalog: async () => {}, unmount: async () => {} }
     },
