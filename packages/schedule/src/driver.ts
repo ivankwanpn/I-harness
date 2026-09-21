@@ -1,9 +1,10 @@
 /**
  * Local schedule driver — the session-side delivery loop (dsh driver parity,
  * IH-shaped). One `tick()` fold-checks every registered session's
- * schedule/change stream and, for each due record, resolves the accepted
- * occurrence and hands the HOST one `ScheduleDelivery` (dispatch event, framed
- * text, per-occurrence inputId) through the injectable `deliver` seam.
+ * schedule/change stream, asks `decideDue` for exactly ONE decision — a due
+ * one-shot, or one batch of every overdue fixed-rate record — and hands the HOST
+ * one `ScheduleDelivery` (the dispatch event(s), framed text, one idempotency
+ * key) through the injectable `deliver` seam.
  * THE ENGINE DOES NOT WRITE THE LOG (spec §3.4's 2026-09-21 correction): the
  * host owns "write or not" — it accepts by appending `[dispatch, admitted]` as
  * ONE durable batch, and rejects by throwing (nothing accepted ⇒ nothing due).
@@ -12,19 +13,21 @@
  * was accepted are no longer due.
  *
  * Rules: deliver BEFORE counting (a delivery the host refused is not delivered
- * — fail-closed path); a corrupted schedule stream skips the whole session with
- * a deliveryError entry (projection-grade honesty); every occurrences are
- * resolved anchor-aligned via resolveEveryOccurrence, and their framing states
- * the occurrence, never the lagging scheduledAt.
+ * — fail-closed path); a corrupted schedule stream OR a decision the state
+ * cannot satisfy skips that session with a deliveryError entry
+ * (projection-grade honesty) and never throws out of `tick()`; a batch is ONE
+ * model message, so N overdue records cost one turn, not N (spec §6.3).
  */
 
 import type { SessionEvent } from "@i-harness/core-session"
 import {
+  decideDue,
   foldScheduleEvents,
+  renderEveryReminderBatchFraming,
   renderReminderFraming,
-  resolveEveryOccurrence,
+  scheduleBatchInputId,
   scheduleOccurrenceInputId,
-  scheduleView,
+  type ScheduleDecision,
   type ScheduleRecord,
 } from "./index.ts"
 
@@ -108,42 +111,49 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
       for (const sessionId of opts.sessions()) {
         const events = opts.events(sessionId)
         if (events === undefined) continue
-        let active: readonly ScheduleRecord[]
+        let decision: ScheduleDecision
         try {
-          active = foldScheduleEvents(events).active
+          // Fold AND decide under one guard: a corrupt stream and a decision this state cannot
+          // satisfy are the same session-scoped failure — reported, never thrown out of tick()
+          // (the in-flight guard's finally must still reset).
+          decision = decideDue(foldScheduleEvents(events).active, accepted)
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
           result.deliveryErrors.push(`${sessionId}: ${reason}`)
-          logWarn(`schedule stream of ${sessionId} is corrupt: ${reason}`)
+          logWarn(`schedule state of ${sessionId} is corrupt: ${reason}`)
           continue
         }
-        for (const record of active) {
-          if (scheduleView(record, accepted).state !== "overdue") continue
-          const occurrenceAt = record.kind === "every"
-            ? resolveEveryOccurrence(record, accepted).occurrenceAt
-            : record.scheduledAt
-          const due: ScheduleDue = { sessionId, record, occurrenceAt }
-          const delivery: ScheduleDelivery = {
-            sessionId,
-            dispatchEvents: [dispatchEventFor(record, accepted)],
-            // renderReminderFraming reads record.scheduledAt — for an every record that is the lagging
-            // target (the fold only advances it on the NEXT dispatch), so hand it the occurrence.
-            text: renderReminderFraming(record.kind === "every" ? { ...record, scheduledAt: occurrenceAt } : record),
-            inputId: scheduleOccurrenceInputId(record, occurrenceAt),
-            due: [due],
-          }
-          try {
-            // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
-            // batch, or refuse by throwing — nothing is counted before this returns.
-            await opts.deliver(delivery)
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err)
-            result.deliveryErrors.push(`${sessionId}: ${reason}`)
-            logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
-            continue
-          }
+        if (decision.kind === "none" || decision.kind === "wait") continue
+        try {
+          // ONE decision ⇒ ONE delivery: a single one-shot, or one batch whose dispatch events,
+          // framing and idempotency key are all built from that same decision.
+          const delivery: ScheduleDelivery = decision.kind === "one-shot"
+            ? {
+                sessionId,
+                dispatchEvents: [dispatchEventFor(decision.record, accepted)],
+                text: renderReminderFraming(decision.record),
+                inputId: scheduleOccurrenceInputId(decision.record, decision.occurrenceAt),
+                due: [{ sessionId, record: decision.record, occurrenceAt: decision.occurrenceAt }],
+              }
+            : {
+                sessionId,
+                dispatchEvents: decision.reminders.map(({ record }) => dispatchEventFor(record, accepted)),
+                text: renderEveryReminderBatchFraming(decision.reminders),
+                inputId: scheduleBatchInputId(decision.acceptedAt),
+                due: decision.reminders.map(({ record, occurrenceAt }) => ({ sessionId, record, occurrenceAt })),
+              }
+          // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
+          // batch, or refuse by throwing — nothing is counted before this returns.
+          await opts.deliver(delivery)
           result.due.push(...delivery.due)
           result.delivered += delivery.due.length
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err)
+          const label = decision.kind === "one-shot"
+            ? decision.record.id
+            : `batch [${decision.reminders.map(({ record }) => record.id).join(", ")}]`
+          result.deliveryErrors.push(`${sessionId}: ${reason}`)
+          logWarn(`schedule delivery of ${label} in ${sessionId} failed: ${reason}`)
         }
       }
       return result
