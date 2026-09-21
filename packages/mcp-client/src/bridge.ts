@@ -1,7 +1,8 @@
 import type { Tool, ToolExec, ToolRegistry } from "@i-harness/core-tools"
 import { publicToolName } from "./naming.ts"
 import type { ConnectedMcpClient, McpTool } from "./client.ts"
-import type { McpServerConfig } from "./types.ts"
+import { MAX_CURSOR_LENGTH, MAX_TOOL_ITEMS, MAX_TOOL_PAGES, type McpServerConfig } from "./types.ts"
+import { McpCatalogError } from "./errors.ts"
 
 // Build one generation-local tool definition. Raw name sent on the wire; the
 // public name is the model-facing registry name (never parsed back).
@@ -57,8 +58,14 @@ export async function syncTools(
   const direct = new Set(config.directTools ?? [])
   const listedNames = new Set<string>() // Phase 1 逐一累積——供未知清單比對
   // Phase 1: fetch and build the next generation without touching the registry.
+  // M6-D1: the cursor is SERVER-supplied, so the walk gets its defensive bounds
+  // — a repeated cursor, an oversized cursor, an oversized catalogue (each a
+  // McpCatalogError) and the page cap (unchanged: a plain Error at
+  // MAX_TOOL_PAGES, which no honest server reaches).
   let cursor: string | undefined
   let pages = 0
+  const seenCursors = new Set<string>()
+  let items = 0
   do {
     const response = await client.listTools(cursor)
     for (const tool of response.tools) {
@@ -74,8 +81,26 @@ export async function syncTools(
       next.set(publicName, { rawName: tool.name, tool })
     }
     cursor = response.nextCursor
+    if (cursor !== undefined) {
+      // The very first `undefined` is not a cursor; only non-undefined values
+      // are compared and remembered.
+      if (cursor.length > MAX_CURSOR_LENGTH) {
+        throw new McpCatalogError("cursor-cap", `server "${serverName}" returned a ${cursor.length}-char cursor (cap ${MAX_CURSOR_LENGTH})`)
+      }
+      if (seenCursors.has(cursor)) {
+        throw new McpCatalogError("repeated-cursor", `server "${serverName}" repeated cursor "${cursor}" — the walk would never end`)
+      }
+      seenCursors.add(cursor)
+    }
+    // Every tool the server LISTED counts, blocked ones included: they were
+    // listed, and the listing is the work this bound protects.
+    items += response.tools.length
+    const itemCap = config.catalogMaxItems ?? MAX_TOOL_ITEMS
+    if (items > itemCap) {
+      throw new McpCatalogError("items-cap", `server "${serverName}" listed ${items} tools, past the ${itemCap}-item cap`)
+    }
     pages += 1
-    if (pages > 100) throw new Error(`mcp-client(${serverName}): tool list pagination exceeded 100 pages`)
+    if (pages > MAX_TOOL_PAGES) throw new Error(`mcp-client(${serverName}): tool list pagination exceeded ${MAX_TOOL_PAGES} pages`)
   } while (cursor !== undefined)
   // M26-B1c: 未知清單警告（拼寫錯誤 fail-loud 但不 fail-close）。
   for (const name of [...blocked, ...direct]) {
