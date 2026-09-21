@@ -68,7 +68,7 @@
 
 ### 2.3 無條件的一部分
 
-`server.ts:5-39` 的方法清單**以 switch 為準重寫**（今天 19 個方法，註解少列 6 個）—— 這是 citation-rot 的同類，跟版本裁決無關。
+`server.ts:5-39` 的方法清單**以 switch 為準重寫**（今天 switch **19 個 case**、註解少列 **7 個**方法 —— `session/create`、`session/fork`、`session/model/state`、`session/model/set`、`session/tasks`、`session/tasks/cancel`、`session/dashboard`；2026-09-22 實測）—— 這是 citation-rot 的同類，跟版本裁決無關。
 
 ### 2.4 驗收
 
@@ -91,7 +91,7 @@
 
 ### 3.2 決定
 
-1. **目錄注入（C1）**：一個新的 runtime-context section `skills`，內容＝**每個技能的 name ＋ description 一行**（有 `when_to_use` 就帶上）。**落點＝尾端追加**（runtime-context 的既有機制）——**不得**動 system prompt 或工具陣列（byte-0 斷點）。**總量上限**：由**計畫量測**定出（以 `token-meter` 對真實技能語料估算，寫進計畫），超過以一行截斷註記收尾 —— 上限**要有依據**，規則先立、數字後量。
+1. **目錄注入（C1）**：一個新的 runtime-context section `skills`，內容＝**每個技能的 name ＋ description 一行**。**⚠ 更正（2026-09-22 實測）：原句的「有 `when_to_use` 就帶上」沒有載體** —— `SkillFrontmatter` 只有 `name`／`description`（未知鍵被容忍並丟棄，`skills/src/frontmatter.ts:10-13,65`），`SkillSummary` 亦然；把它加進 schema 是沒有量到輸入的擴充，**本 spec 不做**。**落點＝尾端追加**（runtime-context 的既有機制）——**不得**動 system prompt 或工具陣列（byte-0 斷點）。**總量上限**：由**計畫量測**定出（以 `token-meter` 對語料估算，寫進計畫），超過以截斷註記收尾 —— 上限**要有依據**，規則先立、數字後量。
 2. **sigil 掃描（C2）**：使用者輸入裡 `$name`（codex 的 `TOOL_MENTION_SIGIL` 先例）命中已註冊技能名 ⇒ **尾端追加一則 user message** 指出該技能（模型自行 `skill_get`）。**不做自動執行**、**不新增事件型別**（`user/message` 是純文字）。**時序與縫**（在哪個站點掃、如何與 admission 互動）留給計畫 —— 語意在本節定死。
 3. **不做**：專案根發現（#9）、layered 的 scope 維度（#10）、bundled（#13）——理由在 synthesis 矩陣欄。
 
