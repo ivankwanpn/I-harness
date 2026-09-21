@@ -269,6 +269,58 @@ describe("installPlugin", () => {
     })
   })
 
+  it("declared `type`: sse (or any unsupported dialect) is skipped with a warn — never silently mounted as streamable-http", async () => {
+    const sourceDir = await tempDir("inst-mcptype-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          sseSrv: { type: "sse", url: "http://127.0.0.1:1/sse" },
+          wsSrv: { type: "websocket", url: "ws://127.0.0.1:1/mcp" },
+          httpSrv: { type: "http", url: "http://127.0.0.1:1/mcp" },
+          streamableSrv: { type: "streamable-http", url: "http://127.0.0.1:1/mcp2" },
+          stdioSrv: { type: "stdio", command: "node", args: ["echo.mjs"] },
+          noType: { command: "node", args: [] },
+        },
+      }),
+      "utf8",
+    )
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const installRoot = await tempDir("inst-root-")
+    try {
+      const res = await installPlugin(sourceDir, "m", "typed", installRoot)
+      // Supported tags behave as today (url wins when present, command otherwise);
+      // unsupported dialects are GONE from the runtime surface, not re-routed.
+      expect(await readMcpServers(res.installPath)).toEqual({
+        "plugin:m__typed:httpSrv": { url: "http://127.0.0.1:1/mcp" },
+        "plugin:m__typed:streamableSrv": { url: "http://127.0.0.1:1/mcp2" },
+        "plugin:m__typed:stdioSrv": { command: "node", args: ["echo.mjs"] },
+        "plugin:m__typed:noType": { command: "node", args: [] },
+      })
+      // One warn per skipped server, naming it and the offending value.
+      const warns = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warns).toHaveLength(2)
+      expect(warns.some((w) => w.includes("sseSrv") && w.includes('"sse"'))).toBe(true)
+      expect(warns.some((w) => w.includes("wsSrv") && w.includes('"websocket"'))).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+    // The installed copy is what the runtime reads — the skip is durable there.
+    const installedText = await readFile(join(installRoot, "m__typed", ".mcp.json"), "utf8")
+    expect(installedText).not.toContain("sseSrv")
+    expect(installedText).not.toContain("wsSrv")
+  })
+
+  it("a non-string `type` is a malformed config (plugin-invalid), like every other known field", async () => {
+    const sourceDir = await tempDir("inst-mcptype-bad-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { s: { type: 5, command: "node", args: [] } } }),
+      "utf8",
+    )
+    await expect(readMcpServers(sourceDir)).rejects.toMatchObject({ code: "plugin-invalid" })
+  })
+
   it("overwrite: re-installing the same id replaces the previous copy (stale files gone, content refreshed)", async () => {
     const sourceDir = await copyPlugin("hello")
     const installRoot = await tempDir("inst-root-")

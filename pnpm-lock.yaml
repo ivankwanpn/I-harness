@@ -590,6 +590,10 @@ importers:
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../fs
+    devDependencies:
+      '@i-harness/mcp-client':
+        specifier: workspace:*
+        version: link:../mcp-client
 
   packages/preset:
     dependencies:

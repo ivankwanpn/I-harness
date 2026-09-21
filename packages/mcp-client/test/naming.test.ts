@@ -40,9 +40,20 @@ describe("assertServerName", () => {
     expect(() => assertServerName("my-server_1")).not.toThrow()
   })
 
+  it("accepts the namespace grammar — `[A-Za-z0-9_.:-]`, cap 64 (Task 8 ruling)", () => {
+    // The colon is the namespace separator plugin-registry's `mcpServerKey`
+    // composes with; before D-MCP-1's fix neither validator knew it, so every
+    // plugin MCP server was refused at the mount's first line.
+    expect(() => assertServerName("plugin:hello:mcp")).not.toThrow()
+    expect(() => assertServerName("plugin:Marketplace_A__proxy:echo")).not.toThrow()
+    expect(() => assertServerName("svc.v1:west")).not.toThrow()
+    expect(() => assertServerName("x".repeat(64))).not.toThrow()
+  })
+
   it("rejects invalid names", () => {
     expect(() => assertServerName("bad name")).toThrow()
     expect(() => assertServerName("")).toThrow()
-    expect(() => assertServerName("x".repeat(33))).toThrow()
+    expect(() => assertServerName("sla/sh")).toThrow()
+    expect(() => assertServerName("x".repeat(65))).toThrow()
   })
 })
