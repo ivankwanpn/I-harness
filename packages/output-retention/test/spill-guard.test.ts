@@ -1,6 +1,13 @@
 import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createToolRegistry, type Tool } from "@i-harness/core-tools"
+import {
+  createToolRegistry,
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_MID_FLIGHT,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+  type Tool,
+} from "@i-harness/core-tools"
 import { createOutputSpillGuard, gcSpillStore } from "../src/spill-guard.ts"
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, utimesSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -83,6 +90,56 @@ it("the skip covers the object path too — a real `read` returns `{ content }`,
   const read = await registry.execute({ name: "read", args: {} })
   expect(read.output).toBe(big) // same object back — no { output, outputPaths, spill } envelope
   rmSync(root, { recursive: true, force: true })
+})
+
+// ── the synthetic-failure exemption ─────────────────────────────────────────
+// A synthetic failure is a VERDICT ABOUT a call, not output FROM it. Each test
+// below drives ONE code from the vocabulary (`core-tools` owns the contract)
+// beside a control that has the SAME shape and NO code, in the same registry at
+// the same cap. The control is the witness: it proves a replacement was
+// available at this cap, so "untouched" cannot be reached by the guard doing
+// nothing, and a predicate keyed on the SHAPE would have to bound both.
+async function driveSynthetic(code: string): Promise<{
+  synthetic: unknown
+  control: unknown
+  fixture: { error: string; note: string }
+}> {
+  const root = mkdir()
+  const ctx = createContext()
+  const registry = createToolRegistry(ctx)
+  const fixture = { error: "the call's own reason", note: "N".repeat(10_000) }
+  registry.register({ name: "synthetic", description: "", inputSchema: {}, execute: async () => ({ ...fixture, code }) } as Tool)
+  registry.register({ name: "control", description: "", inputSchema: {}, execute: async () => fixture } as Tool)
+  ctx.mount(createOutputSpillGuard(ctx, { maxOutputBytes: 2_000, spillRoot: root }))
+  const control = await registry.execute({ name: "control", args: {} })
+  const synthetic = await registry.execute({ name: "synthetic", args: {} })
+  rmSync(root, { recursive: true, force: true })
+  return { synthetic: synthetic.output, control: control.output, fixture }
+}
+
+it("a synthetic TOOL_FAILED result is never bounded — the reason the call failed survives", async () => {
+  const { synthetic, control, fixture } = await driveSynthetic(TOOL_FAILED)
+  // The witness: this fixture shape is bounded when it carries no code.
+  expect((control as { spill?: unknown }).spill).toBeDefined()
+  expect(synthetic).toEqual({ ...fixture, code: TOOL_FAILED })
+})
+
+it("a synthetic TOOL_ABORTED_BEFORE_DISPATCH result is never bounded", async () => {
+  const { synthetic, control, fixture } = await driveSynthetic(TOOL_ABORTED_BEFORE_DISPATCH)
+  expect((control as { spill?: unknown }).spill).toBeDefined()
+  expect(synthetic).toEqual({ ...fixture, code: TOOL_ABORTED_BEFORE_DISPATCH })
+})
+
+it("a synthetic TOOL_CANCELLED_BY_SIBLING result is never bounded", async () => {
+  const { synthetic, control, fixture } = await driveSynthetic(TOOL_CANCELLED_BY_SIBLING)
+  expect((control as { spill?: unknown }).spill).toBeDefined()
+  expect(synthetic).toEqual({ ...fixture, code: TOOL_CANCELLED_BY_SIBLING })
+})
+
+it("a synthetic TOOL_ABORTED_MID_FLIGHT result is never bounded", async () => {
+  const { synthetic, control, fixture } = await driveSynthetic(TOOL_ABORTED_MID_FLIGHT)
+  expect((control as { spill?: unknown }).spill).toBeDefined()
+  expect(synthetic).toEqual({ ...fixture, code: TOOL_ABORTED_MID_FLIGHT })
 })
 
 it("never emits a replacement larger than the cap — the notice counts against it", async () => {

@@ -540,7 +540,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(telemetry !== undefined ? { telemetry } : {}),
       ...(opts.planMode ? { planMode: true } : {}),
       ...(opts.guardian !== undefined ? { guardian: opts.guardian } : {}),
-      ...(opts.outputSpill !== undefined ? { outputSpill: opts.outputSpill } : {}),
+      // M5 T4 block ③: MOUNTED BY DEFAULT. Until this line, `createOutputSpillGuard`
+      // had tests and no production mount — the exact "declared, tested, never
+      // wired" shape this repo's reachability audit exists to find.
+      //
+      // NOTE WHAT IT CHANGES: IH's guard rewrites `output` — the DURABLE record,
+      // not the model-facing rendering (dsh's rewrites `content`). So this is a
+      // change to what the session log holds, not to how it is displayed. spec
+      // §4.3 states that trade-off and why it is taken: the bound survives a
+      // replay, which a rendering-only bound would not.
+      outputSpill: opts.outputSpill ?? {},
       ...(opts.reasoningEffort !== undefined
         ? { reasoningEffort: opts.reasoningEffort }
         : providerBinding?.reasoningEffort !== undefined
