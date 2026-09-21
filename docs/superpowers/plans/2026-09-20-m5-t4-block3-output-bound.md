@@ -451,6 +451,18 @@ core-agent 的依賴       : compaction, core-plugin, core-session, core-tools,
 
 **⇒ 而 `opts.outputSpill ?? {}` 就是那個「把預設打開說出來」的形式** —— 呼叫者仍然可以傳自己的設定（**上限、spill 目錄、GC**），而**不傳就是預設**。**而這一行就是那個「從來沒有被掛上」的護欄第一次被掛上的地方。**
 
+**⚠ T3 交棒三件，而它們都屬於你（你是讓它們變成有承載的那個任務）：**
+
+**(i) 那個刻意的複製，現在**沒有東西釘住它**。** T3 重寫了一份 `toolResultText`／`imageDescriptor` 的規則（`splitRealImages`／`modelVisibleText`／`imageDescriptor`），因為 `output-retention` 不依賴 `core-session`。**而 T3 的 concern 是原話：「Nothing in the build enforces agreement if the authority changes.」**
+
+**⇒ 補一條**跨套件的一致性測試**：** 它要**住在同時依賴兩邊的套件裡**（`session-executor` 或 `apps/cli` —— **先 `grep` 確認**），**對一份輸入語料斷言兩份實作給出同一個答案**：**一段純文字 · 一個真的 `images` 陣列 · 一個混合物件 · 一個空 `images` 陣列 · 一個**假的**（非陣列）`images` 成員**（**最後那一條是 M14 的防禦規則，而它兩邊都要一致**）。
+
+**⇒ 才這樣複製才是這個 repo 允許的那種**（**「重複是較便宜的缺陷」** —— **但一個沒有人釘住的複製不是重複，是一個會漂移的第二個真相**）。
+
+**(ii) 上限有一個**地板**。** T3 量到：**一個低於 notice 大小（約 200 B，取決於路徑長度）的上限，對超限的結果**靜默地變成 no-op**（原文逐位元組回來）。** **⇒ 而出貨預設是 64,000，遠在上面** —— **但你選的是預設值**，所以**在註解裡留一句「這個上限有一個地板，而它是 notice 的長度」。**
+
+**(iii) 而 spill notice 的那半句建議是**過期的**。** `packages/output-retention/src/index.ts` 的 notice 建議 `"Use read with offset/limit"`，**而 IH 的 `read` 只宣告 `path`**（`fs/src/index.ts:240-245`）⇒ **那半句讓模型去做一次完整的重讀，而 T2 之後 `read` 的結果無界了。** **⇒ 把那一句改成**一個真的存在、而且真的更好的下一步**（**`grep` 存在**：`packages/fs-search/src/index.ts`）—— **或者，如果沒有更好的下一步，就把它拿掉。** **一句不可行的建議比沒有建議糟。**
+
 - [ ] **Step 1: 寫測試（兩個）** —— 合成的失敗不被界（**三個 `code` 各一條**）；CLI 真的掛了它
 - [ ] **Step 2: 跑它們，確認紅**
 - [ ] **Step 3: 實作 (a) 與 (b)**
