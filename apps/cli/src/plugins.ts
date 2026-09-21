@@ -33,9 +33,16 @@
  *   VERIFIABLE HERE — the input is an artifact on disk, read exactly the way the
  *   run path reads it (no session involved):
  *     · skills  — the `<root>/skills/<id>` overlay is the directory a live build
- *                 scans back by path (`runtimeInputs().skillDirs`); this process
- *                 reads the same directory, names only (`.DS_Store` skipped,
- *                 the deleted web host's own scan).
+ *                 scans back by path (`runtimeInputs().skillDirs`), and this
+ *                 process runs the SAME SCANNER over it: `createSkillRegistry`
+ *                 with the overlay as an extraDir, which is the very call the
+ *                 assembly's `skills.extraDirs` mount goes through. So "ready"
+ *                 means the same thing on both sides — a stray `README.md`, a
+ *                 `.gitkeep`-only directory, a bare overlay-root `SKILL.md` or a
+ *                 broken file all read NOT-ready here exactly as they yield
+ *                 nothing in a session. Counting directory entries instead would
+ *                 be a second implementation of "is this a skill?" — measured
+ *                 false-readies are why it is not.
  *     · agents / hooks — `evaluate.ts` states these need NO observation:
  *                 advertising the dimension IS the claim, because the registry
  *                 reads the installed copy synchronously itself.
@@ -70,12 +77,15 @@
  *                             chain makes that failure dominate whatever a live
  *                             session would add.
  *   · `not-evaluated`       — otherwise (a live dimension is advertised).
- * `degraded` is unreachable here ON PURPOSE: only the live commands dimension
- * can produce it, so this listing has no member for it.
+ * `degraded` is unreachable here ON PURPOSE: the only arm that produces it
+ * consumes a live input (the commands dimension's registered-name set), so this
+ * listing has no member for it — the refusal is about the INPUT, not about the
+ * arm being undecidable in principle.
  */
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { createSkillRegistry } from "@i-harness/skills"
 import {
   PluginRegistry,
   describeCommands,
@@ -115,11 +125,17 @@ export interface PluginListRow {
   enabled: boolean
   status: PluginStatus
   dimensions: Record<PluginDimension, DimensionStatus>
-  /** Static facts, shown whatever the verdict: the command names the plugin
-   * declares (the materialized copy ∪ its recorded conflicts) and its MCP
-   * server keys, which the install step re-keyed to `plugin:<id>:<server>` —
-   * the same keys `runtimeInputs()` hands the host. */
+  /** Command names the plugin declares, from the MATERIALIZED copy
+   * (`<root>/commands/<id>`, laid down by enable) ∪ its recorded conflicts.
+   * SOURCING NOTE — the two declared lists are NOT symmetric, and deliberately
+   * so: materialization is enable-time state, so a DISABLED plugin reports `[]`
+   * here (the overlay is removed on disable), while `declaredMcpServers` below
+   * survives — see its own note. */
   declaredCommands: string[]
+  /** The plugin's MCP server keys, read from the INSTALLED copy
+   * (`<root>/<id>/.mcp.json`), which survives disable — this is why a disabled
+   * plugin still declares its servers. The install step re-keyed them to
+   * `plugin:<id>:<server>`, the same keys `runtimeInputs()` hands the host. */
   declaredMcpServers: string[]
   /** Commands blocked at enable time (D5), as recorded on the registry record. */
   conflicts: CommandConflict[]
@@ -259,10 +275,28 @@ function evaluateInstalled(root: string, entry: CatalogPlugin): PluginListRow {
     diagnostics.push(`MCP config unreadable: ${error instanceof Error ? error.message : String(error)}`)
   }
 
+  // Skills: the SAME SCANNER the live build runs over this overlay, not a
+  // second implementation of "is this entry a skill?". The live mount hands the
+  // overlay to the skill registry as an extraDir (assembly's `skills.extraDirs`,
+  // fed by `runtimeInputs().skillDirs`); this is that call. Counting directory
+  // entries instead printed `ready` for a stray README.md, a `.gitkeep`-only
+  // directory or a broken SKILL.md — a false signal in the exact class this
+  // whole command exists to stop sending.
   const skillNamesByDir = new Map<string, string[]>()
   const skillsDir = join(root, "skills", entry.id)
   if (existsSync(skillsDir)) {
-    const names = readdirSync(skillsDir).filter((name) => name !== ".DS_Store")
+    const scanner = createSkillRegistry({
+      // Only this overlay is passed. The registry also walks the machine-level
+      // global root (dropped below by `source`) and, when given one, a
+      // workspace — deliberately absent here: the overlay is a machine-level
+      // root and the live mount adds it as an extraDir, nothing more.
+      extraDirs: [skillsDir],
+      // The scanner's warn+skip channel IS this listing's diagnostic channel: a
+      // skill it had to skip is a real defect to SHOW, never a reason to fail
+      // the whole listing. Messages about other roots are not this row's.
+      onWarn: (message) => { if (message.includes(skillsDir)) diagnostics.push(message) },
+    })
+    const names = scanner.list().filter((skill) => skill.source === "plugin").map((skill) => skill.name)
     if (names.length > 0) skillNamesByDir.set(entry.id, names)
   }
 
@@ -299,8 +333,11 @@ function evaluateInstalled(root: string, entry: CatalogPlugin): PluginListRow {
  * marketplace entry has no readiness to report, so `catalog()`'s entries are
  * filtered to the ones state.json records as installed — which is also what
  * keeps this a listing of the store, not a browse of the marketplace).
+ *
+ * NOT exported on purpose: the command entry below is its only caller, and an
+ * export nothing consumes is the orphan this unit's own gate keeps reporting.
  */
-export async function listInstalledPlugins(): Promise<PluginListing> {
+async function listInstalledPlugins(): Promise<PluginListing> {
   const root = join(resolveHarnessHome(), "plugins")
   // No state file ⇒ nothing was ever installed, and the registry must not be
   // CONSTRUCTED to discover that: the state loader warns "state file is missing
@@ -375,13 +412,18 @@ export function renderPluginTable(listing: PluginListing): string {
 const PLUGINS_USAGE =
   "usage: i-harness plugins [list] [--json]\n" +
   "  list  every installed plugin: its enabled flag, the readiness that is\n" +
-  "        verifiable without a live session, and what it declares. Read-only\n" +
-  "        (install/enable/disable are a separate decision). Dimensions that need\n" +
-  "        a LIVE session — commands (registered?) and mcp (connected?) — are\n" +
-  "        reported as not evaluated here, never as failed."
+  "        verifiable without a live session, and what it declares. Writes no\n" +
+  "        registry state (no install/enable/disable — a separate decision; a\n" +
+  "        cold network source's cache may be refreshed, as on the run path).\n" +
+  "        Dimensions that need a LIVE session — commands (registered?) and mcp\n" +
+  "        (connected?) — are reported as not evaluated here, never as failed."
 
-/** The command. Read-only: reads the registry store, writes nothing. Returns the
- * process exit code. */
+/** The command. It writes no registry state: the only mutations reachable from
+ * here are `catalog()`'s own — a registered source whose cache dir is cold is
+ * re-pulled into `<root>/cache/` (the HTTP manifest is written at
+ * marketplaces.ts:392-395; a git source is re-cloned at :399-404), which is
+ * exactly what every other `catalog()` caller does. Returns the process exit
+ * code. */
 export async function runPluginsCommand(args: string[]): Promise<number> {
   const parsed = parsePluginsArgs(args)
   if (parsed.error !== undefined) {

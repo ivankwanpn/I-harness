@@ -115,6 +115,118 @@ describe("renderPluginTable", () => {
   })
 })
 
+describe("skills readiness — the SAME scanner the live mount runs", () => {
+  // A plugin package and the question "is this a skill?" can disagree: the
+  // listing must not invent its own answer. Each plugin below is a shape the
+  // live scanner (packages/skills/src/registry.ts, the registry the assembly's
+  // `skills.extraDirs` mount goes through) reads as ZERO skills, plus one shape
+  // only a real scanner counts. Counting directory entries instead printed
+  // `ready` for the first three, which is the false signal this file exists to
+  // stop — including for a skills-ONLY plugin, whose overall line then reads a
+  // fully-static `ready`.
+  let home: string
+  let previous: string | undefined
+  let src: string
+
+  beforeEach(async () => {
+    home = mkdtempSync(join(tmpdir(), "i-harness-plugins-cmd-skill-"))
+    previous = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = home
+
+    src = marketplaceWith({
+      // A README, an empty subdir and a dot-entry: a plausible-looking overlay
+      // with nothing the scanner would call a skill.
+      stray: (dir) => {
+        mkdirSync(join(dir, "skills", "notes"), { recursive: true })
+        writeFileSync(join(dir, "skills", "README.md"), "# not a skill\n", "utf8")
+        writeFileSync(join(dir, "skills", ".gitkeep"), "", "utf8")
+      },
+      // A BARE SKILL.md at the overlay root (depth 0) — the scanner only counts
+      // SKILL.md at depth ≥ 1 (the file belongs inside a skill directory).
+      direct: (dir) => {
+        mkdirSync(join(dir, "skills"), { recursive: true })
+        writeFileSync(join(dir, "skills", "SKILL.md"), ["---", "name: direct", "description: x", "---"].join("\n"), "utf8")
+      },
+      // A skill file the scanner must WARN about and skip (no front-matter
+      // fence): zero skills AND a diagnostic.
+      broken: (dir) => {
+        mkdirSync(join(dir, "skills", "broken"), { recursive: true })
+        writeFileSync(join(dir, "skills", "broken", "SKILL.md"), "# broken\n\nno front matter here\n", "utf8")
+      },
+      // Depth 2 — counted by the scanner, missed by any top-level-only mirror.
+      nested: (dir) => {
+        mkdirSync(join(dir, "skills", "nested", "inner"), { recursive: true })
+        writeFileSync(
+          join(dir, "skills", "nested", "inner", "SKILL.md"),
+          ["---", "name: inner", "description: Nested skill.", "---", "", "Body."].join("\n"),
+          "utf8",
+        )
+      },
+    })
+
+    const registry = new PluginRegistry({ root: join(home, "plugins") })
+    await registry.addSource(src)
+    for (const name of ["stray", "direct", "broken", "nested"]) {
+      await registry.install(`Cmd Mkt__${name}`)
+      await registry.enable(`Cmd Mkt__${name}`)
+    }
+  })
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.IH_CONFIG_DIR
+    else process.env.IH_CONFIG_DIR = previous
+    rmSync(home, { recursive: true, force: true })
+    rmSync(src, { recursive: true, force: true })
+  })
+
+  /** One plugin's block: from its row line to the next row line. */
+  function blockOf(out: string, id: string): string {
+    const start = out.indexOf(`] ${id} `)
+    if (start === -1) throw new Error(`no row for ${id} in:\n${out}`)
+    const next = out.indexOf("\n  [", start)
+    return out.slice(start, next === -1 ? undefined : next)
+  }
+
+  async function listOutput(): Promise<string> {
+    const lines: string[] = []
+    const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+    try {
+      expect(await runPluginsCommand(["plugins"])).toBe(0)
+    } finally {
+      spy.mockRestore()
+    }
+    return lines.join("\n")
+  }
+
+  it("a README.md / empty subdir / dot-entry overlay is NOT ready", async () => {
+    const block = blockOf(await listOutput(), "Cmd Mkt__stray")
+    expect(block).toContain("skills: failed")
+    // skills is the only advertised dimension, so the overall line is the
+    // fully-static arm: a proven `failed`, not a "not evaluated".
+    expect(block).toContain("readiness: failed")
+  })
+
+  it("a bare SKILL.md at the overlay root is not a skill (the scanner counts depth ≥ 1)", async () => {
+    const block = blockOf(await listOutput(), "Cmd Mkt__direct")
+    expect(block).toContain("skills: failed")
+  })
+
+  it("a broken SKILL.md is skipped AND its scanner diagnostic is shown", async () => {
+    const block = blockOf(await listOutput(), "Cmd Mkt__broken")
+    expect(block).toContain("skills: failed")
+    // The scanner's own message, surfaced — a skipped skill is a defect to SHOW.
+    expect(block).toContain("diagnostic:")
+    expect(block).toContain("SKILL_INVALID_FRONTMATTER")
+    expect(block).toContain(join(home, "plugins", "skills", "Cmd Mkt__broken", "broken", "SKILL.md"))
+  })
+
+  it("a nested skill counts — the depth rule is the live scanner's, not a top-level mirror's", async () => {
+    const block = blockOf(await listOutput(), "Cmd Mkt__nested")
+    expect(block).toContain("skills: ready")
+    expect(block).not.toContain("skills: failed")
+  })
+})
+
 describe("runPluginsCommand — against a real registry home", () => {
   let home: string
   let previous: string | undefined
@@ -128,7 +240,14 @@ describe("runPluginsCommand — against a real registry home", () => {
     src = marketplaceWith({
       hello: (dir) => {
         mkdirSync(join(dir, "skills", "hello"), { recursive: true })
-        writeFileSync(join(dir, "skills", "hello", "SKILL.md"), "# hello\n\nGreets the user.\n", "utf8")
+        // REAL front matter — the live scanner parses this file and skips it
+        // otherwise (the first version of this fixture had none, which the
+        // entry-counting rule happily called a skill; see the parity block).
+        writeFileSync(
+          join(dir, "skills", "hello", "SKILL.md"),
+          ["---", "name: hello", "description: Greets the user.", "---", "", "# Hello"].join("\n"),
+          "utf8",
+        )
         mkdirSync(join(dir, "commands"), { recursive: true })
         // `allowed-tools` is a frontmatter key this repo does NOT honour — it
         // must be REPORTED, never silently ignored.
