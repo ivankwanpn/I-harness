@@ -1,5 +1,13 @@
+import { SERVER_NAME_PATTERN } from "./naming.ts"
+
 // Reconnect supervisor options (dsh absorb). Absent or `enabled: false` → the
 // mount behaves exactly like the pre-supervisor one-shot connect.
+//
+// The serverName grammar every config here is validated against lives in ONE
+// place — naming.ts's SERVER_NAME_PATTERN (`[A-Za-z0-9_.:-]`, 1..64, the Task 8
+// ruling that plugin-registry's `mcpServerKey` composes against). It is shared
+// rather than re-declared on purpose; see the constant's comment for the
+// drift (D-MCP-1) a second copy caused.
 export interface McpReconnectConfig {
   enabled?: boolean
   initialDelayMs?: number
@@ -79,8 +87,8 @@ function validateNameList(list: string[] | undefined, label: string): void {
 
 export function validateMcpConfig(config: McpServerConfig): void {
   const { serverName } = config
-  if (!/^[A-Za-z0-9_-]{1,32}$/.test(serverName)) {
-    throw new Error(`mcp-client: serverName must match ^[A-Za-z0-9_-]{1,32}$ (got "${serverName}")`)
+  if (!SERVER_NAME_PATTERN.test(serverName)) {
+    throw new Error(`mcp-client: serverName must match ${SERVER_NAME_PATTERN.source} (got "${serverName}")`)
   }
   if (config.toolCallTimeoutMs !== undefined && (!Number.isInteger(config.toolCallTimeoutMs) || config.toolCallTimeoutMs <= 0)) {
     throw new Error(`mcp-client: toolCallTimeoutMs must be a positive integer (got ${config.toolCallTimeoutMs})`)

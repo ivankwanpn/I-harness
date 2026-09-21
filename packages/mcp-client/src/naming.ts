@@ -6,11 +6,25 @@ import { createHash } from "node:crypto"
 export const MAX_PUBLIC_NAME_LENGTH = 64
 const INVALID_NAME_CHARS = /[^A-Za-z0-9_-]/g
 const HASH_LENGTH = 12
-const SERVER_NAME_PATTERN = /^[A-Za-z0-9_-]{1,32}$/
+
+/**
+ * THE ONE mounted-server-name grammar (Task 8 ruling, quoted by
+ * plugin-registry's `mcpServerKey`): `[A-Za-z0-9_.:-]`, 1..64 characters,
+ * colon being the namespace separator. `validateMcpConfig` (types.ts) and
+ * `assertServerName` below MUST test this same pattern — two copies is exactly
+ * how the producer/consumer contract drifted (D-MCP-1: `mcpServerKey` emits
+ * `plugin:<id>:<server>` and both validators refused it, so every plugin MCP
+ * server was skipped before a client ever started). plugin-registry cannot
+ * import this constant (mount.ts's structural return: that package does not
+ * depend on this one), so its composer mirrors the same grammar and cap — and
+ * BOUNDS its two parts so the 64-char cap is guaranteed, not hoped for.
+ * 64 is the house cap: `validateNameList` (types.ts) uses the same bound.
+ */
+export const SERVER_NAME_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/
 
 export function assertServerName(name: string): void {
   if (!SERVER_NAME_PATTERN.test(name)) {
-    throw new Error(`mcp-client: serverName must match ^[A-Za-z0-9_-]{1,32}$ (got "${name}")`)
+    throw new Error(`mcp-client: serverName must match ${SERVER_NAME_PATTERN.source} (got "${name}")`)
   }
 }
 

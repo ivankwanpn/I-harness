@@ -11,9 +11,12 @@
  * it) — never nothing; a failed swap restores the parked old copy. Leftover
  * `.id.old-*` / `.id.tmp-*` artifacts of a crash are cleaned on the next
  * install. The installed copy of `.mcp.json` is rewritten with server names
- * re-keyed as `plugin:<mkt>__<name>:<server>` (both parts sanitized by
- * `mcpServerKey` — a marketplace display name with a space, e.g.
- * "Marketplace A", yields `plugin:Marketplace_A__…`) so the runtime host
+ * re-keyed as `plugin:<mkt>__<name>:<server>` (both parts sanitized AND
+ * bounded by `mcpServerKey` — a marketplace display name with a space, e.g.
+ * "Marketplace A", yields `plugin:Marketplace_A__…`, and every composed key is
+ * guaranteed to satisfy mcp-client's 64-char `[A-Za-z0-9_.:-]` grammar; a
+ * server whose declared `type` is a transport this host does not implement is
+ * skipped with a warn) so the runtime host
  * consumes one namespaced Record<string, MCP_CONFIG_SHAPE> merged across
  * plugins (readable back via `readMcpServers`).
  *
@@ -36,7 +39,7 @@
  *   - install-failed: an unexpected filesystem failure during copy/rename.
  */
 
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { execFile } from "node:child_process"
 import { existsSync, realpathSync, readFileSync } from "node:fs"
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
@@ -84,8 +87,23 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
+ * The `.mcp.json` `type` values this registry honours. Both land on today's
+ * inference (the runtime shape has one binary discriminant — a usable `url` vs
+ * a usable `command` — so the declared tag is validated, not re-routed). Every
+ * other value — `sse` above all — names a transport this host does not
+ * implement; mounting it as streamable-http would be a silent dialect swap, so
+ * the server is skipped with a diagnostic instead. "streamable-http" is
+ * accepted as the MCP spec's own spelling of "http".
+ */
+const SUPPORTED_MCP_TYPES = new Set(["stdio", "http", "streamable-http"])
+
+/**
  * Strictly parse .mcp.json text into a MCP config record. Unknown fields are
- * dropped; known fields are type-checked (wrong types → plugin-invalid).
+ * dropped; known fields are type-checked (wrong types → plugin-invalid). The
+ * `type` tag is read (D-MCP-2): a recognised value is fine, an unrecognised
+ * one means the entry declares a transport this host cannot serve, and the
+ * entry is SKIPPED with a console.warn — never silently mounted as
+ * streamable-http (which is what dropping the field did).
  */
 function parseMcpConfigText(text: string, context: string): Record<string, MCP_CONFIG_SHAPE> {
   let raw: unknown
@@ -101,6 +119,17 @@ function parseMcpConfigText(text: string, context: string): Record<string, MCP_C
   for (const [server, rawCfg] of Object.entries(raw.mcpServers)) {
     if (!isRecord(rawCfg)) {
       failInvalid(`.mcp.json server '${server}' must be an object (${context})`)
+    }
+    if (rawCfg.type !== undefined) {
+      if (typeof rawCfg.type !== "string") {
+        failInvalid(`.mcp.json server '${server}': 'type' must be a string (${context})`)
+      }
+      if (!SUPPORTED_MCP_TYPES.has(rawCfg.type)) {
+        console.warn(
+          `[plugin-registry] skipping MCP server '${server}' in ${context}: unsupported type ${JSON.stringify(rawCfg.type)} (this host supports stdio and http/streamable-http; SSE is not implemented)`,
+        )
+        continue
+      }
     }
     const cfg: MCP_CONFIG_SHAPE = {}
     for (const f of ["command", "cwd", "url"] as const) {
@@ -167,35 +196,66 @@ export function readMcpServersSync(pluginDir: string): Record<string, MCP_CONFIG
 }
 
 /**
- * MCP server name grammar for mounted servers (mcp-client validateMcpConfig,
- * Task 8 ruling): `[A-Za-z0-9_.:-]` — colon is the namespace separator.
+ * MCP mounted-server-name contract (mcp-client's Task 8 ruling, one shared
+ * pattern in its naming.ts / validateMcpConfig): `[A-Za-z0-9_.:-]` — colon is
+ * the namespace separator — capped at 64 characters. This package deliberately
+ * does NOT import @i-harness/mcp-client (mount.ts's structural return), so the
+ * grammar and cap are mirrored here; change one, change both.
+ */
+const SERVER_NAME_MAX_LENGTH = 64
+/** Fixed cost of one composed key: `plugin:` plus the `:` before the server part. */
+const SERVER_NAME_KEY_OVERHEAD = "plugin:".length + 1
+/** Per-part budget — 8 + 28 + 28 = 64, so a composed key can never exceed the cap. */
+const SERVER_NAME_PART_MAX_LENGTH = (SERVER_NAME_MAX_LENGTH - SERVER_NAME_KEY_OVERHEAD) / 2
+/** 12 hex chars, the same suffix width mcp-client's naming.ts hashes with (48 bits). */
+const SERVER_NAME_PART_HASH_LENGTH = 12
+
+/**
+ * One part of a composed key: sanitized to the grammar (D-MCP-1's other half —
+ * a marketplace DISPLAY name with a space must never make the plugin's whole
+ * MCP surface unmountable), then BOUNDED so the composed key is within the
+ * cap by construction, not by luck of the plugin's naming.
+ *
+ * A part longer than its budget keeps a 15-char prefix plus
+ * `_<12-hex sha256(sanitized)>`: deterministic (the same part always composes
+ * the same key) and injective in practice — the hash covers the FULL sanitized
+ * part, so two long ids/servers that share a prefix never collapse onto one
+ * name (the 32-char cap was the second blade of D-MCP-1). The hash is over the
+ * sanitized form, because two raws that sanitize identically are already one
+ * identity on this surface.
+ *
  * @private shared by the two exported helpers below.
  */
-function sanitizeServerNamePart(part: string): string {
-  return part.replace(/[^A-Za-z0-9_.:-]/g, "_")
+function serverKeyPart(part: string): string {
+  const sanitized = part.replace(/[^A-Za-z0-9_.:-]/g, "_")
+  if (sanitized.length <= SERVER_NAME_PART_MAX_LENGTH) return sanitized
+  const hash = createHash("sha256").update(sanitized).digest("hex").slice(0, SERVER_NAME_PART_HASH_LENGTH)
+  return `${sanitized.slice(0, SERVER_NAME_PART_MAX_LENGTH - SERVER_NAME_PART_HASH_LENGTH - 1)}_${hash}`
 }
 
 /**
  * The re-keyed MCP server name for an installed plugin: `plugin:<id>:<server>`
- * with BOTH parts sanitized to the server-name grammar — a marketplace DISPLAY
- * name with a space (real Claude Code marketplaces, e.g. "Marketplace A") or a
- * spaced server key must never make the plugin's whole MCP surface unmountable
- * (the validation skip used to swallow it: the plugin MCP 灯永不亮). The id
- * itself stays VERBATIM on record (state.json / install dir identity); only
- * the key composed here is the sanitized surface. Single source for the
- * install-time re-key AND for the host's per-plugin key attribution
- * (`mcpServerKeyPrefix`).
+ * with BOTH parts sanitized and bounded to the server-name grammar — a
+ * marketplace DISPLAY name with a space (real Claude Code marketplaces, e.g.
+ * "Marketplace A") or a spaced server key must never make the plugin's whole
+ * MCP surface unmountable (the validation skip used to swallow it: the plugin
+ * MCP 灯永不亮), and a long id/server must not push the composed key past the
+ * mcp-client cap either. The id itself stays VERBATIM on record (state.json /
+ * install dir identity); only the key composed here is the sanitized, bounded
+ * surface. Single source for the install-time re-key AND for the host's
+ * per-plugin key attribution (`mcpServerKeyPrefix`).
  */
 export function mcpServerKey(id: string, server: string): string {
-  return `plugin:${sanitizeServerNamePart(id)}:${sanitizeServerNamePart(server)}`
+  return `plugin:${serverKeyPart(id)}:${serverKeyPart(server)}`
 }
 
-/** The key namespace prefix of one plugin id — the same sanitized id
+/** The key namespace prefix of one plugin id — the same bounded part
  * `mcpServerKey` composes (the host attributes `mcpServerConfigs` keys to
- * their owning plugin by this prefix; both sides derive from the same
- * sanitizer, so a sanitized key always attributes to its raw-id record). */
+ * their owning plugin by this prefix; both sides derive from the same helper,
+ * so a composed key always attributes to its raw-id record — including when
+ * the id part had to be truncated). */
 export function mcpServerKeyPrefix(id: string): string {
-  return `plugin:${sanitizeServerNamePart(id)}:`
+  return `plugin:${serverKeyPart(id)}:`
 }
 
 /** Re-key the .mcp.json servers of a package dir to `mcpServerKey(id, server)`. */
