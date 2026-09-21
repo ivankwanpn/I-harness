@@ -421,9 +421,9 @@ const PLUGINS_USAGE =
 /** The command. It writes no registry state: the only mutations reachable from
  * here are `catalog()`'s own — a registered source whose cache dir is cold is
  * re-pulled into `<root>/cache/` (the HTTP manifest is written at
- * marketplaces.ts:392-395; a git source is re-cloned at :399-404), which is
- * exactly what every other `catalog()` caller does. Returns the process exit
- * code. */
+ * marketplaces.ts:396; a git source is re-cloned, rm at :403 + clone at :406),
+ * which is exactly what every other `catalog()` caller does. Returns the
+ * process exit code. */
 export async function runPluginsCommand(args: string[]): Promise<number> {
   const parsed = parsePluginsArgs(args)
   if (parsed.error !== undefined) {
