@@ -19,6 +19,8 @@
 
 **⇒ M6 不是重寫，也不是「追上七源」。** 這一輪的目標（依 owner 2026-09-21 的指示）：**把量到的淺缺口補掉、把量到的斷點修掉；每一列只借「缺的那一半」，且每個借用要過 IH 既有設計的相容性檢查 —— 整包搬＝過度設計，而且會撞既有裁定。**
 
+**⚠ Owner 方向（2026-09-21）：暫時不開始 TUI／web 介面的開發，先把後端打磨好；CLI 是當前的（唯一）宿主面。** ⇒ 所有「回報面／管理面」的項目**一律先落 CLI**（#8 已照此裁定）；wire 的硬化**仍屬後端打磨**（roadmap 自己的話：後端的責任是讓那條 wire **值得**被蓋在上面 —— 它是給未來前端的地基，不是前端工作）。
+
 ---
 
 ## 1. 重量結果（§1.1 的閘門輸出）
@@ -82,7 +84,7 @@
 | 5 | `mcp-elicitation` | grok | ✗ **丟棄（現階段）** | **rendezvous 先於 elicitation**：生產連「模型→使用者的問題 provider」都沒有（`ask_user_input` 恆 `NO_PROVIDER`）；先有 question seam，且必須落 session log、不得成為第二個核准機制（`interaction` 已劃線）。 |
 | 6 | `mcp-resource-retrieval` | cc-custom | ✗ **丟棄（false gap）** | 工具早在；快取是第二真相、且量不到重複列舉壓力。 |
 | 7 | `mcp-server-mode` | — | ✗ **不做（Q4 不變）** | 消費者未出現。 |
-| 8 | `plugin-runtime-state` | dsh（投影形狀）＋ZCode（狀態詞彙） | ⏸ **產品決定** | 詞彙在、零消費者、allowlist 掛著——**建回報面或裁掉詞彙，二選一**，現狀不可持續。若建：dsh 的「每次重讀＋投影成可序列化 phase」形狀；**不得**在 `state.json` 長 status 欄位（第二真相）。 |
+| 8 | `plugin-runtime-state` | dsh（投影形狀）＋ZCode（狀態詞彙） | ✅ **採用（owner 2026-09-21 裁定：建，最小形狀＝CLI 列表面）** | 理由：**CLI 是真實存在的宿主**（非假想消費者），而「看不見」的代價本週已付 —— D-MCP-1 靜默了整整一週（每個 plugin MCP server 掛不上，唯一痕跡是一行 warn）。形狀：`i-harness plugins` 投影 `state.json`＋`evaluatePlugin`（id／enabled／整體就緒度／失敗維度）——dsh 的 PluginInventoryGateway 同形；**不含** install/enable/disable 的復活（另一個決定）；**不得**在 `state.json` 長 status 欄位（第二真相）。**前置：D-MCP-1 先修**（否則首跑滿屏 false）。 |
 | 9 | `filesystem-skill-discovery`（專案根半） | dsh（marker walk-up）／ZCode（祖先鏈） | ◑ **選用（低優先；與 #11 同批才有意義）** | 今天 workspace 恆 cwd、量不到「向上找根」的輸入。**只借**：專案根發現＋1–2 個相容根＋優先序入既有三階契約（加階＝改契約，要明說）。 |
 | 10 | `skill-registry-layered` | dsh | ✗ **丟棄**（分層半＝false gap；scope 維度無輸入） | **附帶的小修**：掃描記憶化（借 instructions 的 mtime/size 快取切片）——**若** search 熱度有量。 |
 | 11 | `skill-catalog-injection` | ZCode（`skills_listing`）／dsh（loader 前置） | ✅ **採用（核心；M6「skills 可被發現」的本體）** | **只做** name＋description 的 eager 目錄；**落點＝runtime-context 尾端追加**（前綴安全——T2 紀律）；**不取**：scope-key 解析、invocability 重檢（無輸入）。 |
@@ -123,4 +125,4 @@
 
 - **沒有實作、沒有 spec。** 決策欄是「進 spec 草案的建議」，不是已核准的範圍。
 - **判定的有效期**：量於 `86c22ba1`；引用前重跑 §5 的指令。
-- **沒有替 owner 回答產品問題**：⏸ #8（plugin 狀態回報面：建或裁）與 #1 的版本級裁決，都要 owner。
+- **沒有替 owner 回答產品問題**：**#8 已由 owner 於 2026-09-21 裁定**（建，CLI 列表面 —— 見 #8 列與使用前提段）；**#1 的 PROTOCOL_VERSION 版本級裁決仍待 owner**。
