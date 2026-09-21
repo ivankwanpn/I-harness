@@ -24,6 +24,7 @@ import { randomUUID } from "node:crypto"
 import type { Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
+import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
 import type { AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -102,6 +103,21 @@ export interface SessionServiceOptions extends AssemblyOptions {
    * When defined it ALWAYS wins over the static AssemblyOptions.
    * reasoningEffort; absent → the static value (or never set). */
   reasoningEffortFor?: (sessionId: string, meta: SessionMeta | undefined) => ReasoningEffort | undefined
+  /** M5 T4 block ③ B1: the registry-level tool-output bound. Declared here —
+   * although AssemblyOptions already carries it — because THIS interface is the
+   * host contract for `i-harness sdk` and `i-harness acp`: those hosts own no
+   * assembly call of their own, so this option is how the bound reaches them,
+   * and it is named where a host reads its surface. The assembly keeps its own
+   * ruling (absent = the guard is NOT mounted); the call sites opt in.
+   *
+   * BOTH `createSessionAssembly` calls below carry it through their `...opts`
+   * spread, so there is no second line to find: the spread IS the threading.
+   * Verified at execution — a service built with `outputSpill` mounts the guard
+   * and bounds an over-cap durable result, and shadowing the field at either
+   * call site reddens
+   * `packages/session-executor/test/service-output-spill.test.ts`. NARROWING a
+   * spread to an explicit field list therefore has to list `outputSpill`. */
+  outputSpill?: OutputSpillGuardConfig
 }
 
 export interface SessionService {

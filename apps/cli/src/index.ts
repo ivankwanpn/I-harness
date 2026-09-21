@@ -552,6 +552,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
           loadMeta: async (id: string) => (await coordinator.profile(id)).meta,
         }
       : {}),
+    // Block ③ B1: the tool-output bound. `assembly.ts` mounts the guard only
+    // when the option is present (`if (opts.outputSpill)` — absent = not
+    // mounted), and before this line the ONLY opt-in in the tree was
+    // runHeadless's, so this host's tool output was unbounded.
+    outputSpill: {},
   })
 
   // M41b v1.1: the server-side rewind seam — mirror of the embedded bridge's
@@ -777,6 +782,9 @@ async function runAcpCommand(args: string[]): Promise<number> {
           loadMeta: async (id: string) => (await coordinator.profile(id)).meta,
         }
       : {}),
+    // Block ③ B1, same as the sdk path above: absent = not mounted, so this
+    // host opts in explicitly.
+    outputSpill: {},
   })
   const server = createAcpServer({
     service,
