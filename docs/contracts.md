@@ -98,6 +98,7 @@
 | `-32601` | `METHOD_NOT_FOUND` | 未知方法 |
 | `-32602` | `INVALID_PARAMS` | `sessionId`/`prompt` 缺失、空或非字串 |
 | `-32603` | `INTERNAL_ERROR` | turn / handler 拋錯 |
+| `-32000` | `SERVER_OVERLOAD` | **M68 批 A**：宿主的**有界輸出佇列**越界——`id: null`（JSON-RPC 對「無對應請求的錯誤」的約定），且是串流的**最後一幀**：之後 output 端結束 |
 
 **回放語義**：`session/event` 流**僅追加、不重放**——新連接只看到訂閱後追加的事件；session 的持久化狀態可跨連接恢復（同 `sessionId`），但歷史事件不回放在新訂閱上。
 
@@ -133,6 +134,15 @@
 
 - **rewind wire shape 鏡像引擎**：`session/rewind/*` 的 shape 是 packages/rewind 類型的**結構鏡像**（wire 不能依賴 rewind 包——獨立）；宿主側（apps/cli）factory 於請求時做引擎型 → wire 型映射；引擎內部鍵（blob id）永不洩漏——wire 文件操作為 `{ path, op: "restore-blob" \| "delete-added" }`。
 - **list 行豐富（v1.1 源面）**：apps/cli `sdk` 命令的 `listSessions` 源在 `--session-dir` 給定時補 `updatedAt`（artifact mtime——M37b store-listing 慣例；stat 失敗回退 `meta.createdAt` 解析）+ `turnCount`（`coordinator.load` 的 turn/start 計數——唯讀路徑，非 mutating）。其餘 context 字段（contextUsed/contextTotal）仍可選缺省；單行 load 失敗 → 行保留（無 turnCount）並 loud 於 stderr（profile 敗行維持 M41a 的「唯 id 誠實行」）。
+
+### 輸出背壓（M68 批 A；additive，`PROTOCOL_VERSION` **保持 2**）
+
+> 面在**宿主側**，不是伺服器側：`createSdkServer` 的 `onWrite` 仍是同步的一次回呼（既有行為不變——客戶端的響應/通知交錯語意依賴它），界在 `@i-harness/sdk` 的 `createBoundedWriter()` 裡：`onWrite` → writer（FIFO）→ 宿主的 output。apps/cli 的 `sdk` 命令以 `DEFAULT_WRITE_BOUND_BYTES` 接到 `process.stdout`。
+
+- **界的形狀**：佇列中**未寫出的位元組數**（不是幀數——幀大小無界，位元組才是記憶體）；`write()` 回 `false` ⇒ 停寫、等 `drain` 續；被擋住期間進來的幀排隊（不再直接落進 stream 自己的緩衝）。
+- **界值＝推導，不是挑選**：`DEFAULT_WRITE_BOUND_BYTES` = 2 × 一頁滿 `session/history` 響應的大小（一頁滿 = 1000 事件，既有的 `HISTORY_LIMIT_CAP`；量測 **947820 B**，量測註記在 `packages/sdk/src/bounded-writer.ts` 的常數旁，測試逐字重算同一數字）。理由：落後**恰好一頁**的正常客戶端在追上時不得被誤殺——正在收的那一頁 + 下一頁都要能進佇列。
+- **界破的唯一結局**：丟掉佇列、寫**恰好一幀** `-32000 SERVER_OVERLOAD`（`id: null`）後**結束 output**；此後 `push` 靜默丟棄（串流已結束）。**恢復路徑＝既有的拉取面**：重連後 `session/history`；**不做**界內 resync 指令（第二條路）。
+- **界內逐位元不變**：一般寫入路徑不新增任何幀（同 `send()` 的字節）；`id` 型別放寬為 `number | string | null`（只有 overload 幀用 `null`）。
 
 ## 版本 / 健康
 
