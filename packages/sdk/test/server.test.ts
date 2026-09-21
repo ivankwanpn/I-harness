@@ -18,6 +18,7 @@ import {
   makeRequest,
   INTERNAL_ERROR,
   INVALID_PARAMS,
+  INVALID_REQUEST,
   METHOD_NOT_FOUND,
   isRpcNotification,
   type RpcMessage,
@@ -25,6 +26,17 @@ import {
   type RpcFailure,
   type SessionQueueItem,
 } from "../src/protocol.ts"
+
+/** M68 batch B (v3): `initialize` is the GATE — every request other than
+ * `initialize`/`shutdown` is refused with -32600 until the connection has
+ * handshaken. Every test below that drives a session method therefore has to
+ * handshake first; the helper also pins the version the handshake answered
+ * with (a silent version change would otherwise re-point 30 call sites in
+ * one direction and hide itself). */
+async function handshake(server: SdkServer): Promise<void> {
+  const reply = await server.handleLine(encodeFrame(makeRequest(0, "initialize", {})))
+  expect(JSON.parse(reply!)).toMatchObject({ result: { protocolVersion: 3 } })
+}
 
 async function makeService(session?: Session): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-"))
@@ -96,7 +108,7 @@ describe("createSdkServer", () => {
       const output = await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
       const msg = decodeFrame(output!) as RpcSuccess
       expect(msg.id).toBe(1)
-      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 2, version: "9.9" })
+      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 3, version: "9.9" })
       await server.close()
     } finally {
       await service.close()
@@ -110,7 +122,9 @@ describe("createSdkServer", () => {
   // protocol.ts JSDoc + docs/contracts.md "SDK Wire Contract v1/v1.1"). v1/v1.1
   // are additive bumps: protocolVersion stayed 2 (v1.1 is an APPENDIX — the
   // new surface is capability-advertised rows, the v0/v1 rows byte-identical).
-  it("initialize wire contract v1.1 (field-level lock)", async () => {
+  // M68 batch B: the lock now reads 3 — the initialize GATE is the breaking
+  // sequencing change; the capability rows above are untouched (still additive).
+  it("initialize wire contract v3 (field-level lock)", async () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // default version = "0.1.0" (contract)
@@ -122,7 +136,7 @@ describe("createSdkServer", () => {
         result: {
           name: "i-harness",
           version: "0.1.0",
-          protocolVersion: 2,
+          protocolVersion: 3,
           capabilities: {
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
@@ -181,6 +195,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const driveState = drive(server)
       const responsePromise = server.handleLine(
         encodeFrame(makeRequest(2, "session/prompt", { sessionId: "s1", prompt: "hello" })),
@@ -214,6 +229,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const bad = await server.handleLine(encodeFrame(makeRequest(3, "session/prompt", { sessionId: "", prompt: "" })))
       const msg = decodeFrame(bad!) as RpcFailure
       expect(msg.id).toBe(3)
@@ -229,6 +245,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const written: RpcMessage[] = []
       server.onNotify((m) => written.push(m))
       const unknown = await server.handleLine(encodeFrame(makeRequest(4, "nope-nothing", {})))
@@ -247,6 +264,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const status = await server.handleLine(encodeFrame(makeRequest(5, "session/status", { sessionId: "s9" })))
       expect((decodeFrame(status!) as RpcSuccess).result).toEqual({ running: false, queued: 0 })
       await server.close()
@@ -293,6 +311,7 @@ describe("createSdkServer", () => {
     })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const driveState = drive(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(7, "session/prompt", { sessionId: "s2", prompt: "go" })))
       const msg = decodeFrame(reply!) as RpcSuccess
@@ -313,6 +332,137 @@ describe("createSdkServer", () => {
     } finally {
       await service.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// M68 batch B (v3): `initialize` is the GATE — every request other than
+// `initialize` and `shutdown` is refused until the connection has handshaken.
+// The code (-32600 INVALID_REQUEST) has been defined since v0 and, per the
+// wire contract's own note, never emitted; the sequencing error this milestone
+// makes visible is its first producer. `shutdown` stays exempt so a
+// half-initialized client always has a way out; an UNKNOWN method stays -32601
+// after the handshake (the gate must not shadow method resolution).
+describe("createSdkServer initialize gate (M68 batch B)", () => {
+  it("refuses a session method before initialize (-32600, data.reason not_initialized)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const refused = await server.handleLine(
+        encodeFrame(makeRequest(1, "session/prompt", { sessionId: "g1", prompt: "too early" })),
+      )
+      const msg = decodeFrame(refused!) as RpcFailure
+      expect(msg.id).toBe(1)
+      expect(msg.error.code).toBe(INVALID_REQUEST)
+      expect(msg.error.data).toMatchObject({ reason: "not_initialized" })
+      // The gate is the ONLY difference: the same call goes through afterwards.
+      await handshake(server)
+      const allowed = await server.handleLine(
+        encodeFrame(makeRequest(2, "session/prompt", { sessionId: "g1", prompt: "hello" })),
+      )
+      expect((decodeFrame(allowed!) as RpcSuccess).result).toEqual({ sessionId: "g1", ok: true })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("captures the connection identity at initialize (clientInfo, once)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      expect(server.clientInfo()).toBeUndefined()
+      const reply = await server.handleLine(
+        encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "probe", version: "9" } })),
+      )
+      expect((decodeFrame(reply!) as RpcSuccess).result).toMatchObject({
+        name: "i-harness",
+        protocolVersion: 3,
+      })
+      expect(server.clientInfo()).toEqual({ name: "probe", version: "9" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("a second initialize is idempotent and the FIRST clientInfo wins", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const first = await server.handleLine(
+        encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "first", version: "1" } })),
+      )
+      const firstResult = (decodeFrame(first!) as RpcSuccess).result
+      const second = await server.handleLine(
+        encodeFrame(makeRequest(2, "initialize", { clientInfo: { name: "second", version: "2" } })),
+      )
+      const secondMsg = decodeFrame(second!)
+      // no error frame, and the SAME reply (id aside)
+      expect(secondMsg).not.toHaveProperty("error")
+      expect((secondMsg as RpcSuccess).result).toEqual(firstResult)
+      // the captured identity is not overwritten — and the second params are
+      // never read again (a later request sees the FIRST value).
+      expect(server.clientInfo()).toEqual({ name: "first", version: "1" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("shutdown is exempt from the gate (a half-initialized client has a way out)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      let shutdownSeen = false
+      const server = createSdkServer(service, { onShutdown: () => { shutdownSeen = true } })
+      const reply = await server.handleLine(encodeFrame(makeRequest(1, "shutdown", {})))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ ok: true })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(shutdownSeen).toBe(true)
+      // …while every other method is still behind the gate.
+      const refused = await server.handleLine(encodeFrame(makeRequest(2, "session/status", { sessionId: "g1" })))
+      expect((decodeFrame(refused!) as RpcFailure).error.code).toBe(INVALID_REQUEST)
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("an unknown method stays -32601 after the handshake (the gate never shadows it)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      await handshake(server)
+      const unknown = await server.handleLine(encodeFrame(makeRequest(2, "nope-nothing", {})))
+      expect((decodeFrame(unknown!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("initialize with garbage params still succeeds — clientInfo undefined, and a warning", async () => {
+    const { service, cleanup } = await makeService()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const server = createSdkServer(service)
+      const reply = await server.handleLine(encodeFrame(makeRequest(1, "initialize", "not-an-object")))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toMatchObject({
+        name: "i-harness",
+        protocolVersion: 3,
+      })
+      expect(server.clientInfo()).toBeUndefined()
+      expect(warn).toHaveBeenCalled()
+      await server.close()
+    } finally {
+      warn.mockRestore()
+      await service.close()
+      await cleanup()
     }
   })
 })
@@ -350,6 +500,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel: async (_sessionId, next) => { selection = next },
     })
     try {
+      await handshake(server)
       const created = await server.handleLine(encodeFrame(makeRequest(9, "session/create", {})))
       expect((decodeFrame(created!) as RpcSuccess).result).toEqual({ sessionId: "created" })
       const forked = await server.handleLine(encodeFrame(makeRequest(10, "session/fork", { sessionId: "created" })))
@@ -396,6 +547,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel,
     })
     try {
+      await handshake(server)
       const invalid = await server.handleLine(encodeFrame(makeRequest(13, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "", model: "m" },
@@ -475,6 +627,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel: async () => {},
     })
     try {
+      await handshake(server)
       const state = await server.handleLine(encodeFrame(makeRequest(17, "session/model/state", {
         sessionId: "s1",
       })))
@@ -508,6 +661,7 @@ describe("createSdkServer session ownership", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const replies = await Promise.all([
         server.handleLine(encodeFrame(makeRequest(20, "session/prompt", { sessionId: "existing", prompt: "one" }))),
         server.handleLine(encodeFrame(makeRequest(21, "session/prompt", { sessionId: "existing", prompt: "two" }))),
@@ -533,6 +687,7 @@ describe("createSdkServer session ownership", () => {
     const server = createSdkServer(service)
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(23, "session/prompt", {
         sessionId: "memory-only",
         prompt: "hello",
@@ -550,6 +705,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       // Drive one turn so the live session exists and has a full event log
       // (submit resolves AFTER the turn drained, so the log is stable).
       const promptReply = await server.handleLine(
@@ -619,6 +775,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(105, "session/history", { sessionId: "persisted" })),
       )
@@ -645,6 +802,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(106, "session/history", { sessionId: "missing" })),
       )
@@ -674,6 +832,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(107, "session/history", { sessionId: "persisted" })),
       )
@@ -694,6 +853,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(110, "session/history", { sessionId: "nope" })))
       const msg = decodeFrame(reply!) as RpcFailure
       expect(msg.id).toBe(110)
@@ -710,6 +870,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       for (const bad of [
         { sessionId: "h1", afterSeq: -1 },
         { sessionId: "h1", afterSeq: 1.5 },
@@ -730,6 +891,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // no listSessions option wired
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(120, "session/list", {})))
       expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ sessions: [], listingUnavailable: true })
       await server.close()
@@ -750,6 +912,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
           ],
         }),
       })
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(121, "session/list", {})))
       expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({
         sessions: [
@@ -770,6 +933,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       const server = createSdkServer(service, {
         listSessions: () => Promise.reject(new Error("store exploded")),
       })
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(122, "session/list", {})))
       const msg = decodeFrame(reply!) as RpcFailure
       expect(msg.error.code).toBe(INTERNAL_ERROR)
@@ -791,7 +955,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       const init = await server.handleLine(encodeFrame(makeRequest(130, "initialize", {})))
       expect((decodeFrame(init!) as RpcSuccess).result).toMatchObject({
         name: "i-harness",
-        protocolVersion: 2, // the version moved — but the v0 METHOD surface is intact
+        protocolVersion: 3, // the version moved — but the v0 METHOD surface is intact
       })
       const prompt = await server.handleLine(
         encodeFrame(makeRequest(131, "session/prompt", { sessionId: "v0c", prompt: "hello" })),
@@ -864,6 +1028,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const drv = drive(server)
       const promptPromise = server.handleLine(
         encodeFrame(makeRequest(140, "session/prompt", { sessionId: "c1", prompt: "go" })),
@@ -904,6 +1069,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const first = server.handleLine(encodeFrame(makeRequest(150, "session/prompt", { sessionId: "cq", prompt: "first" })))
       await waitStatus(server, "cq", { running: true })
       // second submit chains behind the running turn → queued; its controller
@@ -935,6 +1101,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const unknown = await server.handleLine(encodeFrame(makeRequest(160, "session/cancel", { sessionId: "nope" })))
       expect((decodeFrame(unknown!) as RpcSuccess).result).toEqual({ cancelled: false, reason: "not-found" })
       const bad = await server.handleLine(encodeFrame(makeRequest(161, "session/cancel", { sessionId: "" })))
@@ -966,6 +1133,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
           },
         }),
       })
+      await handshake(server)
       const drv = drive(server)
       // the live session must exist (never auto-created by a rewind read)
       const promptReply = await server.handleLine(
@@ -1015,6 +1183,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // no rewindFactory wired
+      await handshake(server)
       // unknown session wins the check order (never auto-creates)
       const unknown = await server.handleLine(encodeFrame(makeRequest(180, "session/rewind/points", { sessionId: "u1" })))
       const unknownMsg = decodeFrame(unknown!) as RpcFailure
@@ -1055,6 +1224,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
           },
         }),
       })
+      await handshake(server)
       await server.handleLine(encodeFrame(makeRequest(190, "session/prompt", { sessionId: "r3", prompt: "hello" })))
       for (const bad of [
         { sessionId: "r3", target: -1 },
@@ -1144,6 +1314,7 @@ describe("createSdkServer session/tasks (Task 12)", () => {
     const { service, gate, cleanup } = await gatedTaskService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const promptReply = await server.handleLine(encodeFrame(makeRequest(300, "session/prompt", { sessionId: "s1", prompt: "spawn a helper" })))
       expect(tasksReply(promptReply)?.result).toEqual({ sessionId: "s1", ok: true })
 
@@ -1195,6 +1366,7 @@ describe("createSdkServer session/tasks (Task 12)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const listed = tasksReply(await server.handleLine(encodeFrame(makeRequest(307, "session/tasks", { sessionId: "never-seen" }))))
       expect((listed!.result as { items: unknown[] }).items).toEqual([])
       await server.close()
@@ -1242,6 +1414,7 @@ describe("createSdkServer session/queue (Task 11)", () => {
     const { service, gate, cleanup } = await gatedQueueService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
       for (;;) {
@@ -1333,6 +1506,7 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
         ],
       }),
     })
+    await handshake(server)
     const client = linkClient(server)
     try {
       const result = await client.dashboard()
@@ -1352,6 +1526,7 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
 
   it("session/dashboard without a listing source → honest blank (never fabricated rows)", async () => {
     const server = createSdkServer(makeStubService())
+    await handshake(server)
     const client = linkClient(server)
     try {
       const result = await client.dashboard()
