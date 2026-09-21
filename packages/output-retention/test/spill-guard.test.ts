@@ -32,7 +32,7 @@ it("string output over the budget is truncated head-tail + notice with the spill
   expect(Buffer.byteLength(out, "utf-8")).toBeLessThanOrEqual(2_000)
   expect(out).toContain("Full result stored at:")
   expect(out).toContain("A") // retained tail
-  const path = /Full result stored at: (.+?)\. Use read/.exec(out)![1]
+  const path = /Full result stored at: (.+?)\. Use grep/.exec(out)![1]
   expect(readFileSync(path, "utf-8")).toBe("A".repeat(10_000))
   rmSync(root, { recursive: true, force: true })
 })
