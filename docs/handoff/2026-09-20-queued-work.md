@@ -948,7 +948,7 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 | # | 什麼 | 為什麼是孤兒 |
 |---|---|---|
 | **C1** | **§3.4 durable `operator/run-end`** | **不在 W6 的交付物表、不在 W6 的短清單、不在 §9** —— 而**它服務的那條完成定義被兩份文件照抄著**（「一次失敗的執行不需要人手讀 JSONL 就能定位」）。**失敗的當下**有 `failureReport`，**事後甚麼都沒有**（`sessions.ts` 只渲染五種事件）。**M4 沒有從別的路線補上它** |
-| **C2** | **B1 —— `sdk`／`acp` 兩條線沒有輸出界** | 只活在 block ③ 的 handoff 記錄裡。**沒有 spec、沒有計畫、沒有編號**。**而它是兩個宿主上無界的工具輸出** |
+| **C2** | **B1 —— `sdk`／`acp` 兩條線沒有輸出界** | **✅ 完成**（2026-09-22，`m68`）。**一個提交：`05fa84bb`** —— 兩個命令的呼叫點各自把 `outputSpill: {}` 傳進 `createSessionService`（`apps/cli/src/index.ts`），而 `SessionServiceOptions` 把那個選項命名在宿主讀得到的介面上（`packages/session-executor/src/service.ts`）。**而量測更正了這一格的形狀**：service 的轉送**本來就已經是活的** —— 兩個 `createSessionAssembly` 呼叫都在展開 `...opts`，所以呼叫者給了就會到 assembly ⇒ **服務層的測試落地即綠（照實記，不裝成 RED）**，它的反證是把欄位在兩個站點遮成 `undefined` ⇒ 紅；**真的紅的是 CLI 那一半（2/2）**。行為測試 `packages/session-executor/test/service-output-spill.test.ts`（超限的 durable 結果變成護欄信封、缺席 ⇒ 同一份結果原樣落地）· 路由測試 `apps/cli/test/host-output-spill.test.ts`。**block ③ handoff 的 B1 有同日期的後記。** |
 | **C3** | **`--max-tokens` 沒有消費者** | 卡片的 `maxOutputTokens` 被解析、驗證、穿過五層，**然後被丟掉**。**真正的原因比「沒有消費者」深**：seam 的 `LLMRequest` **完全沒有 max-output 欄位** ⇒ 要動五個轉接器，不是接一條線 |
 
 ---

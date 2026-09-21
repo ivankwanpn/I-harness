@@ -175,3 +175,13 @@ pnpm verify:all          # 這一塊的閘門（block ② 加的五步），先�
 - **五個邊界是**設計**，不是缺陷**：豁免是值測試（B5）· 四個 block ① 成員在生產上不可達（B6）· `null` 的唯一性是上界論證（B7）· 幾何減半會低於最大可行解（B8）· 散落的界維持原位。
 - ⚠ **B4：`pnpm verify:all` 不是 CI 強制的** —— 一個綠燈只證明**它跑過的那棵樹**。
 - **M5／T4 三塊到此完成**：① 信封（`docs/handoff/2026-09-20-m5-t4-block1-soft-failure-envelope.md`）· ② 參數 schema（`docs/handoff/2026-09-20-m5-t4-block2-argument-schema.md`）· ③ 界（本檔）。
+
+---
+
+## 10. 後記（2026-09-22）：**B1 已由孤兒 C2 關閉**
+
+**§6 的 B1（🔴 只有 `runHeadless` 有界）不再是實況。** 單元 **C2**（queued doc `2026-09-20-queued-work.md` §9.2 C 堆那一列，同日標 ✅）於 `m68` 的 **`05fa84bb`** 落地：`runSdkCommand` 與 `runAcpCommand` 各把 `outputSpill: {}` 傳進 `createSessionService`（`apps/cli/src/index.ts`），而 `SessionServiceOptions` 把那個選項命名在**宿主讀得到的介面**上（`packages/session-executor/src/service.ts`）。**`runHeadless` 那一行沒有動；`assembly.ts` 的「缺席即不掛」語意沒有動。**
+
+**這一則同時更正 B1 的一半讀法 —— 用量的方式，不是用讀的。** B1 說那兩條線「都經過 `createSessionAssembly` **而不傳它**」：**就原始碼文字而言是對的，就執行而言不是。** 兩個 `createSessionAssembly` 呼叫（`:319`／`:347`）都在展開 `...opts`，所以**呼叫者一旦把選項交給 service，它本來就會到達 assembly** —— 缺口只有呼叫點那一半。⇒ C2 的**服務層**測試**落地即綠**（照實記在該提交的訊息與 `.superpowers/c2-host-output-bound/report.md`，**不裝成一個 RED**），它的反證是把欄位在兩個站點遮成 `undefined` ⇒ 紅；**真的紅的是 CLI 那一半（加 `{}` 之前 2/2 紅）**。
+
+**上面 §1–§9 一個字都沒動** —— 它們記錄的是那一天量到的那棵樹。**B1 的其餘部分（`TOOL_TIMEOUT` 豁免的曝露、GC 時機未量、`verify:all` 不是 CI 強制）維持原位。**
