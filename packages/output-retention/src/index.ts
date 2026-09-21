@@ -209,6 +209,15 @@ function sanitizeSegment(s: string): string {
 // from the bound, so that re-read lands unbounded. Advice that cannot be
 // followed is worse than none. `grep` takes `path` (an absolute path is used
 // as-is, packages/fs-search/src/index.ts) and returns bounded matches.
+//
+// ONE HOP IS NOT MENTIONED, deliberately: `grep` has `exposure: "deferred"`,
+// so a host whose tool set defers it needs `tool_search` before the call can be
+// made. Naming that hop in the notice would cost bytes in every notice — and
+// this string is charged inside the cap and committed to the durable record —
+// while `tool_search` is the harness's own, uniform mechanism for reaching a
+// deferred tool. So the notice names the tool and leaves the promotion to the
+// mechanism built for it. (Measured followable end to end once callable: the
+// ledger probe greps a real spill file by its absolute path, 1 match.)
 export function spillNotice(omittedBytes: number, path: string): string {
   return `(Omitted ${omittedBytes} bytes. Full result stored at: ${path}. Use grep with this path to search within it.)`
 }
