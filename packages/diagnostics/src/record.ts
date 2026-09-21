@@ -50,8 +50,9 @@ export type DiagnosticPhase =
  * is the provider's response body (`<model> request failed: 401 {...}`), which is
  * a body that can echo the credential back.
  *
- * Nothing in this package accepts a raw `Error` in its place: `fromError` below
- * is the only way in.
+ * Nothing in this package accepts a constructed `RedactedError`, and nothing
+ * accepts a raw `Error` in its place: a call site hands the logger its caught
+ * value (`unknown`) and the logger derives the shape with `fromError` below.
  */
 export interface RedactedError {
   name: string
@@ -78,6 +79,10 @@ export interface RedactedError {
  * The caught Error itself is left alone. The record is a derived COPY — the
  * console channel stays verbatim by ruling, so redacting the live object in
  * place would change bytes for every other handler of the same error.
+ *
+ * CALLED AT THE LOGGER'S BOUNDARY (`toRecord`, index.ts) and nowhere else: that
+ * is what makes the derivation the only writer of `record.err` (§3.5 force layer
+ * 2), rather than a convention each call site has to remember.
  */
 export function fromError(err: unknown, redactor: Redactor): RedactedError {
   if (err instanceof Error) {

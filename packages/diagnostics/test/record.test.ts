@@ -1,18 +1,28 @@
-// packages/diagnostics/test/record.test.ts — TDD for `fromError`, the ONE
-// derivation that fills the error half of a record (M3 §3.3; §3.5's force layer 2:
-// `err` is DERIVED, never an arbitrary `Error` dropped in).
+// packages/diagnostics/test/record.test.ts — TDD for `fromError` (the ONE
+// derivation that fills the error half of a record) and for the logger boundary
+// that CALLS it (M3 §3.3; §3.5's force layer 2: `err` is DERIVED, never an
+// arbitrary `Error` dropped in).
 //
 // WHY A SEPARATE FILE: diagnostics.test.ts owns the logger's three modes and
 // carries the env/ambient teardown they need; this is a pure function over
-// (unknown, Redactor) that wants none of that.
+// (unknown, Redactor) that wants none of that — and the boundary cases at the end
+// are here because the double they need lives in this file.
 //
 // THE REDACTOR HERE IS A LOCAL DOUBLE — T3 owns `createRedactor`, and T2's
 // property is WHERE the derivation places the values (message and stack reach
 // the redactor, the name never does), not which rules exist. T3 must emit the
 // same `[REDACTED]` token, and swapping this double for the real factory is the
 // one line that changes when it lands.
-import { expect, it } from "vitest"
-import { fromError, type Redactor } from "../src/index.ts"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import {
+  createDiagnostics,
+  currentDiagnostics,
+  diagnosticsFor,
+  fromError,
+  installDiagnostics,
+  type DiagnosticRecord,
+  type Redactor,
+} from "../src/index.ts"
 
 /** The minimal double: ONE value rule, so a value that went through it is
  *  visible in the output. `seen`, when passed, records every value the
@@ -114,4 +124,74 @@ it("an Error with no stack derives no stack field — the record never says \"un
 
   expect(out).toEqual({ name: "Error", message: "boom" })
   expect("stack" in out).toBe(false)
+})
+
+// ------------------------------------------------------ the logger boundary
+// `record.err` has exactly ONE writer: the logger derives it from whatever a
+// catch clause holds, so a caller can never hand in a constructed
+// `RedactedError` (§3.5's force layer 2, enforced at the API) — and the console
+// channel does not learn that `err` exists at all.
+
+const ENV = "I_HARNESS_LOG"
+
+beforeEach(() => { delete process.env[ENV] })
+
+afterEach(() => {
+  vi.restoreAllMocks()
+  delete process.env[ENV]
+  // The ambient slot is MODULE state: an instance left installed would choose
+  // the next case's mode (diagnostics.test.ts's teardown discipline).
+  currentDiagnostics()?.close()
+})
+
+function capture(): { stream: NodeJS.WritableStream; lines: string[] } {
+  const lines: string[] = []
+  const stream = { write: (s: string) => { lines.push(s); return true } } as unknown as NodeJS.WritableStream
+  return { stream, lines }
+}
+
+function parsed(lines: string[]): DiagnosticRecord[] {
+  return lines.map((l) => JSON.parse(l) as DiagnosticRecord)
+}
+
+it("a record given a caught value carries a DERIVED err: message and stack through the redactor, name preserved", () => {
+  const { stream, lines } = capture()
+  installDiagnostics(createDiagnostics({ stream, runId: "r", redactor: redactor() }))
+  const err = new Error('openai-compatible request failed: 401 {"error":"bad key","echo":"Authorization: Bearer sk-live-ABC123"}')
+
+  // The AMBIENT path, i.e. the shape every migrated site uses — so this case
+  // also guards the third argument's forwarding through `child(phase)`.
+  diagnosticsFor("run").error("provider call failed", { model: "m" }, err)
+
+  const rec = parsed(lines)[0]!
+  expect(rec.msg).toBe("provider call failed")
+  const derived = rec.err
+  expect(derived?.name).toBe("Error")
+  expect(derived?.message).not.toContain(SECRET)
+  expect(derived?.message).toContain(TOKEN)
+  expect(derived?.stack).not.toContain(SECRET)
+  expect(derived?.stack).toContain(TOKEN)
+})
+
+it("unset mode with data AND err: the console channel still gets exactly ONE verbatim argument", () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {})
+  // Delegation is the byte-identity mechanism (§0.2), and what the 95 existing
+  // assertions compare is the whole argument LIST — so a third argument passed
+  // through to the console, or a second one, shows up here.
+  diagnosticsFor("run").error("boom sk-live-ABC123", { key: "x" }, new Error("caught"))
+
+  expect(error.mock.calls).toEqual([["boom sk-live-ABC123"]])
+})
+
+it("no caught value: the record carries no err key at all", () => {
+  const { stream, lines } = capture()
+  installDiagnostics(createDiagnostics({ stream, runId: "r", redactor: redactor() }))
+
+  diagnosticsFor("run").warn("plain", { key: "x" })
+
+  // `err !== undefined` is the guard, not a nicety: deriving unconditionally
+  // would write `{ name: "undefined", message: "undefined" }` into EVERY record.
+  // (`JSON.stringify` cannot show the finer difference `err: undefined` vs. no
+  // key, so the wire shape is what is pinned here.)
+  expect("err" in parsed(lines)[0]!).toBe(false)
 })

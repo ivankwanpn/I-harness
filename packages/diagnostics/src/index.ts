@@ -19,6 +19,7 @@
 // console channel: the messages a human reads today stay exactly as they are.
 import { appendFileSync, mkdirSync } from "node:fs"
 import { dirname } from "node:path"
+import { fromError } from "./record.ts"
 import type { DiagnosticPhase, DiagnosticRecord, Level, Redactor } from "./record.ts"
 
 export type { DiagnosticPhase, DiagnosticRecord, Level, RedactedError, Redactor } from "./record.ts"
@@ -28,12 +29,20 @@ export type { DiagnosticPhase, DiagnosticRecord, Level, RedactedError, Redactor 
 export { fromError } from "./record.ts"
 
 /** What a call site holds. `child(phase)` binds the phase once, so the site does
- *  not spell it at every call. */
+ *  not spell it at every call.
+ *
+ *  `err` is a CAUGHT VALUE (`unknown`), never a hand-built error shape: the
+ *  record's error half is derived AT THIS BOUNDARY (§3.5 force layer 2 — a caller
+ *  cannot hand in a pre-redacted shape, so an un-redacted one cannot be handed in
+ *  either), and the console channel never sees the argument at all: delegation
+ *  stays the one verbatim `msg`. Optional and per-call, and available on all four
+ *  levels — a `warn` site may hold a caught value as legitimately as an `error`
+ *  site. */
 export interface Diagnostics {
-  debug(msg: string, data?: Record<string, unknown>): void
-  info(msg: string, data?: Record<string, unknown>): void
-  warn(msg: string, data?: Record<string, unknown>): void
-  error(msg: string, data?: Record<string, unknown>): void
+  debug(msg: string, data?: Record<string, unknown>, err?: unknown): void
+  info(msg: string, data?: Record<string, unknown>, err?: unknown): void
+  warn(msg: string, data?: Record<string, unknown>, err?: unknown): void
+  error(msg: string, data?: Record<string, unknown>, err?: unknown): void
   child(phase: DiagnosticPhase): Diagnostics
   close(): void
 }
@@ -144,11 +153,17 @@ interface Instance {
  *  public handle carrying a visible back-pointer. */
 const INSTANCES = new WeakMap<object, Instance>()
 
-function toRecord(inst: Instance, phase: DiagnosticPhase, level: Level, msg: string, data?: Record<string, unknown>): DiagnosticRecord {
+function toRecord(inst: Instance, phase: DiagnosticPhase, level: Level, msg: string, data?: Record<string, unknown>, err?: unknown): DiagnosticRecord {
   const rec: DiagnosticRecord = { ts: Date.now(), level, run: inst.runId, phase, msg: String(inst.redactor.redact(msg)) }
   // The redactor returns the shape it was given (that is its contract), so this
   // cast marks the interface's boundary rather than asserting anything.
   if (data !== undefined) rec.data = inst.redactor.redact(data) as Record<string, unknown>
+  // The derivation is the ONLY writer of `record.err` (§3.5 force layer 2): the
+  // caller hands in its caught value, and the error shape is built HERE — so no
+  // call site can construct one of its own (or forget to). `err !== undefined`,
+  // never a blanket assignment: deriving from an absent value would write
+  // `{ name: "undefined", message: "undefined" }` into every record.
+  if (err !== undefined) rec.err = fromError(err, inst.redactor)
   return rec
 }
 
@@ -157,17 +172,19 @@ function makeHandle(inst: Instance, phase: DiagnosticPhase): Diagnostics {
   if (memo) return memo
   const methods = {} as Pick<Diagnostics, Level>
   for (const level of LEVELS) {
-    methods[level] = (msg: string, data?: Record<string, unknown>): void => {
+    methods[level] = (msg: string, data?: Record<string, unknown>, err?: unknown): void => {
       // No sink: the unset mode, i.e. delegation. It happens even after close() —
       // a console-mode instance owns no resource, and silencing it at teardown
       // would change bytes at the one moment every existing spy is still
-      // watching.
+      // watching. `data` and `err` are DROPPED here, exactly as `data` already
+      // is: the console channel is one verbatim argument, and that is the
+      // byte-identity mechanism, not a detail.
       if (!inst.sink) { delegate(level, msg); return }
       // A closed sink takes no further records: writing to it would either throw
       // (the path mode) or resurrect output after the host declared the run over.
       if (inst.closed) return
       if (RANK[level] < inst.minRank) return
-      inst.sink.write(`${JSON.stringify(toRecord(inst, phase, level, msg, data))}\n`)
+      inst.sink.write(`${JSON.stringify(toRecord(inst, phase, level, msg, data, err))}\n`)
     }
   }
   const handle: Diagnostics = {
@@ -251,7 +268,7 @@ export function diagnosticsFor(phase: DiagnosticPhase): Diagnostics {
 function ambientHandle(phase: DiagnosticPhase): Diagnostics {
   const methods = {} as Pick<Diagnostics, Level>
   for (const level of LEVELS) {
-    methods[level] = (msg: string, data?: Record<string, unknown>): void => {
+    methods[level] = (msg: string, data?: Record<string, unknown>, err?: unknown): void => {
       const d = currentDiagnostics()
       if (!d) { delegate(level, msg); return }
       // Deliberately NOT `d?.child(phase)[level](...) ?? delegate(...)`: these
@@ -262,7 +279,7 @@ function ambientHandle(phase: DiagnosticPhase): Diagnostics {
       // For an instance this module built, `child(phase)` is a memoized view —
       // a map lookup, not an allocation, per record (a foreign implementation's
       // `child` is its own business).
-      d.child(phase)[level](msg, data)
+      d.child(phase)[level](msg, data, err)
     }
   }
   return {
