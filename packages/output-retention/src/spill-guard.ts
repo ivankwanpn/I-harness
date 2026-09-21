@@ -6,6 +6,7 @@ import {
   TOOL_ABORTED_MID_FLIGHT,
   TOOL_CANCELLED_BY_SIBLING,
   TOOL_FAILED,
+  TOOL_TIMEOUT,
 } from "@i-harness/core-tools"
 import { createSpillStore, createTextRetainer, spillNotice, type SpillStore } from "./index.ts"
 
@@ -133,9 +134,31 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
 // CODE, not the shape — a body that returns `{ error }` as real data is not a
 // failure, and keying on the shape would bound it.
 //
+// WHAT THIS EXEMPTION ACTUALLY REACHES — measured, and it is NOT what an
+// earlier version of this comment claimed. This guard is mounted on the
+// `tools/execute` CASCADE, so it only ever sees a value a cascade handler
+// returned. Four of the five codes are written by core-agent's scheduler
+// STRAIGHT TO THE SESSION (`append` — the synthetic fills never go through
+// `registry.execute` or `tools.finalize`), so in production those four verdicts
+// never arrive here at all: their membership is DEFENCE-IN-DEPTH for any future
+// path that routes a synthetic result through the cascade, plus the
+// value-collision rule below. The ONE code that does cross this seam today is
+// TOOL_TIMEOUT, because guard-timeout is itself a cascade handler, mounted
+// inside this one by the assembly. Measured before it was added: a
+// timed-out tool's over-cap result came back as a spill envelope; the durable
+// record had NO top-level `code` and the verdict survived only as truncated
+// text. With it in the set the verdict — and the PARTIAL output the timeout
+// guard spread under it — passes through whole.
+//
+// THE PRICE, stated rather than hidden: the rule is a VALUE test, so a tool
+// body that returns one of these five strings as its own data is never bounded.
+// That is the cost of keying on the vocabulary instead of the shape; the
+// vocabulary is the one the tool-result contract owns, and the shape rule was
+// rejected because it bounds real data (the line above).
+//
 // WHY THIS EXEMPTION KEYS ON A SET AND NOT ON THE REACHABILITY GATE'S SILENCE:
-// "no row" does not mean "no reader". When the four codes moved to core-tools
-// (T1), the gate's used-scan began counting the DECLARING file as a user — a
+// "no row" does not mean "no reader". When the codes moved to core-tools (T1),
+// the gate's used-scan began counting the DECLARING file as a user — a
 // cross-package declarer escapes the scan's own declaring-file exclusion — so
 // the two core-agent allowlist entries went INERT with nothing new reading the
 // codes. An exemption keyed on the instrument's quiet would have been keyed on
@@ -147,12 +170,13 @@ const SYNTHETIC_FAILURE_CODES = new Set([
   TOOL_ABORTED_BEFORE_DISPATCH,   // a call that never started
   TOOL_CANCELLED_BY_SIBLING,      // a call a sibling's failure cancelled
   TOOL_ABORTED_MID_FLIGHT,        // the abort path wrote this verdict
+  TOOL_TIMEOUT,                   // the timeout guard replaced a partial result
 ])
 const isSyntheticFailure = (out: unknown): boolean =>
   typeof out === "object" && out !== null && SYNTHETIC_FAILURE_CODES.has((out as { code?: string }).code as string)
 
-// WHY THE SET STOPS AT FOUR. The repair path in session-persistence
-// (src/repair.ts) writes a FIFTH synthetic code — for a DISPATCHED call whose
+// WHY THE SET STOPS AT FIVE. The repair path in session-persistence
+// (src/repair.ts) writes a SIXTH synthetic code — for a DISPATCHED call whose
 // outcome the log does not contain. It is deliberately not here, because it
 // cannot reach this guard: the mount point is the live `tools/execute` cascade,
 // and a result read back from a REPAIRED log never passes through it. If

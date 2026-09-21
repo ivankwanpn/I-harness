@@ -115,6 +115,19 @@ export const TOOL_FAILED = "TOOL_FAILED"
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
 export const TOOL_ABORTED_MID_FLIGHT = "TOOL_ABORTED_MID_FLIGHT"
+// The fifth code, and the ONLY one of the five whose verdict CROSSES the
+// `tools/execute` cascade: the timeout guard is a cascade handler (the others'
+// fills are appended straight to the session and never pass through it), so a
+// seam-mounted reader — output-retention's spill guard is one — must be able to
+// name it without importing `guard-timeout`. It moved here for exactly that
+// reason; `guard-timeout` still exports it (a re-export), so its existing
+// importers did not move.
+//
+// It is a verdict about a call like the other four, but it is NOT shaped like
+// them: the timeout guard spreads the tool's PARTIAL output and stamps
+// `error`/`code` on top, so this code's result can be arbitrarily large where
+// the other four are a message.
+export const TOOL_TIMEOUT = "TOOL_TIMEOUT"
 
 export interface PreparedCall {
   call: ToolCall

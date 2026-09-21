@@ -6,6 +6,7 @@ import {
   TOOL_ABORTED_MID_FLIGHT,
   TOOL_CANCELLED_BY_SIBLING,
   TOOL_FAILED,
+  TOOL_TIMEOUT,
   type Tool,
 } from "@i-harness/core-tools"
 import { createOutputSpillGuard, gcSpillStore } from "../src/spill-guard.ts"
@@ -140,6 +141,12 @@ it("a synthetic TOOL_ABORTED_MID_FLIGHT result is never bounded", async () => {
   const { synthetic, control, fixture } = await driveSynthetic(TOOL_ABORTED_MID_FLIGHT)
   expect((control as { spill?: unknown }).spill).toBeDefined()
   expect(synthetic).toEqual({ ...fixture, code: TOOL_ABORTED_MID_FLIGHT })
+})
+
+it("a synthetic TOOL_TIMEOUT result is never bounded — the only code that crosses this seam", async () => {
+  const { synthetic, control, fixture } = await driveSynthetic(TOOL_TIMEOUT)
+  expect((control as { spill?: unknown }).spill).toBeDefined()
+  expect(synthetic).toEqual({ ...fixture, code: TOOL_TIMEOUT })
 })
 
 it("never emits a replacement larger than the cap — the notice counts against it", async () => {
