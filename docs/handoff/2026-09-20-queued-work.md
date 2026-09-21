@@ -930,7 +930,7 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 
 | # | 什麼 | 離「可以寫計畫」多遠 |
 |---|---|---|
-| **A1** | **`schedule` 的實作**（spec 已核准） | **最近的一項。** 只差**行號重測**（spec 釘在 `c8c920b9`；`core-agent/src/index.ts` 的引用**全部偏約 42 行**，結構如述）。**而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
+| **A1** | **`schedule` 的實作**（spec 已核准） | **最近的一項。** **✅ 行號重測已完成**（2026-09-21，`m66`，於 `8dbca025`）：**4 處漂移已就地更正**（`core-agent/src/index.ts` 的 step 邊界區 **+42**、`core-tools/src/index.ts` 的 `ToolRegistry` **+79**、`run.ts` 的 `finally` 段、`run.ts` 的 hooks「缺席即關」註解）＋ **1 處精度修正**（`settings` 的 in-flight guard 本體在 `:1437`）。**其餘全部重測為真**（含 6 條 grep 指令的逐行輸出與 §6.3.1 的 byte／token 重算：192／77／79／119 與 229→62）。**⇒ 下一步：寫計畫。** **而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
 | **A2** | **W6** —— M3 剩下的 | **要先決定一件事**（見 B1）。而**站點數是 110**（不是文件上的 79），**集中在 `apps/cli`（58）**，而**另外 15 個套件的 52 個站點沒有任何 level 對照表** |
 | **A3** | **W7（M6 廣度）** | **最遠的一項。** 只有 roadmap 一條（沒有 spec、沒有計畫），而 roadmap §1.1 要求**引用的 13 列 triage 進 spec 前對現行 HEAD 重量**（那些量於 **2026-09-11**）。等級 **M** ⇒ 需完整 spec ＋ 計畫 |
 

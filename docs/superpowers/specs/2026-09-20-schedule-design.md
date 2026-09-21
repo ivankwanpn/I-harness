@@ -5,6 +5,8 @@
 **前置：** `docs/handoff/2026-09-20-queued-work.md` §4（W3 的九個互鎖）· `2026-09-15-backend-polish-roadmap-design.md` §5 **Q2**（2026-09-20 已裁定：**否**）
 **這不是施工計畫。** 本文件不連任何線；計畫等這份被核准之後才寫。
 
+> **行號重測（2026-09-21，`m66`，於 `8dbca025`）：** 本文件釘在 `c8c920b9`；在它之後的第 88 個提交上，把**每一條 `檔案:行號` 引用**重新對照過。**4 處漂移，已就地更正**：`core-agent/src/index.ts` 的 step 邊界區 **+42 行**（`:221/:222/:233/:235` → `:263/:264/:275/:277`）；`core-tools/src/index.ts` 的 `ToolRegistry` 介面 **+79 行**（`:119-134` → `:198-213`）；`run.ts` 的 `finally` 段（原 `:769` 是 `assembly?.dispose()` —— 現在 `:762` 是 `} finally {`、`:784` 是 `dispose`）；`run.ts:570-571` 的 hooks「缺席即關」註解 → `:579-580`。**1 處精度修正（非漂移）**：`settings/src/index.ts` 的 guard 本體在 `:1437`（`:1410-1418` 只是那段註解；該檔自 `c8c920b9` 起 0 個提交）。**其餘全部重測為真**：6 條 grep 指令的逐行輸出（1／6／4／0／3／0 行）、`§6.3.1` 的四個 byte 數（重算 192／77／79／119 逐字相同）與 229 chars → 62 tokens（`ceil(229/4) + 4`）。
+
 ---
 
 ## 0. 為什麼有這份文件
@@ -286,14 +288,14 @@ for (const ev of this.session.events)
 
 ### 4.2 決定：**觸發點是 turn 裡的 step 邊界，不是任何計時器**
 
-**IH 的 agent 迴圈每一步都有一條已經被 awaited 的接縫**（`core-agent/src/index.ts:221-233`）：
+**IH 的 agent 迴圈每一步都有一條已經被 awaited 的接縫**（`core-agent/src/index.ts:263-275`）：
 
 ```
-deps.stepInputs?.claimAtStepBoundary()      // :221  ← steer 在這裡被升格
-append(deps.session, { type: "step/start" }) // :222
+deps.stepInputs?.claimAtStepBoundary()      // :263  ← steer 在這裡被升格
+append(deps.session, { type: "step/start" }) // :264
 …
-await ctx.emit("agent/pre-step", { … })      // :233  ← awaited 的接縫
-const messages = deriveMessages(deps.session) // :235
+await ctx.emit("agent/pre-step", { … })      // :275  ← awaited 的接縫
+const messages = deriveMessages(deps.session) // :277
 ```
 
 **決定：驅動器掛在 `agent/pre-step` 上**（`ctx.on`，與 `runtime-context`／`hooks` 同一條接縫 —— `runtime-context/src/index.ts:75`、`hooks/src/index.ts:411`）。每一 tick 就是**一個 step**。
@@ -304,7 +306,7 @@ const messages = deriveMessages(deps.session) // :235
 |---|---|
 | **I5（閘門）** | **閒置 ＝ 沒有 step ＝ 沒有 tick。** 不啟動 turn 不再是「呼叫者記得檢查」的行為約定，而是**結構上做不到** —— 這是這個 repo 最喜歡的那種解法。 |
 | **I7（讀的成本）** | 活著的 session 的 `events` **就在記憶體裡**（`assembly.ts:271` 的 `session`），所以一個 tick 是**零 I/O**。backlog 擔心的「每個 tick 對每一個 stored session 做一次完整 `coordinator.load()`」**不會發生**，因為根本沒有東西在列舉 stored sessions。 |
-| **I3（in-flight）** | `await ctx.emit("agent/pre-step", …)`（`:233`）**是等著的** —— 驅動器的工作在裡面，所以同一條 turn 的 step 之間**天然序列化**。dsh 用一個 per-agent 的交易鏈（dsh `transaction.ts:13-23`）解同一題；這裡用既有的 awaited 接縫解掉。**仍然要一個守衛**（§4.5）。 |
+| **I3（in-flight）** | `await ctx.emit("agent/pre-step", …)`（`:275`）**是等著的** —— 驅動器的工作在裡面，所以同一條 turn 的 step 之間**天然序列化**。dsh 用一個 per-agent 的交易鏈（dsh `transaction.ts:13-23`）解同一題；這裡用既有的 awaited 接縫解掉。**仍然要一個守衛**（§4.5）。 |
 | **I2（擁有）** | 「誰 tick」的答案變成「**那個 session 自己的 turn**」—— 而一個活著的 session 在一個行程裡只有一個 assembly（`service.ts:291-292` 的 get-or-create）。 |
 
 **⚠ 這張表解掉的是「機制」，不是「政策」。** 「一個在閒置期間到期的 occurrence，當下一個 turn 終於來的時候**還有沒有資格**」是**另一個**決定 —— 機制說「只能在有 turn 的時候動手」，政策說「等了那麼久之後還要不要」。兩者獨立：這份設計的機制配上 O2 的三個選項都成立，而 **O2 已裁定選 (a)「等」**（§7.1）。
@@ -321,7 +323,7 @@ const messages = deriveMessages(deps.session) // :235
 
 ### 4.4 送達的語意：**騎在別人的 turn 上；但它可能需要第二個 turn**
 
-一個 occurrence 只在**有 turn 在跑**時被接受。被接受之後它是一筆 durable 的 input；`claimAtStepBoundary` 在下一個 step（`:221`）把它 splice 進去。
+一個 occurrence 只在**有 turn 在跑**時被接受。被接受之後它是一筆 durable 的 input；`claimAtStepBoundary` 在下一個 step（`:263`）把它 splice 進去。
 
 **還有一個量得到的邊界 —— 它已經被 O2 的裁定涵蓋，所以它是決定，不是問題：** 如果那個 turn 在它被 claim 之前就結束了，它會留在 `pending()` 裡，而 executor 的 pump 迴圈會把它當成 `pending()[0]` **跑成一個新的 turn**（`executor.ts:89-111` 的 `for (;;)`，`submit()` 在 `:131` 是 pump 唯一的呼叫點）。
 
@@ -334,7 +336,7 @@ const messages = deriveMessages(deps.session) // :235
 
 ### 4.5 仍然要的那個守衛（I3）
 
-`await ctx.emit("agent/pre-step", …)` 序列化了同一條 turn 的 step，但**沒有**序列化別的東西：一個 turn 的結尾與 pump 的下一個 `agent.run` 之間、以及（若同一行程有第二個宿主）兩個 tick 之間。**決定：驅動器的 tick 加一個 in-flight 守衛** —— 形狀直接照 W1（`settings/src/index.ts:1410-1418`）：
+`await ctx.emit("agent/pre-step", …)` 序列化了同一條 turn 的 step，但**沒有**序列化別的東西：一個 turn 的結尾與 pump 的下一個 `agent.run` 之間、以及（若同一行程有第二個宿主）兩個 tick 之間。**決定：驅動器的 tick 加一個 in-flight 守衛** —— 形狀直接照 W1（`settings/src/index.ts:1437`；那段註解在 `:1410-1418`）：
 
 > `// without this guard consecutive ticks run their captures concurrently — an OLDER capture can then resolve after a newer one …`
 > `if (capturing) return // one capture in flight; the next tick re-reads`
@@ -343,7 +345,7 @@ const messages = deriveMessages(deps.session) // :235
 
 ### 4.6 掛在哪裡、以及它讀什麼（I2 的收尾）
 
-**決定：驅動器掛在 assembly 裡**（`createSessionAssembly`，`assembly.ts:382`；生命週期由 `dispose()` 收，`assembly.ts:322-325`，實作 `:1174`；CLI 的界線是 `run.ts:486` → `finally` 的 `:769`）。三個接縫變成：
+**決定：驅動器掛在 assembly 裡**（`createSessionAssembly`，`assembly.ts:382`；生命週期由 `dispose()` 收，`assembly.ts:322-325`，實作 `:1174`；CLI 的界線是 `run.ts:486` → `finally`（`:762`）裡的 `assembly?.dispose()`（`:784`））。三個接縫變成：
 
 | 接縫 | 裝什麼 |
 |---|---|
@@ -407,7 +409,7 @@ schedule_list    {}                                                  ← 回 Sch
 schedule_delete  { id }
 ```
 
-- **掛法照 `createTodoTool`**：session-scoped、在 `assembly.ts:807-810` 那一區註冊；`ToolRegistry.register` 的形狀在 `core-tools/src/index.ts:119-134`；要 handle 的形狀照 `registerWorkflow`（`workflow/src/tool.ts:125-133, 145-157`）。
+- **掛法照 `createTodoTool`**：session-scoped、在 `assembly.ts:807-810` 那一區註冊；`ToolRegistry.register` 的形狀在 `core-tools/src/index.ts:198-213`（`register` 在 `:199`）；要 handle 的形狀照 `registerWorkflow`（`workflow/src/tool.ts:125-133, 145-157`）。
 - **建立規則直接打引擎**：`createAfterScheduleRecord` / `createAtScheduleRecord` / `createEveryScheduleRecord`（`index.ts:271,280,289`），錯誤是機器碼 `ScheduleInputError`（`index.ts:96-109`），`allocateScheduleId` 從 fold 的 `seenIds` 取號（`index.ts:363-372`）。
 - **`schedule_list` 不需要載入任何東西** —— §2 說 session-local，而 assembly 握著活的 `session`。這是 §2 選擇的紅利。
 - **id 由引擎配置，不接受模型給的 id**（`allocateScheduleId` 保證不重用，`index.ts:363`）。`schedule_delete` 只認得 `schedule-<n>`。
@@ -464,7 +466,7 @@ $ grep -rn 'renderEveryReminderBatchFraming\|BatchFraming' --include=*.ts packag
 | **數量上限** | **v1 不加** | **沒有任何可推導的依據。** IH 唯一一個推導出來的面額是**每個模型的上下文預算**（`budget = contextWindow × reserveRatio`，預設 0.9 —— `token-meter/src/budget.ts:14`；壓縮的門檻是 `thresholdRatio ?? 0.8`，`compaction/src/config.ts:106`），而把它變成「每回合幾筆排程」**需要先選一個比例，那就是猜** |
 | **若將來要加上限** | **一律「拒絕」，不「替換最舊」** | 替換在既有事件下**表達得出來**（`delete` ＋ `create` 同一次 append、同一個 fold 快照 —— `ScheduleChange` 兩個操作都有，而單一 append 是 §3.4）。**但沒有參考專案這樣做**（對 cc-custom 的 cron 檔案與 dsh 的 schedule src 掃 `oldest\|evict\|LRU\|replace`：cc-custom 的 3 個命中全是「清掉已不存在任務的排程項」的快取整理，不是為了騰位子而淘汰）。而它的代價**不是日誌誠實**（那筆 delete 是誠實且可重播的），**是「一個模型建立的記錄靜默地毀掉一個使用者建立的記錄」** |
 | **視野上限** | **留空** | 同一個標準：今天唯一的相關常數是引擎的年份窗口（`0001-01-01T00:00:00.000Z` … `9999-12-31T23:59:59.999Z`，`schedule/src/index.ts:24-25`）—— **那是一個可表示範圍，不是一個政策** |
-| **開關的預設值** | **留空** | 同一個標準。IH 的「缺席即關」先例（`run.ts:570-571`）**不能直接套**，因為排程沒有設定檔可以「缺席」 |
+| **開關的預設值** | **留空** | 同一個標準。IH 的「缺席即關」先例（`run.ts:579-580`）**不能直接套**，因為排程沒有設定檔可以「缺席」 |
 
 **為什麼「不加」是對的，而不是懶：** 對照 cc-custom 的兩個常數 ——
 
