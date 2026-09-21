@@ -39,6 +39,13 @@ grep -n "<你引用的符號>" <檔案>      # 行號是基準，不是事實
 
 **③ 不要 amend 任何已回報的提交** —— 修錯**往前修**。**而提交訊息不加任何 attribution trailer**（沒有 `Co-Authored-By`、沒有 generated-by）。
 
+**④ 綠燈證明的是你腳下那棵樹，不是你即將推的那個提交。**
+**`pnpm verify:all` 跑在工作區上。** 一個**已 stage 但未 commit 的刪除**對它是隱形的 —— **2026-09-21 真的發生過**：`CLAUDE.md` 被 `mv` 走而刪除沒被提交，於是**工作區是乾淨的、閘門是綠的，而 `HEAD` 上那個檔案還在** ⇒ **任何人 clone 下來都會拿到紅的樹**。
+**⇒ 推送前問一句：`git status` 是空的嗎？工作區與 HEAD 是同一棵樹嗎？**
+
+**⑤ 而那一輪還教了另一件事：在 repo 根目錄放 `CLAUDE.md` 不是寫文件。**
+**`packages/instructions/src/files.ts:7` 是生產程式碼**，它把工作區的 `AGENTS.md`／`CLAUDE.md` **注入 session 的 instructions**。**⇒ 一個根目錄的 `CLAUDE.md` 會進每一個 session 的 system prompt**（量到的後果：`session-executor` 的兩條 queue-projection 測試當場紅，因為 `seen` 記的是整個 prompt，而斷言期望它只有 `['first']`）。**要不要真的放一份，是一個未決的產品決定** —— 說明在 `docs/handoff/2026-09-21-takeover-guide.md` 的檔頭。
+
 ### 0.3 做完一項時
 
 **改狀態、寫下實際量到的數字（連範圍）、把「為什麼」留在提交訊息裡。** 文件與事實不同步，它就變成另一份說謊的文件 —— **而那是這個 repo 一直在消滅的東西。**
