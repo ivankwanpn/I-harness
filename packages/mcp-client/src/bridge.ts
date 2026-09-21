@@ -62,12 +62,26 @@ export async function syncTools(
   // — a repeated cursor, an oversized cursor, an oversized catalogue (each a
   // McpCatalogError) and the page cap (unchanged: a plain Error at
   // MAX_TOOL_PAGES, which no honest server reaches).
+  // M6-D2: the caps bound the WORK the server can make us do; this deadline
+  // bounds the TIME it can spend doing it. Computed ONCE at drain start — a
+  // server whose every page is merely slow fails inside this one budget, not
+  // on a per-page timeout paid once per page — and each page request is handed
+  // the REMAINING total, so a single hanging page cannot outlive the budget.
+  const deadline = Date.now() + (config.catalogTimeoutMs ?? 60_000)
+  const pageTimeoutCap = config.toolCallTimeoutMs ?? 60_000
   let cursor: string | undefined
   let pages = 0
   const seenCursors = new Set<string>()
   let items = 0
   do {
-    const response = await client.listTools(cursor)
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      throw new McpCatalogError("timeout", `mcp-client(${serverName}): catalogue drain exceeded its timeout`)
+    }
+    const response = await client.listTools(cursor, {
+      timeout: Math.min(remaining, pageTimeoutCap),
+      maxTotalTimeout: remaining,
+    })
     for (const tool of response.tools) {
       listedNames.add(tool.name)
       if (blocked.has(tool.name)) {
