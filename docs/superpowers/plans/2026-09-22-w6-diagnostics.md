@@ -35,7 +35,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 | 問題 | 裁定 | 理由 |
 |---|---|---|
 | 站點如何到達實例（DI 會遍及 100 站） | **環境實例**：`packages/diagnostics` 匯出 `installDiagnostics(d)`／`currentDiagnostics()`；站點持有**模組級 child**（`const d = diagnosticsFor("phase")`），呼叫時取當前實例，**沒有實例 ⇒ 委派 console** | 100 站點的參數注入是重寫全部簽名；今天的 `console` 本來就是環境單例 —— 這個模組只是把它**形式化並可替換**。測試可以 `install` 一個捕獲實例（或什麼都不裝＝舊行為）。**代價說出來**：模組級狀態在 vitest 平行 worker 裡是 per-process 的，`install`/`uninstall` 必須成對（teardown 呼叫 `close()` 即卸載） |
-| 級別 vs 通道 | **分開**：`level` 是結構化欄位；**未設模式的 console 通道維持原呼叫的通道**（warn→warn、error→error），**與 level 無關** | 逐位元組不變的要求（0.2）；`help` usage 是 level `info` 但通道仍是 stderr（`bin.test.ts:39` 斷言它在 stderr） |
+| 級別 vs 通道 | **分開**：`level` 是結構化欄位；未設模式的 console 通道**由呼叫的方法決定**（`warn`→`console.warn`、`error`→`console.error`）。**⚠ 修正（T1 複審量到的，2026-09-22）：通道與級別在 API 上等價，所以「`info` 級但走 stderr」不可表達。裁決：那五個非 error 形狀、而今天是 `console.error(...)` 的站點（`index.ts:178` help（exit 0）、`models.ts:343`、`roles.ts:287`、`provider.ts:222`、`run.ts:752`）**維持原樣、不遷移**，作為普查的**五個列名例外**（byte-identical、無結構化記錄）——**不**改 API（為五個 argv 站點造機制＝YAGNI），也**不**給它們 `error` 級（那是讓句子說謊）。普查因此＝**102 個分級 + 5 個列名例外**。**四個既有斷言（`bin.test.ts:39`、`metrics-summary.test.ts:25/32`、`models-command.test.ts:278-284`、`roles-command.test.ts:192-198`）是這條裁決的守衛。** | 逐位元組不變的要求（0.2）；T1 的 API 實況（複審 `index.ts:115-119`） |
 | `[tag]` 與 CLI 前綴 | **msg 逐字保留**（不在此單元正規化；`[i-harness]` 16／`[plugin-registry]` 8／`[rewind]` 6／CLI 的 `provider:` 等）。結構化欄位新增 `phase`，**不**吸收 tag | 50/107 帶 tag；正規化是另一個決定，且有 95 個文字斷言在看 |
 | `runId` | **每個宿主入口 mint 一次**（`randomUUID()`；run／sdk／acp 各自）；`run` 欄位記它 | tree 裡沒有 runId 可借（`activeId` 缺席於 storeless run、且 sdk/acp 是 per-session） |
 | `DiagnosticPhase` | 新套件裡的**封閉 union**，由實測的縫列舉：`"cli"｜"config"｜"run"｜"turn"｜"sdk"｜"acp"｜"session"｜"mount"｜"telemetry"｜"shutdown"`（實作時以 107 站的歸屬微調，增減要在提交訊息說） | 今天不存在任何 phase 詞彙（0 命中） |
@@ -132,7 +132,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 |---|---|---|
 | CLI usage error（17：argv/flag/子命令用法） | `error`（`index.ts:178` 的 help **例外：`info`**） | `cli` |
 | CLI run/command failure（16） | `error` | `run`／`cli` |
-| 非 error 形的 5 條（`models:343`、`roles:287`、`provider:222`、`run:752`、help） | `warn`×2／`info`×2／`info`（help） | 依檔案 |
+| 五個列名例外（`index.ts:178` help、`models:343`、`roles:287`、`provider:222`、`run:752`） | **不遷移**（維持 `console.error` 原樣；§0.3 的修正） | — |
 
 - [ ] **Step 1: 遷移一批（例如 index.ts 23 站）** → 跑 `pnpm --filter <cli-pkg> test`：**既有 spy 斷言全綠即為驗收**（有任何文字斷言紅 ⇒ 遷移改變了 bytes ⇒ 修遷移，不是修測試）→ commit per 檔或小批（SDD 的批處理規則）。
 - [ ] **Step 2: 其餘檔同法**（provider→roles→models→hooks→plugins→sessions→run）→ **Step 3: 全 CLI 綠＋`--gate`** → commit。
