@@ -262,6 +262,16 @@ await handle.sync()
 - **admission 不再由 `Inbox.admit()` 寫入**（它走 session 自己的 append → write-behind 的 200 ms 佇列，`run.ts:312-313`）。所以 **`append` 這個接縫必須是 durable 的**（`coordinator.append`，不是 `session` 的 enqueue）—— 否則「durable accept」四個字是假的：write-behind 會讓 dispatch 在崩潰時消失，而提醒已經送出去了 ⇒ 變成**重複**。
 - **admission 仍然必須滿足 Inbox 的折疊契約**（`type`／`version`／`inputId`／`text`／`delivery`／`intent`，`inbox.ts:43-52`）—— 它只是一個事件，`pending()` 讀的是日誌。
 
+> **⚠ 更正（2026-09-21，實作前量到的）：** 本節指名的 `coordinator.append(sessionId, [...])` 只寫磁碟
+> （`session-persistence/src/index.ts:470-475`）—— 它不更新 `session.events`、不通知訂閱者。照字面實作會
+> 讓 fold 看不到 dispatch（重複投遞）、`pending()` 看不到 admission（永不升格）、SDK 串流看不到兩筆。
+> **實作改為**：`append(session, dispatch)` ＋ `inbox.admit(...)`（canonical `append()`，
+> `core-session/src/index.ts:323-343`）**＋ `await coordinator.flush(sessionId)`**（quiescence barrier，
+> resolves only after backend durability，`session-persistence/src/write-behind.ts:55-64`）—— 兩筆仍落在
+> **同一個 backend append**（失敗 ⇒ 兩筆都不在），而記憶體／鏡像／訂閱者三者一致。
+> **殘餘視窗**：例外路徑 both-or-neither；torn write 由 repair 截到最後一條完整行，理論上可留下 dispatch
+> 而丟掉 admitted —— 那是 jsonl 中每一組相鄰事件對共有的曝光（promote ＋ user/message 同型），不是排程特有。
+
 ### 3.5 `inputId` 必須是**每一次 occurrence**，不是每一個 record
 
 **這是一個現在不寫下來就會中的地雷。** `Inbox.pending()` 把**任何被 promote 或 cancel 過的 id 當成永遠 consumed**（`core-session/src/inbox.ts:74-94`）：
