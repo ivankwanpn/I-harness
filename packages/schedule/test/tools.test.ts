@@ -59,22 +59,26 @@ describe("schedule_create (the exactly-one selector lives in the handler — no 
     expect(session.events).toHaveLength(1)
   })
 
-  it("at: a past instant is not_future; a future offset instant converts to UTC", async () => {
-    const { create } = setup()
+  it("at: a past instant is not_future and appends NOTHING; a future offset instant converts to UTC", async () => {
+    const { session, create } = setup()
     const err = await failureOf(create.execute({ prompt: "x", at: "2020-01-01T00:00:00.000Z" }, {}))
     expect(err).toBeInstanceOf(ScheduleInputError)
     expect(err.code).toBe("not_future")
+    expect(session.events).toHaveLength(0) // checked BEFORE the fold/append
     expect(await create.execute({ prompt: "call home", at: "2999-01-01T00:00:00+08:00" }, {}))
       .toMatchObject({ kind: "at", scheduledAt: "2998-12-31T16:00:00.000Z" })
+    expect(session.events).toHaveLength(1)
   })
 
-  it("every: below the 300 s floor is frequency_too_high; the floor itself is accepted", async () => {
-    const { create } = setup()
+  it("every: below the 300 s floor is frequency_too_high and appends NOTHING; the floor itself is accepted", async () => {
+    const { session, create } = setup()
     const err = await failureOf(create.execute({ prompt: "x", every_seconds: MIN_EVERY_INTERVAL_SECONDS - 1 }, {}))
     expect(err).toBeInstanceOf(ScheduleInputError)
     expect(err.code).toBe("frequency_too_high")
+    expect(session.events).toHaveLength(0) // checked BEFORE the fold/append
     expect(await create.execute({ prompt: "ping the build", every_seconds: MIN_EVERY_INTERVAL_SECONDS }, {}))
       .toMatchObject({ kind: "every" })
+    expect(session.events).toHaveLength(1)
   })
 
   it("zero selectors is invalid_rule, and the message names the exactly-one rule the schema cannot", async () => {

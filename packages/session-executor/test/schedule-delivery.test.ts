@@ -28,7 +28,7 @@
 // The pump is a real, decided consequence (owner ruling O2(a) "wait"): a user
 // turn can bring out a second turn whose content is the reminder.
 
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import {
   append,
   createSession,
@@ -62,11 +62,15 @@ interface BatchCoordinator extends SessionCoordinator {
 /** The coordinator double from assembly.test.ts's `memoryCoordinator`, extended
  * to record the WRITE-BEHIND boundary the §3.4 atomicity claim is about:
  * `enqueue` parks events, `flush` commits them as one batch (what the jsonl
- * backend writes in one write+sync), `append` commits directly. */
-function batchCoordinator(): BatchCoordinator {
+ * backend writes in one write+sync), `append` commits directly.
+ * `failFirstFlush` adds the real write-behind's FAILURE RETENTION: the first
+ * flush rejects but KEEPS its queue (`pending = batch.concat(pending)`,
+ * write-behind.ts:127-131), so the NEXT flush retries that same batch. */
+function batchCoordinator(failFirstFlush = false): BatchCoordinator {
   const written: SessionEvent[] = []
   const batches: SessionEvent[][] = []
   let pending: SessionEvent[] = []
+  let flushes = 0
   return {
     batches,
     written,
@@ -79,6 +83,8 @@ function batchCoordinator(): BatchCoordinator {
       pending.push(...evs)
     },
     flush: async () => {
+      flushes += 1
+      if (failFirstFlush && flushes === 1) throw new Error("flush refused (first)")
       if (pending.length > 0) {
         written.push(...pending)
         batches.push(pending)
@@ -156,8 +162,9 @@ interface HostFixture {
 async function mountHost(opts: {
   seed?: (session: Session) => void
   script?: MockStep[]
+  failFirstFlush?: boolean
 } = {}): Promise<HostFixture> {
-  const coordinator = batchCoordinator()
+  const coordinator = batchCoordinator(opts.failFirstFlush ?? false)
   const session = createSession((ev) => {
     coordinator.enqueue(SESSION_ID, [ev])
     if (ev.type === "turn/end") void coordinator.flush(SESSION_ID)
@@ -287,6 +294,37 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
     }
   }, 30_000)
 
+  it("a failed flush is NOT a refusal: the host accepted in memory (the reminder still reaches the model), and the next flush — turn/end via the mirror — lands BOTH events (a durability report, eventual, never a loss)", async () => {
+    const record = overdueOneShot()
+    const host = await mountHost({ seed: (session) => seedCreate(session, record), failFirstFlush: true })
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {}) // the driver's report goes to a spy
+    try {
+      await host.runTurn("hello")
+
+      // (i) in-memory acceptance DESPITE the failed flush. `deliver` appends both
+      // events through the canonical append() BEFORE the barrier, so the fold already
+      // consumed the occurrence (no re-drive) and the admission is pending — the pump
+      // claims it in turn 2, and THAT request carries the reminder. A host that treated
+      // the flush throw as "nothing accepted" would have to re-deliver instead.
+      expect(host.session.events.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(host.model.requests).toHaveLength(2)
+      expect(requestMessagesCarrying(host.model.requests[1]!, REMINDER)).toHaveLength(1)
+
+      // …and the throw was REPORTED (deliveryErrors → the driver's warn), not swallowed.
+      expect(warn.mock.calls.some((call) => String(call[0]).includes("schedule-1"))).toBe(true)
+
+      // (ii) eventual durability: the failed batch was RETAINED, and the next flush —
+      // turn/end triggers one through the session mirror — committed it. BOTH events
+      // reached the backend, exactly once each.
+      await sleep(10) // the mirror's flush is fire-and-forget (`void coordinator.flush`)
+      expect(host.coordinator.written.filter(isScheduleDispatch)).toHaveLength(1)
+      expect(host.coordinator.written.filter(isScheduleAdmission)).toHaveLength(1)
+    } finally {
+      warn.mockRestore()
+      await host.assembly.dispose()
+    }
+  }, 30_000)
+
   it("a reminder admitted after its step's own claim is spliced at the NEXT step boundary — the claimed user/message carries the plugin source marker and no `internal`", async () => {
     const record = overdueOneShot()
     const host = await mountHost({ seed: (session) => seedCreate(session, record) })
@@ -368,6 +406,14 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
         delivery: "steer",
         intent: "system",
       })
+      // §3.5's batch inference, pinned: BOTH dispatches were built from ONE decision, so
+      // they share the decision's `acceptedAt` — the very instant the batch idempotency
+      // key is minted from (`schedule-batch@<acceptedAt>` on the admission next to them).
+      // Per-record acceptedAt stamps would break the traceability the key rests on.
+      const dispatchAts = batch!.filter(isScheduleDispatch).map((ev) => (ev as { acceptedAt?: string }).acceptedAt)
+      expect(dispatchAts[0]).toBeDefined()
+      expect(dispatchAts[1]).toBe(dispatchAts[0])
+      expect(batch![firstDispatch + 2]).toMatchObject({ inputId: `schedule-batch@${dispatchAts[0]}` })
 
       // The fold, re-read from the log, shows both records advanced past their
       // seeded (overdue) target into the next occurrence — the dispatch is the

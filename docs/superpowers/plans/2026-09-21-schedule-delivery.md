@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM · pnpm workspaces · vitest
 
-**Spec:** `docs/superpowers/specs/2026-09-20-schedule-design.md`（629 行，owner 2026-09-20 核准；**2026-09-21 行號重測完成** —— 4 處漂移已就地更正，`d330dc91`）。前置：`docs/handoff/2026-09-20-queued-work.md` §9.2 A1（重測已完成，只差計畫）。
+**Spec:** `docs/superpowers/specs/2026-09-20-schedule-design.md`（**669 行**（2026-09-21 `wc -l` 實測；原記 629，§3.4 的 flush 補記落地後再測一次），owner 2026-09-20 核准；**2026-09-21 行號重測完成** —— 4 處漂移已就地更正，`d330dc91`）。前置：`docs/handoff/2026-09-20-queued-work.md` §9.2 A1（重測已完成，只差計畫）。
 
 ---
 

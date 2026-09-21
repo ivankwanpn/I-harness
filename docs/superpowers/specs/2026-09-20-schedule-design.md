@@ -280,6 +280,12 @@ await handle.sync()
 > **殘餘視窗**：例外路徑 both-or-neither；torn write 由 repair 截到最後一條完整行，理論上可留下 dispatch
 > 而丟掉 admitted —— 那是 jsonl 中每一組相鄰事件對共有的曝光（promote ＋ user/message 同型），不是排程特有。
 >
+> **flush 失敗不是拒收（2026-09-21 補記）：** `deliver` 是**先** canonical `append()` 讓兩筆**在記憶體裡
+> 生效**（fold 消費了該 occurrence、admission 在下一個 step boundary 就被 claim —— 使用者看得到提醒），
+> **才** `await coordinator.flush()`；flush 失敗只讓 write-behind 把整批**保留並重試**
+> （`session-persistence/src/write-behind.ts:128` 的 `pending = batch.concat(pending)`），所以
+> `deliveryErrors` 是一份 **durability 報告、不是拒絕** —— 殘餘是「重試落地前崩潰 ⇒ 重複」，**不是遺失**。
+>
 > **量到的（2026-09-21，`m66`，不再是「理論上」）：** 把 `[dispatch, admitted]` 的兩事件批次寫進真實的
 > jsonl 後端（一個 348-byte 的檔：header 75 ＋ dispatch 行 79 ＋ admitted 行 191，各帶一個換行），
 > 再把檔**位元組級截在第二條的中間**（348 → 251；admitted 行自第 156 byte 起），跑 `repair` 之後留下的

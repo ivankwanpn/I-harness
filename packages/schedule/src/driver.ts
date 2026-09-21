@@ -7,13 +7,17 @@
  * key) through the injectable `deliver` seam.
  * THE ENGINE DOES NOT WRITE THE LOG (spec §3.4's 2026-09-21 correction): the
  * host owns "write or not" — it accepts by appending `[dispatch, admitted]` as
- * ONE durable batch, and rejects by throwing (nothing accepted ⇒ nothing due).
+ * ONE durable batch, and a throw means the HOST DID NOT ACCEPT. Not every host
+ * throw is a refusal, though: on the session-executor host a failed `flush` is
+ * a DURABILITY report — both events are already in memory (retained & retried;
+ * `deliveryErrors` carries the report, and the residual is a duplicate after a
+ * crash before the retry, never a loss).
  * Restart re-drive is FREE: a new driver instance over the same persisted
  * events delivers exactly the still-overdue remainder — records whose dispatch
  * was accepted are no longer due.
  *
- * Rules: deliver BEFORE counting (a delivery the host refused is not delivered
- * — fail-closed path); a corrupted schedule stream OR a decision the state
+ * Rules: deliver BEFORE counting (a delivery the host did not accept is not
+ * counted — fail-closed path); a corrupted schedule stream OR a decision the state
  * cannot satisfy skips that session with a deliveryError entry
  * (projection-grade honesty) and never throws out of `tick()`; a batch is ONE
  * model message, so N overdue records cost one turn, not N (spec §6.3).
@@ -42,8 +46,9 @@ export interface ScheduleDue {
  * ONE hand-off from the engine to the host: the durable dispatch event(s), the
  * injection-resistant reminder text, the per-occurrence idempotency key, and
  * the due entries this delivery covers. The host accepts by writing
- * `[dispatchEvents…, admitted]` in ONE durable batch and rejects by throwing
- * (spec §3.4) — the engine never touches the log.
+ * `[dispatchEvents…, admitted]` in ONE durable batch and the engine never
+ * touches the log (spec §3.4); a throw = the host did not accept (host-side
+ * durability semantics: see `ScheduleDriverOptions.deliver`).
  */
 export interface ScheduleDelivery {
   sessionId: string
@@ -65,7 +70,9 @@ export interface ScheduleDriverOptions {
   sessions(): string[]
   /** The session's foldable events; undefined = unknown session (skipped). */
   events(sessionId: string): readonly SessionEvent[] | undefined
-  /** Hand one delivery to the host — the ONLY writer of the log (spec §3.4). Throwing = rejection. */
+  /** Hand one delivery to the host — the ONLY writer of the log (spec §3.4). Throwing = the host
+   *  did not accept; on the session-executor host a failed flush still means in-memory acceptance
+   *  happened (the batch is retained & retried — `deliveryErrors` is a durability report). */
   deliver: (delivery: ScheduleDelivery) => void | Promise<void>
   /** Wall-clock source (tests inject). Default Date.now. */
   now?: () => number
