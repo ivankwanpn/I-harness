@@ -31,7 +31,7 @@
 |---|---|
 | benchmark harness | ✅ **完成**（`b6e1f02`）—— `pnpm bench` ／ `pnpm verify:bench`；`--self-test` 證明它抓得到 10 倍退化 |
 | fail-loud 崩潰處理 ＋ 優雅關閉 | ✅ **完成**（`ede0850` ＋ `8c34ca1`）—— SIGINT/SIGTERM → abort → 走既有的 `finally`（drain ＋ dispose）；`failureReport` 取代裸堆疊 **與** 失敗 run 的那一行裸訊息 |
-| 本地結構化診斷日誌 | ⚠️ **一半** —— 失敗／崩潰報告已經結構化（session、error、frame、損失契約）；**79 個 `console.warn/error` 站點沒有分級**。量過：那些訊息確實是**不同類別被壓平**（fail-soft 降級、CLI 用法錯誤、背景失敗），所以分級**有價值** —— 但那是 79 處的遷移 |
+| 本地結構化診斷日誌 | ⚠️ **一半** —— 失敗／崩潰報告已經結構化（session、error、frame、損失契約）；**`console.warn/error` 站點沒有分級**。量過：那些訊息確實是**不同類別被壓平**（fail-soft 降級、CLI 用法錯誤、背景失敗），所以分級**有價值** —— 但那是**站點數**的遷移。**⚠ 而「79」是一個會腐的數字**：它量於 `ede0850`，**而在寫下它的下一筆提交（`24d6051`）樹已經是 80**（中間的 `8c34ca1` 加了一處）；**2026-09-21 在同一範圍重測是 110**（`packages/*/src` ＋ `apps/*/src`，`console.warn|error`）。**要排這個工作時先重量 —— 見 `docs/handoff/2026-09-20-queued-work.md` §6 的實測。** |
 | secret redaction | ⚠️ **缺口示範不出來** —— 見下 |
 | in-process 診斷 metrics registry | ✅ **完成**（`58d7db6`）—— `createMetricsSink` 是一個 `TelemetrySink`（**零 emit 站點**）；`run.ts` 接上它，`--telemetry` 時在 **stderr** 報 summary |
 
