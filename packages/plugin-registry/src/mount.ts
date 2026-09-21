@@ -16,9 +16,13 @@
  *     be able to set the tool allow/deny lists, the roots it may claim, or its
  *     own auth posture. That is a security boundary, not an omission.
  *
- * STRUCTURAL RETURN: this package does not import `@i-harness/mcp-client`. A
- * mismatch between `MountedMcpServer` and the consumer's type surfaces at the
- * consumer's typecheck, which is where it belongs.
+ * STRUCTURAL RETURN: no file under this package's `src/` imports
+ * `@i-harness/mcp-client`. The dependency exists only as a devDependency, used
+ * by the TEST tree to validate the keys these helpers compose against
+ * mcp-client's real validators (see install.ts's mirroring note) — production
+ * code stays free of the runtime dependency in that direction, which is what
+ * matters here. A mismatch between `MountedMcpServer` and the consumer's type
+ * therefore surfaces at the consumer's typecheck, which is where it belongs.
  *
  * See docs/superpowers/specs/2026-09-17-plugin-mount-design.md §2.2.
  */
