@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, truncateSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createJsonlBackend } from "../src/index.ts"
@@ -113,6 +113,46 @@ describe("jsonl backend", () => {
     // repair is durable: re-reading shows the repaired state
     const again = await backend.read("s1")
     expect(again.events.map((e) => e.type)).toEqual(["turn/start", "step/start", "user/message", "step/end", "turn/end"])
+  })
+
+  it("repair on the mount's [dispatch, admitted] batch torn MID-SECOND-LINE keeps the dispatch and drops the admitted (measured)", async () => {
+    const backend = createJsonlBackend(dir)
+    await backend.create("s1", { formatVersion: 1, sessionId: "s1", createdAt: "2026-09-21T00:00:00.000Z" })
+    // The schedule mount's durable batch (§3.4): ONE append, two events, the
+    // dispatch first and its admission second — the shape
+    // session-executor's `deliver` writes.
+    const dispatch = { type: "schedule/change" as const, version: 1 as const, operation: "dispatch" as const, id: "schedule-1" }
+    const admitted = {
+      type: "agent/input/admitted" as const, version: 1 as const,
+      inputId: "schedule-1@2026-09-21T00:00:05.000Z",
+      text: "[SCHEDULE REMINDER]\nPresent reminder_prompt_json …",
+      delivery: "steer" as const, intent: "system" as const,
+    }
+    await backend.append("s1", [dispatch, admitted])
+
+    // Crash mid-write of the batch's SECOND event: a byte-exact truncation
+    // halfway through the admitted line (measured 2026-09-21: 348 bytes before,
+    // admitted line starts at 156 and runs 191 bytes, cut lands at 251).
+    const path = join(dir, "s1.jsonl")
+    const lines = readFileSync(path, "utf-8").split("\n")
+    expect(lines.filter((l) => l.trim() !== "").map((l) => JSON.parse(l).type ?? "header"))
+      .toEqual(["header", "schedule/change", "agent/input/admitted"])
+    const cutAt = Buffer.byteLength(lines.slice(0, 2).join("\n") + "\n") + Math.floor(Buffer.byteLength(lines[2]!) / 2)
+    truncateSync(path, cutAt)
+    const torn = readFileSync(path, "utf-8")
+    expect(() => JSON.parse(torn.slice(torn.lastIndexOf("\n") + 1))).toThrow() // really mid-line
+
+    const { events } = await backend.repair("s1")
+    // MEASURED 2026-09-21, not predicted from repair.ts: repair truncates to the
+    // last COMPLETE line, so the batch's first event survives and its torn
+    // second event is dropped — the residual window spec §3.4 records as fact
+    // (dispatch kept, admitted lost), not both and not neither.
+    expect(events).toEqual([dispatch])
+    expect(readFileSync(path, "utf-8")).toBe(
+      '{"formatVersion":1,"sessionId":"s1","createdAt":"2026-09-21T00:00:00.000Z"}\n'
+      + '{"type":"schedule/change","version":1,"operation":"dispatch","id":"schedule-1"}\n',
+    )
+    expect((await backend.read("s1")).events).toEqual([dispatch])
   })
 
   it("list enumerates session files without extension", async () => {

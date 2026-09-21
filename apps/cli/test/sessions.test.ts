@@ -159,6 +159,18 @@ describe("renderTranscript", () => {
     expect(text).toContain("done")
   })
 
+  it("a delivered schedule reminder is user-visible — no `internal`, so the transcript prints it", () => {
+    const session = createSession()
+    append(session, { type: "turn/start" })
+    append(session, {
+      type: "user/message",
+      text: "[SCHEDULE REMINDER]\nPresent reminder_prompt_json …\nschedule_id_json: \"schedule-1\"",
+      source: { kind: "plugin", plugin: "i-harness/system-input" },
+    })
+    const text = renderTranscript(session, 20)
+    expect(text).toContain("❯ [SCHEDULE REMINDER]")
+  })
+
   it("--last keeps the TAIL (with an honest elision marker)", () => {
     const session = createSession()
     for (let i = 0; i < 10; i++) append(session, { type: "assistant/message", text: `line ${i}` })
