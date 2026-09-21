@@ -165,4 +165,33 @@ describe("schedule driver", () => {
       "2026-08-31T10:30:00.000Z",
     ])
   })
+
+  it("one tick in flight: a tick arriving while the host's delivery is still resolving is SKIPPED (one delivery, not two)", async () => {
+    const deliveries: ScheduleDelivery[] = []
+    // (brief snippet verbatim except this annotation: the literal object alone infers
+    //  `{ "sess-e": FixtureSession }`, which cannot be indexed by the string `id` — TS7053)
+    const sessions: Record<string, FixtureSession> = { "sess-e": everySession("sess-e", 600) }
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const driver = createScheduleDriver({
+      sessions: () => Object.keys(sessions),
+      events: (id) => sessions[id]?.events,
+      deliver: async (delivery) => {
+        deliveries.push(delivery)
+        await held
+        for (const ev of delivery.dispatchEvents) sessions["sess-e"]!.events.push(ev)
+      },
+      now: () => NOW + 25 * 60_000,
+      pollMs: 60_000,
+    })
+    const first = driver.tick()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // the first tick reached deliver
+    const second = await driver.tick()                     // overlaps: it would re-fold the UN-advanced record
+    expect(second.delivered).toBe(0)
+    expect(second.due).toEqual([])
+    release()
+    const finished = await first
+    expect(finished.delivered).toBe(1)
+    expect(deliveries).toHaveLength(1)
+  })
 })
