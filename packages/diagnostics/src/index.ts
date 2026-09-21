@@ -128,6 +128,12 @@ interface Instance {
   redactor: Redactor
   sink: Sink | null
   closed: boolean
+  /** ONE handle per phase. The ambient path calls `child(phase)` on every
+   *  record, so building a view each time would allocate an object — and a
+   *  WeakMap entry — on every logged call, for no gain. A view is PURE (it holds
+   *  only this instance and the phase), so a retained one can never go stale: it
+   *  belongs to one instance, and the ambient path looks the INSTANCE up first. */
+  handles: Map<DiagnosticPhase, Diagnostics>
 }
 
 /** handle -> instance, so a close can detach the right ambient slot without the
@@ -143,6 +149,8 @@ function toRecord(inst: Instance, phase: DiagnosticPhase, level: Level, msg: str
 }
 
 function makeHandle(inst: Instance, phase: DiagnosticPhase): Diagnostics {
+  const memo = inst.handles.get(phase)
+  if (memo) return memo
   const methods = {} as Pick<Diagnostics, Level>
   for (const level of LEVELS) {
     methods[level] = (msg: string, data?: Record<string, unknown>): void => {
@@ -164,6 +172,7 @@ function makeHandle(inst: Instance, phase: DiagnosticPhase): Diagnostics {
     close: () => { detach(inst) },
   }
   INSTANCES.set(handle, inst)
+  inst.handles.set(phase, handle)
   return handle
 }
 
@@ -200,6 +209,7 @@ export function createDiagnostics(opts: { stream?: NodeJS.WritableStream; level?
     // re-reading the env here would make the argument a suggestion.
     sink: opts.stream ? streamSink(opts.stream) : sinkFromEnv(process.env.I_HARNESS_LOG),
     closed: false,
+    handles: new Map(),
   }
   return makeHandle(inst, ROOT_PHASE)
 }
@@ -244,6 +254,10 @@ function ambientHandle(phase: DiagnosticPhase): Diagnostics {
       // methods return void, so the optional call would read `undefined` on both
       // branches and the console line would fire even when an instance handled
       // the record.
+      //
+      // For an instance this module built, `child(phase)` is a memoized view —
+      // a map lookup, not an allocation, per record (a foreign implementation's
+      // `child` is its own business).
       d.child(phase)[level](msg, data)
     }
   }
