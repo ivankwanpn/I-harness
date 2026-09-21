@@ -39,7 +39,7 @@ import { createScheduleTools } from "@i-harness/schedule/tools"
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
-import { createSkillsSection, registerSkills } from "@i-harness/skills"
+import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
   mountMcpClient,
@@ -855,8 +855,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary
-  // via the agent/pre-step hook. Instructions load as one section; W11 adds a
-  // second one below, once the subagent mount has produced the table it reads.
+  // via the agent/pre-step hook. Instructions load as one section, the skills
+  // catalogue as the next; W11 registers the subagents table below, once the
+  // subagent mount has produced the table it reads.
   const runtimeContext = installRuntimeContext(ctx, session)
   runtimeContext.registerSection(
     "instructions",
@@ -875,6 +876,45 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     "skills",
     createSkillsSection({ registry: skillsMount.registry }),
   )
+  // M6 batch C C2 (spec §3.2): the `$name` sigil — the input side of the same
+  // feature. A task that mentions a registered skill appends ONE plain-text
+  // user message naming it; the model loads it with skill_get itself. NO
+  // auto-execution and no new event type: the line is a pointer.
+  //
+  // Registered HERE for the reason the section above is: `skillsMount`
+  // (:758-761) is in hand, so a name the scan can hit is a name the tools can
+  // load. Render order is unaffected — this appends to the log, it is not a
+  // runtime-context section.
+  //
+  // `lastMentionTask` is what keeps this from being per-step noise:
+  // `agent/pre-step` fires at EVERY step boundary with the turn's own task
+  // string, so a five-step turn would otherwise append the same sentence five
+  // times. One line per distinct task; a repeated task appends nothing (and
+  // costs no registry scan — the early return sits above it).
+  //
+  // The handler MUST return undefined (block body, nothing returned):
+  // `emit()` feeds a plain listener's non-undefined return into the waterfall
+  // chain payload, and this event HAS a waterfall when a host mounts hooks
+  // (hooks/src/index.ts:411) — the schedule driver's listener above (:854) is
+  // the precedent.
+  let lastMentionTask: string | undefined
+  ctx.on("agent/pre-step", (payload) => {
+    // `Listener` takes `unknown` (core-plugin/src/index.ts:2), so the payload
+    // shape is narrowed here rather than in the signature — the same cast
+    // hooks' prompt/submit handler does. core-agent emits `{ task, session }`
+    // (:275), and this listener reads only the task.
+    const { task } = payload as { task: string }
+    if (task === lastMentionTask) return
+    lastMentionTask = task
+    const names = scanMentionedSkillNames(task, skillsMount.registry)
+    if (names.length === 0) return
+    append(session, {
+      type: "user/message",
+      text: `[skill mention] Load the ${names.map((n) => `"${n}"`).join(", ")} skill(s) with skill_get before proceeding.`,
+      source: { kind: "plugin", plugin: SKILL_MENTION_PLUGIN },
+      internal: true,
+    })
+  })
 
   // M26-B1: OAuth token store over the coordinator's document API (see run.ts;
   // the coordinator contract reports, never rejects → worst case re-auth).
