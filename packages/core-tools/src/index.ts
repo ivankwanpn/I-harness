@@ -100,9 +100,17 @@ export interface ToolResult {
 //
 // A refusal and a cancellation are DIFFERENT FACTS and carry different codes:
 // a body that tried and failed, a call that never started, a call a sibling
-// cancelled, and a call killed mid-flight are four things, and a log that
-// conflates them cannot be read back. (block ①'s §2.3 for the messages; this is
-// the same rule for the machine-readable form.)
+// cancelled, and a started call the ABORT PATH filled are four things, and a
+// log that conflates them cannot be read back. (block ①'s §2.3 for the messages;
+// this is the same rule for the machine-readable form.)
+//
+// What TOOL_ABORTED_MID_FLIGHT witnesses, exactly: the abort path writes this
+// fill for EVERY started slot that produced no output — including a body that
+// had already failed ON ITS OWN before the abort swept the batch (T1's review
+// measured that with the boundary test's boomTool: `code: TOOL_ABORTED_MID_FLIGHT`
+// carrying the body's own "boom" message). So it means "the abort path wrote
+// this verdict", NOT "the abort killed that body" — the message beside it is
+// what carries the reason, and it is that body's own.
 export const TOOL_FAILED = "TOOL_FAILED"
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
