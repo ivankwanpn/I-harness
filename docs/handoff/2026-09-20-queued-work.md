@@ -62,7 +62,7 @@ grep -n "<你引用的符號>" <檔案>      # 行號是基準，不是事實
 | **W4** | M5/T2 第二半（前綴偵測） | 一 | **✅ 完成**（`b36be755`；**修正輪 `c621567c`**；見 §5 的完成記錄） | 無 |
 | **W5** | M5/T4 工具管線（信封 ＋ 參數 schema ＋ 界） | 一 | **✅ block ①（信封）完成**（**記錄：`docs/handoff/2026-09-20-m5-t4-block1-soft-failure-envelope.md`**）· **✅ block ②（參數 schema）完成**（`4022f607`…`0bb85599`，**13 個提交**，15 程式檔 +1488/−26；**終審 `SHIP WITH FIXES`**，五件已修；**記錄：`docs/handoff/2026-09-20-m5-t4-block2-argument-schema.md`**）。**驗這一塊用 `pnpm verify:all`**（block ② 加的五步閘門）—— `pnpm -r --no-bail test` 單獨跑**不是**閘門。**✅ block ③（界）完成**（`6ad4685`…`7eb8333`，**23 個提交**，14 檔 **+1,071／−64**；**終審 `SHIP WITH FIXES`**，兩輪修正各自再複審一次；**記錄：`docs/handoff/2026-09-20-m5-t4-block3-output-bound.md`**）—— **⚠ 接手前先讀那份記錄的 B1**：「界掛在 CLI 上」**只對 `runHeadless` 為真**，`sdk` 與 `acp` 兩條線今天**沒有界**（指名的界線，不是遺漏）。**M5／T4 三塊到此完成。** | 無（**M5/T4 完成**；**B1 的兩條線是另一個單元**） |
 | **W6** | M3 剩下的兩項（79 站點分級；redaction 繼續量） | 一 | 未開始 | 無 |
-| **W7** | M6（廣度：生態＋介面硬化） | 一 | 未開始 | **無** —— **原本的「依賴 M5」已解除**（M5 ＝ T2 ＋ T4，兩半都完成）。**⇒ 但它還不能直接寫計畫**：只有 roadmap 一條，而 roadmap 自己的規則（§1.1）要求**進 spec 前先把引用的 triage 項對現行 HEAD 重量**（那 13 列是 2026-09-11 量的） |
+| **W7** | M6（廣度：生態＋介面硬化） | 一 | **✅ 四批完成**（2026-09-22，`m68`；計畫 `docs/superpowers/plans/2026-09-22-m6-breadth.md` —— 八個實作任務收在四批＋收尾；區間與量測見 §9.1／§9.2 A3） | **無** —— **原本的「依賴 M5」已解除**（M5 ＝ T2 ＋ T4，兩半都完成）。**⇒ 而 roadmap 自己的規則（§1.1）也在寫計畫之前被履行了**：引用的 triage 項已對現行 HEAD 重量（`docs/superpowers/research/2026-09-21-m6-precedent-synthesis.md`，其中發現並修掉 D-MCP-1），那些列的原始量測是 2026-09-11 的 |
 | **W8** | M7（自我喚醒與記憶） | 一 | **卡住** | **Q1**（**Q2 已於 2026-09-20 裁定「否」**，所以只剩 Q1）。**⇒ 而 roadmap §3.M7 說若答案是「不做」，它降為 S 級：把非目標寫進文件即可 —— 不是一份實作計畫** |
 | **W9** | M4 只差 Q8 | 一 | **卡住** | **Q8** |
 | **W10** | **前景 bash 的 120 秒死線** | 三 | **✅ 完成**（`b8bd78b0`，形狀 (i) 自動轉背景；修正輪 `0794fbe7`） | 無 |
@@ -914,7 +914,7 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 | **M3** 量測底座 | `m65` | `m65` | ⚠ **3 完成 · 1 一半 · 1 有處置** |
 | **M4** 耐久 turn 狀態機 | **`m66`** | **`d4-endpoint-cache` → `m65` → `m66`** | ✅ **含 roadmap 自己的殺行程驗收**；**只差 Q8** |
 | **M5** 一致性 | `m67` | **`d4-endpoint-cache`** | ✅ |
-| **M6** 廣度 | `m68` | **`m68`（2026-09-22 開，自 `m66`）** | **spec 已核准**（`2026-09-21-m6-breadth-design.md`，2026-09-22）；計畫待寫 |
+| **M6** 廣度 | `m68` | **`m68`（2026-09-22 開，自 `m66`）** | **✅ 四批完成**（2026-09-22）—— D: `eb34df41`…`99b048c0`（5 個提交）· A: `b92faaf6`…`ef04eca8`（2）· B: `18c38361`…`8f3eccd2`（2）· C: `e5ff85c0`…`e69f0c06`（3）；`dc7bdd19`（計畫）之後共 **12 個提交**。spec `2026-09-21-m6-breadth-design.md`（owner 2026-09-22 核准）、計畫 `docs/superpowers/plans/2026-09-22-m6-breadth.md`（九個任務）。收尾：`pnpm verify:all` 五步全綠（母體 66／**2814 passed · 9 skipped · 0 failed**／typecheck exit 0／e2e 5 檔 12 測試／`gate PASS -- no new rows`） |
 | **M7** 自我喚醒與記憶 | `m69` | — | **卡 Q1** |
 
 **⇒ 三個必須知道的：**
@@ -932,7 +932,7 @@ W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 |---|---|---|
 | **A1** | **`schedule` 的實作**（spec 已核准） | **✅ 完成**（2026-09-21，`m66`）。計畫：`docs/superpowers/plans/2026-09-21-schedule-delivery.md` —— 六個任務全數落地：引擎接縫 `742bc96f` · in-flight 守衛 `700e81b9` · 批次 `b0d29271` · 三個工具 `3ee94dcd` · assembly 掛載 `a7a84a7a` · 收尾（torn-tail 量測、transcript 案例）`a4d07e63`；**文件收尾（spec 的三則更正、本格、allowlist 一筆）載於本提交**。**驗證（本提交前的一次完整跑）：`pnpm verify:all` 五步全綠**（母體 66；`--gate` → `PASS -- no new rows`）。**前置的 ✅ 行號重測**（2026-09-21，於 `8dbca025`）：**4 處漂移已就地更正**（`core-agent/src/index.ts` 的 step 邊界區 **+42**、`core-tools/src/index.ts` 的 `ToolRegistry` **+79**、`run.ts` 的 `finally` 段、`run.ts` 的 hooks「缺席即關」註解）＋ **1 處精度修正**（`settings` 的 in-flight guard 本體在 `:1437`）。**其餘全部重測為真**（含 6 條 grep 指令的逐行輸出與 §6.3.1 的 byte／token 重算：192／77／79／119 與 229→62）。**而 dsh 那一側已驗證**：spec 的引用在 `v0.1.6-alpha.2` 上**逐行解析得開**，而 rc.2→v0.1.6 **在 `schedule/schedule/src` 除了註解沒改** ⇒ **移植計畫沒有被新版推翻** |
 | **A2** | **W6** —— M3 剩下的 | **〈排序裁定 2026-09-21：A3 之後〉** **起手單元＝ B1 的裁定備忘** —— 而量到它的實況比 B1 原文大：**§3.3 的 `@i-harness/diagnostics` 套件從未建**（`I_HARNESS_LOG`／`createDiagnostics`／`createRedactor` 全樹 0 命中、`packages/diagnostics` 不存在；2026-09-21 實測）⇒「W6 的形狀」其實是「建不建那塊基礎」，而它按構造強制的 `redactor` 撞上既有的「**沒有已知輸入不建濾網**」裁定（§6）——所以起手要的是裁定，不是接線。**站點數 110（2026-09-21 重量；不是文件上的 79）**，集中在 `apps/cli`（58），而**另外 15 個套件的 52 個站點沒有任何 level 對照表** |
-| **A3** | **W7（M6 廣度）** | **〈排序裁定 2026-09-21：A3 先、A2 後 —— 理由：A2 卡在 B1（上列），而 B1 的實況讓它起手就要設計層裁定；A3 的閘門是純重量，且八源先例整合已完成（D3 矩陣＋ZCode 調研＋兩份 prior-art，逐列「取誰的長」——逐列整合表為本項第一單元的交付物，與重量表同批落地）〉**。**2026-09-22 現況：重量＋八源整合已完成（`2026-09-21-m6-precedent-synthesis.md`，發現並修掉 D-MCP-1）、spec 已核准（`2026-09-21-m6-breadth-design.md`）、`m68` 已開 ⇒ 下一步＝計畫。** 等級 **M**。 |
+| **A3** | **W7（M6 廣度）** | **〈排序裁定 2026-09-21：A3 先、A2 後 —— 理由：A2 卡在 B1（上列），而 B1 的實況讓它起手就要設計層裁定；A3 的閘門是純重量，且八源先例整合已完成（D3 矩陣＋ZCode 調研＋兩份 prior-art，逐列「取誰的長」——逐列整合表為本項第一單元的交付物，與重量表同批落地）〉**。**2026-09-22 現況：重量＋八源整合已完成（`2026-09-21-m6-precedent-synthesis.md`，發現並修掉 D-MCP-1）、spec 已核准（`2026-09-21-m6-breadth-design.md`）、`m68` 已開 ⇒ 下一步＝計畫。而這一步在同一天走完：✅ 完成。** 計畫 `docs/superpowers/plans/2026-09-22-m6-breadth.md`（九個任務：八個實作收在四批）—— **D** `eb34df41`…`99b048c0`（catalog 的四個界＋`list_changed` 刷新，5 個提交）· **A** `b92faaf6`…`ef04eca8`（wire 的輸出界＋overload 幀，2）· **B** `18c38361`…`8f3eccd2`（`PROTOCOL_VERSION 3`＋`initialize` 閘門＋連線身分，2）· **C** `e5ff85c0`…`e69f0c06`（skills 目錄 section＋`$name` sigil，3）；收尾 `pnpm verify:all` 五步全綠（母體 66／2814 passed · 0 failed／typecheck exit 0／e2e 5 檔／`gate PASS -- no new rows`）。 等級 **M**。 |
 
 **B 堆 —— 卡在決定**
 
