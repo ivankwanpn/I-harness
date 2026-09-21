@@ -793,6 +793,9 @@ importers:
       '@i-harness/sandbox-windows-acl':
         specifier: workspace:*
         version: link:../sandbox-windows-acl
+      '@i-harness/schedule':
+        specifier: workspace:*
+        version: link:../schedule
       '@i-harness/session-persistence':
         specifier: workspace:*
         version: link:../session-persistence

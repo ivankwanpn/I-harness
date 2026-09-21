@@ -13,8 +13,10 @@
 // "workflow" (projectWorkflowRows over the assembly's real workflow executor
 // rows — the executor object itself is never passed here, only its row
 // snapshots). The "schedule" group is part of the summary union for hosts
-// that mount a schedule source; no source exists in this repo's assemblies
-// today, so the projection emits no schedule rows (honestly).
+// that mount a schedule source; an assembly now MOUNTS a real schedule driver
+// (session-executor's schedule delivery mount, 2026-09-21), but no schedule
+// source is fed to THIS projection yet — rows stay absent until a host provides
+// one (honestly).
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { ChildAgentEntry } from "./agent-table.ts"
 import type { JobRegistry, JobStatus } from "./jobs.ts"

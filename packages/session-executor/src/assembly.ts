@@ -32,6 +32,8 @@ import { createInstructionsSection } from "@i-harness/instructions"
 import { PLAN_MODE_SYSTEM_PROMPT, ensurePlanModeTool } from "@i-harness/plan-mode"
 import { registerToolSearch } from "@i-harness/tool-search"
 import { createFsSearchTools } from "@i-harness/fs-search"
+import { createScheduleDriver } from "@i-harness/schedule/driver"
+import { createScheduleTools } from "@i-harness/schedule/tools"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
@@ -809,6 +811,36 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // workspace-resolved path → ImageInput { mediaType, dataBase64 }).
   tools.register(createTodoTool({ session }))
   tools.register(createReadImageTool({ workspace: opts.workspace }))
+
+  // E9 schedule (spec 2026-09-20-schedule-design §4.2/§4.6): the delivery mount. Gated on the
+  // DURABLE path — coordinator + sessionId, the same condition as the session mirror above —
+  // because the acceptance contract IS "dispatch + admission in one durable batch", and without
+  // a coordinator there is no batch to speak of. Tools and driver mount together: tools alone
+  // would be a fifth zero-source (writes the log, nothing folds it — spec §10).
+  if (opts.coordinator !== undefined && opts.sessionId !== undefined) {
+    const coordinator = opts.coordinator
+    const scheduleSessionId = opts.sessionId
+    for (const tool of createScheduleTools({ session })) tools.register(tool)
+    const scheduleDriver = createScheduleDriver({
+      sessions: () => [scheduleSessionId],
+      // Fork (§5): the driver owns only THIS session's own suffix — an inherited prefix
+      // (subagent seeds) is never dispatched; the same slice task-protocol.ts:355 takes.
+      events: (id) => (id === scheduleSessionId ? session.events.slice(session.header?.seedLength ?? 0) : undefined),
+      deliver: async (delivery) => {
+        // §3.4 (corrected): the canonical append() path (seq + write-behind mirror + subscribers)
+        // for BOTH events, then the flush barrier — the pair lands in ONE backend append, and
+        // `deliver` returns only after durability. The engine does not write; this does.
+        for (const ev of delivery.dispatchEvents) append(session, ev)
+        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system" })
+        await coordinator.flush(scheduleSessionId)
+      },
+    })
+    // §4.2: the trigger is the step boundary — no timer exists, so idle means no step means no
+    // tick (I5 structurally). The handler MUST return undefined (block body, awaited inside):
+    // emit() feeds a plain listener's non-undefined return into the waterfall chain payload, and
+    // hooks HAS a waterfall on this same event (hooks/src/index.ts:411).
+    ctx.on("agent/pre-step", async () => { await scheduleDriver.tick() })
+  }
 
   // R-A4/R-A5: dynamic system context — sections render at every step boundary
   // via the agent/pre-step hook. Instructions load as one section; W11 adds a
