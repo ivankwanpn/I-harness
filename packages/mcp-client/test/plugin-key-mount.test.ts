@@ -18,8 +18,12 @@ import { createToolRegistry } from "@i-harness/core-tools"
 // test reaches the source file directly — the seam under test is the composer,
 // not the package boundary.
 import { mcpServerKey, mcpServerKeyPrefix, pluginId } from "../../plugin-registry/src/install.ts"
+import { fitPublicName } from "../src/naming.ts"
 import { mountMcpClient, publicToolName } from "../src/index.ts"
 import { writeStdioStubServer } from "./stdio-stub.ts"
+
+/** The three resource helper prefixes (resources.ts). */
+const RESOURCE_PREFIXES = ["list_mcp_resources__", "list_mcp_resource_templates__", "read_mcp_resource__"] as const
 
 describe("plugin MCP mount seam (D-MCP-1)", () => {
   it("mounts a server whose name came from mcpServerKey, then unmounts it", async () => {
@@ -39,14 +43,34 @@ describe("plugin MCP mount seam (D-MCP-1)", () => {
       // (sanitized + hashed, since the key carries `:` and `__`) form.
       const publicName = publicToolName(serverName, "echo")
       expect(tools.get(publicName)).toBeDefined()
-      // Resource helpers are server-qualified by the RAW key.
-      expect(tools.get(`list_mcp_resources__${serverName}`)).toBeDefined()
+      // THE REVIEW-CAUGHT HALF: a valid SERVER name is not a valid TOOL name.
+      // Every plugin key carries colons, and all three resource helpers
+      // register unconditionally on every mount — so each must land inside the
+      // provider grammar, and the raw colon-bearing name must NOT exist.
+      for (const prefix of RESOURCE_PREFIXES) {
+        const name = fitPublicName(`${prefix}${serverName}`)
+        expect(name).toMatch(/^[A-Za-z0-9_-]{1,64}$/)
+        expect(tools.get(name)).toBeDefined()
+        expect(tools.get(`${prefix}${serverName}`)).toBeUndefined()
+      }
+      // An independent pin, not a mirror of the helper: for the read helper the
+      // sanitized candidate fits untruncated (19 + 32 = 51), so the exact shape
+      // is fully determined — prefix, sanitized key, 12-hex suffix — and the
+      // REGISTRY really carries it, not just the helper's return value.
+      const readName = fitPublicName(`read_mcp_resource__${serverName}`)
+      expect(readName).toMatch(/^read_mcp_resource__plugin_Marketplace_A__proxy_echo_[0-9a-f]{12}$/)
+      expect(tools.get(readName)).toBeDefined()
+      // …and the simple-name contract still holds byte-for-byte (every test
+      // that predates the plugin seam uses names like these).
+      expect(fitPublicName("list_mcp_resources__files")).toBe("list_mcp_resources__files")
       // Attribution: the mounted name is under its plugin's prefix.
       expect(serverName.startsWith(mcpServerKeyPrefix(id))).toBe(true)
     } finally {
       await handle.unmount()
     }
     expect(tools.get(publicToolName(serverName, "echo"))).toBeUndefined()
-    expect(tools.get(`list_mcp_resources__${serverName}`)).toBeUndefined()
+    for (const prefix of RESOURCE_PREFIXES) {
+      expect(tools.get(fitPublicName(`${prefix}${serverName}`))).toBeUndefined()
+    }
   })
 })

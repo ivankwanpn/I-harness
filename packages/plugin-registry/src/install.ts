@@ -104,6 +104,17 @@ const SUPPORTED_MCP_TYPES = new Set(["stdio", "http", "streamable-http"])
  * one means the entry declares a transport this host cannot serve, and the
  * entry is SKIPPED with a console.warn — never silently mounted as
  * streamable-http (which is what dropping the field did).
+ *
+ * KNOWN LIMIT (of that fix, not a remaining hole in it): a copy installed
+ * BEFORE the `type` check existed was re-keyed from the PARSED shape, so its
+ * `.mcp.json` on disk no longer carries `type` at all and an `sse` entry in
+ * such a copy still mounts as streamable-http. Nothing here can tell that
+ * apart from a genuine http entry; the plugin must be re-installed (which
+ * re-reads the source) for the skip to apply.
+ *
+ * An empty server key is skipped on the same warn channel: it composes the
+ * degenerate key `plugin:<id>:`, which names no server and would otherwise
+ * register an unnamed resource surface.
  */
 function parseMcpConfigText(text: string, context: string): Record<string, MCP_CONFIG_SHAPE> {
   let raw: unknown
@@ -117,6 +128,10 @@ function parseMcpConfigText(text: string, context: string): Record<string, MCP_C
   }
   const out: Record<string, MCP_CONFIG_SHAPE> = {}
   for (const [server, rawCfg] of Object.entries(raw.mcpServers)) {
+    if (server === "") {
+      console.warn(`[plugin-registry] skipping MCP server with an empty name in ${context}: a server needs a key`)
+      continue
+    }
     if (!isRecord(rawCfg)) {
       failInvalid(`.mcp.json server '${server}' must be an object (${context})`)
     }
@@ -198,9 +213,13 @@ export function readMcpServersSync(pluginDir: string): Record<string, MCP_CONFIG
 /**
  * MCP mounted-server-name contract (mcp-client's Task 8 ruling, one shared
  * pattern in its naming.ts / validateMcpConfig): `[A-Za-z0-9_.:-]` — colon is
- * the namespace separator — capped at 64 characters. This package deliberately
- * does NOT import @i-harness/mcp-client (mount.ts's structural return), so the
- * grammar and cap are mirrored here; change one, change both.
+ * the namespace separator — capped at 64 characters. The PRODUCTION code here
+ * deliberately does not import @i-harness/mcp-client (mount.ts's structural
+ * return: no runtime dependency in that direction), so the grammar and cap are
+ * mirrored here — change one, change both. The mirroring is not left to trust:
+ * this package's TEST tree does depend on mcp-client (devDependency) and its
+ * seam test validates every key these helpers can compose with the real
+ * validators.
  */
 const SERVER_NAME_MAX_LENGTH = 64
 /** Fixed cost of one composed key: `plugin:` plus the `:` before the server part. */
