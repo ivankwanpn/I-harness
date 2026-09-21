@@ -455,7 +455,15 @@ core-agent 的依賴       : compaction, core-plugin, core-session, core-tools,
 
 **(i) 那個刻意的複製，現在**沒有東西釘住它**。** T3 重寫了一份 `toolResultText`／`imageDescriptor` 的規則（`splitRealImages`／`modelVisibleText`／`imageDescriptor`），因為 `output-retention` 不依賴 `core-session`。**而 T3 的 concern 是原話：「Nothing in the build enforces agreement if the authority changes.」**
 
-**⇒ 補一條**跨套件的一致性測試**：** 它要**住在同時依賴兩邊的套件裡**（`session-executor` 或 `apps/cli` —— **先 `grep` 確認**），**對一份輸入語料斷言兩份實作給出同一個答案**：**一段純文字 · 一個真的 `images` 陣列 · 一個混合物件 · 一個空 `images` 陣列 · 一個**假的**（非陣列）`images` 成員**（**最後那一條是 M14 的防禦規則，而它兩邊都要一致**）。
+**⇒ 補一條**跨套件的一致性測試**：** 它要**住在同時依賴兩邊的套件裡**（`session-executor` 或 `apps/cli` —— **先 `grep` 確認**），**對一份輸入語料斷言兩份實作給出同一個答案**：**一段純文字 · 一個真的 `images` 陣列 · 一個混合物件 · 一個空 `images` 陣列**（**T3 的複審量到請把「假的 `images` 成員」拿掉 —— 見下**）。
+
+> **⚠ 而這一格的第一版要了一個**跑不起來的語料成員**（T3 的複審量到的）：**
+>
+> 它說要加「**一個假的（非陣列）`images` 成員**」來測 M14 的防禦規則。**而量到的是**：**`append` 對每一個非陣列的 `images` 成員都**丟出****（`image attachment: images must be an array` —— `null`／`"nope"`／`{}`／`0`／`false` 全部）⇒ **一條走 `append` 的語料會**丟出**而不是**比較**。**
+>
+> **⇒ 而那個分支只有**從持久化的日誌讀回來**到得了**（`fromJSONL`／直接 `events.push`）—— **那正是 M14 那條防禦規則存在的位置。** **⇒ 要測它就得走那條路**，而**那是另一個量級的 fixture**。
+>
+> **⇒ 裁定：v1 的語料不含它，而那個缺口**明說出來**（M14 的非陣列分支在兩份實作之間**沒有**跨套件的一致性證據；它各自有單元測試，而那是今天全部的證據）。**
 
 **⇒ 才這樣複製才是這個 repo 允許的那種**（**「重複是較便宜的缺陷」** —— **但一個沒有人釘住的複製不是重複，是一個會漂移的第二個真相**）。
 
