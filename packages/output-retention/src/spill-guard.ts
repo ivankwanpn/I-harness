@@ -1,10 +1,22 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
+import {
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_MID_FLIGHT,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+} from "@i-harness/core-tools"
 import { createSpillStore, createTextRetainer, spillNotice, type SpillStore } from "./index.ts"
 
 export interface OutputSpillGuardConfig {
-  maxOutputBytes?: number   // 缺省 64_000
+  // 缺省 64_000. The cap has a FLOOR as well: the replacement always carries the
+  // notice, whose own text plus the spill path is ~200 B, so a cap below that
+  // can never hold a replacement — an over-cap result then comes back
+  // byte-identical through the give-up path (fitWithinCap): unbounded and
+  // notice-less. The shipped default sits far above the floor; a caller lowering
+  // this below a few hundred bytes gets that give-up path, not truncation.
+  maxOutputBytes?: number
   spillRoot?: string        // 缺省 <tmpdir>/i-harness-spill（穩定目錄——GC 有意義）
   gc?: { maxAgeMs?: number; maxTotalBytes?: number } // 缺省 24h / 512MiB
 }
@@ -115,6 +127,39 @@ function fitWithinCap(cap: number, assemble: (budget: number) => unknown): unkno
   return null
 }
 
+// A synthetic failure is a VERDICT ABOUT a call, not output FROM it. Truncating
+// one is worse than not bounding it: the model would lose the reason the call
+// failed, which is the whole point of block ①. And the predicate reads the
+// CODE, not the shape — a body that returns `{ error }` as real data is not a
+// failure, and keying on the shape would bound it.
+//
+// WHY THIS EXEMPTION KEYS ON A SET AND NOT ON THE REACHABILITY GATE'S SILENCE:
+// "no row" does not mean "no reader". When the four codes moved to core-tools
+// (T1), the gate's used-scan began counting the DECLARING file as a user — a
+// cross-package declarer escapes the scan's own declaring-file exclusion — so
+// the two core-agent allowlist entries went INERT with nothing new reading the
+// codes. An exemption keyed on the instrument's quiet would have been keyed on
+// an artifact of that move. (The mechanism is recorded in
+// scripts/audit/reachability-allowlist.json, the core-agent TOOL_FAILED /
+// TOOL_CANCELLED_BY_SIBLING pair.)
+const SYNTHETIC_FAILURE_CODES = new Set([
+  TOOL_FAILED,                    // a body that tried and failed
+  TOOL_ABORTED_BEFORE_DISPATCH,   // a call that never started
+  TOOL_CANCELLED_BY_SIBLING,      // a call a sibling's failure cancelled
+  TOOL_ABORTED_MID_FLIGHT,        // the abort path wrote this verdict
+])
+const isSyntheticFailure = (out: unknown): boolean =>
+  typeof out === "object" && out !== null && SYNTHETIC_FAILURE_CODES.has((out as { code?: string }).code as string)
+
+// WHY THE SET STOPS AT FOUR. The repair path in session-persistence
+// (src/repair.ts) writes a FIFTH synthetic code — for a DISPATCHED call whose
+// outcome the log does not contain. It is deliberately not here, because it
+// cannot reach this guard: the mount point is the live `tools/execute` cascade,
+// and a result read back from a REPAIRED log never passes through it. If
+// "synthetic" is ever widened to mean "read back from a repaired log", this set
+// stops being complete — and the `replay: false` sentence the repair path
+// attaches is exactly what a truncation would hide.
+
 /** registry 級統一落盤（opencode/dsh spill policy 吸收）。string 超限 → 截斷字串 + spill notice
  *  （notice 內含完整路徑）；object 超限 → { output, outputPaths, spill } 信封。**core-tools 零改動**
  *  ——core-tools 的 tools/execute cascade 縫（guard-timeout 先例）是唯一接入點。 */
@@ -138,6 +183,10 @@ export function createOutputSpillGuard(_ctx: PluginContext, config?: OutputSpill
         // for exactly this reason (spec §4.2). The check is on the TOOL NAME at
         // the cascade seam, which is the only place this guard can see it.
         if (d.name === "read") return out
+        // A synthetic failure is returned UN-bounded (see SYNTHETIC_FAILURE_CODES
+        // above): the verdict about the call, and the reason it carries, is the
+        // whole payload — a truncation would delete it.
+        if (isSyntheticFailure(out)) return out
         if (typeof out === "string") {
           // Atom (ii): what the model sees for a string result is the
           // authority's JSON-quoted form, so that — not the raw byte length —
