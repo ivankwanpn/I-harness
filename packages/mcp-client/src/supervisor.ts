@@ -62,7 +62,15 @@ export interface McpSupervisor {
   /** M6-D3: rebuild the catalogue IN PLACE on the current generation (a fresh
    *  drain of tools/list, no reconnect, no new process). Throws
    *  McpServerUnavailableError when no generation is live — the same fail-fast
-   *  error a tool call gets during an outage. */
+   *  error a tool call gets during an outage.
+   *
+   *  Two paths RESOLVE WITHOUT DRAINING (both leave `catalogDirty()` true, so a
+   *  caller that answers "is a rebuild due?" from the flag and retries at the
+   *  next boundary is correct — see the two checks in the implementation):
+   *  the generation is not `ready` (its own initial/refresh drain is in flight:
+   *  that drain IS the rebuild), or a previous drain FAILED within the last
+   *  `catalogTimeoutMs` (the failed drain's own budget of quiet, which is what
+   *  keeps a stalled server from costing a drain timeout at every boundary). */
   refreshCatalog(): Promise<void>
 }
 
@@ -102,11 +110,26 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
   // reflect the server's list"; the EPOCH counts announcements, which is what
   // makes a rebuild's clear safe — a list that changed WHILE the drain was in
   // flight is not the list we just installed, so that rebuild must leave the
-  // flag set for the next boundary (see resyncTools). Both are per generation:
-  // adoptGeneration and generationDown reset them, because a superseded
-  // generation's announcement says nothing about the live one.
+  // flag set for the next boundary (see resyncTools). The flag is per
+  // GENERATION — adoptGeneration, generationDown, goLost and close all reset
+  // it, because a superseded generation's announcement says nothing about the
+  // live one. The EPOCH is deliberately NOT reset with it: it is monotonic, a
+  // pure count of announcements, and the only thing ever done with it is a
+  // comparison against the value a drain captured at its start — resetting it
+  // could only let a stale captured value look current again.
   let catalogDirtyFlag = false
   let catalogEpoch = 0
+  // Final review: when a FAILED rebuild is allowed to be retried. The flag
+  // stays dirty (it is not lying — the catalogue IS stale), but the RETRY is
+  // throttled, because the boundary AWAITS the rebuild (core-plugin's emitFn
+  // awaits promise-returning plain listeners — core-plugin/src/index.ts:264-276)
+  // and a server that announces list_changed and then stalls would otherwise
+  // cost up to one catalogTimeoutMs at every step boundary, unbounded. Set to
+  // the failure instant + one full drain's budget (the same `?? 60_000`
+  // bridge.ts:81 derives its deadline from); reset when a generation is
+  // adopted, because a failed drain says nothing about a NEW generation's —
+  // which drains itself anyway.
+  let catalogRetryNotBefore = 0
   // M6-D3 single-flight: the rebuild in flight, shared by every concurrent
   // caller (the same idiom as oauth.ts's `refreshInFlight`). Two boundaries CAN
   // be in flight at once — the emitter's plain listeners live on an ancestor
@@ -282,7 +305,8 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     // Two-phase swap (bridge.ts): dispose the previous generation's tools,
     // then fetch + register the fresh list from the new generation. Resource
     // tools are re-bound per generation as well.
-    disposers = await syncTools(proxy, deps.tools, config, disposers)
+    const previousDisposers = disposers
+    disposers = await syncTools(proxy, deps.tools, config, previousDisposers)
     for (const name of resourceToolNames) deps.tools.unregister(name)
     const resourceTools = createResourceTools(proxy, serverName, config)
     resourceToolNames = resourceTools.map((t) => t.name)
@@ -291,8 +315,20 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     // a list_changed arrived while those pages were in flight: that list is
     // newer than what we just installed, so the flag stays set and the next
     // boundary drains again. A rebuild that THREW never reaches this line, so a
-    // failed refresh also stays dirty (retried at the next boundary).
-    if (catalogEpoch === epochAtStart) catalogDirtyFlag = false
+    // failed refresh also stays dirty (retried at the next boundary, on the
+    // failure backoff).
+    //
+    // A swap that returned ZERO disposers is the ambiguous case (final review):
+    // either the server's list is genuinely empty, or bridge.ts's re-sync
+    // rollback zeroed a populated catalogue after a Phase-2 registry conflict
+    // (:144-154 — the silent-zeroing path, which returns an empty map rather
+    // than throwing). Clearing the flag for the second reading would leave the
+    // server with no tools and no retry. So the flag is cleared only when the
+    // swap PRODUCED disposers, or when there was no catalogue to lose (the
+    // predecessor was already empty — a genuinely empty list costs one extra
+    // drain at the next boundary, which then sees an empty predecessor and
+    // clears).
+    if (catalogEpoch === epochAtStart && (disposers.size > 0 || previousDisposers.size === 0)) catalogDirtyFlag = false
   }
 
   const armStability = (gen: ConnectedMcpClient): void => {
@@ -310,8 +346,11 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     current = gen
     // M6-D3: a new generation starts CLEAN — its connect() just drained the
     // catalogue, and anything the previous generation announced is about a
-    // list that no longer exists.
+    // list that no longer exists. Its failed-refresh backoff dies with it too:
+    // the generation drains itself below (attempt/start), and whatever went
+    // wrong on the previous generation's drain is not this one's.
     catalogDirtyFlag = false
+    catalogRetryNotBefore = 0
     // Observe transport death only when the reconnect machinery is on — the
     // default (no reconnect config) must behave exactly like a one-shot mount.
     if (reconnectEnabled) gen.onDisconnect?.(() => generationDown(gen))
@@ -444,9 +483,45 @@ export function createMcpSupervisor(config: McpServerConfig, deps: SupervisorDep
     // that helper also fires deps.onToolUnavailable, whose contract is "a tool
     // call was rejected" — which a refresh is not (and scheduler.ts's
     // empty-mount path throws the bare error the same way).
+    //
+    // The two RESOLVE-WITHOUT-DRAINING checks below are the final review's
+    // fixes. Both keep this promise's contract honest by NOT clearing the flag:
+    // the flag is what a caller answers "is a rebuild due?" with, and it stays
+    // true, so the next boundary asks again — the same "retry later" shape as a
+    // failed drain, minus the failure report (nothing failed; the rebuild is
+    // simply not due yet).
     refreshCatalog: (): Promise<void> => {
       if (current === undefined) return Promise.reject(new McpServerUnavailableError(serverName))
-      refreshing ??= resyncTools().finally(() => { refreshing = undefined })
+      // #2: the single-flight above guards refresh-vs-refresh only. `attempt`
+      // (:379) and `start` (:445) call resyncTools() directly right after
+      // adoptGeneration, and the state is still "reconnecting"/"connecting"
+      // while those pages are in flight — a list_changed arriving then plus a
+      // live turn's boundary would start a SECOND, overlapping syncTools over
+      // the same previous-disposers map: duplicate registration → bridge
+      // rollback → an empty disposers map → a live tool silently missing and a
+      // stale one undesposable (the collision the single-flight comment above
+      // documents, :133-144). While the generation is not ready there is nothing
+      // to add anyway: that drain IS the rebuild, and the epoch guard keeps the
+      // flag set for the boundary after `ready`.
+      if (state !== "ready") return Promise.resolve()
+      // #1: a failed drain is retried at the next boundary (the flag stays
+      // dirty), which put the retry ON the turn's critical path — the boundary
+      // awaits it, so a stalled server cost up to one drain timeout at EVERY
+      // step boundary. One full drain's budget of quiet after a failure.
+      if (Date.now() < catalogRetryNotBefore) return Promise.resolve()
+      if (refreshing === undefined) {
+        refreshing = resyncTools()
+          .then(
+            () => undefined,
+            (err: unknown) => {
+              catalogRetryNotBefore = Date.now() + (config.catalogTimeoutMs ?? 60_000)
+              throw err
+            },
+          )
+          .finally(() => {
+            refreshing = undefined
+          })
+      }
       return refreshing
     },
   }

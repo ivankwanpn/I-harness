@@ -118,4 +118,21 @@ describe("scanMentionedSkillNames (M6 C2)", () => {
       expect(scanMentionedSkillNames("$hello, thanks", registry)).toEqual(["hello"])
     })
   })
+
+  // The `$`-edge literals the spec's §3.3 sigil row asks for (`$` 邊界的誤命中
+  // 案例). Both sides of a mention's edge are the same rule (mention.ts:14-20):
+  // the capture is the maximal `[a-z0-9-]` run, so the character AFTER the run
+  // is irrelevant to it — and the sigil itself is the marker, so the character
+  // BEFORE it is too. A name can never CONTAIN `$` (the registry grammar has
+  // none), so a `$` in the text only ever sits at one of these two edges.
+  it("`$` edges: the alphabet ends the run, and the sigil is the marker", () => {
+    withRegistry((registry) => {
+      // `_` is outside the name alphabet, so the run stops at `hello` — which
+      // IS registered: a hit that keeps `_db` out of the name, not a near-miss.
+      expect(scanMentionedSkillNames("$hello_db", registry)).toEqual(["hello"])
+      // Not anchored on a word boundary: a `$hello` mid-token is still a
+      // mention, and the capture is exactly `hello` (the `x` is not swept in).
+      expect(scanMentionedSkillNames("x$hello", registry)).toEqual(["hello"])
+    })
+  })
 })

@@ -13,7 +13,11 @@ export interface McpMountHandle {
    *  for a mount that came up empty (failOnStartupError=false). */
   catalogDirty(): boolean
   /** M6-D3: rebuild the catalogue in place on the current generation. Throws
-   *  McpServerUnavailableError when nothing is live (mount-empty or outage). */
+   *  McpServerUnavailableError when nothing is live (mount-empty or outage).
+   *  Resolves WITHOUT draining when no rebuild is due yet — the generation is
+   *  mid-connect/reconnect (its own drain is the rebuild), or a previous drain
+   *  failed inside its backoff window. Either way `catalogDirty()` stays true,
+   *  so "ask the flag, then refresh" is the caller's contract. */
   refreshCatalog(): Promise<void>
   unmount(): Promise<void>
 }

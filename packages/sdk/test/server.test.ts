@@ -388,6 +388,25 @@ describe("createSdkServer initialize gate (M68 batch B)", () => {
     }
   })
 
+  it("clientInfo() hands back a COPY — mutating it cannot reach the capture", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      await server.handleLine(encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "probe", version: "9" } })))
+      // The captured object is the server's own state; the accessor's contract
+      // is a copy, so a caller that edits what it got back must not be able to
+      // rewrite what the NEXT caller sees (nor the capture itself).
+      const first = server.clientInfo()!
+      first.name = "mutated"
+      delete first.version
+      expect(server.clientInfo()).toEqual({ name: "probe", version: "9" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
   it("a second initialize is idempotent and the FIRST clientInfo wins", async () => {
     const { service, cleanup } = await makeService()
     try {

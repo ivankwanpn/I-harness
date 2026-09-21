@@ -495,12 +495,15 @@ describe("the catalogue drain's overall deadline", () => {
   it("completes the same slow drain when the budget leaves room — the bound is not 'always throws'", async () => {
     const tools = registry()
     const { client, calls } = pagingClient(10, 30)
-    const disposers = await syncTools(client, tools, cfg({ catalogTimeoutMs: 1_000 }))
+    // The walk is ~300ms of real sleeps; the budget is 3_000 so a loaded CI
+    // machine has a 10× margin, not the ~3× a 1_000 budget left (the case above
+    // is the converse and its 50ms budget is deliberate — that one must fail).
+    const disposers = await syncTools(client, tools, cfg({ catalogTimeoutMs: 3_000 }))
     expect(calls).toHaveLength(10)
     expect(disposers.size).toBe(10)
     expect(tools.schemas()).toHaveLength(10)
-    // the pages really were handed a deadline derived from the 1000ms budget
-    expect(calls[0]?.opts?.maxTotalTimeout).toBeLessThanOrEqual(1_000)
+    // the pages really were handed a deadline derived from the 3000ms budget
+    expect(calls[0]?.opts?.maxTotalTimeout).toBeLessThanOrEqual(3_000)
     expect(calls[0]?.opts?.maxTotalTimeout).toBeGreaterThan(0)
   })
 
@@ -525,6 +528,13 @@ describe("the catalogue caps are DEFENSIVE bounds", () => {
     // policy number, and it must not creep down toward real catalogues.
     expect(MAX_TOOL_ITEMS).toBe(10_000)
     expect(100).toBeLessThan(MAX_TOOL_ITEMS / 10) // a 100-tool catalogue is <1% of the cap
+  })
+
+  it("the cursor cap is pinned BY VALUE too", () => {
+    // MAX_TOOL_PAGES is pinned through its error message (:339-341) and the item
+    // cap above; the cursor cap's literal is what a hostile server runs into, so
+    // a relaxation of it must be a visible, deliberate edit as well.
+    expect(MAX_CURSOR_LENGTH).toBe(4_096)
   })
 })
 

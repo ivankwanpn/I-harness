@@ -14,7 +14,10 @@
 // report, not abort the turn (the `schedule-driver` precedent, assembly.ts:850:
 // a step-boundary hook is on the turn's critical path, so it never throws), and
 // the catalogue that stays in the registry is the PREVIOUS one — a failed drain
-// leaves the tools it could not replace alone.
+// leaves the tools it could not replace alone. Its RETRY is throttled by the
+// failed drain's own budget (one catalogTimeoutMs of quiet), because the
+// boundary AWAITS each attempt and an unthrottled retry was therefore one drain
+// timeout per step boundary, unbounded (final review).
 
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
@@ -129,7 +132,7 @@ interface Fixture {
   boundary: () => Promise<void>
 }
 
-async function mountCatalogueServer(mode = "ok"): Promise<Fixture> {
+async function mountCatalogueServer(mode = "ok", extra: { catalogTimeoutMs?: number } = {}): Promise<Fixture> {
   const dir = mkdtempSync(join(tmpdir(), "mcp-cat-"))
   const logPath = join(dir, "requests.log")
   const script = join(dir, "cat-stub.mjs")
@@ -139,7 +142,7 @@ async function mountCatalogueServer(mode = "ok"): Promise<Fixture> {
     workspace: process.cwd(),
     sessionId: "mcp-catalog",
     model: createMockClient([{ role: "assistant", text: "ok" }]),
-    mcp: [{ transport: "stdio", serverName: "cat", command: execPath, args: [script, logPath, mode] }],
+    mcp: [{ transport: "stdio", serverName: "cat", command: execPath, args: [script, logPath, mode], ...extra }],
   })
   const registry = agentDeps.calls.at(-1)!.tools
   const log = (): string[] =>
@@ -199,16 +202,19 @@ describe("the MCP catalogue rebuilds at the agent/pre-step boundary (M6-D3)", ()
     }
   }, 30_000)
 
-  it("a rebuild that cannot read a page reports, keeps the previous catalogue, and retries at the next boundary", async () => {
-    const f = await mountCatalogueServer("fail-after-swap")
+  it("a rebuild that cannot read a page reports, keeps the previous catalogue, and retries after its window", async () => {
+    // The retry window IS one drain budget (the supervisor derives it from
+    // catalogTimeoutMs), so a small one keeps this test's clock small while
+    // still exercising the real cadence end to end.
+    const f = await mountCatalogueServer("fail-after-swap", { catalogTimeoutMs: 300 })
     const warnings: string[] = []
     const originalWarn = console.warn
     console.warn = (message: string) => { warnings.push(String(message)) }
     try {
       await f.registry.get("mcp__cat__swap")!.execute({}, {})
 
-      // The boundary MUST resolve: a background catalogue refresh is not on the
-      // turn's critical path (the schedule driver's tick() is the precedent).
+      // The boundary MUST resolve: the handler never throws (the schedule
+      // driver's tick() precedent), and the failure is REPORTED.
       await boundaryUntil(f, 2)
       expect(f.listCalls()).toBeGreaterThanOrEqual(2)
       expect(warnings.some((w) => w.includes("catalogue refresh failed"))).toBe(true)
@@ -218,10 +224,24 @@ describe("the MCP catalogue rebuilds at the agent/pre-step boundary (M6-D3)", ()
       expect(f.registry.get("mcp__cat__before")).toBeDefined()
       expect(f.registry.get("mcp__cat__swap")).toBeDefined()
 
-      // The flag survived the failure — the next boundary tries again.
+      // The flag survived the failure (the catalogue IS still stale), but the
+      // RETRY is throttled: boundaries inside the failed drain's window — one
+      // catalogTimeoutMs, the drain budget the failure itself derives — do not
+      // pay another drain. That per-step cost is what the throttle bounds; the
+      // cadence's unit test lives with its owner
+      // (mcp-client/test/reconnect.test.ts).
       const before = f.listCalls()
       await f.boundary()
+      await f.boundary()
+      expect(f.listCalls()).toBe(before)
+
+      // Past the window the same boundary tries again — and, the server still
+      // broken, fails again: the throttle delays retries, it does not wedge
+      // them.
+      await new Promise((resolve) => setTimeout(resolve, 500))
+      await f.boundary()
       expect(f.listCalls()).toBe(before + 1)
+      expect(warnings.filter((w) => w.includes("catalogue refresh failed")).length).toBeGreaterThanOrEqual(2)
     } finally {
       console.warn = originalWarn
       await f.assembly.dispose()

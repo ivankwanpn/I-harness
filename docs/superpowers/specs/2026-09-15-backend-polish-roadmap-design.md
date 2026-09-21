@@ -220,7 +220,7 @@ triage 第 3 題（「誰是第二個消費者？」）repo 內沒有答案，�
 
 **依賴**：M5（工具管線是 MCP 工具進來的入口）。
 **分級**：**M**，且增量。
-**完成定義**：MCP 的攝取面有硬化過的測試；skills 可被發現而非只是可載入；**`@i-harness/sdk` 的 append-only `session/event` 語意與背壓在 wire 層有測試**（原為「web host 的握手與背壓有測試」，2026-09-15 隨 Q6 改）；`settings-seam` 與 `operator-config-layer-stack` 有契約測試。
+**完成定義**：MCP 的攝取面有硬化過的測試；skills 可被發現而非只是可載入；**`@i-harness/sdk` 的 append-only `session/event` 語意與背壓在 wire 層有測試**（原為「web host 的握手與背壓有測試」，2026-09-15 隨 Q6 改）；`settings-seam` 與 `operator-config-layer-stack` 有契約測試。 **▶ 2026-09-22 補記（這一格是 2026-09-15 的原文，補記只加不刪）：最後一格的兩項與量到的事實不符，owner 2026-09-22 已隨 M6 spec 一起核准修正 —— 見 `docs/superpowers/specs/2026-09-21-m6-breadth-design.md` §7：`settings-seam` 的契約測試**已存在**（`sections.ts` 的既有測試；缺的是消費者，wire 的 settings 面是 Q7 觸發時的工作），`operator-config-layer-stack` 的來源歸因 **park 到有宿主顯示它為止，本里程碑不含**。**
 **它不保證什麼**：**不保證第三方實作真的相容** —— 那需要一個外部消費者，而目前沒有。
 
 ### M7 — 自我喚醒與記憶
