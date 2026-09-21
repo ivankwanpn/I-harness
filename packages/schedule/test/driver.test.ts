@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { SessionEvent } from "@i-harness/core-session"
-import { createAfterScheduleRecord, createEveryScheduleRecord } from "../src/index.ts"
+import { createAfterScheduleRecord, createEveryScheduleRecord, type ScheduleRecord } from "../src/index.ts"
 import { createScheduleDriver, type ScheduleDelivery } from "../src/driver.ts"
 
 /** In-memory fixture session: the foldable event stream. The DRIVER never writes it — the host
@@ -10,6 +10,11 @@ interface FixtureSession {
 }
 
 const NOW = Date.parse("2026-08-31T10:00:00.000Z")
+
+/** The create event for one record (the fixtures below carry theirs inline). */
+function createEvent(record: ScheduleRecord): SessionEvent {
+  return { type: "schedule/change", version: 1, operation: "create", schedule: record } as unknown as SessionEvent
+}
 
 /** A session whose stream carries ONE due-in-N-s one-shot reminder. */
 function afterSession(_id: string, dueAfterSeconds: number): FixtureSession {
@@ -108,10 +113,13 @@ describe("schedule driver", () => {
     expect(deliveries[0]!.due[0]!.occurrenceAt).toBe("2026-08-31T10:20:00.000Z")
     expect((deliveries[0]!.dispatchEvents[0] as { acceptedAt?: string }).acceptedAt)
       .toBe("2026-08-31T10:25:00.000Z")
-    expect(deliveries[0]!.inputId).toBe("schedule-1@2026-08-31T10:20:00.000Z")
+    // Every records ride the batch path: the idempotency key is the DECISION's, not the record's
+    // (spec §3.5's batch inference — one admission, one inputId bound to the shared acceptedAt).
+    expect(deliveries[0]!.inputId).toBe("schedule-batch@2026-08-31T10:25:00.000Z")
     // The framing states the OCCURRENCE it was accepted for — not the record's lagging
     // scheduledAt (10:10:00.000Z, the creation target).
-    expect(deliveries[0]!.text).toContain("occurrence_at: 2026-08-31T10:20:00.000Z")
+    expect(deliveries[0]!.text).toContain("[SCHEDULE REMINDER BATCH]")
+    expect(deliveries[0]!.text).toContain('"occurrence_at":"2026-08-31T10:20:00.000Z"')
     await driver.tick()
     expect(deliveries).toHaveLength(1) // no second delivery for the same acceptance
   })
@@ -193,5 +201,87 @@ describe("schedule driver", () => {
     const finished = await first
     expect(finished.delivered).toBe(1)
     expect(deliveries).toHaveLength(1)
+  })
+
+  it("a batch bounds model turns: N overdue every records produce ONE delivery — one decision, one message", async () => {
+    const deliveries: ScheduleDelivery[] = []
+    // (typed like driverOver's parameter: the literal alone infers a session-keyed object
+    //  that cannot be indexed by the fixture's string sessionId — TS7053)
+    const sessions: Record<string, FixtureSession> = { "sess-a": everySession("sess-a", 600) }
+    // The fixture helper makes schedule-1 only; the second record goes in as its own create event.
+    sessions["sess-a"]!.events.push(createEvent(createEveryScheduleRecord("schedule-2", "every ten too", 600, NOW)))
+    const driver = driverOver(sessions, deliveries, NOW + 25 * 60_000) // "10:25"
+    const result = await driver.tick()
+    expect(deliveries).toHaveLength(1) // one delivery per tick, two records in it — N messages would be 2
+    expect(deliveries[0]!.dispatchEvents).toHaveLength(2)
+    expect(deliveries[0]!.text).toContain("[SCHEDULE REMINDER BATCH]")
+    expect(deliveries[0]!.inputId).toBe("schedule-batch@2026-08-31T10:25:00.000Z")
+    expect(result.delivered).toBe(2)
+    expect(result.due.map((entry) => [entry.record.id, entry.occurrenceAt])).toEqual([
+      ["schedule-1", "2026-08-31T10:20:00.000Z"],
+      ["schedule-2", "2026-08-31T10:20:00.000Z"],
+    ])
+  })
+
+  it("one-shot takes precedence: a due one-shot is delivered ALONE, the overdue every records wait for the next tick", async () => {
+    const deliveries: ScheduleDelivery[] = []
+    const sessions: Record<string, FixtureSession> = { "sess-mix": afterSession("sess-mix", 60) } // due 10:01:00Z
+    sessions["sess-mix"]!.events.push(createEvent(createEveryScheduleRecord("schedule-2", "every ten", 600, NOW)))
+    const driver = driverOver(sessions, deliveries, NOW + 25 * 60_000)
+    const first = await driver.tick()
+    expect(first.delivered).toBe(1) // the every record is overdue too — and still is NOT in this delivery
+    expect(deliveries).toHaveLength(1)
+    expect(deliveries[0]!.dispatchEvents).toHaveLength(1)
+    expect(deliveries[0]!.text).toContain("[SCHEDULE REMINDER]")
+    expect(deliveries[0]!.text).not.toContain("[SCHEDULE REMINDER BATCH]")
+    expect(deliveries[0]!.inputId).toBe("schedule-1@2026-08-31T10:01:00.000Z")
+    // Same clock, next tick: the one-shot is consumed (its dispatch is in the log), the every is due.
+    const second = await driver.tick()
+    expect(second.delivered).toBe(1)
+    expect(deliveries).toHaveLength(2)
+    expect(deliveries[1]!.text).toContain("[SCHEDULE REMINDER BATCH]")
+    expect(deliveries[1]!.inputId).toBe("schedule-batch@2026-08-31T10:25:00.000Z")
+  })
+
+  it("no double delivery inside one tick: after the batch the records are advanced, not re-due", async () => {
+    const deliveries: ScheduleDelivery[] = []
+    const sessions: Record<string, FixtureSession> = { "sess-n": everySession("sess-n", 600) }
+    sessions["sess-n"]!.events.push(createEvent(createEveryScheduleRecord("schedule-2", "second every", 600, NOW)))
+    const driver = driverOver(sessions, deliveries, NOW + 25 * 60_000)
+    const first = await driver.tick()
+    expect(first.delivered).toBe(2)
+    expect(deliveries).toHaveLength(1)
+    const again = await driver.tick()
+    expect(again.delivered).toBe(0)
+    expect(again.due).toEqual([])
+    expect(deliveries).toHaveLength(1) // the host consumed BOTH dispatch events in the one batch
+  })
+
+  it("a decision the state cannot satisfy is that session's deliveryError — loud, loop continues", async () => {
+    const deliveries: ScheduleDelivery[] = []
+    const warnings: string[] = []
+    const sessions: Record<string, FixtureSession> = {
+      "sess-bad": everySession("sess-bad", 600),
+      "sess-ok": afterSession("sess-ok", 60),
+    }
+    const driver = createScheduleDriver({
+      sessions: () => Object.keys(sessions),
+      events: (id) => sessions[id]?.events,
+      deliver: async (delivery) => {
+        deliveries.push(delivery)
+        for (const ev of delivery.dispatchEvents) sessions[delivery.sessionId]!.events.push(ev)
+      },
+      // One millisecond past the last representable four-digit-year instant: the every occurrence
+      // arithmetic refuses that accepted time, so sess-bad's DECISION throws — never tick() itself.
+      now: () => Date.parse("9999-12-31T23:59:59.999Z") + 1,
+      logWarn: (message) => warnings.push(message),
+    })
+    const result = await driver.tick()
+    expect(result.deliveryErrors).toHaveLength(1)
+    expect(result.deliveryErrors[0]).toMatch(/^sess-bad: /)
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("sess-bad")
+    expect(result.delivered).toBe(1) // the loop continued: sess-ok's one-shot still went out
+    expect(deliveries.map((delivery) => delivery.sessionId)).toEqual(["sess-ok"])
   })
 })
