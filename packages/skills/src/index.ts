@@ -48,6 +48,10 @@ export {
 // path directly, so re-exporting them would add a name the gate reports as
 // declared-but-unused.
 export { createSkillsSection } from "./section.ts"
+// M6 batch C C2 (spec §3.2): the `$name` sigil scan. Unlike the section's
+// constant above, BOTH of these names leave the entry: their production
+// consumer is the assembly's pre-step listener, which imports them from here.
+export { scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "./mention.ts"
 // M27 R-B6: shadow selector + implicit-invocation vocabulary (pure, no I/O).
 export {
   selectShadowCandidates,
