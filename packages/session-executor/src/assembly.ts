@@ -813,10 +813,16 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   tools.register(createReadImageTool({ workspace: opts.workspace }))
 
   // E9 schedule (spec 2026-09-20-schedule-design §4.2/§4.6): the delivery mount. Gated on the
-  // DURABLE path — coordinator + sessionId, the same condition as the session mirror above —
-  // because the acceptance contract IS "dispatch + admission in one durable batch", and without
-  // a coordinator there is no batch to speak of. Tools and driver mount together: tools alone
-  // would be a fifth zero-source (writes the log, nothing folds it — spec §10).
+  // DURABLE path — coordinator + sessionId — because the acceptance contract IS "dispatch +
+  // admission in one durable batch", and without a coordinator there is no batch to speak of.
+  // The gate ASSUMES the session is already mirrored (its own appends must reach this
+  // coordinator): the mirror is installed here only when this assembly CREATES the session —
+  // with a caller-supplied session it is the caller's job, and both in-repo hosts do it
+  // (apps/cli/src/run.ts:310-313, packages/session-executor/src/durable-session.ts:12-15).
+  // Without a mirror `coordinator.flush` is a no-op (session-persistence/src/index.ts:579-582)
+  // and the durability half of that claim would be false.
+  // Tools and driver mount together: tools alone would be a fifth zero-source (writes the log,
+  // nothing folds it — spec §10).
   if (opts.coordinator !== undefined && opts.sessionId !== undefined) {
     const coordinator = opts.coordinator
     const scheduleSessionId = opts.sessionId
@@ -830,6 +836,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // §3.4 (corrected): the canonical append() path (seq + write-behind mirror + subscribers)
         // for BOTH events, then the flush barrier — the pair lands in ONE backend append, and
         // `deliver` returns only after durability. The engine does not write; this does.
+        // ORDER is load-bearing: dispatch BEFORE admission (an `admit` throw — a duplicate
+        // still-pending id; not reachable today — would leave the record consumed without a
+        // delivered input). And a flush throw is NOT "nothing accepted": both events are already
+        // in memory (the fold consumed the dispatch; the next step boundary claims the admission,
+        // so the user sees the reminder) while the write-behind retains & retries the batch —
+        // `deliveryErrors` is a durability report, not a refusal.
         for (const ev of delivery.dispatchEvents) append(session, ev)
         inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system" })
         await coordinator.flush(scheduleSessionId)

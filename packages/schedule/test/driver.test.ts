@@ -124,8 +124,9 @@ describe("schedule driver", () => {
     expect(deliveries).toHaveLength(1) // no second delivery for the same acceptance
   })
 
-  it("deliver failure suppresses the delivery (fail-closed: the host threw ⇒ nothing accepted, nothing counted)", async () => {
+  it("deliver failure suppresses the delivery (fail-closed: the host threw ⇒ the host did not accept, nothing counted)", async () => {
     const deliveries: ScheduleDelivery[] = []
+    const warnings: string[] = []
     let attempts = 0
     const driver = createScheduleDriver({
       sessions: () => ["sess-1"],
@@ -135,13 +136,18 @@ describe("schedule driver", () => {
         throw new Error("disk full")
       },
       now: () => NOW + 2_000,
+      logWarn: (message) => warnings.push(message), // collector — the suite transcript stays clean
     })
     const result = await driver.tick()
     expect(attempts).toBe(1) // the host WAS handed the delivery …
-    expect(result.delivered).toBe(0) // … and refused it: no durable accept ⇒ no due, no count
+    expect(result.delivered).toBe(0) // … and did not accept: no durable accept here ⇒ no due, no count
     expect(result.due).toEqual([])
     expect(result.deliveryErrors).toEqual(["sess-1: disk full"])
     expect(deliveries).toHaveLength(0)
+    // The failure is reported, not silent: one warn, naming the record and the reason.
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain("schedule-1")
+    expect(warnings[0]).toContain("disk full")
   })
 
   it("unknown session ids are skipped, never a throw; no deliveries leak", async () => {
