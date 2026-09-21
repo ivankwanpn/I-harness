@@ -22,7 +22,7 @@ import type { SandboxMode } from "@i-harness/sandbox"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
-import { encodeFrame, type SessionListEntry, type SessionModelSelection } from "@i-harness/sdk"
+import { createBoundedWriter, DEFAULT_WRITE_BOUND_BYTES, type SessionListEntry, type SessionModelSelection } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
 import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
@@ -605,6 +605,22 @@ async function runSdkCommand(args: string[]): Promise<number> {
   }
 
   const rl = createInterface({ input: process.stdin, terminal: false })
+  // M68 batch A: the outbound bound. onWrite() is called SYNCHRONOUSLY from the
+  // server for every frame (responses AND one notification per appended event),
+  // so the queue and its bound live HERE, between that call and stdout: in-bound
+  // the frames are byte-identical to the pre-M68 path; at the bound the writer
+  // writes ONE SERVER_OVERLOAD frame (id: null) and ends stdout — a slow client
+  // is cut visibly and recovers via session/history, instead of growing this
+  // process's heap invisibly.
+  const writer = createBoundedWriter({
+    write: (chunk) => process.stdout.write(chunk),
+    end: () => process.stdout.end(),
+    onDrain: (cb) => {
+      process.stdout.once("drain", cb)
+      return () => { process.stdout.off("drain", cb) }
+    },
+    boundBytes: DEFAULT_WRITE_BOUND_BYTES,
+  })
   const server = createSdkServer(service, {
     coordinator,
     ...(coordinator !== undefined
@@ -695,7 +711,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
             }))
             return { sessions }
           },
-    onWrite: (message) => process.stdout.write(encodeFrame(message)),
+    onWrite: (message) => writer.push(message),
     onShutdown: () => rl.close(),
   })
 
