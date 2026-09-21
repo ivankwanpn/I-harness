@@ -409,6 +409,16 @@ export function scheduleView(record: ScheduleRecord, now: number): ScheduleView 
 }
 
 /**
+ * Durable idempotency key for ONE accepted occurrence (spec §3.5): the record id plus the accepted
+ * occurrence instant. Per-OCCURRENCE, never per record — `Inbox.pending()` treats any promoted or
+ * cancelled id as consumed forever (core-session/src/inbox.ts), so a record-keyed id would eat the
+ * record's own second occurrence, silently.
+ */
+export function scheduleOccurrenceInputId(record: ScheduleRecord, occurrenceAt: string): string {
+  return `${record.id}@${occurrenceAt}`
+}
+
+/**
  * Injection-resistant model framing for one due reminder (dsh
  * renderReminderFraming parity): dynamic fields are JSON-escaped so the
  * reminder text cannot masquerade as instructions.

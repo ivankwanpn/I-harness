@@ -1,23 +1,29 @@
 /**
  * Local schedule driver — the session-side delivery loop (dsh driver parity,
  * IH-shaped). One `tick()` fold-checks every registered session's
- * schedule/change stream, dispatch-advances due records (the durable event is
- * the acceptance record) and only then notifies the injectable `onDue`
- * deliverer (the A1 inbox followup wire — this milestone ships the seam).
+ * schedule/change stream and, for each due record, resolves the accepted
+ * occurrence and hands the HOST one `ScheduleDelivery` (dispatch event, framed
+ * text, per-occurrence inputId) through the injectable `deliver` seam.
+ * THE ENGINE DOES NOT WRITE THE LOG (spec §3.4's 2026-09-21 correction): the
+ * host owns "write or not" — it accepts by appending `[dispatch, admitted]` as
+ * ONE durable batch, and rejects by throwing (nothing accepted ⇒ nothing due).
  * Restart re-drive is FREE: a new driver instance over the same persisted
- * events delivers exactly the still-overdue remainder — records whose
- * dispatch was accepted are no longer due.
+ * events delivers exactly the still-overdue remainder — records whose dispatch
+ * was accepted are no longer due.
  *
- * Rules: append BEFORE deliver (a delivery without a durable accept is a
- * duplicate risk — fail-closed path); a corrupted schedule stream skips the
- * whole session with a deliveryError entry (projection-grade honesty); every
- * occurrences are resolved anchor-aligned via resolveEveryOccurrence.
+ * Rules: deliver BEFORE counting (a delivery the host refused is not delivered
+ * — fail-closed path); a corrupted schedule stream skips the whole session with
+ * a deliveryError entry (projection-grade honesty); every occurrences are
+ * resolved anchor-aligned via resolveEveryOccurrence, and their framing states
+ * the occurrence, never the lagging scheduledAt.
  */
 
 import type { SessionEvent } from "@i-harness/core-session"
 import {
   foldScheduleEvents,
+  renderReminderFraming,
   resolveEveryOccurrence,
+  scheduleOccurrenceInputId,
   scheduleView,
   type ScheduleRecord,
 } from "./index.ts"
@@ -29,10 +35,25 @@ export interface ScheduleDue {
   occurrenceAt: string
 }
 
+/**
+ * ONE hand-off from the engine to the host: the durable dispatch event(s), the
+ * injection-resistant reminder text, the per-occurrence idempotency key, and
+ * the due entries this delivery covers. The host accepts by writing
+ * `[dispatchEvents…, admitted]` in ONE durable batch and rejects by throwing
+ * (spec §3.4) — the engine never touches the log.
+ */
+export interface ScheduleDelivery {
+  sessionId: string
+  dispatchEvents: SessionEvent[]
+  text: string
+  inputId: string
+  due: ScheduleDue[]
+}
+
 export interface ScheduleTickResult {
   delivered: number
   due: ScheduleDue[]
-  /** Per-session delivery failures (append/onDue), sessionId-prefixed — never a silent drop. */
+  /** Per-session delivery failures (the host's deliver), sessionId-prefixed — never a silent drop. */
   deliveryErrors: string[]
 }
 
@@ -41,10 +62,8 @@ export interface ScheduleDriverOptions {
   sessions(): string[]
   /** The session's foldable events; undefined = unknown session (skipped). */
   events(sessionId: string): readonly SessionEvent[] | undefined
-  /** Append durable events to the session log (the dispatch records). */
-  append(sessionId: string, events: SessionEvent[]): Promise<void>
-  /** Deliver a due reminder (the A1-inbox wire lands here later). */
-  onDue?: (due: ScheduleDue) => void | Promise<void>
+  /** Hand one delivery to the host — the ONLY writer of the log (spec §3.4). Throwing = rejection. */
+  deliver: (delivery: ScheduleDelivery) => void | Promise<void>
   /** Wall-clock source (tests inject). Default Date.now. */
   now?: () => number
   /** Background tick interval; the first tick runs at start() (restart re-drive). */
@@ -95,26 +114,28 @@ export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDrive
         const occurrenceAt = record.kind === "every"
           ? resolveEveryOccurrence(record, accepted).occurrenceAt
           : record.scheduledAt
+        const due: ScheduleDue = { sessionId, record, occurrenceAt }
+        const delivery: ScheduleDelivery = {
+          sessionId,
+          dispatchEvents: [dispatchEventFor(record, accepted)],
+          // renderReminderFraming reads record.scheduledAt — for an every record that is the lagging
+          // target (the fold only advances it on the NEXT dispatch), so hand it the occurrence.
+          text: renderReminderFraming(record.kind === "every" ? { ...record, scheduledAt: occurrenceAt } : record),
+          inputId: scheduleOccurrenceInputId(record, occurrenceAt),
+          due: [due],
+        }
         try {
-          // durable accept FIRST — a delivery without it double-fires on the next re-drive.
-          await opts.append(sessionId, [dispatchEventFor(record, accepted)])
+          // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
+          // batch, or refuse by throwing — nothing is counted before this returns.
+          await opts.deliver(delivery)
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
           result.deliveryErrors.push(`${sessionId}: ${reason}`)
-          logWarn(`schedule dispatch of ${record.id} in ${sessionId} failed: ${reason}`)
+          logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
           continue
         }
-        result.due.push({ sessionId, record, occurrenceAt })
-        result.delivered += 1
-        if (opts.onDue !== undefined) {
-          try {
-            await opts.onDue({ sessionId, record, occurrenceAt })
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err)
-            result.deliveryErrors.push(`${sessionId}: ${reason}`)
-            logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
-          }
-        }
+        result.due.push(...delivery.due)
+        result.delivered += delivery.due.length
       }
     }
     return result
