@@ -39,7 +39,7 @@ import { createScheduleTools } from "@i-harness/schedule/tools"
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
 import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
-import { registerSkills } from "@i-harness/skills"
+import { createSkillsSection, registerSkills } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
   mountMcpClient,
@@ -861,6 +861,19 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   runtimeContext.registerSection(
     "instructions",
     createInstructionsSection({ workspace: opts.workspace }),
+  )
+  // M6 batch C C1 (spec §3.2): the skills catalogue, registered HERE because
+  // this is the first point holding both the runtime-context service and the
+  // registry the skill tools read — `skillsMount` above (:758-761), so a skill
+  // the tools can load is a skill the section names. Registration order is
+  // render order (runtime-context's Map): instructions → skills → the
+  // subagents section below, i.e. the catalogue sits after the host's own
+  // documents and before the live-agent report. The section's text is a
+  // function of the skill SET only, so runtime-context's change-only append
+  // yields one log line per catalogue change and none in between.
+  runtimeContext.registerSection(
+    "skills",
+    createSkillsSection({ registry: skillsMount.registry }),
   )
 
   // M26-B1: OAuth token store over the coordinator's document API (see run.ts;

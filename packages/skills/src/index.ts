@@ -41,6 +41,13 @@ export {
   type SkillGetArgs,
   type SkillGetOutput,
 } from "./tool.ts"
+// M6 batch C C1 (spec 2026-09-21-m6-breadth-design §3.2): the skills catalogue
+// as a runtime-context section — its production consumer is the assembly.
+// The budget constant and the options type stay OFF this entry on purpose:
+// their readers are the section itself and its tests, which import the module
+// path directly, so re-exporting them would add a name the gate reports as
+// declared-but-unused.
+export { createSkillsSection } from "./section.ts"
 // M27 R-B6: shadow selector + implicit-invocation vocabulary (pure, no I/O).
 export {
   selectShadowCandidates,
