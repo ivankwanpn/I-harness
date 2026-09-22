@@ -186,6 +186,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      // M72 Ⅱ: the wire's own truncation literal (`finishReason: "MAX_TOKENS"`)
+      // — set in `handleChunk` below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       // Function-call accumulation (Gemini streams a functionCall as several
       // chunks: the first carries the name, the rest carry args objects that
       // may be partial — the docs' canonical accumulation is to store the
@@ -246,6 +250,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const events: LLMStreamEvent[] = []
         const candidates = event.candidates as { content?: { parts?: { text?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
+        if ((candidates?.[0] as { finishReason?: string } | undefined)?.finishReason === "MAX_TOKENS") truncated = true
         const parts = candidates?.[0]?.content?.parts ?? []
         for (const part of parts) {
           if (part.functionCall !== undefined) {
@@ -289,7 +294,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

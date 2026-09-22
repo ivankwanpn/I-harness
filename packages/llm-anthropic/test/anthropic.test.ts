@@ -530,3 +530,31 @@ describe("M72 Ⅱ: the output cap on the anthropic wire", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅱ. The seam's `end` gained a `truncated?: true` bit (Task 1); the
+// Messages wire's own literal decides it. `max_tokens` is the truncation
+// reason — every other stop_reason is a clean ending, and a clean ending must
+// carry NO field at all (`absent is absent`: the bit is written only as true).
+describe("M72 Ⅱ: the truncation bit (anthropic)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: stop_reason max_tokens reaches the seam as truncated", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "max_tokens" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: a clean ending carries NO truncated field", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})

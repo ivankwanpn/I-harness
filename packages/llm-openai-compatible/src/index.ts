@@ -155,6 +155,10 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       const decoder = new TextDecoder()
       let buffer = ""
       let receivedDone = false
+      // M72 Ⅱ: the wire's own truncation literal (`finish_reason: "length"`) —
+      // set in the chunk loop below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       // tool call accumulation: index -> { id, name, argsBuffer }
       const pendingToolCalls = new Map<number, { id: string; name: string; argsBuffer: string }>()
 
@@ -206,6 +210,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
               const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
               for (const choice of choices) {
                 const delta = choice.delta ?? {}
+                if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
                 if (typeof delta.content === "string" && delta.content.length > 0) {
                   events.push({ type: "text/chunk", text: delta.content })
                 }
@@ -267,7 +272,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

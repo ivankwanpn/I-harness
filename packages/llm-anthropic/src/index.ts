@@ -182,6 +182,10 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      // M72 Ⅱ: the wire's own truncation literal (`stop_reason: "max_tokens"`)
+      // — set in `handleEvent` below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       const pendingToolUses = new Map<number, { name: string; argsBuffer: string }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
@@ -196,6 +200,8 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "message_delta") {
+          const stop = (event.delta as { stop_reason?: string } | undefined)?.stop_reason
+          if (stop === "max_tokens") truncated = true
           const usage = mapUsage(event.usage)
           return usage ? [{ type: "usage", usage }] : []
         }
@@ -292,7 +298,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }
