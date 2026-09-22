@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createOpenAIClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -201,6 +201,51 @@ describe("llm-openai protocol", () => {
     const secondBody = bodies[1] as { input: unknown[] }
     expect(secondBody.input.some((i) => (i as { type?: string }).type === "function_call_output")).toBe(true)
   })
+
+  it("M72 Ⅰ: a corrupt chunk is an error event, not an exception out of the generator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: {not json\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The discrimination is the SHAPE of the failure: today the SyntaxError escapes
+    // out of the for-await and NO event arrives; after the fix exactly one `error`
+    // arrives and the stream ends there. Whether a VALID PREFIX that preceded the
+    // bad chunk was already yielded is deliberately NOT asserted: `new Response(string)`
+    // may hand the whole body over as ONE chunk, so pinning that would be a test of
+    // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("not json")
+  })
+
+  it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {
+    // The caller's OWN abort is not a provider failure (unlike the corrupt chunk
+    // above): it keeps today's behaviour — the for-await throws — and must NOT
+    // arrive as an `error` event that reads as a fault. The body parks the read and
+    // rejects it on abort, which is what a real fetch does to a parked body read.
+    const controller = new AbortController()
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal
+      const body = new ReadableStream({
+        start(stream) {
+          signal.addEventListener("abort", () => stream.error(Object.assign(new Error("The operation was aborted"), { name: "AbortError" })))
+        },
+      })
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+    }
+    const pending = drain()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the body read park
+    controller.abort()
+    await expect(pending).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure. Deleting the
+    // read loop's abort guard turns the rejection above AND this line red.
+    expect(events).toEqual([])
+  })
 })
 
 describe("M14 openai responses wire", () => {
@@ -333,5 +378,57 @@ describe("M32 reasoning effort (openai-family Responses)", () => {
     await it2.return?.()
     const [, init2] = fetchMock.mock.calls[1]!
     expect((JSON.parse(init2.body as string) as Record<string, unknown>).reasoning).toBeUndefined()
+  })
+})
+
+// M72 Ⅰ. The Responses API signals a failure on the stream itself
+// (`response.failed`) and can also send a bare `error` event — both on an HTTP
+// 200. Neither had an arm in `handleEvent`, so both fell through to `return []`
+// and the caller got a clean `end` for a failed response.
+describe("M72 Ⅰ in-stream provider failures (openai)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅰ: a failed Responses stream is surfaced, not swallowed", async () => {
+    const sse =
+      `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { error: { code: "server_error", message: "boom" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("boom")
+  })
+
+  // The canonical `error` event on the Responses wire is FLAT:
+  // {"type":"error","code":…,"message":…,"param":…,"sequence_number":…}. The
+  // first cut of the arm above read only `event.error?.message`, so this shape
+  // fell to the generic fallback and the `code` — declared on the cast, never
+  // read — was lost; that also costs `retryErrorCode` the structured
+  // classification its regexes need (rate_limit_exceeded → RATE_LIMIT).
+  it("M72 Ⅰ: the flat `error` event is read from its top-level code/message", async () => {
+    const sse =
+      `data: ${JSON.stringify({ type: "error", code: "rate_limit_exceeded", message: "Rate limit reached", param: null, sequence_number: 3 })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    const message = (events[0] as { error: Error }).error.message
+    expect(message).toContain("Rate limit reached")
+    // `${code}: ${text}` — without the code the classifier sees no rate limit.
+    expect(message).toContain("rate_limit_exceeded")
+  })
+
+  // …while the older nested shape keeps working: both occur.
+  it("M72 Ⅰ: a bare `error` event carrying only the nested error.message still surfaces", async () => {
+    const sse = `data: ${JSON.stringify({ type: "error", error: { message: "nested only" } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("nested only")
   })
 })

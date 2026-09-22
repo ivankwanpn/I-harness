@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -75,7 +75,11 @@ export function parseSSE(text: string): Record<string, unknown>[] {
       const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
       const data = dataLine.slice(5).trim()
       if (data === "[DONE]") return { type: "[DONE]" }
-      return JSON.parse(data) as Record<string, unknown>
+      try {
+        return JSON.parse(data) as Record<string, unknown>
+      } catch (err) {
+        throw new SSEParseError(data)
+      }
     })
 }
 
@@ -199,6 +203,30 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           receivedDone = true
           return []
         }
+        // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
+        // and can also send a bare `error` event. Both used to fall through to the
+        // empty default, so a failed response was indistinguishable from an empty
+        // one. `response.incomplete` is deliberately NOT handled here — that is
+        // truncation, i.e. phase Ⅱ's `truncated` bit.
+        //
+        // The two shapes carry their fields differently, so this arm reads both:
+        // `response.failed` nests them under `response.error.{code,message}`,
+        // while the canonical bare `error` event is FLAT on the wire —
+        // `{type:"error",code,message,param,sequence_number}` — with an older
+        // nested `error.message` still seen in the wild (tracked as a fallback).
+        // Reading only `event.error?.message` sent the flat shape to the generic
+        // fallback and dropped `code`, which the seam's retry classifier reads
+        // off the message (rate_limit_exceeded → RATE_LIMIT), so the code is
+        // composed into the message (`${code}: ${text}`), mirroring the
+        // anthropic arm's `${type}: ${message}`.
+        if (t === "response.failed" || t === "error") {
+          const r = event.response as { error?: { message?: string; code?: string } } | undefined
+          const flat = event as { code?: unknown; message?: unknown }
+          const nested = event.error as { message?: string } | undefined
+          const code = r?.error?.code ?? flat.code
+          const text = r?.error?.message ?? (typeof flat.message === "string" ? flat.message : undefined) ?? nested?.message ?? "the provider reported a failed response"
+          return [{ type: "error", error: new Error(typeof code === "string" ? `${code}: ${text}` : text) }]
+        }
         return []
       }
       const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
@@ -235,6 +263,12 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             if (yield* emitEvents(handleEvent(event))) return
           }
         }
+      } catch (err) {
+        // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
+        // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
+        return
       } finally {
         reader.releaseLock()
       }

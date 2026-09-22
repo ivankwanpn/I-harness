@@ -1,6 +1,6 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
-import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime"
+import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 
 export interface BedrockConfig {
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
@@ -153,10 +153,21 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       }
       // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
       // kill a parked Converse call, not wait for the first event.
-      const output = await client.send(
-        new ConverseStreamCommand(body),
-        request.signal !== undefined ? { abortSignal: request.signal } : {},
-      )
+      let output: ConverseStreamCommandOutput
+      try {
+        output = await client.send(
+          new ConverseStreamCommand(body),
+          request.signal !== undefined ? { abortSignal: request.signal } : {},
+        )
+      } catch (err) {
+        // M72 Ⅰ: M61's cancel and every request-level failure (auth, throttling,
+        // network) used to escape as a raw SDK throw, bypassing the seam's error
+        // channel the other four adapters use. Abort is NOT a provider failure:
+        // it keeps today's behaviour (a throw out of the generator).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: await describeTransportError("bedrock", resolveBedrockRegion(config.region, process.env), err, { remediation: "none" }) }
+        return
+      }
       // Tool-use accumulation per content block (the ConverseStream wire):
       // a toolUse delta carries the args as one JSON string split across
       // deltas; the stop event completes the block, and the args are parsed
@@ -240,12 +251,24 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         }
         return []
       }
-      for await (const member of output.stream ?? []) {
-        const events = handleMember(member)
-        for (const ev of events) {
-          yield ev
-          if (ev.type === "error") return // error is terminal — no `end`
+      try {
+        for await (const member of output.stream ?? []) {
+          const events = handleMember(member)
+          for (const ev of events) {
+            yield ev
+            if (ev.type === "error") return // error is terminal — no `end`
+          }
         }
+      } catch (err) {
+        // M72 Ⅰ: the read loop was the last unguarded one — the four SSE
+        // adapters got this catch in Task 4, and without it a failure AFTER the
+        // 200 (a dropped connection, an SDK-level stream error) escaped as a raw
+        // throw, bypassing both the diagnosis below and the seam's error channel.
+        // Abort is NOT a provider failure: a cancelled read keeps today's
+        // behaviour (a throw out of the generator).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: await describeTransportError("bedrock", resolveBedrockRegion(config.region, process.env), err, { remediation: "none" }) }
+        return
       }
       yield { type: "end" }
     },

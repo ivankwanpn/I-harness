@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
 import { createBedrockClient, resolveBedrockRegion, translateReasoning, type BedrockRuntimeFace } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -288,5 +288,130 @@ describe("M32 reasoning effort (bedrock Converse)", () => {
       reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" },
       thinking: { type: "adaptive" },
     })
+  })
+})
+
+// M72 Ⅰ. `await client.send(...)` (the Converse request itself) had no
+// try/catch, so every request-level failure — auth, throttling, network —
+// escaped as a raw SDK throw and bypassed the seam's `error` event channel
+// that the other four adapters route through. Abort is NOT a provider
+// failure: it keeps today's behaviour (a throw out of the generator).
+describe("M72 Ⅰ request-level failures (bedrock)", () => {
+  it("M72 Ⅰ: a request-level failure is an error event with a diagnosis, not a raw throw", async () => {
+    const { fake } = fakeRuntime([])
+    ;(fake.send as unknown as Mock).mockRejectedValueOnce(new Error("AccessDeniedException: nope"))
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("AccessDeniedException")
+  })
+
+  // Fix 3's other half: THIS path is the one the review measured. An AWS
+  // `AccessDeniedException` is an auth failure on the SDK's transport — Node's
+  // NODE_USE_ENV_PROXY / NODE_EXTRA_CA_CERTS are not read by the AWS SDK at
+  // all, so the fetch tail the helper used to append unconditionally was
+  // unhookable advice. The resolved region rides in the locator slot.
+  it("M72 Ⅰ: the request-level diagnosis carries no fetch-specific remediation advice", async () => {
+    const { fake } = fakeRuntime([])
+    ;(fake.send as unknown as Mock).mockRejectedValueOnce(new Error("AccessDeniedException: nope"))
+    const client = createBedrockClient({ model: "m", region: "eu-west-1" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    const message = (events[0] as { error: Error }).error.message
+    expect(message).toContain("bedrock request failed (eu-west-1)")
+    expect(message).not.toContain("transport")
+    expect(message).not.toContain("NODE_USE_ENV_PROXY")
+  })
+
+  // The constraint the case above makes easy to break: abort is NOT a provider
+  // failure. A cancelled request must keep rejecting out of the generator
+  // (M61's cancel contract) — never turn the caller's own abort into an
+  // `error` event that reads as a provider fault.
+  it("M72 Ⅰ: an aborted request rejects instead of yielding an error event", async () => {
+    const { fake } = fakeRuntime([])
+    ;(fake.send as unknown as Mock).mockRejectedValueOnce(
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
+    )
+    const controller = new AbortController()
+    controller.abort()
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: { type: string }[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        systemPrompt: "s",
+        signal: controller.signal,
+      } as LLMRequest)) events.push(ev)
+    }
+    await expect(drain()).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure.
+    expect(events).toEqual([])
+  })
+})
+
+// M72 Ⅰ. Task 4 (two commits after the Task-3 ruling) gave the four SSE
+// adapters' read loops a catch; bedrock's `for await (const member of
+// output.stream ?? [])` stayed bare, so a failure AFTER the 200 — a dropped
+// connection, an SDK-level stream error — remained the last one that bypassed
+// both `describeTransportError` and the seam's `error` channel. Abort is NOT a
+// provider failure: a cancelled request keeps today's behaviour (a throw out of
+// the generator).
+describe("M72 Ⅰ mid-stream failures (bedrock)", () => {
+  /** Hand over the members, then REJECT the next read — the mid-stream shape. */
+  function streamThenReject(members: unknown[], err: unknown): AsyncIterable<unknown> {
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<unknown> {
+        let index = 0
+        return {
+          next: async (): Promise<IteratorResult<unknown>> => {
+            if (index < members.length) return { done: false, value: members[index++] }
+            throw err
+          },
+        }
+      },
+    }
+  }
+
+  /** The fakeRuntime idiom, for a stream that is not a plain array. */
+  function runtimeWithStream(stream: AsyncIterable<unknown>): BedrockRuntimeFace {
+    return { send: vi.fn(async () => ({ stream })), destroy: vi.fn() } as unknown as BedrockRuntimeFace
+  }
+
+  it("M72 Ⅰ: a mid-stream rejection is an error event with a diagnosis, not a raw throw", async () => {
+    const stream = streamThenReject(
+      [{ contentBlockDelta: { contentBlockIndex: 0, delta: { text: "hel" } } }],
+      new Error("socket hang up"),
+    )
+    const client = createBedrockClient({ model: "m", region: "us-east-1" }, runtimeWithStream(stream))
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["text/chunk", "error"]) // error is terminal — no `end`
+    const message = (events[1] as { error: Error }).error.message
+    expect(message).toContain("socket hang up")
+    expect(message).toContain("bedrock request failed (us-east-1)")
+    // This also pins the ADAPTER-side half of the remediation fix: bedrock asks
+    // for `remediation: "none"`, so fetch-specific proxy advice never rides on
+    // an AWS fault.
+    expect(message).not.toContain("NODE_USE_ENV_PROXY")
+  })
+
+  it("M72 Ⅰ: an aborted mid-stream read rejects instead of yielding an error event", async () => {
+    const stream = streamThenReject(
+      [{ contentBlockDelta: { contentBlockIndex: 0, delta: { text: "hel" } } }],
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
+    )
+    const controller = new AbortController()
+    controller.abort()
+    const client = createBedrockClient({ model: "m", region: "us-east-1" }, runtimeWithStream(stream))
+    const events: { type: string }[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+    }
+    await expect(drain()).rejects.toThrow("aborted")
+    // The pre-abort delta was already delivered; NO error event follows it.
+    expect(events.map((e) => e.type)).toEqual(["text/chunk"])
   })
 })

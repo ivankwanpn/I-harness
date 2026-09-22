@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createOpenAICompatibleClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 describe("llm-openai-compatible protocol", () => {
   it("translates LLMRequest to the Chat Completions request body", async () => {
@@ -22,14 +22,33 @@ describe("llm-openai-compatible protocol", () => {
     const body = JSON.parse(init.body as string)
     expect(body.model).toBe("m")
     expect(body.stream).toBe(true)
-    expect(body.system).toBeUndefined() // chat/completions has no system field
+    // M72 Ⅰ: the system prompt is a MESSAGE, not a top-level field — the old
+    // assertion (`body.system` undefined) was true about the field and wrong
+    // about the mapping: it left the prompt on the floor.
+    expect(body.system).toBeUndefined()
     expect(body.messages).toEqual([
+      { role: "system", content: "sys" },
       { role: "user", content: "hi" },
       { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
       { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
     ])
     expect(body.tools).toEqual([{ type: "function", function: { name: "read", description: "read a file", parameters: {} } }])
     expect((init.headers as Record<string, string> | undefined)?.Authorization).toBe("Bearer k")
+    await it.return?.()
+  })
+
+  it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      systemPrompt: "",
+    } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.messages).toEqual([{ role: "user", content: "hi" }])
     await it.return?.()
   })
 
@@ -84,6 +103,51 @@ describe("llm-openai-compatible protocol", () => {
     }
     expect(events).toEqual(["error"])
   })
+
+  it("M72 Ⅰ: a corrupt chunk is an error event, not an exception out of the generator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: {not json\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The discrimination is the SHAPE of the failure: today the SyntaxError escapes
+    // out of the for-await and NO event arrives; after the fix exactly one `error`
+    // arrives and the stream ends there. Whether a VALID PREFIX that preceded the
+    // bad chunk was already yielded is deliberately NOT asserted: `new Response(string)`
+    // may hand the whole body over as ONE chunk, so pinning that would be a test of
+    // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("not json")
+  })
+
+  it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {
+    // The caller's OWN abort is not a provider failure (unlike the corrupt chunk
+    // above): it keeps today's behaviour — the for-await throws — and must NOT
+    // arrive as an `error` event that reads as a fault. The body parks the read and
+    // rejects it on abort, which is what a real fetch does to a parked body read.
+    const controller = new AbortController()
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal
+      const body = new ReadableStream({
+        start(stream) {
+          signal.addEventListener("abort", () => stream.error(Object.assign(new Error("The operation was aborted"), { name: "AbortError" })))
+        },
+      })
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+    }
+    const pending = drain()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the body read park
+    controller.abort()
+    await expect(pending).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure. Deleting the
+    // read loop's abort guard turns the rejection above AND this line red.
+    expect(events).toEqual([])
+  })
 })
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
@@ -130,7 +194,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages; this test pins
+    // the FULL list, so the expectation gains the system entry (nothing below
+    // it changed shape).
     expect(body.messages).toEqual([
+      { role: "system", content: "s" },
       { role: "user", content: "hi, plain string" },
       { role: "assistant", content: "" },
       { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
@@ -153,7 +221,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages; this test pins
+    // the FULL list, so the expectation gains the system entry (nothing below
+    // it changed shape).
     expect(body.messages).toEqual([
+      { role: "system", content: "s" },
       { role: "assistant", content: "planned", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
       { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
     ])
@@ -175,8 +247,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
-    expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
-    expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages, so the two
+    // message assertions shift by one and the head is pinned explicitly.
+    expect(body.messages[0]).toEqual({ role: "system", content: "s" })
+    expect(body.messages[1]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
+    expect(body.messages[2]).toEqual({ role: "user", content: "plain" })
   })
 })
 

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog } from "../src/index.ts"
+import { assertMessagesFromLog, describeTransportError } from "../src/index.ts"
 import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
@@ -82,5 +82,45 @@ describe("M32 reasoning effort seam", () => {
 
   it("carries an optional reasoningEffort on LLMRequest (default = don't send)", () => {
     expectTypeOf<LLMRequest["reasoningEffort"]>().toEqualTypeOf<ReasoningEffort | undefined>()
+  })
+})
+
+// M72 Ⅰ. `describeTransportError`'s remediation tail (NODE_USE_ENV_PROXY /
+// NODE_EXTRA_CA_CERTS) is FETCH-specific advice: it describes Node's fetch
+// proxy/CA behaviour. It used to be unconditional, so bedrock's own
+// `AccessDeniedException` — an auth failure on the AWS SDK, where neither
+// variable is read — shipped as "bedrock transport failure … unless the process
+// is started with NODE_USE_ENV_PROXY=1": advice that cannot be acted on, of
+// exactly the kind this phase exists to remove. The fourth parameter opts out;
+// the DEFAULT keeps the fetch callers' message byte-identical (the M62 suite in
+// llm-openai-compatible pins that path).
+describe("M72 Ⅰ describeTransportError remediation", () => {
+  it("default (fetch): keeps the transport framing and the proxy/CA tail", async () => {
+    const described = await describeTransportError("openai", "https://h.example/v1/responses", new Error("fetch failed"))
+    expect(described.message).toContain("openai transport failure reaching h.example")
+    expect(described.message).toContain("NODE_USE_ENV_PROXY=1")
+    expect(described.message).toContain("NODE_EXTRA_CA_CERTS")
+  })
+
+  it("remediation: none — no transport framing, no fetch advice, the locator still named", async () => {
+    const described = await describeTransportError("bedrock", "us-east-1", new Error("AccessDeniedException: nope"), { remediation: "none" })
+    expect(described.message).toBe("bedrock request failed (us-east-1): AccessDeniedException: nope")
+    expect(described.message).not.toContain("transport")
+    expect(described.message).not.toContain("NODE_USE_ENV_PROXY")
+  })
+
+  it("remediation: none with an empty locator omits the empty parens", async () => {
+    const described = await describeTransportError("bedrock", "", new Error("boom"), { remediation: "none" })
+    expect(described.message).toBe("bedrock request failed: boom")
+  })
+
+  it("keeps the abort early return and the `cause` link in BOTH branches", async () => {
+    const abort = Object.assign(new Error("This operation was aborted"), { name: "AbortError" })
+    const noneAbort = await describeTransportError("bedrock", "us-east-1", abort, { remediation: "none" })
+    expect(noneAbort.message).toBe("bedrock request aborted by the caller")
+
+    const original = new Error("AccessDeniedException: nope")
+    expect((await describeTransportError("bedrock", "us-east-1", original, { remediation: "none" })).cause).toBe(original)
+    expect((await describeTransportError("bedrock", "us-east-1", original)).cause).toBe(original)
   })
 })

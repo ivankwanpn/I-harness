@@ -333,8 +333,21 @@ export function projectImagesForTextModel(messages: LLMMessage[]): LLMMessage[] 
  * This walks the `cause` chain, keeps each link's `code` and message, and
  * appends the same remediation hint the community converged on. It never
  * includes headers or the API key — only the URL and the error text.
+ *
+ * M72 Ⅰ: that remediation tail is FETCH-specific — it describes Node's fetch
+ * proxy/CA behaviour — and it used to be unconditional, so a bedrock
+ * `AccessDeniedException` (an AWS SDK auth failure, where neither variable is
+ * read) shipped with "unless the process is started with NODE_USE_ENV_PROXY=1".
+ * `options.remediation: "none"` opts out: it drops the transport framing and the
+ * whole fetch tail, leaving `${label} request failed (${locator}): <chain>`.
+ * The DEFAULT is `"fetch"` so the fetch callers' message stays byte-identical.
  */
-export async function describeTransportError(label: string, url: string, error: unknown): Promise<Error> {
+export async function describeTransportError(
+  label: string,
+  url: string,
+  error: unknown,
+  options?: { remediation?: "fetch" | "none" },
+): Promise<Error> {
   // A caller-initiated abort is NOT a transport fault; naming it as one sends
   // the operator hunting a network problem that does not exist.
   const aborted = error instanceof Error && error.name === "AbortError"
@@ -357,12 +370,29 @@ export async function describeTransportError(label: string, url: string, error: 
   // Return a real Error, not a string: core-agent reads `ev.error.message`, so
   // a bare string would degrade to "undefined".
   const err = new Error(
-    `${label} transport failure reaching ${host}: ${chain.join(" <- ")}` +
-    " — if this machine reaches the internet through a proxy, Node's fetch ignores" +
-    " HTTP(S)_PROXY unless the process is started with NODE_USE_ENV_PROXY=1" +
-    " (--use-env-proxy); behind a TLS-inspecting gateway, also set" +
-    " NODE_EXTRA_CA_CERTS to the approved CA bundle. Both are read at process start.",
+    (options?.remediation ?? "fetch") === "none"
+      ? `${label} request failed${host === "" ? "" : ` (${host})`}: ${chain.join(" <- ")}`
+      : `${label} transport failure reaching ${host}: ${chain.join(" <- ")}` +
+        " — if this machine reaches the internet through a proxy, Node's fetch ignores" +
+        " HTTP(S)_PROXY unless the process is started with NODE_USE_ENV_PROXY=1" +
+        " (--use-env-proxy); behind a TLS-inspecting gateway, also set" +
+        " NODE_EXTRA_CA_CERTS to the approved CA bundle. Both are read at process start.",
   )
   err.cause = error
   return err
+}
+
+/**
+ * M72 Ⅰ: a stream body that was not valid SSE/JSON. Thrown by an adapter's
+ * `parseSSE` so the READING LOOP can decide — a corrupt chunk is a provider
+ * failure like any other and belongs on the seam's `error` channel, not out of
+ * the generator as an exception while the same adapter reports HTTP failures as
+ * events. The message carries a truncated copy of the offending text: without
+ * it a 4000-chunk stream gives no way to tell WHAT was malformed.
+ */
+export class SSEParseError extends Error {
+  constructor(text: string) {
+    super(`malformed SSE chunk: ${text.slice(0, 80)}`)
+    this.name = "SSEParseError"
+  }
 }
