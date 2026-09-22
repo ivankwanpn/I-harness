@@ -19,8 +19,11 @@
 //      is not written at all. The predicate is SUFFIX on the separator-stripped
 //      name, never `includes`: `monkey` and `keychain` contain the letters of a
 //      stem and are ordinary words, while `clientSecret` and `refreshToken` are
-//      names a real config uses. `monkey` is the brief's named non-hit and has a
-//      case of its own below.
+//      names a real config uses. The stems that cannot collide with a count also
+//      take a plural (`apiKeys`, `credentials`), so a plural name is a NAME and its
+//      value goes whole; `tokens` and `cookies` are not plurals this scan knows,
+//      because a count is not a credential. `monkey` is the brief's named non-hit
+//      and has a case of its own below.
 //
 //   2. CREDENTIAL SHAPES — `sk-…`, `Bearer <token>` (in prose: that is the
 //      measured leak of the four llm adapters, whose error message is the
@@ -113,10 +116,41 @@ const KEY_STEMS = [
   "cookie",
 ] as const
 
+/** The stems above that ALSO take a plural, matched as `stem + "s"` and nothing
+ *  else. `clientSecret` was already masked while `credentials` was not, so the
+ *  value under a plural name was not replaced whole — the redactor recursed into
+ *  it leaf by leaf instead, and a leaf is not a name: `apiKeys: { openai:
+ *  "abc123def" }` survived, because `abc123def` is neither `sk-`-shaped nor a
+ *  ≥32-character base64 run. The gap was the GRANULARITY of the protection.
+ *
+ *  A second list rather than a trailing `s` stripped off the name before the test
+ *  above: stripping is the naive form, and `maxTokens` strips to `maxtoken`, which
+ *  ends with `token` — a field an existing case pins as untouched, and a count a
+ *  human reads. The plural is added only where it cannot collide.
+ *
+ *  Deliberately absent, for two reasons a reader can check:
+ *   - `token`, `cookie`, `auth`, `authorization` and `bearer` take no plural here,
+ *     because `tokens: 1234` and `cookies: 3` are the very shape the comment above
+ *     refuses to lie about — a count is not a credential. Bare `keys` stays
+ *     unmatched too (bare `key` is not a stem, and `keys` is a name configs use
+ *     for ordinary identifiers).
+ *   - it costs nothing where a plural would have mattered: a CREDENTIAL-shaped
+ *     value under a `*token*` name is already reached by the base64 fence, whose
+ *     predicate is `includes` and therefore wider than this one.
+ *
+ *  The test that pairs with this list is an equality assertion on an UNTOUCHED
+ *  object (`tokens`, `maxTokens`, `keywords`, `monkey`, `cookieCount`, `hotkey`,
+ *  `keychain`, `author`, `turkey`, `cookies`, bare `keys`), so the narrowness is
+ *  measured rather than asserted. */
+const PLURAL_KEY_STEMS = ["apikey", "secret", "password", "passwd", "credential", "hmac"] as const
+
 /** The scan ① predicate. */
 function isSecretKeyName(key: string): boolean {
   const name = normalizedKeyName(key)
-  return KEY_STEMS.some((stem) => name.endsWith(stem))
+  return (
+    KEY_STEMS.some((stem) => name.endsWith(stem)) ||
+    PLURAL_KEY_STEMS.some((stem) => name.endsWith(`${stem}s`))
+  )
 }
 
 /** The base64 fence's predicate — WIDER than scan ① on purpose, and the reason
