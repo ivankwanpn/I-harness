@@ -376,3 +376,30 @@ describe("M72 Ⅱ: the output cap on the compatible wire", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅱ. Chat Completions' own literal is `finish_reason: "length"` — the
+// truncation bit the seam's `end` gained (Task 1). A stream that ends with any
+// other reason (or with no reason at all) keeps today's byte-exact `end`.
+describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: finish_reason length reaches the seam as truncated", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: a clean ending carries NO truncated field", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})

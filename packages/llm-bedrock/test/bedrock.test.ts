@@ -442,3 +442,31 @@ describe("M72 Ⅱ: the output cap on the bedrock wire", () => {
     expect("inferenceConfig" in input).toBe(false)
   })
 })
+
+// M72 Ⅱ. Converse states the ending on `messageStop.stopReason` — the member
+// the handler used to skip as "no stream content". `max_tokens` is the
+// truncation literal that decides the seam's `truncated?: true` bit (Task 1);
+// `end_turn` (or any other reason) is a clean ending with NO field.
+describe("M72 Ⅱ: the truncation bit (bedrock)", () => {
+  it("M72 Ⅱ: messageStop stopReason max_tokens reaches the seam as truncated", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "x" } } },
+      { messageStop: { stopReason: "max_tokens" } },
+    ])
+    const client = createBedrockClient({ model: "claude-x" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: messageStop stopReason end_turn carries no truncated field", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "x" } } },
+      { messageStop: { stopReason: "end_turn" } },
+    ])
+    const client = createBedrockClient({ model: "claude-x" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})

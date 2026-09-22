@@ -397,3 +397,29 @@ describe("M72 Ⅱ: the output cap on the gemini wire", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅱ. GenAI's own literal is `finishReason: "MAX_TOKENS"`, read off the
+// candidate the chunk loop already looks at. It decides the seam's
+// `truncated?: true` bit (Task 1); `STOP` — like every other reason — is a
+// clean ending, and a clean ending carries NO field at all.
+describe("M72 Ⅱ: the truncation bit (gemini)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: finishReason MAX_TOKENS reaches the seam as truncated", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "MAX_TOKENS" }] }])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: finishReason STOP carries no truncated field", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }] }])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})
