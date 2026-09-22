@@ -415,3 +415,30 @@ describe("M72 Ⅰ mid-stream failures (bedrock)", () => {
     expect(events.map((e) => e.type)).toEqual(["text/chunk"])
   })
 })
+
+// M72 Ⅱ. Converse accepts `maxTokens` ONLY inside `inferenceConfig` (this
+// adapter's own header comment records that) — yet the parent object has never
+// been built here: every option went to `additionalModelRequestFields`, which
+// the wire does not read for the cap. The parent is optional on the wire, so an
+// unresolved cap must stay absence.
+describe("M72 Ⅱ: the output cap on the bedrock wire", () => {
+  it("M72 Ⅱ: the cap lives in inferenceConfig.maxTokens", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "claude-x" }, fake)
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const { input } = await lastCommandSent(fake)
+    expect(input.inferenceConfig).toEqual({ maxTokens: 4096 })
+  })
+
+  it("M72 Ⅱ: no cap resolved → no inferenceConfig at all", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "claude-x" }, fake)
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    await it.return?.()
+    const { input } = await lastCommandSent(fake)
+    expect("inferenceConfig" in input).toBe(false)
+  })
+})

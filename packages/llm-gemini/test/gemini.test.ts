@@ -339,3 +339,35 @@ describe("M32 reasoning effort (gemini)", () => {
     expect((JSON.parse(init2.body as string) as Record<string, unknown>).thinkingConfig).toBeUndefined()
   })
 })
+
+// M72 Ⅱ. Gemini takes the cap at `generationConfig.maxOutputTokens` — a parent
+// object this adapter has never built (an explicit request-level cap was
+// unreachable: everything went to the body's top level). The parent is
+// optional on the wire, so an unresolved cap must stay absence.
+describe("M72 Ⅱ: the output cap on the gemini wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap lives in generationConfig.maxOutputTokens, and the parent is built for it", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.generationConfig).toEqual({ maxOutputTokens: 4096 })
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → no generationConfig at all (absent is absent)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("generationConfig" in body).toBe(false)
+    await it.return?.()
+  })
+})

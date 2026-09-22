@@ -145,6 +145,12 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: the parent object does not exist today — Gemini takes the cap
+        // at generationConfig.maxOutputTokens, and the parent is optional on
+        // the wire, so when there is no cap we do not build it at all.
+        ...(request.maxOutputTokens !== undefined
+          ? { generationConfig: { maxOutputTokens: request.maxOutputTokens } }
+          : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
