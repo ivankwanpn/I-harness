@@ -135,7 +135,7 @@
 |---|---|---|
 | `docs/handoff/2026-09-20-queued-work.md` | **§6** 的普查句（`:535`；該列講的是「本地結構化診斷日誌」）與 **§9.2** 的 **A2** row（`:934`）：刪掉舊的「110」（以及 A2 格的 58／52）與過渡期的「107 ＝ 102 分級 ＋ 5 列名例外」，改成**可重現的指令**＋**舊指令壞在哪**＋**兩個修訂上的原始讀數**＋**最終切分 107 ＝ 94 分級 ＋ 13 列名例外** | §2.4（同一條指令在 `e78bad3`／`f307cdb` 上各跑一次）；`§6`／`§9.2` 兩個節號是 `grep -n "^## "` 對著改完的檔案量的 |
 | 同上 | §1 的 **W6** row（`:64`）與 A2 row（`:934`）→ **✅ 完成**，附提交區間、計畫與**終態記錄檔名** | `git grep -n w6-diagnostics-partial` 在改名前只命中 `:64`／`:934` 兩行（該檔名在本樹只有這兩個 tracked 引用），兩行已一併改指新檔名 |
-| `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` | §3.3 加 dated 註記（`bin.test.ts:69` 已漂成 timeout 行）；§3.5 加 dated 註記（`provider-runtime.ts:24-26` 今天是 `roleModelOptionsFor` 的註解，而那個 store **一直在回傳**：型別 `:50`、物件 `:63`、建構 `:58`） | 兩者都是**引用漂移**、不是本單元造成的：`git log --oneline ec18c9d0^..HEAD -- apps/cli/src/provider-runtime.ts` **為空**（W6 的整個區間一個字沒動它），而 `:50` 在 W6 的起點 `e78bad3` 逐字相同 |
+| `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` | §3.3 加 dated 註記（`bin.test.ts:69` 已漂成 timeout 行）；§3.5 加 dated 註記（`provider-runtime.ts:24-26` 今天是「空行 ＋ `roleModelOptionsFor` 註解的開頭」，而那個 store **一直在回傳**：型別 `:50`、物件 `:63`、建構 `:58`） | 兩者都是**引用漂移**、不是本單元造成的：`git log --oneline ec18c9d0^..HEAD -- apps/cli/src/provider-runtime.ts` **為空**（W6 的整個區間一個字沒動它），而 `:50` 在 W6 的起點 `e78bad3` 逐字相同 |
 | 本文件 | `git mv` 由 `2026-09-22-w6-diagnostics-partial.md` → `2026-09-22-w6-diagnostics.md`；標題不再是「進行中」；§0 補「最終驗證」列；§2 由「未完成」改成這份 T7 記錄；§8 改成終態 | **改名前** `git grep -n w6-diagnostics-partial` 命中**兩行**（queue doc 的 `:64`／`:934` —— 該檔名在本樹全部的 tracked 引用），兩行已一併改指新名；**改名後**同一條指令只剩**本文件的這兩行**（`git grep -c` ＝ **2**），而它們是**對這次改名的記述**、不是指向舊路徑的引用 |
 
 ### 2.4 普查：指令、舊指令壞在哪、最終切分
@@ -146,7 +146,7 @@
 grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --include=*.ts | grep -v "\.test\.\|/test/"
 ```
 
-**舊指令壞在哪（機制於 2026-09-22 複審更正、T7 已實測）：** queued doc 原本寫的 `grep -rn "console\.(warn\|error)"` **不是**「在 BRE 裡把 `(warn\|error)` 當字面量」—— **GNU BRE 認得 `\|` 這個交替**（GNU 擴充），而 `(`／`)` 在 BRE 裡**是**字面量。所以那條模式的兩支是**字面字串 `console.(warn`** 與**字面字串 `error)`**；第一支在真碼裡不存在（真實呼叫是 `console.warn(`，括號在 `warn` **之前**），於是**整個模式退化成「含有 `error)` 的行」的比對**。**這也解釋了數字本身**（實測，GNU grep 3.0）：在 `e78bad3` 與 `f307cdb` 都命中 **152 行**，**這 152 行全部**是靠 `error)` 那一支中的（`… | grep -c "error)"` ＝ 152／152），而其中只有 **12** 條是真的呼叫（量於 `e78bad3`）⇒ **「140 條不是呼叫」＝ 152 − 12 ✓**（`f307cdb` 只剩 2 條）。**兩個方向都錯：** 它數進一堆不是呼叫的東西（`} catch (error) {`、含 `error)` 的註解…），又漏掉每一個引數不是單字 `error` 的真實呼叫 —— `console.error(USAGE)`（`error(` 之後不是 `)`）以及整個 argv 驗證區塊。所以「110」既不是站點數、也不是任何東西的數。
+**舊指令壞在哪（機制於 2026-09-22 複審更正、T7 已實測）：** queued doc 原本寫的 `grep -rn "console\.(warn\|error)"` **不是**「在 BRE 裡把 `(warn\|error)` 當字面量」—— **GNU BRE 認得 `\|` 這個交替**（GNU 擴充），而 `(`／`)` 在 BRE 裡**是**字面量。所以那條模式的兩支是**字面字串 `console.(warn`** 與**字面字串 `error)`**；第一支在真碼裡不存在（真實呼叫是 `console.warn(`，括號在 `warn` **之前**），於是**整個模式退化成「含有 `error)` 的行」的比對**。**這也解釋了數字本身**（實測，GNU grep 3.0）：在 `e78bad3` 與 `f307cdb` 都命中 **152 行**，**這 152 行全部**是靠 `error)` 那一支中的（`… | grep -c "error)"` ＝ 152／152），而其中只有 **12 行落在普查的 108 行裡**（＝**兩個指令的交集**，量於 `e78bad3`），**這 12 行裡又有 1 行是註解** —— `apps/cli/src/run.ts:236`，正是下面扣掉的那一行 ⇒ **真的呼叫是 11 條**；**不是呼叫的行因此是 141 條**（140 行落在普查範圍外 ＋ 那 1 行註解）。**⇒ 舊記錄的「140 條不是呼叫」差一。**（`f307cdb` 的交集只剩 **2 行**，其中同樣含那條註解 ⇒ 真的呼叫 1 條。）**兩個方向都錯：** 它數進一堆不是呼叫的東西（`} catch (error) {`、含 `error)` 的註解…），又漏掉每一個引數不是單字 `error` 的真實呼叫 —— `console.error(USAGE)`（`error(` 之後不是 `)`）以及整個 argv 驗證區塊。所以「110」既不是站點數、也不是任何東西的數。
 
 **兩個修訂上的讀數**（同一個指令，T7 親量、無截斷）：
 
