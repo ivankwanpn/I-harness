@@ -16,6 +16,12 @@
 //   (spec §1 boundary: "只修最後一個打開序列；已閉檔不碰").
 // - FAIL-CLOSED: nothing is silently rewritten; the caller keeps the original
 //   when it disagrees (this function only ever ADDS).
+//
+// Q8 (M71): WHOLE-LOG is a READ, never a repair region. A log that records no
+// `tool/dispatch` ANYWHERE cannot prove its pending tail calls never ran, so
+// they get the UNKNOWN verdict rather than the benign one — see
+// TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT. The four properties above are
+// untouched: the check reads outside the tail, and still repairs nothing there.
 import type { SessionEvent } from "@i-harness/core-session"
 
 /** M10a vocabulary (single source of truth: `@i-harness/core-agent`'s
@@ -54,6 +60,35 @@ export const TOOL_OUTCOME_UNKNOWN_RESULT = {
   replay: false,
 } as const
 
+/**
+ * Q8 (M71): the conservative verdict for a pending call in a log that records
+ * NO `tool/dispatch` marker ANYWHERE.
+ *
+ * Such a log cannot prove that the body never ran: a log written by a build
+ * that predates the boundary, and a log whose crash landed between `tool/call`
+ * and the marker append, leave the same bytes. Reading that absence as "aborted
+ * before dispatch" asserts a fact the log does not contain — and a model that
+ * believes it may re-run a `git push` whose body had already started.
+ *
+ * Same `code` as the dispatched arm: the verdict CLASS is identical (the
+ * outcome is unknown), so every machine consumer keyed on the code reads it
+ * unchanged. It is a separate payload because TOOL_OUTCOME_UNKNOWN_RESULT's
+ * message says the call "was dispatched", which is exactly what this log cannot
+ * establish.
+ *
+ * It also does not say the log is OLD: the rule infers from absence, and
+ * absence is the whole of what it cannot interpret.
+ *
+ * ACCEPTED COST, recorded rather than hidden: a call that genuinely never
+ * dispatched (the crash landed between `tool/call` and the marker) lands here
+ * too. That is the price of the rule — no in-band signal tells the two apart.
+ */
+export const TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT = {
+  error: "tool call outcome unknown: the log records no tool/dispatch marker anywhere, so whether the body ran is not recorded; do not replay blindly",
+  code: TOOL_OUTCOME_UNKNOWN,
+  replay: false,
+} as const
+
 interface PendingCall {
   callId: string
   name: string
@@ -76,18 +111,31 @@ const STEP_CONTENT_TYPES = new Set<SessionEvent["type"]>([
  * Append synthetic closers to open sequences at the END of a session log.
  *
  * - Every `tool/call` in the LAST turn without a matching `tool/result`
- *   receives a synthetic aborted result (M10a TOOL_ABORTED_BEFORE_DISPATCH
- *   vocabulary), in call order.
+ *   receives a synthetic result, in call order, whose payload the log's own
+ *   evidence picks: TOOL_OUTCOME_UNKNOWN for a call the log marks dispatched;
+ *   TOOL_ABORTED_RECOVERY_RESULT (M10a vocabulary) for a marker-less call in a
+ *   log that carries a marker SOMEWHERE; and — when the log carries no marker
+ *   AT ALL (Q8, a read over the WHOLE log) — the conservative
+ *   TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT.
  * - If the last turn never ended: a closing `step/end` is appended when the
  *   turn's step region is open (or the turn carries step content without any
  *   step marker — torn writes lose markers), then the `turn/end`.
  * - An already-closed end (turn/end present) is returned with NO additions.
  *
- * @param events the events as loaded (after backend repair + version gate)
+ * @param events the events as loaded (after backend repair + version gate) —
+ *   the WHOLE log, earlier turns included: the Q8 read needs them.
  * @returns a NEW array (input untouched); the original log is never modified.
  */
 export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
   if (events.length === 0) return []
+
+  // Q8 (M71): does THIS LOG prove its writing build had the boundary? One
+  // marker in ANY turn does — and then a marker-less call elsewhere in the same
+  // log is honestly "never dispatched" rather than unknown. A log with no
+  // marker anywhere proves nothing about any call, so its pending tail calls
+  // read conservatively. This is a READ of the whole log; the repair region
+  // below is still the last turn alone.
+  const boundaryProven = events.some((e) => e.type === "tool/dispatch")
 
   // Locate the last turn's region. No turn/start at all → nothing to repair.
   let turnStart = -1
@@ -161,10 +209,17 @@ export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
       type: "tool/result",
       callId: call.callId,
       name: call.name,
-      // M4: the verdict is READ from the log's own dispatch marker, not guessed.
-      // A dispatched call gets `outcome-unknown`; only a call with no marker
-      // anywhere is the one we can honestly call "aborted before dispatch".
-      output: call.dispatched ? TOOL_OUTCOME_UNKNOWN_RESULT : TOOL_ABORTED_RECOVERY_RESULT,
+      // M4 + Q8: the verdict is READ from the log's own evidence, never guessed.
+      // - this call is marked dispatched → the body started, outcome unknown;
+      // - the log carries a marker SOMEWHERE → this call's absence is evidence:
+      //   "aborted before dispatch";
+      // - no marker ANYWHERE → the log proves nothing about any call, so the
+      //   conservative unknown (a benign verdict here licenses a re-run).
+      output: call.dispatched
+        ? TOOL_OUTCOME_UNKNOWN_RESULT
+        : boundaryProven
+          ? TOOL_ABORTED_RECOVERY_RESULT
+          : TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT,
     }) as SessionEvent))
   }
 
