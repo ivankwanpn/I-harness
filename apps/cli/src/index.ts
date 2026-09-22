@@ -43,13 +43,11 @@ import { failureReport, diagnosticSessionId } from "./run.ts"
 // any entry body runs — is a live view rather than a snapshot (the ambient
 // handle's contract, packages/diagnostics). ONE handle per phase this file
 // reports under: `cli` for the argv/flag refusals and this entry's own
-// reporters, `sdk` for the sdk host's runtime below (its two messages carry
-// the `[i-harness sdk]` tag). The run's own failure report is deliberately
-// still a plain console call (its phase would be `run`): T4's cases ②/⑤ read
-// the installed instance out of a spy on that call, so a handle with a sink
-// silences the spy and reddens four cases in a test file this task may not
-// touch — measured, and recorded as the open ruling in the W6 plan's T5 note.
+// reporters, `run` for the run's own failure report below (the phase is the
+// run whose outcome the message carries), `sdk` for the sdk host's runtime
+// (its two messages carry the `[i-harness sdk]` tag).
 const d = diagnosticsFor("cli")
+const runD = diagnosticsFor("run")
 const sdkD = diagnosticsFor("sdk")
 
 // M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
@@ -466,7 +464,7 @@ export async function main(argv: string[]): Promise<number> {
   //
   // WHERE IT GOES, and why nothing earlier: the flags above are refused through
   // the module-scope handles at the top of this file — T5 migrated them, and the
-  // help usage among them is one of the plan's five named exceptions (it stays a
+  // help usage among them is one of the plan's named exceptions (it stays a
   // plain console call) — and a run refused during parsing has no run to
   // instrument. The `finally` below is the ONE teardown
   // for every way `runHeadless` can end: the four returns (a failed resume, a
@@ -483,7 +481,11 @@ export async function main(argv: string[]): Promise<number> {
       // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
       // naming no session and saying nothing about what survived. It now gets the
       // same report an unhandled crash gets, because it is the same question.
-      if (r.error) console.error(failureReport(r.error, { ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}), kind: "failed" }))
+      // Phase `run` (R10): T4's four exit-path cases used to read the installed
+      // instance out of a spy on this very console call, which made a test's
+      // capture hook into a product constraint; they now read the instance where
+      // it is built, and this site reports like every other one.
+      if (r.error) runD.error(failureReport(r.error, { ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}), kind: "failed" }))
       return r.exitCode
     })
   } finally {
