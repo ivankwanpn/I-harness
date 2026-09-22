@@ -35,7 +35,7 @@ import { diagnosticsFor } from "@i-harness/diagnostics"
 // file: all five migrated sites here are the plugin/hook/mcp mount's own
 // warnings (the `[plugins]`/`[hooks]` tags in their messages), so they report
 // as `mount`. The one site that is NOT the mount — the `[metrics]` report at
-// the end of a run — is one of the plan's five named exceptions and stays a
+// the end of a run — is one of the plan's named exceptions and stays a
 // plain console call.
 const d = diagnosticsFor("mount")
 

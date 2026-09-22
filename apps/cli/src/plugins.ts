@@ -437,7 +437,10 @@ export async function runPluginsCommand(args: string[]): Promise<number> {
     return 1
   }
   if (parsed.subcommand === "help") {
-    d.error(PLUGINS_USAGE)
+    // Named exception (T5/R11): an exit-0 help print on the stderr channel.
+    // This API cannot express a non-`error` level over that channel, and a
+    // record calling a help request an error would be the sentence lying.
+    console.error(PLUGINS_USAGE)
     return 0
   }
   const listing = await listInstalledPlugins()
