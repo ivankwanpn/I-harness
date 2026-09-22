@@ -13,6 +13,7 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
+    "@i-harness/diagnostics": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
     "yaml": "^2.4.2",
     "@i-harness/harness-home": "workspace:*"

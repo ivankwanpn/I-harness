@@ -257,6 +257,9 @@ importers:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
@@ -297,7 +300,11 @@ importers:
         specifier: workspace:*
         version: link:../token-meter
 
-  packages/core-plugin: {}
+  packages/core-plugin:
+    dependencies:
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
 
   packages/core-session: {}
 
@@ -319,6 +326,9 @@ importers:
 
   packages/credentials:
     dependencies:
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../fs
@@ -460,6 +470,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home
@@ -562,6 +575,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(zod@4.4.3)
@@ -577,6 +593,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
 
   packages/plan-mode:
     dependencies:
@@ -592,6 +611,9 @@ importers:
 
   packages/plugin-registry:
     dependencies:
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../fs
@@ -653,6 +675,9 @@ importers:
 
   packages/rewind:
     dependencies:
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../fs
@@ -700,12 +725,18 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
 
   packages/sdk:
     dependencies:
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/session-executor':
         specifier: workspace:*
         version: link:../session-executor
@@ -736,6 +767,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../exec
@@ -942,6 +976,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home
@@ -966,6 +1003,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../exec
@@ -1059,6 +1099,9 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
       '@i-harness/exec':
         specifier: workspace:*
         version: link:../exec
