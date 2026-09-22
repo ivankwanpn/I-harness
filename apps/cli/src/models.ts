@@ -15,6 +15,11 @@ import type { ProviderRuntime, ProviderRuntimeEntry } from "@i-harness/provider-
 import type { SettingsModel } from "@i-harness/settings"
 import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle — every site here reports the `models`
+// command's own refusals and failures (phase `cli`).
+const d = diagnosticsFor("cli")
 
 /** A parsed `--context-window` / `--max-tokens` argument. `auto` CLEARS the
  * override and falls back to the card — without it, a number once written
@@ -348,12 +353,12 @@ function warnAboveCard(
 export async function runModelsCommand(args: string[]): Promise<number> {
   const parsed = parseModelsArgs(args)
   if (parsed.error !== undefined) {
-    console.error(`models: ${parsed.error}`)
-    console.error(MODELS_USAGE)
+    d.error(`models: ${parsed.error}`)
+    d.error(MODELS_USAGE)
     return 1
   }
   if (parsed.subcommand === "help") {
-    console.error(MODELS_USAGE)
+    d.error(MODELS_USAGE)
     return 0
   }
 
@@ -454,7 +459,7 @@ export async function runModelsCommand(args: string[]): Promise<number> {
     console.log(`default model: ${route} (reasoning effort: ${parsed.values.reasoningEffort ?? "none"})`)
     return 0
   } catch (error) {
-    console.error(`models: ${error instanceof Error ? error.message : String(error)}`)
+    d.error(`models: ${error instanceof Error ? error.message : String(error)}`)
     return 1
   }
 }

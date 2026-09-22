@@ -99,6 +99,11 @@ import {
   type Observations,
   type PluginRecord,
 } from "@i-harness/plugin-registry"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle — the three sites here are the `plugins`
+// command's own argument refusals and its help usage (phase `cli`).
+const d = diagnosticsFor("cli")
 
 /** The six dimensions the evaluator reports. */
 export type PluginDimension = "skills" | "commands" | "mcp" | "agents" | "hooks" | "executable"
@@ -427,12 +432,12 @@ const PLUGINS_USAGE =
 export async function runPluginsCommand(args: string[]): Promise<number> {
   const parsed = parsePluginsArgs(args)
   if (parsed.error !== undefined) {
-    console.error(`plugins: ${parsed.error}`)
-    console.error(PLUGINS_USAGE)
+    d.error(`plugins: ${parsed.error}`)
+    d.error(PLUGINS_USAGE)
     return 1
   }
   if (parsed.subcommand === "help") {
-    console.error(PLUGINS_USAGE)
+    d.error(PLUGINS_USAGE)
     return 0
   }
   const listing = await listInstalledPlugins()

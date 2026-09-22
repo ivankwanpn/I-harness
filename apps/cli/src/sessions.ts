@@ -21,6 +21,11 @@ import {
   type SessionCoordinator,
 } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle — both sites report this file's own subject,
+// the durable session store (phase `session`).
+const d = diagnosticsFor("session")
 
 /** One listed session. Fields are absent when the store cannot prove them. */
 export interface StoredSessionRow {
@@ -179,14 +184,14 @@ export async function runSessionsCommand(args: string[]): Promise<number> {
   try {
     if (subcommand === "show") {
       if (id === undefined) {
-        console.error(SESSIONS_USAGE)
+        d.error(SESSIONS_USAGE)
         return 2
       }
       let session: Session
       try {
         session = (await coordinator.load(id)).session
       } catch (error) {
-        console.error(`session not found: ${id} (${error instanceof Error ? error.message : String(error)})`)
+        d.error(`session not found: ${id} (${error instanceof Error ? error.message : String(error)})`)
         return 1
       }
       if (options.json === true) {
