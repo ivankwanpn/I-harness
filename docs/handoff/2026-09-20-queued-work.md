@@ -899,7 +899,7 @@ W10 前景 bash 的 120 秒死線         ← ✅ `b8bd78b0`（修正 `0794fbe7`
 W11 子代理的健康訊號（三塊）        ← ✅ `22b20c30`
 W12 `spawn_agent background:false` 逾時不說 settled ← ✅ `ad8dca47`
 W9  M4 收尾（Q8 的落地：dispatch 邊界的 checkpoint） ← ✅ `m70`（2026-09-22；記錄 `docs/handoff/2026-09-22-m70-dispatch-boundary.md`，見 §9.2 A4）
-M71 residuals pass（R14 ＋ Q8 的字面重讀 ＋ R15） ← ✅ `m71`（2026-09-22；13 個提交；記錄 `docs/handoff/2026-09-22-m71-residuals.md`，見 §9.2 A4 末）
+M71 residuals pass（R14 ＋ Q8 的字面重讀 ＋ R15） ← ✅ `m71`（2026-09-22；13 程式提交 ＋ 3 記錄／註解提交 ＋ 2 筆整支複審 fix wave；記錄 `docs/handoff/2026-09-22-m71-residuals.md`，見 §9.2 A4 末）
 ```
 ```
 
