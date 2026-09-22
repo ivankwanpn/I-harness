@@ -81,6 +81,20 @@ describe("subagent state snapshot", () => {
     expect(fresh.table.get("root/helper")?.roleName).toBe("research")
   })
 
+  it("snapshotState/restoreState round-trip the recorded model label", () => {
+    const s = makeState()
+    s.table.add("root/helper", {
+      path: "root/helper", status: "waiting", session: (() => { const x = { formatVersion: 1, events: [] as never[] }; return x })(),
+      controller: new AbortController(), mailbox: [], sessionId: "child-abc", roleName: "general", modelLabel: "gw:small",
+    })
+    const snap = snapshotState(s)
+    expect(snap.agentTable[0]?.modelLabel).toBe("gw:small")
+    const fresh = makeState()
+    restoreState(fresh, snap)
+    // a restored entry still says what it RAN on — the projection reads this record
+    expect(fresh.table.get("root/helper")?.modelLabel).toBe("gw:small")
+  })
+
   it("snapshotState/restoreState round-trip the inbox consumption cursor (lastInboxSeq)", () => {
     const s = makeState()
     s.table.add("root/helper", {

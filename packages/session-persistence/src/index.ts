@@ -1,17 +1,19 @@
 import { CURRENT_FORMAT_VERSION, type Session, type SessionEvent, type SessionHeader } from "@i-harness/core-session"
 import { acquireSessionLock, lockPathFor, type SessionLock } from "@i-harness/fs-lock"
+// Type-only, following session-executor's precedent (`assembly.ts` imports the
+// same type from the same place): the protocol is the SAME closed set settings
+// validates — a copy of the five names here would be another place to edit one
+// enum. Erased at build time.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 import { SessionWriteBehind, type SessionWriteBehindOptions } from "./write-behind.ts"
 import { repairTurnTail } from "./repair.ts"
 
 export { SessionWriteBehind, type SessionWriteBehindOptions }
-export { resolveHarnessHome, resolveSessionStoreRoot } from "./harness-home.ts"
+export { resolveSessionStoreRoot } from "./store-root.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
-  SessionForkUnavailableError,
-  completedTurnPrefix,
   forkSession,
   type ForkSessionOptions,
-  type ForkSessionResult,
 } from "./fork.ts"
 
 // M23: the ownership lease's typed errors are part of the coordinator's
@@ -41,6 +43,10 @@ export interface SessionModelSelection {
   provider: string
   /** Model id within the provider's registry/catalog. */
   model: string
+  /** The wire this session's selection was made on, when it named one.
+   * ABSENT is not "the default" — it hands the decision to the chain
+   * (model row > route > refusal). Design: protocol-selection §2, §4.2. */
+  protocol?: SettingsProviderProtocol
   /** Optional reasoning-effort hint (forward-compatible passthrough). */
   reasoningEffort?: string
 }
@@ -220,6 +226,25 @@ registerEventType("command/done")
 // SessionFormatUnsupportedError. NOT `ignorable: true`: load() drops ignorable
 // events, which would silently resurrect the rewound turns (probe D2).
 registerEventType("rewind/point")
+// M1 Phase B (Task 1): the sandbox mode marker (core-session union member,
+// `packages/core-session/src/index.ts:43`). SAME load-gate defect class as
+// `rewind/point` directly above, and it stayed latent only because the event
+// had ZERO production producers: `createSessionAssembly` now appends it at
+// construction whenever the host passes a `sandbox` option, so without this
+// registration the first producer makes every sandboxed session unloadable —
+// web-host `GET /api/sessions/:id/events` answers 500 and CLI `--resume`, TUI
+// resume, `--attach` and fork all fail with SessionFormatUnsupportedError.
+// NOT `ignorable: true`: core-session's own test asserts this event is "durable
+// and replayable" across the JSONL round-trip (`packages/core-session/test/
+// session.test.ts:483`), and load() DROPS ignorable events — which would erase
+// the record of the mode a session actually ran under. It is registered, not
+// dropped, so `effectiveSandboxMode` still sees the history it was built for.
+registerEventType("sandbox/mode")
+
+// M4: the dispatch boundary (see the type's own note in @i-harness/core-session).
+// Registered so it crosses the guardIgnorable load gate on its own — a log that
+// carries a dispatch marker must still load when only this package is present.
+registerEventType("tool/dispatch")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure

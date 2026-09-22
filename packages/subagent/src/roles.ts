@@ -3,7 +3,12 @@ export interface SubagentRole {
   description: string
   systemPrompt: string
   tools: string[]
-  model?: { provider: string; model: string; extra?: Record<string, unknown> }
+  // No `extra`: per-role request-body options have no producer (settings,
+  // toSubagentRoles and the CLI all omit them) and, since the model resolution
+  // moved to the host's resolver, no consumer either. A field nothing sets is a
+  // capability the type advertises and the code does not honour — it lands
+  // again only with a producer AND a consumer.
+  model?: { provider: string; model: string }
 }
 
 export interface RoleRegistry {

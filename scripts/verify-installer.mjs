@@ -18,7 +18,8 @@
 //   2. silent-install the test exe into the temp dir via `/S /D=<tmp>`.
 //   3. assert the installed tree mirrors installer/staging (File /r semantics)
 //      and that the launchers really run: --version == <ver> on both cmd
-//      files, `tui --help` exits 0, the bundled node.exe reports its version.
+//      files, `help` exits 0 and prints the usage, the bundled node.exe reports
+//      its version.
 //   4. silent-uninstall (again /S-only), asserting the install dir is removed
 //      (the NSIS uninstaller defers the final root-dir delete by ~1-3 s to its
 //      temp-copy helper, so the check polls a few seconds).
@@ -178,14 +179,23 @@ async function main() {
   assert("i-harness.cmd --version prints version", v1.out.includes(APP_VERSION), v1.out.trim().slice(0, 120))
   const v2 = await verifyLauncher("ih.cmd", ["--version"], "ih.cmd --version")
   assert("ih.cmd --version prints version", v2.out.includes(APP_VERSION), v2.out.trim().slice(0, 120))
-  const tuiHelp = await verifyLauncher("ih.cmd", ["tui", "--help"], "ih.cmd tui --help")
-  assert("ih.cmd tui --help exits 0 (usage)", tuiHelp.code === 0, tuiHelp.out.trim().slice(0, 120))
-  // M55: the BUNDLED runtime must run the self-sufficient dist surfaces
-  // (minimal inline engine + ACL seam + SDK re-entry + relaunch argv) — the
-  // pin is only real if the shipped node.exe executes them.
+  // M65 T1: this replaces an assertion that `ih.cmd tui --help` exits 0 — the
+  // TUI subcommand is deleted, so that assertion asserted a surface the binary
+  // now refuses. `help` is the surviving usage surface; the refusal itself
+  // (bare launch / unknown subcommand -> usage on stderr, exit 1) is pinned at
+  // the source level by apps/cli/test/bare-launch.test.ts and at the bundle
+  // level by scripts/verify-dist.mjs (b).
+  const help = await verifyLauncher("ih.cmd", ["help"], "ih.cmd help")
+  assert("ih.cmd help prints usage", help.out.includes("usage: i-harness"), help.out.trim().slice(0, 160))
+  // M55: the BUNDLED runtime must run the self-sufficient dist surface. M65 T1
+  // removed the three TUI-subject self-check probes (the minimal inline engine,
+  // the /minimal relaunch argv, the TUI's --attach SDK spawn), so what remains
+  // in __dist-selfcheck is the windows-acl seam; the SDK stdio re-entry survives
+  // and is asserted by scripts/verify-dist.mjs (f), which drives `node ih.mjs
+  // sdk` directly instead of going through the deleted TUI helper.
   const selfcheck = await verifyLauncher("ih.cmd", ["__dist-selfcheck"], "ih.cmd __dist-selfcheck")
   assert(
-    "installed bundle self-sufficient (minimal + ACL + SDK) under the bundled node",
+    "installed bundle self-sufficient (windows-acl seam) under the bundled node",
     selfcheck.code === 0 && selfcheck.out.includes("dist-selfcheck: PASS"),
     selfcheck.out.trim().slice(0, 300)
   )

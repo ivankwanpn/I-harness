@@ -1,4 +1,5 @@
 import { randomBytes, webcrypto } from "node:crypto"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   refreshAuthorization,
   selectResourceURL,
@@ -8,6 +9,14 @@ import {
 import { OAuthError } from "@modelcontextprotocol/sdk/server/auth/errors.js"
 import type { OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js"
 import type { McpOAuthConfig, McpTokenStore } from "./types.ts"
+
+// W6 T6: ONE module-scope handle for this file's reports; the phase is
+// `mount` because each is the MCP seam's own report about mounting a server
+// that needs a token: a proactive refresh, an expiry check, and a token
+// re-read whose store misbehaved (all three keep the stored token). With
+// nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 const b64url = (buf: Buffer): string => buf.toString("base64url")
 
@@ -146,7 +155,7 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
         try { await provider.invalidateCredentials?.("discovery") } catch { /* fail-soft：清不掉也不影響 */ }
       }
       const message = err instanceof Error ? err.message : String(err)
-      console.warn(
+      d.warn(
         `[i-harness] mcp-server(${serverName}) OAuth: proactive refresh failed (${message}); keeping the stored token (the 401 path will handle it)`,
       )
       // M56 T1.5：宿主通知（assembly 把它接到 mcp/server-status sink）；回調拋錯不得破壞 fail-soft。
@@ -182,7 +191,7 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
       // 檢查本身 fail-soft：store 讀取異常 → 照舊回傳現有 token（被動行為不變），但不靜默。
       let due = false
       try { due = await shouldRefreshProactively(current) } catch (err) {
-        console.warn(
+        d.warn(
           `[i-harness] mcp-server(${serverName}) OAuth: expiry check failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token`,
         )
         due = false
@@ -193,7 +202,7 @@ export function createOAuthClientProvider(config: OAuthProviderConfig): IHOAuthC
         try {
           return (await get<OAuthTokens>("tokens")) ?? current
         } catch (err) {
-          console.warn(
+          d.warn(
             `[i-harness] mcp-server(${serverName}) OAuth: token re-read failed (${err instanceof Error ? err.message : String(err)}); keeping the stored token`,
           )
           return current

@@ -47,6 +47,25 @@ describe("createResourceTools", () => {
     expect(called).toEqual({ server: "files", uri: "file:///a.txt", signal })
   })
 
+  it("a colon-bearing server name (a plugin key) yields provider-valid tool names, never the raw one", () => {
+    // A valid SERVER name is not a valid TOOL name: every backend's tool-name
+    // grammar rejects `:`, and all three helpers register on every mount, so
+    // the raw form would fail the whole request for exactly the plugin mounts
+    // the seam fix enabled.
+    const serverName = "plugin:Marketplace_A__proxy:echo"
+    const tools = createResourceTools(fakeClient(), serverName, { transport: "stdio", serverName, command: "x", args: [] })
+    const names = tools.map((t) => t.name)
+    expect(names).toHaveLength(3)
+    for (const name of names) {
+      expect(name).toMatch(/^[A-Za-z0-9_-]{1,64}$/)
+      expect(name).not.toContain(":")
+    }
+    // The raw, colon-bearing form is not among them.
+    expect(names).not.toContain(`list_mcp_resources__${serverName}`)
+    expect(names).not.toContain(`read_mcp_resource__${serverName}`)
+    expect(names).not.toContain(`list_mcp_resource_templates__${serverName}`)
+  })
+
   it("list_mcp_resource_templates__files exists and forwards to client.listResourceTemplates", async () => {
     let called: { signal?: AbortSignal } | undefined
     const client: ConnectedMcpClient = {

@@ -16,7 +16,7 @@ function record(overrides: Partial<PluginRecord> = {}): PluginRecord {
 }
 
 function caps(overrides: Partial<Capabilities> = {}): Capabilities {
-  return { skills: false, commands: false, mcp: false, executable: false, ...overrides }
+  return { skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false, ...overrides }
 }
 
 function obs(overrides: Partial<Observations> = {}): Observations {
@@ -43,6 +43,8 @@ describe("evaluatePlugin", () => {
       skills: "disabled",
       commands: "disabled",
       mcp: "disabled",
+      agents: "disabled",
+      hooks: "disabled",
       executable: "unsupported",
     })
     expect(r.commandStatuses).toEqual({})
@@ -67,9 +69,32 @@ describe("evaluatePlugin", () => {
       skills: "unsupported",
       commands: "unsupported",
       mcp: "unsupported",
+      agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("failed")
+  })
+
+  it("an agents-only plugin is NOT 'failed' — agents is a runtime surface of its own", () => {
+    // Before agents/ was a capability dimension this plugin could not be enabled
+    // at all, so the question never arose. Now that it can, the "nothing
+    // advertised → failed" rule must not call it failed: it contributes subagent
+    // roles to every agent build. This is the falsehood the dimension addition
+    // would otherwise introduce.
+    const r = evaluatePlugin(record(), caps({ agents: true }), obs())
+    expect(r.capabilities.agents).toBe("ready")
+    expect(r.overall).not.toBe("failed")
+  })
+
+  it("a hooks-only plugin is NOT 'failed' — hooks is a runtime surface too", () => {
+    // Same argument as agents, and measured: three plugins in the official
+    // snapshot ship nothing but hooks/. An enabled one that read "failed"
+    // ("nothing advertised") would be reporting a lie about a plugin the host
+    // is actively running.
+    const r = evaluatePlugin(record(), caps({ hooks: true }), obs())
+    expect(r.capabilities.hooks).toBe("ready")
+    expect(r.overall).not.toBe("failed")
   })
 
   it("executable capability → always unsupported, does not degrade overall", () => {
@@ -103,6 +128,8 @@ describe("evaluatePlugin", () => {
       skills: "pending",
       commands: "pending",
       mcp: "pending",
+      agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("initializing")
@@ -287,6 +314,8 @@ describe("evaluatePlugin", () => {
       skills: "ready",
       commands: "unsupported",
       mcp: "unsupported",
+      agents: "unsupported",
+      hooks: "unsupported",
       executable: "unsupported",
     })
     expect(r.overall).toBe("ready")

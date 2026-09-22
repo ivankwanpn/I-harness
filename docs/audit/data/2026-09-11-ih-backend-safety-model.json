@@ -875,10 +875,10 @@
         {
           "decision": "Websearch is a zero-default id-keyed seam: no built-in provider, pin > exactly-one > error, and a missing map means the websearch tool is simply not registered.",
           "rationale": "Registered under the 'websearch/provider' service as a Map; a duplicate id throws; NO_PROVIDER/MULTIPLE_PROVIDERS are the two fail-loud misconfiguration classes.",
-          "evidence": ["packages/provider/src/index.ts:780-863"]
+          "evidence": ["packages/provider/src/index.ts:751-834"]
         }
       ],
-      "failurePolicy": "fail-loud / fail-closed. register() throws on a duplicate route and validates contextWindow/maxContextWindow and the retry policy at registration (packages/provider/src/index.ts:603-608,683-700); an unknown protocol throws at build (723-725); probe failures carry the branded code 'model-probe-failed' while 'no probe and no catalog' is 'probe-unavailable' (216-235); a model row with no resolvable id throws (389-398); resolveModelCard returns undefined rather than a synthetic value (110-115); the model catalog is validated at load and throws on a malformed route/model row (70-99); websearch throws NO_PROVIDER / MULTIPLE_PROVIDERS / duplicate-id (820-862).",
+      "failurePolicy": "fail-loud / fail-closed. register() throws on a duplicate route and validates contextWindow/maxContextWindow and the retry policy at registration (packages/provider/src/index.ts:603-608,683-700); an unknown protocol throws at build (723-725); probe failures carry the branded code 'model-probe-failed' while 'no probe and no catalog' is 'probe-unavailable' (216-235); a model row with no resolvable id throws (389-398); resolveModelCard returns undefined rather than a synthetic value (110-115); the model catalog is validated at load and throws on a malformed route/model row (70-99); websearch throws NO_PROVIDER / MULTIPLE_PROVIDERS / duplicate-id (791-833).",
       "events": ["none"],
       "keyConstants": [
         { "name": "ProviderProtocol", "value": "['openai-responses','openai-compatible','anthropic-messages','gemini','bedrock']", "evidence": "packages/provider/src/index.ts:9" },
@@ -1040,7 +1040,7 @@
         },
         {
           "decision": "The default preset's system prompt is the readable in-repo source and is treated as a BASE by the assembly, not as the final prompt.",
-          "rationale": "default.ts states 'the readable source here IS the authoritative default system prompt' while 'the assembly composes its runtime sections AFTER this base, and the model's user message always outranks the system prompt'; the consumer appends the sandbox policy context after it (packages/session-executor/src/assembly.ts:592-602).",
+          "rationale": "default.ts states 'the readable source here IS the authoritative default system prompt' while 'the assembly composes its runtime sections AFTER this base, and the model's user message always outranks the system prompt'; the consumer appends the sandbox policy context after it (packages/session-executor/src/assembly.ts:775).",
           "evidence": ["packages/preset/src/default.ts:1-7", "packages/preset/src/default.ts:11-52"]
         }
       ],

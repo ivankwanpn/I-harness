@@ -3,12 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
+    "@i-harness/diagnostics": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
-    "yaml": "^2.4.2"
+    "yaml": "^2.4.2",
+    "@i-harness/harness-home": "workspace:*"
   }
 }

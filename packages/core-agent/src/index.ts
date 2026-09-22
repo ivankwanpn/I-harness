@@ -1,7 +1,7 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
-import { append, deriveMessages } from "@i-harness/core-session"
+import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
 import { assertMessagesFromLog } from "@i-harness/llm-seam"
@@ -11,6 +11,8 @@ import type { Telemetry } from "@i-harness/telemetry"
 export {
   executeToolCalls,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
   type BatchCall,
   type ExecuteToolCallsOptions,
 } from "./execute-tool-calls.ts"
@@ -36,7 +38,11 @@ export interface AgentBudgetConfig {
 }
 
 export interface AgentConfig {
-  systemPrompt: string
+  /** Prompt for every request. A STRING is fixed for the session. A FUNCTION is
+   * resolved at the start of each step, for prompts that carry a fact the
+   * session can change while the agent runs (the sandbox policy: see
+   * session-executor/src/assembly.ts). */
+  systemPrompt: string | (() => string)
   maxTurns?: number
   signal?: AbortSignal
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
@@ -97,6 +103,39 @@ export interface Agent {
   compact?(instructions?: string): Promise<CompactionResult>
 }
 
+/** M5 T2 (second half): one message as canonical JSON, for the per-request
+ * prefix comparison. "The same message" has to mean the same CONTENT, not the
+ * same construction order — a message rebuilt from a resumed log, or by a
+ * producer that assembles its object in another order, must fingerprint
+ * identically or the comparison reports a break that never happened. So object
+ * keys are sorted (recursively), arrays keep their order (a tool-result run is
+ * ordered), and `undefined`-valued keys are dropped the way `JSON.stringify`
+ * drops them. Not exported: its only consumer is the comparison in
+ * `createAgent`, in this file.
+ *
+ * ⚠ WHAT IT CALLS IDENTITY — and where it DISAGREES with the tree's other
+ * definition of it. This fingerprints plain JSON structure: two values are the
+ * same iff they have the same keys (order irrelevant) and the same values, with
+ * array order significant. A value whose meaning lives in `toJSON` — a `Date`, a
+ * `Map`/`Set`, a class instance — has no enumerable properties, so it collapses
+ * to `{}`: measured, `canonicalJson(new Date(0)) === canonicalJson(new Date(1))
+ * === "{}"`, while the seam's `assertMessagesFromLog` — which compares
+ * `JSON.stringify` output — sees `"…:00.000Z"` against `"…:00.001Z"` and tells
+ * them apart. The two definitions therefore disagree on exactly that class of
+ * value. Deliberate, and NOT a behaviour to "fix": the model-visible surface is
+ * derived from the JSON-persisted session log (tool args arrive via
+ * `JSON.parse`), so nothing on this path produces such a value, and widening the
+ * definition would change what `prefixKept` means for every input in order to
+ * close a case nothing reaches. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null"
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entry]) => entry !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`
+}
+
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
   const maxTurns = deps.maxTurns ?? 20
   const maxParallel = deps.maxParallelToolCalls ?? 10
@@ -127,7 +166,22 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   }
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
-  const compactor = deps.compact ? createCompactionEngine({ model: deps.model, config: deps.compact }) : undefined
+  // M5/D2: the agent is the only layer that knows the shape the model sees, so
+  // it hands the engine a getter — read at compact time, matching the LAST
+  // request rather than whatever was true at construction. Without this the
+  // summarizer falls back to its text form and the whole conversation is re-read
+  // at full price; with it, the call is a byte-prefix of the main request and the
+  // provider's cache serves it.
+  const compactor = deps.compact
+    ? createCompactionEngine({
+        model: deps.model,
+        config: deps.compact,
+        requestShape: () => ({
+          systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+          tools: deps.tools.schemas(),
+        }),
+      })
+    : undefined
   const compactEnabled = deps.compact?.auto ?? true
   // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
   // at creation above); the default matches the engine convention.
@@ -174,6 +228,20 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   let steps = 0
   let callSeq = 0
   const reasoning: string[] = []
+  // M5/D3: how many rewrite markers the log carried at the PREVIOUS request. A
+  // bigger count next time means a rewrite landed in between, which is what
+  // breaks the cached prefix — the absolute count is not a break, since it stays
+  // non-zero forever after the first compaction. Undefined before the first
+  // request: a resumed session has no predecessor to compare against, so the
+  // first request claims nothing rather than guessing.
+  let rewriteMarkers: number | undefined
+  // M5 T2, second half: the PREVIOUS request's per-message fingerprints. It
+  // lives here, beside `steps`/`callSeq`, for the same reason they do — a
+  // followup continues the same conversation, so its first request must be
+  // compared against the previous turn's LAST request, not against nothing.
+  // Undefined before the first request: this process has sent nothing yet, so a
+  // resumed session has no predecessor to compare with and claims none.
+  let prevFingerprints: string[] | undefined
 
   async function runTurn(message: string, signal?: AbortSignal): Promise<AgentResult> {
     const abort = signal ?? deps.signal
@@ -216,7 +284,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       const request: LLMRequest = {
         messages,
         tools: deps.tools.schemas(),
-        systemPrompt: deps.systemPrompt,
+        systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
         // M32 T3: verbatim effort passthrough (absent → the field is never set;
         // the adapter's translateReasoning owns the wire vocabulary).
         ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
@@ -233,10 +301,56 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // core-agent loop, so a retry is not observable from this layer. v0
       // emits no retry/start (a failed call still surfaces as provider/error
       // or tool/error); adding a retry hook to those packages is follow-up.
-      deps.telemetry?.emit({ type: "provider/call", ts: Date.now(), data: { step: steps, messages: messages.length, tools: request.tools.length } })
+      // M5/D3: whether THIS request's prefix was rewritten by a marker that
+      // arrived since the last one. Derived from the log rather than reported by
+      // whoever rewrote it, so a rewrite path that forgets to announce itself
+      // still shows up. Read beside T2-1's `reported:` numbers, which say
+      // whether the provider actually charged full price.
+      const rewrite = deriveProjectionRewrite(deps.session)
+      const prefixRewritten = rewriteMarkers !== undefined && rewrite.markers > rewriteMarkers
+      rewriteMarkers = rewrite.markers
+      // M5 T2 (second half): the same question asked of our OWN bytes — this
+      // request's message prefix against the previous request's. D3 above
+      // attributes a count of rewrite MARKERS (the cause); this measures the
+      // bytes themselves (the effect), so the two are read together. `shared` is
+      // the number of leading messages that are byte-identical, and the previous
+      // request is "still a prefix" only when every one of its messages is.
+      const fingerprints = messages.map(canonicalJson)
+      let shared = 0
+      if (prevFingerprints !== undefined) {
+        const limit = Math.min(fingerprints.length, prevFingerprints.length)
+        while (shared < limit && fingerprints[shared] === prevFingerprints[shared]) shared += 1
+      }
+      const previous = prevFingerprints
+      prevFingerprints = fingerprints
+      deps.telemetry?.emit({
+        type: "provider/call",
+        ts: Date.now(),
+        data: {
+          step: steps,
+          messages: messages.length,
+          tools: request.tools.length,
+          ...(prefixRewritten
+            ? { prefixRewritten: true, ...(rewrite.lastCause !== undefined ? { prefixCause: rewrite.lastCause } : {}) }
+            : {}),
+          // M5 T2 (second half), the honesty rule: present ONLY when there was a
+          // previous request to compare against. A resumed session's first
+          // request reports NEITHER field — absent, never `shared: 0`, which is
+          // a measurement it did not make and would read as a regression.
+          // `prefixKept` is that measurement when it exists: how many of the
+          // previous request's messages are still the identical head of this
+          // one. `prefixBroke` says the rest is gone — a compaction's summary
+          // takes the head, so this is 0/true on the request that follows one.
+          ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
+        },
+      })
 
       let stepText = ""
       let toolCallsThisStep = 0
+      // M5 T2: the provider's own usage report for THIS round-trip. Merged
+      // rather than overwritten, because one request can report twice and each
+      // report carries only its own fields.
+      const stepUsage: Record<string, number> = {}
       const batch: BatchCall[] = []
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
@@ -261,6 +375,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             toolCallsThisStep += 1
             break
           }
+          case "usage":
+            // M5 T2. This `case` is the ONLY thing that turns a provider report
+            // into something the host can see: the switch has no default and no
+            // exhaustiveness assert, so without it the event is dropped in
+            // silence — the run looks perfect and the numbers are simply absent.
+            for (const [field, value] of Object.entries(ev.usage)) {
+              if (typeof value === "number") stepUsage[field] = value
+            }
+            break
           case "error":
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
@@ -269,11 +392,30 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         }
       }
 
+      // M5 T2: emitted ONLY on a completed round-trip, and only if something was
+      // actually reported. The event count is the denominator for every number
+      // in it, so a round-trip that died mid-stream must not report: llm-seam's
+      // retry wrapper is silent, and an attempt that failed and was retried
+      // would otherwise be counted as its own reported request. No report at all
+      // is the honest outcome — absent is not zero.
+      if (Object.keys(stepUsage).length > 0) {
+        deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
+      }
+
       if (batch.length > 0) {
         // M13: concurrent execution. The scheduler appends tool/result in model
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
-        // never-started calls) and rethrows the first tool failure.
+        // never-started calls). A tool BODY failure does not throw: the failed
+        // call is filled with a synthetic failure result, its never-started
+        // siblings get a cancellation result, and the turn continues so the
+        // model sees the error and can retry. A POLICY refusal still throws — a
+        // `prepare` refusal by site, a cascade veto by the marker
+        // `isPolicyRefusal` reads. A failure of the commit lane itself is not
+        // swallowed either: the fills still run and the lane's error is
+        // rethrown, so a lost durable write fails the turn. (Before M5 T4
+        // block ① every failure threw and the batch was discarded;
+        // fs/src/error.ts records what that looked like outside.)
         await executeToolCalls(ctx, deps.session, deps.tools, batch, {
           maxParallel,
           signal: abort,

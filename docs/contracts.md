@@ -74,7 +74,7 @@
 
 ## SDK（`@i-harness/sdk` NDJSON JSON-RPC — Wire Contract v0）
 
-> M28 S-1（2026-09-01）**凍結**。`i-harness sdk`（stdio）與內嵌 harness 走同一條線規約；事實來源：`packages/sdk/src/protocol.ts`（framing + 錯誤碼,頭部 JSDoc = 完整契約註釋）與 `src/server.ts`（方法語義）。漂移哨兵測試：`packages/sdk/test/server.test.ts` 的「initialize wire contract v0 (field-level lock)」。
+> M28 S-1（2026-09-01）**凍結**。`i-harness sdk`（stdio）與內嵌 harness 走同一條線規約；事實來源：`packages/sdk/src/protocol.ts`（framing + 錯誤碼,頭部 JSDoc = 完整契約註釋）與 `src/server.ts`（方法語義）。漂移哨兵測試：`packages/sdk/test/server.test.ts` 的「initialize wire contract v3 (field-level lock)」（v3 之名隨 M68 批 B；此指針在批 B 前仍寫著舊名）。
 
 **Framing**：每行一條 JSON-RPC 2.0 訊息（`JSON.stringify` + `\n`，NDJSON）。畸形行**靜默忽略**（不回應、不崩潰——絕不會 echo）；請求 `id` 原樣進響應。
 
@@ -98,6 +98,7 @@
 | `-32601` | `METHOD_NOT_FOUND` | 未知方法 |
 | `-32602` | `INVALID_PARAMS` | `sessionId`/`prompt` 缺失、空或非字串 |
 | `-32603` | `INTERNAL_ERROR` | turn / handler 拋錯 |
+| `-32000` | `SERVER_OVERLOAD` | **M68 批 A**：宿主的**有界輸出佇列**越界——`id: null`（JSON-RPC 對「無對應請求的錯誤」的約定），且是串流的**最後一幀**：之後 output 端結束 |
 
 **回放語義**：`session/event` 流**僅追加、不重放**——新連接只看到訂閱後追加的事件；session 的持久化狀態可跨連接恢復（同 `sessionId`），但歷史事件不回放在新訂閱上。
 
@@ -133,6 +134,27 @@
 
 - **rewind wire shape 鏡像引擎**：`session/rewind/*` 的 shape 是 packages/rewind 類型的**結構鏡像**（wire 不能依賴 rewind 包——獨立）；宿主側（apps/cli）factory 於請求時做引擎型 → wire 型映射；引擎內部鍵（blob id）永不洩漏——wire 文件操作為 `{ path, op: "restore-blob" \| "delete-added" }`。
 - **list 行豐富（v1.1 源面）**：apps/cli `sdk` 命令的 `listSessions` 源在 `--session-dir` 給定時補 `updatedAt`（artifact mtime——M37b store-listing 慣例；stat 失敗回退 `meta.createdAt` 解析）+ `turnCount`（`coordinator.load` 的 turn/start 計數——唯讀路徑，非 mutating）。其餘 context 字段（contextUsed/contextTotal）仍可選缺省；單行 load 失敗 → 行保留（無 turnCount）並 loud 於 stderr（profile 敗行維持 M41a 的「唯 id 誠實行」）。
+
+### 輸出背壓（M68 批 A；additive——批 A 當時維持 2；批 B 依條款 bump 至 3）
+
+> 面在**宿主側**，不是伺服器側：`createSdkServer` 的 `onWrite` 仍是同步的一次回呼（既有行為不變——客戶端的響應/通知交錯語意依賴它），界在 `@i-harness/sdk` 的 `createBoundedWriter()` 裡：`onWrite` → writer（FIFO）→ 宿主的 output。apps/cli 的 `sdk` 命令以 `DEFAULT_WRITE_BOUND_BYTES` 接到 `process.stdout`。
+
+- **界的形狀**：佇列中**未寫出的位元組數**（不是幀數——幀大小無界，位元組才是記憶體）；`write()` 回 `false` ⇒ 停寫、等 `drain` 續；被擋住期間進來的幀排隊（不再直接落進 stream 自己的緩衝）。
+- **界值＝推導，不是挑選**：`DEFAULT_WRITE_BOUND_BYTES` = 2 × 一頁滿 `session/history` 響應的大小（一頁滿 = 1000 事件，既有的 `HISTORY_LIMIT_CAP`；量測 **947820 B**，量測註記在 `packages/sdk/src/bounded-writer.ts` 的常數旁，測試逐字重算同一數字）。理由：落後**恰好一頁**的正常客戶端在追上時不得被誤殺——正在收的那一頁 + 下一頁都要能進佇列。
+- **界破的唯一結局**：丟掉佇列、寫**恰好一幀** `-32000 SERVER_OVERLOAD`（`id: null`）後**結束 output**；此後 `push` 靜默丟棄（串流已結束）。**恢復路徑＝既有的拉取面**：重連後 `session/history`；**不做**界內 resync 指令（第二條路）。
+- **界內逐位元不變**：一般寫入路徑不新增任何幀（同 `send()` 的字節）；`id` 型別放寬為 `number | string | null`（只有 overload 幀用 `null`）。
+
+### Wire Contract v2 addendum（M68 批 B，2026-09-22 — **BREAKING**）
+
+> **v2：`initialize` 成為閘門。** 這是**定序層的 breaking 變更**（shape 一律不動）；照「凍結後變更流程」，`PROTOCOL_VERSION` **2 → 3**（`SDK_SERVER_PROTOCOL_VERSION` 同步），migration 註記＝本節。今日樹內消費者只有測試，所以跳躍的成本落在測試面。
+
+| 方向 | 方法 / 通知 | 參數 | 響應 |
+|---|---|---|---|
+| call | （除 `initialize`／`shutdown` 外的**任何**方法） | — | **未握手 ⇒ `-32600 INVALID_REQUEST`**：`message: "not initialized: send initialize first"`、`data: { reason: "not_initialized" }`。`-32600` 自 v0 起定義、**v3 才有第一個生產者**（畸形行仍靜默忽略，不走此碼）。未知方法在**閘後**仍是 `-32601`（閘先回答「握手了沒」，再回答「方法存在嗎」） |
+| call | `initialize` | `{ clientInfo?: { name?: string; version?: string } }` | 外殼**不變**（`name`／`version`／`capabilities`＝v1.1 的行集，仍只加不改），`protocolVersion: 3`。**params 現在會被讀**：`clientInfo` 於**首次** `initialize` **捕獲一次**（連線作用域；事件日誌推不出來，故不落任何日誌／檔案），經伺服器物件的 `clientInfo()` 讀取。第二次 `initialize` **冪等**：同響應、不報錯、**first-wins**（第二次的 params 不再被讀）。`params`／`clientInfo` 存在但非物件 ⇒ 捕獲 undefined ＋ `console.warn`，**不拒**握手（欄位非字串則丟棄，不強轉）。 |
+| call | `shutdown` | `{}` | 同 v0 不變；**免閘**——半初始化的客戶端要有路退 |
+
+- **遷移**：客戶端在**首個請求前**送 `initialize`。`HarnessClient.initialize()` 已是明示方法（embedder 不需新 API）；直接驅動裸 wire 的 embedder 補一幀。其餘不變：所有其他方法、所有通知 shape、capabilities 行、`session/event` 的 append-only 語意、既有錯誤碼的語意。
 
 ## 版本 / 健康
 

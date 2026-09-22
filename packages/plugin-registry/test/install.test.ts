@@ -58,14 +58,40 @@ function expectManifestInvalid(f: () => void): void {
 }
 
 describe("inspectCapabilities", () => {
-  it("hello fixture: skills + commands, no mcp, not executable", async () => {
+  it("hello fixture: skills + commands, no mcp, no agents, no hooks, not executable", async () => {
     const dir = await copyPlugin("hello")
-    expect(inspectCapabilities(dir)).toEqual({ skills: true, commands: true, mcp: false, executable: false })
+    expect(inspectCapabilities(dir)).toEqual({ skills: true, commands: true, mcp: false, agents: false, hooks: false, executable: false })
   })
 
   it("proxy fixture: mcp only", async () => {
     const dir = await copyPlugin("proxy")
-    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: true, executable: false })
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: true, agents: false, hooks: false, executable: false })
+  })
+
+  it("an agents/ tree is a capability dimension of its own", async () => {
+    // Without this dimension an agents-only plugin fails enable() outright with
+    // "no usable capabilities", so the sniff is not cosmetic.
+    const dir = await tempDir("inst-agents-")
+    await mkdir(join(dir, "agents"), { recursive: true })
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: false, agents: true, hooks: false, executable: false })
+  })
+
+  it("a hooks/hooks.json is a capability dimension of its own", async () => {
+    // Same argument, MEASURED: the official snapshot has three plugins whose
+    // ONLY content is hooks/ (explanatory-output-style, learning-output-style,
+    // security-guidance). Without this dimension they cannot be enabled at all.
+    const dir = await tempDir("inst-hooks-")
+    await mkdir(join(dir, "hooks"), { recursive: true })
+    await writeFile(join(dir, "hooks", "hooks.json"), JSON.stringify({ version: 1, handlers: [] }), "utf8")
+    expect(inspectCapabilities(dir)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: true, executable: false })
+  })
+
+  it("an EMPTY hooks/ dir is not the dimension — the config file is", async () => {
+    // `agents` is a directory sniff; hooks is a FILE. An empty hooks/ tree is
+    // what a half-copied plugin leaves behind, and it must not read as usable.
+    const dir = await tempDir("inst-hooks-empty-")
+    await mkdir(join(dir, "hooks"), { recursive: true })
+    expect(inspectCapabilities(dir).hooks).toBe(false)
   })
 
   it("executable: package.json main or exports['./server'] (JSON.parse only, never loaded)", async () => {
@@ -78,7 +104,7 @@ describe("inspectCapabilities", () => {
     expect(inspectCapabilities(exp).executable).toBe(true)
 
     const bare = await tempDir("inst-none-")
-    expect(inspectCapabilities(bare)).toEqual({ skills: false, commands: false, mcp: false, executable: false })
+    expect(inspectCapabilities(bare)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false })
 
     const broken = await tempDir("inst-badpkg-")
     await writeFile(join(broken, "package.json"), "{broken", "utf8")
@@ -88,7 +114,7 @@ describe("inspectCapabilities", () => {
   it("missing directory → all false (safe to inspect an uninstalled id)", async () => {
     const ghost = await tempDir("inst-ghost-")
     await rm(ghost, { recursive: true, force: true })
-    expect(inspectCapabilities(ghost)).toEqual({ skills: false, commands: false, mcp: false, executable: false })
+    expect(inspectCapabilities(ghost)).toEqual({ skills: false, commands: false, mcp: false, agents: false, hooks: false, executable: false })
   })
 })
 
@@ -169,7 +195,7 @@ describe("installPlugin", () => {
     const res = await installPlugin(sourceDir, "Marketplace A", "hello", installRoot)
     expect(res.id).toBe("Marketplace A__hello")
     expect(res.installPath).toBe(resolve(join(installRoot, "Marketplace A__hello")))
-    expect(res.capabilities).toEqual({ skills: true, commands: true, mcp: false, executable: false })
+    expect(res.capabilities).toEqual({ skills: true, commands: true, mcp: false, agents: false, hooks: false, executable: false })
     const skill = await readFile(join(res.installPath, "skills", "hello", "SKILL.md"), "utf8")
     expect(skill).toContain("A tiny demo skill bundled with the fixture marketplace plugin.")
     expect((await stat(join(res.installPath, "commands", "hello.md"))).isFile()).toBe(true)
@@ -241,6 +267,76 @@ describe("installPlugin", () => {
         headers: { "x-token": "abc" },
       },
     })
+  })
+
+  it("declared `type`: sse (or any unsupported dialect) is skipped with a warn — never silently mounted as streamable-http", async () => {
+    const sourceDir = await tempDir("inst-mcptype-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          sseSrv: { type: "sse", url: "http://127.0.0.1:1/sse" },
+          wsSrv: { type: "websocket", url: "ws://127.0.0.1:1/mcp" },
+          httpSrv: { type: "http", url: "http://127.0.0.1:1/mcp" },
+          streamableSrv: { type: "streamable-http", url: "http://127.0.0.1:1/mcp2" },
+          stdioSrv: { type: "stdio", command: "node", args: ["echo.mjs"] },
+          noType: { command: "node", args: [] },
+        },
+      }),
+      "utf8",
+    )
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    const installRoot = await tempDir("inst-root-")
+    try {
+      const res = await installPlugin(sourceDir, "m", "typed", installRoot)
+      // Supported tags behave as today (url wins when present, command otherwise);
+      // unsupported dialects are GONE from the runtime surface, not re-routed.
+      expect(await readMcpServers(res.installPath)).toEqual({
+        "plugin:m__typed:httpSrv": { url: "http://127.0.0.1:1/mcp" },
+        "plugin:m__typed:streamableSrv": { url: "http://127.0.0.1:1/mcp2" },
+        "plugin:m__typed:stdioSrv": { command: "node", args: ["echo.mjs"] },
+        "plugin:m__typed:noType": { command: "node", args: [] },
+      })
+      // One warn per skipped server, naming it and the offending value.
+      const warns = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warns).toHaveLength(2)
+      expect(warns.some((w) => w.includes("sseSrv") && w.includes('"sse"'))).toBe(true)
+      expect(warns.some((w) => w.includes("wsSrv") && w.includes('"websocket"'))).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+    // The installed copy is what the runtime reads — the skip is durable there.
+    const installedText = await readFile(join(installRoot, "m__typed", ".mcp.json"), "utf8")
+    expect(installedText).not.toContain("sseSrv")
+    expect(installedText).not.toContain("wsSrv")
+  })
+
+  it("an empty .mcp.json server key is skipped with a warn (it would compose the degenerate key plugin:<id>:)", async () => {
+    const sourceDir = await tempDir("inst-mcpempty-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { "": { command: "node", args: [] }, ok: { command: "node", args: [] } } }),
+      "utf8",
+    )
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const servers = await readMcpServers(sourceDir)
+      expect(Object.keys(servers)).toEqual(["ok"])
+      const warns = warnSpy.mock.calls.map((c) => String(c[0]))
+      expect(warns.some((w) => w.includes("empty name"))).toBe(true)
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it("a non-string `type` is a malformed config (plugin-invalid), like every other known field", async () => {
+    const sourceDir = await tempDir("inst-mcptype-bad-")
+    await writeFile(
+      join(sourceDir, ".mcp.json"),
+      JSON.stringify({ mcpServers: { s: { type: 5, command: "node", args: [] } } }),
+      "utf8",
+    )
+    await expect(readMcpServers(sourceDir)).rejects.toMatchObject({ code: "plugin-invalid" })
   })
 
   it("overwrite: re-installing the same id replaces the previous copy (stale files gone, content refreshed)", async () => {

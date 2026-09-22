@@ -288,6 +288,11 @@ describe("createShellTools", () => {
   // forwards the sandboxPolicy into exec.run / exec.runBackground for BOTH
   // tools (and that the field is absent when no policy is configured).
   it("sandboxPolicy: bash/pwsh attach policy to run + runBackground; absent → no sandbox field", async () => {
+    // M62: the option is a RESOLVER, not a value — this test used to pass the
+    // policy object directly. What it pins is unchanged (the policy reaches
+    // exec.run and exec.runBackground for BOTH tools, and the field is absent
+    // when none is configured); per-call resolution is covered by
+    // test/sandbox-per-call.test.ts.
     const policy: SandboxExecutionPolicy = { mode: "read-only", workspaceRoot: "/" }
     const foreground: ExecCommand[] = []
     const background: ExecCommand[] = []
@@ -304,7 +309,7 @@ describe("createShellTools", () => {
       killJob: () => "already-finished",
       listJobs: () => [],
     }
-    const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: policy })
+    const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: () => policy })
     await bash.execute({ command: "echo hi" }, {})
     await pwsh.execute({ command: "Get-Date" }, {})
     await bash.execute({ command: "echo bg", background: true }, {})
@@ -327,6 +332,10 @@ describe("createShellTools", () => {
     const [plainBash] = createShellTools({ exec: noPolicyExec })
     await plainBash.execute({ command: "echo hi" }, {})
     expect(plainForeground[0]!.sandbox).toBeUndefined()
+    // `undefined` must mean the field is ABSENT, not present-and-undefined: exec
+    // reads `cmd.sandbox !== undefined`, but an explicit undefined key would
+    // silently change the contract for any consumer that uses `in`.
+    expect("sandbox" in plainForeground[0]!).toBe(false)
   })
 })
 
@@ -400,12 +409,18 @@ describe("shell output retention", () => {
     expect(res.truncated).toBeUndefined()
   })
 
-  it("no retention config → today's behavior (exact shape, no stderr)", async () => {
+  it("no retention config → unchanged decode, and stderr is now carried", async () => {
     const tools = createShellTools({ exec: fakeExec({ stdout: "hi", stderr: "err", exitCode: 0 }) })
     const bash = tools.find((t) => t.name === "bash")!
-    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; exitCode: number }
-    // Exactly today's shape: stderr is dropped entirely, no truncated marker.
-    expect(res).toEqual({ stdout: "hi", exitCode: 0 })
+    const res = (await bash.execute({ command: "echo hi" }, {} as never)) as { stdout: string; stderr: string; exitCode: number }
+    // M62 Task 3: this used to assert `toEqual({ stdout, exitCode })` — "stderr is
+    // dropped entirely". That made the tool's most legible failure channel depend
+    // on retention being OFF, which is backwards: the RETAINED path below already
+    // returns `stderr`, and the refusals the shell returns (bash absent, sandbox
+    // unavailable) carry their whole reason in it. The declared output type names
+    // `stderr` too, so the shape and the value now agree on both paths. Still no
+    // `truncated` marker here — that remains retention's business.
+    expect(res).toEqual({ stdout: "hi", stderr: "err", exitCode: 0 })
   })
 
   it("pwsh also retains", async () => {

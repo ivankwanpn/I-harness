@@ -3037,6 +3037,142 @@
         ],
         "verified": true,
         "wiringNote": "Wired: the single dependent is xai-grok-workspace, exposing it as a `workspace.fuzzy_search` RPC driven through a manager (xai-grok-workspace/src/file_system/mod.rs:143-166). The degradation ladder is regression-guarded by a unix child-re-exec test that caps the process-count rlimit and asserts the process degrades instead of aborting (lib.rs:843-890)."
+      },
+      {
+        "name": "confirmed-corruption-quarantine-and-recreate",
+        "what": "The session index is a rebuildable cache, so an unusable database file is classified, confirmed, quarantined and recreated instead of failing search. Classification is narrow on purpose: `is_unusable_db_error` accepts the SQLite `DatabaseCorrupt`/`NotADatabase` codes or one of three phrases - \"disk image is malformed\", \"malformed database schema\", \"is not a database\" - because a bare \"malformed\" would also match a bad FTS MATCH expression (recovery.rs:35-56). A heal is confirmed before it runs: `probe_usable` reopens the file READ-ONLY and requires `PRAGMA integrity_check` to return exactly \"ok\", and `heal_unusable` returns without touching anything when the reprobe says healthy or fails transiently (fts.rs:131-136; recovery.rs:138-143). Quarantine then happens under a process-wide mutex plus an exclusive cross-process `fs2` lock on `<effective db>.lock`, renaming the `-wal`/`-shm`/`-journal` siblings and then the main file to `<name>.corrupt.<unix_nanos>`, recreating an empty index and bumping a process-global `CACHE_EPOCH` that long-lived connections and in-flight queries observe (recovery.rs:114-136, :64-104, :160; bootstrap.rs:419-435; manager.rs:275-285).",
+        "invariants": [
+          "Corruption must be confirmed twice before anything is moved - the error-code/phrase classification AND a read-only `PRAGMA integrity_check` reprobe - because a wrong quarantine discards an index that only looked broken (fts.rs:131-136).",
+          "The phrase allowlist must stay specific: a bare \"malformed\" also matches a malformed FTS MATCH expression, and a test pins that neither \"malformed MATCH expression\" nor \"database is corrupt\" classifies (recovery.rs:221-233).",
+          "A heal must move the sidecars with the main file and must bump `CACHE_EPOCH`, or a stale `-wal` is replayed into the fresh database and cached connections keep pointing at the renamed inode (recovery.rs:71-84, :160; bootstrap.rs:419-424)."
+        ],
+        "failurePolicy": "mixed - confirmation fails closed (nothing is quarantined unless corruption is confirmed by both the classifier and the integrity-check reprobe), while the heal itself fails soft: a heal lock that cannot be opened or taken, and a rename that fails, both leave the file in place and return, so the caller sees only the original error. The post-heal retry is bounded at exactly one attempt, and a file that is unusable but can be neither quarantined nor recreated is logged, not deleted.",
+        "constants": [
+          {
+            "name": "quarantine suffix",
+            "value": "\".corrupt.{unix_nanos}\"",
+            "evidence": "crates/codegen/xai-grok-session-search/src/recovery.rs:69"
+          },
+          {
+            "name": "quarantined sqlite siblings",
+            "value": "\"-wal\", \"-shm\", \"-journal\"",
+            "evidence": "crates/codegen/xai-grok-session-search/src/recovery.rs:71"
+          },
+          {
+            "name": "heal lock file",
+            "value": "\"<effective_db>.lock\", fs2 lock_exclusive, opened create+write (never truncated)",
+            "evidence": "crates/codegen/xai-grok-session-search/src/recovery.rs:120-136"
+          },
+          {
+            "name": "unusable-DB phrase allowlist",
+            "value": "\"disk image is malformed\" | \"malformed database schema\" | \"is not a database\"",
+            "evidence": "crates/codegen/xai-grok-session-search/src/recovery.rs:53-55"
+          },
+          {
+            "name": "post-heal retry budget",
+            "value": "1 (the caller's operation is re-run once against the recreated index)",
+            "evidence": "crates/codegen/xai-grok-session-search/src/fts.rs:97-98"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-session-search/src/recovery.rs:35-56",
+          "crates/codegen/xai-grok-session-search/src/recovery.rs:64-104",
+          "crates/codegen/xai-grok-session-search/src/recovery.rs:106-143",
+          "crates/codegen/xai-grok-session-search/src/recovery.rs:145-170",
+          "crates/codegen/xai-grok-session-search/src/fts.rs:82-102",
+          "crates/codegen/xai-grok-session-search/src/fts.rs:131-136",
+          "crates/codegen/xai-grok-session-search/src/bootstrap.rs:419-435",
+          "crates/codegen/xai-grok-session-search/src/manager.rs:246-285",
+          "crates/codegen/xai-grok-session-search/src/db.rs:34-88"
+        ],
+        "modules": [
+          "xai-grok-session-search"
+        ],
+        "verified": true,
+        "wiringNote": "On every open, not behind a flag: `SessionSearchIndex::open_or_create` and `with_index` both route unusable-DB errors through `heal_unusable`, and `with_index` re-runs the caller's operation exactly once against the recreated file (fts.rs:82-102, :113-129). The heal takes its lock on the per-host effective path, so on a network mount it quarantines the same per-host file the journal-mode classifier selected (recovery.rs:118). A heal also resets the rate-limit budget of the crate's log counters, so a healed index gets a fresh warning allowance rather than staying throttled (db.rs:33-88)."
+      },
+      {
+        "name": "debounced-hash-deduped-index-maintenance",
+        "what": "Index writes are queued per session and coalesced behind a 500 ms debounce rather than written on every turn: `enqueue` sends a job to a per-grok-home worker whose pending map holds one deadline per `(session_id, cwd)` key, so repeated updates inside the window collapse into a single flush (manager.rs:32, :201-228, :304-336, :406-428). A flush re-reads the session through the `SessionSource` seam - `Some(session)` goes to `upsert_unless_unchanged`, which skips the write when the stored blake3 hash of title-plus-content matches, `None` (session gone) deletes the row, and `Err` leaves the indexed copy alone (manager.rs:430-443; doc.rs:29-61). Because that SQLite file is shared with other grok generations that may wipe or downgrade it, every query re-verifies the on-disk completed-bootstrap marker and only re-runs the full bootstrap when the marker is confirmed absent; a transient marker read failure is deliberately not a rebuild (manager.rs:1-5, :367-402; bootstrap.rs:357-367). `execute_search` waits up to 5 s for an in-flight bootstrap, then answers `bootstrapping: true` when the cache was healed, a bootstrap is running, or a live claim has no completion marker, so an empty page is not read as \"no matches\" (manager.rs:233-286).",
+        "invariants": [
+          "The dedup hash must cover the title as well as the body (`blake3(title, NUL, content)`), or a rename with an unchanged transcript is deduped into the old title for good (doc.rs:43-51).",
+          "Only `Ok(None)` from the source may delete a row: a read error must leave the indexed copy in place, or a temporarily unreadable session store silently empties search (manager.rs:436-443).",
+          "An unreadable bootstrap marker (`None`) must not be treated as \"marker absent\" - rebuilding on every transient read failure means a full reindex per failing search (manager.rs:395-401).",
+          "An empty result must carry `bootstrapping: true` whenever the index may be incomplete (healed, bootstrapping, or claimed without a completion marker), so callers can tell \"settling\" from \"no matches\" (manager.rs:52-54, :280-285)."
+        ],
+        "failurePolicy": "fail-soft - every maintenance failure is logged, not returned: a failed upsert or extract is recorded against the session and the worker moves on, a failed bootstrap only logs through a rate-limited counter and withholds the completion marker so a later search retries, and queries degrade to an empty (not final) response when no manager exists or the query is blank.",
+        "constants": [
+          {
+            "name": "SEARCH_INDEX_DEBOUNCE_MS",
+            "value": "500",
+            "evidence": "crates/codegen/xai-grok-session-search/src/manager.rs:32"
+          },
+          {
+            "name": "BOOTSTRAP_WAIT_TIMEOUT / BOOTSTRAP_POLL_INTERVAL",
+            "value": "5 s / 50 ms",
+            "evidence": "crates/codegen/xai-grok-session-search/src/manager.rs:33-34"
+          },
+          {
+            "name": "content hash",
+            "value": "blake3(title + 0x00 + content), hex-encoded",
+            "evidence": "crates/codegen/xai-grok-session-search/src/doc.rs:47-51"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-grok-session-search/src/manager.rs:32-34",
+          "crates/codegen/xai-grok-session-search/src/manager.rs:304-336",
+          "crates/codegen/xai-grok-session-search/src/manager.rs:340-404",
+          "crates/codegen/xai-grok-session-search/src/manager.rs:406-443",
+          "crates/codegen/xai-grok-session-search/src/manager.rs:233-286",
+          "crates/codegen/xai-grok-session-search/src/doc.rs:29-61",
+          "crates/codegen/xai-grok-session-search/src/bootstrap.rs:358-367"
+        ],
+        "modules": [
+          "xai-grok-session-search"
+        ],
+        "verified": true,
+        "wiringNote": "Wired: the shell enqueues after a turn's persistence write (xai-grok-shell/src/session/persistence.rs:2005-2010) and when a session title is generated or reset (src/extensions/session_admin.rs:181-186, :301-305). A process that keeps no index holds no manager, and the shell models that as a three-state decision - `IndexDecision::Pending` answers `still_settling()` rather than an empty final page, `Off` is final, `On` carries the manager (xai-grok-shell/src/session/storage/search.rs:66-102, :192-203). `evict_session` returns without doing anything when no index file exists, so a process that only evicts never creates one (manager.rs:288-302)."
+      },
+      {
+        "name": "two-tier-index-lock-with-stale-takeover",
+        "what": "Index work on a repository is serialized twice over: an in-memory `DashMap` registry dedups inside the process with shared, counted readers for `Load` and a single exclusive writer for `Save`/`Build`/`BackgroundRefresh`, and an exclusive operation then writes a cross-process lock file beside the cache carrying `operation=`, `pid=`, `started=` and `workspace=` (lock.rs:23-26, :53-58, :86, :170-221, :325-380). An existing lock file is honored only while it is younger than the operation's own stale timeout AND its recorded PID is still alive; otherwise it is logged as stale and taken over, and a failed cross-process acquisition releases the in-memory lock before reporting `Busy` (lock.rs:331-350, :406-419, :198-212). `is_operation_in_progress` exposes the same rule as a non-blocking probe that acquires nothing (lock.rs:226-254). The shipped consumer is the background index refresh, which returns early - no stat pass, no filesystem walk - whenever the lock is busy (index_manager.rs:1321-1336).",
+        "invariants": [
+          "The shared/exclusive asymmetry is the mechanism: `Load` counts readers while every other operation is exclusive, so a `Load` that blocks other loads, or an exclusive that coexists with a reader, silently re-admits duplicate index work (lock.rs:53-58, :270-300).",
+          "Staleness requires BOTH signals - an expired per-operation timeout and a dead PID on unix; on non-unix `is_process_alive` reports true, so only the timeout can break a lock there (lock.rs:406-419).",
+          "A failed cross-process acquisition must release the in-memory lock, or the workspace stays locked to this process for the rest of its life (lock.rs:198-212)."
+        ],
+        "failurePolicy": "fail-soft - contention is never an error: `try_lock` returns `LockResult::Busy { operation, holder_pid }` and the caller skips the work (the background refresh logs and returns). A lock directory that cannot be created only warns, a lock file that cannot be written reports busy, removal on drop only warns, and the non-unix PID probe conservatively reports every process alive rather than guessing.",
+        "constants": [
+          {
+            "name": "per-operation stale timeouts",
+            "value": "load 120 s / save 120 s / build 600 s / background_refresh 300 s",
+            "evidence": "crates/codegen/xai-codebase-graph/src/manager/lock.rs:23-26"
+          },
+          {
+            "name": "lock file path",
+            "value": "<workspace>/.goto_index.lock (cache path with_extension(\"lock\"))",
+            "evidence": "crates/codegen/xai-codebase-graph/src/manager/lock.rs:263-267"
+          },
+          {
+            "name": "lock file fields",
+            "value": "operation=, pid=, started= (unix secs), workspace=",
+            "evidence": "crates/codegen/xai-codebase-graph/src/manager/lock.rs:364-377"
+          }
+        ],
+        "evidence": [
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:23-26",
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:53-68",
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:170-221",
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:226-254",
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:326-380",
+          "crates/codegen/xai-codebase-graph/src/manager/lock.rs:407-419",
+          "crates/codegen/xai-codebase-graph/src/index_manager.rs:1322-1336"
+        ],
+        "modules": [
+          "xai-codebase-graph"
+        ],
+        "verified": true,
+        "wiringNote": "One operation is wired today: `try_lock(root_path, IndexOperation::BackgroundRefresh)` in the background index refresh (index_manager.rs:1322), which is what stops two grok processes from stat-walking and re-parsing the same repository at once. The `Load`, `Save` and `Build` variants and the exported `is_operation_in_progress` probe have no call sites outside lock.rs's own tests in this tree (repo-wide grep), so the indexing actor's own cache load/save path does not take these locks."
       }
     ],
     "ops": [
@@ -3683,11 +3819,6 @@
       "why": "`crates/codegen` is the directory containing 82 of the checklist's crates, not a crate. The checklist's own `path` values are `crates/codegen/<name>`, so this row is a container artifact of the classifier's directory walk."
     }
   ],
-  "domainsAbsent": [
-    {
-      "domain": "retrieval",
-      "why": "Not absent - deliberately deferred rather than claimed hollow. The three retrieval crates are real and were read: `xai-grok-session-search` (FTS5 cache with BM25, quarantine-and-recreate recovery, one-process reindex lease), `xai-codebase-graph` (tree-sitter go-to-definition and go-to-references over a full repo index) and `xai-fuzzy-file-search` (ignore-walk plus nucleo matcher on a background thread, degrading per stage rather than aborting). Evidence for all three is in `moduleCoverage`, but a second research pass over their internals (schema, lease mechanics, ranking, reindex triggers) had not returned when this file was written, so no mechanism entries with verified line citations were emitted. Reading these three crates fully is the highest-value next step for this source."
-    }
-  ],
+  "domainsAbsent": [],
   "_rebuiltBy": "scripts/audit/rebuild-json-from-sections.mjs after the assembled file ended at depth -2; a mechanism object inside one domain array was missing its closing brace, which leaked its own fields as domain names"
 }

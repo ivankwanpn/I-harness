@@ -10,7 +10,25 @@ headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26�
 init/teardown, capability probe, GrokNight theme, PTY harness) → M37a app layer
 (grok 1:1 agent screen: scrollback engine + views + keymap + embedded
 SessionService bridge + `apps/tui`, PTY-proved live streaming). M37b covers
-interaction overlays + Inline/minimal modes.**
+interaction overlays + Inline/minimal modes — and M65 then removed the TUI and
+web frontends entirely (2026-09-17); see the removal note below.**
+
+> **Taking this project over?** Read [`docs/handoff/HANDOFF.md`](docs/handoff/HANDOFF.md) first: current
+> branch/commit state, the verification commands with **measured baselines**, nine traps that actually
+> cost time here, and the list of what was deliberately left undone. The same directory holds
+> [`FINAL-REPORT.md`](docs/handoff/FINAL-REPORT.md) (the last goal's full report) and
+> [`what-the-design-does-not-answer.md`](docs/handoff/what-the-design-does-not-answer.md) (what the
+> design does not answer, and what was declined with rulings).
+
+> **Frontends: the TUI and the web frontend were removed on 2026-09-17 (M65).** The product
+> position is that **the backend must keep working when no interface is attached**, and that **a
+> frontend should be a pure frontend** — so the frontends went first, and the rebuild is a
+> separate milestone (the rebuild is *not* part of M65). Removed: `apps/tui`, `packages/tui`,
+> `packages/tui-core`, `packages/web-host` and `apps/cli/src/web.ts`. **`packages/web` is not a
+> frontend** — it is the `web_search` / `web_fetch` **tool** package, still on the production path
+> (`packages/session-executor/src/assembly.ts:19`). **The bare launch is back to its pre-M44
+> shape**: usage goes to **stderr**, exit code **1** — no UI launches. Full record:
+> [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](docs/handoff/2026-09-17-remove-tui-and-web-frontends.md).
 
 ## What it is
 
@@ -39,10 +57,10 @@ pnpm typecheck       # tsc --noEmit for every package
 pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runHeadless)
 ```
 
-## Install once — launch like `grok` (M44)
+## Install once — a global command in any folder (M44)
 
-`i-harness` / `ih` — type the name in ANY folder's cmd/PowerShell to launch the
-TUI there (workspace = cwd), exactly like `grok` in a project folder:
+`i-harness` / `ih` — type the name in ANY folder's cmd/PowerShell to run the
+headless CLI there (workspace = cwd):
 
 ```bash
 # from the repo (one-time global link; both names go on PATH)
@@ -50,12 +68,15 @@ cd apps/cli
 pnpm link -g            # or: npm i -g ./apps/cli
 
 # from ANY project folder
-i-harness               # TUI (fullscreen) in the current folder
-ih --minimal            # native-scrollback mode
-ih --prompt "hi"        # auto-kick a prompt
-ih --attach <session-id>  # remote SDK session
-ih help                 # full usage (run / web / sdk / acp / tui)
+ih run "say hi" --model deepseek:deepseek-chat --yes   # headless run (workspace = cwd)
+ih sessions list                                       # session list
+ih help                 # full usage (run / sdk / acp / sessions)
 ```
+
+**A bare launch, or an absent/unknown subcommand, is a usage error**: usage goes
+to **stderr**, exit code **1**. There is no "default UI" launch — that was the
+M44–M64 behaviour, and M65 restored the pre-M44 shape (authority:
+`db3d1e7^:apps/cli/src/index.ts`).
 
 The bin shim resolves the tsx loader by ABSOLUTE path from its own install —
 no bundle, no dist: the repo stays source-run.
@@ -77,15 +98,16 @@ node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
   (registry + PATH cleanup). `i-harness` and `ih` both work in any cmd after
   install.
 - **Verify**: `node scripts/verify-installer.mjs` — silent install → both
-  commands + `--version`/`tui --help` + the installed dist self-check →
-  clean uninstall (currently 19/19 de-verified on this machine).
-- **Dist is self-sufficient (M55)**: the `--attach` SDK spawn re-enters the
-  bundle (`node ih.mjs sdk`), the Windows-ACL sandbox spawns the bundled
-  `dist/runner.mjs`, `/minimal` relaunches the bundle itself, and the minimal
-  inline engine is inlined — none of them need the source or tsx anymore.
-  `I_HARNESS_HOME` is a **source-mode** dev override only (a non-standard
-  checkout); dist never reads it. Version is the single constant
-  `apps/cli/package.json` (0.1.0).
+  commands + `--version` + the `help` usage surface + the installed dist
+  self-check → clean uninstall (currently 19/19 de-verified on this machine).
+- **Dist is self-sufficient (M55)**: the Windows-ACL sandbox spawns the bundled
+  `dist/runner.mjs`, and the SDK stdio server re-enters the bundle itself
+  (`node ih.mjs sdk`) — neither needs the source or tsx anymore. (M65 removed
+  the three TUI-subject probes — the `--attach` SDK spawn, the `/minimal`
+  relaunch argv and the minimal inline engine — together with their subject,
+  the deleted `@i-harness/tui-app`.) `I_HARNESS_HOME` is a **source-mode** dev
+  override only (a non-standard checkout); dist never reads it. Version is the
+  single constant `apps/cli/package.json` (0.1.0).
 
 ## Scripts
 
@@ -95,6 +117,7 @@ node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
 | `pnpm typecheck` | Type-check every package (`pnpm -r typecheck`)       |
 | `pnpm e2e`       | End-to-end tests (`vitest run e2e/ --config e2e/vitest.config.ts`) |
 | `pnpm verify:store` | pnpm store integrity check (`scripts/check-store.sh`) — run before e2e after installs |
+| `pnpm verify:reachability` | Reachability ratchet — fails on **newly added** orphan rows only, never on a low count; seeded from `scripts/audit/reachability-baseline.json`, with exemptions only in a dated, reasoned allowlist. It proves a caller exists, never that the call is right |
 
 Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
 
@@ -102,7 +125,7 @@ Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-too
 
 ```
 node scripts/build-dist.mjs    # esbuild bundle + native deploy → dist/ (gitignored)
-node scripts/verify-dist.mjs   # gate: layout/manifest checks + --version / tui --help / help + __dist-selfcheck
+node scripts/verify-dist.mjs   # gate: layout/manifest checks + --version / bare-launch usage error / help + __dist-selfcheck
 ```
 
 `build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,
@@ -113,9 +136,10 @@ the pinned manifest `installer/dist-package.json` (exact versions, build-time
 drift check). The dist layout is
 `dist/{ih.mjs, runner.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
 and runs with plain `node` — no tsx needed. `verify-dist.mjs` is the gate
-(fails loud on any mismatch; it also runs the hidden `__dist-selfcheck` so the
-minimal engine, the ACL confinement, the relaunch argv and the SDK re-entry are
-proved from the bundle). The `Distribution` story (installing the produced
+(fails loud on any mismatch; it also runs the hidden `__dist-selfcheck`, which
+proves the windows-acl confinement seam, and drives `node ih.mjs sdk` directly,
+which proves the SDK stdio re-entry — M65 removed the three TUI-subject probes,
+so these are what remain). The `Distribution` story (installing the produced
 dist) is owned by the packaging milestone.
 
 ## Development status (M1 → M34)
@@ -161,15 +185,15 @@ frontend" gate:
 | M43 | Rewind UI 1:1 (§3.9 phases/strings/keys via grok's rewind.rs) — Esc-Esc picker, mode-select, two-phase confirm with clean/conflict lists, engine hidement of rewound blocks, dim-from-anchor; PTY case-020 (real service restore: disk byte-exact v1 + journal truncate + marker line) | ✅ |
 | M41b | Wire v1.1 appendix: `session/cancel` (in-flight abort now reaches the engine — per-submit signal threading) + `session/rewind/*` (points/plan/execute via rewindFactory), capability-gated remote consumption, CLI list-row enrichment (updatedAt/turnCount), DA1 probe | ✅ |
 | M46b | Mouse full parity (new-truth): capture five-mode (1000/1002/1003/1015/1006, crossterm order) + Moved decode, HitArea hover (dirty-only repaint — row bg blend / ts `%H:%M:%S | %b %d` swap / md border / dropdown+permission rows), click semantics (single=select+focus; 300ms multi-click: double=fold, triple=fold+top; drag ≥1 cell = display-line selection + edge-band autoscroll + auto-copy (injected clipboard) + "Copied!" toast + flash; scrollbar latch+fraction jump; permission double-fire; prompt/pane/dropdown clicks), scroll streaming (grok engine port — 80ms gap / 16ms cadence / per-brand ept / 2.5x accel / taper / carry / speed knob), knobs (settings Mouse 7: speed/mode/lines/invert/keep_text_selection/word_separators/mouse_reporting_toggle + Ctrl+R opt-in gate), minimal no-capture; PTY case-023 mouse matrix (wheel/hover+ts-swap/click/fold/drag-autocopy/scrollbar/permission-double + minimal no-?1000h byte assert; 34-write budget) | ✅ |
-
 | M48 | Reliability and TUI delivery: G1 chain rejection advancement; durable TUI session-dir create/list/resume/close flush; capability-gated durable Rewind bridge for recorder-backed file changes; PTY case-010 Windows `chcp` command-resolution fix | ⚠️ delivered, full verification blocked by Windows ACL/installer runtime failures |
+| **M65** | **Removed the TUI and web frontends** (`apps/tui`, `packages/tui`, `packages/tui-core`, `packages/web-host`, `apps/cli/src/web.ts`); restored the **pre-M44 bare launch** (usage → stderr, exit 1); retired 19 TUI-only settings and 21 exports whose only consumer was a frontend; priced the 104 rows the removal orphaned as **one named class** (T delete / B retire / C contract / ? defer). **The M35–M49 interface capabilities therefore no longer exist** — the rebuild is a separate milestone |
 
 Each milestone was developed spec → plan → subagent-driven execution with
 per-task review. Design specs and plans live in `docs/superpowers/`.
 
 **Full capability inventory: `docs/CAPABILITIES.md`**（能力全景/邊界,以 m34 為準）。
 
-## Package structure (65 packages + apps/cli / apps/tui-app)
+## Package structure (65 packages + apps/cli)
 
 ```
 packages/
@@ -217,7 +241,6 @@ packages/
 ├── session-title/        M26 A: session title (LLM providers + fold)
 ├── plan-mode/            M26 A: plan mode (log-only event + projection + exit tool)
 ├── goal/                 M26 E: event-sourced goal + tools
-├── feedback/             M26 E: message feedback (doc sidecar + CAS)
 ├── jobs/                 M26 D: durable job records + kill bridge
 ├── credentials/          M26 E: credentials (env-first, refs-not-values)
 ├── workspace/            M26 E: workspace document-library registry
@@ -225,16 +248,12 @@ packages/
 ├── hooks/                M26 E: hooks (Claude / Codex contracts)
 ├── schedule/             M26 E: persistent schedule
 ├── settings/             M26 E: settings layering + hot reload + comment-preserving patch
-├── web-host/             M26 C: engine-owned web host (routes + WS mux, /api/health)
-├── web/                  M26 C: web app
+├── web/                  M26 C: web_search / web_fetch tools — a tool package, NOT a frontend
 ├── sdk/                  M27 C: stdio NDJSON JSON-RPC SDK (wire contract v0)
 ├── acp/                  M28 C: ACP server (v0 automation subset)
-├── fs-watch/             M28 B: fs watch (chokidar)
-├── tui-core/             M36 TUI renderer layer (cell grid/diff, input, terminal, probe, theme; runtime deps: none)
-└── tui/                  M37a TUI app layer (scrollback engine + views + keymap + embedded bridge)
+└── fs-watch/             M28 B: fs watch (chokidar)
 apps/
-├── cli/                  headless CLI (run/resume/--telemetry/--sandbox / sdk / acp / web)
-└── tui-app/              M37a TUI app (embedded mock agent shell — `tui --prompt "hi"`)
+└── cli/                  headless CLI (run / sessions / sdk / acp + bin shim)
 ```
 
 ## Running the CLI
@@ -299,4 +318,4 @@ node --import tsx apps/cli/src/index.ts run "把 src/data.txt 第一行改成 he
 
 ## Known infra quirks
 
-- **vitest worker flake (RESOLVED M31)**: the tinypool IPC teardown race (`ERR_IPC_CHANNEL_CLOSED`) that hit web-host (M27-M31) is fixed — `packages/web-host/vitest.config.ts` now uses `pool: "forks"` (child-process workers; two consecutive full-run verifications green). If any other package shows the same symptom, mirror that config.
+- **vitest worker flake (RESOLVED M31)**: the tinypool IPC teardown race (`ERR_IPC_CHANNEL_CLOSED`) that hit web-host (M27-M31) is fixed — `packages/web-host/vitest.config.ts` used `pool: "forks"` (child-process workers; two consecutive full-run verifications green; **that package was removed in M65**). If any other package shows the same symptom, mirror that config.

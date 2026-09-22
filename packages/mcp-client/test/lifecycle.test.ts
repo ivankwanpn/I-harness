@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { mountMcpClient, type McpMountHandle } from "../src/index.ts"
+import { McpServerUnavailableError, mountMcpClient, type McpMountHandle } from "../src/index.ts"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
 import type { McpServerConfig, ConnectedMcpClient } from "../src/index.ts"
@@ -86,6 +86,11 @@ describe("mountMcpClient lifecycle", () => {
       expect(handle.serverName).toBe("soft")
       // empty mount: nothing registered, nothing is left behind
       expect(warn).toContain("failOnStartupError=false")
+      // M6-D3: an empty mount has no catalogue — a boundary consumer asking it
+      // gets "clean" (never a rebuild), and a DIRECT refresh gets the same
+      // unavailable error a tool call does, not a silent no-op.
+      expect(handle.catalogDirty()).toBe(false)
+      await expect(handle.refreshCatalog()).rejects.toThrowError(McpServerUnavailableError)
       await handle.unmount()
     } finally {
       console.warn = original

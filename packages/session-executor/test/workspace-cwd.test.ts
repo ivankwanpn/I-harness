@@ -3,11 +3,12 @@
 // tool's `pwd` printed the vitest cwd, the PTY spawned in the vitest cwd and
 // `glob` with no path searched the vitest cwd — while the fs tools resolved
 // against the workspace.
+import { createContext } from "@i-harness/core-plugin"
 import { describe, expect, it } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createExecService, type ExecService } from "@i-harness/exec"
+import { registerExec, type ExecService } from "@i-harness/exec"
 import type { TerminalService } from "@i-harness/terminal"
 import { resolveRgPath } from "@i-harness/fs-search"
 import { createSessionAssembly } from "../src/assembly.ts"
@@ -35,7 +36,7 @@ function stripAnsi(s: string): string {
 }
 
 async function pwshAvailable(): Promise<boolean> {
-  const r = await createExecService().run({
+  const r = await registerExec(createContext()).run({
     argv: ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PWD.Path"],
   })
   return r.exitCode === 0

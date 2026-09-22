@@ -41,4 +41,30 @@ describe("llm-mock", () => {
     }
     expect(events).toEqual(["done"])
   })
+
+  // M5 T2: the mock is how most of the tree exercises the usage seam, so it has
+  // to be able to report — and to stay SILENT, which is its own case. Yielded
+  // FIRST because that is where the wire puts it (Anthropic's message_start
+  // carries the input side, before any content arrives).
+  //
+  // NOTE ON PROVENANCE: the change this pins was driven by the failing
+  // `apps/cli/test/metrics-summary.test.ts` RED, not by a RED here — this test
+  // was written after, and its teeth were established by the mutation recorded
+  // with that commit rather than by a watched failure.
+  it("M5 T2: replays a scripted usage report, and emits nothing when unset", async () => {
+    const withUsage = createMockClient([{ role: "assistant", text: "hi", usage: { inputTokens: 12, cacheReadTokens: 400 } }])
+    const seen: string[] = []
+    for await (const ev of withUsage.stream({} as LLMRequest)) {
+      if (ev.type === "usage") seen.push(`usage:${JSON.stringify(ev.usage)}`)
+      if (ev.type === "text/chunk") seen.push("text")
+    }
+    expect(seen).toEqual(['usage:{"inputTokens":12,"cacheReadTokens":400}', "text"])
+
+    const without = createMockClient([{ role: "assistant", text: "hi" }])
+    const none: string[] = []
+    for await (const ev of without.stream({} as LLMRequest)) {
+      if (ev.type === "usage") none.push("usage")
+    }
+    expect(none).toEqual([])
+  })
 })

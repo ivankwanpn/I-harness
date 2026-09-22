@@ -56,15 +56,59 @@ export interface CommandDescriptor {
   description?: string
   argumentHints?: string
   body: string
+  /** Frontmatter keys the commands parser saw but does NOT honour, in file order.
+   * Present only when non-empty. Recorded so a command declaring `allowed-tools`
+   * (or any key we do not implement) cannot silently believe it is restricted —
+   * the parser in `commands.ts` fills this, and spec 2026-09-17 §3 decision 3
+   * says why it is recorded rather than dropped.
+   *
+   * NOTE: this comment deliberately does NOT name the command-file parser's
+   * exported function. The reachability scanner's "is this used?" test is a TEXT
+   * match over production files, so writing that name anywhere here — including
+   * in an explanation of this very hazard — marks it used and silently suppresses
+   * its row. Measured on 2026-09-17, twice in a row: the first wording tripped
+   * it, and so did the first attempt at THIS note. That is the comment-masking
+   * mechanism the baseline document's §7 item 4 records. */
+  unsupported?: string[]
 }
 
 /** The runtime surface enable() produces and the host consumes on every agent
  * build: materialized skill dirs (read-only overlays), the re-keyed MCP config
- * (`plugin:<id>:<server>` keys) and the markdown command descriptors. */
+ * (`plugin:<id>:<server>` keys), the markdown command descriptors, the markdown
+ * subagent descriptors and the hook config PATHS. */
 export interface RuntimeInputs {
   skillDirs: string[]
   mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE>
   commandDescriptors: CommandDescriptor[]
+  agentDescriptors: AgentDescriptor[]
+  /** Paths to each enabled plugin's `hooks/hooks.json`, read from the INSTALLED
+   * copy like agents — no materialized overlay, because the hooks registry takes
+   * a path and owns its own load. The config is deliberately NOT parsed here:
+   * a second reader of the same file is how the two drift, and the loader's
+   * fail-closed semantics (trust, approval, malformed-config) live with it. */
+  hookConfigs: string[]
+}
+
+/** One subagent discovered in a plugin's agents/*.md (name = the frontmatter
+ * `name`, falling back to the file name). The body IS the system prompt.
+ *
+ * `tools` is reported VERBATIM — the names stay exactly as the plugin wrote
+ * them (Claude Code's `Read`/`Glob`/`Grep` vocabulary), because the translation
+ * into this repo's registry belongs to the mount side and doing it here would
+ * make the descriptor stop saying what the file actually said. `undefined` means
+ * the file declared no `tools` key at all, which is "inherit" — a DIFFERENT
+ * thing from `[]`, which is "no tools", and the host resolves the two
+ * differently. */
+export interface AgentDescriptor {
+  name: string
+  description: string
+  systemPrompt: string
+  tools?: string[]
+  /** The declared model alias. Recorded, never honoured — see the mount side. */
+  model?: string
+  /** Frontmatter keys the agent parser saw but does NOT honour, in file order.
+   * Present only when non-empty. Same contract as CommandDescriptor.unsupported. */
+  unsupported?: string[]
 }
 
 /** One plugin as listed by catalog(): merged manifest metadata + registry state. */

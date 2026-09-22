@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { deriveSearchText, type Session } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { ProviderRegistry } from "@i-harness/provider"
 import type { AgentRegistry } from "@i-harness/core-agent"
 import {
   spawnChild,
@@ -32,7 +31,16 @@ export interface GuardianReviewDeps {
   parentRegistry: ToolRegistry
   parentSession: Session
   parentCtx: PluginContext
-  providers: ProviderRegistry
+  /** Forwarded verbatim to `spawnChild` — see SpawnOptions.resolveModel. */
+  resolveModel: SpawnOptions["resolveModel"]
+  /** Forwarded verbatim to `spawnChild` too: the host's declared role models
+   * (`agents.roles`) and the `plugins.subagentModel` switch. The guardian's
+   * spawn is a role-carrying spawn like any other — without them a
+   * settings-declared `reviewer` entry is invisible at THIS site: the declared
+   * selection collapses to the role's own `model` (undefined), the gate never
+   * fires and the reviewer silently inherits the parent's client. */
+  roleSelectionFor?: SpawnOptions["roleSelectionFor"]
+  allowSubagentModelSelection?: boolean
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
   model?: ModelClient
@@ -126,6 +134,18 @@ export interface GuardianReviewVerdict extends GuardianVerdict {
 export async function runGuardianReview(deps: GuardianReviewDeps, request: GuardianRequest): Promise<GuardianReviewVerdict> {
   const role = ensureReviewerRole(deps.subagents.roles)
   const timeoutMs = deps.timeoutMs ?? GUARDIAN_REVIEW_TIMEOUT_MS
+  // R-B2, extended to this boundary: a CONFIGURED `deps.model` (the host's
+  // `guardian.model`, handed in by the assembly) WINS over `deps.parentModel`,
+  // and that precedence is DELIBERATE — not the silent exception this unit
+  // exists to remove. `deps.parentModel` is the session assembly's stable
+  // model handle (R-B1), so an INHERITED reviewer follows a rebind; a
+  // configured one does not — and this is the SECOND declared exception,
+  // never the only one: its twin is the summarizer's
+  // `config.summarizationModel` (compaction/src/index.ts), same rule, same
+  // cost: after a rebind every guardian review / summary keeps billing the
+  // configured endpoint. Pinned by "a CONFIGURED guardian model wins over the
+  // handle too" in packages/session-executor/test/assembly.test.ts — do NOT
+  // "fix" this into following the handle.
   const model = deps.model ?? deps.parentModel
   const message = renderGuardianMessage(request, renderRecentContext(deps.parentSession), deps.policyText ?? BUNDLED_GUARDIAN_POLICY)
   const { path, jobId, sessionId } = await spawnChild({
@@ -137,7 +157,13 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     parentCtx: deps.parentCtx,
     role,
     parentModel: model,
-    providers: deps.providers,
+    resolveModel: deps.resolveModel,
+    // The role's model is decided the SAME way here as through
+    // registerSubagent's chain: the declared selection and the switch ride WITH
+    // the resolver. Omitted when the host passed neither — an unset switch is
+    // OFF, never "enabled by omission".
+    ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
+    ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,
     agents: deps.subagents.agents,

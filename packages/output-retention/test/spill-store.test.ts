@@ -7,7 +7,7 @@ import { join, relative, sep } from "node:path"
 describe("spill helpers", () => {
   it("spillNotice formats correctly", () => {
     expect(spillNotice(1234, "C:/spill/f.log")).toBe(
-      "(Omitted 1234 bytes. Full result stored at: C:/spill/f.log. Use read with offset/limit, or grep this path to search within it.)",
+      "(Omitted 1234 bytes. Full result stored at: C:/spill/f.log. Use grep with this path to search within it.)",
     )
   })
   it("createSpillStore saves full text and returns path", async () => {

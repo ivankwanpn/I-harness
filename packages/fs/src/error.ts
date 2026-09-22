@@ -2,6 +2,10 @@ export type FsToolErrorCode =
   | "FS_NOT_FOUND" | "FS_NOT_REGULAR_FILE" | "FS_ALREADY_EXISTS"
   | "FS_EDIT_NOT_FOUND" | "FS_AMBIGUOUS_EDIT" | "FS_STALE_VERSION"
   | "FS_TOO_LARGE" | "FS_IO_ERROR"
+  // M16: the write was refused by the session's sandbox policy. Distinct from
+  // FS_IO_ERROR so a caller can tell "the system said no" from "the disk said no",
+  // and so the denial is classifiable rather than buried in a generic failure.
+  | "FS_SANDBOX_DENIED"
 
 export class FsToolError extends Error {
   readonly code: FsToolErrorCode
@@ -27,6 +31,19 @@ export class FsToolError extends Error {
 export interface FsToolFailure {
   error: string
   code: string
+  /**
+   * M62 ladder: the shared refusal SHAPE (`@i-harness/sandbox`), present when
+   * this failure IS a sandbox refusal and absent for every other fs failure.
+   *
+   * Without this field the ladder's refusal — whose whole point is that ONE rule
+   * covers fs, shell and terminal — could not be returned as a typed object
+   * literal from a tool whose output is `… | FsToolFailure`, and the only way out
+   * would be the JSON-in-a-string trick the GUARD path already uses (`guardWrite`
+   * serializes its denial into `error` to keep `FS_SANDBOX_DENIED` byte-identical
+   * for existing readers). Type-only import: this is the same dependency edge the
+   * tools already have, with no runtime cycle.
+   */
+  denial?: import("@i-harness/sandbox").SandboxDenial
 }
 
 /** Node errno codes that mean "the request could not be served" — converted to

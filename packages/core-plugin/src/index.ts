@@ -1,3 +1,13 @@
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T6: ONE module-scope handle for this file's one report; the phase is
+// `shutdown` because the message is emitted by an UNMOUNT disposer that timed
+// out (the plugin is already removed from the registry and the teardown
+// completes anyway). The level is `error`, inherited from the console.error it
+// replaces, and with nothing installed the handle delegates to console.error
+// verbatim (one argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("shutdown")
+
 export type NextFn = (payload: unknown) => unknown | Promise<unknown>
 export type Listener = (payload: unknown) => unknown
 export type WaterfallHandler = (payload: unknown, next: NextFn) => unknown | Promise<unknown>
@@ -445,7 +455,7 @@ function createScope(
     })
     return Promise.race([Promise.resolve(disposer), timeout]).then(() => {
       if (timedOut) {
-        console.error(`[core-plugin] unmount disposer for '${name}' timed out after 5s`)
+        d.error(`[core-plugin] unmount disposer for '${name}' timed out after 5s`)
       }
     })
   }

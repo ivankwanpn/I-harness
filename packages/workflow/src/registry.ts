@@ -5,6 +5,7 @@
 // package). One invalid file warns and skips — it never breaks the registry.
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import { parseWorkflowYaml, type WorkflowDefinition } from "./definition.ts"
 
 export interface WorkflowRegistry {
@@ -22,9 +23,23 @@ export interface WorkflowRegistryDeps {
   onWarn?: (message: string) => void
 }
 
+// W6 T6: the registry scan's warn+skip seam (an invalid .yml is skipped, and
+// the scan is how a host MOUNTS workflows, hence phase `mount`). The default's
+// body reaches the ambient instance, and is the console call it always was
+// when none is installed — same function, same single verbatim argument. The
+// deps' signature is untouched; only the default moved.
+function defaultOnWarn(message: string): void {
+  const d = currentDiagnostics()
+  if (d === undefined) {
+    console.warn(`[workflow] ${message}`)
+    return
+  }
+  d.child("mount").warn(`[workflow] ${message}`)
+}
+
 export function createWorkflowRegistry(deps: WorkflowRegistryDeps): WorkflowRegistry {
   const workflowDir = join(deps.workspace, "workflow")
-  const onWarn = deps.onWarn ?? ((message: string) => console.warn(`[workflow] ${message}`))
+  const onWarn = deps.onWarn ?? defaultOnWarn
   let cache: WorkflowDefinition[] | undefined
 
   function scan(): WorkflowDefinition[] {

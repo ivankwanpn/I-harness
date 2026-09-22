@@ -7,27 +7,38 @@ import {
   mutateSection,
   normalizeSettings,
   resolveSettingsPath,
-  SETTINGS_DEFAULTS,
 } from "../src/index.ts"
 
 async function tmpRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), "ih-settings-"))
 }
 
+/** The defaults, obtained through the PUBLIC api.
+ *
+ * `DEFAULTS` used to be exported and the tests named it directly. It is
+ * module-private now (nothing outside `index.ts` ever read it in production),
+ * and `normalizeSettings` is the sanctioned way to the same values — it is pure,
+ * so a module-scope constant is safe. */
+const DEFAULTS = normalizeSettings(undefined)
+
 describe("normalizeSettings", () => {
   it("falls back to defaults for a non-object / corrupt input", () => {
-    expect(normalizeSettings(undefined)).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings(null)).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings("junk")).toEqual(SETTINGS_DEFAULTS)
-    expect(normalizeSettings([])).toEqual(SETTINGS_DEFAULTS)
+    // `undefined` is deliberately NOT asserted here: it IS the reference the
+    // other three are compared against, so `expect(normalizeSettings(undefined))
+    // .toEqual(DEFAULTS)` would be `expect(X).toEqual(X)`. Dropping it costs no
+    // coverage — it never tested anything — and keeping it would have meant
+    // keeping a public export alive to avoid noticing that.
+    expect(normalizeSettings(null)).toEqual(DEFAULTS)
+    expect(normalizeSettings("junk")).toEqual(DEFAULTS)
+    expect(normalizeSettings([])).toEqual(DEFAULTS)
   })
 
   it("empty state has NO model defaults anywhere (amendment: no seeded model)", () => {
     // core.model = "" = unset; llm.defaultModel = {provider:"",model:""} = unset;
     // old files that carry values keep them (no migration chain) — see the
     // preservation test below.
-    expect(SETTINGS_DEFAULTS.model).toBe("")
-    expect(SETTINGS_DEFAULTS.llm.defaultModel).toEqual({ provider: "", model: "" })
+    expect(DEFAULTS.model).toBe("")
+    expect(DEFAULTS.llm.defaultModel).toEqual({ provider: "", model: "" })
     expect(normalizeSettings(undefined).model).toBe("")
     expect(normalizeSettings(undefined).llm.defaultModel).toEqual({ provider: "", model: "" })
     // an old file with values keeps them verbatim at read (no migration writes)
@@ -37,69 +48,44 @@ describe("normalizeSettings", () => {
   })
 
   it("keeps valid values and merges partial unknowns", () => {
-    const s = normalizeSettings({ theme: "dark", fontSize: 16, plugins: { bash: false } })
-    expect(s.theme).toBe("grok-night")
+    const s = normalizeSettings({ sandboxMode: "read-only", fontSize: 16, plugins: { bash: false } })
+    expect(s.sandboxMode).toBe("read-only")
     expect(s.fontSize).toBe(16)
     expect(s.plugins.bash).toBe(false)
     // untouched fields stay at defaults
-    expect(s.plugins.agentLoop).toBe(SETTINGS_DEFAULTS.plugins.agentLoop)
-    expect(s.sandboxMode).toBe(SETTINGS_DEFAULTS.sandboxMode)
+    expect(s.plugins.agentLoop).toBe(DEFAULTS.plugins.agentLoop)
+    expect(s.model).toBe(DEFAULTS.model)
   })
 
   it("rejects out-of-range / wrong-typed values with fallbacks", () => {
     const s = normalizeSettings({
-      theme: "purple",
       fontSize: 99,
       fontSizeStr: "14",
       sandboxMode: 4,
       searchBackend: "postgres",
       plugins: { webSearch: "yes" },
     })
-    expect(s.theme).toBe("system")
     expect(s.fontSize).toBe(14)
     expect(s.sandboxMode).toBe("workspace-write")
     expect(s.searchBackend).toBe("jsonl")
     expect(s.plugins.webSearch).toBe(false)
-    // unknown theme ids degrade to the default (system) — never a silent keep.
-    expect(normalizeSettings({ theme: "midnight" }).theme).toBe("system")
-  })
-
-  it("normalizes legacy light/dark theme values", () => {
-    expect(normalizeSettings({ theme: "light" }).theme).toBe("grok-day")
-    expect(normalizeSettings({ theme: "dark" }).theme).toBe("grok-night")
-  })
-
-  it("accepts all six modern theme ids verbatim", () => {
-    for (const theme of [
-      "system", "grok-night", "grok-day", "tokyo-night", "rose-pine-moon", "oscura-midnight",
-    ] as const) {
-      expect(normalizeSettings({ theme }).theme).toBe(theme)
-    }
-  })
-
-  it("tui.prefs.screenMode defaults to fullscreen and validates minimal", () => {
-    expect(SETTINGS_DEFAULTS.tui.prefs.screenMode).toBe("fullscreen")
-    expect(normalizeSettings(undefined).tui.prefs.screenMode).toBe("fullscreen")
-    expect(normalizeSettings({ tui: { prefs: { screenMode: "minimal" } } }).tui.prefs.screenMode).toBe("minimal")
-    // unknown / wrong-typed values degrade to the default (never corrupt)
-    expect(normalizeSettings({ tui: { prefs: { screenMode: "tiny" } } }).tui.prefs.screenMode).toBe("fullscreen")
   })
 
   it("tui.prefs.dashboard + statusLine (Task 13, spec §9.2): defaults, valid parse, corrupt degrade", () => {
-    expect(SETTINGS_DEFAULTS.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
-    expect(SETTINGS_DEFAULTS.tui.prefs.statusLine).toEqual({
+    expect(DEFAULTS.tui.prefs.dashboard).toEqual({ order: [] })
+    expect(DEFAULTS.tui.prefs.statusLine).toEqual({
       mode: "builtin",
       items: ["cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks"],
     })
     const s = normalizeSettings({
       tui: {
         prefs: {
-          dashboard: { pinned: ["s2", "s1"], order: ["s2", "s1"] },
+          dashboard: { order: ["s2", "s1"] },
           statusLine: { mode: "command", items: ["cwd", "queue"], command: "git status --short", refreshMs: 500 },
         },
       },
     })
-    expect(s.tui.prefs.dashboard).toEqual({ pinned: ["s2", "s1"], order: ["s2", "s1"] })
+    expect(s.tui.prefs.dashboard).toEqual({ order: ["s2", "s1"] })
     expect(s.tui.prefs.statusLine).toEqual({
       mode: "command",
       items: ["cwd", "queue"],
@@ -110,12 +96,12 @@ describe("normalizeSettings", () => {
     const bad = normalizeSettings({
       tui: {
         prefs: {
-          dashboard: { pinned: [42, ""], order: "s1" },
+          dashboard: { order: "s1" },
           statusLine: { mode: "inline", items: ["nope", 5], command: "", refreshMs: 20 },
         },
       },
     })
-    expect(bad.tui.prefs.dashboard).toEqual({ pinned: [], order: [] })
+    expect(bad.tui.prefs.dashboard).toEqual({ order: [] })
     expect(bad.tui.prefs.statusLine.mode).toBe("builtin")
     expect(bad.tui.prefs.statusLine.items).toEqual([
       "cwd", "branch", "model", "context", "turn-timer", "session", "queue", "tasks",
@@ -126,7 +112,7 @@ describe("normalizeSettings", () => {
   })
 
   it("searchBackend (Task 1.2): defaults to jsonl, accepts sqlite, rejects unknowns", () => {
-    expect(SETTINGS_DEFAULTS.searchBackend).toBe("jsonl")
+    expect(DEFAULTS.searchBackend).toBe("jsonl")
     expect(normalizeSettings({ searchBackend: "sqlite" }).searchBackend).toBe("sqlite")
     expect(normalizeSettings(undefined).searchBackend).toBe("jsonl")
   })
@@ -162,7 +148,7 @@ describe("normalizeSettings", () => {
     expect(out.llm.defaultModel).toEqual({ provider: "deepseek", model: "" })
     // the normalized TUI section no longer carries the legacy plane (prefs only).
     expect("providers" in out.tui).toBe(false)
-    expect(out.tui.prefs.timestamps).toBe(false)
+    expect(out.tui.prefs.compact).toBe(false)
   })
 
   it("canonical provider fields win over a legacy migration row", () => {
@@ -243,7 +229,7 @@ describe("SettingsStore", () => {
   /** A legacy-only document (tui.providers, no llm section) — the load-path
    * migration fixture. */
   const LEGACY_FILE = {
-    theme: "dark",
+    fontSize: 15,
     tui: {
       providers: {
         version: 1,
@@ -309,14 +295,14 @@ describe("SettingsStore", () => {
     const store = new SettingsStore({ path: file })
     await store.load()
 
-    const immediate = await store.set({ theme: "grok-day" })
-    expect(immediate.theme).toBe("grok-day")
+    const immediate = await store.set({ fontSize: 16 })
+    expect(immediate.fontSize).toBe(16)
     expect(immediate.llm.providers.custom).toEqual(EXPECTED_LEGACY_ROW)
     // the normalized section still never exposes the legacy plane.
     expect("providers" in immediate.tui).toBe(false)
 
     const persisted = JSON.parse(await readFile(file, "utf8"))
-    expect(persisted.theme).toBe("grok-day")
+    expect(persisted.fontSize).toBe(16)
     expect(persisted.tui.providers.providers.custom).toEqual(LEGACY_FILE.tui.providers.providers.custom)
 
     const reloaded = new SettingsStore({ path: file })
@@ -376,8 +362,8 @@ describe("SettingsStore", () => {
     // the empty pin is cleaned up entirely; the rest of the document stays.
     const persisted = JSON.parse(await readFile(file, "utf8"))
     expect(persisted.tui.providers).toBeUndefined()
-    // the rest of the document survives (theme "dark" normalizes to grok-night).
-    expect(persisted.theme).toBe("grok-night")
+    // the rest of the document survives (the fixture's fontSize 15 is kept).
+    expect(persisted.fontSize).toBe(15)
     const reloaded = new SettingsStore({ path: file })
     await reloaded.load()
     expect(reloaded.get().llm.providers).toEqual({})
@@ -423,7 +409,7 @@ describe("SettingsStore", () => {
     const root = await tmpRoot()
     const store = new SettingsStore({ path: join(root, "settings.json") })
     const s = await store.load()
-    expect(s).toEqual(SETTINGS_DEFAULTS)
+    expect(s).toEqual(DEFAULTS)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -432,13 +418,13 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "grok-night", fontSize: 16, searchBackend: "sqlite" })
+    await store.set({ sandboxMode: "read-only", fontSize: 16, searchBackend: "sqlite" })
     const again = new SettingsStore({ path: file })
     const s = await again.load()
-    expect(s.theme).toBe("grok-night")
+    expect(s.sandboxMode).toBe("read-only")
     expect(s.fontSize).toBe(16)
     expect(s.searchBackend).toBe("sqlite")
-    expect(s.model).toBe(SETTINGS_DEFAULTS.model)
+    expect(s.model).toBe(DEFAULTS.model)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -447,10 +433,10 @@ describe("SettingsStore", () => {
     const file = join(root, "settings.json")
     const store = new SettingsStore({ path: file })
     await store.load()
-    await store.set({ theme: "grok-night" })
+    await store.set({ fontSize: 16 })
     await store.reset()
     const s = store.get()
-    expect(s.theme).toBe("system")
+    expect(s.fontSize).toBe(DEFAULTS.fontSize)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -463,5 +449,40 @@ describe("SettingsStore", () => {
     const raw = await readFile(file, "utf8")
     expect(JSON.parse(raw).model).toBe("deepseek:test-model")
     await rm(root, { recursive: true, force: true })
+  })
+})
+
+// The roles section: each role may name a model. `provider` and `model` are
+// required TOGETHER — a half entry is not a setting, it is a guess, and the
+// normalizer drops it the same way it drops a bad baseURL.
+describe("agents.roles", () => {
+  it("round-trips a full entry and defaults to none", () => {
+    const parsed = normalizeSettings({
+      agents: {
+        roles: {
+          worker: { provider: "gw", model: "big", protocol: "anthropic-messages", reasoningEffort: "max" },
+          explore: { provider: "gw", model: "small" },
+        },
+      },
+    })
+    expect(parsed.agents.roles).toEqual({
+      worker: { provider: "gw", model: "big", protocol: "anthropic-messages", reasoningEffort: "max" },
+      explore: { provider: "gw", model: "small" },
+    })
+    expect(normalizeSettings({}).agents).toEqual({ roles: {} })
+  })
+
+  it("drops a HALF entry rather than completing it", () => {
+    const parsed = normalizeSettings({
+      agents: { roles: { general: { provider: "gw" }, worker: { model: "big" } } },
+    })
+    expect(parsed.agents.roles).toEqual({})
+  })
+
+  it("drops an invalid protocol but keeps the entry", () => {
+    const parsed = normalizeSettings({
+      agents: { roles: { general: { provider: "gw", model: "m", protocol: "grpc" } } },
+    })
+    expect(parsed.agents.roles).toEqual({ general: { provider: "gw", model: "m" } })
   })
 })

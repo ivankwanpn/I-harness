@@ -281,7 +281,7 @@ export interface WorkflowExecutor {
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
 
-export interface WorkflowExecutorDeps {
+interface WorkflowExecutorDeps {
   exec: ExecService
   // Inject an isolated store (tests); default = the shared run-level store.
   jobs?: WorkflowJobStore

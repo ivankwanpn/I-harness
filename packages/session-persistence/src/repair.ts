@@ -24,6 +24,21 @@ import type { SessionEvent } from "@i-harness/core-session"
  * direction: core-agent consumes session-persistence). */
 export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
 
+/**
+ * M4: the verdict for a tool the log says WAS DISPATCHED and whose outcome it
+ * does not contain.
+ *
+ * It is deliberately NOT a flavour of "it did not run", and it is not a failure
+ * either — it is the absence of a fact. A `tool/call` is written when the MODEL
+ * emits the call and the body runs later, in a batch, so before `tool/dispatch`
+ * existed the log could not tell "never dispatched" from "dispatched, still
+ * running" — and it answered the benign one. A model that reads the benign
+ * answer may re-run the tool, and a `rm` or a `git push` then happens twice.
+ *
+ * Nothing may auto-replay this. It is a state a human resolves.
+ */
+export const TOOL_OUTCOME_UNKNOWN = "TOOL_OUTCOME_UNKNOWN"
+
 /** The synthetic tool/result payload, byte-identical in shape to the live
  * abort path (core-agent/src/execute-tool-calls.ts). */
 export const TOOL_ABORTED_RECOVERY_RESULT = {
@@ -31,9 +46,20 @@ export const TOOL_ABORTED_RECOVERY_RESULT = {
   code: TOOL_ABORTED_BEFORE_DISPATCH,
 } as const
 
+/** The synthetic result for a DISPATCHED tool whose outcome the log does not
+ * contain (M4). Says what is known and stops there — see TOOL_OUTCOME_UNKNOWN. */
+export const TOOL_OUTCOME_UNKNOWN_RESULT = {
+  error: "tool call was dispatched but its outcome is unknown (the process ended mid-execution)",
+  code: TOOL_OUTCOME_UNKNOWN,
+  replay: false,
+} as const
+
 interface PendingCall {
   callId: string
   name: string
+  /** M4: the log contains a `tool/dispatch` for this call, so the body STARTED
+   * and the outcome is genuinely unknown rather than "never ran". */
+  dispatched: boolean
 }
 
 /** Deterministic lexical set of events that establish a step region even when
@@ -87,7 +113,23 @@ export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
         lastCallIdx = i
         const callId = (ev as { callId?: unknown }).callId
         const name = (ev as { name?: unknown }).name
-        pending.push({ callId: typeof callId === "string" ? callId : "unknown", name: typeof name === "string" ? name : "" })
+        pending.push({
+          callId: typeof callId === "string" ? callId : "unknown",
+          name: typeof name === "string" ? name : "",
+          dispatched: false,
+        })
+        break
+      }
+      case "tool/dispatch": {
+        // M4: the body STARTED. Marking the pending call changes its verdict from
+        // "aborted before dispatch" to "outcome unknown" — they demand opposite
+        // responses, so reading them apart is the whole point.
+        const dispatchedId = (ev as { callId?: unknown }).callId
+        if (typeof dispatchedId === "string") {
+          const call = pending.find((p) => p.callId === dispatchedId)
+          if (call !== undefined) call.dispatched = true
+        }
+        lastCallIdx = i
         break
       }
       case "tool/result": {
@@ -119,7 +161,10 @@ export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
       type: "tool/result",
       callId: call.callId,
       name: call.name,
-      output: TOOL_ABORTED_RECOVERY_RESULT,
+      // M4: the verdict is READ from the log's own dispatch marker, not guessed.
+      // A dispatched call gets `outcome-unknown`; only a call with no marker
+      // anywhere is the one we can honestly call "aborted before dispatch".
+      output: call.dispatched ? TOOL_OUTCOME_UNKNOWN_RESULT : TOOL_ABORTED_RECOVERY_RESULT,
     }) as SessionEvent))
   }
 

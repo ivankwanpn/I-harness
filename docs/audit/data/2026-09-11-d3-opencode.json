@@ -5532,12 +5532,12 @@
       "change": "CoreV2 source-composed command registry: upstream composes commands imperatively inside packages/opencode/src/command/index.ts, whereas the fork exposes a CommandV2 that plugins contribute to through a Source list, with a beforeExecute hook that rewrites command parts before expansion.",
       "evidence": [
         "packages/core/src/command.ts:18",
-        "packages/core/src/command.ts:68",
-        "packages/core/src/command.ts:79",
-        "packages/core/src/command.ts:100",
-        "packages/core/src/session/prompt-expansion.ts:307",
-        "packages/opencode/src/command/index.ts:105",
-        "packages/opencode/src/command/index.ts:134"
+        "fork:packages/core/src/command.ts:68",
+        "fork:packages/core/src/command.ts:79",
+        "fork:packages/core/src/command.ts:100",
+        "fork:packages/core/src/session/prompt-expansion.ts:307",
+        "upstream:packages/opencode/src/command/index.ts:105",
+        "upstream:packages/opencode/src/command/index.ts:134"
       ]
     },
     {
@@ -5548,18 +5548,18 @@
         "packages/core/src/command.ts:16",
         "packages/core/src/plugin/command.ts:15",
         "packages/core/src/plugin/command.ts:19",
-        "packages/opencode/src/command/index.ts:46",
-        "packages/opencode/src/command/index.ts:70",
-        "packages/opencode/src/command/index.ts:79"
+        "upstream:packages/opencode/src/command/index.ts:46",
+        "upstream:packages/opencode/src/command/index.ts:70",
+        "upstream:packages/opencode/src/command/index.ts:79"
       ]
     },
     {
       "area": "extension/mcp",
       "change": "MCP prompts self-register as a command Source in the fork, so a prompt can resolve its template lazily through the source interface; upstream iterates mcp.prompts() inline while building the command map.",
       "evidence": [
-        "packages/core/src/mcp/runtime.ts:85",
+        "fork:packages/core/src/mcp/runtime.ts:85",
         "packages/core/src/plugin/command.ts:6",
-        "packages/opencode/src/command/index.ts:105"
+        "upstream:packages/opencode/src/command/index.ts:105"
       ]
     },
     {
@@ -5568,34 +5568,34 @@
       "evidence": [
         "packages/core/src/skill.ts:57",
         "packages/core/src/skill.ts:119",
-        "packages/core/src/command.ts:85",
-        "packages/core/src/command.ts:97",
-        "packages/opencode/src/command/index.ts:134"
+        "fork:packages/core/src/command.ts:85",
+        "fork:packages/core/src/command.ts:97",
+        "upstream:packages/opencode/src/command/index.ts:134"
       ]
     },
     {
       "area": "extension/prompt-expansion",
       "change": "Command execution is extracted into a SessionPromptExpansion service (331 lines) that owns argument expansion and agent guidance; upstream performs the same expansion inside the legacy command/prompt path.",
       "evidence": [
-        "packages/core/src/session/prompt-expansion.ts:71",
-        "packages/core/src/session/prompt-expansion.ts:82",
-        "packages/core/src/session/prompt-expansion.ts:307",
-        "packages/core/src/session/prompt-expansion.ts:326"
+        "fork:packages/core/src/session/prompt-expansion.ts:71",
+        "fork:packages/core/src/session/prompt-expansion.ts:82",
+        "fork:packages/core/src/session/prompt-expansion.ts:307",
+        "fork:packages/core/src/session/prompt-expansion.ts:326"
       ]
     },
     {
       "area": "loop/engines",
       "change": "Two session engines coexist - classic and kernel. Each session fixes its engine at creation; the router reads the stored engine and returns the matching implementation, and a missing kernel registration raises KernelUnavailableError without ever falling back to classic. The kernel is a distinct durable implementation (coordinator, lifecycle store, checkpoints, recovery planner/executor, tool scheduler) where upstream has only the classic local path.",
       "evidence": [
-        "packages/core/src/session/execution/router.ts:13",
-        "packages/core/src/session/execution/router.ts:18",
-        "packages/core/src/session/execution/router.ts:10",
-        "packages/core/src/session/execution.ts:54",
-        "packages/core/src/session/execution.ts:59",
-        "packages/core/src/session/execution.ts:70",
-        "packages/core/src/session/kernel/index.ts:19",
-        "packages/core/src/session/kernel/index.ts:35",
-        "packages/core/src/session/kernel/tool-scheduler.ts:42",
+        "fork:packages/core/src/session/execution/router.ts:13",
+        "fork:packages/core/src/session/execution/router.ts:18",
+        "fork:packages/core/src/session/execution/router.ts:10",
+        "fork:packages/core/src/session/execution.ts:54",
+        "fork:packages/core/src/session/execution.ts:59",
+        "fork:packages/core/src/session/execution.ts:70",
+        "fork:packages/core/src/session/kernel/index.ts:19",
+        "fork:packages/core/src/session/kernel/index.ts:35",
+        "fork:packages/core/src/session/kernel/tool-scheduler.ts:42",
         "packages/core/src/session/execution/local.ts:1"
       ]
     },
@@ -5603,42 +5603,42 @@
       "area": "subagent/durability",
       "change": "Durable task submission protocol with a task_notification_outbox table as the durable source of truth; the process-local notification is described in-source as an advisory wakeup only.",
       "evidence": [
-        "packages/core/src/session/task-notification.ts:10",
-        "packages/core/src/session/task-notification.ts:31",
-        "packages/core/src/session/task-submission.ts:18",
-        "packages/core/src/session/task-submission.ts:411"
+        "fork:packages/core/src/session/task-notification.ts:10",
+        "fork:packages/core/src/session/task-notification.ts:31",
+        "fork:packages/core/src/session/task-submission.ts:18",
+        "fork:packages/core/src/session/task-submission.ts:411"
       ]
     },
     {
       "area": "safety/permissions",
       "change": "Permission V1 to V2 is migrated in place by rewriting stored session permission rows from {permission,pattern,action} to {action,resource,effect} so the column type can switch to PermissionV2.Ruleset.",
       "evidence": [
-        "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:4",
-        "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:17",
-        "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:18",
-        "packages/core/src/database/migration/20260811000000_session_permission_v2.ts:19"
+        "fork:packages/core/src/database/migration/20260811000000_session_permission_v2.ts:4",
+        "fork:packages/core/src/database/migration/20260811000000_session_permission_v2.ts:17",
+        "fork:packages/core/src/database/migration/20260811000000_session_permission_v2.ts:18",
+        "fork:packages/core/src/database/migration/20260811000000_session_permission_v2.ts:19"
       ]
     },
     {
       "area": "extension/plugin-compat",
       "change": "A v1 plugin compatibility bridge adapts the legacy hook surface (chat.message, chat.params, chat.headers, permission.ask, command.execute.before, tool.execute.before/after, shell.env, auth) onto the V2 plugin runtime.",
       "evidence": [
-        "packages/core/src/plugin/v1-compat.ts:54",
-        "packages/core/src/plugin/v1-compat.ts:57",
-        "packages/core/src/plugin/v1-compat.ts:62",
-        "packages/core/src/plugin/v1-compat.ts:65",
-        "packages/core/src/plugin/v1-compat.ts:66",
-        "packages/core/src/plugin/v1-compat.ts:69"
+        "fork:packages/core/src/plugin/v1-compat.ts:54",
+        "fork:packages/core/src/plugin/v1-compat.ts:57",
+        "fork:packages/core/src/plugin/v1-compat.ts:62",
+        "fork:packages/core/src/plugin/v1-compat.ts:65",
+        "fork:packages/core/src/plugin/v1-compat.ts:66",
+        "fork:packages/core/src/plugin/v1-compat.ts:69"
       ]
     },
     {
       "area": "extension/plugin-compat",
       "change": "v1-projection.ts projects V2 model/credential/provider data back into the V1 plugin-facing shapes, including auth projection and provider source labelling.",
       "evidence": [
-        "packages/core/src/plugin/v1-projection.ts:15",
-        "packages/core/src/plugin/v1-projection.ts:159",
-        "packages/core/src/plugin/v1-projection.ts:228",
-        "packages/core/src/plugin/v1-projection.ts:246"
+        "fork:packages/core/src/plugin/v1-projection.ts:15",
+        "fork:packages/core/src/plugin/v1-projection.ts:159",
+        "fork:packages/core/src/plugin/v1-projection.ts:228",
+        "fork:packages/core/src/plugin/v1-projection.ts:246"
       ]
     },
     {
@@ -5646,8 +5646,8 @@
       "change": "The backend engine was relayered into packages/core: the fork has 650 ts files under packages/core versus 479 upstream, and subsystems that upstream keeps in packages/opencode/src moved into core - command, mcp (core/src/mcp/runtime.ts is 1102 lines), lsp, skill and the plugin runtime. Extension modules that exist upstream at packages/opencode/src/<x> may therefore be absent or reduced in the fork.",
       "evidence": [
         "packages/core/src/command.ts:1",
-        "packages/core/src/mcp/runtime.ts:1",
-        "packages/core/src/plugin/runtime.ts:1",
+        "fork:packages/core/src/mcp/runtime.ts:1",
+        "fork:packages/core/src/plugin/runtime.ts:1",
         "packages/core/src/skill.ts:1"
       ]
     },
@@ -5656,36 +5656,36 @@
       "change": "Compaction moved into core as packages/core/src/session/compaction.ts, and the kernel schedules a fenced compaction phase under the session lease; upstream keeps compaction in packages/opencode/src/session/compaction.ts.",
       "evidence": [
         "packages/core/src/session/compaction.ts:1",
-        "packages/core/src/session/kernel/index.ts:22",
-        "packages/opencode/src/session/compaction.ts:1"
+        "fork:packages/core/src/session/kernel/index.ts:22",
+        "upstream:packages/opencode/src/session/compaction.ts:1"
       ]
     },
     {
       "area": "session/migrations",
       "change": "The fork retires the legacy transcript: a session-message tombstone migration is followed by a migration that drops the legacy transcript tables. Upstream has no equivalent drop.",
       "evidence": [
-        "packages/core/src/database/migration/20260812063844_session-message-tombstone.ts:1",
-        "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:1",
-        "packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:12"
+        "fork:packages/core/src/database/migration/20260812063844_session-message-tombstone.ts:1",
+        "fork:packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:1",
+        "fork:packages/core/src/database/migration/20260812130609_drop_legacy_transcript.ts:12"
       ]
     },
     {
       "area": "tools/exposure",
       "change": "The fork adds durable tool-discovery state, gating tool exposure through the kernel tool catalog with a persisted discovery table; upstream materialises the tool set per session without durable discovery state.",
       "evidence": [
-        "packages/core/src/session/tool-discovery.ts:1",
-        "packages/core/src/database/migration/20260815080734_session-tool-discovery.ts:1",
-        "packages/core/src/tool/catalog.ts:1"
+        "fork:packages/core/src/session/tool-discovery.ts:1",
+        "fork:packages/core/src/database/migration/20260815080734_session-tool-discovery.ts:1",
+        "fork:packages/core/src/tool/catalog.ts:1"
       ]
     },
     {
       "area": "safety/environment",
       "change": "Neither source ships an OS-level sandbox, so the fork does not close the upstream gap: both expose the host user authority through a permission gate only. Recorded as a non-delta so the two sources are not mistakenly read as differing on confinement.",
       "evidence": [
-        "packages/core/src/tool/bash.ts:340",
+        "fork:packages/core/src/tool/bash.ts:340",
         "packages/core/src/project/sql.ts:16",
-        "packages/opencode/src/tool/shell.ts:303",
-        "packages/opencode/src/permission/index.ts:216"
+        "upstream:packages/opencode/src/tool/shell.ts:303",
+        "upstream:packages/opencode/src/permission/index.ts:216"
       ]
     }
   ],

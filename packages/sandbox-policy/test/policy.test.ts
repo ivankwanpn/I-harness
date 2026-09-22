@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { resolve as resolvePath } from "node:path"
 import { createSession, append } from "@i-harness/core-session"
+import type { SessionEvent } from "@i-harness/core-session"
 import { SANDBOX_MODES, createSandboxPolicy, effectiveSandboxMode, renderPolicyContext } from "../src/index.ts"
 
 describe("SANDBOX_MODES", () => {
@@ -28,6 +29,19 @@ describe("effectiveSandboxMode", () => {
     const s = createSession()
     append(s, { type: "sandbox/mode", mode: "read-only", source: "delegation" })
     expect(effectiveSandboxMode(s.events)).toBe("read-only")
+  })
+
+  it("ignores a mode outside the vocabulary instead of returning it", () => {
+    const events = [
+      { type: "sandbox/mode", mode: "read-only" },
+      { type: "sandbox/mode", mode: "host-root" as never },
+    ] as unknown as SessionEvent[]
+    expect(effectiveSandboxMode(events)).toBe("read-only")
+  })
+
+  it("returns undefined when the only mode is out of vocabulary", () => {
+    const events = [{ type: "sandbox/mode", mode: "host-root" as never }] as unknown as SessionEvent[]
+    expect(effectiveSandboxMode(events)).toBeUndefined()
   })
 })
 
@@ -59,5 +73,18 @@ describe("renderPolicyContext", () => {
     expect(renderPolicyContext({ mode: "read-only", workspaceRoot: "/x" })).toContain("read-only")
     expect(renderPolicyContext({ mode: "workspace-write", workspaceRoot: "/x" })).toContain("/x")
     expect(renderPolicyContext({ mode: "danger-full-access", workspaceRoot: "/x" })).toContain("danger-full-access")
+  })
+
+  it("names THIS harness, not another product", () => {
+    // This fragment is rendered into IH's own system prompt, one line after the
+    // preset says "You are I-harness" — so a fragment naming a different product
+    // contradicts the sentence above it. The assertion is negative as well as
+    // positive on purpose: `toContain(<mode>)` alone (the test above) cannot see
+    // a product name at all, so the wording could regress silently.
+    for (const mode of ["read-only", "workspace-write", "danger-full-access"] as const) {
+      const text = renderPolicyContext({ mode, workspaceRoot: "/x" })
+      expect(text).toContain("I-harness")
+      expect(text).not.toContain("DSH")
+    }
   })
 })

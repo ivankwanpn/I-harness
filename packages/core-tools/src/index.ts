@@ -1,4 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import { assertSupportedJsonSchema, validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 
 // M27-R-A8: get_context_remaining — registered only when a contextWindow is
 // known (fail-closed); see context-remaining.ts.
@@ -19,6 +20,11 @@ export interface Tool<Args = unknown, Output = unknown> {
   getArgv?(args: Args): string[]
   exposure?: ToolExposure
   searchHint?: string
+  // spec §3.8: the schema was written by someone else (an MCP server forwards
+  // its own verbatim). The ASSERT layer governs this repo's own declarations;
+  // a remote server's dialect is not ours to reject. Additive, and read in
+  // exactly one place: `register`.
+  inputSchemaForeign?: true
 }
 
 export interface ToolExec {
@@ -40,6 +46,42 @@ export type ToolDecision =
   | { kind: "deny"; reason: string }
   | { kind: "ask"; reason: string }
 
+// spec §2.6: a POLICY refusal — "you may not do this" — as opposed to a tool
+// body that tried and failed. Policy refusals stay LOUD (the turn fails); a
+// body failure is soft (the failed call gets a result and the turn continues).
+//
+// Marked structurally so `core-agent` needs no dependency on the mechanism
+// that refuses: `hooks` already sits above this package, and importing it from
+// `core-agent` would point the dependency backwards.
+//
+// THE CONVENTION, and its failure mode: a future in-cascade policy that must
+// fail the turn carries this marker. One that forgets has a SOFT refusal —
+// which is why the convention is named in the spec, not left as a local
+// detail. (Contrast: block ②'s INVALID_ARGS is also typed, but its
+// disposition is SOFT — an argument violation is the model's mistake and is
+// fixable by the model, a veto is not.)
+export interface PolicyRefusal {
+  readonly policyRefusal: true
+}
+
+/** Total: never throws, and requires the marker to CARRY `true` — a present
+ *  but `undefined` field is not a marker (the same rule as W4's F1 fix). */
+export function isPolicyRefusal(err: unknown): err is PolicyRefusal {
+  return typeof err === "object" && err !== null && (err as { policyRefusal?: unknown }).policyRefusal === true
+}
+
+/** spec §3.7.1: a TYPED disposition. `prepare` throws it; exactly this type is
+ *  converted to a soft failure by the scheduler. The vocabulary stays "typed
+ *  dispositions", never a list of messages. */
+export const INVALID_ARGS = "INVALID_ARGS"
+export class ToolArgsError extends Error {
+  readonly code = INVALID_ARGS
+  constructor(readonly violations: readonly string[]) {
+    super(`invalid arguments: ${violations.join("; ")}`)
+    this.name = "ToolArgsError"
+  }
+}
+
 export interface ToolCall {
   name: string
   args: unknown
@@ -49,6 +91,43 @@ export interface ToolResult {
   name: string
   output: unknown
 }
+
+// The codes a SYNTHETIC tool result can carry. They live here, not in
+// core-agent, because they describe the shape of a tool result and this package
+// owns that contract — and because both core-agent (which writes them) and
+// output-retention (which must recognise one to leave it un-bounded) depend on
+// this package and NOT on each other.
+//
+// A refusal and a cancellation are DIFFERENT FACTS and carry different codes:
+// a body that tried and failed, a call that never started, a call a sibling
+// cancelled, and a started call the ABORT PATH filled are four things, and a
+// log that conflates them cannot be read back. (block ①'s §2.3 for the messages;
+// this is the same rule for the machine-readable form.)
+//
+// What TOOL_ABORTED_MID_FLIGHT witnesses, exactly: the abort path writes this
+// fill for EVERY started slot that produced no output — including a body that
+// had already failed ON ITS OWN before the abort swept the batch (T1's review
+// measured that with the boundary test's boomTool: `code: TOOL_ABORTED_MID_FLIGHT`
+// carrying the body's own "boom" message). So it means "the abort path wrote
+// this verdict", NOT "the abort killed that body" — the message beside it is
+// what carries the reason, and it is that body's own.
+export const TOOL_FAILED = "TOOL_FAILED"
+export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
+export const TOOL_CANCELLED_BY_SIBLING = "TOOL_CANCELLED_BY_SIBLING"
+export const TOOL_ABORTED_MID_FLIGHT = "TOOL_ABORTED_MID_FLIGHT"
+// The fifth code, and the ONLY one of the five whose verdict CROSSES the
+// `tools/execute` cascade: the timeout guard is a cascade handler (the others'
+// fills are appended straight to the session and never pass through it), so a
+// seam-mounted reader — output-retention's spill guard is one — must be able to
+// name it without importing `guard-timeout`. It moved here for exactly that
+// reason; `guard-timeout` still exports it (a re-export), so its existing
+// importers did not move.
+//
+// It is a verdict about a call like the other four, but it is NOT shaped like
+// them: the timeout guard spreads the tool's PARTIAL output and stamps
+// `error`/`code` on top, so this code's result can be arbitrarily large where
+// the other four are a message.
+export const TOOL_TIMEOUT = "TOOL_TIMEOUT"
 
 export interface PreparedCall {
   call: ToolCall
@@ -178,6 +257,8 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // Same-layer duplicate name fails loud (audit F03-5); child scopes create
     // their own registry instance and shadow freely by name.
     if (tools.has(tool.name)) throw new Error(`duplicate tool registration: ${tool.name}`)
+    // The assertion is IH's contract with itself — see Tool.inputSchemaForeign.
+    if (tool.inputSchemaForeign !== true) assertSupportedJsonSchema(tool.inputSchema)
     tools.set(tool.name, tool)
   }
 
@@ -199,8 +280,24 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   function schemas(): ToolSchema[] {
     // Hidden tools never surface in schemas(); deferred tools surface only
     // after promotion via search().
+    //
+    // M5/D1: the tool array is the FIRST thing in the cached prompt, so a change
+    // to it is a cache break at byte 0 — the WHOLE prompt, not just the tool
+    // span. Two ways it could churn, both closed here:
+    //   1. Map insertion order is mount order (plugin load, MCP connect), so two
+    //      assemblies of the same session could disagree. Sorting makes the
+    //      array a function of its CONTENTS, not of when things registered.
+    //   2. Promotion used to insert a deferred tool at its registration index,
+    //      shifting every tool after it. Ranking deferred ones last makes
+    //      promotion an APPEND, so what was already sent stays byte-identical.
+    // Compared by code unit, not `localeCompare`: the latter follows the host's
+    // locale/ICU, which would reintroduce machine-dependent bytes.
     return [...tools.values()]
       .filter((t) => t.exposure !== "hidden" && (t.exposure !== "deferred" || promoted.has(t.name)))
+      .sort((a, b) => {
+        const rank = (t: Tool): number => (t.exposure === "deferred" ? 1 : 0)
+        return rank(a) - rank(b) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      })
       .map((t) => ({
         name: t.name,
         description: t.description,
@@ -212,6 +309,12 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall> {
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
+
+    // spec §3.7: BEFORE the policy layers, so a malformed call never reaches an
+    // approval prompt — nobody should be asked to approve garbage. The refusal
+    // is a TYPED disposition (§3.7.1), read by name at exactly one place.
+    const violations = validateJsonSchemaValue(tool.inputSchema as JsonSchemaNode, call.args)
+    if (violations.length > 0) throw new ToolArgsError(violations)
 
     // 1. pre-execute waterfall — resolves to a closed-vocabulary decision.
     //    Per-dispatch (M13): the decision is the emit's chain return (or the

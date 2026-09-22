@@ -1,6 +1,12 @@
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
+import { TOOL_TIMEOUT } from "@i-harness/core-tools"
 
-export const TOOL_TIMEOUT = "TOOL_TIMEOUT"
+// Re-exported from @i-harness/core-tools, which owns the tool-result contract
+// and the codes a synthetic result can carry (M5 T4 block ③ moved this one
+// there so a reader mounted on the `tools/execute` cascade can name it without
+// importing this package). Kept here so every existing importer — guard-retry
+// reads it — does not move.
+export { TOOL_TIMEOUT }
 
 export interface TimeoutGuardConfig {
   // Reserved for future policy knobs; the current policy reads tool.timeoutMs

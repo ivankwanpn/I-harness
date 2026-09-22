@@ -38,6 +38,30 @@ describe("plan mode", () => {
     expect(await tool.execute({}, {})).toEqual({ active: false })
   })
 
+  // M1 Phase B Task 4. The withdraw half of this seam was deleted in that task: it was
+  // a dead declaration nothing consumed on any production path, and the requirement a
+  // re-add would have to satisfy is recorded in that task's commit message and report.
+  // What survives as the seam's contract is this case: `ensurePlanModeTool` registers by
+  // name and is idempotent, and plan-mode OFF is a session-log event that leaves the
+  // tool registered, so `exit_plan_mode` stays in the request catalog while plan mode is
+  // inactive. The OFF assertion is the part no sibling case makes; the idempotency half
+  // the case above already reaches by a different route (it registers, then ensures).
+  // This case passes before and after that deletion: it is not evidence for it and it is
+  // not its guard -- the instrument's row count is. It also cannot see a wiring inside
+  // the session assembly, which owns its own registry.
+  it("exit_plan_mode: ensure is idempotent, and plan-mode OFF does not withdraw it", () => {
+    const s = createSession()
+    const registry = createToolRegistry(createContext())
+    ensurePlanModeTool(registry, s)
+    ensurePlanModeTool(registry, s) // idempotent: the duplicate-register path is guarded by a get()
+    expect(registry.get("exit_plan_mode")).toBeDefined()
+
+    enterPlanMode(s, "plan")
+    expect(exitPlanMode(s)).toBe(true)
+    expect(derivePlanMode(s).active).toBe(false)
+    expect(registry.get("exit_plan_mode")).toBeDefined() // OFF is a log event, not a registry mutation
+  })
+
   it("the bundled prompt fragment is non-empty text", () => {
     expect(PLAN_MODE_SYSTEM_PROMPT).toContain("plan")
   })

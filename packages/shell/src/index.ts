@@ -2,8 +2,10 @@ import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
-import type { ExecService } from "@i-harness/exec"
+import type { ExecService, PromotedRun } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
+import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
+import { ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
 import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
@@ -136,6 +138,17 @@ export interface ShellRetentionOptions {
 export interface ShellToolDeps {
   exec: ExecService
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
+  /** W10: a FOREGROUND bash/pwsh command still running after this many ms is
+   * handed back as a background job id (the command keeps running) instead of
+   * waiting — the escape hatch for commands that outlive `timeoutMs`, which
+   * must be applied BEFORE the call rather than guessed before it.
+   *
+   * IT MUST BE WELL UNDER `timeoutMs`. The two knobs are read together for a
+   * reason: `timeoutMs` is this tool's declared deadline, and at that deadline
+   * guard-timeout aborts the call and exec kills the process tree — so a
+   * threshold AT or ABOVE it never fires, and every long command still dies
+   * mid-flight. Absent → no promotion (pre-W10 behavior, byte for byte). */
+  backgroundAfterMs?: number
   retention?: ShellRetentionOptions
   // D1 (m55): the working directory for every shell execution — the assembly
   // workspace. Absent → no cwd field, so exec keeps its own contract (the
@@ -144,7 +157,165 @@ export interface ShellToolDeps {
   // M16 final-review (C1): when set, every bash/pwsh execution carries this
   // policy so exec confines at spawn. Absent → no sandbox field (passthrough,
   // pre-M16 behavior).
-  sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+  // M62: a RESOLVER, not a value. It used to be the resolved policy, captured
+  // once when the assembly mounted the tools, so a mid-session mode change
+  // reached the fs guard but not the shell — the two surfaces then disagreed
+  // about the mode in force. Every execute calls it, so the argv is confined
+  // against the policy of THAT call. Returning `undefined` still means
+  // "no policy ⇒ no sandbox field" (a host that requested no sandbox).
+  //
+  // What actually makes the per-call read pay off is a HOST appending a
+  // `sandbox/mode` event mid-session. The escalation ladder is a DIFFERENT path
+  // and not a producer of this one: a grant is per-call and transient, appends
+  // no `sandbox/mode` event, and never moves the standing mode (spec §3.3
+  // point 1). It reaches exec through the granted policy below, not through
+  // this thunk.
+  sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+  // M62: the approval-service ADAPTER, built once by the assembly. The per-call
+  // `EscalationContext` is composed in the tool body, because only that layer
+  // holds the `ToolExec` a prompt must name. Absent → an escalation request is
+  // refused (fail closed), never silently allowed.
+  escalationApprover?: import("@i-harness/sandbox").EscalationApprover<unknown, string>
+}
+
+/**
+ * M62: the escalation ladder for the shell surface — the SAME per-call decision
+ * fs and the terminal make, in the one place that knows how a shell refusal is
+ * delivered.
+ *
+ * A refusal is a VALUE, never a throw: a throwing tool body fails the whole turn
+ * and appends no `tool/result` (`packages/fs/src/error.ts:19-31` records the same
+ * rule), so the model would read a hung call instead of an answer.
+ *
+ * It is returned HERE, as the ladder built it, and NOT through
+ * `sandboxUnavailableFailure`: that helper answers a different question (no
+ * backend exists for ANY mode), so routing this denial through it would answer
+ * with the wrong reason. Every ladder refusal withholds its escalation sentence
+ * by construction (`escalationTarget: null` in branches 1/5/6), which is exactly
+ * why the denial must not be rebuilt by a helper that has its own.
+ *
+ * `stderr` carries the JSON denial because that is the field this surface's
+ * refusals already use (see `sandboxUnavailableFailure`), and the shell tool's
+ * declared output has no `error`/`denial` slot.
+ */
+async function resolveShellCall(
+  deps: ShellToolDeps,
+  exec: ToolExec,
+  toolName: "bash" | "pwsh",
+  args: { sandbox_permissions?: string; justification?: string },
+  subject: string,
+): Promise<
+  | { kind: "proceed"; policy: SandboxExecutionPolicy | undefined }
+  | { kind: "refused"; refusal: { stdout: string; stderr: string; exitCode: number } }
+> {
+  const escalation = deps.escalationApprover === undefined
+    ? undefined
+    : {
+        approver: deps.escalationApprover,
+        agent: exec,
+        callId: exec.callId ?? "unknown",
+        toolName,
+        ...(exec.abortSignal !== undefined ? { signal: exec.abortSignal } : {}),
+      }
+  const resolution = await resolveCallPolicy({
+    base: deps.sandboxPolicy?.(),
+    surface: "shell",
+    subject,
+    args,
+    ...(escalation !== undefined ? { escalation } : {}),
+  })
+  if (resolution.kind === "refused") {
+    return { kind: "refused", refusal: { stdout: "", stderr: JSON.stringify(resolution.denial), exitCode: -1 } }
+  }
+  // The GRANTED policy when an escalation was approved, the session's otherwise.
+  // Re-reading `deps.sandboxPolicy?.()` here would refuse the very call the user
+  // just approved.
+  return { kind: "proceed", policy: resolution.policy }
+}
+
+/**
+ * M62 Task 3 (Step 7): a REFUSAL the model can read, not a turn that dies.
+ *
+ * `exec`'s `resolveArgv` throws `SandboxUnavailableError` synchronously — from
+ * `run` (either overload: there is ONE implementation behind them, so W10's
+ * promotion cannot diverge here) and from `runBackground`, both through
+ * `spawnChild` — when a confined policy reaches it with no provider composed.
+ * (Named by SYMBOL, not by line number: W10 moved every line in that file, and
+ * the shell test's own note records the same lesson.) A throwing tool
+ * body fails the whole turn and appends no `tool/result`, so ONE bash call ended
+ * the turn and the model never learned why. The bash-absent branch below already
+ * returns a legible failure for the same class of fact ("this host cannot run
+ * what you asked"), and so does this one.
+ *
+ * TWO THINGS THIS MUST NOT DO.
+ *
+ * 1. It must not carry escalation guidance. `denialFor` attaches "retry with
+ *    sandbox_permissions set to …" whenever a wider mode exists, and here the
+ *    problem is that NO backend is usable — not that the mode is narrow. Sending
+ *    the model to ask for a wider mode points it at a request that cannot help.
+ *    So the denial is constructed literally. The shared thing is the TYPE
+ *    (`SandboxDenial`), which is what the Task 2 corrections settled on.
+ * 2. It must never fall back to running the command unconfined. Refusing is the
+ *    whole point; the confinement boundary is `exec` failing closed, and
+ *    swallowing the throw into a spawn would be strictly worse than the crash.
+ *
+ * `policy` is the policy THIS call handed to exec (the `mode` the model is told
+ * about); the fallback only covers the theoretical case where the thunk returns
+ * nothing after the throwing call already read a confined policy.
+ */
+function sandboxUnavailableFailure(
+  tool: "bash" | "pwsh",
+  surface: SandboxSurface,
+  policy: SandboxExecutionPolicy | undefined,
+): { stdout: string; stderr: string; exitCode: number } {
+  const denial: SandboxDenial = {
+    code: "SANDBOX_DENIED",
+    surface,
+    mode: policy?.mode ?? "read-only",
+    reason:
+      "no sandbox backend is usable on this host, so the confined mode in force cannot be enforced: " +
+      `refusing to run the ${tool} command unconfined. Asking for a wider mode cannot help — no backend ` +
+      "exists for any mode here. Use a file tool for a file operation, or ask the host to compose a sandbox.",
+  }
+  // exitCode -1 mirrors the bash-absent branch at each call site: -1 means "this
+  // host could not run it", never "it ran and failed".
+  return { stdout: "", stderr: JSON.stringify(denial), exitCode: -1 }
+}
+
+/**
+ * W10: exec handed a FOREGROUND command back as a job because it outlived the
+ * promotion threshold. The result must say exactly that, because the one thing
+ * it must never look like is a choice the model made: a bare `{ job_id }` is
+ * what the model's OWN `background: true` call returns, so on that shape it
+ * would believe it had asked for background. `promoted: true` plus the elapsed
+ * time is the difference, and `stdout` states it in words as well — that is
+ * the field the model reads first.
+ *
+ * The partial output is deliberately NOT repeated here. It is not lost: it is
+ * already in the job record this id names (the same record `job_output` reads),
+ * and copying it into the tool result would show the model a snapshot frozen at
+ * the hand-back while the job keeps writing.
+ */
+function promotedResult(
+  promoted: PromotedRun,
+  tool: "bash" | "pwsh",
+  deadlineMs: number | undefined,
+): { stdout: string; job_id: string; promoted: true; ran_foreground_ms: number } {
+  // The deadline is named only when the host declared one: a mount without
+  // `timeoutMs` has no deadline to explain, and quoting 120_000 here would be
+  // asserting a number this layer never saw.
+  const why = deadlineMs === undefined
+    ? ""
+    : ` A foreground ${tool} call is killed at ${deadlineMs}ms and its work is lost, so the harness promotes instead of waiting for that.`
+  return {
+    job_id: promoted.jobId,
+    promoted: true,
+    ran_foreground_ms: promoted.ranForegroundMs,
+    stdout:
+      `[i-harness] the ${tool} command was still running after ${promoted.ranForegroundMs}ms, so the harness promoted it to background job ` +
+      `${promoted.jobId} and returned this id instead of waiting. You did NOT ask for background — the harness did.${why} ` +
+      `The command is STILL RUNNING. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`,
+  }
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
@@ -176,7 +347,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     label: string,
   ) {
-    if (retention === null) return { stdout: result.stdout, exitCode: result.exitCode } // 現有 shape 不變
+    // M62 Task 3: `stderr` is carried here too (it used to be dropped). The
+    // declared output shape now names it, and this branch is the one path where
+    // the shape and the value disagreed — a stderr the caller can read is part of
+    // the contract, not an artifact of whether retention happens to be on.
+    if (retention === null) return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)
@@ -209,12 +384,24 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   }
   // execute: `return retainedRunResult(result)`——async fn 回 promise 自動展平（既有呼叫面不變）
 
-  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
+  // M62 Task 3: `stderr` is declared because the refusals below RETURN it — the
+  // bash-absent branch and `sandboxUnavailableFailure` both carry the reason in
+  // `stderr` (the field the model reads). It was absent from this type, so the
+  // refusal's most important field sat outside the declared output shape.
+  const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "bash",
     description: "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" }, background: { type: "boolean" } },
+      properties: {
+        command: { type: "string" },
+        background: { type: "boolean" },
+        // M62 Task 3: the denial text tells the model to retry with these two
+        // arguments; before this, no schema declared them. OPT-IN — absent from
+        // `required`, because an ordinary call passes neither.
+        sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+        justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+      },
       required: ["command"],
     },
     timeoutMs: deps.timeoutMs,
@@ -223,7 +410,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     // default shell (resolveShell can return pwsh on Windows without bash).
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
     // executing PowerShell.
-    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       // M59: legible failure instead of a silent spawn-fail (-1 with empty
       // output) — the model can then pick the pwsh tool immediately.
       if (!bashAvailable()) {
@@ -236,32 +423,83 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         }
       }
       const argv = ["bash", "-c", args.command]
-      if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-        return { job_id: jobId }
+      // M62: the ladder runs BEFORE exec is called and AFTER the availability
+      // check — asking a human to widen the sandbox for a command this host
+      // cannot run at all would be a prompt with no possible outcome.
+      const ladder = await resolveShellCall(deps, exec, "bash", args, `run ${argv[0]}`)
+      if (ladder.kind === "refused") return ladder.refusal
+      // Per CALL, never cached: the assembly's resolver re-reads the session's
+      // last `sandbox/mode` event, so a mode change a HOST appends mid-session
+      // applies here. (`ladder.policy` is the granted policy when this call
+      // carried an approved escalation — the ladder is per-call and transient
+      // and appends no `sandbox/mode` event of its own.)
+      const sandboxResolved = ladder.policy
+      try {
+        if (args.background === true) {
+          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId }
+        }
+        // W10: the command spec is built ONCE — the promotion overload takes
+        // the very same ExecCommand, so the two calls below differ in nothing
+        // but the threshold. The overload (not a second code path) is what
+        // keeps a non-promoting call's result shape untouched.
+        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const result = deps.backgroundAfterMs === undefined
+          ? await deps.exec.run(cmd)
+          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
+        // The threshold is the trigger; ONLY a run that outlived it lands here.
+        if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
+        return retainedRunResult(result, "bash-stdout")
+      } catch (err) {
+        // M62 Step 7: exec refuses this command because no backend is composed
+        // for the confined mode now in force. Returning the refusal keeps the
+        // turn alive so the model can adapt; see sandboxUnavailableFailure.
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("bash", "shell", sandboxResolved)
+        throw err
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-      return retainedRunResult(result, "bash-stdout")
     },
   }
-  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; exitCode?: number; job_id?: string }> = {
+  const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "pwsh",
     description: "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
-      properties: { command: { type: "string" }, background: { type: "boolean" } },
+      properties: {
+        command: { type: "string" },
+        background: { type: "boolean" },
+        // M62 Task 3 — same two arguments as bash; see the note there.
+        sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" },
+        justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" },
+      },
       required: ["command"],
     },
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
-    execute: async (args: { command: string; background?: boolean }, exec: ToolExec) => {
+    execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
-      if (args.background === true) {
-        const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-        return { job_id: jobId }
+      // M62: the ladder runs once, before exec; `ladder.policy` is the granted
+      // policy when this call carried an approved escalation, and the session's
+      // per-call read otherwise — see the bash tool above.
+      const ladder = await resolveShellCall(deps, exec, "pwsh", args, `run ${argv[0]}`)
+      if (ladder.kind === "refused") return ladder.refusal
+      const sandboxResolved = ladder.policy
+      try {
+        if (args.background === true) {
+          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          return { job_id: jobId }
+        }
+        // W10 — same two calls as the bash tool above; see the note there.
+        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const result = deps.backgroundAfterMs === undefined
+          ? await deps.exec.run(cmd)
+          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
+        if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)
+        return retainedRunResult(result, "pwsh-stdout")
+      } catch (err) {
+        // M62 Step 7 — see the bash tool above.
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved)
+        throw err
       }
-      const result = await deps.exec.run({ argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(deps.sandboxPolicy ? { sandbox: deps.sandboxPolicy } : {}) })
-      return retainedRunResult(result, "pwsh-stdout")
     },
   }
   return [bash, pwsh]
@@ -272,14 +510,32 @@ export function registerShell(
   registry: { register(t: Tool): void },
   opts?: {
     timeoutMs?: number
+    /** W10: the foreground promotion threshold, forwarded to both tools — see
+     * ShellToolDeps.backgroundAfterMs. It MUST stay well under `timeoutMs`; the
+     * assembly is the layer that knows both numbers and states the relation. */
+    backgroundAfterMs?: number
     retention?: ShellRetentionOptions
     sandbox?: import("@i-harness/sandbox").SandboxProvider
-    sandboxPolicy?: import("@i-harness/sandbox").SandboxExecutionPolicy
+    // M62: a resolver thunk passed straight through to the tools — see
+    // ShellToolDeps.sandboxPolicy. The assembly hands over its per-call read.
+    sandboxPolicy?: () => import("@i-harness/sandbox").SandboxExecutionPolicy | undefined
+    // M62: the escalation approver, forwarded to `createShellTools` — see
+    // ShellToolDeps.escalationApprover. Without this hop the ladder would be
+    // unreachable at runtime while every type still checked.
+    escalationApprover?: import("@i-harness/sandbox").EscalationApprover<unknown, string>
     /** D1 (m55): assembly workspace — the default cwd for bash/pwsh. */
     cwd?: string
   },
 ): void {
   registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({ exec, timeoutMs: opts?.timeoutMs, retention: opts?.retention, sandboxPolicy: opts?.sandboxPolicy, ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}) })) registry.register(tool)
+  for (const tool of createShellTools({
+    exec,
+    timeoutMs: opts?.timeoutMs,
+    backgroundAfterMs: opts?.backgroundAfterMs,
+    retention: opts?.retention,
+    sandboxPolicy: opts?.sandboxPolicy,
+    ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
+    ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
+  })) registry.register(tool)
 }

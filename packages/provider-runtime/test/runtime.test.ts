@@ -11,15 +11,14 @@ import {
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
 import type { ModelClient } from "@i-harness/llm-seam"
-import {
-  ModelProbeFailedError,
-  buildModelClient,
+import {  buildModelClient,
   createProviderRegistry,
   type ProbeRequest,
   type ProviderProfile,
   type ProviderRegistry,
 } from "@i-harness/provider"
 import {
+  PROVIDER_PROTOCOLS,
   SettingsStore,
   type SettingsDefaultModel,
   type SettingsProviderConfig,
@@ -174,6 +173,11 @@ describe("provider directory", () => {
       ],
       defaultModel: "default-model",
       discovery: "available",
+      // No `catalog` declared anywhere in this fixture, so the route name IS
+      // the family. Reported as a resolved value so a listing never has to
+      // re-implement `catalog ?? id` — and reported WITHOUT `catalog`, which is
+      // what lets a reader tell "declared" from "defaulted".
+      cardFamily: "deepseek",
     })
   })
 
@@ -348,11 +352,10 @@ describe("model resolution", () => {
       providerId: "missing",
       modelId: "model",
     })
-    await expect(ready.runtime.resolveModel({ override: "deepseek:not-catalogued" })).resolves.toMatchObject({
-      status: "invalid",
-      providerId: "deepseek",
-      modelId: "not-catalogued",
-    })
+    // `deepseek:not-catalogued` used to sit here and is now a READY case — an
+    // uncatalogued model is not an invalid state (see the test below it). It was
+    // removed rather than moved: this case asserts "invalid WITHOUT building a
+    // client", and an unknown model DOES build one now.
     await expect(ready.runtime.resolveModel({
       sessionSelection: { provider: "deepseek", model: "session-model", reasoningEffort: "turbo" },
     })).resolves.toMatchObject({
@@ -362,6 +365,123 @@ describe("model resolution", () => {
       reason: expect.stringMatching(/reasoning/i),
     })
     expect(ready.builds).toEqual([])
+  })
+
+  it("an UNCATALOGUED model resolves — the catalog is advisory, not a licence", async () => {
+    // Measured 2026-09-19, against the real home: the membership check refused
+    // `deepseek-flash` — the name DeepSeek's own docs tell you to use — because
+    // our table still listed the RETIRED ones (`deepseek-v4-flash`, …). A vendor
+    // rename was enough to break the default-model path.
+    //
+    // Six shipping harnesses were read for this. Four pass an unknown model
+    // straight through (Codex with a 272k fallback + `used_fallback_model_metadata`,
+    // Pi by cloning the provider's default, DSH never rejecting by design), one
+    // probes the provider, and the two that refuse — opencode and Grok — both
+    // give an actionable message and a documented escape hatch. This check gave
+    // neither: `is not in the configured catalog`, and no route to fix it.
+    //
+    // And the code after it already tolerated an undeclared model (`userModel?.`,
+    // an optional `contextWindow` in the binding), so it withheld service without
+    // supplying anything in return. An unknown PROVIDER still refuses — there is
+    // no base URL and no auth without it — and that is the line the next case pins.
+    const { runtime } = await readyFixture()
+    await expect(runtime.resolveModel({ override: "deepseek:not-catalogued" })).resolves.toMatchObject({
+      status: "ready",
+      // On the BINDING, not the top level: `invalidState` hoists providerId/modelId
+      // so the neighbours above read that way, but a ready result carries them
+      // inside the binding it built.
+      binding: { providerId: "deepseek", modelId: "not-catalogued" },
+    })
+  })
+
+  // ── the card FAMILY, declared rather than inferred from the route name ──────
+  // `runtimeProfile` sets `name: view.id`, and the card lookup used that name —
+  // so a provider whose route is named anything other than the vendor's table key
+  // resolved NO model metadata at all. Measured 2026-09-19: `deepseek1` (the
+  // user's second route, opened to use a second API key) got nothing while
+  // `deepseek` got the card. The route name is the user's label; it is not a
+  // vendor identity, and the two only coincide by convention.
+  it("a route named DIFFERENTLY from its vendor still reaches the card, via a declared catalog", async () => {
+    const f = await fixture({
+      providers: {
+        deepseek1: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          catalog: "deepseek", // ← the declaration the route name cannot make
+          models: [{ id: "deepseek-v4-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek1", model: "deepseek-v4-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { contextWindow: 1_048_576 },
+    })
+    // NOT asserted: the card's `maxOutputTokens`, because it does not reach the
+    // binding. Measured 2026-09-19 — `SessionModelBinding` has no such field and
+    // `resolveModel` takes only `.contextWindow` off `resolveEffectiveModelContext`,
+    // so the card parses it, validates it, threads it through the five-tier chain
+    // and then drops it. Nothing in production reads it (its only mentions are in
+    // this package's own loader and chain), which is the repo's familiar shape:
+    // a capability built to the last link with no consumer. Recorded in the
+    // design's open questions; NOT fixed here, because whether we should SEND
+    // `max_output_tokens` at all is a separate decision (Codex does not model it;
+    // Pi, DSH and Grok do).
+  })
+
+  it("with NO catalog declared, the route name IS the family — unchanged, and deliberately so", async () => {
+    // The default is the route name, NOT a guess. A provider named after its
+    // vendor keeps working exactly as before, and `deepseek1` is fixed by one
+    // line of config rather than by inferring a vendor from a base URL — which
+    // would guess wrong on exactly the gateways, proxies and regional variants
+    // the field exists for. A default that is merely the status quo is honest;
+    // a derivation would be a claim.
+    const f = await fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "deepseek-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek", model: "deepseek-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { contextWindow: 1_048_576 },
+    })
+    // `deepseek-flash` rather than a retired name ON PURPOSE: this case declares
+    // no `catalog`, so it isolates the ALIAS — the table's new name reaching the
+    // same card as the old ones — from the field the case above proves.
+  })
+
+  it("`deepseek-flash` — the vendor's CURRENT name — reaches the same card as the retired one", async () => {
+    // DeepSeek renamed `deepseek-v4-flash` → `deepseek-flash`, and its own docs
+    // say the old names "仍可调用，但对应模型已下线，请求将由 DeepSeek V4.1-Flash
+    // 模型提供服务" — i.e. both names now serve the SAME model. Our table listed
+    // only the retired ones, so the current name resolved nothing. Both are
+    // aliases of one card; DSH's own catalogue lists them side by side.
+    const f = await fixture({
+      providers: {
+        deepseek1: {
+          baseURL: "https://api.deepseek.com/anthropic",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          catalog: "deepseek",
+          models: [{ id: "deepseek-flash" }, { id: "deepseek-v4-flash" }],
+        },
+      },
+      defaultModel: { provider: "deepseek1", model: "deepseek-flash" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+    })
+    const current = await f.runtime.resolveModel({})
+    expect(current).toMatchObject({ status: "ready", binding: { contextWindow: 1_048_576 } })
+    const retired = await f.runtime.resolveModel({ override: "deepseek1:deepseek-v4-flash" })
+    expect(retired).toMatchObject({ status: "ready", binding: { contextWindow: 1_048_576 } })
   })
 
   it("reports a missing non-Bedrock credential as unconfigured", async () => {
@@ -388,6 +508,56 @@ describe("model resolution", () => {
       reason: expect.stringMatching(/API key/i),
     })
     expect(builds).toEqual([])
+  })
+
+  it("a route that declares no protocol is INVALID, and the reason names the repair", async () => {
+    // The mutation this guards: put the tail back (`?? "openai-completions"`) and
+    // this must go RED. Silence here is the original bug.
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [{ id: "m" }] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    await expect(
+      runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } }),
+    ).resolves.toEqual({
+      status: "invalid",
+      reason: expect.stringContaining("gateway"),
+      providerId: "gateway",
+      modelId: "m",
+    })
+
+    const state = await runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } })
+    // Actionable, not merely true: the message names the EXACT verb that fixes it.
+    expect(state.status === "invalid" && state.reason).toContain("i-harness provider set gateway --protocol")
+    // And it names the SET, not a placeholder: `--protocol P` copied verbatim
+    // would fail with `unknown protocol "P"` — a second error before the fix.
+    // The SET is pinned by CONTENT, not shape: `toContain("one of: ")` also
+    // passes when the tail degrades to ONE fixed protocol (the mutation
+    // 8652dbf9 measured). Pinned against the same object the source reads
+    // (PROVIDER_PROTOCOLS from @i-harness/settings) — never re-declared here.
+    expect(state.status === "invalid" && state.reason).toContain(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
+  })
+
+  it("the route's protocol still wins when it declares one, and the selection still beats the row", async () => {
+    const { runtime } = await fixture({
+      providers: {
+        gateway: {
+          baseURL: "https://gateway.example",
+          apiKeyEnv: "GATEWAY_API_KEY",
+          protocol: "anthropic-messages",
+          models: [{ id: "m", protocol: "gemini" }],
+        },
+      },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    // The row beats the route…
+    await expect(runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m" } }))
+      .resolves.toMatchObject({ status: "ready" })
+    // …and the selection beats the row.
+    await expect(runtime.resolveModel({ sessionSelection: { provider: "gateway", model: "m", protocol: "bedrock" } }))
+      .resolves.toMatchObject({ status: "ready" })
   })
 })
 
@@ -632,8 +802,14 @@ describe("auth and discovery", () => {
           displayName: "Custom",
           protocol: "openai-compatible",
         })
+        // A probe that FAILS, which is all this case needs: its assertion below is
+        // on the message, and nothing on this path discriminates by the error
+        // class — `provider-runtime`'s production code never names it (measured).
+        // The class is no longer exported from `@i-harness/provider`, because
+        // nothing outside that package consumed it; a consumer discriminates by
+        // `code`, per the convention workspace/src/index.ts:44-46 records.
         registry.registerProbe("custom", async () => {
-          throw new ModelProbeFailedError("model probe failed: 2 candidate attempts failed")
+          throw new Error("model probe failed: 2 candidate attempts failed")
         })
       },
     })
@@ -859,5 +1035,406 @@ describe("canonical mutations", () => {
       baseURL: "https://legacy.example",
       apiKeyEnv: "LEGACY_API_KEY",
     })
+  })
+})
+
+// D4-superseding (spec §3.1): `discoverModels` probed AND wrote, so "show me
+// what this endpoint offers" could not be asked without also changing the
+// route's model list. This is the read half.
+describe("probeModels — the read half of discovery", () => {
+  async function probeFixture() {
+    const probe = vi.fn(async () => [{ id: "gw-model", name: "Gateway" }])
+    const f = await fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://gateway.example",
+          modelsURL: "https://models.example/v1/models",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "manual" }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+        registry.registerProbe("deepseek", probe)
+      },
+    })
+    return { ...f, probe }
+  }
+
+  it("returns what the endpoint offers and writes NOTHING", async () => {
+    const { runtime, settings } = await probeFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.probeModels("deepseek")).resolves.toEqual([{ id: "gw-model", name: "Gateway" }])
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("a protocol override shapes THIS request only — the route and the store are untouched", async () => {
+    const seen: ProbeRequest[] = []
+    const probe = vi.fn(async (req: ProbeRequest) => {
+      seen.push(req)
+      return [{ id: "gw-model" }]
+    })
+    const f = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gateway.example",
+          modelsURL: "https://models.example/v1/models",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "manual" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+        registry.registerProbe("gw", probe)
+      },
+    })
+    const before = JSON.stringify(f.settings.get().llm)
+
+    await f.runtime.probeModels("gw", { protocol: "anthropic-messages" })
+    // Omitted: the probe runs on the ROUTE's protocol, which is the default.
+    await f.runtime.probeModels("gw")
+
+    expect(seen.map((req) => req.protocol)).toEqual(["anthropic-messages", "openai-completions"])
+    // The design's §4 promise: a one-off parameter, landed nowhere.
+    expect(JSON.stringify(f.settings.get().llm)).toBe(before)
+  })
+
+  it("an override does not make bedrock probeable — the refusal is a fact about the ROUTE", async () => {
+    const { runtime } = await fixture({
+      providers: { br: { baseURL: "https://br.example", protocol: "bedrock" } },
+    })
+
+    await expect(runtime.probeModels("br", { protocol: "openai-completions" }))
+      .rejects.toThrow(/manually|not available/i)
+  })
+
+  it("leaves the discovery memo alone — a later discoverModels still writes", async () => {
+    const { runtime, settings } = await probeFixture()
+
+    await runtime.probeModels("deepseek")
+    // No `force`: only a populated memo could answer without probing. If
+    // probeModels had filled it, the settings below would be untouched.
+    await runtime.discoverModels("deepseek")
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "manual" },
+      { id: "gw-model", name: "Gateway" },
+    ])
+  })
+
+  it("refuses bedrock, a keyless route, and a route that is not configured", async () => {
+    const { runtime } = await fixture({
+      providers: {
+        bedrock: { baseURL: "https://bedrock.example", protocol: "bedrock" },
+        keyless: { baseURL: "https://gw.example", protocol: "openai-completions" },
+      },
+    })
+
+    await expect(runtime.probeModels("bedrock")).rejects.toThrow(/manually|not available/i)
+    await expect(runtime.probeModels("keyless")).rejects.toThrow(/No API key/i)
+    await expect(runtime.probeModels("nope")).rejects.toThrow(/not configured/)
+  })
+
+  it("an EMPTY probe result is legal — it leaves the route's models alone and does not throw", async () => {
+    const probe = vi.fn(async () => [] as { id: string }[])
+    const f = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "kept" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+        registry.registerProbe("gw", probe)
+      },
+    })
+
+    await expect(f.runtime.discoverModels("gw", { force: true })).resolves.toEqual([{ id: "kept" }])
+    expect(f.settings.get().llm.providers.gw?.models).toEqual([{ id: "kept" }])
+  })
+
+  it("refuses to probe a route that declares no protocol, and names the fix", async () => {
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+    })
+
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(/declares no protocol/)
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(/i-harness provider set gateway --protocol/)
+    // The repair names the SET (see the resolveModel guard test's note), and
+    // the set is pinned by CONTENT: `/one of: /` also passes when the tail
+    // degrades to ONE fixed protocol.
+    await expect(runtime.probeModels("gateway")).rejects.toThrow(`<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`)
+  })
+
+  it("still probes when the caller names a protocol explicitly — the escape hatch", async () => {
+    // The override is what makes the refusal above safe: a gateway serving
+    // another vendor's models is exactly what `--protocol` is for.
+    const { runtime } = await fixture({
+      providers: { gateway: { baseURL: "https://gateway.example", apiKeyEnv: "GATEWAY_API_KEY", models: [] } },
+      credentials: { GATEWAY_API_KEY: "k" },
+      registry: (r) => { r.registerProbe("gateway", async () => [{ id: "m" }]) },
+    })
+
+    await expect(runtime.probeModels("gateway", { protocol: "anthropic-messages" })).resolves.toEqual([{ id: "m" }])
+  })
+})
+
+describe("per-row model writes", () => {
+  async function rowsFixture() {
+    return fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://gateway.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [{ id: "kept", contextWindow: 128_000 }, { id: "gone" }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("addModels adds only the rows given, and an EXISTING row keeps its own numbers", async () => {
+    const { runtime, settings } = await rowsFixture()
+
+    await runtime.addModels("deepseek", [
+      { id: "kept", contextWindow: 999 },      // exists → left alone
+      { id: "fresh", name: "Fresh" },          // new → added
+    ])
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", contextWindow: 128_000 },
+      { id: "gone" },
+      { id: "fresh", name: "Fresh" },
+    ])
+  })
+
+  it("addModels refuses an empty list and a blank id, without writing", async () => {
+    const { runtime, settings } = await rowsFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.addModels("deepseek", [])).rejects.toThrow(/at least one/i)
+    await expect(runtime.addModels("deepseek", [{ id: "   " }])).rejects.toThrow(/non-empty id/i)
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("setModel changes only that row, and null CLEARS a field back to the card", async () => {
+    const { runtime, settings } = await rowsFixture()
+
+    await runtime.setModel("deepseek", "kept", { contextWindow: 65_536, maxTokens: 8_192 })
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", contextWindow: 65_536, maxTokens: 8_192 },
+      { id: "gone" },
+    ])
+
+    await runtime.setModel("deepseek", "kept", { contextWindow: null })
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([
+      { id: "kept", maxTokens: 8_192 },
+      { id: "gone" },
+    ])
+  })
+
+  it("setModel and removeModel refuse a model the route does not have", async () => {
+    const { runtime } = await rowsFixture()
+
+    await expect(runtime.setModel("deepseek", "absent", { contextWindow: 1 })).rejects.toThrow(/no model "absent"/)
+    await expect(runtime.removeModel("deepseek", "absent")).rejects.toThrow(/no model "absent"/)
+  })
+
+  it("removeModel takes one row out and leaves llm.defaultModel ALONE", async () => {
+    const { runtime, settings } = await rowsFixture()
+    await settings.set({
+      llm: { providers: settings.get().llm.providers, defaultModel: { provider: "deepseek", model: "gone" } },
+    })
+
+    await runtime.removeModel("deepseek", "gone")
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    // D1 removed the membership check, so a default naming a removed row still
+    // resolves — nothing breaks, and the row is simply gone from the directory.
+    expect(settings.get().llm.defaultModel).toEqual({ provider: "deepseek", model: "gone" })
+  })
+})
+
+describe("route writes that leave the model list alone", () => {
+  async function routeFixture() {
+    return fixture({
+      providers: {
+        deepseek: {
+          baseURL: "https://old.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          displayName: "Old",
+          // A patch has no field for either of these, so the ONLY thing that can
+          // keep them is the copy-then-overlay shape. Asserted below.
+          headers: { "x-gateway": "gw-1" },
+          inputModalities: ["text", "image"],
+          models: [{ id: "kept", contextWindow: 128_000 }],
+        },
+      },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "deepseek", displayName: "DeepSeek", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("patchProvider changes named fields and KEEPS models, displayName and apiKeyEnv", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.patchProvider("deepseek", { protocol: "anthropic-messages" })
+
+    const row = settings.get().llm.providers.deepseek
+    expect(row?.protocol).toBe("anthropic-messages")
+    // The fields a naive whole-config replace would have dropped — this is the
+    // merge the deleted TUI's saveProvider() did, and why it existed. `headers`
+    // and `inputModalities` are here because they are UNPATCHABLE (no key for
+    // them in ProviderPatch), so an overlay that started from `{}` would take
+    // them with it and no other case in this file would notice.
+    expect(row?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    expect(row?.displayName).toBe("Old")
+    expect(row?.apiKeyEnv).toBe("DEEPSEEK_API_KEY")
+    expect(row?.headers).toEqual({ "x-gateway": "gw-1" })
+    expect(row?.inputModalities).toEqual(["text", "image"])
+  })
+
+  it("patchProvider with null CLEARS a field", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.patchProvider("deepseek", { displayName: null })
+
+    expect(settings.get().llm.providers.deepseek?.displayName).toBeUndefined()
+  })
+
+  it("createProvider refuses an existing route; patchProvider refuses an absent one", async () => {
+    const { runtime, settings } = await routeFixture()
+    const before = JSON.stringify(settings.get().llm)
+
+    await expect(runtime.createProvider("deepseek", { baseURL: "https://new.example" })).rejects.toThrow(/already exists/)
+    await expect(runtime.patchProvider("nope", { baseURL: "https://new.example" })).rejects.toThrow(/not configured/)
+
+    expect(JSON.stringify(settings.get().llm)).toBe(before)
+  })
+
+  it("createProvider writes a new route with no models at all", async () => {
+    const { runtime, settings } = await routeFixture()
+
+    await runtime.createProvider("fresh", { baseURL: "https://fresh.example", protocol: "anthropic-messages" })
+
+    expect(settings.get().llm.providers.fresh).toEqual({ baseURL: "https://fresh.example", protocol: "anthropic-messages" })
+  })
+
+  it("`models` is unreachable from a patch, even through a variable", async () => {
+    const { runtime, settings } = await routeFixture()
+    // A VARIABLE, not a literal: no excess-property check, so the type alone
+    // would not stop this — which is why the allowlist is at runtime.
+    const smuggled = { protocol: "anthropic-messages", models: [] } as unknown as Parameters<typeof runtime.patchProvider>[1]
+
+    await runtime.patchProvider("deepseek", smuggled)
+
+    expect(settings.get().llm.providers.deepseek?.models).toEqual([{ id: "kept", contextWindow: 128_000 }])
+    expect(settings.get().llm.providers.deepseek?.protocol).toBe("anthropic-messages")
+  })
+})
+
+describe("protocol: the row overrides the route", () => {
+  it("a row's protocol wins over its route's; a row without one inherits the route's", async () => {
+    const { runtime, builds } = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [
+            { id: "anthropic-model", protocol: "anthropic-messages" },
+            { id: "plain-model" },
+          ],
+        },
+        // A second route whose protocol is NOT openai-completions (what `gw`
+        // declares) — it is what makes the route-arm inheritance below
+        // distinguishable from a collapsed arm.
+        claude: {
+          baseURL: "https://claude.example",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "CLAUDE_API_KEY",
+          models: [{ id: "haiku-model" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key", CLAUDE_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+      },
+    })
+
+    await runtime.resolveModel({ override: "gw:anthropic-model" })
+    await runtime.resolveModel({ override: "gw:plain-model" })
+    await runtime.resolveModel({ override: "claude:haiku-model" })
+
+    // adapterProtocol maps openai-completions → openai-compatible.
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+    // This row's route protocol happens to BE openai-completions, so this
+    // assertion alone does not show where the value came from — though a
+    // collapsed route arm can no longer produce a passing coincidence:
+    // runtimeProfile returns undefined (no build) and never falls back.
+    // The row below is the distinguishing case.
+    expect(builds[1]?.profile.protocol).toBe("openai-compatible")
+    // The distinguishing case: a protocol-less row on an anthropic-messages
+    // route. Only inheritance from the ROUTE produces this value — a collapsed
+    // route arm would read openai-compatible here.
+    expect(builds[2]?.profile.protocol).toBe("anthropic-messages")
+  })
+})
+
+describe("a selection may carry its own protocol", () => {
+  async function gwFixture() {
+    return fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_API_KEY",
+          models: [{ id: "plain" }, { id: "row-wins-otherwise", protocol: "gemini" }],
+        },
+      },
+      credentials: { GW_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({ name: "gw", displayName: "Gateway", protocol: "openai-compatible" })
+      },
+    })
+  }
+
+  it("beats the ROUTE's protocol", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain", protocol: "anthropic-messages" } })
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+  })
+
+  it("beats the model ROW's too — the selection is the most specific thing there is", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise", protocol: "anthropic-messages" } })
+    expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+  })
+
+  it("absent → the row's, then the route's, exactly as before", async () => {
+    const { runtime, builds } = await gwFixture()
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise" } })
+    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain" } })
+    expect(builds[0]?.profile.protocol).toBe("gemini")
+    expect(builds[1]?.profile.protocol).toBe("openai-compatible")
   })
 })

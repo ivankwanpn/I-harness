@@ -1237,6 +1237,12 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
         workspace: dir,
         approveAll: true,
         shellTimeoutMs: 300,
+        // The RELIANCE, stated: an INERT pair (threshold ≥ deadline) is what this
+        // case wants — the death at the deadline is the assertion. The explicit
+        // value is the default written out, so the precondition is local rather
+        // than inherited; the assembly warns on this pair by design (W10 F1),
+        // and this case is one of the places that warning is expected.
+        shellBackgroundAfterMs: 30_000,
         mockScript: [
           { role: "assistant", toolCalls: [{
             name: shell,
@@ -1290,6 +1296,64 @@ describe("headless CLI M10a guards (timeout + repeat-reminder)", () => {
   }, 20_000)
 })
 
+describe("headless CLI W10 foreground promotion", () => {
+  // The M10a case above shows the death: a command that outlives
+  // `shellTimeoutMs` is aborted there and the result carries TOOL_TIMEOUT. This
+  // is the other side of the same deadline — with `shellBackgroundAfterMs` set
+  // under it, the SAME kind of command is handed back as a job id instead, and
+  // this is the run the users meet: the CLI's option, the assembly's wiring, the
+  // shell tool, the guard and exec's job registry, in one pass.
+  it("a shell call that outlives shellBackgroundAfterMs returns a job id, and the command outlives the run to finish its work", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-w10-cli-"))
+    try {
+      const shell = resolveShell().name
+      const release = join(dir, "release")
+      const donePath = join(dir, "done.txt")
+      const fwd = (p: string): string => p.replace(/\\/g, "/")
+      // The command WAITS for the release file, so "still running" at the point
+      // of the assertion is a fact, not a race: nothing can complete it before
+      // this test writes that file.
+      const command = shell === "bash"
+        ? `echo started; while [ ! -f "${fwd(release)}" ]; do sleep 0.2; done; echo finished > "${fwd(donePath)}"`
+        : `Write-Output started; while (!(Test-Path '${fwd(release)}')) { Start-Sleep -Milliseconds 200 }; Set-Content -Path '${fwd(donePath)}' -Value finished`
+      const result = await runHeadless("slow", {
+        workspace: dir,
+        approveAll: true,
+        shellTimeoutMs: 5_000, // the deadline this run must NOT reach
+        shellBackgroundAfterMs: 300, // the threshold it must reach
+        mockScript: [
+          { role: "assistant", toolCalls: [{ name: shell, args: { command } }] },
+          { role: "assistant", toolCalls: [{ name: "job_list", args: {} }] },
+          { role: "assistant", text: "done" },
+        ],
+      })
+      expect(result.exitCode).toBe(0)
+      const toolResults = result.session?.events.filter((e) => e.type === "tool/result") ?? []
+      const shellResult = toolResults.find((e) => e.name === shell) as { output: { job_id?: string; promoted?: boolean; ran_foreground_ms?: number; code?: string } } | undefined
+      expect(shellResult).toBeDefined()
+      // Promoted — announced as a promotion, not as the model's own background
+      // choice and not as the timeout death.
+      expect(shellResult!.output.promoted).toBe(true)
+      expect(shellResult!.output.ran_foreground_ms).toBeGreaterThanOrEqual(300)
+      expect(shellResult!.output.job_id).toMatch(/^bash-\d+$/)
+      expect(shellResult!.output.code).toBeUndefined()
+      // The job surface the model reads agrees: the promoted command is a live
+      // bash job while the run is still going.
+      const jobList = toolResults.find((e) => e.name === "job_list") as { output: { jobs: { id: string; kind: string; status: string }[] } } | undefined
+      expect(jobList).toBeDefined()
+      expect(jobList!.output.jobs.some((j) => j.kind === "bash" && j.status === "running")).toBe(true)
+      // THE WORK SURVIVES THE RUN: the foreground call would have been killed at
+      // 5s and lost; released here, it keeps running after runHeadless returned
+      // and finishes what it was doing.
+      writeFileSync(release, "go")
+      const finished = await pollUntil(async () => (existsSync(donePath) ? true : undefined), 10_000)
+      expect(finished).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+})
+
 describe("headless CLI M12 retry + retention", () => {
   let dir: string
   beforeEach(() => {
@@ -1312,6 +1376,11 @@ describe("headless CLI M12 retry + retention", () => {
       // than 300ms to start on Windows. The first attempt still sleeps for 5s,
       // while the retry has enough budget to prove that it exits normally.
       shellTimeoutMs,
+      // Same reliance as the M10a case above: an INERT pair, so the first
+      // attempt really does time out (a promotion would hand back a job id and
+      // the retry path would never run). Explicit so it cannot be inherited
+      // from a default; the assembly's F1 warning on this pair is expected here.
+      shellBackgroundAfterMs: 30_000,
       retry,
       mockScript: [
         { role: "assistant", toolCalls: [{ name: shell, args: { command } }] },
@@ -1432,6 +1501,72 @@ describe("headless CLI M14 multimodal (image-bearing user message)", () => {
         mediaType: "image/png",
         dataBase64: PNG,
       })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("M11 runHeadless compaction contract", () => {
+  // NOTE: these exercise `runHeadless` DIRECTLY, with the caller supplying
+  // `compact`. They therefore say nothing about whether the CLI supplies it —
+  // that is `main`'s job and it is covered by test/compaction-wiring.test.ts,
+  // which mocks run.ts and asserts on the options main builds. An earlier version
+  // of this block was named "CLI compaction wiring", and a mutation removing the
+  // field from `main` left it green: a test can pass while the defect it appears
+  // to cover is fully present.
+  it("a window in the compact config makes runHeadless auto-compact an over-pressure session", async () => {
+    // The defect this pins: `HeadlessOptions.compact` existed and runHeadless would
+    // have threaded it, but NOTHING ever set it — the CLI's option object carried
+    // workspace/approveAll/modelPolicy/sandbox and no compact. So the engine was
+    // never constructed on any shipped path, pressure never triggered a summary,
+    // and the three-layer budget ladder ran with its first layer dead.
+    //
+    // The observable is the SESSION, not exitCode: a compaction leaves
+    // `compaction/*` events behind, and `compactNow` is the manual surface that
+    // bypasses the pressure gate — so this has to be an auto path, i.e. a real run.
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-"))
+    try {
+      const model: ModelClient = {
+        async *stream() {
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("work ".repeat(400), {
+        workspace: dir,
+        approveAll: true,
+        model,
+        // No provider binding here (a model client was supplied), so the window
+        // arrives ONLY from the config — the same shape the CLI now produces.
+        compact: { contextWindow: 100, auto: true },
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("auto:false keeps the engine but does not auto-compact under pressure", async () => {
+    // The opt-out must be honoured in the same shape, or `compaction.auto:false`
+    // would be a setting that silently does nothing.
+    const dir = mkdtempSync(join(tmpdir(), "i-harness-m11-off-"))
+    try {
+      const model: ModelClient = {
+        async *stream() {
+          yield { type: "text/chunk", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) }
+          yield { type: "end" }
+        },
+      }
+      const result = await runHeadless("work ".repeat(400), {
+        workspace: dir,
+        approveAll: true,
+        model,
+        compact: { contextWindow: 100, auto: false },
+      })
+      expect(result.exitCode).toBe(0)
+      expect(result.session?.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

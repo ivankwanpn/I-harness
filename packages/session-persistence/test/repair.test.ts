@@ -18,6 +18,54 @@ function events(...types: Array<Partial<SessionEvent> & { type: SessionEvent["ty
   return types as SessionEvent[]
 }
 
+// M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the
+// call; the body runs later, in a batch (core-agent/src/index.ts:261-264). So a
+// `tool/call` with no `tool/result` used to be given ONE verdict —
+// TOOL_ABORTED_BEFORE_DISPATCH — for four possibilities that the log cannot tell
+// apart, **including "dispatched and still running"** (`rm`, `git push`). The
+// model reads that verdict, may re-run the tool, and doubles a side effect.
+//
+// `tool/dispatch` is written before the body starts, so the two are now READ
+// apart instead of guessed apart.
+describe("repairTurnTail — the dispatch boundary (M4)", () => {
+  const syntheticResultCode = (out: SessionEvent[]): unknown =>
+    (out.find((e) => e.type === "tool/result") as { output?: { code?: unknown } } | undefined)?.output?.code
+
+  it("a DISPATCHED tool with no result is outcome-unknown, NEVER 'before dispatch'", () => {
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+      { type: "tool/dispatch", callId: "c1", eventSeq: 1, seq: 2 },
+    ))
+    expect(syntheticResultCode(out)).toBe("TOOL_OUTCOME_UNKNOWN")
+    // THE ASSERTION WITH TEETH: the old verdict must not survive anywhere in the
+    // repaired log — not just not in the code field.
+    expect(JSON.stringify(out)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
+  })
+
+  it("a tool with NO dispatch marker keeps the before-dispatch verdict", () => {
+    // The control, and it is not decoration: an implementation that simply
+    // renamed the constant would pass the case above and be wrong here.
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+    ))
+    expect(syntheticResultCode(out)).toBe("TOOL_ABORTED_BEFORE_DISPATCH")
+  })
+
+  it("one dispatch marker does not change the verdict for a DIFFERENT call", () => {
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
+      { type: "tool/dispatch", callId: "c1", eventSeq: 1, seq: 2 },
+      { type: "tool/call", callId: "c2", name: "read", args: {}, seq: 3 },
+    ))
+    const codes = out.filter((e) => e.type === "tool/result")
+      .map((e) => (e as { output?: { code?: unknown } }).output?.code)
+    expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN", "TOOL_ABORTED_BEFORE_DISPATCH"])
+  })
+})
+
 describe("repairTurnTail", () => {
   it("closes an interrupted turn (synthetic step/end + turn/end)", () => {
     const evs = events({ type: "turn/start", seq: 0 }, { type: "assistant/message", text: "x", seq: 1 })
@@ -274,6 +322,54 @@ describe("repairTurnTail through coordinator.load()", () => {
       const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
         .map((line) => JSON.parse(line) as SessionEvent)
       expect(raw.map((event) => event.seq)).toEqual(raw.map((_, index) => index))
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  // M4: the NEW verdict has to be as durable as the old one, and the machinery
+  // that makes it so already existed (`needsRewrite` + `backend.replaceEvents`).
+  // This test exists because "the write-back happens" was checked for the
+  // before-dispatch verdict and NOT for the unknown-outcome one — the case the
+  // whole milestone is about.
+  it("loadOwned durably canonicalizes an OUTCOME-UNKNOWN verdict too (M4)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ih-repair-unknown-"))
+    const sessionId = "sess-owned-unknown"
+    try {
+      const header = `{"formatVersion":1,"sessionId":"${sessionId}","createdAt":"2026-09-06T00:00:00.000Z"}`
+      writeFileSync(join(dir, `${sessionId}.jsonl`), [
+        header,
+        JSON.stringify({ type: "turn/start", seq: 0 }),
+        JSON.stringify({ type: "step/start", seq: 1 }),
+        JSON.stringify({ type: "tool/call", callId: "c1", name: "bash", args: { cmd: "rm -rf build" }, seq: 2 }),
+        // THE MARKER: the body started. The log cannot say how it ended.
+        JSON.stringify({ type: "tool/dispatch", callId: "c1", eventSeq: 2, seq: 3 }),
+        "",
+      ].join("\n"), "utf8")
+
+      const first = createSessionCoordinator(createJsonlBackend(dir))
+      const loaded = await first.loadOwned(sessionId)
+      const verdict = loaded.session.events.find((event) => event.type === "tool/result") as
+        | { output?: { code?: string; replay?: boolean } }
+        | undefined
+      expect(verdict?.output?.code).toBe("TOOL_OUTCOME_UNKNOWN")
+      expect(verdict?.output?.replay).toBe(false)
+      await first.close()
+
+      // A SECOND coordinator over the same directory: the verdict must be READ
+      // from the file, not re-derived. Re-deriving would be the failure I2 names.
+      const second = createSessionCoordinator(createJsonlBackend(dir))
+      const reloaded = await second.loadOwned(sessionId)
+      const codes = reloaded.session.events
+        .filter((event) => event.type === "tool/result")
+        .map((event) => (event.output as { code?: string }).code)
+      expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN"])
+      await second.close()
+
+      // And it is on DISK, not only in the objects returned.
+      const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8")
+      expect(raw).toContain("TOOL_OUTCOME_UNKNOWN")
+      expect(raw).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

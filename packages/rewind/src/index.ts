@@ -20,7 +20,6 @@ export type {
   FileOp,
   FileStatus,
   RewindEvent,
-  RewindExecuteError,
   RewindFileRecord,
   RewindMode,
   RewindOrphanedTurn,

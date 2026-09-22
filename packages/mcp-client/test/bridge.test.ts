@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { createContext } from "@i-harness/core-plugin"
+import { createToolRegistry } from "@i-harness/core-tools"
 import { createMcpTool } from "../src/index.ts"
 import type { ConnectedMcpClient } from "../src/index.ts"
 
@@ -48,5 +50,36 @@ describe("createMcpTool", () => {
     const client = fakeClient({ content: [{ type: "text", text: "boom" }], isError: true })
     const tool = createMcpTool(client, "mcp__s__t", "t", { name: "t" }, { transport: "stdio", serverName: "s", command: "x", args: [] })
     await expect(tool.execute({}, {} as never)).rejects.toThrow(/tool error|boom/)
+  })
+})
+
+// spec §3.8, the writer's half: this file is the ONE place a remote server's
+// schema becomes a Tool, so it is the one place the foreign marker can be set.
+// Without it the registry's assertion rejects a server for speaking draft-07 —
+// measured on a real SDK server, whose zod→draft-7 conversion emits `$schema`
+// at the schema root (a key no literal in this repo contains).
+describe("createMcpTool — a remote schema is FOREIGN", () => {
+  it("registers through the real registry although the server's schema leaves IH's subset", () => {
+    const client = fakeClient({ content: [] })
+    const tool = createMcpTool(
+      client,
+      "mcp__schema__draft",
+      "draft",
+      {
+        name: "draft",
+        description: "draft-07",
+        inputSchema: {
+          $schema: "http://json-schema.org/draft-07/schema#",
+          type: "object",
+          properties: { text: { type: "string", format: "date" } },
+          required: ["text"],
+        },
+      },
+      { transport: "stdio", serverName: "schema", command: "x", args: [] },
+    )
+    expect(tool.inputSchemaForeign).toBe(true)
+    const registry = createToolRegistry(createContext())
+    expect(() => registry.register(tool)).not.toThrow()
+    expect(registry.get("mcp__schema__draft")).toBeDefined()
   })
 })

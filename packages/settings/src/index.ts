@@ -14,51 +14,25 @@
 import { existsSync } from "node:fs"
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { homedir } from "node:os"
 // Runtime import of the protocol constants (the enum's single source). Safe:
 // sections.ts only ever imports TYPES from this module, so the runtime edge
 // is one-directional (this module → sections.ts) — no evaluation-order cycle.
 import { PROVIDER_PROTOCOLS } from "./sections.ts"
 import type { SettingsProviderProtocol } from "./sections.ts"
 import type { Telemetry } from "@i-harness/telemetry"
+import { resolveHarnessHome } from "@i-harness/harness-home"
 
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
 export type SettingsSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 
-/** Theme preference (M49 Task 8 — design spec §9.3): six persisted ids;
- * `system` follows the OS appearance (auto). Legacy on-disk `light` / `dark`
- * values soft-normalize to `grok-day` / `grok-night` at read. */
-export type SettingsTheme =
-  | "system"
-  | "grok-night"
-  | "grok-day"
-  | "tokyo-night"
-  | "rose-pine-moon"
-  | "oscura-midnight"
-
-/** The six accepted theme ids, in the settings modal's cycle order. */
-export const SETTINGS_THEMES: readonly SettingsTheme[] = [
-  "system",
-  "grok-night",
-  "grok-day",
-  "tokyo-night",
-  "rose-pine-moon",
-  "oscura-midnight",
-]
-
-/** The theme ids low-color terminals can distinguish (design §9.3 — the tinted
- * palettes "lose their character" when quantized — pickers expose only these). */
-export const SETTINGS_THEMES_LOW_COLOR: readonly SettingsTheme[] = [
-  "system",
-  "grok-night",
-  "grok-day",
-]
-
-/** Completed-turn transcript presentation (dsh settings.transcript). */
+/** Completed-turn transcript presentation (dsh settings.transcript). Retained as
+ * a vocabulary type after the `transcriptMode` key was retired: it is not one of
+ * the retired names, and it still names the closed value set. */
 export type SettingsTranscriptMode = "normal" | "compact"
 
-/** Enter-while-busy behavior (dsh settings.busyEnter). */
+/** Enter-while-busy behavior (dsh settings.busyEnter). Retained as a vocabulary
+ * type alongside `transcriptMode` — see the note there. */
 export type SettingsBusyEnter = "interrupt" | "wait"
 
 /** Session search-backend preference (M29 語意降級——search index switch):
@@ -93,6 +67,11 @@ export interface SettingsModel {
    * G1 mapping of this value onto `maxContextWindow` is removed). A per-model
    * override in the unified resolution chain; never a request default. */
   maxTokens?: number
+  /** The WIRE PROTOCOL for this model, overriding the route's. One endpoint can
+   * serve different models on different protocols (the gateway case), and the
+   * protocol is a property of the endpoint, so the route states the default and
+   * a row states the exception. Absent → the route's. */
+  protocol?: SettingsProviderProtocol
   /** M61: content types this MODEL accepts — the per-model override of the
    * route's declaration (see SettingsProviderConfig.inputModalities). */
   inputModalities?: SettingsInputModality[]
@@ -126,6 +105,20 @@ export function normalizeInputModalities(raw: unknown): SettingsInputModality[] 
  * packages/credentials (Task 2), so this document never holds key material. */
 export interface SettingsProviderConfig {
   apiKeyEnv?: string
+  /** The model-card FAMILY this route draws its per-model capability metadata
+   * from (`model-catalog.json`'s top-level key — `deepseek`, `gemini`, …).
+   *
+   * The route NAME is the default, and that is deliberate: most routes are named
+   * after their vendor, so the default is the status quo rather than a guess.
+   * This field exists for the routes where it is not — the user's second route
+   * for a vendor (`deepseek1`, opened to use a second API key) inherits nothing
+   * from the name `deepseek`, and before this field it inherited nothing at all.
+   *
+   * It is declared, NOT derived from baseURL, because a derivation would be wrong
+   * on precisely the set-ups the field exists for: gateways, proxies, regional
+   * and subscription variants, and any vendor fronted by a custom host. A wrong
+   * family is worse than no family — it supplies another vendor's numbers. */
+  catalog?: string
   /** Host ROOT after normalize (a trailing /v1 is stripped — the adapters
    * assemble /v1/... themselves); see stripBaseURLSuffix. */
   baseURL?: string
@@ -135,11 +128,11 @@ export interface SettingsProviderConfig {
   displayName?: string
   /** Wire protocol (D2). normalizeSettings keeps VALID values only: absent
    * stays absent and invalid raw degrades to absent (review r1 — a normalizing
-   * default-fill would shadow the consumers' resolution chain; the per-route
-   * default belongs there, never in the stored document). Per-route
-   * resolution is resolveProviderProtocol (user > SEEDED_PROTOCOLS > DEFAULT
-   * — the seeded map is EMPTY after the amendment); the section API's mutate
-   * rejects unknown values fail-loud. */
+   * default-fill would shadow the consumers' resolution chain; the resolved
+   * protocol belongs there, never in the stored document). Per-route
+   * resolution is resolveProviderProtocol (user > SEEDED_PROTOCOLS — the
+   * seeded map is EMPTY after the amendment, and absence is where the chain
+   * ends); the section API's mutate rejects unknown values fail-loud. */
   protocol?: SettingsProviderProtocol
   /** Model rows (objects since T1; string entries soft-upgrade at normalize). */
   models?: SettingsModel[]
@@ -163,17 +156,35 @@ export interface SettingsDefaultModel {
   reasoningEffort?: string
 }
 
+/** One role's model selection: the shape of `SettingsDefaultModel` plus the
+ * protocol, because a role may name an endpoint as well as a model. `provider`
+ * and `model` are required TOGETHER — a role that named only one would be
+ * asking us to guess the other.
+ *
+ * NOT EXPORTED. Nothing outside this file ever NAMES it: Task 4's resolver and
+ * Task 5's CLI both build object literals, which structural typing accepts. And
+ * the reachability instrument counts `export interface` as a row — an export
+ * whose consumer is three tasks away is what commit 8ec8fda0 removed. */
+interface SettingsRoleModel {
+  provider: string
+  model: string
+  protocol?: SettingsProviderProtocol
+  reasoningEffort?: string
+}
+
+/** `agents.roles.<name>`: the model a sub-agent role runs on. An ABSENT role
+ * inherits the parent's client — which is what every role did before this
+ * section existed, and what an unconfigured harness still does.
+ * Not exported; see SettingsRoleModel. */
+interface SettingsAgents {
+  roles: Record<string, SettingsRoleModel>
+}
+
 /** Canonical provider overrides + the default model. */
 export interface SettingsLlm {
   providers: Record<string, SettingsProviderConfig>
   defaultModel: SettingsDefaultModel
 }
-
-/** M46b G1: keep_text_selection modes (grok `ui.keep_text_selection`). */
-export type SettingsKeepTextSelection = "flash" | "hold" | "word_select"
-
-/** M46b G1: scroll input classification (grok `ui.scroll_mode`). */
-export type SettingsScrollMode = "auto" | "wheel" | "trackpad"
 
 /** M46b G1: the grok default word-separator set (text_selection.rs:
  * DEFAULT_WORD_SEPARATORS `!"#$%&'()*+,-./:;<=>?@[\]^`{|}~`). */
@@ -191,11 +202,10 @@ export const SETTINGS_STATUS_LINE_SEGMENTS = [
 ] as const
 export type SettingsStatusLineSegment = (typeof SETTINGS_STATUS_LINE_SEGMENTS)[number]
 
-/** M49 Task 13 (spec §8.3): dashboard pin/order ids (tui.prefs.dashboard) —
- * ids ONLY; missing ids are ignored for display and deleted only after the
- * next successful commit. */
+/** M49 Task 13 (spec §8.3): dashboard order ids (tui.prefs.dashboard) — ids
+ * ONLY; missing ids are ignored for display and deleted only after the next
+ * successful commit. */
 export interface SettingsTuiDashboardPrefs {
-  pinned: string[]
   order: string[]
 }
 
@@ -213,38 +223,11 @@ export interface SettingsTuiStatusLinePrefs {
 }
 
 export interface SettingsTuiPrefs {
-  /** Scrollback timestamps (the engine's showTimestamps). */
-  timestamps: boolean
   /** UI density compaction (the loop's layout compact mode). */
   compact: boolean
   /** Approval guardian: ON = tool asks go to the user (approveAll off). */
   guardian: boolean
-  /** Always-approve default for permission asks (with the guardian on). */
-  alwaysApprove: boolean
-  /** Mouse/trackpad scroll speed multiplier (1–100; 1→0.1×, 50→1.0×, 100→6.0×). */
-  scrollSpeed: number
-  /** Scroll input classification (auto-detect wheel vs trackpad, or forced). */
-  scrollMode: SettingsScrollMode
-  /** Lines per scroll tick for both wheel and trackpad (1–10). Unset (3 in the
-   * schema default) keeps the per-terminal profile in charge; the loop's
-   * normalizer treats it as the override when present. */
-  scrollLines: number
-  /** Reverse vertical scroll direction (natural scrolling). */
-  invertScroll: boolean
-  /** In-app selection: brief flash, hold, or double-click word select. */
-  keepTextSelection: SettingsKeepTextSelection
-  /** Word separators for double-click word-select (grok default set). */
-  wordSeparators: string
-  /** Opt-in mouse-reporting toggle (grok `ui.mouse_reporting_toggle`, default
-   * off): ON exposes the Ctrl+R scrollback binding + /toggle-mouse-reporting
-   * that flips mouse capture/hover at runtime (and GROK_MOUSE_REPORTING_TOGGLE
-   * forces it ON at startup). */
-  mouseReportingToggle: boolean
-  /** M49 Task 8: production UI surface mode. The executable resolves explicit
-   * `--mode` flag > this persisted value > fullscreen default; `/minimal` and
-   * `/fullscreen` write it on switch. */
-  screenMode: "fullscreen" | "minimal"
-  /** M49 Task 13 (spec §9.2): the local dashboard's pinned/order id lists. */
+  /** M49 Task 13 (spec §9.2): the local dashboard's order id list. */
   dashboard: SettingsTuiDashboardPrefs
   /** M49 Task 13 (spec §9.2): the status-line preferences. */
   statusLine: SettingsTuiStatusLinePrefs
@@ -268,25 +251,47 @@ export interface Settings {
   sandboxMode: SettingsSandboxMode
   model: string
   language: SettingsLanguage
-  theme: SettingsTheme
   fontSize: number
-  transcriptMode: SettingsTranscriptMode
-  busyEnter: SettingsBusyEnter
   /** M29: search-index ON-switch, not a persistence backend (JSONL is the sole
    *  authority). "jsonl" = index enabled (default); legacy "sqlite" value reads
    *  as enabled (compat); unknown value normalizes to "jsonl". */
   searchBackend: SettingsSearchBackend
   plugins: SettingsPluginToggles
+  /** Agent-role configuration. A separate plane from `llm`: `llm` is the
+   * provider plane, this is which of them a ROLE runs on. */
+  agents: SettingsAgents
   /** Appended in this plan: previously-absent top-level key, additive-only. */
   llm: SettingsLlm
   onboarding: SettingsOnboarding
+  /** Compaction engine switch. Distinct from `tui.prefs.compact`, which is UI
+   *  density — this one governs whether context-pressure AUTO-compaction runs.
+   *  Kept local like SettingsSandboxMode so the settings package stays
+   *  dependency-free. A manual `/compact` is unaffected by `auto:false`. */
+  compaction: SettingsCompaction
   /** Appended M46a G1: TUI UI-preference knobs (M49 Task 6 — the provider
    * registry is the canonical llm.providers plane; presentation only here). */
   tui: SettingsTui
 }
 
-export const SETTINGS_DEFAULTS: Settings = {
+export interface SettingsCompaction {
+  /** false disables AUTO compaction ONLY. The engine is still constructed, so a
+   *  manual `/compact` and the pressure gate's other layers keep working. */
+  auto: boolean
+}
+
+// NOT exported (2026-09-18): nothing outside this module names it, and
+// `normalizeSettings` is the public way to obtain the same values — which is
+// what the three test files that used it as an oracle now do. The row this
+// retires was blocked for months by a mis-stated reason; see the correction in
+// docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
+const SETTINGS_DEFAULTS: Settings = {
   sandboxMode: "workspace-write",
+  // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
+  // and its designed ladder: layer 1 is pressure compaction at 80% of the window,
+  // layers 2-3 are the pure reset and the fail-closed refusal. Shipping with this
+  // unreachable meant layer 1 never ran and long sessions fell straight through to
+  // `prompt_too_long`. Turning it OFF is the opt-out, not the other way round.
+  compaction: { auto: true },
   // Amendment (seeded defaults removed): "" = UNset — no default model. Every
   // model now comes from the user section (llm.providers + llm.defaultModel)
   // or a per-session selection; the field is kept so an OLD file's written
@@ -294,12 +299,10 @@ export const SETTINGS_DEFAULTS: Settings = {
   // no default anywhere.
   model: "",
   language: "zh",
-  theme: "system",
   fontSize: 14,
-  transcriptMode: "normal",
-  busyEnter: "interrupt",
   searchBackend: "jsonl",
   plugins: { agentLoop: true, bash: true, webSearch: false, subagentModel: false },
+  agents: { roles: {} },
   // Appended sections: fresh documents default here without any migration path
   // (old files without these keys load with these values — D5/no-migration).
   llm: {
@@ -314,25 +317,14 @@ export const SETTINGS_DEFAULTS: Settings = {
   // the first-run notice visible, while a plain old document stays unset.
   onboarding: { welcomeNoticeVersion: "" },
   // M46a G1 appended section (M49 Task 6: presentation prefs only — the
-  // provider plane is llm.providers): timestamps off (the engine default),
-  // compact off (the fullscreen default), guardian off (the embedded
-  // factory's approveAll:true default; always-approve on — "no asks" stance).
+  // provider plane is llm.providers): compact off (the fullscreen default) and
+  // guardian off (the embedded factory's approveAll:true default).
   tui: {
-    // M46b G1 mouse defaults: speed 50 (1.0×), auto mode, scroll_lines 3 (the
-    // registry default — per-terminal profile in charge), invert off, flash
-    // selection, grok's word separators, mouse-reporting-toggle opt-in OFF
-    // (the Ctrl+R binding + /toggle-mouse-reporting stay inert until ON).
     prefs: {
-      timestamps: false, compact: false, guardian: false, alwaysApprove: true,
-      scrollSpeed: 50, scrollMode: "auto", scrollLines: 3, invertScroll: false,
-      keepTextSelection: "flash", wordSeparators: SETTINGS_DEFAULT_WORD_SEPARATORS,
-      mouseReportingToggle: false,
-      // M49 Task 8: fullscreen is the executable default (the resolver order):
-      // explicit flag > this persisted value > fullscreen.
-      screenMode: "fullscreen",
-      // M49 Task 13 (spec §9.2): dashboard pins/order empty; the builtin
-      // status line with every configurable segment.
-      dashboard: { pinned: [], order: [] },
+      compact: false, guardian: false,
+      // M49 Task 13 (spec §9.2): dashboard order empty; the builtin status line
+      // with every configurable segment.
+      dashboard: { order: [] },
       statusLine: { mode: "builtin", items: [...SETTINGS_STATUS_LINE_SEGMENTS] },
     },
   },
@@ -343,19 +335,6 @@ export const FONT_SIZE_MIN = 13
 export const FONT_SIZE_MAX = 16
 
 const SANDBOX_MODES: readonly SettingsSandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
-const THEMES: readonly SettingsTheme[] = SETTINGS_THEMES
-/** Legacy on-disk vocabulary (design §9.3): light/dark → grok-day/grok-night. */
-const LEGACY_THEMES: Record<string, SettingsTheme> = { light: "grok-day", dark: "grok-night" }
-
-/** Theme value normalization: legacy light/dark soft-upgrade to the modern ids
- * (D5 — no migration chain, no file rewrite), the six modern ids pass, and an
- * unknown value degrades to the default (`system`). */
-function normalizeTheme(value: unknown): SettingsTheme {
-  if (typeof value === "string" && value in LEGACY_THEMES) return LEGACY_THEMES[value]!
-  return oneOf(value, THEMES, SETTINGS_DEFAULTS.theme)
-}
-const TRANSCRIPT_MODES: readonly SettingsTranscriptMode[] = ["normal", "compact"]
-const BUSY_ENTERS: readonly SettingsBusyEnter[] = ["interrupt", "wait"]
 const SEARCH_BACKENDS: readonly SettingsSearchBackend[] = ["jsonl", "sqlite"]
 const LANGUAGES: readonly SettingsLanguage[] = ["zh"]
 
@@ -468,6 +447,7 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
       if (isNonEmptyString(entry.name)) model.name = entry.name
       if (isPositiveInteger(entry.contextWindow)) model.contextWindow = entry.contextWindow
       if (isPositiveInteger(entry.maxTokens)) model.maxTokens = entry.maxTokens
+      if (isProviderProtocol(entry.protocol)) model.protocol = entry.protocol
       const modalities = normalizeInputModalities(entry.inputModalities)
       if (modalities !== undefined) model.inputModalities = modalities
       models.push(model)
@@ -482,11 +462,12 @@ function normalizeModels(raw: unknown): SettingsModel[] | undefined {
  * (it never rescues a route either).
  * TWO-TIER protocol stance (review r1): at READ a valid raw value is kept,
  * an absent/invalid raw value stays ABSENT — normalize never fills a default,
- * because the per-route default belongs to resolveProviderProtocol's chain
- * (user > SEEDED_PROTOCOLS({}) > DEFAULT — the seeded map is empty after the
- * amendment); filling here would shadow the consumers' resolution and
- * mis-dispatch the T2 probe / T4 build. Fail-loud rejection of unknown
- * values remains the section API's mutate (the protocol enum FieldSpec). */
+ * because the resolved protocol belongs to resolveProviderProtocol's chain
+ * (user > SEEDED_PROTOCOLS({}) — the seeded map is empty after the
+ * amendment, and the chain has no tail after it); filling here would shadow
+ * the consumers' resolution and mis-dispatch the T2 probe / T4 build.
+ * Fail-loud rejection of unknown values remains the section API's mutate
+ * (the protocol enum FieldSpec). */
 function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (!isRecord(raw)) return null
   const out: SettingsProviderConfig = {}
@@ -497,6 +478,7 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   }
   if (isNonEmptyString(raw.modelsURL)) out.modelsURL = raw.modelsURL
   if (isNonEmptyString(raw.displayName)) out.displayName = raw.displayName
+  if (isNonEmptyString(raw.catalog)) out.catalog = raw.catalog
   const models = normalizeModels(raw.models)
   if (models !== undefined) out.models = models
   const headers = normalizeProviderHeaders(raw.headers)
@@ -506,6 +488,29 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out
+}
+
+/** One role entry. Returns null for anything that is not a complete selection —
+ * a half entry (`provider` without `model` or vice versa) is DROPPED, not
+ * completed: completing it is the guess this design exists to avoid. */
+function normalizeRoleModel(raw: unknown): SettingsRoleModel | null {
+  if (!isRecord(raw)) return null
+  if (!isNonEmptyString(raw.provider) || !isNonEmptyString(raw.model)) return null
+  const out: SettingsRoleModel = { provider: raw.provider, model: raw.model }
+  if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
+  if (isNonEmptyString(raw.reasoningEffort)) out.reasoningEffort = raw.reasoningEffort
+  return out
+}
+
+function normalizeAgents(raw: unknown, base: SettingsAgents): SettingsAgents {
+  if (!isRecord(raw)) return { roles: { ...base.roles } }
+  const rolesRaw = isRecord(raw.roles) ? raw.roles : {}
+  const roles: Record<string, SettingsRoleModel> = {}
+  for (const [name, value] of Object.entries(rolesRaw)) {
+    const entry = normalizeRoleModel(value)
+    if (entry !== null) roles[name] = entry
+  }
+  return { roles }
 }
 
 /** M59: extra request headers — dynamic string keys, non-empty string values;
@@ -576,40 +581,22 @@ function normalizeOnboarding(raw: unknown, base: SettingsOnboarding): SettingsOn
 /** Appended TUI section (M49 Task 6): the presentation prefs only — the
  * legacy `providers` payload is no longer normalized (the canonical plane is
  * `llm.providers`; the store still passes the raw legacy section to the
- * read migration). Corrupt input degrades per pref. */
+ * read migration). Corrupt input degrades per pref.
+ *
+ * The projection names every key it reads, so a retired key left in an older
+ * on-disk document is simply never read — the document still loads. */
 function normalizeTui(raw: unknown, base: SettingsTui): SettingsTui {
   const prefsRaw = isRecord(raw) && isRecord(raw.prefs) ? raw.prefs : {}
   const b = base.prefs
   return {
     prefs: {
-      timestamps: typeof prefsRaw.timestamps === "boolean" ? prefsRaw.timestamps : b.timestamps,
       compact: typeof prefsRaw.compact === "boolean" ? prefsRaw.compact : b.compact,
       guardian: typeof prefsRaw.guardian === "boolean" ? prefsRaw.guardian : b.guardian,
-      alwaysApprove: typeof prefsRaw.alwaysApprove === "boolean" ? prefsRaw.alwaysApprove : b.alwaysApprove,
-      // M46b G1 mouse knobs (loose on-disk values degrade to the defaults —
-      // same fallback discipline as every other appended pref).
-      scrollSpeed: numberInList(prefsRaw.scrollSpeed, 1, 100, b.scrollSpeed),
-      scrollMode: oneOf(prefsRaw.scrollMode, ["auto", "wheel", "trackpad"] as const, b.scrollMode),
-      scrollLines: numberInList(prefsRaw.scrollLines, 1, 10, b.scrollLines),
-      invertScroll: typeof prefsRaw.invertScroll === "boolean" ? prefsRaw.invertScroll : b.invertScroll,
-      keepTextSelection: oneOf(
-        prefsRaw.keepTextSelection,
-        ["flash", "hold", "word_select"] as const,
-        b.keepTextSelection,
-      ),
-      wordSeparators: typeof prefsRaw.wordSeparators === "string" && prefsRaw.wordSeparators !== ""
-        ? prefsRaw.wordSeparators
-        : b.wordSeparators,
-      mouseReportingToggle: typeof prefsRaw.mouseReportingToggle === "boolean"
-        ? prefsRaw.mouseReportingToggle
-        : b.mouseReportingToggle,
-      screenMode: oneOf(prefsRaw.screenMode, ["fullscreen", "minimal"] as const, b.screenMode),
-      // M49 Task 13 (spec §9.2): dashboard pin/order + the status line —
-      // corrupt input degrades per field (the run-time nullability of
-      // command/refreshMs is preserved — an absent value means "host default
-      // 1000ms/1s", never a fabricated one).
+      // M49 Task 13 (spec §9.2): dashboard order + the status line — corrupt
+      // input degrades per field (the run-time nullability of command/refreshMs
+      // is preserved — an absent value means "host default 1000ms/1s", never a
+      // fabricated one).
       dashboard: {
-        pinned: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).pinned),
         order: stringList((isRecord(prefsRaw.dashboard) ? prefsRaw.dashboard : {}).order),
       },
       statusLine: (() => {
@@ -636,28 +623,30 @@ export function normalizeSettings(raw: unknown): Settings {
     return {
       ...base,
       plugins: { ...base.plugins },
+      agents: normalizeAgents(undefined, base.agents),
       llm: normalizeLlm(undefined, base.llm),
       onboarding: { ...base.onboarding },
+      compaction: { ...base.compaction },
       tui: normalizeTui(undefined, base.tui),
     }
   }
   const pluginsRaw = isRecord(raw.plugins) ? raw.plugins : {}
+  const compactionRaw = isRecord(raw.compaction) ? raw.compaction : {}
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,
     language: oneOf(raw.language, LANGUAGES, base.language),
-    theme: normalizeTheme(raw.theme),
     fontSize: numberInList(raw.fontSize, FONT_SIZE_MIN, FONT_SIZE_MAX, base.fontSize),
-    transcriptMode: oneOf(raw.transcriptMode, TRANSCRIPT_MODES, base.transcriptMode),
-    busyEnter: oneOf(raw.busyEnter, BUSY_ENTERS, base.busyEnter),
     searchBackend: oneOf(raw.searchBackend, SEARCH_BACKENDS, base.searchBackend),
+    compaction: { auto: booleanOf(compactionRaw.auto, base.compaction.auto) },
     plugins: {
       agentLoop: booleanOf(pluginsRaw.agentLoop, base.plugins.agentLoop),
       bash: booleanOf(pluginsRaw.bash, base.plugins.bash),
       webSearch: booleanOf(pluginsRaw.webSearch, base.plugins.webSearch),
       subagentModel: booleanOf(pluginsRaw.subagentModel, base.plugins.subagentModel),
     },
+    agents: normalizeAgents(raw.agents, base.agents),
     // Transition read migration: legacy TUI providers fill missing canonical
     // fields in memory only; explicit llm values win and no file is rewritten.
     llm: normalizeLlmWithLegacy(raw.llm, tuiRaw.providers, base.llm),
@@ -682,7 +671,7 @@ export interface SettingsStoreOptions {
  */
 export function resolveSettingsPath(options: SettingsStoreOptions = {}): string {
   if (options.path !== undefined) return resolve(options.path)
-  const dir = options.configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  const dir = resolveHarnessHome(options.configDir)
   return join(dir, "settings.json")
 }
 
@@ -1136,6 +1125,15 @@ export class LayeredSettingsStore {
   private revision: Record<string, number> = {}
   private listeners = new Set<(path: string) => void>()
   private watcher: { dispose: () => void } | undefined
+  /** W1 conflate state: a reload is in flight, and the detections that arrived
+   * while it was — arrival-ordered and deduped (a file re-observed inside its
+   * own window, e.g. the settled half of a non-atomic write, is not a new
+   * change). BOTH settle paths resolve this queue — see recheckPendingChange.
+   * The paths are part of the state, not decoration: the re-check reports under
+   * a pending detection's path, never under the one that started the reload in
+   * flight (measured: the wrong path is user-visible in `data.path`). */
+  private reloadInFlight = false
+  private reloadPending: string[] = []
 
   constructor(options: LayeredStoreOptions = {}) {
     this.options = options
@@ -1251,7 +1249,8 @@ export class LayeredSettingsStore {
    * source's mtime/size changed, reload merged view + notify (settings/changed
    * analog at the store surface: `onChange`). M40 A6: the DETECTED CHANGE
    * (subsequent ticks only — the first tick snapshots, see watchSettings)
-   * also emits `settings/changed` to the injected telemetry stream. */
+   * also emits `settings/changed` to the injected telemetry stream. W1: the
+   * reload itself is conflated — see handleWatchedChange. */
   private ensureWatcher(): void {
     if (this.watcher !== undefined || this.options.watchIntervalMs === false) return
     const intervalMs = this.options.watchIntervalMs ?? 500
@@ -1259,19 +1258,103 @@ export class LayeredSettingsStore {
       .map((s) => s.path)
       .filter((p): p is string => p !== null && p !== undefined)
     if (paths.length === 0) return
-    this.watcher = watchSettings(paths, (path) => {
-      // The pre-reload view is the change baseline: reloadFromDisk → load()
-      // ALREADY assigns this.current, so comparing against this.current here
-      // would always compare the merged view to itself (the dormant
-      // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
-      const before = this.current
-      void this.reloadFromDisk().then((settings) => {
-        if (JSON.stringify(settings) !== JSON.stringify(before)) {
-          for (const cb of [...this.listeners]) cb(path)
-          this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
-        }
-      }).catch(() => {})
-    }, { intervalMs })
+    this.watcher = watchSettings(paths, (path) => this.handleWatchedChange(path), { intervalMs })
+  }
+
+  /**
+   * W1 conflate: at most one `reloadFromDisk()` in flight, and a detection that
+   * lands while one is in flight is absorbed UNLESS the disk moved again behind
+   * it — the settle re-check compares STATE, never time.
+   *
+   * The baseline `before` is snapshotted synchronously and compared AFTER the
+   * await, so two detections landing inside one reload's latency both compare
+   * against the same pre-change view and both emit. That is one of the three
+   * sources of the double report: the watcher can re-report one write (its own
+   * out-of-order capture — guarded there now) and a non-atomic `writeFile`
+   * (truncate → write) genuinely presents two `mtime:size` states, so a single
+   * write can legitimately deliver two detections. The conflate absorbs the
+   * second one here.
+   *
+   * The re-check is what keeps the conflate honest, and why it is not a
+   * debounce: the pending detection starts a fresh reload whose baseline is the
+   * state the in-flight reload produced. A detection that merely re-observed
+   * the change just reported compares equal and emits nothing; a genuinely
+   * separate write that the in-flight reload did not read differs and fires
+   * once. Two real writes therefore stay two reports, no matter how close.
+   */
+  private handleWatchedChange(path: string): void {
+    if (this.reloadInFlight) {
+      // The pending detection keeps ITS OWN path (see recheckPendingChange).
+      if (!this.reloadPending.includes(path)) this.reloadPending.push(path)
+      return
+    }
+    // NOTE: no queue clear here. This is also the re-check's entry point, and a
+    // re-check must not drop the detections queued behind the one it resolves
+    // (they drain one per cycle, see recheckPendingChange). Nothing is pending
+    // when a ROOT cycle starts: `reloadInFlight` is only ever false with an
+    // empty queue — the settle clears the flag and starts the next re-check in
+    // the same synchronous block, so no detection can slip between them.
+    this.reloadInFlight = true
+    // The pre-reload view is the change baseline: reloadFromDisk → load()
+    // ALREADY assigns this.current, so comparing against this.current here
+    // would always compare the merged view to itself (the dormant
+    // store-level detection — M40 A6 fixes it by snapshotting BEFORE).
+    const before = this.current
+    void this.reloadFromDisk().then((settings) => {
+      const reported = JSON.stringify(settings) !== JSON.stringify(before)
+      if (reported) {
+        for (const cb of [...this.listeners]) cb(path)
+        this.options.telemetry?.emit({ type: "settings/changed", ts: Date.now(), data: { path } })
+      }
+      this.reloadInFlight = false
+      this.recheckPendingChange(reported ? path : undefined)
+    }).catch(() => {
+      // A reload that threw (a torn read of a non-atomic writer's file, a
+      // document the tolerant parser rejects) must not wedge the handler — and
+      // must NOT drop the pending detection either. The watcher advanced its
+      // snapshot to the state that raised the failure when it fired, so a
+      // settled state observed DURING the failed reload is never re-detected:
+      // dropping it here would lose the change outright (pre-conflate, that
+      // detection's own reload read the settled state and reported it). So the
+      // failure path resolves the pending exactly as the success path does —
+      // and it reported nothing, so no path is excluded below.
+      this.reloadInFlight = false
+      this.recheckPendingChange(undefined)
+    })
+  }
+
+  /**
+   * Resolve ONE detection that arrived while a reload was in flight, from
+   * EITHER settle path (the success path and the `catch` — a reload that threw
+   * reported nothing, so it excludes no path). The entry starts a fresh reload
+   * whose comparison baseline is the state the previous one produced
+   * (`this.current` — unchanged by a reload that threw). A detection that
+   * merely re-observed the change just reported compares equal and emits
+   * nothing; a write the previous reload did not read differs and reports once,
+   * under its OWN path.
+   *
+   * ONE entry per cycle, never the whole queue: an entry's change may be read
+   * by a later cycle than the one that drained the entry before it (this reload
+   * may itself fail, or may have read the disk before that write landed), and
+   * the watcher advanced its snapshot when it fired — so a dropped entry is a
+   * change that is never reported again. Each remaining entry gets its own
+   * cycle this way; one whose change is already covered compares equal, emits
+   * nothing, and is gone.
+   *
+   * `reportedPath` is the file the settled reload has ALREADY reported
+   * (undefined when it reported nothing). The re-check prefers a pending path
+   * different from it: that event is already out, so naming the same file again
+   * would attribute the next transition to a file whose only other detection is
+   * its own re-observation — the settled half of a non-atomic write, measured
+   * to be visible to the poll — while another pending file's change has not
+   * been reported at all. When nothing else is pending it re-checks that one
+   * file anyway; the state comparison, not this choice, decides what fires.
+   */
+  private recheckPendingChange(reportedPath: string | undefined): void {
+    const index = this.reloadPending.findIndex((p) => p !== reportedPath)
+    if (index === -1 && this.reloadPending.length === 0) return
+    const next = this.reloadPending.splice(index === -1 ? 0 : index, 1)[0]!
+    this.handleWatchedChange(next)
   }
 }
 
@@ -1290,7 +1373,7 @@ function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
   }
   const roots = options.roots ?? {}
   const sources: LayerSource[] = []
-  const configDir = options.configDir ?? process.env.IH_CONFIG_DIR ?? join(homedir(), ".i-harness")
+  const configDir = resolveHarnessHome(options.configDir)
   const workspaceRoot = options.workspace ?? process.cwd()
   if (roots.global !== undefined) {
     const path = roots.global === "auto" ? join(configDir, "settings.json") : resolve(roots.global)
@@ -1311,7 +1394,8 @@ function resolveLayeredDefaults(options: LayeredStoreOptions): LayerSource[] {
  * Polling settings watcher (no new deps — no chokidar). `intervalMs` defaults
  * to 500. The FIRST tick only snapshots (a pre-existing state never fires);
  * a change fires the callback with the changed path. Returns a dispose() that
- * stops polling.
+ * stops polling. W1/A: captures never overlap (an in-flight tick is skipped),
+ * so one write can no longer be reported twice by an out-of-order overwrite.
  */
 export function watchSettings(
   paths: string | string[],
@@ -1322,6 +1406,16 @@ export function watchSettings(
   const intervalMs = opts?.intervalMs ?? 500
   let snapshot = new Map<string, string>()
   let timer: ReturnType<typeof setInterval> | undefined
+  // W1/A: one capture at a time. `capture()` awaits a stat per file, and
+  // without this guard consecutive ticks run their captures concurrently — an
+  // OLDER capture can then resolve after a newer one and overwrite `snapshot`
+  // with its stale value, so the next tick sees the same change again and
+  // fires a SECOND onChange for one write. A tick that finds a capture in
+  // flight is SKIPPED, not queued: the next tick re-stats the current state,
+  // so skipping costs at most one poll interval of latency and can never miss
+  // a state that has settled. The initial snapshot holds the guard too —
+  // otherwise a tick could start alongside it and be overwritten by it.
+  let capturing = true
 
   const capture = async (): Promise<Map<string, string>> => {
     const snap = new Map<string, string>()
@@ -1335,12 +1429,24 @@ export function watchSettings(
     return snap
   }
 
-  void capture().then((snap) => { snapshot = snap })
+  void capture().then((snap) => {
+    snapshot = snap
+    capturing = false
+  })
   timer = setInterval(() => {
+    if (capturing) return // one capture in flight; the next tick re-reads
+    capturing = true
     void capture().then((snap) => {
+      capturing = false
       for (const [file, info] of snap) {
         if (snapshot.get(file) !== info) {
-          snapshot = snap
+          // One batch per tick — and advance ONLY the marker of the file just
+          // reported. Advancing the whole capture would record every other
+          // changed file as seen while reporting one of them, so their changes
+          // would be DROPPED rather than deferred (this snapshot is the only
+          // place a change is ever detected). The next tick re-finds them and
+          // reports the next one; the rest wait their turn.
+          snapshot.set(file, info)
           onChange(file)
           return // one batch per tick
         }

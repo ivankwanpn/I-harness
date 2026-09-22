@@ -74,6 +74,16 @@ export class OutputCollector {
     return { text, spillPath, lossy, truncated }
   }
 
+  /** W10: the retained text RIGHT NOW, without finalizing. A foreground
+   * promotion seeds the job record with what the command has already produced
+   * (exec's `registerJob` → `SpawnHandle.text()`); calling `finalize()` for
+   * that would close the spill fd and end the collection the running command
+   * still needs. `finalize` remains the only thing that decides truncation and
+   * lossiness. */
+  peek(): string {
+    return Buffer.concat(this.chunks).toString("utf-8")
+  }
+
   private openSpill(): void {
     const name = `i-harness-spill-${Date.now()}-${randomBytes(6).toString("hex")}-${encodeSegment(this.label)}.log`
     const p = join(this.spillRoot, name)

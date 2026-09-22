@@ -58,6 +58,25 @@ export interface CompactionConfig {
   prune?: false | PruneConfig
 }
 
+/**
+ * The HOST-facing form of the compaction config: everything except the window.
+ *
+ * `CompactionConfig.contextWindow` is required by the engine, but the layer that
+ * can actually resolve it is the assembly — it owns `AssemblyOptions.contextWindow`
+ * and already overwrites the field when building the engine (`assembly.ts`). A host
+ * being forced to supply it was therefore duplication at best, and at worst a
+ * barrier: the CLI never set `compact` at all, so the whole three-layer budget
+ * ladder shipped with its first layer dead — pressure never triggered a
+ * compaction, and long sessions fell through to the fail-closed `prompt_too_long`
+ * instead.
+ *
+ * `contextWindow` stays accepted here so existing callers keep compiling; the
+ * assembly overwrites it with the window it resolved.
+ */
+export type CompactionRequest = Omit<CompactionConfig, "contextWindow"> & {
+  contextWindow?: number
+}
+
 export interface ResolvedPruneConfig {
   enabled: boolean
   thresholdChars: number

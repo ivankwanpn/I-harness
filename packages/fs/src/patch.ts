@@ -177,12 +177,16 @@ export async function applyPatch(
   resolve: PathResolver,
   hunks: PatchHunk[],
   rewind?: RewindCapture,
+  /** M16: write confinement, checked per hunk INSIDE the try so a refused hunk is
+   *  reported alongside the others instead of aborting the whole patch. */
+  guard?: (absPath: string) => void,
 ): Promise<{ applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[]; errors: { path: string; message: string }[] }> {
   const applied: { path: string; action: "added" | "deleted" | "updated"; change?: TextDiff; preImageRef?: string; isNewFile?: boolean }[] = []
   const errors: { path: string; message: string }[] = []
   for (const hunk of hunks) {
     const target = resolve(hunk.path)
     try {
+      guard?.(target)
       if (hunk.kind === "add") {
         // fail-closed：Add 到已存在路徑＝静默破壞性覆寫 → 先 stat，存在即報錯且不寫入
         const existing = await stat(target).catch(() => null)

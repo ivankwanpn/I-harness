@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { createExecService } from "../src/index.ts"
+import { createContext } from "@i-harness/core-plugin"
+import { registerExec } from "../src/index.ts"
 import { SandboxUnavailableError, type SandboxProvider } from "@i-harness/sandbox"
 
 describe("exec readIsolation gate", () => {
@@ -9,7 +10,7 @@ describe("exec readIsolation gate", () => {
         return { argv: [...argv], enforcement: "partial", denialSignatures: [], runnerFailureRules: [] }
       },
     }
-    const exec = createExecService({ sandbox: provider })
+    const exec = registerExec(createContext(), { sandbox: provider })
     await expect(exec.run({
       argv: ["node", "-e", "0"],
       sandbox: { mode: "workspace-write", workspaceRoot: "C:/w", requireReadIsolation: true },

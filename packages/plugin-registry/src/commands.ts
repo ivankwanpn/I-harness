@@ -1,61 +1,58 @@
 /**
- * Markdown command discovery + a minimal frontmatter parser (self-made — no
- * yaml dependency). A plugin declares commands as `commands/*.md`; the command
- * name is the file name without the `.md` extension and the body is the
- * markdown after an optional `---\nkey: value\n---` fence.
+ * Markdown command discovery. A plugin declares commands as `commands/*.md`; the
+ * command name is the file name without the `.md` extension and the body is the
+ * markdown after an optional `---\nkey: value\n---` fence. The fence itself is
+ * read by `frontmatter.ts`, shared with the agent parser so the two cannot drift.
  *
- * Supported frontmatter keys (single-line values, quotes stripped):
- * `description` and `argument-hints` (alias `argument_hints` / `argumentHints`).
- * No closed fence → the whole text is treated as the body. Nothing is executed
- * here: the files are only read and parsed (D2).
+ * Honoured frontmatter keys (matched case-insensitively, `-`/`_` equivalent):
+ * `description` and `argument-hints` (aliases `argument_hints` / `argumentHints`).
+ * Nothing is executed here: the files are only read and parsed (D2).
  */
 
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+import { parseFrontmatter } from "./frontmatter.ts"
 import type { CommandDescriptor } from "./types.ts"
 
-/** Strip one value of surrounding single/double quotes (frontmatter convention). */
-function stripQuotes(value: string): string {
-  if (value.length >= 2) {
-    const q = value[0]
-    if ((q === '"' || q === "'") && value[value.length - 1] === q) return value.slice(1, -1)
-  }
-  return value
-}
+// W6 T6: one module-scope handle for this file's reports; the phase is
+// `mount` because every one of them is the plugins seam's own report —
+// plugin scanning/mounting/install is where a host builds its plugin world.
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 /**
  * Parse one command markdown file into a CommandDescriptor. `fileName` yields
- * the command name (basename without the .md extension). Frontmatter keys are
- * matched case-insensitively with `-`/`_` treated as equivalent.
+ * the command name (basename without the .md extension).
+ *
+ * A key we do NOT honour is recorded in `unsupported` rather than dropped
+ * (spec 2026-09-17 §3 decision 3): a command declaring `allowed-tools` would
+ * otherwise believe it is restricted while nothing enforces it — the
+ * "looks successful, did nothing" defect this repo keeps deleting. The command
+ * still parses; the limitation is what gets reported.
  */
 export function parseCommandMarkdown(fileName: string, text: string): CommandDescriptor {
   const name = fileName.replace(/\.md$/i, "")
-  const lines = text.split(/\r?\n/)
+  const { fields, body } = parseFrontmatter(text)
   const meta: { description?: string; argumentHints?: string } = {}
-  let bodyStart = 0
-  if (lines[0]?.trim() === "---") {
-    let fence = -1
-    for (let i = 1; i < lines.length; i++) {
-      if (lines[i]!.trim() === "---") {
-        fence = i
-        break
-      }
-    }
-    if (fence !== -1) {
-      for (let i = 1; i < fence; i++) {
-        const line = lines[i]!
-        const colon = line.indexOf(":")
-        if (colon <= 0) continue
-        const key = line.slice(0, colon).trim().toLowerCase().replace(/[-_]/g, "")
-        const value = stripQuotes(line.slice(colon + 1).trim())
-        if (value === "") continue
-        if (key === "description") meta.description = value
-        else if (key === "argumenthints") meta.argumentHints = value
-      }
-      bodyStart = fence + 1
-    }
+  const unsupported: string[] = []
+  for (const field of fields) {
+    if (field.value === "") continue
+    if (field.key === "description") meta.description = field.value
+    // `argument-hint` is the OFFICIAL spelling (it is what Anthropic's own
+    // commands use); `argument-hints` is ours. Both are honoured — the singular
+    // was silently dropped before 2026-09-17, which is how a frontmatter key
+    // came to be ignored without anyone noticing.
+    else if (field.key === "argumenthints" || field.key === "argumenthint") meta.argumentHints = field.value
+    else if (!unsupported.includes(field.raw)) unsupported.push(field.raw)
   }
-  return { name, ...meta, body: lines.slice(bodyStart).join("\n").trim() }
+  return {
+    name,
+    ...meta,
+    body: body.trim(),
+    ...(unsupported.length > 0 ? { unsupported } : {}),
+  }
 }
 
 /**
@@ -76,7 +73,7 @@ export function describeCommands(dir: string): CommandDescriptor[] {
       out.push(parseCommandMarkdown(name, readFileSync(join(dir, name), "utf8")))
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e)
-      console.warn(`[plugin-registry] skipping unreadable command file ${join(dir, name)}: ${reason}`)
+      d.warn(`[plugin-registry] skipping unreadable command file ${join(dir, name)}: ${reason}`)
     }
   }
   return out

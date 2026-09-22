@@ -257,6 +257,19 @@ export interface SkillsMountConfig {
   workspace?: string
   telemetry?: SkillTelemetryEmitter
   allowImplicitInvocation?: boolean
+  /** Additional read-only skill roots — plugin overlays. The precedence
+   * (`global < plugin < workspace`) is decided and pinned by
+   * test/extra-dirs.test.ts; it is documented on the registry deps interface
+   * beside this one. `assembly.ts` passes `opts.skills.extraDirs` here; before
+   * 2026-09-17 this field did not exist and that value was silently discarded
+   * (a spread property, which TypeScript does not excess-property check).
+   *
+   * NOTE: like the sibling note on the registry's own config interface, this
+   * comment avoids naming that interface explicitly — the reachability
+   * scanner's used-test is a TEXT match, so naming an exported type from
+   * another production file marks it used and suppresses its row. Tripped by
+   * this very comment on the first draft; third instance in one day. */
+  extraDirs?: string[]
 }
 
 export function registerSkills(
@@ -264,7 +277,10 @@ export function registerSkills(
   tools: ToolRegistry,
   config?: SkillsMountConfig,
 ): SkillsMountHandle {
-  const registry = createSkillRegistry({ workspace: config?.workspace })
+  const registry = createSkillRegistry({
+    ...(config?.workspace !== undefined ? { workspace: config.workspace } : {}),
+    ...(config?.extraDirs !== undefined ? { extraDirs: config.extraDirs } : {}),
+  })
   ctx.services.register(skillsServiceName, registry)
   const skillSearch = createSkillSearchTool({
     registry,

@@ -25,7 +25,6 @@ export {
   runWorkflow,
   runWorkflowIn,
   type WorkflowExecutor,
-  type WorkflowExecutorDeps,
   type WorkflowJobEntry,
   type WorkflowJobStore,
   type WorkflowRunHandle,
@@ -37,10 +36,8 @@ export {
   workflowExecutorServiceName,
   workflowListName,
   workflowRunName,
-  type WorkflowListEntry,
   type WorkflowListOutput,
   type WorkflowMountConfig,
   type WorkflowMountHandle,
   type WorkflowRunArgs,
-  type WorkflowRunOutput,
 } from "./tool.ts"

@@ -8,6 +8,7 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
+    "@i-harness/diagnostics": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/shell": "workspace:*",
     "yaml": "^2.4.2"

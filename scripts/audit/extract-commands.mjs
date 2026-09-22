@@ -180,9 +180,25 @@ function canonicalise(raw) {
 }
 
 // -- I-harness ---------------------------------------------------------------
-// Registration: packages/tui/src/app/slash/impl/*.ts, each entry an object
-// literal with name/aliases/description and an optional visible() capability
-// gate. The registry (registry.ts) is a pure table; the loop owns the context.
+// Registration (until M65 T1): packages/tui/src/app/slash/impl/*.ts, each entry
+// an object literal with name/aliases/description and an optional visible()
+// capability gate. The registry (registry.ts) is a pure table; the loop owns the
+// context.
+//
+// M65 T1 DELETED that registration site (the TUI frontend), so this source now
+// has NO static slash-command registry to enumerate. The absence is recorded in
+// the output as an explicit removal rather than surfaced as "0 commands" --
+// the same distinction extractOpencode() draws for its dynamic registries: a
+// silent zero reads as a shrinking tree, not as a removal with a reason. The
+// surviving ih surface is the CLI host list below.
+const IH_SLASH_SITE_REMOVED = {
+  removedBy: "M65 T1 (remove the TUI and web frontends)",
+  formerSite: "packages/tui/src/app/slash/impl",
+  note:
+    "Deleted with packages/tui. This extractor can no longer enumerate ih slash commands " +
+    "from source; the historical rows are the audit data already committed under docs/audit/data/.",
+}
+
 function extractIH() {
   const root = SOURCES.ih
   const dir = join(root, "packages/tui/src/app/slash/impl")
@@ -216,18 +232,30 @@ function extractIH() {
     })
   }
   // CLI host surface (apps/cli) -- not slash commands, recorded separately.
-  return { commands: dedupe(cmds, root), hosts: extractIHHosts(root) }
+  return {
+    commands: dedupe(cmds, root),
+    hosts: extractIHHosts(root),
+    slashCommandSite: existsSync(dir) ? { site: "packages/tui/src/app/slash/impl" } : IH_SLASH_SITE_REMOVED,
+  }
 }
 
 function extractIHHosts(root) {
   const f = join(root, "apps/cli/src/index.ts")
   const text = slurp(f)
   const usage = text.match(/"usage: i-harness([^;]*?)"/s)
-  const hosts = ["run", "web", "sdk", "acp", "tui", "sessions"].map((h) => ({
-    host: h,
-    evidence: evidence(root, f, h),
-  }))
-  return { usageLine: usage ? usage[1].slice(0, 400) : null, hosts }
+  const usageLine = usage ? usage[1].slice(0, 400) : null
+  // M65 T1: the host list is DERIVED from the usage string instead of being
+  // hard-coded. The hard-coded list this replaces still named `tui` and `web`
+  // after both were deleted, so every re-run would have re-asserted two hosts
+  // that no longer exist -- the failure mode this script exists to prevent (a
+  // row that does not trace back to a live registration site). The literal
+  // fallback only applies if the usage string ever loses its `<a|b|c>` form.
+  const alternation = usageLine ? usageLine.match(/<([^>]*)>/) : null
+  const hosts = (alternation ? alternation[1].split("|") : ["run", "sdk", "acp", "sessions"])
+    .map((h) => h.trim())
+    .filter((h) => h !== "" && h !== "...")
+    .map((h) => ({ host: h, evidence: evidence(root, f, h) }))
+  return { usageLine, hosts }
 }
 
 // -- dsh ---------------------------------------------------------------------
@@ -659,7 +687,11 @@ function dedupe(cmds, root) {
 const EXTRACTORS = {
   ih: () => {
     const r = extractIH()
-    return { ...env("ih", SOURCES.ih, "registry+capability-gate", r.commands), hosts: r.hosts }
+    return {
+      ...env("ih", SOURCES.ih, "registry+capability-gate", r.commands),
+      hosts: r.hosts,
+      slashCommandSite: r.slashCommandSite,
+    }
   },
   dsh: () => {
     const r = extractDsh()

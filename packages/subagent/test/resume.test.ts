@@ -12,9 +12,9 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
-import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
@@ -23,6 +23,10 @@ import { createSubagentTools, driveFollowups, ensureResidentAgent, sweepPendingI
 import { registerSubagent } from "../src/index.ts"
 import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
+
+/** The seam is required; no role in these cases carries a model, so it is
+ * never reached. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 function setup() {
   const ctx = createContext()
@@ -33,12 +37,11 @@ function setup() {
   const table = createAgentTable()
   const roles = createRoleRegistry()
   for (const r of builtinRoles()) roles.register(r)
-  const providers = createProviderRegistry()
-  const exec = createExecService()
+  const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "child done" }])
   const deps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx,
-    parentModel: model, providers, exec, agents: createAgentRegistry(),
+    parentModel: model, resolveModel: noRoleModel, exec, agents: createAgentRegistry(),
     tasks: createTaskRegistry(),
   }
   return { deps, table, agents: deps.agents, jobs }
@@ -103,6 +106,117 @@ describe("ensureResidentAgent", () => {
     expect(agents.get("child-1")).toBeUndefined() // nothing registered
     expect(entry.status).toBe("error") // untouched
   }, 10_000)
+
+  // The RESTORE half of the three-way rule: a restored child whose role carries
+  // a model must come back on that model or not at all. With the switch off it
+  // does not come back — it does NOT quietly run on the parent's client, which
+  // is the one outcome the whole rule exists to prevent.
+  it("with the switch off, a role carrying a model is NOT rebuilt on the parent's client", async () => {
+    const { deps, table, agents } = setup()
+    const roles = createRoleRegistry()
+    roles.register({ ...builtinRoles()[0]!, name: "modelled", model: { provider: "gw", model: "small" } })
+    let called = 0
+    const gated: SubagentToolDeps = {
+      ...deps, roles, allowSubagentModelSelection: false,
+      resolveModel: async () => { called += 1; return { status: "unconfigured" as const, reason: "x" } },
+    }
+    const entry = restoredEntry("child-1", "modelled")
+    table.add(entry.path, entry)
+
+    expect(await ensureResidentAgent(gated, entry)).toBe(false)
+    expect(called).toBe(0) // refused before the resolver, not after
+    expect(agents.get("child-1")).toBeUndefined()
+    expect(entry.unmount).toBeUndefined() // no scope was mounted
+  }, 10_000)
+
+  it("with the switch on, the resident rebuild asks the resolver for the HOST's declared selection", async () => {
+    const { deps, table } = setup()
+    const calls: Array<{ provider: string; model: string }> = []
+    const declared: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "general" ? { provider: "gw", model: "from-settings" } : undefined),
+      resolveModel: async (selection) => { calls.push(selection); return { status: "unconfigured" as const, reason: "no route" } },
+    }
+    const entry = restoredEntry("child-1", "general")
+    table.add(entry.path, entry)
+
+    expect(await ensureResidentAgent(declared, entry)).toBe(false) // resolver answered "no route"
+    expect(calls).toEqual([{ provider: "gw", model: "from-settings" }])
+  }, 10_000)
+
+  // Task 6 fix round: the rebuild re-resolves against the LIVE settings
+  // callback, so it can move the recorded label EITHER way. A label written
+  // only at spawn goes stale — the row would print the model the child ran on
+  // before the settings changed, which is exactly what R3 ("say what IS")
+  // forbids. Both directions are asserted: the label must follow the rebuild.
+  it("a rebuild that resolves a DIFFERENT selection re-records the entry's model label", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    entry.modelLabel = "gw:small" // what the child ran on when it was spawned
+    table.add(entry.path, entry)
+    const model = createMockClient([{ role: "assistant", text: "ok" }])
+    const reResolved: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "general" ? { provider: "gw", model: "big" } : undefined),
+      resolveModel: async () => ({ status: "ready" as const, binding: { client: model } }),
+    }
+
+    expect(await ensureResidentAgent(reResolved, entry)).toBe(true)
+    // the row says what the child runs on NOW, not what it ran on at spawn
+    expect(entry.modelLabel).toBe("gw:big")
+  }, 10_000)
+
+  // The rebuild resolves through the HOST's resolver, so the binding's OTHER
+  // fields must land on the rebuilt child too: keeping only `client` would run
+  // the same model at the adapter default — a declared reasoning effort that
+  // does nothing. The child's own request is the surface where that is a fact.
+  it("the rebuilt child's requests carry the resolved binding's reasoningEffort", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "big" }),
+      resolveModel: async () => ({
+        status: "ready" as const,
+        binding: { client: roleClient, reasoningEffort: "high" as const },
+      }),
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.reasoningEffort).toBe("high")
+  }, 10_000)
+
+  it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    entry.modelLabel = "gw:small" // recorded at spawn, before the entry was cleared
+    table.add(entry.path, entry)
+    const inheritsNow: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => undefined, // the settings entry was removed
+    }
+
+    expect(await ensureResidentAgent(inheritsNow, entry)).toBe(true)
+    // it runs on the parent's client now — a label left behind would name a
+    // model the child is no longer running on
+    expect(entry.modelLabel).toBeUndefined()
+  }, 10_000)
 })
 
 describe("driveFollowups rebuild injection (M23 wakeup no-op fix)", () => {
@@ -162,6 +276,25 @@ describe("resume_agent semantics preserved", () => {
     expect(entry.status).toBe("waiting")
     expect(entry.finalText).toBe("queued handled")
   }, 10_000)
+
+  // The restore path's DIAGNOSTIC: the rebuild refuses (no silent inherit) and
+  // this tool re-derives the reason through the same helper the spawn throws, so
+  // the operator is told the two fixes instead of a bare "could not resume".
+  it("names both fixes when the switch refuses a restored role's model", async () => {
+    const { deps, table } = setup()
+    const roles = createRoleRegistry()
+    roles.register({ ...builtinRoles()[0]!, name: "modelled", model: { provider: "gw", model: "small" } })
+    const entry = restoredEntry("child-1", "modelled")
+    table.add(entry.path, entry)
+    const tools = createSubagentTools({ ...deps, roles, allowSubagentModelSelection: false })
+
+    const resume = tools.find((t) => t.name === "resume_agent")!
+    // `modelled` is not one of the four built-ins, so the message names the
+    // repair the CLI can perform for it: the settings key, not `roles unset`.
+    await expect(resume.execute({ target: "root/helper" }, {})).rejects.toThrow(
+      /role "modelled" declares a model, but sub-agent model selection is disabled: set plugins\.subagentModel=true in settings, or clear `agents\.roles\.modelled` in settings\.json/,
+    )
+  }, 10_000)
 })
 
 // M24a Task 3: G1a async mirror rebuild + G4 pending-inbox sweep + `ready`.
@@ -206,8 +339,8 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     return registerSubagent(ctx, parentReg, {
-      providers: createProviderRegistry(),
-      exec: createExecService(),
+      resolveModel: noRoleModel,
+      exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
       restoredState,
@@ -264,8 +397,8 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
     const subagent = registerSubagent(ctx, parentReg, {
-      providers: createProviderRegistry(),
-      exec: createExecService(),
+      resolveModel: noRoleModel,
+      exec: registerExec(createContext()),
       parentModel: createMockClient([{ role: "assistant", text: "ok" }]),
       parentSession: createSession(),
     })
