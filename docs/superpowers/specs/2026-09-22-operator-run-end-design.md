@@ -4,6 +4,29 @@
 
 **來源**：M3 spec §3.4（`docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md:197-213`）＋ 孤兒列 C1（`docs/handoff/2026-09-20-queued-work.md:950`）。**分級 S**（一個事件＋一個漏斗＋兩個表面；動引擎型別一格）。**取樣／自創**：**自創**（M3 spec §4 的來源表 `:271`；2026-09-22 的先例掃描亦證實：**沒有**參照工具有 run-end 紀錄——durable 的是 trace，不是結局）。
 
+> **行號重測（2026-09-22，終審複審的修復 wave，於 `082cc0e5`）：** 本檔寫下時的引用多數被**本單元自己的實作**推走（§0 的讀數標的是 `m68`；少數在寫下時就差了一兩行）。逐條重量後，被取代的數字與**今天**的值：
+>
+> - §0 `apps/cli/src/index.ts:488` → **`:495`**（`failureReport` 呼叫；`:488` 今天是註解）。
+> - §0 `apps/cli/src/sessions.ts:113`（`sessions list` 表頭）→ **`:148`**（表頭行；`:136` 是其 doc comment；`:113` 今天是排序）。
+> - §0 `apps/cli/src/sessions.ts:143-157` → **`:171-188`**（`transcriptLine`）。
+> - §0 `apps/cli/src/run.ts:256`（`LOSS CONTRACT` 那句）→ **`:267`**（同註解的 `durable:` 輸出字串在 `:287-290`）。
+> - §1.1 `packages/core-session/src/index.ts:139`（「末員」）→ 聯集的末員今天是 **`:151`**（本單元的事件）；`:139` 仍是 `rewind/point`。
+> - §1.2 表格：`run.ts:652` → **`:699`**（旁排空 `:654` → **`:701`**）；`:740-741` → **`:788`**（`:741` 的 `flush` → **`:792`**、`:748` 的 `close()` → **`:801`**）；`:782` → **`:838`**（旁排空 `:784` → **`:840`**）；`:343-345` → **`:384-387`**。
+> - §1.2 開頭的反證段：`:748` → **`:801`**、`:778` → **`:830`**。
+> - §1.2「append 走 `append(session, ev)`」：`packages/core-session/src/index.ts:323` → **`:335`**。
+> - §1.2「由既有的鏡射回呼進 coordinator」：`run.ts:319-323` → **`:343-347`**。
+> - §1.2「在 `run.ts:308-312` 的 `session/start` 發射旁邊」：發射區塊今天是 **`:331-337`**（`runStartedAt` 在 **`:324`**）。
+> - §4 第 5 條的兩個站點：`run.ts:783`／`:833` → **`:788`／`:838`**（修復 wave 的 `runId` 單次 mint 把 `run.ts` 的下半段各推 +5）。
+> - §1.3 `apps/cli/src/diagnostics-bootstrap.ts:162` → **`:174-177`**（回傳物件；`:162` 今天是 `registerEnvSecrets`）。
+> - §1.4 `apps/cli/src/sessions.ts:87`（turnCount 的全 log 讀取）→ **`:90`**（`coordinator.load` 在 `:89`）。**量測分歧註記**：複審報 `:93`，重量推翻它 —— `:93` 是那段註解的一行（`` // `flush` rejected carries TWO records… ``）。
+> - §1.4 `apps/cli/src/sessions.ts:143`（`transcriptLine` 加 case）→ 函式今天在 **`:171-188`**、新 case 在 **`:184`**（`:143` 在寫下時是空行；今天是 `idW` 的計算）。
+> - §1.4 `StoredSessionRow` 慣例的 `apps/cli/src/sessions.ts:29` → **`:30`**（doc comment；`:29` 在寫下時與今天都是空行）。
+> - §1.5 `packages/session-persistence/src/index.ts:421-425`（`load()` 丟掉 ignorable）→ **`:426-430`**。
+> - §1.5「`:247` 是最後一條」→ 今天的最後一條是 **`:252`**（本事件自己的註冊；`:247` 是 `tool/dispatch`）。
+> - §3「`SessionEvent` 不是已發布的 wire」的 `spec :297`（母 M3 spec）→ **`:302`**。
+>
+> **重測仍在原位、未改的**：`core-session:5`、`:81-83`、`apps/cli/src/sessions.ts:96`（`.at(-1)`）、`apps/cli/src/index.ts:477`（boot 同址；`runId`／`redactor` 的賦值在 `:483-484`）、`apps/cli/test/sessions.test.ts:274`、M3 spec `:197-213`／`:211`。
+
 ---
 
 ## 0. 它讓什麼變得不一樣
@@ -63,7 +86,7 @@ W6 的 bootstrap 每次宿主入口 mint 一個 `runId`，**診斷 JSONL 的每�
 
 ### 1.4 表面
 
-- **`sessions list`**：列尾加 `LAST RUN`（`ok 1.2s`／`failed exit 1`／`—`）。實作上不是新的一次讀：`turnCount` 已經在做**全 log 讀取**（`apps/cli/src/sessions.ts:87`），同一次掃描裡取**最後一個** `operator/run-end`。舊 session 沒有這個事件 ⇒ **照 `StoredSessionRow` 的既有慣例「無法證明就缺席」**（`:29`）。
+- **`sessions list`**：列尾加 `LAST RUN`（`ok 1.2s`／`failed exit 1 0.4s`／`—`）。實作上不是新的一次讀：`turnCount` 已經在做**全 log 讀取**（`apps/cli/src/sessions.ts:87`），同一次掃描裡取**最後一個** `operator/run-end`。舊 session 沒有這個事件 ⇒ **照 `StoredSessionRow` 的既有慣例「無法證明就缺席」**（`:29`）。
 - **`sessions show`**：`transcriptLine` 加一個 case（`:143`），渲染成與其他行同風格的一行，內容＝exit code、時長、以及（有失敗時）已 redact 的 error。
 
 ### 1.5 載入閘門（本樹的**已知缺陷類**）
@@ -92,7 +115,9 @@ W6 的 bootstrap 每次宿主入口 mint 一個 `runId`，**診斷 JSONL 的每�
 2. **SIGKILL／崩潰不產生它**——行程已死；那是 spec §3.6（崩潰紀錄與下次開啟時回報）的另一半，不在本單元。
 3. **只涵蓋 CLI 的 `run`**（見 §3）。
 4. **成功與失敗都寫**（`exitCode` 0 也寫）——那讓這一欄同時是**時長遙測**；成本是每次執行多一筆事件，這是有意的。
-5. **一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**——成功站點在 flush **之前**寫下 `exit 0`（§1.2 的站點 ②，`run.ts:783`），而 flush 拒絕後落進的失敗 catch 再寫一筆 `exit 1`（站點 ③，`run.ts:833`）：write-behind 保留失敗的批次，`close()` 再 best-effort 排空 ⇒ **兩筆都可能落地**。**讀取端的契約是「最後一筆為準」**——`listStoredSessions` 的 `.at(-1)`（`apps/cli/src/sessions.ts:96`），由 T3 的兩筆案例釘住（`apps/cli/test/sessions.test.ts:274`：同一 `runId` 的 `exit 0` 與 `exit 1` ⇒ 那一列讀到 `failed exit 1 0.9s`）。**這是 T2 複審的 Important 發現**（標記 plan-mandated），裁定見 ledger **R7**：**不**把站點 ② 移到 flush 之後——把紀錄押在一次「失敗會被吞掉」的排空上，代價是**常見**的成功路徑會丟紀錄；重複則在讀取端自我修正。
+5. **一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**——成功站點在 flush **之前**寫下 `exit 0`（§1.2 的站點 ②，`run.ts:788`），而 flush 拒絕後落進的失敗 catch 再寫一筆 `exit 1`（站點 ③，`run.ts:838`）：write-behind 保留失敗的批次，`close()` 再 best-effort 排空 ⇒ **兩筆都可能落地**。**讀取端的契約是「最後一筆為準」**——`listStoredSessions` 的 `.at(-1)`（`apps/cli/src/sessions.ts:96`），由 T3 的兩筆案例釘住（`apps/cli/test/sessions.test.ts:274`：同一 `runId` 的 `exit 0` 與 `exit 1` ⇒ 那一列讀到 `failed exit 1 0.9s`）。**這是 T2 複審的 Important 發現**（標記 plan-mandated），裁定見 ledger **R7**：**不**把站點 ② 移到 flush 之後——把紀錄押在一次「失敗會被吞掉」的排空上，代價是**常見**的成功路徑會丟紀錄；重複則在讀取端自我修正。
+6. **以 `--session-dir` 執行、卻被前置檢查拒絕的 run 留下一份沒有紀錄的文件**——session 文件在那些檢查**之前**就 mint 好（`apps/cli/src/index.ts:364-365` 在 `:394-397` 的 `--model requires --api-key` 拒絕之前），所以一次被拒絕的執行留下一份**零事件**的文件：它的 `LAST RUN` 讀 `—`，與「比這個功能更老的 session」**無法區分**（兩者都是缺席）。
+7. **在 session 尾端 fork 出來的子 session 繼承父的紀錄**——fork 的種子是「最後一個 `turn/end` 之後、下一個 `turn/start` 之前」的完整尾段（`packages/session-persistence/src/fork.ts:95-97`），而成功路徑的紀錄正是發在最後一個 `turn/end` 之後 ⇒ 子 session 的 `LAST RUN` 在它自己跑過之前，描述的是**父的那一次**。
 
 ## 5. 殘餘（寫出來，不是藏起來）
 
