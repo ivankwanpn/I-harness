@@ -1,8 +1,8 @@
-# W6 — 結構化診斷 ＋ redactor：**進行中**交接（T1–T3／7 完成）
+# W6 — 結構化診斷 ＋ redactor：**進行中**交接（T1–T4／7 完成）
 
-**Written:** 2026-09-22，前一個爆 context 的 controller session 寫下 T1–T2 的部分（依 owner 指示在 T2 收線、push）；同日工作電腦接手後續作 **T3**，本文件隨之更新。
+**Written:** 2026-09-22，前一個爆 context 的 controller session 寫下 T1–T2 的部分（依 owner 指示在 T2 收線、push）；同日工作電腦接手後續作 **T3、T4**，本文件隨之更新。
 **Audience:** 續作 W6 的人（可能是 fresh clone、沒有本機 scratch 的工作電腦）。
-**State measured at:** `7c78589`（T3 的 head；本文件的更新提交在其後）— 本文每一條 `path:line` 都在此修訂量過；**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
+**State measured at:** `b5a5321`（T4 的 head；本文件的更新提交在其後）— 本文每一條 `path:line` 都在此修訂量過；**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
 
 ---
 
@@ -12,9 +12,9 @@
 |---|---|
 | Repo / remote | 原工作站 `D:\I-harness-main` ↔ `https://github.com/ivankwanpn/I-harness.git`（authoritative）；工作電腦同路徑 |
 | Branch | **`m68`**（本單元的里程碑分支；`main` 的合併時機由人決定） |
-| HEAD / origin | T3 head `7c78589`；`origin/m68` 於 2026-09-22 的第二次 push 同步（T1–T3 ＋ handoff 提交）。**自重** |
+| HEAD / origin | T4 head `b5a5321`；`origin/m68` 於 2026-09-22 的第三次 push 同步（T1–T4 ＋ handoff 提交）。**自重** |
 | 本單元 | **W6**：建 `@i-harness/diagnostics`（`createDiagnostics` ＋ `createRedactor`），把 **107 個 `console.warn/error` 站點**分級上去 —— 而 **`I_HARNESS_LOG` 未設時 stderr 逐位元組不變** |
-| 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4–T7 ⬜**（7 任務；§1–§2） |
+| 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4 ✅ · T5–T7 ⬜**（7 任務；§1–§2） |
 
 **設計依據**：spec `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-193`）＋§3.5（`:215-235`）**；B1 裁定 **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）。
 **計畫**：`docs/superpowers/plans/2026-09-22-w6-diagnostics.md`（7 任務；**§0.1 的普查指令是唯一有效的量法**——舊的 `grep -rn "console\.(warn\|error)"` 在 BRE 裡是字面量，數到 152 條裡 140 條不是呼叫）。
@@ -62,14 +62,26 @@
 
 **複審裁決（2026-09-22）**：T1 Approved（1 件計畫層 Important 已裁定，§3 R1）· T2 ✅／Approved，0 Crit／0 Imp（4 Minor）· T3 ✅／Approved，0 Critical，**1 Important 標記 plan-mandated**（`Bearer \S+` 對散文過度遮蔽 ⇒ 裁定維持，§3 R5），6 Minor。
 
+### T4 — CLI bootstrap（runId、redactor、install/close 接線）
+
+**Commit**：`b5a5321`（6 檔 +787/−11）。**檔案**：新增 `apps/cli/src/diagnostics-bootstrap.ts` ＋ `apps/cli/test/diagnostics-bootstrap.test.ts`；改 `apps/cli/src/{index,run}.ts`；`apps/cli/package.json` 加 workspace link（＋`pnpm-lock.yaml`）。
+
+- **三個入口 install、每條出口 close**：四個 `runHeadless` 出口（複審重量：`run.ts:336`／`:646`／`:771`／`:776`）＋ sdk/acp 的 teardown。測試以真實 `main()` 驅動，`expectClosed` **同時**斷言卸載（`currentDiagnostics()` 為 undefined）與 sink 釋放（close 後再 warn 不再寫 stderr）——後者才是區辨「只清槽」的判別器。
+- **redactor 餵法照 §3.5**：env 掃描（`/(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i` 且值 ≥8）＋ `settings.get().llm.providers[*].apiKeyEnv` → `credentials.resolve(ref)`；`loadProviderRuntime()` 早就回傳那個 store，只是呼叫端把它丟了（複審重開：`provider-runtime.ts:42-60`；`run.ts:406-413` 保留它）。
+- **zero 改動 `packages/`**：複審確認 diff 不含任何 `packages/` 檔，也不含任何既有測試檔（30 檔／95 處 spy 的守衛完整未動）。
+- 三個具名設計選擇（複審判定）：①**不傳 `stream`** ⇒ 目的地由 `process.env` 決定、`env` 只當掃描來源 —— **正確讀法**（顯式 stream 會讓 `I_HARNESS_LOG=<path>` 不可達），命名有誤導性入 §7 ②run 路徑宣告的 refs 由 `run.ts` 經**一枚模組級 redactor 槽**晚餵 —— **可接受**（順序有強制、身分守衛齊、無測試滲漏）③sdk/acp 在 install 與 teardown 接線之間拋出會漏實例 —— **真、已揭露、可避免**（入 §7）。
+
+**測量**（at `b5a5321`，controller 親量）：CLI 全測 **283 passed／1 skipped／0 failed**（25 檔；前置基線 265+1）＋新檔 18/18；typecheck exit 0；gate **7 → 4 NEW**（437 rows）。RED 13/18；11 條突變（M11 紅 0 條，複審判為**惰性分支**）。
+
+**複審（2026-09-22）**：✅ Spec compliant／Approved，0 Critical／0 Important；6 Minor（§7）。
+
 ---
 
-## 2. 未完成的部分（T4–T7）——下一個動作就是 T4
+## 2. 未完成的部分（T5–T7）——下一個動作就是 T5
 
 | 任務 | 範圍 | 已知裁定／注意 |
 |---|---|---|
-| **T4** CLI bootstrap（`apps/cli/src/diagnostics-bootstrap.ts` ＋ 三入口） | `createCliDiagnostics({runId?, env?, settings?, credentials?})`：runId mint、redactor 由 env 掃描（`/(KEY\|TOKEN\|SECRET\|PASSWORD\|PASSWD\|CREDENTIAL\|AUTH)/i` 且值 ≥8）＋ `settings.get().llm.providers[*].apiKeyEnv` → `credentials.resolve(ref)` → **逐個 `registerSecret`**；三入口 install ＋ `finally` close；`run.ts:398` 等保留 `loadProviderRuntime()` 回傳的 `credentials`（**零改動 credentials／provider-runtime**） | T4 的 case ③（記錄的 `data` 與 `err.message` 都被遮蔽）**可表達**（T2 的第三參數）。`createDiagnostics` 讀 `process.env`；env 未設時要顯式 `stream`。close 要在四條 run 出口（`run.ts:334/629/755/759`，引用前重量）＋sdk/acp teardown 都被走到。**T3 的交棒**：`*_WEBHOOK`／`*_URL` 這類名字**落在**上面那條 regex 之外（T3 實作者具名回報）。**R7**：若 bootstrap 用得上 `extraRules`／`Rule`，順帶清掉第 7 條 gate row |
-| **T5** 分級遷移 — `apps/cli` 60 站 | 逐檔批次；**完成條件＝既有測試檔 diff 為空**（95 處 spy 是守衛） | 形狀 `diagnosticsFor(phase).<level>(msg[, data])`，**msg 逐字**；**5 個列名例外不遷移**（`index.ts:178` help（exit 0）、`models.ts:343`、`roles.ts:287`、`provider.ts:222`、`run.ts:752` —— 維持 `console.error` 原樣）；普查＝**102 分級＋5 例外** |
+| **T5** 分級遷移 — `apps/cli` 60 站 | 逐檔批次；**完成條件＝既有測試檔 diff 為空**（95 處 spy 是守衛） | 形狀 `diagnosticsFor(phase).<level>(msg[, data])`，**msg 逐字**；**5 個列名例外不遷移**（`index.ts:178` help（exit 0）、`models.ts:343`、`roles.ts:287`、`provider.ts:222`、`run.ts:752` —— 維持 `console.error` 原樣）；普查＝**102 分級＋5 例外**。**T5 落地時 `diagnosticsFor`／`currentDiagnostics` 的 gate row 應清除**（它們的生產消費者就是遷移站點）。可順帶處理 §7 的 `env`→`secretEnv` 命名 |
 | **T6** 分級遷移 — 16 套件 47 站 ＋ 8 個縫 | 縫先行（`?? console.warn` 預設改成「取環境實例、無則 console」，縫簽名不動），再逐套件 | 每套件完成條件＝該套件測試全綠 |
 | **T7** 收尾 | `pnpm verify:all`（**母體 67**；五步全綠）＋ queue doc 普查句更正（`:535`／`:934`）＋ W6 兩列狀態翻 ✅＋ spec 加 dated 註記＋**把本文件改成終態** | 儀器盲區的實例要記進記錄（§5）；`--gate` 的 7 NEW rows 在此轉綠（含 `#Rule` 的去路，R7）；**R5 的 named residual 要進記錄**；§7 的 deferred minors 在此 triage |
 
@@ -91,7 +103,8 @@
 ## 4. 量到的數字（附指令與修訂）
 
 - `pnpm --filter @i-harness/diagnostics test` → **46/46**（3 檔）at `7c78589`；typecheck exit 0。（T1 的 17／T2 的 27 是同一條曲線上的中途讀數。）
-- `node scripts/audit/check-reachability.mjs --gate` at `7c78589`（**controller 親量**）→ **exit 1、440 rows、7 NEW rows**（全在 `packages/diagnostics/src/index.ts`：`RedactedError`／`Rule`／`createDiagnostics`／`createRedactor`／`currentDiagnostics`／`diagnosticsFor`／`installDiagnostics`）。**預期中的中途狀態；T7 之前不得加 allowlist**。
+- `pnpm --filter @i-harness/cli test` → **283 passed／1 skipped／0 failed**（25 檔）at `b5a5321`（前置基線 265 passed＋1 skipped；＋18 新案例、＋1 檔）。
+- `node scripts/audit/check-reachability.mjs --gate` at `b5a5321`（**controller 親量**）→ **exit 1、437 rows、4 NEW rows**（`RedactedError`／`Rule`／`currentDiagnostics`／`diagnosticsFor`）。T4 清掉了 `createDiagnostics`／`createRedactor`／`installDiagnostics`。**預期中的中途狀態；T7 之前不得加 allowlist**。
 - 母體（帶 `test` script 的 workspace 目錄）：**67**（66 → 67，T1 實測）。
 - 全樹閘門 `pnpm verify:all`：最後一次全綠在 `a955c4d1`（M6，母體 66、433 rows、`--gate PASS`）；**本單元中途必然紅在 7 NEW rows 上**，T7 是它轉綠的時點。
 
@@ -123,6 +136,7 @@
 - **T1**：④ double install/uninstall、`stream` 勝 env 未測（deferred）。**concern**：`durMs` **在 W6 沒有生產者** —— T7 的記錄不要暗示它被填。
 - **T2**：①`src/index.ts:29` 的 `fromError` 公開 re-export 無套件外消費者（一行可撤）②no-err-key 案例只釘 wire shape（`rec.err = undefined` 會穿過 `JSON.stringify`）③`[REDACTED]` token 的 double 斷言 ⇒ **已由 T3 履行**（`99c287e`）（保留此列僅為記錄）④非 Error 的 `name = typeof err`（語意選擇）。
 - **T3**：①base64 的鍵名 fence 比 §3.5 的「看起來像秘密」寬（`includes` 詞幹，`author`／`passengers` 也中；dead-code 論證支持現狀）②`toJSON` 回傳自身時 UNSCANNED（`redactor.ts:284`；罕見形狀，一行可修）③衍生副本邊角（symbol 鍵被丟、`apiKey: undefined` 變成 `"[REDACTED]"`）④循環引用只在報告、未寫進模組文件（結果同為 throw，非回歸）⑤洩漏 payload 缺 scan-① 樣本（專屬案例仍抓得到）⑥規則順序案例的 fixture 其實不重疊（合併由同案例的 `Bearer sk-live-…` 斷言釘住）。
+- **T4**：①`env` 只當掃描來源、目的地由 `process.env` ⇒ **命名誤導**（建議 T5 時改 `secretEnv` 或明說；無生產呼叫端傳 `env`）②resume 出口測試只 `toContain("i-harness run did not finish")`，**兩個出口共用該字串** ⇒ 未來漂移會讓兩案塌成一案仍綠（修法：斷言錯誤指名缺失的 session）③sdk/acp 的 install→teardown 拋出窗可 `try/catch` 化（順帶關掉既有 `coordinator` 的同形洩漏）④`MIN_SECRET_LENGTH` 副本無測試（要求本身由 redactor 釘住）⑤M11 惰性分支（複審判為**正確保留**：close 後 handle 不碰 redactor）⑥`uncaughtException`／`unhandledRejection` 的 `process.exit(1)`（`index.ts:48-53`，**既有**）繞過新 `finally` ⇒ **T7／§3.6 的 shutdown 記帳要有一行**（兩個 sink 皆 flush-free，今日無害）。
 
 ---
 
