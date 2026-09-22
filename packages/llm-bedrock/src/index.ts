@@ -1,6 +1,6 @@
-import { projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
-import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput } from "@aws-sdk/client-bedrock-runtime"
+import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 
 export interface BedrockConfig {
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
@@ -153,10 +153,21 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       }
       // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
       // kill a parked Converse call, not wait for the first event.
-      const output = await client.send(
-        new ConverseStreamCommand(body),
-        request.signal !== undefined ? { abortSignal: request.signal } : {},
-      )
+      let output: ConverseStreamCommandOutput
+      try {
+        output = await client.send(
+          new ConverseStreamCommand(body),
+          request.signal !== undefined ? { abortSignal: request.signal } : {},
+        )
+      } catch (err) {
+        // M72 Ⅰ: M61's cancel and every request-level failure (auth, throttling,
+        // network) used to escape as a raw SDK throw, bypassing the seam's error
+        // channel the other four adapters use. Abort is NOT a provider failure:
+        // it keeps today's behaviour (a throw out of the generator).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: await describeTransportError("bedrock", config.region ?? "", err) }
+        return
+      }
       // Tool-use accumulation per content block (the ConverseStream wire):
       // a toolUse delta carries the args as one JSON string split across
       // deltas; the stop event completes the block, and the args are parsed
