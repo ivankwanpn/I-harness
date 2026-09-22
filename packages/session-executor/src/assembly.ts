@@ -1238,6 +1238,18 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
+      // M70: the checkpoint the tool scheduler awaits between the `tool/dispatch`
+      // marker and the body. The closure is built HERE because the assembly owns
+      // both halves — the coordinator, and the session id the mirror above files
+      // its appends under — and the drain must be the SAME write-behind that
+      // received the marker, or it would resolve without making anything
+      // durable. The guard is the mirror's OWN pair (assembly.ts:448-452): no
+      // coordinator means there is no durability to checkpoint, and no session
+      // id means there is nothing to drain BY NAME — either way no seam is
+      // built and the deps object is the pre-M70 one.
+      ...(opts.coordinator !== undefined && opts.sessionId !== undefined
+        ? { flush: () => opts.coordinator!.flush(opts.sessionId!) }
+        : {}),
       // M32 T3, made live (Task 4 review F-1): a GETTER, not the construction
       // value — the same discipline as the model handle above (R-B1). core-agent
       // reads `deps.reasoningEffort` when it builds each request
