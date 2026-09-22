@@ -38,17 +38,30 @@
 2. **卡片的 `maxOutputTokens`** —— 模型的**能力上限**（`model-catalog.json` 已有 deepseek 384000、gemini 65536/8192、bedrock 8192）；
 3. **協定要求時的退路** —— **Anthropic 的 Messages API 必填**，所以那條線**必須**永遠解析出一個數（DSH 的 `?? connection.maxTokens` 就是為此）。本樹採一個**具名常數**當最後手段，而它的**語意要明寫**：它是「**實質無上限**」的意思（取值要對齊該 provider 文件上的輸出上限），**不是**一個「聽起來合理的」猜測值 —— 常數的**形狀**在此定案，**數字**由計畫依 provider 文件定案並具名其出處。
 
+**上限必須先與剩下的 context 夾過**（**這一條是文件推翻我初稿的地方**）：Anthropic 的文件把 `max_tokens` 當**嚴格上限**——**輸入 + `max_tokens` 超過 context window 會是驗證錯誤**（較新的模型則是 `stop_reason: "model_context_window_exceeded"`）**[page-via-search ＋ 本機 Anthropic 發布的參考；Pi 的 `clampMaxTokensToContext`（`context − 已估輸入 − 4096`）就是為此存在]**。⇒ 送**卡片的**上限（例如 128K）到一個已經塞了 100K 輸入的請求上，會把一個本來能跑的請求變成 **400**。所以鏈上多一步：**先算 `min(鏈的值, 剩餘 context − 安全邊際)`**，安全邊際的取值與出處由計畫定案。
+
 **為什麼照 Pi 而不是 DSH 的「能力不當預設」**：使用者的理由是「模型真的有上限」，而送一個**等於模型上限**的數在語意上是**無操作**（provider 本來就會那樣夾），卻讓**意圖顯式**：日誌裡看得到我們送了什麼，而 Anthropic 那條線的必要欄位因此有值。DSH 的顧慮（「把一個沒人挑過的數字變成請求預設」）在本樹**不成立**，因為卡片的數字就是模型的真實上限。
 
-### 1.2 wire 映射（五個，各用自己 provider 的參數）
+### 1.2 wire 映射（五個，各用自己 provider 的參數）—— **每一格附來源**
 
-| 轉接器 | 欄位 | 位置 |
-|---|---|---|
-| `llm-anthropic` | `max_tokens` | body 頂層（**必填**，走完整鏈） |
-| `llm-openai-compatible` | `max_tokens` | body 頂層 |
-| `llm-openai` | `max_output_tokens` | body 頂層 |
-| `llm-gemini` | `generationConfig.maxOutputTokens` | **需要新建 `generationConfig`**（今天沒有這個鍵） |
-| `llm-bedrock` | `inferenceConfig.maxTokens` | **需要新建 `inferenceConfig`**（今天是不可達的——options 全被塞進 `additionalModelRequestFields`，所以 Converse 的 `maxTokens`／`temperature`／`topP`／`stopSequences` **今天一個都送不出去**） |
+**取證的層級**（本機的 WebFetch 被封鎖；見 §6）：**[doc]** ＝ 廠商頁面直接抓下來（Gemini／Bedrock 用 `curl` 抓到，含 AWS 文件自己的 `.md` 來源）；**[spec-SDK]** ＝ 由廠商 OpenAPI spec 生成的 SDK docstring；**[Pi]** ＝ Pi 的實作（它為真實拒絕而生）；**[page-via-search]** ＝ 廠商頁面的搜尋摘要（未逐位元組驗證）。
+
+| 轉接器 | 欄位與位置 | 必填／選填 | 省略時 | 撞到上限的訊號 |
+|---|---|---|---|---|
+| `llm-anthropic` | `max_tokens`，**body 頂層** **[spec-SDK]** | **必填** **[spec-SDK]** | ——（省略即請求驗證失敗） | `stop_reason: "max_tokens"` **[spec-SDK ＋ Pi]** |
+| `llm-openai-compatible` | **`max_tokens`**（今天 OpenAI 已棄用、新模型用 `unsupported_parameter` 拒絕；現行名是 `max_completion_tokens`）**[spec-SDK ＋ 第三方日期]** | 選填 | 未記載 | `finish_reason: "length"` **[vendor ref]** |
+| `llm-openai`（Responses） | `max_output_tokens`，body 頂層 **[spec-SDK]** | 選填 | 未記載 | `status: "incomplete"` ＋ `incomplete_details.reason: "max_output_tokens"`；**串流的終止事件是 `response.incomplete`** **[spec-SDK ＋ relayed]** |
+| `llm-gemini` | `generationConfig.maxOutputTokens`；**父物件 `generationConfig` 本身也是選填** **[doc]** | 選填 **[doc]** | 「**the default value varies by model**」 **[doc]** | `finishReason: "MAX_TOKENS"`（與 `SAFETY` 等**不同**的 enum 值）**[doc]** |
+| `llm-bedrock` | `inferenceConfig.maxTokens`；**父物件 `inferenceConfig` 也是選填** **[doc ＋ local SDK]** | 選填，**最小 1** **[doc]** | 「**the default value is the maximum allowed value for the model that you are using**」 **[doc，與本機 SDK 的 JSDoc 逐字相符]** | `stopReason: "max_tokens"`（`MessageStopEvent` 上，**必填**）**[doc ＋ local SDK]** |
+
+**兩個由文件確立、與本設計直接相關的事實**：
+
+- **Bedrock 省略時的值就是模型上限** ⇒ 我們送卡片的數字在語意上是**無操作**，而這**支持 §1.1 的論證**（送一個等於上限的數不會改變行為，只是把意圖顯式化）。
+- **`openai-compatible` 的欄位名是一個風險**：`max_tokens` 對**相容 gateway**（本轉接器存在的理由）是通用的，對**新 OpenAI 模型**是被拒的舊名。**本輪照 Pi 的形狀**：預設送 `max_tokens`，並讓**每一條 route** 能指定自己的欄位名——那是 Pi 的 `maxTokensField` 自動偵測在解決的同一個問題，只是我們把它做成顯式配置而不是猜。
+
+`LLMRequest` 加一個可選欄位 **`maxOutputTokens?: number`**（沿用卡片與 `SessionModelBinding` 既有的詞彙，不引入第三個名字），`SessionModelBinding` 加對應欄位，`provider-runtime` 的 drop site 改為**傳下去**；`models list`／`provider list` 開始**顯示使用者寫的值**（不只是卡片）。
+
+**五個轉接器各自要新建的東西**：gemini 需要建 `generationConfig`（今天沒有這個鍵）；bedrock 需要建 `inferenceConfig`（今天**不可達**——options 全被塞進 `additionalModelRequestFields`，所以 Converse 的 `maxTokens`／`temperature`／`topP`／`stopSequences` **今天一個都送不出去**）。
 
 `LLMRequest` 加一個可選欄位 **`maxOutputTokens?: number`**（沿用卡片與 `SessionModelBinding` 既有的詞彙，不引入第三個名字），`SessionModelBinding` 加對應欄位，`provider-runtime` 的 drop site 改為**傳下去**；`models list`／`provider list` 開始**顯示使用者寫的值**（不只是卡片）。
 
@@ -56,7 +69,7 @@
 
 Pi 與 DSH 都把「被上限截斷」當**一等結局**（Pi：`stopReason: "length"` ⇒ 一次有界的 compact-and-retry；DSH：`max-tokens` 讓 turn 的結局**黏住**、從被截斷的訊息裡**剔除工具呼叫**、摘要 fail-closed）。**IH 今天分不出截斷與完成**——所以只送上限等於讓輸出**無聲地變短**。
 
-**形狀**：seam 的終止事件加一個可選位 —— `{ type: "end"; truncated?: true }`。**一個位，不是一個 finish-reason 詞彙**：每個轉接器只需要回答「provider 是不是說它撞到輸出上限了」（`stop_reason: "max_tokens"`／`finishReason: "MAX_TOKENS"`／Responses 的 `incomplete`…），而**多一個 provider 詞彙的聯集**會把五個供應商的差異漏進 seam——那正是 seam 存在的理由要擋掉的東西。缺席 ⇒ 與今天逐位元組相同。
+**形狀**：seam 的終止事件加一個可選位 —— `{ type: "end"; truncated?: true }`。**一個位，不是一個 finish-reason 詞彙**：每個轉接器只需要回答「provider 是不是說它撞到輸出上限了」，而四家的字面**互不相同**——`stop_reason: "max_tokens"`（Anthropic）· `finish_reason: "length"`（Chat Completions）· `status: "incomplete"` ＋ `incomplete_details.reason: "max_output_tokens"`（Responses；**且它的串流終止事件是 `response.incomplete`，IH 今天正是把它 `return []` 丟掉的那一半**）· `finishReason: "MAX_TOKENS"`（Gemini）· `stopReason: "max_tokens"`（Bedrock，在 `MessageStopEvent` 上）。**做一個四家詞彙的聯集會把供應商差異漏進 seam**——那正是 seam 存在的理由要擋的。缺席 ⇒ 與今天逐位元組相同。
 
 **可見度**：`truncated` 至少進得了 telemetry 與 `run` 的輸出；**不做**自動重試（那是 Pi 的產品選擇，不在本輪）。
 
@@ -95,7 +108,7 @@ Pi 與 DSH 都把「被上限截斷」當**一等結局**（Pi：`stopReason: "l
 ## 3. 刻意不做（YAGNI）
 
 - **自動 compact-and-retry on truncation**（Pi 有）：那是產品選擇，且 IH 的 compact 有自己的觸發；本輪只讓截斷**看得見**。
-- **cap 與 context window 的夾取**（Pi 的 `clampMaxTokensToContext`）：IH 的 `token-meter` 已經用**比例**保留輸出空間（`reserveRatio` 0.9，量的是**輸入**）。再加一層夾取會產生**兩個決定誰先誰後的地方**——那是下一個單元要一起看的事，不在這裡。
+- ~~**cap 與 context window 的夾取**~~ → **改為必做**（見 §1.1）：Anthropic 的文件把輸入 + `max_tokens` 超過 window 判成**驗證錯誤**，所以不夾取會把能跑的請求變成 400。**IH 的 `token-meter` 保留輸入空間的那條 `reserveRatio` 不衝突**——它量的是**輸入**、決定「該不該壓縮」，而這一條是**請求層**的夾取；兩者的先後由計畫明寫，但**兩者都要有**。
 - **改 `config.options` 的語意**（驗證它、或禁止它覆蓋必填欄位）：那是一個**獨立的契約決定**，而且它今天**在生產上從不被填**。
 - **`"off"` 在 anthropic／bedrock 的表達**（今天 `off` ≡ unset，而 API 的關法是 `{type:"disabled"}`）：需要產品決定，且與 5.x 的 reasoning 分支同一個地方。
 - **bedrock 的 headers 路由**（M59 宣稱「每個轉接器」但從未送到它）：那是**接線缺一條**，不是本輪的契約。
@@ -107,6 +120,8 @@ Pi 與 DSH 都把「被上限截斷」當**一等結局**（Pi：`stopReason: "l
 2. **不保證截斷一定被 provider 誠實回報**——有些端點就是回一個「正常結束」。本輪只保證**我們這一側不再把已收到的訊號丟掉**。
 3. **不保證 usage 的數字可比**——Pi 與 DSH 都示範了同一件事：不同 provider 對「沒回報」與「真的是 0」的處理不一致。本樹的 seam 已明說 **absent ≠ 0**，本輪維持那條。
 4. **不保證既有 session 的行為不變**：送上限**會**讓輸出在原本會更長的地方變短。這是這一輪的**目的**，不是副作用——但它是**行為改變**，記錄要這樣寫。
+5. **不保證一個小上限不會把回答整顆吃掉**——這是 **Gemini 文件明講**的：`max_output_tokens` 是**思考與輸出合併**的硬切斷，而它**不會**去重算思考預算（「acts as a hard cutoff … without changing how the model allocates its thinking budget … setting a low limit can truncate responses」）⇒ 一個相對思考量太小的上限，可能回一個**空**回答。文件自己的建議是**降低思考等級**，不是把上限調高。**本輪只把它變可見（`truncated`），不自動調參。**
+6. **不保證欄位名一定被接受**：`max_tokens` 對新 OpenAI 模型是舊名（`unsupported_parameter`），而 `stream_options` 與 `max_output_tokens` 都有已知會拒絕的 gateway。閘門是**per-route 的配置**，不是自動退讓。
 
 ## 5. 殘餘（寫出來，不是藏起來）
 
@@ -121,8 +136,10 @@ Pi 與 DSH 都把「被上限截斷」當**一等結局**（Pi：`stopReason: "l
 
 | 部分 | 來源 |
 |---|---|
-| 送輸出上限（值鏈、每 API 的欄位、必填協定的退路） | **取樣**（Pi ＋ DSH，兩者的機制都逐行讀過；使用者裁定照它們做） |
-| 「上限是能力還是請求預設」的區分 | **取樣**（DSH 的 `catalog.ts:806-816` 明文寫了理由）——本樹**採用 Pi 的取法**，理由記在 §1.1 |
-| 截斷是一等結局 | **取樣**（兩家都有；本樹只取「看得見」那一半） |
+| 送輸出上限（值鏈、每 API 的欄位、必填協定的退路） | **取樣 ＋ 查證**：機制逐行讀過 Pi ＋ DSH（使用者裁定照它們做），而**每一格的欄位名與必填性另以廠商文件／SDK 覆核**（§1.2 的表逐格標了來源層級） |
+| **上限必須與剩餘 context 夾取** | **文件推翻初稿**：Anthropic 的 strict-limit 規則（輸入 + `max_tokens` 超窗 ⇒ 驗證錯誤）＋ Pi 的 `clampMaxTokensToContext` 兩個獨立來源一致 ⇒ 從 §3 移進 §1.1 |
+| 「上限是能力還是請求預設」的區分 | **取樣**（DSH 的 `catalog.ts:806-816` 明文寫了理由）——本樹**採用 Pi 的取法**，並由 **Bedrock 文件**佐證（省略時的值**就是**模型上限 ⇒ 送卡片值是無操作） |
+| 截斷是一等結局 | **取樣**（兩家都有）＋ **四家的字面由文件確認各不相同** ⇒ 本樹只取「看得見」那一半，且形狀是**一個位** |
 | `stream_options` 的閘 | **取樣**（Pi 的 `supportsUsageInStreaming`，預設 true） |
 | **請求層缺陷的修法**（system 映射、串流內錯誤、終止符） | **自創**——審計是本樹自己做的，拿到的是一組**沉默失敗**，而兩家參考在這些點上沒有可抄的東西（它們沒有這些洞） |
+| **文件取證的取得方式（本輪的方法學，值得記下）** | **本機的 `WebFetch` 被封鎖**（連 `example.com` 都回「無法驗證網域安全」），但 **WebSearch 可用**；Gemini／Bedrock 那一半改以 `curl` 直取廠商頁面（含 **AWS 文件自己的 `.md` 來源**）⇒ 那一半是 **[doc]**；Anthropic／OpenAI 那一半落到 **SDK docstring（由廠商 OpenAPI spec 生成）＋ 廠商頁面的搜尋摘要**。**凡文件與 Pi 的實作衝突，以文件為準並記下差異；查不到的，以 Pi 為準**（使用者 2026-09-22 的裁定：**Pi 的 compat 表是為真實拒絕而生的**，例如它的註解帶著 issue 編號） |
