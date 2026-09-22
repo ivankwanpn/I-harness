@@ -19,16 +19,17 @@
 |---|---|
 | 本機工作區 | `D:\I-harness-main` |
 | GitHub | `https://github.com/ivankwanpn/I-harness`（**不是 fork**，`origin` 直接指向它） |
-| 目前分支 | `m62`（領先 `main` **41** 個 commit） |
-| HEAD | `d9dc22d` |
+| 目前分支 | `m62`（與 `main` 同一點） |
+| HEAD | `6271153` |
 
-**注意**：這個 repo 的 `origin` 就是 `ivankwanpn/I-harness` 本身，與 DSH 那邊（fork + 上游 `origin`）的形狀**不同**，別把兩邊的 remote 慣例搞混。
+**注意**：這個 repo 的 `origin` 就是 `ivankwanpn/I-harness` 本身，與 DSH 那邊（已脫離 fork network，另留只讀 `upstream`）的形狀**不同**，別把兩邊的 remote 慣例搞混。
 
 ## 2. 現況快照
 
 - 工作區**乾淨**，`m62` 與 `origin/m62` 完全同步（0 ahead / 0 behind）。
-- `main` 停在 `86d6f34`，落後 `m62` 41 個 commit。**分支紀律：不要推 `main`**（見 §6）。
-- 既有 branch 一覽：`m29 m30 m49 m50 m58 m59 m60 m61 m62 main`。其中 `m30`、`m50` 顯示 `behind 7`，`m60` 是 `ahead 1`。
+- **`main` = `m62` = `6271153`**（2026-09-11 由使用者裁定快進合併，見 §11）。
+- **分支紀律：開發在分支上，合併時機由人決定**（見 §6）——`main` 已是最新整合點，但不代表 agent 可自行推它。
+- 既有 branch 一覽：`m26`–`m62`（含 `m37b`、`m38b`、`m41b`、`m46a/b/c`、`m54-fork/rewind/sticky`、`m55-dist/polish/shell` 等變體）與 `main`。其中 `m30`、`m50`、`m61` 落後其遠端，`m60` 領先 1；`main` 與 `m62` 已無落差。
 
 ## 3. 接手第一件事（照順序）
 
@@ -66,17 +67,32 @@ pnpm test:quarantine       # case-027 的獨立閘門
 
 1. **`NO_COLOR=1` 會被注入這個 session 的環境**。而部分測試 harness 會設 `FORCE_COLOR=1`，兩者相衝時 Node 會印警告進 PTY，導致 `pnpm -r test` 誤紅。**跑測試前先 `Remove-Item env:NO_COLOR`**（已修在 `packages/tui*/test/harness/runner.ts`，但先移掉最省事）。
 2. **`pnpm -r test` 遇第一個失敗就中止** —— 要看全部 70 個包的結果必須 `--no-bail`（`test:default` 已經帶了）。
-3. **兩個 repo 共用同一台機器**：`D:\I-harness-main`（本專案）與 `D:\deepseek-harness`（DSH，已 fork）。DSH 的環境變數 `DSH_HOME=C:\Users\IvanKwan\.dsh` 是 harness 自己設的。**做破壞性測試時務必把 `DSH_HOME` / `DSH_AGENTS_HOME` 指向 `$env:TEMP`**，別碰到真實的 `~/.agents/skills`。
+3. **兩個 repo 共用同一台機器**：`D:\I-harness-main`（本專案）與 `D:\deepseek-harness`（DSH，**已於 2026-09-11 脫離 fork network，現為獨立 repo**；remote 為 `origin` = 自己的 repo、`upstream` = 原官方 repo 只讀）。DSH 的環境變數 `DSH_HOME=C:\Users\IvanKwan\.dsh` 是 harness 自己設的。**做破壞性測試時務必把 `DSH_HOME` / `DSH_AGENTS_HOME` 指向 `$env:TEMP`**，別碰到真實的 `~/.agents/skills`。
 4. **此 checkout 的 `core.symlinks=false`**（僅影響 DSH 那邊的閘門，見 DSH 的 handoff）。
 
 ## 6. 協作紀律（這條最容易被下一個人破壞）
 
-- **絕不推 `main`。** 前一版已驗證的修訂以 tag `verified-m61-d234f21` 為錨。
-- **分工是「作者／驗證者分離」**：由作者（另一個 agent／人）開發，本 session 的驗證者**只驗不寫功能碼**。若你要繼續這個分工，**不要順手改功能碼**再自稱已驗證。
+- **開發必須在分支上。** 任何功能或修正都先開分支（例：`m62`、`docs/…`），不要直接改 `main`。
+- **合併進 `main` 的時機由人決定，不由 agent 自行判斷。** `main` 是這個 repo 的 default branch，也已經是最新整合點（2026-09-11 由 `m62` 快進合併，見 §11），但它**不是**「隨時可以推」的意思：把分支併入 `main` 是使用者的節奏決定，agent 不主動推 `main`。
+  - 這條的分界是**誰決定**，不是**能不能**。使用者要求合併時就照做；沒被要求時就留在工作分支上。
+- **前一版已驗證的修訂以 tag `verified-m61-d234f21` 為錨。**
+- **分工是「作者／驗證者分離」**：由作者（另一個 agent／人）開發，驗證者**只驗不寫功能碼**。若你要繼續這個分工，**不要順手改功能碼**再自稱已驗證。
 - **驗證必須是實跑出來的、不是聲稱的。** 這條分支上的每個修正都有**突變證明**（把修正拿掉 → 測試要紅）。新增修正請沿用同一標準。
 - **不要只驗 config，要驗行為。** §7 記錄了一個假陰性：探針沒安裝 outbound 政策時，設了壞代理照樣回報「網路正常」。
 
-## 7. 殘留 / 待裁定（照建議順序）
+## 7. 殘留 / 待裁定
+
+> **本節的狀態已於 §10 更新（2026-09-13）。** 下表保留原始記錄以便追溯，但**不要照著它做事**——第 1、2 項已完成，第 1 項的假設也被實測**證偽了一半**（見 §10c）。仍然有效的是第 3、4、5 項。
+
+| # | 原始待辦 | 現況 |
+|---|---|---|
+| 1 | `case-027` 的假設尚未驗證 | **已驗證並重新設計** —— 假設對了一半，詳見 §10c |
+| 2 | installer 未重建 | **已完成**，詳見 §10b |
+| 3 | `case-027` 已移出預設閘門 | **仍有效**（見下方原文） |
+| 4 | per-session workspace 執行未做 | **仍有效** |
+| 5 | `scripts/dsh-net-probe.mjs` 使用者裁定保留 | **仍有效**（在 DSH 那邊，見 DSH 的 handoff） |
+
+原始記錄如下。
 
 1. **`case-027` 的假設尚未驗證。** 隔離閘門跑過 5180ms 綠，但先前紅過一次。讀 marker 時間軸指向一個**具體假設**：`host-027.ts:371` 的 `pollMarker("request-exit", 120_000)`，host 自己的 **120s 上限比 referee 的 150s 場景預算短**，所以 host 永遠先放棄——量到的不是真病因。**若假設成立，要修的是預算關係，不是測試內容。**
 2. **installer 重建。** §4d 的 `workspaceWarning`、transport 診斷、headless `--sandbox` 都還沒進安裝版；不重建，使用者拿不到這三個 commit。
@@ -92,6 +108,8 @@ pnpm test:quarantine       # case-027 的獨立閘門
 - **中文文件用簡體。** 本 repo 的 `docs/` 與 zh README 一律簡體中文（與程式碼註解的英文並存）。
 
 ## 9. 下一步建議
+
+> **本節已於 §10 完成（2026-09-13）。** 保留原始記錄以便追溯。目前仍有效的下一步見 §7 的對照表（第 3、4、5 項）。
 
 1. 驗 `case-027` 的「host 120s < referee 150s」假設。
 2. 重建 installer，否則這條分支的三個 commit 對使用者等於不存在。
@@ -155,3 +173,23 @@ Error: EPERM, Permission denied: \\?\C:\…\Temp\ih-t12-wf-ncSPwx
 **斷言全過，紅在 `finally` 的清理**——handle 在 `service.close()` 之後才釋放。`force: true` 吞 ENOENT 但**不吞 EPERM/EBUSY**（M61 已記過這個 class，而且**同一個包裡**早就有 `test/helpers.ts` 的 `rmWorkspaceSync` 有界重試 helper）。`service.test.ts` 兩處、`rewind.test.ts` 的 `afterEach` 一處都用 raw `rmSync`，三處一併改用該 helper。單獨跑 66/66 綠。
 
 **殘留**：其他包的測試若有 raw `rmSync` 清理，仍屬同一風險類（未全面清查）。
+
+## 11. `main` 快進到 `m62`（2026-09-11，使用者決定）
+
+`main` 原本停在 `0d1d63f`，落後 `m62` **58 個 commit**。使用者裁定「把 `m62` 合併到 `main` 應該就行了」，於是將 `main` 快進合併至 `6271153`。
+
+| 項目 | 值 |
+|---|---|
+| 合併前 `main` | `0d1d63f` |
+| 合併後 = `m62` | `6271153` |
+| 幅度 | 58 個 commit |
+| 方式 | `git merge --ff-only`（**純快進**，未產生合併 commit） |
+
+**合併前逐項確認過**：
+
+- `origin/main` 是 `origin/m62` 的**祖先** → 可快進
+- `main` 獨有 commit = **0** → 不會遺失任何東西
+- 分支保護：**無**；rulesets：`[]`；`push` / `admin` 權限皆有
+- 因為是快進，**樹狀內容與 `m62` 完全相同**，所以先前對 `m62` 的驗證（`pnpm -r typecheck` exit 0、`pnpm test:default` **70/70 包零失敗**）對 `main` 一體適用
+
+**這不是「`main` 解禁」。** 紀律仍是開發在分支上、合併時機由人決定（見 §6）。本次之所以推送 `main`，是因為使用者明確要求。
