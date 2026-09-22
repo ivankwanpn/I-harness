@@ -7,9 +7,9 @@
 // redactor is not "it masks secrets", it is "it masks secrets and stops there".
 // So `monkey` (a key name containing `key`), `tokenBudget` (a name containing
 // `token`), `disk-usage-report` (prose containing `sk-`), a 48-character base64
-// blob under `notes` (the measured reason bare base64 is not blanket-ruled), and
-// a 7-character registration all sit next to their rules. A rule that cannot be
-// shown to stop is a rule that corrupts a diagnostic somewhere else.
+// blob under `notes` (the design's own reason bare base64 is not blanket-ruled),
+// and a 7-character registration all sit next to their rules. A rule that cannot
+// be shown to stop is a rule that corrupts a diagnostic somewhere else.
 //
 // THE TOKEN IS SPELLED OUT, not imported: `[REDACTED]` is fixed by the plan and
 // asserted byte-for-byte. A test that referred to a constant could not notice the
@@ -100,7 +100,8 @@ it("shape sk-: a key-shaped run goes, and the leading boundary is what keeps pro
   // hyphenated English word, which is why the boundary is not decoration.
   const prose = "risk-free, task-force and disk-usage-report are prose"
   expect(r.redact(prose)).toBe(prose)
-  // A floor under the run, so a mistyped two-letter suffix is not a key.
+  // A floor under the run: `sk-abc` carries three characters where a real key
+  // carries eight or more, so a stub is not a key.
   expect(r.redact("sk-abc")).toBe("sk-abc")
 })
 
@@ -127,7 +128,7 @@ it("shape PEM: BEGIN through END is one token, and a message truncated mid-block
   // The mask stops at END: what follows is the diagnostic, not the key.
   expect(whole).toContain("(truncated by the provider)")
 
-  // No END marker: an error message truncated to a length limit is exactly how a
+  // No END marker: an error message truncated to a length limit is exactly how
   // half a key reaches a log, and the lazy match has to fall back to end-of-text.
   const half = r.redact("failed to parse -----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkq")
   expect(half).toContain(TOKEN)
