@@ -18,7 +18,7 @@
 | **最終驗證** | **`pnpm verify:all` 五步全綠、exit 0**（2026-09-22，T7 親量；母體 **67／67**；suite **2889 passed／9 skipped／0 failed**；typecheck exit 0；e2e exit 0／5 檔；`--gate` exit 0／**`PASS -- no new rows`**）。指令、五步讀數與**兩筆 allowlist** 見 §2 |
 
 **設計依據**：spec `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-195`）＋§3.5（`:217-239`）**（**2026-09-22 重測**：T7 加了兩則 dated 註記，兩節各因此 +2 行 —— 計畫裡寫的 `:177-193`／`:215-235` 是**加註之前**的位置）；B1 裁定 **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）。
-**計畫**：`docs/superpowers/plans/2026-09-22-w6-diagnostics.md`（7 任務；**§0.1 的普查指令是唯一有效的量法**——舊的 `grep -rn "console\.(warn\|error)"` 在 BRE 裡是字面量，數到 152 條裡 140 條不是呼叫）。
+**計畫**：`docs/superpowers/plans/2026-09-22-w6-diagnostics.md`（7 任務；**§0.1 的普查指令是唯一有效的量法**——舊的 `grep -rn "console\.(warn\|error)"` 壞在**兩個方向**，數到 152 條裡 140 條不是呼叫。**⚠ 機制更正（2026-09-22 複審，T7 實測）：** 它**不是**「在 BRE 裡是字面量」—— GNU BRE 認得 `\|`，那條模式其實退化成「含有 `error)` 的行」。完整機制與 152／140／12 的實測見 §2.4；計畫 §0.1 那一行已加同日的指向註記）。
 **SDD ledger**：`.superpowers/sdd/2026-09-22-w6-diagnostics/`（`progress.md`＋task brief／report／review diff）—— **gitignored**；依 owner 2026-09-22 裁定**維持不納版控、靠複製遷移**（遷移包：`ih-migration-2026-09-22`）。本文自足，不依賴它。
 
 ---
@@ -118,7 +118,7 @@
 | ① | **加 allowlist 之前** | **1** | 1/5 suite **exit 1 · 2888 passed／9 skipped／1 failed**（67/67 專案都回報；`FAILED: packages/session-executor`）· 2/5 population **✓ 67／67** · 3/5 typecheck **exit 0** · 4/5 e2e **exit 0**（5 檔）· 5/5 gate **exit 1 · 435 rows · 2 NEW**（`#RedactedError`、`#Rule`，兩列都在 `packages/diagnostics/src/index.ts`） |
 | ② | **加 allowlist 之後** | **0** | 1/5 suite **exit 0 · 2889 passed／9 skipped／0 failed**（67/67）· 2/5 population **✓ 67／67** · 3/5 typecheck **exit 0** · 4/5 e2e **exit 0**（5 檔）· 5/5 gate **exit 0 · 435 rows · `PASS -- no new rows`** |
 
-**① 的那 1 個 failed 是負載 flake，不是回歸 —— 兩邊都量了：** 平行跑紅的是 `packages/session-executor` 的 `test/shell-promotion.test.ts` › *FALSIFICATION: a threshold ABOVE the deadline never fires — the command dies, and dies branded as a timeout*，**30011 ms 撞 30000 ms 的死線**。把它**單獨跑**（`pnpm --filter @i-harness/session-executor test`）＝ **136 passed／136（20 檔）、exit 0、9.08 s**；而在**② 的第二次全套平行跑裡它自己就綠了**。同一個站點在本單元更早的複審裡已經記過（§7 T5⑧：「已量測、既有、不追」）。**⇒ 這條紅與 W6 的改動無關，且沒有被追。** 兩次跑都**沒有**出現 `apps/cli` 的紅。
+**① 的那 1 個 failed 是負載 flake，不是回歸 —— 兩邊都量了：** 平行跑紅的是 `packages/session-executor` 的 `test/shell-promotion.test.ts` › *FALSIFICATION: a threshold ABOVE the deadline never fires — the command dies, and dies branded as a timeout*，**30011 ms 撞 30000 ms 的死線**。把它**單獨跑**（`pnpm --filter @i-harness/session-executor test`）＝ **136 passed／136（20 檔）、exit 0、9.08 s**；而在**② 的第二次全套平行跑裡它自己就綠了**。**「既有、不追」的證據是我自己的隔離跑**（上面那個 136/136），**不是引自 §7**：§7 T5⑧ 量到的 reds 是 `cli.test.ts` 的 entry-point spawn 與 `hooks-mount.test.ts` 的 hook timeout，**不是這一條** —— 「已量測、既有、不追」是我對那次量測的**概述**，兩者站點不同。**⇒ 這條紅與 W6 的改動無關，且沒有被追。** 兩次跑都**沒有**出現 `apps/cli` 的紅。
 
 ### 2.2 allowlist 的兩筆（**一列一筆**，各是一則有日期的裁定）
 
@@ -146,7 +146,7 @@
 grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --include=*.ts | grep -v "\.test\.\|/test/"
 ```
 
-**舊指令壞在哪：** queued doc 原本寫的 `grep -rn "console\.(warn\|error)"` 在 **BRE** 裡把 `(warn\|error)` 當**字面量**（基本正則沒有 `\|` 交替，`(` 也不是群組）。它因此**兩個方向都錯**：數到的 152 條裡**有 140 條不是呼叫**（`} catch (error) {`、含 `error)` 的註解…），而真實的呼叫它**又漏掉**（`console.error(USAGE)` 這種 `error(` 之後不是 `)` 的、整個 argv 驗證區塊）。所以「110」既不是站點數、也不是任何東西的數。
+**舊指令壞在哪（機制於 2026-09-22 複審更正、T7 已實測）：** queued doc 原本寫的 `grep -rn "console\.(warn\|error)"` **不是**「在 BRE 裡把 `(warn\|error)` 當字面量」—— **GNU BRE 認得 `\|` 這個交替**（GNU 擴充），而 `(`／`)` 在 BRE 裡**是**字面量。所以那條模式的兩支是**字面字串 `console.(warn`** 與**字面字串 `error)`**；第一支在真碼裡不存在（真實呼叫是 `console.warn(`，括號在 `warn` **之前**），於是**整個模式退化成「含有 `error)` 的行」的比對**。**這也解釋了數字本身**（實測，GNU grep 3.0）：在 `e78bad3` 與 `f307cdb` 都命中 **152 行**，**這 152 行全部**是靠 `error)` 那一支中的（`… | grep -c "error)"` ＝ 152／152），而其中只有 **12** 條是真的呼叫（量於 `e78bad3`）⇒ **「140 條不是呼叫」＝ 152 − 12 ✓**（`f307cdb` 只剩 2 條）。**兩個方向都錯：** 它數進一堆不是呼叫的東西（`} catch (error) {`、含 `error)` 的註解…），又漏掉每一個引數不是單字 `error` 的真實呼叫 —— `console.error(USAGE)`（`error(` 之後不是 `)`）以及整個 argv 驗證區塊。所以「110」既不是站點數、也不是任何東西的數。
 
 **兩個修訂上的讀數**（同一個指令，T7 親量、無截斷）：
 
@@ -162,7 +162,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 1. **儀器盲區的實例** —— §5（三則記述；第三則本身是兩次重現）。§2.2 那筆 `#RedactedError` 就是第 2 則的落地。
 2. **R5 的 named residual** —— `\bBearer\s+\S+` 對散文過度遮蔽；代價已寫在 `redactor.ts:49-53`，規則大小寫敏感（§3 R5）。
 3. **T4 的 shutdown 記帳一行** —— `uncaughtException`／`unhandledRejection` 的 `process.exit(1)` **繞過新的 `finally`**（既有；兩個 sink 皆 flush-free，今日無害）—— §3.6 的 fail-loud 記帳要有一行（§7 T4⑥）。**位置 T7 重測：`apps/cli/src/index.ts:61-66`**（`:61-62` 是理由註解、`:63` 是那個 `for (const event of ["uncaughtException", "unhandledRejection"])`、`:66` 是 `process.exit(1)`）—— **§7 T4⑥ 記的 `:48-53` 已漂**（今天那幾行是三個 `diagnosticsFor` handle 的宣告），**引用以本行為準**。
-4. **census 精度** —— ①**六行縫 fallback 是普查的可見子群**（計畫 T6 的 §0.3 縫清單有 8 個位置；T6 遷移 6 個、留 3 個當例外（`session-persistence:251` ＋ `telemetry:11,13`），所以**遷移後的 packages 側重跑那條指令讀到 12 行** ＝ 6 個縫 ＋ `packages/diagnostics` 自己的 3 行 ＋ 3 個例外，**不是 6**）。②`packages/mcp-client/src/oauth.ts:233` 的 **`console.info` 在普查之外**（普查只數 warn／error）—— `grep -rn "console\.info" packages/*/src apps/*/src --include=*.ts` 在 `f307cdb` 命中 **3 行**，扣掉 `packages/diagnostics/src/index.ts:138`（委派的 info 通道）與 `packages/mcp-client/src/types.ts:31`（一句註解）⇒ **普查之外的生產站點是 1 個**。
+4. **census 精度** —— ①**六行縫 fallback 是普查的可見子群**（**以下都算「行」**：計畫 T6 的 §0.3 縫清單列了 8 個位置，T6 遷移掉其中 6 個、留下 **3 行**當例外（`session-persistence:251` ＋ `telemetry:11,13`）；所以**遷移後的 packages 側重跑那條指令讀到 12 行** ＝ 6 ＋ `packages/diagnostics` 自己的 3 ＋ 3，**不是 6**）。②`packages/mcp-client/src/oauth.ts:233` 的 **`console.info` 在普查之外**（普查只數 warn／error）—— `grep -rn "console\.info" packages/*/src apps/*/src --include=*.ts` 在 `f307cdb` 命中 **3 行**，扣掉 `packages/diagnostics/src/index.ts:138`（委派的 info 通道）與 `packages/mcp-client/src/types.ts:31`（一句註解）⇒ **普查之外的生產站點是 1 個**。
 5. **`record.err` 沒有站點級的寫者** —— API 收第三參數（§3 R3），**44 個 packages 站點全部只傳 `msg`**，而多個站點手上就有 caught value。**⇒ 本記錄不得被讀成「`record.err` 被生產路徑填過」。**
 6. **六個可翻的相位** —— `schedule→session`、`subagent/child→run`、`subagent/tools→session`、`compaction→turn`、`plugin-registry/state→mount`、`output-retention→mount`；**沒有測試斷言相位**，所以翻動不會紅。`telemetry` 與 `acp` 兩個 union 成員**零站點**。
 7. **縫的覆蓋缺口** —— `schedule/driver.ts:106` 與 `workflow/registry.ts:31` 的預設體**無測試行使**；`hooks`／`skills` 行使了但**不斷言**；`plugin-registry/state.ts:74`／`credentials:243` 只有 `toHaveBeenCalled()`；而且**沒有任何 package 測試 install 實例** ⇒ **安裝模式的站點全無守衛**（與 T5 的 M1 同類，具名揭露）。
@@ -178,11 +178,31 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 ### 2.6 未完成的部分
 
-**沒有。** 七個任務全部落地，最終 `pnpm verify:all` 五步全綠（§2.1）。仍然開著的是 §2.5 的**已具名殘餘**與 §7 的 **deferred minors**，兩者都**明確交給最終複審 triage** —— 它們不是未完成的任務。
+**沒有。** 七個任務全部落地，最終 `pnpm verify:all` 五步全綠（§2.1）。仍然開著的是 §2.5 的**已具名殘餘**與 §7 的 **deferred minors** —— 兩者都**已交給最終複審 triage**，判定見 §2.7（**safe-to-leave**，不是未完成的任務）。
+
+### 2.7 最終整支複審（**本單元的收尾判定**）
+
+**範圍與裁決：** `e78bad3`…`95fe4c9`（**50 個提交** —— 從計畫那一筆到 T7 的最後一筆，也就是整支 W6）。**opus，分九輪讀完。** 裁決：**Ready to merge? Yes** —— **0 Critical、2 Important、約 12 Minor**；而**每一條 deferred minor 都被 triage 為 safe-to-leave**（§7 因此結案：那裡「不修」是**複審的判定**，不是 T7 的省略）。
+
+**它的依據（複審自己重跑的，不是複述本文件）：** 每一條它能測的 binding constraint 都成立；**普查與 allowlist 的數字被獨立重現**。
+
+**兩條被 park 的 Important（控制器裁定；編號續 §3 的 R 系列）：**
+
+- **R14 —— 掃描①（鍵名）不認複數鍵名**（`apiKeys`／`tokens`／`secrets`）。**Park，不是修**，三個理由：①**今天沒有任何站點傳 `data`**（§2.5 第 5 點），所以這條缺口沒有可被利用的路徑；②修法要與**過度遮蔽**對賭（`tokens: 1234`、`keys` 這種正常鍵名會被吃掉）；③**已註冊的值仍由第③趟按值擋住**。**⇒ 它是「下一個單元裡第一個傳 `data` 的站點」落地時要先修的東西**，不是「有空再修」。**若錯的代價：** 那第一個站點傳進去的複數鍵名下的秘密不被鍵名遮蔽（值仍可能被第③趟擋住）。
+- **R15 —— 沒有任何 package 測試 install 實例 ⇒ 44 個 package 站點的「已安裝」分支無守衛**（§2.5 第 7 點的另一面，量過的）。**Park。** **最便宜的守衛＝一個捕捉型實例的測試，斷言 `phase` ＋ `level`**。**若錯的代價：** 已安裝模式的路徑在 packages 側一直沒有回歸網，相位或級別被翻掉不會紅（§2.5 第 6 點）。
+
+**複審對下一個單元的建議（原樣記下）：**
+
+1. **R14 的複數詞幹修法與 R15 的那個捕捉型測試一起做** —— 兩者是同一個「`data` 一開始被傳」的時刻的兩面。
+2. **把 caught value 交給 `err`，不要自己插值 `error.message`**（§2.5 第 5 點的正面用法：`record.err` 的寫者已經在 API 上，只是沒有站點用它）。
+3. 給**五條 `mount` warn** 補一條 **`level === "warn"`** 斷言（§2.5 第 7 點；T5 的 M1 實測「翻 `warn`→`error` 紅 0 條」）。
+4. **`installDiagnostics` 在第二個「同進程宿主」出現時會靜默取代活著的實例** —— 那個需求真的出現時，這條要先被推翻（與 §「風險張力」／計畫 Self-review 的那條同一條）。
 
 ---
 
 ## 3. Rulings（全部；每條附「若錯的代價」）
+
+**⚠ R14／R15 是 T1–T6 之後才出現的兩條（最終整支複審 park 的 Important），記在 §2.7** —— 本節保留 T1–T6 那 13 條的原文不動。
 
 - **R1（T1 複審，2026-09-22）**：`index.ts:178` help（exit 0）、`models.ts:343`、`roles.ts:287`、`provider.ts:222`、`run.ts:752` 五站**維持原樣、列名不遷移** —— T1 的 API 讓通道＝級別，「info 級、通道 stderr」不可表達，而四個既有斷言釘著它們。**代價（明說）**：這五個 argv/notice 站點沒有結構化記錄。計畫 §0.3 與 T5 表已就地更正（`364e7cd3`）。
 - **R2（T2 派工前）**：T2 紅測試的 redactor 用**測試內 double**（`/sk-live-[A-Za-z0-9]+/` → 恰好 `[REDACTED]`）。**代價**：T3 落地後一行換真工廠 ⇒ **已由 T3 履行**（`99c287e`，複審確認強化）。
@@ -232,7 +252,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 ---
 
-## 7. Deferred minors（**交給最終複審 triage**；都不入修復迴圈。**T7 一條都沒修**）
+## 7. Deferred minors（**已由最終整支複審 triage：全部 safe-to-leave**，§2.7；都不入修復迴圈，**T7 一條都沒修**）
 
 - **T1**：④ double install/uninstall、`stream` 勝 env 未測（deferred）。**concern**：`durMs` **在 W6 沒有生產者** —— T7 的記錄不要暗示它被填。
 - **T2**：①`src/index.ts:29` 的 `fromError` 公開 re-export 無套件外消費者（一行可撤）②no-err-key 案例只釘 wire shape（`rec.err = undefined` 會穿過 `JSON.stringify`）③`[REDACTED]` token 的 double 斷言 ⇒ **已由 T3 履行**（`99c287e`）（保留此列僅為記錄）④非 Error 的 `name = typeof err`（語意選擇）。
