@@ -38,6 +38,8 @@
 
 **測量**（at `0ae6f231`）：`packages/diagnostics` **17/17**；typecheck exit 0；母體 **66 → 67**（`verify-all.mjs:49-50` 數帶 test script 的 workspace 目錄）。
 
+**＋lockfile 的缺口（工作電腦 2026-09-22 實測，本提交補上）**：`ec18c9d0` 沒帶 `pnpm-lock.yaml`，而 pnpm **10.34.5** 的 `install --frozen-lockfile` **exit 0 但仍會把 `packages/diagnostics: {}` 這行 importer 寫回** ⇒ 「needed no change」只對**解析**為真，檔案本身會被補寫、每台機器的樹都留一個 dirty 檔。
+
 ### T2 — `RedactedError.fromError` ＋ **`record.err` 的寫者**
 
 **Commits**：`1d20ef5b`（`fromError` ＋ 四 adapter 洩漏 fixture）· `4915350a`（controller 裁定的 API 擴充 ＋ 計畫 §0.3 的 dated ⚠ 更正）。
