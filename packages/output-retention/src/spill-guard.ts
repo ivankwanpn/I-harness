@@ -236,13 +236,14 @@ const isSyntheticFailure = (out: unknown): boolean =>
   typeof out === "object" && out !== null && SYNTHETIC_FAILURE_CODES.has((out as { code?: string }).code as string)
 
 // WHY THE SET STOPS AT FIVE. The repair path in session-persistence
-// (src/repair.ts) writes a SIXTH synthetic code — for a DISPATCHED call whose
-// outcome the log does not contain. It is deliberately not here, because it
-// cannot reach this guard: the mount point is the live `tools/execute` cascade,
-// and a result read back from a REPAIRED log never passes through it. If
-// "synthetic" is ever widened to mean "read back from a repaired log", this set
-// stops being complete — and the `replay: false` sentence the repair path
-// attaches is exactly what a truncation would hide.
+// (src/repair.ts) writes a SIXTH synthetic code — one code shared by TWO arms:
+// a DISPATCHED call whose outcome the log does not contain, and (Q8/M71) a
+// pending call in a log that records no dispatch marker ANYWHERE. It is
+// deliberately not here, because it cannot reach this guard: the mount point is
+// the live `tools/execute` cascade, and a result read back from a REPAIRED log
+// never passes through it. If "synthetic" is ever widened to mean "read back
+// from a repaired log", this set stops being complete — and the `replay: false`
+// sentence the repair path attaches is exactly what a truncation would hide.
 
 /** registry 級統一落盤（opencode/dsh spill policy 吸收）。string 超限 → 截斷字串 + spill notice
  *  （notice 內含完整路徑）；object 超限 → { output, outputPaths, spill } 信封。**core-tools 零改動**

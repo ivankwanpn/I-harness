@@ -532,18 +532,29 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
       }
 
       const rawAfterFirst = readFileSync(sessionPath, "utf8").trim().split("\n").slice(1)
-        .map((line) => JSON.parse(line) as { type: string; seq?: number; output?: { code?: string } })
+        .map((line) => JSON.parse(line) as { type: string; seq?: number; output?: { code?: string; error?: string } })
       expect(rawAfterFirst.map((event) => event.seq)).toEqual(rawAfterFirst.map((_, index) => index))
-      expect(rawAfterFirst.some((event) => event.type === "tool/result" && event.output?.code === "TOOL_ABORTED_BEFORE_DISPATCH")).toBe(true)
+      // M71 T2 — DELIBERATE CONTRACT CHANGE (was TOOL_ABORTED_BEFORE_DISPATCH):
+      // this hand-written crash log carries no tool/dispatch ANYWHERE, so the
+      // conservative verdict is the one that must reach the wire. `code` alone
+      // cannot say WHICH unknown arm this is (both carry TOOL_OUTCOME_UNKNOWN),
+      // so the message is read too: this sentence is the unmarked-log payload's
+      // own (the dispatched arm's says "was dispatched", which this log cannot
+      // establish). Raw JSONL on purpose — the wire carries the full payload.
+      expect(rawAfterFirst.some((event) => event.type === "tool/result"
+        && event.output?.code === "TOOL_OUTCOME_UNKNOWN"
+        && (event.output?.error ?? "").includes("no tool/dispatch marker anywhere"))).toBe(true)
 
       const second = createHarnessClient({ command: process.execPath, args, cwd: workspace, env: { IH_CONFIG_DIR: canonicalConfigDir } })
       try {
         await second.request("initialize", {})
         await second.run({ sessionId, prompt: "second restart" })
         const history = await second.history(sessionId)
+        // ...and it SURVIVES the second restart as the same conservative code
+        // (M71 T2 flipped this from TOOL_ABORTED_BEFORE_DISPATCH).
         expect(history.events.some((event) =>
           event.type === "tool/result"
-          && (event.output as { code?: string }).code === "TOOL_ABORTED_BEFORE_DISPATCH",
+          && (event.output as { code?: string }).code === "TOOL_OUTCOME_UNKNOWN",
         )).toBe(true)
       } finally {
         await second.close().catch(() => {})
