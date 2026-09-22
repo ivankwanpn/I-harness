@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createOpenAIClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -200,6 +200,21 @@ describe("llm-openai protocol", () => {
     expect(secondEvents).toEqual(["t:ok"])
     const secondBody = bodies[1] as { input: unknown[] }
     expect(secondBody.input.some((i) => (i as { type?: string }).type === "function_call_output")).toBe(true)
+  })
+
+  it("M72 Ⅰ: a corrupt chunk is an error event, not an exception out of the generator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: {not json\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The discrimination is the SHAPE of the failure: today the SyntaxError escapes
+    // out of the for-await and NO event arrives; after the fix exactly one `error`
+    // arrives and the stream ends there. Whether a VALID PREFIX that preceded the
+    // bad chunk was already yielded is deliberately NOT asserted: `new Response(string)`
+    // may hand the whole body over as ONE chunk, so pinning that would be a test of
+    // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("not json")
   })
 })
 
