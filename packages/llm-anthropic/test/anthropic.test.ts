@@ -351,3 +351,59 @@ describe("M32 reasoning effort (anthropic)", () => {
     expect(body2.output_config).toBeUndefined()
   })
 })
+
+// M5 T2. The wire's usage was ALWAYS arriving — message_start carries the
+// input side and message_delta the output side — and `handleEvent` fell
+// through to `return []` for both. Nothing read it, and the seam had no
+// member that could have held it: three adapters documented that hole in
+// their own comments (llm-gemini calls it "a future usage seam slot").
+describe("M5 T2 provider usage (anthropic)", () => {
+  const sseStream = (frames: object[]): string =>
+    frames.map((f) => `data: ${JSON.stringify(f)}`).join("\n\n")
+
+  async function collectUsage(frames: object[]): Promise<unknown[]> {
+    const fetchMock = vi.fn(async () => new Response(sseStream(frames), { status: 200, headers: { "content-type": "text/event-stream" } }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const seen: unknown[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "usage") seen.push(ev.usage)
+    }
+    return seen
+  }
+
+  it("M5 T2: surfaces the wire's usage instead of discarding message_start/message_delta", async () => {
+    const seen = await collectUsage([
+      { type: "message_start", message: { usage: { input_tokens: 25, output_tokens: 1, cache_creation_input_tokens: 100, cache_read_input_tokens: 900 } } },
+      { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "hi" } },
+      { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 15 } },
+      { type: "message_stop" },
+    ])
+    // Two reports, one round-trip — the consumer merges them. Emitting each
+    // field under the name the wire used, and nothing that was not sent.
+    expect(seen).toEqual([
+      { inputTokens: 25, outputTokens: 1, cacheReadTokens: 900, cacheCreationTokens: 100 },
+      { outputTokens: 15 },
+    ])
+  })
+
+  it("M5 T2: a usage object with no cache numbers does NOT produce cacheReadTokens: 0", async () => {
+    // Anthropic omits the cache fields on responses that used no cache. A zero
+    // here would be OUR invention and would read as a measurement — the exact
+    // ambiguity the milestone exists to remove.
+    const seen = await collectUsage([
+      { type: "message_start", message: { usage: { input_tokens: 7, output_tokens: 1 } } },
+      { type: "message_stop" },
+    ])
+    expect(seen).toEqual([{ inputTokens: 7, outputTokens: 1 }])
+    expect("cacheReadTokens" in (seen[0] as object)).toBe(false)
+  })
+
+  it("M5 T2: no usage object at all → no usage event", async () => {
+    const seen = await collectUsage([
+      { type: "message_start", message: {} },
+      { type: "message_stop" },
+    ])
+    expect(seen).toEqual([])
+  })
+})

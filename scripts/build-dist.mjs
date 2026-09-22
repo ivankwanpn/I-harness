@@ -143,7 +143,7 @@ log(`out dir: ${OUT}`)
 
 /**
  * Bundle one entry point with the shared options. Two entries are emitted:
- *   ih.mjs     — the CLI/TUI (the whole workspace inlined);
+ *   ih.mjs     — the CLI (the whole backend workspace inlined);
  *   runner.mjs — the windows-acl confinement runner as a SIBLING bundle:
  *                packages/sandbox-windows-acl spawns it in dist
  *                (I_HARNESS_DIST branch of runnerInvocation), so the sandbox
@@ -163,12 +163,17 @@ async function bundleEntry(entry, outfile, label) {
       external: EXTERNALS,
       logLevel: "info",
       absWorkingDir: ROOT,
-      // DIST double-entry guard: esbuild merges every module into ONE file
-      // with ONE import.meta.url — apps/tui's direct-entry guard
-      // (`import.meta.url === pathToFileURL(argv[1]).href`) would fire on
-      // every `node ih.mjs ...` invocation and boot the TUI alongside main()
-      // (probe escape bytes on stdout). source-run never sets the env — the
-      // guard changes shape ONLY in the bundle.
+      // DIST marker. Read at runtime by the sandbox's runnerInvocation
+      // (packages/sandbox-windows-acl/src/index.ts:470 — the I_HARNESS_DIST
+      // branch re-enters the SIBLING runner.mjs instead of the source tsx
+      // entry) and by apps/cli's __dist-selfcheck, which fails loud if the dist
+      // confinement still goes through tsx. Source runs never set the env, so
+      // the branch changes shape ONLY in the bundle.
+      // Historical second reason, now gone: apps/tui's direct-entry guard
+      // (`import.meta.url === pathToFileURL(argv[1]).href`) would have fired on
+      // every `node ih.mjs ...` invocation and booted the TUI alongside main()
+      // — that module was deleted in M65 T1, and the marker is still required
+      // by the two readers above.
       define: { "process.env.I_HARNESS_DIST": JSON.stringify("1") },
       // esbuild keeps `require("node:stream")`-style calls inside the CJS
       // modules it wraps as a RUNTIME `__require` shim that throws in ESM
@@ -288,7 +293,7 @@ writeFileSync(
     "i-harness — M45/M55 build-dist bundle",
     "",
     "Layout:",
-    "  ih.mjs            the esbuild bundle (whole CLI/TUI workspace inlined)",
+    "  ih.mjs            the esbuild bundle (the whole CLI/backend workspace inlined)",
     "  runner.mjs        the windows-acl confinement runner (sibling bundle; the",
     "                    sandbox seam spawns it in dist — no source checkout, no tsx)",
     "  node_modules/     the NATIVE externals (node-pty, koffi, @vscode/ripgrep)",
@@ -301,22 +306,23 @@ writeFileSync(
     "Run:",
     "  node ih.mjs --version       # 0.1.0",
     "  node ih.mjs help            # full usage",
-    "  node ih.mjs tui --help      # tui usage",
     "  node ih.mjs run <task> [--model provider:model --api-key KEY] [--yes]",
+    "  node ih.mjs sdk             # SDK stdio server (NDJSON JSON-RPC 2.0)",
+    "  node ih.mjs acp             # ACP v1 stdio server",
+    "  node ih.mjs sessions list   # list the durable session store",
+    "A bare `node ih.mjs` — or any first token that is not a subcommand — prints the",
+    "usage on stderr and exits 1: this bundle has NO default UI (M65 T1 removed the",
+    "TUI and the web host; the backend is the whole surface).",
     "",
     "The natives are EXTERNAL by design: their platform binaries (node-pty .node,",
     "koffi .node, @vscode/ripgrep rg executable) cannot be embedded in the bundle, so",
     "they resolve from ./node_modules at runtime. No tsx is needed — everything else",
-    "is inlined (including the G1 minimal inline engine).",
+    "is inlined.",
     "",
     "The bundle is SELF-SUFFICIENT (M55) — no source checkout and no tsx:",
-    "  - `tui --attach` spawns the SDK stdio server by re-entering this bundle",
-    "    (`node ih.mjs sdk …`);",
-    "  - the Windows-ACL sandbox spawns ./runner.mjs next to this bundle;",
-    "  - /minimal and /fullscreen relaunch this bundle with the flipped --mode;",
-    "  - minimal mode loads the inline engine from the bundle (no fallback).",
-    "I_HARNESS_HOME is a DEVELOPMENT-only override for SOURCE runs (a non-standard",
-    "checkout for the source SDK spawn); dist ignores it.",
+    "  - `node ih.mjs sdk` serves the SDK stdio server from this bundle (and `acp`",
+    "    serves ACP the same way) — no separate entry point, no tsx;",
+    "  - the Windows-ACL sandbox spawns ./runner.mjs next to this bundle.",
     "",
     "Rebuild/verify (from the monorepo):",
     "  node scripts/build-dist.mjs && node scripts/verify-dist.mjs",
@@ -334,7 +340,7 @@ log(`info: dynamic imports left in the bundle (esm-unsplittable): ${dynImports.l
 for (const p of dynImports) log(`info:   import(${JSON.stringify(p)})`)
 if (tsDyn.length > 0) {
   log(`warn: ${tsDyn.length} dynamic .ts import(s) remain — those require a tsx-like loader at runtime;` +
-    " the smoke surface does not hit them, but a downlevel loader (minimal mode) silently falls back to fullscreen.")
+    " the smoke surface does not hit them, but any runtime path that does would fail in dist (no tsx there).")
 }
 log(`info: out files: ${files.map((f) => `${f} (${statSync(join(OUT, f)).size} bytes)`).join(", ")}`)
 log(`done: ${OUT} — run: node scripts/verify-dist.mjs${out === "dist" ? "" : ` --out ${out}`}`)

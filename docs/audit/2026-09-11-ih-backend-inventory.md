@@ -65,6 +65,17 @@
 **但 `fs` 完全沒有沙箱整合**：`packages/fs/src` 內零個 sandbox 符號，`FsToolDeps` 只有 workspace ＋ rewind（`packages/fs/src/index.ts:38-49`），組裝點也沒傳（`packages/session-executor/src/assembly.ts:358-361`）。fs 的「圍堵」只是 `resolvePath` 拒絕 `..` 逃逸，而**絕對路徑可以穿過並指向 workspace 之外**（`packages/fs/src/index.ts:26-36`）。`fs-search`（rg 無 sandbox 欄位）與 `terminal`（PTY 無沙箱、無 timeout）同理。
 
 > 這是本次盤點最重要的安全性發現：**「有 win-ACL 沙箱」不等於「所有檔案操作都被圍堵」**。寫入路徑的圍堵依賴 `resolvePath` 的相對路徑檢查，不是 OS 層隔離。
+>
+> **⚠ 更正記錄（2026-09-14，動手修復時）**：本節初稿寫「`fs` 完全沒有沙箱整合」，那個描述**太強且不精確**。實際情況是 **fs 的閘是「審批」而不是「強制」**：
+>
+> - `guard-approval` 有 Layer 2——工作區外的寫入回 `{ kind: "ask", reason: "write target outside workspace requires approval" }`（`packages/guard-approval/src/index.ts:134-143`）。**閘是存在的**，我漏看了它。
+> - **但它不查沙箱模式**，只問人。而 `approveAll`（CLI 的 `--yes`，`apps/cli/src/index.ts:317`）會**自動批准**。
+> - 所以精確的缺陷是：**`sandbox: "read-only"` 在 fs 路徑上完全不被諮詢**。同一模式下 shell 是核心層拒絕的，而 `i-harness run --yes` 的 `write` 工具可以寫到磁碟任何位置。
+> - `WRITE_TOOLS` 只有 `"write"`；`edit` 與 `apply_patch` 走 Layer 1 的「任何非 readOnly 工具都要審批」——同樣是審批，同樣被 `approveAll` 自動滿足。
+>
+> **✅ 已修復**：新增 `checkWrite`（`packages/sandbox-policy/src/paths.ts`）作為**與審批無關的政策強制**——`read-only` 拒絕一切寫入、`workspace-write` 只允許工作區內、`danger-full-access` 不限制。fs 的四個寫入點全部接上。實作會解析符號連結（避免用工作區內的連結洗路徑），且**刻意不給暫存目錄例外**：bwrap 後端只綁定工作區，給 tmp 會讓 fs 比 shell 更寬鬆，而那個方向才是真的破口。
+>
+> **未修的部分，如實記錄**：`terminal` 的 PTY 仍無沙箱（`registerTerminal` 的簽名只有 `{ cwd? }`，需要另一次設計），`fs-search` 的 rg 子行程同理；**讀取隔離仍未實作**（每個後端都允許讀，fs 也維持一致，見 `paths.ts` 的說明）。
 
 ### 2. **讀隔離是宣告而非實作**，而且那道閘門在組合使用時從未上膛
 
@@ -87,6 +98,16 @@
 > **⚠ 更正記錄**：本節初稿寫「`embedded.ts:969` 是全 repo 唯一一個非測試呼叫點，我在 `packages/`＋`apps/` 全樹確認過」——**那句話是錯的**。我的搜尋實際只掃了 `packages/`，卻在文字裡宣稱涵蓋全 repo。這是兩個獨立子代理在後續階段分別抓到的，也正是本審計一直在批評的那種事：**把抽樣講成全稱**。上面已改為正確的多呼叫點敘述。
 >
 > **實質結論不變**：無論四個還是五個，**沒有任何宿主傳 `compact`**，headless 路徑讀的 `HeadlessOptions.compact`（`apps/cli/src/run.ts:231-233,258`）**沒有任何非測試檔案設定過**（只有 `apps/cli/test/cli.test.ts` 設過）。另有一個更細的條件：`service.ts:256-258` 是**析取**，所以即使傳了 compact config，只要 binding 沒有 `contextWindow` 也會被丟掉。
+>
+> **✅ 已修復（2026-09-14）**：本節描述的是盤點當下的狀態，該缺陷隨後已修。修法與 `sandbox` 在 M62 的處置同構——問題不在引擎，而在**宿主契約要求 `contextWindow` 必填，而唯一知道視窗的層無法提供它**，於是 CLI 從未設定 `compact`。實際改動：
+>
+> - 新增 `CompactionRequest`（視窗可選）作為**宿主邊界**型別；`CompactionConfig` 仍是引擎的必填契約
+> - `assembly` 負責填入視窗：優先用自己的 `contextWindow`，**回退到 config 裡帶的那個**（後者是既有呼叫者的合法用法；測試抓到了我第一版把它弄丟的回歸）
+> - 要求壓縮卻無視窗可解析時**發出警告**而非靜默停用
+> - `service.ts` 的析取**保留**（binding 是權威，其缺席即停用），但同樣改為出聲
+> - `settings` 新增 `compaction.auto`（預設 `true`），CLI 解析並可被 `--no-compact` 覆寫
+>
+> 驗證：`apps/cli/test/compaction-wiring.test.ts` mock 掉 `run.ts` 並斷言 `main` **實際建出的**選項——**變異測試證明把 `compact` 從 `main` 移除會讓它 4 個全紅**。我最初寫的版本直接呼叫 `runHeadless` 並自帶 `compact`，那個變異下**依然全綠**，等於沒測到缺陷所在的那層。
 >
 > 連鎖後果（每一環都有出處）：
 >
@@ -407,7 +428,7 @@ The engine-owned session assembly and its global service: one createSessionAssem
    - 出處：`packages/session-executor/src/assembly.ts:1`、`packages/session-executor/src/assembly.ts:259`、`packages/session-executor/src/assembly.ts:702`
 2. **Model policy defaults to production-safe `required`: an omitted modelPolicy with no explicit client throws ModelUnavailableError, and a mock is only built when the caller explicitly opts into "test-mock".**
    - 理由：A test double must never be reachable by omission in production.
-   - 出處：`packages/session-executor/src/assembly.ts:85`、`packages/session-executor/src/assembly.ts:262`、`packages/session-executor/src/assembly.ts:65`
+   - 出處：`packages/session-executor/src/assembly.ts:86`、`packages/session-executor/src/assembly.ts:262`、`packages/session-executor/src/assembly.ts:66`
 3. **Two-layer pacing with a stable public row id: the service creates the queue row id + a service-owned AbortController BEFORE its pacing chain (the caller signal is linked into it), then hands that same id through the A-region lane (lane.submit(..., id)). The queue projection merges service-front and lane rows by that public id, takes 'running' from the lane's currentInput (the lane is ground truth, the record's state can lag), and cancelQueued refuses to cancel a running row.**
    - 理由：One id per user-visible turn lets the queue surface, the lane and cancellation agree; consulting a lagging projection would abort a running turn and report a false success.
    - 出處：`packages/session-executor/src/service.ts:315`、`packages/session-executor/src/service.ts:378`、`packages/session-executor/src/service.ts:434`、`packages/session-executor/src/service.ts:506`
@@ -429,7 +450,7 @@ The engine-owned session assembly and its global service: one createSessionAssem
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `shellTimeoutMs (default)` | 120000 | `packages/session-executor/src/assembly.ts:278` |
+| `shellTimeoutMs (default)` | 120000 | `packages/session-executor/src/assembly.ts:297` |
 | `shell retention maxBytes (default)` | 64000 | `packages/session-executor/src/assembly.ts:304` |
 | `mock default script` | [{ role: "assistant", text: "ok" }] | `packages/session-executor/src/assembly.ts:264` |
 
@@ -1301,7 +1322,7 @@ The bash and pwsh tools: resolves which shell executable to spawn, keeps a tool 
 
 | 名稱 | 值 | 出處 |
 |---|---|---|
-| `retention maxBytes default` | 64_000 | `packages/shell/src/index.ts:130` |
+| `retention maxBytes default` | 64_000 | `packages/shell/src/index.ts:132` |
 | `bash argv` | ['bash','-c',command] | `packages/shell/src/index.ts:238` |
 | `pwsh argv` | [resolvePwshExe(),'-NoLogo','-NoProfile','-NonInteractive','-Command',command] | `packages/shell/src/index.ts:258` |
 | `pwsh fallback path` | %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe | `packages/shell/src/index.ts:74` |
@@ -1397,7 +1418,7 @@ PTY-backed terminal and process control: a TerminalService owning node-pty sessi
 
 **已知缺口（原始碼內標記）**
 
-- No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:5-11, packages/terminal/src/tool.ts:164-174) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).
+- No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:7-24, packages/terminal/src/tool.ts:354-379) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).
 - Documented shortcoming: an offset earlier than the ring start is served from the ring start, and the dropped prefix is unrecoverable (packages/terminal/src/service.ts:73-75).
 - No gap markers (TODO/FIXME/deferred/limitation) beyond the ring-buffer note.
 

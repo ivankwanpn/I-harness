@@ -42,7 +42,7 @@ import { readdir } from "node:fs/promises"
 import { join, sep } from "node:path"
 
 /** One discovered workspace entry (DSH fileReferences candidate, simplified). */
-export interface FileReferenceCandidate {
+interface FileReferenceCandidate {
   /** Workspace-relative path, always "/" separators. */
   path: string
   /** basename(path) — the display label. */

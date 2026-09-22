@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest"
-import { syncTools, type McpServerConfig } from "../src/index.ts"
+import {
+  MAX_CURSOR_LENGTH,
+  MAX_TOOL_ITEMS,
+  McpCatalogError,
+  syncTools,
+  validateMcpConfig,
+  type McpServerConfig,
+} from "../src/index.ts"
 import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 import type { ConnectedMcpClient } from "../src/index.ts"
 
@@ -104,6 +111,41 @@ function throwingRegistry(): { store: Map<string, Tool>; tools: ToolRegistry } {
   return { store, tools }
 }
 
+// A fake server whose every page costs `delayMs` of wall clock and whose walk
+// is `pages` long. The drain-deadline tests need a walk that is slow AS A
+// WHOLE while each single page stays far under any per-page default. Records
+// the RequestOptions the drain handed it per page (undefined = none passed).
+function pagingClient(pages: number, delayMs: number): {
+  client: ConnectedMcpClient
+  calls: Array<{ cursor: string | undefined; opts: { timeout?: number; maxTotalTimeout?: number } | undefined }>
+} {
+  const calls: Array<{ cursor: string | undefined; opts: { timeout?: number; maxTotalTimeout?: number } | undefined }> = []
+  let served = 0
+  const client = {
+    async listTools(cursor?: string, opts?: { timeout?: number; maxTotalTimeout?: number }) {
+      calls.push({ cursor, opts })
+      const index = served
+      served += 1
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+      return {
+        tools: [{ name: `t${index}`, description: "x", inputSchema: {} }],
+        ...(index < pages - 1 ? { nextCursor: `c${index}` } : {}),
+      }
+    },
+    async callTool() {
+      return { content: [] }
+    },
+    async listResources() {
+      return []
+    },
+    async readResource() {
+      return []
+    },
+    async close() {},
+  } as unknown as ConnectedMcpClient
+  return { client, calls }
+}
+
 describe("syncTools", () => {
   it("registers server tools under public names and returns disposers", async () => {
     const tools = registry()
@@ -188,6 +230,115 @@ describe("syncTools", () => {
     expect(tools.get("mcp__files__a")).toBeDefined()
     expect(tools.get("mcp__files__b")).toBeDefined()
     expect(disposers.size).toBe(2)
+  })
+
+  // M6-D1: the drain's remaining bounds. A catalogue is server-controlled, so
+  // each of these is a way a broken/hostile server could spend unbounded work.
+  it("rejects a server that repeats a cursor instead of walking forever", async () => {
+    const tools = registry()
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        return { tools: [], nextCursor: "same" } // 永遠同一個
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    await expect(syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] })).rejects.toMatchObject({
+      reason: "repeated-cursor",
+    })
+  })
+
+  it("rejects a catalogue larger than the defensive item cap — blocked tools still count (they were listed)", async () => {
+    const tools = registry()
+    let page = 0
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        const start = page * 100
+        page += 1
+        // Page 2 is the LAST page: the cap must end the drain on its own, not
+        // the cursor running out.
+        return {
+          tools: Array.from({ length: 100 }, (_, i) => ({ name: `t${start + i}`, description: "x", inputSchema: {} })),
+          ...(page < 2 ? { nextCursor: `c${page}` } : {}),
+        }
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    // Every tool of page 1 is blocked. An implementation that counted only the
+    // tools it REGISTERED would stay under the cap (100 < 150) and the drain
+    // would complete; the cap is on what the server LISTED (200 > 150).
+    const blockedTools = Array.from({ length: 100 }, (_, i) => `t${i}`)
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      await expect(
+        syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [], catalogMaxItems: 150, blockedTools }),
+      ).rejects.toMatchObject({ reason: "items-cap" })
+    } finally {
+      warnSpy.mockRestore()
+    }
+  })
+
+  it("rejects an absurdly long cursor (typed, with the code discriminant)", async () => {
+    const tools = registry()
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        return { tools: [], nextCursor: "x".repeat(MAX_CURSOR_LENGTH + 1) }
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    const err = await syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] }).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(McpCatalogError)
+    expect(err).toMatchObject({ code: "mcp_catalog", reason: "cursor-cap" })
+  })
+
+  it("still ends a never-terminating drain at 100 pages — the extracted page cap kept its value and message", async () => {
+    const tools = registry()
+    let page = 0
+    const client: ConnectedMcpClient = {
+      async listTools() {
+        page += 1
+        return { tools: [], nextCursor: `c${page}` } // a FRESH cursor each page: not the repeated-cursor case
+      },
+      async callTool() {
+        return { content: [] }
+      },
+      async listResources() {
+        return []
+      },
+      async readResource() {
+        return []
+      },
+      async close() {},
+    }
+    await expect(syncTools(client, tools, { transport: "stdio", serverName: "files", command: "x", args: [] })).rejects.toThrow(
+      /pagination exceeded 100 pages/,
+    )
   })
 
   it("rolls back to zero tools and logs a warning on a registry conflict (re-sync)", async () => {
@@ -308,5 +459,121 @@ describe("syncTools", () => {
     } finally {
       warnSpy.mockRestore()
     }
+  })
+})
+
+// M6-D2: the drain's overall deadline. The caps above bound the WORK a server
+// can extract; this bounds the TIME it can spend doing so — a server whose
+// every page is merely slow must fail inside ONE budget, not pay a per-page
+// timeout per page (spec §4.3: 逐頁都慢 ⇒ 整體界內失敗).
+describe("the catalogue drain's overall deadline", () => {
+  const cfg = (extra: object): McpServerConfig =>
+    ({ transport: "stdio", serverName: "files", command: "x", args: [], ...extra }) as McpServerConfig
+
+  it("rejects with the typed timeout reason when the pages outlast catalogTimeoutMs", async () => {
+    const tools = registry()
+    // 10 pages x 30ms ≈ 300ms of walk; the budget is 50ms.
+    const { client, calls } = pagingClient(10, 30)
+    const err = await syncTools(client, tools, cfg({ catalogTimeoutMs: 50 })).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(McpCatalogError)
+    expect(err).toMatchObject({ code: "mcp_catalog", reason: "timeout" })
+    expect((err as Error).message).toContain("mcp-client(files):")
+    // It stopped MID-walk, and every page it did request carried the REMAINING
+    // total as its own bound — not the 60s tool-call default.
+    expect(calls.length).toBeGreaterThan(0)
+    expect(calls.length).toBeLessThan(10)
+    for (const call of calls) {
+      expect(call.opts?.maxTotalTimeout).toBeGreaterThan(0)
+      expect(call.opts?.maxTotalTimeout).toBeLessThanOrEqual(50)
+      // toolCallTimeoutMs is unset here, so the per-page timeout IS the
+      // remaining total: min(remaining, 60_000) = remaining.
+      expect(call.opts?.timeout).toBe(call.opts?.maxTotalTimeout)
+    }
+    expect(tools.schemas()).toHaveLength(0) // fetch phase: nothing registered
+  })
+
+  it("completes the same slow drain when the budget leaves room — the bound is not 'always throws'", async () => {
+    const tools = registry()
+    const { client, calls } = pagingClient(10, 30)
+    // The walk is ~300ms of real sleeps; the budget is 3_000 so a loaded CI
+    // machine has a 10× margin, not the ~3× a 1_000 budget left (the case above
+    // is the converse and its 50ms budget is deliberate — that one must fail).
+    const disposers = await syncTools(client, tools, cfg({ catalogTimeoutMs: 3_000 }))
+    expect(calls).toHaveLength(10)
+    expect(disposers.size).toBe(10)
+    expect(tools.schemas()).toHaveLength(10)
+    // the pages really were handed a deadline derived from the 3000ms budget
+    expect(calls[0]?.opts?.maxTotalTimeout).toBeLessThanOrEqual(3_000)
+    expect(calls[0]?.opts?.maxTotalTimeout).toBeGreaterThan(0)
+  })
+
+  it("bounds each page by min(remaining total, toolCallTimeoutMs)", async () => {
+    const tools = registry()
+    const { client, calls } = pagingClient(10, 0)
+    await syncTools(client, tools, cfg({ catalogTimeoutMs: 1_000, toolCallTimeoutMs: 5 }))
+    expect(calls).toHaveLength(10)
+    for (const call of calls) {
+      expect(call.opts?.timeout).toBe(5) // the smaller of the two
+      expect(call.opts?.maxTotalTimeout).toBeGreaterThan(5) // the total still rules
+      expect(call.opts?.maxTotalTimeout).toBeLessThanOrEqual(1_000)
+    }
+  })
+})
+
+describe("the catalogue caps are DEFENSIVE bounds", () => {
+  it("a realistic catalogue (the stdio stub's 1 tool; a synthetic 100) stays far below MAX_TOOL_ITEMS", () => {
+    // test/stdio-stub.ts exposes exactly one tool ("echo"), and a 100-tool
+    // server is already a large synthetic catalogue. The bound exists so a
+    // broken or hostile paginator cannot spend unbounded work — it is not a
+    // policy number, and it must not creep down toward real catalogues.
+    expect(MAX_TOOL_ITEMS).toBe(10_000)
+    expect(100).toBeLessThan(MAX_TOOL_ITEMS / 10) // a 100-tool catalogue is <1% of the cap
+  })
+
+  it("the cursor cap is pinned BY VALUE too", () => {
+    // MAX_TOOL_PAGES is pinned through its error message (:339-341) and the item
+    // cap above; the cursor cap's literal is what a hostile server runs into, so
+    // a relaxation of it must be a visible, deliberate edit as well.
+    expect(MAX_CURSOR_LENGTH).toBe(4_096)
+  })
+})
+
+describe("catalogMaxItems config validation", () => {
+  const cfg = (catalogMaxItems: number): McpServerConfig => ({
+    transport: "stdio",
+    serverName: "files",
+    command: "x",
+    args: [],
+    catalogMaxItems,
+  })
+
+  it("accepts a positive integer", () => {
+    expect(() => validateMcpConfig(cfg(250))).not.toThrow()
+  })
+
+  it("rejects a non-positive or non-integer value (the toolCallTimeoutMs house rule)", () => {
+    expect(() => validateMcpConfig(cfg(0))).toThrow(/catalogMaxItems/)
+    expect(() => validateMcpConfig(cfg(-1))).toThrow(/catalogMaxItems/)
+    expect(() => validateMcpConfig(cfg(1.5))).toThrow(/catalogMaxItems/)
+  })
+})
+
+describe("catalogTimeoutMs config validation", () => {
+  const cfg = (catalogTimeoutMs: number): McpServerConfig => ({
+    transport: "stdio",
+    serverName: "files",
+    command: "x",
+    args: [],
+    catalogTimeoutMs,
+  })
+
+  it("accepts a positive integer", () => {
+    expect(() => validateMcpConfig(cfg(30_000))).not.toThrow()
+  })
+
+  it("rejects a non-positive or non-integer value (the same house rule)", () => {
+    expect(() => validateMcpConfig(cfg(0))).toThrow(/catalogTimeoutMs/)
+    expect(() => validateMcpConfig(cfg(-1))).toThrow(/catalogTimeoutMs/)
+    expect(() => validateMcpConfig(cfg(1.5))).toThrow(/catalogTimeoutMs/)
   })
 })

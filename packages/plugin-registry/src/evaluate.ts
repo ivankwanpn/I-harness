@@ -46,10 +46,10 @@ import type { Capabilities } from "./capability.ts"
 import type { PluginRecord } from "./types.ts"
 
 /** Per-dimension runtime status of one plugin. */
-export type CapabilityStatus = "ready" | "pending" | "failed" | "unsupported" | "disabled"
+type CapabilityStatus = "ready" | "pending" | "failed" | "unsupported" | "disabled"
 
 /** Overall runtime status of one plugin. */
-export type OverallStatus = "disabled" | "initializing" | "ready" | "degraded" | "failed"
+type OverallStatus = "disabled" | "initializing" | "ready" | "degraded" | "failed"
 
 /**
  * Runtime observations injected by the host (web.ts scans its overlays and the
@@ -77,12 +77,12 @@ export interface Observations {
 }
 
 /** Per-command verdict label for the plugin's expected command set. */
-export type CommandStatus = "ready" | "failed"
+type CommandStatus = "ready" | "failed"
 
 /** The evaluator's per-plugin verdict. */
 export interface EvaluateResult {
   overall: OverallStatus
-  capabilities: Record<"skills" | "commands" | "mcp" | "executable", CapabilityStatus>
+  capabilities: Record<"skills" | "commands" | "mcp" | "agents" | "hooks" | "executable", CapabilityStatus>
   /** One entry per expected command name ([]/{} once the commands dimension is
    * unsupported, pending or the plugin is disabled). */
   commandStatuses: Record<string, CommandStatus>
@@ -107,6 +107,8 @@ export function evaluatePlugin(
         skills: "disabled",
         commands: "disabled",
         mcp: "disabled",
+        agents: "disabled",
+        hooks: "disabled",
         executable: "unsupported", // D2: package-level fact, not runtime state
       },
       commandStatuses: {},
@@ -121,6 +123,8 @@ export function evaluatePlugin(
         skills: apply(caps.skills, "pending"),
         commands: apply(caps.commands, "pending"),
         mcp: apply(caps.mcp, "pending"),
+        agents: apply(caps.agents, "pending"),
+        hooks: apply(caps.hooks, "pending"),
         executable: "unsupported",
       },
       commandStatuses: {},
@@ -134,11 +138,29 @@ export function evaluatePlugin(
   const commands = evaluated !== undefined ? evaluated.status : "unsupported"
   const commandStatuses = evaluated !== undefined ? evaluated.commandStatuses : {}
   const mcp = caps.mcp ? evaluateMcp(observations) : "unsupported"
+  // agents needs no observation, unlike the other three. skills are verified
+  // against a materialized overlay, mcp against a live connection and commands
+  // against the interaction catalog — all host-side steps that can fail after
+  // enable. Agent descriptors are read synchronously by the registry itself from
+  // the installed copy in runtimeInputs(), so advertising the dimension IS the
+  // whole claim. Residual, stated rather than hidden: an `agents/` directory
+  // that exists but holds no readable file reads "ready".
+  const agents = apply(caps.agents, "ready")
+  // hooks joins agents in needing no observation, for the same structural
+  // reason: the descriptor/config paths are read synchronously by the registry
+  // itself from the installed copy, so there is no host-side step between
+  // advertising the dimension and contributing it. Residual, stated rather than
+  // hidden: a `hooks/hooks.json` that exists but parses to zero handlers reads
+  // "ready".
+  const hooks = apply(caps.hooks, "ready")
 
-  const statuses = { skills, commands, mcp }
+  const statuses = { skills, commands, mcp, agents, hooks }
 
   let overall: OverallStatus
-  if (skills === "unsupported" && commands === "unsupported" && mcp === "unsupported") {
+  if (
+    skills === "unsupported" && commands === "unsupported" && mcp === "unsupported" &&
+    agents === "unsupported" && hooks === "unsupported"
+  ) {
     // Nothing advertised → the runtime surface is empty and can never become
     // ready (reached when a refreshed package drops all its dimensions, e.g.
     // an executable-only payload). D2 phase rule → failed.

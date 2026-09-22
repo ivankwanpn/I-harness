@@ -176,7 +176,7 @@
           {
             "name": "shellTimeoutMs (default)",
             "value": "120000",
-            "evidence": "packages/session-executor/src/assembly.ts:278"
+            "evidence": "packages/session-executor/src/assembly.ts:297"
           },
           {
             "name": "shell retention maxBytes (default)",
@@ -185,10 +185,10 @@
           }
         ],
         "evidence": [
-          "packages/session-executor/src/assembly.ts:259",
+          "packages/session-executor/src/assembly.ts:267",
           "packages/session-executor/src/service.ts:241-269",
           "packages/session-executor/src/service.ts:315",
-          "packages/session-executor/src/assembly.ts:702"
+          "packages/session-executor/src/assembly.ts:894-903"
         ],
         "modules": [
           "session-executor",
@@ -624,7 +624,7 @@
         "evidence": [
           "packages/core-agent/src/index.ts:130",
           "packages/core-agent/src/index.ts:324-325",
-          "packages/session-executor/src/assembly.ts:621-631",
+          "packages/session-executor/src/assembly.ts:801-823",
           "packages/session-executor/src/service.ts:256-258",
           "packages/tui/src/backend/embedded.ts:969-980",
           "apps/cli/src/index.ts:424-441",
@@ -749,7 +749,7 @@
       },
       {
         "name": "context-window-resolution-chain",
-        "what": "The effective context window is a per-field chain: explicit user value > profile.modelContexts[modelId] > profile.contextWindow > the value-only model-catalog card > undefined, with maxOutputTokens coming from the card/user maxTokens. A run with no window knowledge anywhere returns undefined, and consumers gate on it fail-closed (no window => no budget ladder, and the compact pass-through stays exactly as the caller wrote it). The compaction engine resolves catalog-first the same way, and the effective policy is a per-model overlay on the global chain keyed by exact 'provider/model' with malformed keys failing loud at resolve.",
+        "what": "The effective context window is a per-field chain: explicit user value > profile.modelContexts[modelId] > profile.contextWindow > the value-only model-catalog card > undefined, with maxOutputTokens coming from the card/user maxTokens. A run with no window knowledge anywhere returns undefined, and consumers gate on it fail-closed (no window => no budget ladder, and the compact pass-through does NOT stay exactly as the caller wrote it -- **corrected 2026-09-15 by re-measurement:** superseded by 73c9b725, packages/session-executor/src/assembly.ts:810-817 drops the caller's compact config when opts.compact is set but no window resolves, leaving compactForAgent undefined with a warning that auto-compaction is DISABLED for the session, so the config reaches the agent only on the branch where a window DID resolve, and that branch does not hand it over unmodified either -- it is carried through with the resolved window substituted, the object being rebuilt at packages/session-executor/src/assembly.ts:804-809 as a spread of the caller's compact config whose contextWindow is overridden by the resolved value (plus an estimated overheadTokens when the caller set none), so the caller's fields are spread and then overridden rather than passed through unchanged). The compaction engine resolves catalog-first the same way, and the effective policy is a per-model overlay on the global chain keyed by exact 'provider/model' with malformed keys failing loud at resolve.",
         "invariants": [
           "A card fills a missing value but NEVER overwrites an explicit one",
           "The card is value-only and never provides a request default"
@@ -766,7 +766,7 @@
           "packages/provider/src/index.ts:117-158",
           "packages/compaction/src/config.ts:151",
           "packages/compaction/src/config.ts:112",
-          "packages/session-executor/src/assembly.ts:617-636"
+          "packages/session-executor/src/assembly.ts:801-828"
         ],
         "modules": [
           "provider",
@@ -972,7 +972,7 @@
           {
             "name": "retention maxBytes default",
             "value": "64000",
-            "evidence": "packages/shell/src/index.ts:130"
+            "evidence": "packages/shell/src/index.ts:132"
           },
           {
             "name": "bash argv / pwsh argv",
@@ -1223,8 +1223,8 @@
           "packages/web/src/index.ts:45-93",
           "packages/web/src/index.ts:95-120",
           "packages/web/src/index.ts:122-124",
-          "packages/provider/src/index.ts:820",
-          "packages/provider/src/index.ts:848-861"
+          "packages/provider/src/index.ts:791",
+          "packages/provider/src/index.ts:819-832"
         ],
         "modules": [
           "web",
@@ -1499,7 +1499,7 @@
         "evidence": [
           "packages/plan-mode/src/index.ts:10-21",
           "packages/plan-mode/src/index.ts:31",
-          "packages/session-executor/src/assembly.ts:597"
+          "packages/session-executor/src/assembly.ts:835"
         ],
         "modules": [
           "plan-mode",
@@ -1625,7 +1625,7 @@
           "packages/session-executor/src/assembly.ts:358-361",
           "packages/fs-search/src/index.ts:87",
           "packages/fs-search/src/index.ts:134",
-          "packages/terminal/src/tool.ts:5-11",
+          "packages/terminal/src/tool.ts:7-24",
           "packages/core-agent/src/execute-tool-calls.ts:125-133"
         ],
         "modules": [
@@ -1908,7 +1908,7 @@
         "evidence": [
           "packages/preset/src/index.ts:26-63",
           "packages/preset/src/default.ts:1-52",
-          "packages/session-executor/src/assembly.ts:592-602"
+          "packages/session-executor/src/assembly.ts:752-778"
         ],
         "modules": [
           "preset",

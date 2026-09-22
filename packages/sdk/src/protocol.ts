@@ -14,10 +14,11 @@
  * SDK Wire Contract v0 — FROZEN (M28 S-1, 2026-09-01).
  *
  * This is the public wire surface for @i-harness/sdk embedders. The version
- * anchor is `PROTOCOL_VERSION` (= 1; exposed as SDK_SERVER_PROTOCOL_VERSION by
- * server.ts). The field-level drift sentinel lives in test/server.test.ts
- * ("initialize wire contract v0 (field-level lock)") — changing any shape
- * below breaks it on purpose.
+ * anchor is `PROTOCOL_VERSION` (= 1 at v0; 3 today — see the v2 section at the
+ * end of this header; exposed as SDK_SERVER_PROTOCOL_VERSION by server.ts). The
+ * field-level drift sentinel lives in test/server.test.ts ("initialize wire
+ * contract v3 (field-level lock)") — changing any shape below breaks it on
+ * purpose.
  *
  * Framing: ONE JSON-RPC 2.0 message per NDJSON line; request ids echo into
  * responses; malformed lines are ignored (never echo, never crash).
@@ -34,9 +35,11 @@
  *   session/status { sessionId, status, error? } — lifecycle transitions
  *
  * Error shape: { jsonrpc: "2.0", id, error: { code, message, data? } }
- * Error codes: -32700 parse · -32600 invalid request (defined; v0 never emits
- *   it — malformed lines are ignored) · -32601 method not found ·
- *   -32602 invalid params · -32603 internal.
+ * Error codes: -32700 parse · -32600 invalid request (v0–v2: defined but never
+ *   emitted — malformed lines are ignored; v3 emits it for a request sent
+ *   before `initialize`, see the v2 section below) · -32601 method not found ·
+ *   -32602 invalid params · -32603 internal · -32000 server overload (M68: the
+ *   reserved server-error range; carries id: null — no request corresponds).
  *
  * Replay semantics: the session/event stream is APPEND-ONLY — events are
  * pushed as they happen and are never replayed. A session's durable state
@@ -75,7 +78,8 @@
  *
  * A v0 client that only speaks the v0 methods is unaffected — the server
  * answers every v0 request per the v0 shapes above. Breaking-change policy
- * is unchanged: v1 (and any later version) stays additive-only.
+ * is unchanged: the default is additive-only; a breaking step bumps the
+ * version — see the v2 section at the end of this header.
  *
  * ────────────────────────────────────────────────────────────────────────────
  * SDK Wire Contract v1.1 addendum — M41b, 2026-09-05 (ADDITIVE-ONLY).
@@ -142,9 +146,15 @@
  *
  * SessionModelState is serialization-only: it contains status, reason, ids,
  * and label, never credentials or a runtime client. Model changes reject an
- * active/queued session, persist the selection, invalidate the live assembly,
- * and resolve a fresh state. Unknown sessions follow the v1 history convention
- * (-32602 with an explicit not-found message).
+ * active/queued session, then rebind the LIVE session's model in place — the
+ * host resolves the selection (including an optional `protocol?`, §4.2②) and
+ * every handle-reachable holder follows through the assembly's handle — and
+ * answer a fresh
+ * state. The durable write that follows CARRIES NO PROTOCOL (§4.3: a session's
+ * protocol is never persisted); the pre-Task-4 teardown of the live assembly
+ * ("invalidate") is GONE, because it existed only to make the change take
+ * effect on the next assembly. Unknown sessions follow the v1 history
+ * convention (-32602 with an explicit not-found message).
  *
  * ────────────────────────────────────────────────────────────────────────────
  * Task 11 addendum — M49, 2026-09-07 (ADDITIVE-ONLY).
@@ -207,19 +217,86 @@
  *         the registry's already-finished answer). Unknown ids follow the
  *         existing not-found semantics: -32602 INVALID_PARAMS with an explicit
  *         "unknown task" message (never a fabricated "already-finished").
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * M68 batch A addendum — 2026-09-22 (ADDITIVE-ONLY).
+ *
+ * PROTOCOL_VERSION stays 2 in THIS batch — batch A is additive-only on its own;
+ * the SAME milestone's batch B (the `initialize` gate, the v2 section below) is
+ * what takes the number to 3. ONE new error code; no existing shape changes:
+ *
+ *   SERVER_OVERLOAD = -32000 — the "Reserved for implementation-defined
+ *   server-errors" range (JSON-RPC 2.0, -32000…-32099). It is emitted by the
+ *   HOST's bounded outbound queue (src/bounded-writer.ts), never by a request
+ *   handler: when a connection's unwritten output would exceed the configured
+ *   bound, the writer drops the queued frames, writes exactly ONE failure
+ *   frame with `id: null` (the JSON-RPC convention for an error with no
+ *   corresponding request — RpcFailure.id is now `number | string | null`),
+ *   and ends the output stream. So the frame is TERMINAL: a client that sees
+ *   it should reconnect and resume through the EXISTING session/history pull
+ *   surface — there is no in-band resync frame, and none is added here.
+ *
+ * A client that stays inside the bound sees no new frame at all: the normal
+ * write path is byte-identical to v1.1 (the writer only forwards frames).
+ * Embedders driving their own output stream keep the same choice they always
+ * had: the bound is the host's (the CLI wires it to stdout), not the server's.
+ *
+ * ────────────────────────────────────────────────────────────────────────────
+ * SDK Wire Contract v2 — **BREAKING** (M68 batch B, 2026-09-22).
+ *
+ * PROTOCOL_VERSION is now 3. This is NOT an additive step — the versioning
+ * rules above are what it pays: bump PROTOCOL_VERSION, document the migration.
+ *
+ *   **v2: `initialize` is the GATE.** A request sent before the connection has
+ *   handshaken is refused:
+ *
+ *     -32600 INVALID_REQUEST
+ *     message: "not initialized: send initialize first"
+ *     data:    { reason: "not_initialized" }
+ *
+ *   Sequencing is the whole change — no existing shape/field/code moved. The
+ *   refused code has been defined since v0 and had no producer until now
+ *   (malformed lines are IGNORED, so the framing path never emitted it); a
+ *   request out of order is exactly the "invalid request" it names, and the
+ *   BREAKING part is carried by the version number, not by a new error code.
+ *   `shutdown` is EXEMPT from the gate, deliberately: a half-initialized client
+ *   must have a way out.
+ *
+ *   initialize { clientInfo? } → the reply is UNCHANGED in shape (name, version,
+ *   protocolVersion: 3, capabilities — the rows are the v1.1 set, still only
+ *   additive). The PARAMS are now read: `clientInfo?: { name?: string;
+ *   version?: string }` is captured ONCE for the connection at the first
+ *   initialize (readable through the server's `clientInfo()`; a connection-
+ *   scoped fact — the session event log cannot derive it, so it is neither
+ *   persisted nor logged). A second `initialize` is IDEMPOTENT: same reply, no
+ *   error, and the FIRST captured identity wins — the params of a second call
+ *   are never read. Present-but-not-an-object params/clientInfo captures
+ *   nothing and warns; it never rejects the handshake.
+ *
+ * Migration: the client sends `initialize` before its first request.
+ * `HarnessClient.initialize()` is already an explicit method, so no client API
+ * changes; an embedder driving the raw wire adds one frame. Everything else is
+ * unchanged: every other method, every notification shape, the capability rows,
+ * the append-only session/event semantics, and the error-code meanings.
  */
 
 import { createInterface, type Interface } from "node:readline"
 import type { Readable, Writable } from "node:stream"
 import type { SessionEvent } from "@i-harness/core-session"
 
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 export const PARSE_ERROR = -32700
 export const INVALID_REQUEST = -32600
 export const METHOD_NOT_FOUND = -32601
 export const INVALID_PARAMS = -32602
 export const INTERNAL_ERROR = -32603
+
+/** M68 batch A: the host's bounded outbound queue cut this connection (see the
+ * addendum in the header). JSON-RPC reserves -32000…-32099 for
+ * implementation-defined server errors; the frame carries `id: null` because no
+ * request corresponds to it, and it is the LAST frame on the stream. */
+export const SERVER_OVERLOAD = -32000
 
 export interface RpcRequest {
   jsonrpc: "2.0"
@@ -242,7 +319,9 @@ export interface RpcSuccess {
 
 export interface RpcFailure {
   jsonrpc: "2.0"
-  id: number | string
+  /** `null` is the JSON-RPC convention for an error with no corresponding
+   * request — M68's SERVER_OVERLOAD frame is the one producer. */
+  id: number | string | null
   error: { code: number; message: string; data?: unknown }
 }
 
@@ -282,12 +361,22 @@ export interface SessionIdResult {
   sessionId: string
 }
 
-/** Public SDK selection shape. Kept structurally identical to the durable
- * SessionMeta field without coupling the wire contract to persistence. */
+/** Public SDK selection shape. Mirrored from the durable SessionMeta field
+ * structurally, not by dependency — and it carries only what this wire lets an
+ * embedder SET. `protocol?` rides the REBIND path only (design §4.2②, §6:
+ * `setSessionModel({…, protocol?})` → the LIVE session changes wire now). It is
+ * NEVER persisted (§4.3: a session's protocol is written to no file) — the host
+ * routes it to the live assembly and strips it before any durable write, and
+ * the guard for that is the sdk-wire e2e "never persists a protocol" case. The
+ * field is deliberately `string`, not the settings union: this file is the
+ * zero-dependency wire contract; the host validates it against the five
+ * protocols it can resolve, and refuses an unknown one loudly rather than
+ * dropping it. */
 export interface SessionModelSelection {
   provider: string
   model: string
   reasoningEffort?: string
+  protocol?: string
 }
 
 /** Serializable per-session model state. Runtime clients and credentials are
@@ -480,7 +569,7 @@ export function makeSuccess(id: number | string, result: unknown): RpcSuccess {
   return { jsonrpc: "2.0", id, result }
 }
 
-export function makeFailure(id: number | string, code: number, message: string, data?: unknown): RpcFailure {
+export function makeFailure(id: number | string | null, code: number, message: string, data?: unknown): RpcFailure {
   return data === undefined
     ? { jsonrpc: "2.0", id, error: { code, message } }
     : { jsonrpc: "2.0", id, error: { code, message, data } }

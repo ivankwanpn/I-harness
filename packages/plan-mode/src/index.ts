@@ -32,7 +32,3 @@ export function ensurePlanModeTool(tools: ToolRegistry, session: Session): void 
   if (tools.get("exit_plan_mode")) return
   for (const tool of createPlanModeTools(session)) tools.register(tool)
 }
-
-export function withdrawPlanModeTool(tools: ToolRegistry): void {
-  tools.unregister("exit_plan_mode")
-}

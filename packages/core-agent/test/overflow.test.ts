@@ -263,3 +263,49 @@ function createEmptyRegistry() {
     genToolCatalog: () => [], verifyToolCatalog: () => {},
   } as never
 }
+
+describe("the summarizer inherits the main request's shape (M5/D2)", () => {
+  it("a real compaction sends the SAME system prompt and tools as the turn request", async () => {
+    // The failure mode this pins is SILENT: if the agent forgets to hand the
+    // engine the request shape, compaction still succeeds, still writes a
+    // summary, and nothing anywhere reports a problem — the only symptom is that
+    // the whole conversation is re-read at full price, forever. So the assertion
+    // is on the wire, not on the outcome.
+    const session = createSession()
+    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(200) })
+    const seen: Array<{ systemPrompt: string; tools: number; lastRole: string }> = []
+    const model = {
+      async *stream(req: { systemPrompt: string; tools: unknown[]; messages: Array<{ role: string }> }) {
+        seen.push({ systemPrompt: req.systemPrompt, tools: req.tools.length, lastRole: req.messages.at(-1)?.role ?? "" })
+        yield { type: "text/chunk", text: "answer" } as never
+        yield { type: "end" } as never
+      },
+    }
+    // A registry that actually REPORTS one schema — `createEmptyRegistry()` is a
+    // stub whose schemas() is `() => []`, so a registration on it is a no-op and
+    // both requests would show 0 tools, passing an assertion that proves nothing.
+    const tools = {
+      ...(createEmptyRegistry() as Record<string, unknown>),
+      schemas: () => [{ name: "read", description: "d", inputSchema: {}, exposure: "direct" }],
+    } as never
+    const agent = createAgent(ctx, {
+      session,
+      tools,
+      model,
+      systemPrompt: "SYS-PROMPT",
+      maxTurns: 10,
+      compact: { contextWindow: 200, thresholdRatio: 0.95, retainTokens: 50, maxTokens: 16, minSummaryChars: 1 },
+      budget: { contextWindow: 200, reserveRatio: 0.5 },
+    } as never)
+    await agent.run("work", undefined)
+    expect(session.events.some((e) => e.type === "compaction/end")).toBe(true)
+
+    // Every call — the summarizer's and the turn's — carries the shape. Before
+    // D2 the summarizer's had `systemPrompt: ""` and `tools: 0`.
+    expect(seen.length).toBeGreaterThan(1)
+    for (const req of seen) {
+      expect(req.systemPrompt).toBe("SYS-PROMPT")
+      expect(req.tools).toBe(1)
+    }
+  })
+})

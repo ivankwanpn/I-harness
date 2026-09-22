@@ -66,14 +66,181 @@ describe("createSessionService", () => {
         label: "deepseek:deepseek-chat",
       })
       const assembly = await assemblyPromise
-      expect(assembly.model).toBe(model)
+      // R-B1 (phase B): `assembly.model` is the assembly's ONE stable handle —
+      // not the binding's client object. Every handle-reachable holder reads
+      // through the handle, and the handle is what FORWARDS to the bound client,
+      // so the identity form of this assertion ("assembly.model IS the pending
+      // binding's client") no longer holds by construction. The fact it pinned
+      // is pinned behaviorally instead: the turn's request lands in THIS client's
+      // own recorder (exactly one request), and the resolution count stays 1.
+      // The handle's identity across a rebind is pinned in test/assembly.test.ts.
       expect(assembly.modelLabel).toBe("deepseek:deepseek-chat")
       await expect(assembly.agent.run("hello")).resolves.toMatchObject({ finalText: "real" })
+      expect(requests).toHaveLength(1)
       expect(requests[0]?.reasoningEffort).toBe("high")
       expect(requests[0]?.tools.map((tool) => tool.name)).toContain("get_context_remaining")
       expect(calls).toBe(1)
     } finally {
       release()
+      await service.close()
+    }
+  }, 60_000)
+
+  it("R-B1 holder 7 — the service dispenses the LIVE assembly, so a rebind reaches a submitted turn", async () => {
+    // R-B1's table row 7 is the service's memoised binding (bindingFor →
+    // `modelBindings.set(sessionId, pending)`, service.ts:243, consumed as
+    // `model: binding.model,` at :322). What is REACHABLE from it is the
+    // assembly the service hands out: `assemblyFor` is cache-first and returns
+    // the stored reference (service.ts:632 `assemblyFor: getOrCreate,`), so a
+    // rebind applied to that object is a rebind applied to the session the
+    // service is running — the object Task 4's `SessionService.rebindModel`
+    // mutates through `assembly.setModel`/`setReasoningEffort` (service.ts:263-284).
+    //
+    // LIMITER, recorded not asserted (Task 4's F1 named it; Task 4 resolved it
+    // by making the reporting follow — the complete rebind is
+    // `service.rebindModel`, pinned in the next test): the RAW `setModel` call
+    // below moves SPENDING only. The memoised binding still holds the old
+    // client, so `modelState` (which reads it) and `assembly.modelLabel` (fixed
+    // at construction) would keep naming the OLD provider:model — the two
+    // surfaces `rebindModel` refreshes. Nothing here is deleted: a raw
+    // `setModel` genuinely does not update reporting, and that is the boundary
+    // the next test closes on the service's public path.
+    const recording = (text: string) => {
+      const requests: LLMRequest[] = []
+      const model: ModelClient = {
+        async *stream(request) {
+          requests.push(request)
+          yield { type: "text/chunk", text }
+          yield { type: "end" }
+        },
+      }
+      return { model, requests }
+    }
+    const first = recording("old endpoint")
+    const second = recording("new endpoint")
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one" },
+      }),
+    })
+
+    try {
+      const assembly = await service.assemblyFor("s1")
+      // cache-first: the SAME live object on every call — the property the
+      // rebind path depends on. (`modelBindings` is where `first.model` is held;
+      // this is the assembly, not the binding.)
+      await expect(service.assemblyFor("s1")).resolves.toBe(assembly)
+
+      assembly.setModel(second.model)
+
+      await service.submit("s1", "go", new AbortController().signal)
+      // The turn ran through the service's own lane and its answer is the SECOND
+      // client's script — a turn that stayed on the binding's client would have
+      // answered "old endpoint".
+      expect(deriveMessages(assembly.session).at(-1)?.content).toBe("new endpoint")
+      expect(second.requests.length).toBeGreaterThan(0)
+      expect(first.requests).toHaveLength(0)
+    } finally {
+      await service.close()
+    }
+  }, 60_000)
+
+  it("Task 4 (F1): rebindModel retargets the LIVE handle AND the reporting binding", async () => {
+    // The two surfaces F1 named, closed on the service's OWN path (the SDK's
+    // `session/model/set` relay installs a host-resolved binding through this
+    // method). Before Task 4, a rebind left `modelState` (the memoised binding)
+    // and `assembly.modelLabel` naming the OLD provider:model, and only
+    // `closeSession` cleared the memo — which this task deliberately stops
+    // doing (a live rebind must not tear the assembly down).
+    const recording = (text: string) => {
+      const requests: LLMRequest[] = []
+      const model: ModelClient = {
+        async *stream(request) {
+          requests.push(request)
+          yield { type: "text/chunk", text }
+          yield { type: "end" }
+        },
+      }
+      return { model, requests }
+    }
+    const first = recording("old endpoint")
+    const second = recording("new endpoint")
+    const rebound = {
+      model: second.model,
+      providerId: "fixture",
+      modelId: "two",
+      label: "fixture:two",
+      reasoningEffort: "high" as const,
+    }
+    const service = createSessionService({
+      workspace: process.cwd(),
+      modelPolicy: "required",
+      // The construction-time effort is "low": Task 4 review F-1 was that a live
+      // rebind moved the client but left this frozen at the construction value —
+      // the RPC answered `ready` and the durable header recorded "high" while
+      // the wire kept sending "low".
+      modelBindingFor: async () => ({
+        status: "ready",
+        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one", reasoningEffort: "low" },
+      }),
+    })
+
+    try {
+      const assembly = await service.assemblyFor("s1")
+      await expect(service.modelState("s1")).resolves.toEqual({
+        status: "ready",
+        providerId: "fixture",
+        modelId: "one",
+        label: "fixture:one",
+      })
+
+      // true = an assembly WAS live and was retargeted in place. The reporting
+      // follows in the same call: the memoised binding (modelState) and the
+      // assembly's label both name the NEW provider:model.
+      expect(service.rebindModel("s1", rebound)).toBe(true)
+      await expect(service.modelState("s1")).resolves.toEqual({
+        status: "ready",
+        providerId: "fixture",
+        modelId: "two",
+        label: "fixture:two",
+      })
+      expect(assembly.modelLabel).toBe("fixture:two")
+
+      // ...and the spending really moved: the next turn's request lands in the
+      // SECOND recorder and the answer is that client's script.
+      await service.submit("s1", "go", new AbortController().signal)
+      expect(deriveMessages(assembly.session).at(-1)?.content).toBe("new endpoint")
+      expect(second.requests.length).toBeGreaterThan(0)
+      expect(first.requests).toHaveLength(0)
+      // F-1, pinned on the WIRE: the effort the request carries is the rebind's,
+      // not the construction binding's. This asserts the request, never the
+      // binding — a frozen deps property sends "low" here.
+      expect(second.requests[0]?.reasoningEffort).toBe("high")
+
+      // ...and a rebind whose selection names NO effort CLEARS the old one: the
+      // previous value must not survive as a stale field on later requests.
+      service.rebindModel("s1", { model: second.model, providerId: "fixture", modelId: "two", label: "fixture:two" })
+      await service.submit("s1", "again", new AbortController().signal)
+      expect(second.requests[1]?.reasoningEffort).toBeUndefined()
+
+      // Control (the reviewer's dormant probe): with NO live assembly the new
+      // binding is what the next build — still in this process — starts from,
+      // effort included. The gap was specific to the live path; this half
+      // already worked and must keep working.
+      expect(service.rebindModel("s2", rebound)).toBe(false)
+      await expect(service.modelState("s2")).resolves.toEqual({
+        status: "ready",
+        providerId: "fixture",
+        modelId: "two",
+        label: "fixture:two",
+      })
+      await service.assemblyFor("s2")
+      await service.submit("s2", "dormant", new AbortController().signal)
+      expect(second.requests[2]?.reasoningEffort).toBe("high")
+    } finally {
       await service.close()
     }
   }, 60_000)
@@ -243,7 +410,13 @@ describe("createSessionService", () => {
       await service.closeSession("s1")
 
       const assembly = await service.assemblyFor("s1")
-      expect(assembly.model).toBe(models[1])
+      // R-B1 (phase B): the assembly exposes a stable handle, not the binding's
+      // client object, so the identity form of this assertion ("assembly.model
+      // IS models[1]") no longer holds by construction. What it pinned — the
+      // invalidated FIRST resolution is not in force; this assembly runs on the
+      // SECOND client — is pinned behaviorally: "second" is the second client's
+      // script step, which the first client does not carry.
+      await expect(assembly.agent.run("go")).resolves.toMatchObject({ finalText: "second" })
       expect(assembly.modelLabel).toBe("fixture:second")
       await expect(service.modelState("s1")).resolves.toMatchObject({
         status: "ready",

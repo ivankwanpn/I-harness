@@ -11,7 +11,6 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "tsx": "^4.19.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "@i-harness/acp": "workspace:*",
     "@i-harness/agent-team": "workspace:*",
@@ -22,6 +21,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/credentials": "workspace:*",
+    "@i-harness/diagnostics": "workspace:*",
     "@i-harness/exec": "workspace:*",
     "@i-harness/fs": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
@@ -29,6 +29,8 @@
     "@i-harness/guard-repeat-tool": "workspace:*",
     "@i-harness/guard-retry": "workspace:*",
     "@i-harness/guard-timeout": "workspace:*",
+    "@i-harness/harness-home": "workspace:*",
+    "@i-harness/hooks": "workspace:*",
     "@i-harness/instructions": "workspace:*",
     "@i-harness/interaction": "workspace:*",
     "@i-harness/jobs": "workspace:*",
@@ -61,12 +63,10 @@
     "@i-harness/telemetry": "workspace:*",
     "@i-harness/terminal": "workspace:*",
     "@i-harness/tool-search": "workspace:*",
-    "@i-harness/web": "workspace:*",
-    "@i-harness/web-host": "workspace:*",
     "@i-harness/workflow": "workspace:*",
     "@i-harness/workspace": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
-    "@i-harness/tui-app": "workspace:*"
+    "tsx": "^4.19.0"
   },
   "bin": {
     "i-harness": "./bin/i-harness.js",

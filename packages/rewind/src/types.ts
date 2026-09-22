@@ -191,7 +191,7 @@ export interface RewindEvent {
   fileOps: Array<{ path: string; op: "restore" | "delete" }>
 }
 
-export interface RewindExecuteError {
+interface RewindExecuteError {
   path: string
   message: string
 }

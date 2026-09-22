@@ -86,11 +86,12 @@ describe("i-harness sdk end-to-end (real subprocess)", () => {
         env: { IH_CONFIG_DIR: configDir },
       })
       try {
-        // handshake: the server answers initialize — v1/v1.1: protocolVersion
-        // still 2; the v1 rows plus the v1.1 additive capability rows
+        // handshake: the server answers initialize — v3 (M68 batch B:
+        // initialize is the GATE, so this frame must come before any other);
+        // the v1 rows plus the v1.1 additive capability rows, shape unchanged
         const info = (await client.request("initialize", {})) as ServerInfo
         expect(info.name).toBe("i-harness")
-        expect(info.protocolVersion).toBe(2)
+        expect(info.protocolVersion).toBe(3)
         expect(info.capabilities["session-history"]).toEqual(["1"])
         expect(info.capabilities["session-list"]).toEqual(["1"])
         expect(info.capabilities["session-cancel"]).toEqual(["1"])

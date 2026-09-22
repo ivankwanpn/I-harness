@@ -30,24 +30,13 @@
 
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs"
 import { join, resolve, relative } from "node:path"
-import { carrierClass } from "./lib-union.mjs"
+import { carrierClass, SOURCE_PATHS, missingSourceRoots } from "./lib-union.mjs"
 
 const ROOT = resolve(process.argv[1], "../../..")
 const DATA = join(ROOT, "docs/audit/data")
 const args = process.argv.slice(2)
 const sampleIdx = args.indexOf("--sample")
 const SAMPLE_N = sampleIdx >= 0 ? Number(args[sampleIdx + 1]) : 0
-
-/** Source roots, mirroring extract-commands.mjs. */
-const SOURCE_PATHS = {
-  ih: "D:/I-harness-main",
-  dsh: "D:/agent-complete/deepseek-harness-dsh-v0.1.5-rc.2",
-  codex: "D:/agent-complete/codex-rust-v0.149.1",
-  opencode: "D:/agent-complete/opencode-1.18.30",
-  "opencode-fork": "D:/agent-complete/opencode-fork-private-999.0.15",
-  grok: "D:/agent-complete/grok-build-main",
-  "cc-custom": "D:/opencode-bugfix/cc-custom",
-}
 
 function readJson(p) {
   try {
@@ -111,8 +100,8 @@ const stats = {
 const lineUse = new Map()
 const cells = []
 const dirOnly = []
+const unattributed = []
 const docOnly = []
-
 
 const LEADING_CLASSES = ["implementation", "manifest", "registry-listing", "alias-or-helper", "doc-comment", "type-decl", "blank"]
 const leadingTally = Object.fromEntries(LEADING_CLASSES.map((c) => [c, 0]))
@@ -295,6 +284,30 @@ function walkEvidence(node, ctx = { source: null, label: null }, out = []) {
   return out
 }
 
+// A source root that does not exist turns every citation under it into a
+// "missing file", so ONE wrong path reads as thousands of bad citations --
+// measured: 6116 phantom problems against a baseline of 0. Refuse instead of
+// reporting someone else's directory layout as a data defect.
+{
+  const missing = missingSourceRoots()
+  if (missing.length && !args.includes("--allow-missing-roots")) {
+    console.error("SOURCE ROOTS MISSING -- refusing to run.")
+    console.error("")
+    console.error("A missing root does not fail loudly: it reports every citation")
+    console.error("under it as a missing file. Point the roots with")
+    console.error("scripts/audit/source-paths.local.json (gitignored) or the")
+    console.error("IH_AUDIT_SOURCE_PATHS env var, or pass --allow-missing-roots")
+    console.error("to check only the sources that are present.")
+    console.error("")
+    for (const m of missing) console.error(`  ${m.key.padEnd(15)} ${m.path}`)
+    console.error(`\n${missing.length} of ${Object.keys(SOURCE_PATHS).length} roots absent.`)
+    process.exit(2)
+  }
+  if (missing.length) {
+    console.error(`! --allow-missing-roots: proceeding without ${missing.map((m) => m.key).join(", ")}`)
+  }
+}
+
 const files = readdirSync(DATA).filter((f) => f.endsWith(".json") && !f.includes("-surface"))
 for (const f of files) {
   // An enriched file SUPERSEDES its raw extraction; reading both would verify
@@ -342,8 +355,94 @@ for (const f of files) {
   // function needing to know the schema.
   if (f.includes("-d3-")) {
     for (const found of walkEvidence(data)) {
-      if (!found.source || !SOURCE_PATHS[found.source]) continue
-      checkClaim(found.source, { rawName: found.label }, "mechanism", found.claim, found.evidence)
+      if (found.source && SOURCE_PATHS[found.source]) {
+        checkClaim(found.source, { rawName: found.label }, "mechanism", found.claim, found.evidence)
+        continue
+      }
+      // An evidence-bearing node with no resolvable source used to be SKIPPED
+      // SILENTLY here, which is the one thing this audit keeps saying not to do.
+      // It hid every forkDeltas citation: that array is a SIBLING of opencode's
+      // `upstream`/`fork` subtrees, so it inherits no source, and 1,532 citations
+      // went unchecked while the report still said "7110/7110 resolved".
+      //
+      // The correct model for a delta is PER-CITATION resolution, not one source
+      // for the node: a fork delta legitimately cites BOTH trees, and its prose
+      // says which side is which ("upstream composes ... whereas the fork
+      // exposes ..."). So each citation is resolved against every root and
+      // attributed to whichever contains it. A citation matching NO root is a
+      // real defect; a node spanning two roots is normal for a delta and is
+      // recorded as informational rather than reported as a problem.
+      const rootsUsed = new Set()
+      const byRoot = new Map()
+      let unresolved = 0
+      let firstUnresolved = null
+      const ambiguous = []
+      for (const cite of found.evidence) {
+        // A fork delta may name the tree explicitly (`fork:path:line`, written by
+        // qualify-forkdelta-citations.mjs) because the same path can exist in both
+        // trees as different files. Honour the prefix when present.
+        const qm = String(cite).match(/^(fork|upstream):(.*)$/)
+        const hint = qm ? qm[1] : null
+        const { path: rel, line, endLine } = parseCitation(qm ? qm[2] : cite)
+        const roots = hint ? [hint === "fork" ? "opencode-fork" : "opencode"] : Object.keys(SOURCE_PATHS)
+        // A path can exist in MORE THAN ONE source tree as different files --
+        // `packages/core/src/command.ts` is 65 lines upstream and longer in the
+        // fork -- so existence alone picks the wrong root and then reports the
+        // fork's line numbers as out of range against upstream's file. The root
+        // is therefore chosen by FILE AND LINE together.
+        const fits = []
+        const hasFile = []
+        for (const src of roots) {
+          const abs = join(SOURCE_PATHS[src], rel ?? "")
+          if (!rel || !existsSync(abs)) continue
+          hasFile.push(src)
+          if (line == null) {
+            fits.push(src)
+            continue
+          }
+          const ls = lines(abs)
+          if (ls && line <= ls.length && (endLine == null || endLine <= ls.length)) fits.push(src)
+        }
+        const chosen = fits[0] ?? hasFile[0]
+        if (chosen) {
+          rootsUsed.add(chosen)
+          // Group citations BY the root they resolved in. A delta node spans two
+          // trees, so calling checkClaim once per root with the WHOLE evidence
+          // array makes every citation from the other tree fail against this one
+          // -- which is what produced the last 32 flags.
+          if (!byRoot.has(chosen)) byRoot.set(chosen, [])
+          byRoot.get(chosen).push(qm ? qm[2] : String(cite))
+          if (hasFile.length > 1 && fits.length !== 1) {
+            ambiguous.push({ cite, inTrees: hasFile })
+          }
+        } else {
+          unresolved++
+          if (!firstUnresolved) firstUnresolved = cite
+        }
+      }
+      unattributed.push({
+        label: found.label,
+        roots: [...rootsUsed],
+        citations: found.evidence.length,
+        unresolved,
+        ambiguous,
+      })
+      // checkClaim per root, with ONLY that root's citations. Passing the whole
+      // evidence array to every root -- which is what this did before -- makes
+      // each tree's citations fail against the other tree, and that is what
+      // produced the last 32 flags on nodes that span both.
+      for (const [src, cites] of byRoot) {
+        checkClaim(src, { rawName: found.label }, "mechanism", found.claim, cites)
+      }
+      if (unresolved > 0) {
+        stats.missingFile += unresolved
+        problems.push({
+          source: "(no source)",
+          cmd: found.label,
+          kind: "UNRESOLVED_IN_ANY_TREE",
+          detail: `${unresolved} of ${found.evidence.length} citation(s) resolve in no source tree, e.g. ${firstUnresolved}`,
+        })
+      }
     }
   }
 }
@@ -422,8 +521,15 @@ if (SAMPLE_N > 0) {
     }
   }
   if (problems.length) {
-    console.log(`\nproblems (${problems.length}), first 30:`)
-    for (const p of problems.slice(0, 30)) console.log(`  ${p.kind.padEnd(24)} ${p.source}/${p.cmd}  ${p.detail}`)
+    // The default cap keeps the output readable, but it HIDES problems: with 52
+    // findings only the first 30 were visible, and the 4 remaining BLANK_LINE
+    // entries sat past the cut -- invisible to anyone reading the summary, which
+    // reports the true count. `--all-problems` prints every one. Default is
+    // unchanged so existing runs diff identically.
+    const showAll = process.argv.includes("--all-problems")
+    const shown = showAll ? problems.length : Math.min(problems.length, 30)
+    console.log(`\nproblems (${problems.length})${showAll ? "" : ", first 30 — pass --all-problems to see every one"}:`)
+    for (const p of problems.slice(0, shown)) console.log(`  ${p.kind.padEnd(24)} ${p.source}/${p.cmd}  ${p.detail}`)
   } else {
     console.log("\nno mechanical citation problems found")
   }

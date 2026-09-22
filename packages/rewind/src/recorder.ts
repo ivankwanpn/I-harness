@@ -24,9 +24,17 @@
 // commit(anchorSeq) AFTER the caller appended the point — a crash in between
 // leaves a sidecar that recoverPending() recognises as already-recorded.
 import { readFile } from "node:fs/promises"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { normalizeRelPath, workspaceAbsPath } from "./path.ts"
 import { sha256Hex, type RewindStore } from "./store.ts"
 import type { FileStatus, RewindFileRecord, RewindPendingTurn, RewindPoint } from "./types.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report; the phase is
+// `session` because the subject is the session's own durable journal (a
+// pending-turn write that failed — recording continues, the failure is loud).
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("session")
 
 export interface RewindTakeResult {
   /** sha256 blob id of the pre-image; null when the file did not exist. */
@@ -58,7 +66,7 @@ export interface RewindRecorderOptions {
 }
 
 const defaultDurabilityError = (err: unknown): void => {
-  console.warn(`[rewind] pending-turn persistence failed: ${err instanceof Error ? err.message : String(err)}`)
+  d.warn(`[rewind] pending-turn persistence failed: ${err instanceof Error ? err.message : String(err)}`)
 }
 
 export class RewindRecorder {

@@ -5,6 +5,7 @@ import {
   ListRootsRequestSchema,
   ListToolsResultSchema,
   ReadResourceResultSchema,
+  ToolListChangedNotificationSchema,
 } from "@modelcontextprotocol/sdk/types.js"
 import { UnauthorizedError, type OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js"
 import type { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
@@ -49,7 +50,10 @@ export function resolveRootUris(roots: string[]): string[] {
 }
 
 export interface ConnectedMcpClient {
-  listTools(cursor?: string): Promise<{ tools: McpTool[]; nextCursor?: string }>
+  /** M6-D2: `opts` is optional — the drain passes the page's bound (the
+   *  remaining total budget) through to the SDK request; every pre-existing
+   *  fake/implementation that omits it keeps compiling unchanged. */
+  listTools(cursor?: string, opts?: { timeout?: number; maxTotalTimeout?: number }): Promise<{ tools: McpTool[]; nextCursor?: string }>
   callTool(name: string, args: unknown, signal?: AbortSignal): Promise<McpCallResult>
   listResources(server?: string, signal?: AbortSignal): Promise<unknown[]>
   readResource(server: string, uri: string, signal?: AbortSignal): Promise<unknown>
@@ -64,6 +68,18 @@ export interface ConnectedMcpClient {
   onDisconnect?(cb: () => void): void
   /** M26-B1b: resources/templates/list—optional（既有 fake 不實作也零改動）。 */
   listResourceTemplates?(signal?: AbortSignal): Promise<unknown[]>
+}
+
+/** M6-D3: options for `createConnectedClient`. `onToolsChanged` is the
+ *  generation's `notifications/tools/list_changed` observation point: the SDK
+ *  callback only REPORTS the announcement — the observer (the reconnect
+ *  supervisor) marks its catalogue stale and rebuilds it later, at a safe
+ *  boundary. Nothing here refetches: `ClientOptions.listChanged.autoRefresh`
+ *  would drain `tools/list` synchronously INSIDE the notification callback,
+ *  which the spec forbids. */
+export interface McpConnectOptions {
+  /** Fired when the server announces `notifications/tools/list_changed`. */
+  onToolsChanged?: () => void
 }
 
 const MAX_AUTH_ATTEMPTS = 3
@@ -111,7 +127,7 @@ async function connectWithAuth(
   }
 }
 
-export async function createConnectedClient(config: McpServerConfig): Promise<ConnectedMcpClient> {
+export async function createConnectedClient(config: McpServerConfig, opts?: McpConnectOptions): Promise<ConnectedMcpClient> {
   // M26-B1: OAuth 組裝——先綁回調端口才能得出 redirectUrl（端口 0 = 系統分配；EADDRINUSE fail-closed）。
   let oauthServer: OAuthCallbackServer | undefined
   let oauthProvider: IHOAuthClientProvider | undefined
@@ -160,6 +176,17 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
     // M26-B1b: roots 能力 + 伺服器→客戶端 roots/list 請求（都必須在 connect 前——capabilities
     // 隨 initialize 廣播；request handler 由 Protocol 在 connect 時安裝）。
     client.registerCapabilities({ roots: { listChanged: false } })
+    // M6-D3: the catalogue's staleness signal. Registered on the LOW-level
+    // Protocol API (not `ClientOptions.listChanged`, whose autoRefresh would
+    // refetch tools/list synchronously inside this very callback) and BEFORE
+    // connect() — the SDK reads its handler map at dispatch time, and this
+    // registration is not gated on the server advertising the capability
+    // (client/index.js's `_setupListChangedHandlers` gate applies only to the
+    // high-level option). The callback does ONE thing: report.
+    const onToolsChanged = opts?.onToolsChanged
+    if (onToolsChanged !== undefined) {
+      client.setNotificationHandler(ToolListChangedNotificationSchema, () => onToolsChanged())
+    }
     client.setRequestHandler(ListRootsRequestSchema, () => ({
       roots: resolveRootUris(config.roots ?? []).map((uri) => ({
         uri,
@@ -216,10 +243,13 @@ export async function createConnectedClient(config: McpServerConfig): Promise<Co
 
     return {
       // Paginated shape (nextCursor) so syncTools can loop on cursor (Task 4).
-      async listTools(cursor) {
+      // M6-D2: the drain's per-page bound travels as the SDK's third argument
+      // (RequestOptions); absent opts keep the SDK's own default timeout.
+      async listTools(cursor, opts) {
         const response = await guardAuth(() => client.request(
           { method: "tools/list", params: cursor !== undefined ? { cursor } : {} } as never,
           ListToolsResultSchema,
+          opts,
         ))
         return {
           tools: response.tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.inputSchema })),

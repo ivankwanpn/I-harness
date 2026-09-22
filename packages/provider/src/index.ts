@@ -5,6 +5,10 @@ import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
 import { createGeminiClient } from "@i-harness/llm-gemini"
 import { createBedrockClient } from "@i-harness/llm-bedrock"
+// Type-only: the per-row protocol is the SAME closed set settings validates
+// (`SettingsProviderProtocol`) — a fourth copy of the five names would be a
+// fourth place to edit one enum. Erased at build time, so no runtime edge.
+import type { SettingsProviderProtocol } from "@i-harness/settings"
 
 export type ProviderProtocol = "openai-responses" | "openai-compatible" | "anthropic-messages" | "gemini" | "bedrock"
 
@@ -15,6 +19,16 @@ export interface ProviderModelContext {
 
 export interface ProviderProfile {
   name: string
+  /** The model-card FAMILY this route's per-model metadata comes from — a key
+   * of `model-catalog.json`'s `families` (`deepseek`, `gemini`, …).
+   *
+   * `name` is the ROUTE identity: it keys the registry and appears as the
+   * directory route, and it is the user's label. A user who opens a SECOND route
+   * for one vendor (`deepseek1`, for a second API key) therefore has a name that
+   * is not the vendor's, and before this field that route resolved no model
+   * metadata at all. Absent → the route name, which is the status quo for the
+   * common case where a route IS named after its vendor. */
+  catalog?: string
   displayName: string
   protocol: ProviderProtocol
   baseUrl?: string
@@ -58,48 +72,24 @@ export function resolveModelContext(
 // absence stance); a request maxTokens ABOVE the card is fail-loud at the
 // model end (no clamping).
 //
-// Seed values, source-annotated (updates must annotate their source too):
-// - deepseek: DeepSeek docs — 1,048,576 context / 384,000 max output for the
-//   v4 line (design spec §1.1 carries the same trio).
-// - gemini: Google AI docs — Gemini 2.5 series: 1,048,576 context / 65,536 max
-//   output; Gemini 1.5 Pro: 2,097,152 context / 8,192 max output.
-// - bedrock: Anthropic Claude 3.5 family docs — 200,000 context / 8,192 max
-//   output (claude-3-5-sonnet-20241022 & claude-3-5-haiku-20241022).
+// D3 (2026-09-19): the file is `{ generatedAt, families }`, and it now carries
+// WHERE ITS NUMBERS CAME FROM. Two properties are ENFORCED by the loader below
+// rather than promised by a comment — both because this table is
+// hand-maintained and both failure modes were observed, not imagined:
+//   - every family must declare a `source`. The numbers used to be annotated
+//     HERE, in code, and the table itself carried no provenance at all; a
+//     retired model name sat in it unnoticed because nothing in the FILE said
+//     what the file was supposed to contain (design §1.2).
+//   - a retired name is an ALIAS on the current row, not a second row. Two
+//     rows holding one model's numbers are two places to edit, and only one of
+//     them gets edited.
+// `generatedAt` is the date the NUMBERS were last revised. The file is
+// hand-maintained, so this is a revision date, NOT a generation timestamp —
+// Pi's manifest, where this field comes from, is written by a generator we do
+// not have. Deliberately NOT copied from it: the per-file sha256, which guards
+// a remote overlay against downgrading a release. We have no remote and no
+// generator, so a hash of a file stored in that file would be decoration.
 type ModelCatalog = Record<string, Record<string, { contextWindow?: number; maxOutputTokens?: number }>>
-
-function loadModelCatalog(): ModelCatalog {
-  const text = readFileSync(new URL("./model-catalog.json", import.meta.url), "utf8")
-  const parsed: unknown = JSON.parse(text)
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-    throw new Error("provider: model-catalog.json is not an object")
-  }
-  const out: ModelCatalog = {}
-  for (const [route, models] of Object.entries(parsed as Record<string, unknown>)) {
-    if (typeof models !== "object" || models === null || Array.isArray(models)) {
-      throw new Error(`provider: model-catalog.json route "${route}" is not an object`)
-    }
-    const rows: Record<string, { contextWindow?: number; maxOutputTokens?: number }> = {}
-    for (const [modelId, card] of Object.entries(models as Record<string, unknown>)) {
-      if (typeof card !== "object" || card === null || Array.isArray(card)) {
-        throw new Error(`provider: model-catalog.json ${route}.${modelId} is not an object`)
-      }
-      const row = card as Record<string, unknown>
-      const contextWindow = positiveInteger(row.contextWindow)
-      const maxOutputTokens = positiveInteger(row.maxOutputTokens)
-      if (contextWindow === undefined && maxOutputTokens === undefined) {
-        throw new Error(`provider: model-catalog.json ${route}.${modelId} has no positive-integer capability`)
-      }
-      rows[modelId] = {
-        ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-      }
-    }
-    out[route] = rows
-  }
-  return out
-}
-
-const MODEL_CATALOG: ModelCatalog = loadModelCatalog()
 
 /** One capability card (model-documented limits). */
 export interface ModelCard {
@@ -107,11 +97,161 @@ export interface ModelCard {
   maxOutputTokens?: number
 }
 
-/** Pure catalog query: the card for one route's model, or undefined when the
- * catalog has no entry (fail-closed — never a synthetic value). */
-export function resolveModelCard(route: string, modelId: string): ModelCard | undefined {
-  const card = MODEL_CATALOG[route]?.[modelId]
+/** One row of the table as WRITTEN: the row's own name, its retired names, and
+ * the card they share. */
+export interface ModelCatalogRow {
+  modelId: string
+  aliases: string[]
+  card: ModelCard
+}
+
+/** Where one family's numbers came from. */
+export interface ModelCatalogFamilySource {
+  family: string
+  source: string
+}
+
+/** The table's own provenance — the answer to "how old is this, and who says?". */
+export interface ModelCatalogProvenance {
+  /** The date the numbers were last revised (YYYY-MM-DD). */
+  generatedAt: string
+  families: ModelCatalogFamilySource[]
+}
+
+const CATALOG_FILE = "provider: model-catalog.json"
+
+/** `aliases` is optional; an EMPTY array is refused rather than tolerated,
+ * because writing one is a statement ("this row has aliases") that says
+ * nothing, and the next reader has to check. */
+function parseAliases(value: unknown, family: string, modelId: string): string[] {
+  if (value === undefined) return []
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`${CATALOG_FILE} ${family}.${modelId} aliases must be a non-empty array of names`)
+  }
+  return value.map((alias) => {
+    if (typeof alias !== "string" || alias.trim() === "") {
+      throw new Error(`${CATALOG_FILE} ${family}.${modelId} has an empty alias`)
+    }
+    if (alias === modelId) {
+      throw new Error(`${CATALOG_FILE} ${family}.${modelId} lists itself as an alias`)
+    }
+    return alias
+  })
+}
+
+function loadModelCatalog(): {
+  catalog: ModelCatalog
+  rows: Record<string, ModelCatalogRow[]>
+  provenance: ModelCatalogProvenance
+} {
+  const text = readFileSync(new URL("./model-catalog.json", import.meta.url), "utf8")
+  const parsed: unknown = JSON.parse(text)
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`${CATALOG_FILE} is not an object`)
+  }
+  const root = parsed as Record<string, unknown>
+  const generatedAt = root.generatedAt
+  // Validated as a date, not merely required: a provenance field holding
+  // whatever anyone typed is a field nobody can act on.
+  if (typeof generatedAt !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(generatedAt)) {
+    throw new Error(`${CATALOG_FILE} generatedAt must be a YYYY-MM-DD date`)
+  }
+  const families = root.families
+  if (typeof families !== "object" || families === null || Array.isArray(families)) {
+    throw new Error(`${CATALOG_FILE} families is not an object`)
+  }
+
+  const catalog: ModelCatalog = {}
+  const rowsByFamily: Record<string, ModelCatalogRow[]> = {}
+  const provenance: ModelCatalogProvenance = { generatedAt, families: [] }
+  for (const [family, body] of Object.entries(families as Record<string, unknown>)) {
+    if (typeof body !== "object" || body === null || Array.isArray(body)) {
+      throw new Error(`${CATALOG_FILE} family "${family}" is not an object`)
+    }
+    const { source, models } = body as Record<string, unknown>
+    if (typeof source !== "string" || source.trim() === "") {
+      throw new Error(`${CATALOG_FILE} family "${family}" declares no source`)
+    }
+    if (typeof models !== "object" || models === null || Array.isArray(models)) {
+      throw new Error(`${CATALOG_FILE} family "${family}" has no models object`)
+    }
+
+    const lookup: Record<string, ModelCard> = {}
+    const rows: ModelCatalogRow[] = []
+    /** Every name this family has claimed → the row that claimed it. */
+    const claimed = new Map<string, string>()
+    for (const [modelId, card] of Object.entries(models as Record<string, unknown>)) {
+      if (typeof card !== "object" || card === null || Array.isArray(card)) {
+        throw new Error(`${CATALOG_FILE} ${family}.${modelId} is not an object`)
+      }
+      const row = card as Record<string, unknown>
+      const contextWindow = positiveInteger(row.contextWindow)
+      const maxOutputTokens = positiveInteger(row.maxOutputTokens)
+      if (contextWindow === undefined && maxOutputTokens === undefined) {
+        throw new Error(`${CATALOG_FILE} ${family}.${modelId} has no positive-integer capability`)
+      }
+      const aliases = parseAliases(row.aliases, family, modelId)
+      // An id claimed twice is ambiguous, and these names are aliases precisely
+      // because they are ONE model — a second row claiming the same name
+      // rebuilds the drift this shape exists to prevent.
+      for (const name of [modelId, ...aliases]) {
+        const owner = claimed.get(name)
+        if (owner !== undefined) {
+          throw new Error(`${CATALOG_FILE} ${family}: "${name}" is claimed by both ${owner} and ${modelId}`)
+        }
+        claimed.set(name, modelId)
+      }
+      const entry: ModelCard = {
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+      }
+      lookup[modelId] = entry
+      // The alias resolves to the SAME card OBJECT, not a copy of its numbers:
+      // one row to edit, so the current name and the retired one cannot drift.
+      // (resolveModelCard copies on the way out, so callers still cannot reach
+      // this object.)
+      for (const alias of aliases) lookup[alias] = entry
+      rows.push({ modelId, aliases, card: entry })
+    }
+    catalog[family] = lookup
+    rowsByFamily[family] = rows
+    provenance.families.push({ family, source })
+  }
+  return { catalog, rows: rowsByFamily, provenance }
+}
+
+const MODEL_CATALOG_LOADED = loadModelCatalog()
+const MODEL_CATALOG: ModelCatalog = MODEL_CATALOG_LOADED.catalog
+
+/** Pure catalog query: the card for one model in one card FAMILY, or undefined
+ * when the table has no entry (fail-closed — never a synthetic value).
+ *
+ * `family` is the DECLARED card family (`ProviderProfile.catalog`), which
+ * defaults to the route name — see that field for why it is not the route
+ * itself. */
+export function resolveModelCard(family: string, modelId: string): ModelCard | undefined {
+  const card = MODEL_CATALOG[family]?.[modelId]
   return card === undefined ? undefined : { ...card }
+}
+
+/** The table's provenance: when its numbers were last revised, and the source
+ * each family declares. Read by `i-harness provider list`, which prints it — a
+ * table whose age cannot be read is a table nobody knows to update. */
+export function resolveModelCatalogProvenance(): ModelCatalogProvenance {
+  return {
+    generatedAt: MODEL_CATALOG_LOADED.provenance.generatedAt,
+    families: MODEL_CATALOG_LOADED.provenance.families.map((entry) => ({ ...entry })),
+  }
+}
+
+/** One family's rows IN FILE ORDER, each with the aliases that also resolve to
+ * it. An unknown family lists nothing — the same fail-closed answer
+ * `resolveModelCard` gives, so a caller can render a miss without a special
+ * case. Copies: the loaded table is not a caller's to edit. */
+export function listModelCatalogFamily(family: string): ModelCatalogRow[] {
+  const rows = MODEL_CATALOG_LOADED.rows[family]
+  if (rows === undefined) return []
+  return rows.map((row) => ({ modelId: row.modelId, aliases: [...row.aliases], card: { ...row.card } }))
 }
 
 // M31 T1 (M32 T1 fix): the settings-side user model row is the TOP of the
@@ -141,7 +281,11 @@ export interface EffectiveModelContext {
 
 export function resolveEffectiveModelContext(input: EffectiveContextInput): EffectiveModelContext | undefined {
   const base = resolveModelContext(input.profile, input.modelId)
-  const card = resolveModelCard(input.profile.name, input.modelId)
+  // The declared family, else the route name. NOT derived from the base URL:
+  // a derivation would guess wrong on exactly the set-ups the field exists for
+  // (gateways, proxies, regional/subscription variants), and a wrong family is
+  // worse than none — it supplies ANOTHER vendor's numbers.
+  const card = resolveModelCard(input.profile.catalog ?? input.profile.name, input.modelId)
   const merged: EffectiveModelContext = {
     ...base,
     ...(card !== undefined ? { maxOutputTokens: card.maxOutputTokens } : {}),
@@ -174,10 +318,17 @@ export interface ModelDescriptor {
   contextWindow?: number
   /** Discovered response cap (maxTokens / the limit.output half of a pair). */
   maxTokens?: number
+  /** The row's OWN wire protocol, when it declares one — a settings model row
+   * may override its route's protocol (provider-runtime's `resolveModel` reads
+   * it as runtimeProfile's `modelProtocol`). `mergeModels` already spreads the
+   * settings row, so the value is present at runtime; this only names it.
+   * Probe results never carry it (a probe reports what an endpoint offers, and
+   * the endpoint's protocol is the route's). */
+  protocol?: SettingsProviderProtocol
 }
 
 /** Directory row: the UI-facing view of one registered provider route. */
-export interface DirectoryEntry {
+interface DirectoryEntry {
   route: string
   displayName: string
   protocol: string
@@ -194,8 +345,10 @@ export interface DirectoryEntry {
  * and is fetched exactly once. An explicit `baseURL` is a host root and keeps
  * the ordered candidate strategy. `protocol` is the route's RESOLVED wire
  * protocol — the caller runs settings' resolveProviderProtocol chain (user >
- * SEEDED_PROTOCOLS > DEFAULT) and passes it here; this module only applies
- * the generic terminal fallback (openai-completions = Bearer). Either explicit
+ * SEEDED_PROTOCOLS) and REFUSES when it runs out (provider-runtime's
+ * probeModels no longer passes the absent case down); this module's generic
+ * terminal fallback (openai-completions = Bearer) therefore only serves
+ * requests that name no protocol at all. Either explicit
  * URL makes the generic builtin probe run for ANY route (task 7 — D4: the
  * route-gate applies to the route-based preview flow only). */
 export interface ProbeRequest {
@@ -213,7 +366,7 @@ export type Probe = (req: ProbeRequest) => Promise<ModelDescriptor[]>
 
 /** No probe AND no static catalog for the route — probing is genuinely
  * unavailable (Task 4 maps this to the "model-probe-failed" 400 family). */
-export class ProbeUnavailableError extends Error {
+class ProbeUnavailableError extends Error {
   readonly code = "probe-unavailable" as const
   readonly route: string
   constructor(route: string) {
@@ -226,7 +379,7 @@ export class ProbeUnavailableError extends Error {
 /** Every in-flight probe failure is branded with this code — the symmetric
  * sibling of ProbeUnavailableError (Task 4 maps it to 400 model-probe-failed)
  * so a caller can tell "the probe exists but failed" from "no probe exists". */
-export class ModelProbeFailedError extends Error {
+class ModelProbeFailedError extends Error {
   readonly code = "model-probe-failed" as const
   constructor(message: string) {
     super(message)
@@ -647,30 +800,36 @@ export function createProviderRegistry(): ProviderRegistry {
   }
 }
 
-// ── Module-level conveniences (plan interface) ───────────────────────────────
-// The standalone describeDirectory/registerProbe/probeModels operate on the
-// module default registry — the registration API is unchanged (`register`).
-// Embeddings that own a specific registry should pass it through its methods
-// instead (createProviderRegistry instances are independent).
+// ── The module default registry ──────────────────────────────────────────────
+// A plan once specified standalone `describeDirectory` / `registerProbe` /
+// `probeModels` wrappers over this registry. They are gone (see the note below);
+// what remains is the accessor, and embeddings that own a specific registry
+// should pass it through its methods instead (`createProviderRegistry` instances
+// are independent).
 let defaultRegistry: ProviderRegistry | undefined
 
-/** The module-level default registry the standalone functions use (one per module). */
+/** The module-level default registry (one per module). */
 export function defaultProviderRegistry(): ProviderRegistry {
   if (defaultRegistry === undefined) defaultRegistry = createProviderRegistry()
   return defaultRegistry
 }
 
-export function describeDirectory(): DirectoryEntry[] {
-  return defaultProviderRegistry().describeDirectory()
-}
-
-export function registerProbe(route: string, probe: Probe): void {
-  defaultProviderRegistry().registerProbe(route, probe)
-}
-
-export function probeModels(route: string, req: ProbeRequest): Promise<ModelDescriptor[]> {
-  return defaultProviderRegistry().probeModels(route, req)
-}
+// The three standalone wrappers that used to live here — `describeDirectory()`,
+// `registerProbe(route, probe)` and `probeModels(route, req)` — were removed.
+// Each was a one-line sugar over `defaultProviderRegistry()` plus the equivalent
+// INSTANCE method, which remains: `defaultProviderRegistry().probeModels(…)`.
+//
+// Why they went: production never called them (measured — no file outside this
+// package and its own test file did), and the comment above already gives the
+// reason they were the wrong shape: "Embeddings that own a specific registry
+// should pass it through its methods instead". A second way to do one thing is
+// what this package's own advice argues against.
+//
+// One instrument note, because it is why only two of the three were ever rows:
+// `probeModels` was NOT reported, because the scanner's used-test is a TEXT match
+// and `packages/provider-runtime/src/index.ts:262` writes
+// `registry.probeModels(id, …)` — the INSTANCE method. A word regex cannot tell
+// `probeModels(…)` from `registry.probeModels(…)`, so the standalone read as used.
 
 // M15: context windows fail loud at registration (no defaults injected —
 // absence means "unknown, fall back to config").
@@ -736,15 +895,6 @@ export function buildModelClient(profile: ProviderProfile, model?: string, extra
   return createRetryingClient(client, resolveRetryPolicy(profile.retryPolicy))
 }
 
-// ── Task 4: RESOLVED wire protocol → adapter dispatch ─────────────────────────
-// The profile's `protocol` field is the registry's ADAPTER-KIND marker
-// (describeDirectory / the headless parseModel order). The WEB build (and the
-// T2 probe) dispatch on the RESOLVED THREE-value wire vocabulary that
-// settings' resolveProviderProtocol produces (user section > SEEDED_PROTOCOLS >
-// DEFAULT): the same keys ProbeRequest.protocol carries. A user who re-wires a
-// seeded route (e.g. deepseek → anthropic-messages) must get the anthropic
-// client even though the profile's marker still says "openai-compatible".
-
 /** The adapter inputs, protocol-independent — the shared shape of all three
  * client factories (llm-openai-compatible / llm-openai / llm-anthropic). */
 export interface WireClientConfig {
@@ -755,26 +905,6 @@ export interface WireClientConfig {
   inputModalities?: ("text" | "image")[]
   /** M59: literal extra request headers merged into every request. */
   headers?: Record<string, string>
-}
-
-/** Build the adapter client for a RESOLVED wire protocol; undefined for an
- * unknown protocol so the caller owns the warn + mock fallback. */
-export function buildWireClient(protocol: string, config: WireClientConfig): ModelClient | undefined {
-  switch (protocol) {
-    case "openai-completions":
-      return createOpenAICompatibleClient(config)
-    case "openai-responses":
-      return createOpenAIClient(config)
-    case "anthropic-messages":
-      return createAnthropicClient(config)
-    case "gemini":
-      return createGeminiClient(config)
-    case "bedrock":
-      // Key-less by design (AWS credential chain); apiKey is ignored.
-      return createBedrockClient({ model: config.model, options: config.options, inputModalities: config.inputModalities })
-    default:
-      return undefined
-  }
 }
 
 // ── M26-B3 → M31: websearch provider seam（同 interaction/questions 模式）──

@@ -29,6 +29,7 @@ import { existsSync, statSync } from "node:fs"
 import { rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { inspectCapabilities } from "./capability.ts"
+import { describeAgents } from "./agents.ts"
 import { describeCommands } from "./commands.ts"
 import {
   InstallError,
@@ -49,6 +50,7 @@ import {
 } from "./marketplaces.ts"
 import { loadState, loadStateSync, saveState } from "./state.ts"
 import type {
+  AgentDescriptor,
   CatalogPlugin,
   CommandConflict,
   CommandDescriptor,
@@ -59,12 +61,20 @@ import type {
   RegistryOptions,
   RuntimeInputs,
 } from "./types.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   PluginArtifactError,
   PluginNotFoundError,
   SourceConflictError,
   SourceNotFoundError,
 } from "./types.ts"
+
+// W6 T6: one module-scope handle for this file's reports; the phase is
+// `mount` because every one of them is the plugins seam's own report —
+// plugin scanning/mounting/install is where a host builds its plugin world.
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 export {
   SourceConflictError,
@@ -86,7 +96,6 @@ export { inspectCapabilities, type Capabilities, type Capability } from "./capab
 export {
   InstallError,
   installPlugin,
-  mcpServerKey,
   mcpServerKeyPrefix,
   pluginId,
   readMcpServers,
@@ -114,8 +123,16 @@ export {
   type PluginSourceUrl,
 } from "./marketplaces.ts"
 export { describeCommands, parseCommandMarkdown } from "./commands.ts"
-export { evaluatePlugin, type CapabilityStatus, type CommandStatus, type EvaluateResult, type Observations, type OverallStatus } from "./evaluate.ts"
+export { evaluatePlugin, type EvaluateResult, type Observations } from "./evaluate.ts"
 export { materializePlugin, type MaterializedPlugin } from "./materialize.ts"
+export { toMcpServerConfigs, type MountedMcpServer, type SkippedMcpServer } from "./mount.ts"
+// `toSubagentRoles` alone: its two result types are not named by any consumer —
+// they are read structurally (`pluginAgents.roles`, `.unresolved`). Re-exporting
+// them anyway put two rows on the reachability gate the moment this landed, which
+// is the instrument doing its job: an exported name nothing references IS an
+// orphan, however small. They stay exported from mount.ts, where the signature
+// that produces them lives.
+export { toSubagentRoles } from "./mount.ts"
 
 function byIdCompare(a: { id: string }, b: { id: string }): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
@@ -237,7 +254,7 @@ export class PluginRegistry {
         collected = await this.collectSource(src.source)
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
-        console.warn(`[plugin-registry] catalog: source ${src.name} (${src.source}) unreadable: ${reason}`)
+        d.warn(`[plugin-registry] catalog: source ${src.name} (${src.source}) unreadable: ${reason}`)
         continue
       }
       for (const entry of collected.manifest.plugins) {
@@ -248,7 +265,7 @@ export class PluginRegistry {
           // Documented v1 behavior: the first registered source wins, the host
           // is warned, install() resolves the same way (findEntry order).
           if (existing.source !== src.source || existing.name !== entry.name) {
-            console.warn(
+            d.warn(
               `[plugin-registry] catalog: duplicate plugin id ${id} (${existing.marketplace}/${existing.name} vs ${collected.manifest.name}/${entry.name}); keeping the first`,
             )
           }
@@ -406,9 +423,12 @@ export class PluginRegistry {
       throw new PluginArtifactError(`install directory is missing for ${JSON.stringify(id)} (${installPath})`)
     }
     const capabilities = inspectCapabilities(installPath)
-    if (!capabilities.skills && !capabilities.commands && !capabilities.mcp) {
+    if (
+      !capabilities.skills && !capabilities.commands && !capabilities.mcp &&
+      !capabilities.agents && !capabilities.hooks
+    ) {
       throw new PluginArtifactError(
-        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/ or .mcp.json)`,
+        `plugin ${JSON.stringify(id)} has no usable capabilities (no skills/, commands/, agents/, hooks/hooks.json or .mcp.json)`,
       )
     }
     const conflicts = this.computeConflicts(state, rec, installPath)
@@ -456,6 +476,8 @@ export class PluginRegistry {
     const skillDirs: string[] = []
     const mcpServerConfigs: Record<string, MCP_CONFIG_SHAPE> = {}
     const commandDescriptors: CommandDescriptor[] = []
+    const agentDescriptors: AgentDescriptor[] = []
+    const hookConfigs: string[] = []
     for (const rec of enabled) {
       const skillDir = join(this.root, "skills", rec.id)
       if (existsSync(skillDir)) skillDirs.push(skillDir)
@@ -463,12 +485,25 @@ export class PluginRegistry {
         Object.assign(mcpServerConfigs, readMcpServersSync(join(this.root, rec.id)))
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
-        console.warn(`[plugin-registry] runtime: skipping MCP config of ${rec.id}: ${reason}`)
+        d.warn(`[plugin-registry] runtime: skipping MCP config of ${rec.id}: ${reason}`)
       }
       commandDescriptors.push(...this.effectiveDescriptors(rec))
+      // Agents are read from the INSTALLED copy, not a materialized overlay —
+      // unlike skills/ and commands/, which the host reads back by path. An
+      // agent becomes DATA at mount (a SubagentRole), so copying it into
+      // <root>/agents/<id> would create a tree nothing ever reads.
+      agentDescriptors.push(...describeAgents(join(this.root, rec.id, "agents")))
+      // Hooks: the PATH only. Same reasoning as agents (read from the installed
+      // copy, no materialized overlay) plus one of its own — the hooks registry
+      // owns the config's load and its fail-closed semantics, so parsing here
+      // would be a second reader of the same file.
+      const hookConfig = join(this.root, rec.id, "hooks", "hooks.json")
+      if (existsSync(hookConfig)) hookConfigs.push(hookConfig)
     }
     commandDescriptors.sort(byNameCompare)
-    return { skillDirs, mcpServerConfigs, commandDescriptors }
+    agentDescriptors.sort(byNameCompare)
+    hookConfigs.sort()
+    return { skillDirs, mcpServerConfigs, commandDescriptors, agentDescriptors, hookConfigs }
   }
 
   /**

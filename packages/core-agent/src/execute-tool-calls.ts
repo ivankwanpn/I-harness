@@ -2,9 +2,18 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
+import { isPolicyRefusal, ToolArgsError } from "@i-harness/core-tools"
+import {
+  TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_ABORTED_MID_FLIGHT,
+  TOOL_CANCELLED_BY_SIBLING,
+  TOOL_FAILED,
+} from "@i-harness/core-tools"
 import type { Telemetry } from "@i-harness/telemetry"
 
-export const TOOL_ABORTED_BEFORE_DISPATCH = "TOOL_ABORTED_BEFORE_DISPATCH"
+// Re-exported from @i-harness/core-tools, which owns the tool-result contract.
+// Kept here so every existing importer (and the tests) do not move.
+export { TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING, TOOL_FAILED }
 
 export interface BatchCall {
   callId: string
@@ -42,8 +51,20 @@ export interface ExecuteToolCallsOptions {
 // run sequentially (full drain between), so an exclusive call never overlaps
 // anything.
 //
-// Failure (throw-fails-turn, ruling A): stop starting, drain started calls,
-// rethrow the first error — NO fabricated results for unstarted calls.
+// Failure (soft since M5 T4 block ①): stop starting, drain started calls,
+// fill the failed slot, commit what settled, and give never-started calls a
+// TOOL_CANCELLED_BY_SIBLING result. That verdict is not fabricated: CANCELLED
+// is what happened to that call — it never started — not a made-up outcome.
+// (The FILL is a different thing and does not claim otherwise: it is written
+// `synthetic: true`.) A policy refusal (a policy `prepare` throw, or a cascade
+// throw carrying the `isPolicyRefusal` marker) still rethrows.
+//
+// M5 T4 block ② adds ONE soft `prepare` throw: a malformed-argument refusal is
+// a typed disposition the model can repair, so it lands in the same soft path
+// as a body failure (that call's slot is filled, `synthetic: true`) while it
+// still never reaches the tool body. It is converted in `startCall`, by TYPE —
+// every other `prepare` refusal is untouched and loud.
+//
 // Abort: stop starting, drain started (commit what settled in model order),
 // synthesize TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls,
 // then throw "agent aborted". Abort dominates a coincident failure. M51 B3:
@@ -64,11 +85,56 @@ export async function executeToolCalls(
   // (tools/post-execute) or agent/post-tool (M10a ordering ruling).
   interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true }
   const slots: ((Slot | SyntheticSlot) | undefined)[] = batch.map(() => undefined)
+  // Each call's OWN failure, so the fill below can record what actually
+  // happened to THAT call rather than stamping the first failure's message on
+  // every sibling. Two facts make the fill's `firstError` branch dead: the
+  // drain below (ahead of both dispositions, the abort test included) lets
+  // every in-flight dispatch settle, and a settled dispatch either wrote
+  // `slots[i]` or ran its `.catch`, whose FIRST statement records this map —
+  // before the emit and the marker check, either of which can throw.
+  const failures = new Map<number, unknown>()
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
   let committed = 0
   let aborted = opts.signal?.aborted ?? false
   let firstError: unknown
+  // "Did anything fail?" is a SEPARATE variable from the failure's value, on
+  // purpose. `firstError` is used as a value (it is thrown on the loud paths and
+  // its message is filled into the batch), and a variable cannot carry both jobs:
+  // a body that rejects with `undefined` — `throw undefined` is legal — used to
+  // fire `batchAbort.abort()` while every `if (firstError)` read falsy, so the
+  // soft fill and the never-started fill both skipped and the projection emitted
+  // a tool_use with no tool_result. The flag is the flag; the value is the value
+  // (`firstError` is read for its content only).
+  let hasFailed = false
+  // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
+  // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
+  // call gets a result and the turn continues. Every OTHER throw that reaches
+  // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
+  // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
+  // denied), and a throwing commit-lane listener. (The one `prepare` throw that
+  // is NOT loud — the malformed-argument disposition — is converted up in
+  // `startCall` and never reaches this scope, so the rule above still holds as
+  // written for everything that does.)
+  //
+  // Structural, not a list: the SITE of the throw is the classification, so a
+  // fifth refusal added to `prepare` tomorrow is loud without anyone
+  // remembering to add it here. (A list is what gets forgotten — which is how
+  // the first draft of this task got it wrong.)
+  let firstRefusal: unknown
+  // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
+  // path said "drain started (results discarded)" and awaited `allSettled`, so a
+  // failed call left its siblings running — a `bash` still spawning, a fetch
+  // still in flight — threw their results away anyway, and made the caller wait
+  // for the SLOWEST of them before the error surfaced. The roadmap asks for
+  // "可取消", and the mechanism was already there: `prepare` puts the signal on
+  // `prepared.exec.abortSignal` (core-tools:291), so a body can observe it.
+  // Composed with the outer signal rather than replacing it — an abort and a
+  // failure are different events and both must reach the body.
+  const batchAbort = new AbortController()
+  const batchSignal = opts.signal !== undefined
+    ? AbortSignal.any([opts.signal, batchAbort.signal])
+    : batchAbort.signal
 
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
 
@@ -107,12 +173,56 @@ export async function executeToolCalls(
     // not be counted as started — the boundary stays truthful (on abort the
     // [startedUpTo, batch.length) range decides which calls get synthesized
     // TOOL_ABORTED_BEFORE_DISPATCH results).
-    const prepared = await tools.prepare(
-      { name: call.name, args: call.args },
-      opts.signal,
-      { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
-    )
+    let prepared: PreparedCall
+    try {
+      prepared = await tools.prepare(
+        { name: call.name, args: call.args },
+        batchSignal,
+        { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
+      )
+    } catch (err) {
+      if (err instanceof ToolArgsError) {
+        // A TYPED disposition, checked by name — never a message list. The
+        // model CAN fix this one, so it is soft; every other `prepare`
+        // refusal (guard / approval / guardian / unknown tool) stays loud.
+        //
+        // THIS call's record goes down FIRST, before the slot it fills and
+        // before `abort()` — both of which run out-of-tree code (a slot
+        // build reads `err.message`, `abort()` notifies tool bodies). The
+        // same rule as the dispatch `.catch`: an unrecorded failure gets
+        // stamped with its SIBLING's message by the fill below.
+        failures.set(index, err)
+        slots[index] = {
+          name: call.name,
+          callId: call.callId,
+          synthetic: true,
+          output: { error: (err as Error).message, code: TOOL_FAILED },
+        }
+        // The flag AND the value, never one variable for both: `throw
+        // undefined` is legal, so a value used as a flag reads falsy on a
+        // failure that happened.
+        if (!hasFailed) {
+          firstError = err
+          hasFailed = true
+        }
+        batchAbort.abort()
+        return
+      }
+      throw err
+    }
     startedUpTo = index + 1
+    // M4: make the boundary DURABLE, at the exact point it becomes true. The
+    // in-memory `startedUpTo` above already carries this fact for the abort path;
+    // a process that DIES instead of aborting loses it, and `repairTurnTail` then
+    // gave every pending call the "aborted before dispatch" verdict — including
+    // the ones whose bodies had run, whose side effects a re-run would double.
+    // `append` is the SAME call the tool/result path uses, so this costs one
+    // event and no new store.
+    append(session, {
+      type: "tool/dispatch",
+      callId: call.callId,
+      ...(call.eventSeq !== undefined ? { eventSeq: call.eventSeq } : {}),
+    })
     // M25: tool/start only once the call is REALLY dispatched (after prepare —
     // a prepare failure means the tool never started, mirroring the
     // never-started boundary that abort synthesis relies on).
@@ -123,13 +233,37 @@ export async function executeToolCalls(
         slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
-        // M25: tool/error — the tool body failed (throw-fails-turn semantics).
+        // This call's OWN rejection is recorded FIRST — the order is
+        // load-bearing. `telemetry.emit` and `isPolicyRefusal` below both run
+        // out-of-tree code (a host Telemetry, an error whose `policyRefusal`
+        // getter throws), so either can reject this handler; when that happens
+        // to a SECOND failure the post-loop drain absorbs the rejection and
+        // nobody re-reads it. A slot left with no entry here is stamped with
+        // its SIBLING's message by the fill below — the exact misattribution
+        // this map exists to prevent.
+        failures.set(index, err)
+        // M25: tool/error — the dispatched call's promise rejected. The M5 T4
+        // classification below decides what that rejection means for the turn.
         opts.telemetry?.emit({
           type: "tool/error",
           ts: Date.now(),
           data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
         })
-        firstError ??= err
+        if (isPolicyRefusal(err)) {
+          // A veto is not a body failure: it must keep failing the turn.
+          firstRefusal ??= err
+        }
+        // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
+        // (before the drains below), so `allSettled` returns their cancellations
+        // instead of waiting out their work. Only the first, so a second failure
+        // cannot re-open a channel that is already closed. "First" is read off
+        // the FLAG, not off `firstError === undefined`: the value may legitimately
+        // be `undefined`, the flag cannot.
+        if (!hasFailed) {
+          firstError = err
+          hasFailed = true
+          batchAbort.abort()
+        }
       })
       .then(() => index)
     inFlight.set(index, promise)
@@ -155,8 +289,8 @@ export async function executeToolCalls(
   const runGroup = async (indices: number[]): Promise<void> => {
     let gi = 0
     while (gi < indices.length || inFlight.size > 0) {
-      if (aborted || firstError) break
-      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !firstError) {
+      if (aborted || hasFailed) break
+      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !hasFailed) {
         await startCall(indices[gi]!)
         gi += 1
         await commitReady()
@@ -173,35 +307,80 @@ export async function executeToolCalls(
   try {
     for (const group of groups) {
       await runGroup(group)
-      if (firstError || aborted) break
+      if (hasFailed || aborted) break
     }
   } catch (err) {
-    firstError ??= err
+    if (!hasFailed) firstError = err
+    hasFailed = true
+    // Anything thrown outside the dispatch `.catch` is a refusal. It DOMINATES:
+    // a policy refusal must never be silently downgraded by a coincident body
+    // failure, so a refusal that arrives second still wins.
+    firstRefusal ??= err
   }
 
-  // Abort dominates: drain started, commit in model order, synthesize.
+  // Drain BEFORE the disposition tests. Every write to `firstError` and
+  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
+  // promises have settled neither is final — and a refusal that settles one
+  // microtask late is tested as "not a refusal" and silently downgraded to
+  // the soft path. (Measured before this drain existed: the same marked veto
+  // threw when its own .catch ran first, and resolved softly — recorded
+  // against a sibling's error message — when a sibling's failure got there
+  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
+  // case, not the exotic one.)
+  await Promise.allSettled([...inFlight.values()])
+  inFlight.clear()
+  // …and the drain is also where a late ABORT is read. `aborted` is only
+  // written inside `runGroup`, which breaks out of its loop on the first
+  // failure, so an abort that fires while this drain is running — the user
+  // stopping the step just after a tool broke — otherwise reaches the
+  // dispositions as "not aborted": the soft path commits, and the
+  // never-started calls are stamped CANCELLED BY A SIBLING, which is not what
+  // happened to them. Measured before this re-read: that batch RESOLVED, with
+  // `TOOL_CANCELLED_BY_SIBLING` on the never-started call, and `agent/post-tool`
+  // was emitted for the call that settled inside the window although
+  // `commitReady` suppresses post-tool when aborted (M10a).
+  if (opts.signal?.aborted) aborted = true
+
+  // Abort dominates: commit what settled in model order, synthesize.
   if (aborted) {
-    await Promise.allSettled([...inFlight.values()])
-    inFlight.clear()
-    // Abort dominates a coincident finalize failure: `commitReady` runs
+    // Abort dominates a coincident commit-lane failure: `commitReady` runs
     // user/policy-controlled tools/post-execute listeners that can throw, and
     // that must NOT suppress the synthetic TOOL_ABORTED_BEFORE_DISPATCH results
     // or the "agent aborted" throw — the turn is aborting regardless. The
-    // NON-abort path keeps its throw (it flows into `firstError` via the outer
-    // try → drain + rethrow, which is the correct throw-fails-turn behavior).
+    // swallow is safe HERE and only here, because this branch throws on the
+    // very next line: a swallowed error cannot leave behind a turn that keeps
+    // running. The non-abort failure path suppresses nothing — it records the
+    // lane's error, lets the fills run, and rethrows it (M5 T6), so a lost
+    // durable write fails the turn instead of continuing it in silence.
     // M51 B3: every STARTED slot that produced no output failed; leaving it
     // undefined stalled the head-of-line cursor forever, so a sibling that had
     // already settled successfully never got a tool/result. Fill each with a
-    // synthetic failure (the first error's message) so the cursor advances and
-    // the settled siblings commit their REAL outputs in model order. Abort
-    // path ONLY — the non-abort failure path still discards (M13).
-    const failureMessage = firstError instanceof Error
+    // synthetic failure so the cursor advances and the settled siblings commit
+    // their REAL outputs in model order.
+    //
+    // Per call, from the SAME map the soft fill reads. (M5 T4 block ②: the
+    // shared message was merely imprecise while `firstError` could only be a
+    // tool-body failure; `firstError` can now be a TYPED ARGUMENT REFUSAL, and
+    // stamping it on every slot told a sibling killed by the cancel about a
+    // DIFFERENT call's arguments.)
+    const fallbackMessage = firstError instanceof Error
       ? firstError.message
       : firstError === undefined ? "tool call aborted before dispatch" : String(firstError)
     for (let i = committed; i < startedUpTo; i += 1) {
       if (slots[i] !== undefined) continue
       const call = batch[i]!
-      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: failureMessage } }
+      // THIS call's own message when it has one. The test is `failures.has(i)`
+      // — NOT `failures.get(i) !== undefined`: a body that rejects with
+      // `undefined` DOES record itself (`set(i, undefined)`), and a value test
+      // cannot tell that record from "no entry" — so that call would be stamped
+      // with its SIBLING's message, the misattribution this map exists to kill.
+      // `fallbackMessage` is only for a slot that never got an entry of its own
+      // (the defensive fallback the soft fill below also keeps).
+      const own = failures.get(i)
+      const message = failures.has(i)
+        ? (own instanceof Error ? own.message : String(own))
+        : fallbackMessage
+      slots[i] = { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } }
     }
     try {
       await commitReady()
@@ -209,6 +388,17 @@ export async function executeToolCalls(
       // swallow — abort dominates
     }
     for (let i = startedUpTo; i < batch.length; i += 1) {
+      // A call can be in the never-started range AND already have a result: a
+      // malformed-argument refusal fills its slot and returns before
+      // `startedUpTo` advances (it truly never started). Appending again would
+      // write TWO results for one callId — a `tool_use` answered twice.
+      //
+      // `slots[i] !== undefined` is the SAFE kind of "was this filled?" test:
+      // a filled slot is always an OBJECT (`Slot | SyntheticSlot` both are), so
+      // there is no "filled with `undefined`" state that a value test would
+      // confuse with "not filled" — unlike the flag/value pairs this file has
+      // collided with three times.
+      if (slots[i] !== undefined) continue
       const call = batch[i]!
       append(session, {
         type: "tool/result",
@@ -220,10 +410,109 @@ export async function executeToolCalls(
     throw new Error("agent aborted")
   }
 
-  // Failure: drain started (results discarded), rethrow the first error.
-  if (firstError) {
-    await Promise.allSettled([...inFlight.values()])
-    inFlight.clear()
-    throw firstError
+  // A refusal is never soft. The drain above has already settled every
+  // in-flight dispatch, so `firstRefusal` is final here.
+  if (firstRefusal !== undefined) {
+    throw firstRefusal
+  }
+
+  // Failure: cancel the siblings (M5 T4), then COMMIT — on THIS path every
+  // DISPATCHED call ends in exactly one tool/result. The guarantee is the soft
+  // failure path's, not the function's: a refusal (checked just above) still
+  // discards the batch by design, and a throw from the commit lane below stops
+  // the cursor where it fired, leaving the slots from there on out of the log
+  // (the accepted cost recorded at that rethrow). This path used to
+  // `throw firstError` and discard the batch; fs/src/error.ts records the
+  // consequence in its own words ("no tool/result and no turn/end are appended
+  // ... read as hung").
+  //
+  // Cancelling and committing are different questions: cancellation answers
+  // "do the siblings keep working" (no), committing answers "how does what
+  // happened get written down" (honestly). Discarding the siblings' already
+  // settled results made the M5 T4 cancellation pointless — they were
+  // cancelled AND thrown away.
+  //
+  // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
+  // from a tool body. A refusal never gets here.
+  if (hasFailed) {
+    // Fill every STARTED slot that produced no output, so the head-of-line
+    // cursor advances and an already-settled sibling commits its REAL result
+    // (the SAME mechanism M51 B3 added to the abort path, one branch up).
+    for (let i = committed; i < startedUpTo; i += 1) {
+      if (slots[i] !== undefined) continue
+      const call = batch[i]!
+      // THIS call's own message. The test is `failures.has(i)` — NOT
+      // `failures.get(i) !== undefined`: a body that rejects with `undefined`
+      // DOES record itself (`set(i, undefined)`), and a value test cannot tell
+      // that record from "no entry" — so that call would be stamped with its
+      // SIBLING's message, the exact misattribution this map was added to
+      // kill. `firstError` is only a defensive fallback: after the drain, a
+      // settled started call either wrote `slots[i]` or ran its `.catch` and
+      // recorded its own error here.
+      const own = failures.get(i)
+      const message = failures.has(i)
+        ? (own instanceof Error ? own.message : String(own))
+        : firstError instanceof Error ? firstError.message : String(firstError)
+      slots[i] = {
+        name: call.name,
+        callId: call.callId,
+        synthetic: true,
+        output: { error: message, code: TOOL_FAILED },
+      }
+    }
+    let commitError: unknown
+    let hasCommitError = false
+    try {
+      await commitReady()
+    } catch (err) {
+      // A throwing commit-lane listener must not suppress the never-started
+      // fills below — the abort path swallows for exactly this reason (see its
+      // comment at the top of the abort branch). But this catch must not
+      // swallow the WHOLE commit lane either, the way a BARE `catch {}` did
+      // before M5 T6: `commitReady` also runs `append`, whose fail-loud paths
+      // (core-session's image validation among them) must stay loud, and a turn
+      // that keeps running after a lost durable write is worse than a turn that
+      // fails. So: record the error, let the fills run, rethrow it after them.
+      // The flag carries "it threw" and the value carries what it threw — one
+      // variable cannot do both jobs, because `throw undefined` is legal (the
+      // same split `hasFailed`/`firstError` makes above).
+      hasCommitError = true
+      commitError = err
+    }
+    // Calls that never started: no `prepare`, no `tool/dispatch`, no body.
+    // They get a result too, so the projection never emits a tool_use with no
+    // tool_result — but their verdict is CANCELLATION, not abort.
+    for (let i = startedUpTo; i < batch.length; i += 1) {
+      // A call can be in the never-started range AND already have a result: a
+      // malformed-argument refusal fills its slot and returns before
+      // `startedUpTo` advances (it truly never started). Appending again would
+      // write TWO results for one callId — a `tool_use` answered twice.
+      //
+      // `slots[i] !== undefined` is the SAFE kind of "was this filled?" test:
+      // a filled slot is always an OBJECT (`Slot | SyntheticSlot` both are), so
+      // there is no "filled with `undefined`" state that a value test would
+      // confuse with "not filled" — unlike the flag/value pairs this file has
+      // collided with three times.
+      if (slots[i] !== undefined) continue
+      const call = batch[i]!
+      append(session, {
+        type: "tool/result",
+        callId: call.callId,
+        name: call.name,
+        output: {
+          error: "tool call cancelled: a sibling call in the same batch failed",
+          code: TOOL_CANCELLED_BY_SIBLING,
+        },
+      })
+    }
+    // STATED COST (inherited, not introduced): the cursor stopped where the
+    // commit lane threw, so every slot from there on never reached the log — a
+    // settled sibling's REAL result AND the synthetic fills written just above
+    // (the filled slots lose their tool/result too, not only the settled
+    // siblings). The never-started calls are appended outside the cursor, so
+    // they do get theirs. The abort path has the same hole. The rethrow below
+    // does not repair the cursor; it makes the half-committed log fail the turn
+    // loudly instead of letting the turn continue in silence.
+    if (hasCommitError) throw commitError
   }
 }

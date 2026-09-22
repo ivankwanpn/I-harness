@@ -6,6 +6,13 @@ export { createRoleRegistry, builtinRoles } from "./roles.ts"
 export type { SubagentRole, RoleRegistry } from "./roles.ts"
 export { createAgentTable } from "./agent-table.ts"
 export type { ChildStatus, ChildAgentEntry, AgentTable } from "./agent-table.ts"
+// W11: the runtime-context section naming sub-agents past the staleness
+// threshold. Its consumer is the assembly (`createSessionAssembly`), which
+// registers it under the "subagents" section name. The section's options type
+// is deliberately NOT re-exported: no consumer names it, so a barrel export
+// would be a declared name with no reader (the reachability gate reports it as
+// a new row, and the assembly passes an object literal).
+export { createStaleSubagentsSection } from "./section.ts"
 export { forkTurns } from "./fork.ts"
 export { spawnChild } from "./child.ts"
 export type { SpawnOptions } from "./child.ts"
@@ -23,7 +30,6 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import type { ModelClient } from "@i-harness/llm-seam"
-import type { ProviderRegistry } from "@i-harness/provider"
 import type { ExecService } from "@i-harness/exec"
 // M24b (spec §3.3): optional workflow executor threaded into SubagentToolDeps
 // (type-only here — the runtime object flows from the host).
@@ -34,14 +40,22 @@ import { createAgentTable, type AgentTable, type ChildAgentEntry } from "./agent
 import { projectAgentTasks, type AgentTaskView } from "./projection.ts"
 import { createSubagentTools, ensureResidentAgent, sweepPendingInbox } from "./tools.ts"
 import type { SubagentToolDeps } from "./tools.ts"
+import type { RoleModelHost, RoleModelSelection, RoleModelState } from "./child.ts"
 import { createAgentRegistry, type AgentRegistry } from "@i-harness/core-agent"
 import { emitRestoredJobTransitions, restoreState, wireSubagentPersistence } from "./persist.ts"
 import type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 import { classifyRestoredTasks, createTaskRegistry, isSessionCancelledChain, taskDocKey, type TaskProtocolDocument, type TaskRegistry } from "./task-protocol.ts"
 import { createNotificationDrain, type ParentInputAdmission } from "./task-notification.ts"
 
-export interface RegisterSubagentOptions {
-  providers: ProviderRegistry
+export interface RegisterSubagentOptions extends RoleModelHost {
+  /** Resolve a selection to a live client through the HOST's provider plane —
+   * the same one the session's own model went through, so a role gets the same
+   * credentials, the same card table and the same protocol chain.
+   *
+   * It replaced a `ProviderRegistry` that `assembly.ts` built empty and nothing
+   * ever registered into, which made `role.model` throw `references unknown
+   * provider` for every value it could ever hold. */
+  resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   parentModel: ModelClient
   parentSession: ReturnType<typeof createSession>
@@ -145,8 +159,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   // registries the tools use.
   const subagentDeps: SubagentToolDeps = {
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
-    parentModel: opts.parentModel, providers: opts.providers, exec: opts.exec,
+    parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
+    // The role-model gate travels with the resolver it gates: both ride
+    // RegisterSubagentOptions → SubagentToolDeps → spawnChild's opts.
+    // Omitted when the host passed none — an unset switch is OFF, and the
+    // subagent package must not read one into existence.
+    ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
+    ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
     tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the
     // job_* tools see the third layer. Omitted when the host didn't pass one —

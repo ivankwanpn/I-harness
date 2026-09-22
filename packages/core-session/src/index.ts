@@ -13,6 +13,14 @@ export type SessionEvent =
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
+    // M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the
+    // call; the body runs later, in a batch (core-agent/src/index.ts:261-264).
+    // Without this marker a `tool/call` with no `tool/result` is indistinguishable
+    // between "never dispatched" and "dispatched, outcome unknown" — and the two
+    // demand opposite responses. Written BEFORE the body starts.
+    // `callId` is the identity; `eventSeq` is the durable seq of the `tool/call`
+    // it belongs to, present when the caller knows it (the production path does).
+    | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
     | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
     | { type: "step/end"; seq?: number }
     | { type: "turn/end"; seq?: number }
@@ -375,6 +383,66 @@ export type LLMMessage =
   | { role: "user"; content: string | LLMContentPart[] }
   | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[] }
   | { role: "tool"; toolCallId: string; content: string | LLMContentPart[] }
+
+/** M5/D3: the three markers that share the shadow mechanism (see the pre-pass
+ * inside deriveMessages). A rewrite of the model-visible projection is possible
+ * ONLY through one of these, which is what makes it derivable. */
+type ProjectionRewriteCause = "compaction/summary" | "compaction/reset" | "rewind"
+
+interface ProjectionRewrite {
+  /** How many rewrite markers the log carries right now. A CONSUMER COMPARES
+   * THIS BETWEEN REQUESTS: a bigger number than last time means a rewrite landed
+   * in between, which is what breaks the cached prefix. The absolute value is
+   * not a break — after one compaction it stays non-zero forever, so a boolean
+   * "was this rewritten?" would report every later request as a break. */
+  markers: number
+  /** The kind of the most recent marker, so a break can be ATTRIBUTED rather
+   * than merely noticed. Absent when there are none. */
+  lastCause?: ProjectionRewriteCause
+  /** Total seqs hidden by compaction markers. Rewind hides by window, so this
+   * counts only what the markers name. */
+  hiddenSeqs: number
+}
+
+export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
+  let markers = 0
+  let lastCause: ProjectionRewriteCause | undefined
+  let hiddenSeqs = 0
+  for (const ev of session.events) {
+    if (ev.type === "compaction/summary") {
+      markers += 1
+      lastCause = "compaction/summary"
+      hiddenSeqs += ev.shadowedSeqs.length
+    } else if (ev.type === "compaction/reset") {
+      markers += 1
+      lastCause = "compaction/reset"
+      hiddenSeqs += (ev.removedSeqs ?? []).length
+    } else if (ev.type === "rewind/point") {
+      // Same defensive shape as the pre-pass: a malformed persisted marker with
+      // a non-numeric or empty window contributes no cut, so it is not a rewrite.
+      if (typeof ev.seq === "number" && typeof ev.anchorSeq === "number" && ev.anchorSeq < ev.seq) {
+        markers += 1
+        lastCause = "rewind"
+      }
+    }
+  }
+  return { markers, hiddenSeqs, ...(lastCause !== undefined ? { lastCause } : {}) }
+}
+
+/** M5/D2: the projection as of a PREFIX of the log — `maxSeq` inclusive.
+ *
+ * The summarizer uses this to send a byte-prefix of the last main request, so
+ * its own call can reuse the provider's cache instead of paying full price for
+ * the whole conversation. Built through the SAME fold as deriveMessages, so the
+ * two cannot drift; that identity is the entire reason the cache can hit.
+ *
+ * Correct only when the cut is block-aligned — a boundary inside a tool block
+ * would project a different message list here than the main path sends. The
+ * compaction module guarantees that by walking its boundary off tool events.
+ */
+export function deriveMessagesUpTo(session: Session, maxSeq: number): LLMMessage[] {
+  return deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })
+}
 
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []

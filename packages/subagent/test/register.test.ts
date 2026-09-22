@@ -3,21 +3,23 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
-import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { registerSubagent } from "../src/index.ts"
+
+/** The seam is required; no role in these cases carries a model, so it is
+ * never reached — the cases that exercise a role's model supply their own. */
+const resolveModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("registerSubagent", () => {
   it("seeds built-in roles, mounts the 13 tools, and returns the registries", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
-    const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
 
     const { roles, jobs, table } = registerSubagent(ctx, parentReg, {
-      providers,
+      resolveModel,
       exec,
       parentModel: model,
       parentSession: session,
@@ -38,13 +40,12 @@ describe("registerSubagent", () => {
   it("returns a live task registry (durable records behind the mount)", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
-    const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
 
     const { tasks } = registerSubagent(ctx, parentReg, {
-      providers, exec, parentModel: model, parentSession: session,
+      resolveModel, exec, parentModel: model, parentSession: session,
     })
 
     expect(typeof tasks.submit).toBe("function")
@@ -55,11 +56,10 @@ describe("registerSubagent", () => {
   it("is idempotent when called twice on the same registry", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)
-    const providers = createProviderRegistry()
-    const exec = createExecService()
+    const exec = registerExec(createContext())
     const model = createMockClient([{ role: "assistant", text: "ok" }])
     const session = createSession()
-    registerSubagent(ctx, parentReg, { providers, exec, parentModel: model, parentSession: session })
-    expect(() => registerSubagent(ctx, parentReg, { providers, exec, parentModel: model, parentSession: session })).not.toThrow()
+    registerSubagent(ctx, parentReg, { resolveModel, exec, parentModel: model, parentSession: session })
+    expect(() => registerSubagent(ctx, parentReg, { resolveModel, exec, parentModel: model, parentSession: session })).not.toThrow()
   })
 })

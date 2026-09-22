@@ -58,8 +58,6 @@ import type { SessionCoordinator } from "@i-harness/session-persistence"
 export {
   DEFAULT_LIST_FILES_OPTIONS,
   DEFAULT_LIST_FILES_SKIP_NAMES,
-  listWorkspaceFiles,
-  type FileReferenceCandidate,
   type ListWorkspaceFilesOptions,
 } from "./files.ts"
 
@@ -98,7 +96,7 @@ export interface WorkspaceSnapshot {
 }
 
 /** The requested path is blank or malformed (DSH: workspace-invalid-path). */
-export class WorkspaceInvalidPathError extends Error {
+class WorkspaceInvalidPathError extends Error {
   readonly code = "workspace-invalid-path" as const
   constructor(message: string, readonly path: string) {
     super(message)
@@ -107,7 +105,7 @@ export class WorkspaceInvalidPathError extends Error {
 }
 
 /** The request payload violates a semantic input constraint (DSH: bad-request). */
-export class WorkspaceBadRequestError extends Error {
+class WorkspaceBadRequestError extends Error {
   readonly code = "bad-request" as const
   constructor(message: string) {
     super(message)
@@ -116,7 +114,7 @@ export class WorkspaceBadRequestError extends Error {
 }
 
 /** The referenced workspace record does not exist (DSH: workspace-not-found). */
-export class WorkspaceNotFoundError extends Error {
+class WorkspaceNotFoundError extends Error {
   readonly code = "workspace-not-found" as const
   constructor(message: string, readonly workspaceId: string) {
     super(message)
@@ -125,7 +123,7 @@ export class WorkspaceNotFoundError extends Error {
 }
 
 /** The proposed title duplicates another workspace's (DSH: workspace-name-conflict). */
-export class WorkspaceNameConflictError extends Error {
+class WorkspaceNameConflictError extends Error {
   readonly code = "workspace-name-conflict" as const
   constructor(message: string, readonly name: string) {
     super(message)
@@ -140,7 +138,7 @@ export class WorkspaceNameConflictError extends Error {
  * must never silently record a dangling id in a DISPLAY set the user cannot
  * see enumerated.
  */
-export class WorkspaceUnknownSessionError extends Error {
+class WorkspaceUnknownSessionError extends Error {
   readonly code = "session-not-found" as const
   constructor(message: string, readonly sessionId: string) {
     super(message)
@@ -148,7 +146,7 @@ export class WorkspaceUnknownSessionError extends Error {
   }
 }
 
-export interface WorkspaceRegistry {
+interface WorkspaceRegistry {
   /** All workspaces, registry order (creation order; DSH reorder deferred). */
   list(): Promise<Workspace[]>
   /** One workspace by id, or undefined when unknown. */

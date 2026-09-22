@@ -13,12 +13,15 @@
 // "workflow" (projectWorkflowRows over the assembly's real workflow executor
 // rows — the executor object itself is never passed here, only its row
 // snapshots). The "schedule" group is part of the summary union for hosts
-// that mount a schedule source; no source exists in this repo's assemblies
-// today, so the projection emits no schedule rows (honestly).
+// that mount a schedule source; an assembly now MOUNTS a real schedule driver
+// (session-executor's schedule delivery mount, 2026-09-21), but no schedule
+// source is fed to THIS projection yet — rows stay absent until a host provides
+// one (honestly).
 import type { AgentTable, ChildStatus } from "./agent-table.ts"
 import type { ChildAgentEntry } from "./agent-table.ts"
 import type { JobRegistry, JobStatus } from "./jobs.ts"
 import type { RoleRegistry } from "./roles.ts"
+import { modelLabelOf } from "./child.ts"
 import type { TaskRecord, TaskRegistry, TaskStatus } from "./task-protocol.ts"
 
 /** Summary status union — settled and recovered states map truthfully
@@ -62,8 +65,11 @@ export interface AgentTaskDetail {
   group: AgentTaskGroup
   /** The role the subagent was spawned with (subagent rows only). */
   role?: string
-  /** The role's CONFIGURED model (undefined = inherited from the parent —
- * the role carries no model). */
+  /** The model this child RAN on (subagent rows): the label RECORDED at spawn
+   * (`provider:model`), else the role's DECLARED model — a child spawned before
+   * labels were recorded — else the explicit inheritance statement. Never a
+   * re-derivation from settings: a running child's settings can change under it,
+   * and this payload has no settings getter to re-derive with anyway. */
   model?: string
   /** The parent's spawn prompt (durable task record). */
   parentPrompt?: string
@@ -160,7 +166,15 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
         id: row.id,
         group: row.group,
         ...(roleName !== undefined ? { role: roleName } : {}),
-        ...(role?.model !== undefined ? { model: `${role.model.provider}:${role.model.model}` } : {}),
+        // The recorded label is the fact (what the child RAN on). The role's
+        // declared model is the fallback evidence for an entry spawned before
+        // labels were recorded — spelled through `modelLabelOf`, the ONE
+        // spelling of that pair; with neither, say the inheritance outright.
+        ...(entry?.modelLabel !== undefined
+          ? { model: entry.modelLabel }
+          : role?.model !== undefined
+            ? { model: modelLabelOf(role.model) }
+            : { model: "inherited from the session" }),
         ...(pool?.prompt !== undefined ? { parentPrompt: pool.prompt } : {}),
         ...(pool?.resultText ?? entry?.finalText !== undefined ? { result: pool?.resultText ?? entry?.finalText } : {}),
         ...(pool?.error ?? entry?.error !== undefined ? { error: pool?.error ?? entry?.error } : {}),

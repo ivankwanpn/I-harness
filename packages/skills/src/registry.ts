@@ -6,11 +6,12 @@
 // is cheap); one bad skill warns and skips, never breaking the registry.
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join } from "node:path"
-import { homedir } from "node:os"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import { parseFrontmatter } from "./frontmatter.ts"
 import { searchSkillSummaries } from "./search.ts"
+import { resolveHarnessHome } from "@i-harness/harness-home"
 
-export type SkillSource = "workspace" | "global"
+export type SkillSource = "workspace" | "global" | "plugin"
 
 export interface Skill {
   name: string
@@ -43,6 +44,22 @@ export interface SkillRegistry {
 export interface SkillRegistryDeps {
   workspace?: string
   globalDir?: string
+  /**
+   * Additional read-only skill roots — plugin overlays. Each is scanned exactly
+   * like the workspace and global roots, and its skills report source `"plugin"`.
+   *
+   * PRECEDENCE (decided, not incidental): `global < plugin < workspace`. The
+   * user's own workspace is the most specific thing in play and wins; a plugin is
+   * a machine-level addition like the global root, and being an explicit install
+   * is why it outranks it. Pinned by test/extra-dirs.test.ts.
+   *
+   * This field is what `assembly.ts` has been passing (as
+   * `skills.extraDirs`) into a config that had no such field since the plugin
+   * seams were built — silently discarded, because TypeScript does not
+   * excess-property check spread properties. See the plugin-mount design
+   * (docs/superpowers/specs/2026-09-17-plugin-mount-design.md §4).
+   */
+  extraDirs?: string[]
   // Observability seam for the scan's warn+skip path (defaults to console.warn).
   onWarn?: (message: string) => void
 }
@@ -75,10 +92,35 @@ export class SkillToolError extends Error {
   }
 }
 
-const GLOBAL_SKILLS_DIR = join(homedir(), ".i-harness", "skills")
+/**
+ * The machine-level skills root: `<harness home>/skills`, where the harness home
+ * is `$IH_CONFIG_DIR` when set, else `~/.i-harness` (the default the module used
+ * to hard-code as `GLOBAL_SKILLS_DIR`).
+ *
+ * That is the SAME chain settings, hooks and the session store resolve, and it is
+ * this repo's isolation contract — a test that pins `IH_CONFIG_DIR` to a temp dir
+ * must not read the developer's real home (e2e/helpers.ts:29). The skills global
+ * root was the one place that ignored it, which is why a plugin-mount test could
+ * not be isolated. Resolved PER CALL on purpose: a module-level const captures the
+ * environment once, at import.
+ */
+function globalSkillsDir(): string {
+  return join(resolveHarnessHome(), "skills")
+}
 
+// W6 T6: the registry's warn+skip seam (a bad SKILL.md is skipped, and the
+// scan is how a host MOUNTS skills, hence phase `mount`). The default's body
+// now reaches the ambient instance and is the console call it always was when
+// none is installed — the same function, the same single verbatim argument,
+// which is what the console spies in this tree compare. The signature is
+// untouched; only the body moved.
 function defaultWarn(message: string): void {
-  console.warn(`[skills] ${message}`)
+  const d = currentDiagnostics()
+  if (d === undefined) {
+    console.warn(`[skills] ${message}`)
+    return
+  }
+  d.child("mount").warn(`[skills] ${message}`)
 }
 
 function errorText(err: unknown): string {
@@ -171,7 +213,7 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
   const onWarn = deps?.onWarn ?? defaultWarn
 
   function scanGlobal(): SkillSummary[] {
-    return scanSkillsDir(deps?.globalDir ?? GLOBAL_SKILLS_DIR, "global", onWarn)
+    return scanSkillsDir(deps?.globalDir ?? globalSkillsDir(), "global", onWarn)
   }
 
   function scanWorkspace(): SkillSummary[] {
@@ -179,21 +221,29 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
     return scanSkillsDir(join(deps.workspace, "skills"), "workspace", onWarn)
   }
 
+  function scanExtras(): SkillSummary[] {
+    const out: SkillSummary[] = []
+    for (const dir of deps?.extraDirs ?? []) out.push(...scanSkillsDir(dir, "plugin", onWarn))
+    return out
+  }
+
   function list(): SkillSummary[] {
     const merged = new Map<string, SkillSummary>()
     for (const summary of scanGlobal()) merged.set(summary.name, summary)
-    for (const summary of scanWorkspace()) merged.set(summary.name, summary) // workspace 蓋 global
+    for (const summary of scanExtras()) merged.set(summary.name, summary) // plugin 蓋 global
+    for (const summary of scanWorkspace()) merged.set(summary.name, summary) // workspace 蓋 plugin
     return [...merged.values()].sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  // Conventional <root>/<name>/SKILL.md probe locations, workspace first. Used
-  // only when the valid index has no such name: a skill whose file is BROKEN is
-  // skipped by the scan, but skill_get must fail explicitly on it instead of
-  // reporting a misleading SKILL_NOT_FOUND.
+  // Conventional <root>/<name>/SKILL.md probe locations, in the same precedence
+  // `list` resolves collisions with. Used only when the valid index has no such
+  // name: a skill whose file is BROKEN is skipped by the scan, but skill_get must
+  // fail explicitly on it instead of reporting a misleading SKILL_NOT_FOUND.
   function probeRoots(): [root: string, source: SkillSource][] {
     const roots: [string, SkillSource][] = []
     if (deps?.workspace !== undefined) roots.push([join(deps.workspace, "skills"), "workspace"])
-    roots.push([deps?.globalDir ?? GLOBAL_SKILLS_DIR, "global"])
+    for (const dir of deps?.extraDirs ?? []) roots.push([dir, "plugin"])
+    roots.push([deps?.globalDir ?? globalSkillsDir(), "global"])
     return roots
   }
 

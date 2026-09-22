@@ -4,20 +4,23 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { createProviderRegistry } from "@i-harness/provider"
-import { createExecService } from "@i-harness/exec"
+import { registerExec } from "@i-harness/exec"
 import { registerSubagent } from "@i-harness/subagent"
 import { registerGuardian, runGuardianReview, ensureReviewerRole, renderGuardianMessage } from "../src/guardian/index.ts"
 import { registerApprovalAnswerer } from "@i-harness/interaction"
 import { createApprovalPolicy } from "../src/index.ts"
 
+/** The seam is required; the reviewer role carries no model, so it is never
+ * reached — the spawn path that reads a role's model is covered in
+ * @i-harness/subagent's child.test.ts. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
+
 function makeSubagents(ctx: PluginContext, parentRegistry: ReturnType<typeof createToolRegistry>, parentSession: ReturnType<typeof createSession>, model: ReturnType<typeof createMockClient>) {
-  const exec = createExecService()
-  const providers = createProviderRegistry()
+  const exec = registerExec(createContext())
   const sub = registerSubagent(ctx, parentRegistry, {
-    providers, exec, parentModel: model, parentSession,
+    resolveModel: noRoleModel, exec, parentModel: model, parentSession,
   })
-  return { exec, providers, sub }
+  return { exec, sub }
 }
 
 describe("guardian review", () => {
@@ -53,7 +56,7 @@ describe("guardian review", () => {
     const { sub } = makeSubagents(ctx, parentRegistry, parentSession, reviewerModel)
     const verdict = await runGuardianReview({
       subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
-      providers: createProviderRegistry(), parentModel: reviewerModel,
+      resolveModel: noRoleModel, parentModel: reviewerModel,
       model: reviewerModel,
     }, { name: "write", reason: "write to ./x", args: { path: "./x" } })
     expect(verdict.outcome).toBe("approve")
@@ -73,7 +76,7 @@ describe("guardian review", () => {
     const { sub } = makeSubagents(ctx, parentRegistry, parentSession, reviewerModel)
     const verdict = await runGuardianReview({
       subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
-      providers: createProviderRegistry(), parentModel: reviewerModel,
+      resolveModel: noRoleModel, parentModel: reviewerModel,
       model: reviewerModel,
     }, { name: "write", reason: "r", args: { path: "x" } })
     expect(verdict.outcome).toBe("deny")
@@ -98,7 +101,7 @@ describe("guardian review", () => {
     const { sub } = makeSubagents(ctx, parentRegistry, parentSession, slowModel)
     const verdict = await runGuardianReview({
       subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
-      providers: createProviderRegistry(), parentModel: slowModel,
+      resolveModel: noRoleModel, parentModel: slowModel,
       model: slowModel, timeoutMs: 50,
     }, { name: "write", reason: "timed", args: { path: "x" } })
     expect(verdict.outcome).toBe("deny")
@@ -107,6 +110,42 @@ describe("guardian review", () => {
     // transient reviewer is cleaned up despite the timeout
     expect(sub.table.entries().size).toBe(0)
     expect(sub.agents.entries().size).toBe(0)
+  })
+
+  // The guardian's spawn is one of the assembly's three role-carrying spawn
+  // sites, so it must resolve the reviewer's model through the SAME seam the
+  // subagent tools use: a settings-declared `agents.roles.reviewer` entry plus
+  // `plugins.subagentModel` has to reach spawnChild from these deps. Without
+  // them the declared selection collapsed to the role's own (undefined) model,
+  // so the reviewer silently inherited the parent's client here while the
+  // team/rebuild paths resolved the declared one — the same role on two models.
+  it("a settings-declared reviewer selection reaches the guardian's spawn (no silent inherit)", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    // The parent's client answers with a verdict the runner cannot parse; the
+    // DECLARED client's verdict is the one that approves. So the verdict below
+    // says which client actually ran, not merely that one was built.
+    const parentModel = createMockClient([{ role: "assistant", text: "I think it is fine." }])
+    const declaredModel = createMockClient([
+      { role: "assistant", text: '{"outcome":"approve","rationale":"declared model ran","risk_level":"none"}' },
+    ])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, parentModel)
+    const calls: Array<{ provider: string; model: string }> = []
+    const verdict = await runGuardianReview({
+      subagents: sub, parentRegistry, parentSession, parentCtx: ctx,
+      resolveModel: async (selection) => {
+        calls.push(selection)
+        return { status: "ready" as const, binding: { client: declaredModel } }
+      },
+      parentModel,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: (roleName) => (roleName === "reviewer" ? { provider: "gw", model: "small" } : undefined),
+    }, { name: "write", reason: "write to ./x", args: { path: "./x" } })
+
+    expect(calls).toEqual([{ provider: "gw", model: "small" }])
+    expect(verdict.outcome).toBe("approve")
+    expect(verdict.rationale).toContain("declared model ran")
   })
 
   it("registerGuardian runs the full pipeline: deny skips the human answerer", async () => {
@@ -130,7 +169,7 @@ describe("guardian review", () => {
     const { sub } = makeSubagents(ctx, registry, session, reviewerModel)
     await registerGuardian(ctx, {
       subagents: sub, parentRegistry: registry, parentSession: session, parentCtx: ctx,
-      providers: createProviderRegistry(), parentModel: reviewerModel, model: reviewerModel,
+      resolveModel: noRoleModel, parentModel: reviewerModel, model: reviewerModel,
     })
     await expect(registry.execute({ name: "publish_artifact", args: { tag: "1.0" } })).rejects.toThrow(/guardian denied: no publishing today/)
   })

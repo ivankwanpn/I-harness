@@ -1,24 +1,38 @@
 /**
  * Local schedule driver — the session-side delivery loop (dsh driver parity,
  * IH-shaped). One `tick()` fold-checks every registered session's
- * schedule/change stream, dispatch-advances due records (the durable event is
- * the acceptance record) and only then notifies the injectable `onDue`
- * deliverer (the A1 inbox followup wire — this milestone ships the seam).
+ * schedule/change stream, asks `decideDue` for exactly ONE decision — a due
+ * one-shot, or one batch of every overdue fixed-rate record — and hands the HOST
+ * one `ScheduleDelivery` (the dispatch event(s), framed text, one idempotency
+ * key) through the injectable `deliver` seam.
+ * THE ENGINE DOES NOT WRITE THE LOG (spec §3.4's 2026-09-21 correction): the
+ * host owns "write or not" — it accepts by appending `[dispatch, admitted]` as
+ * ONE durable batch, and a throw means the HOST DID NOT ACCEPT. Not every host
+ * throw is a refusal, though: on the session-executor host a failed `flush` is
+ * a DURABILITY report — both events are already in memory (retained & retried;
+ * `deliveryErrors` carries the report, and the residual is a duplicate after a
+ * crash before the retry, never a loss).
  * Restart re-drive is FREE: a new driver instance over the same persisted
- * events delivers exactly the still-overdue remainder — records whose
- * dispatch was accepted are no longer due.
+ * events delivers exactly the still-overdue remainder — records whose dispatch
+ * was accepted are no longer due.
  *
- * Rules: append BEFORE deliver (a delivery without a durable accept is a
- * duplicate risk — fail-closed path); a corrupted schedule stream skips the
- * whole session with a deliveryError entry (projection-grade honesty); every
- * occurrences are resolved anchor-aligned via resolveEveryOccurrence.
+ * Rules: deliver BEFORE counting (a delivery the host did not accept is not
+ * counted — fail-closed path); a corrupted schedule stream OR a decision the state
+ * cannot satisfy skips that session with a deliveryError entry
+ * (projection-grade honesty) and never throws out of `tick()`; a batch is ONE
+ * model message, so N overdue records cost one turn, not N (spec §6.3).
  */
 
 import type { SessionEvent } from "@i-harness/core-session"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import {
+  decideDue,
   foldScheduleEvents,
-  resolveEveryOccurrence,
-  scheduleView,
+  renderEveryReminderBatchFraming,
+  renderReminderFraming,
+  scheduleBatchInputId,
+  scheduleOccurrenceInputId,
+  type ScheduleDecision,
   type ScheduleRecord,
 } from "./index.ts"
 
@@ -29,10 +43,26 @@ export interface ScheduleDue {
   occurrenceAt: string
 }
 
+/**
+ * ONE hand-off from the engine to the host: the durable dispatch event(s), the
+ * injection-resistant reminder text, the per-occurrence idempotency key, and
+ * the due entries this delivery covers. The host accepts by writing
+ * `[dispatchEvents…, admitted]` in ONE durable batch and the engine never
+ * touches the log (spec §3.4); a throw = the host did not accept (host-side
+ * durability semantics: see `ScheduleDriverOptions.deliver`).
+ */
+export interface ScheduleDelivery {
+  sessionId: string
+  dispatchEvents: SessionEvent[]
+  text: string
+  inputId: string
+  due: ScheduleDue[]
+}
+
 export interface ScheduleTickResult {
   delivered: number
   due: ScheduleDue[]
-  /** Per-session delivery failures (append/onDue), sessionId-prefixed — never a silent drop. */
+  /** Per-session delivery failures (the host's deliver), sessionId-prefixed — never a silent drop. */
   deliveryErrors: string[]
 }
 
@@ -41,10 +71,10 @@ export interface ScheduleDriverOptions {
   sessions(): string[]
   /** The session's foldable events; undefined = unknown session (skipped). */
   events(sessionId: string): readonly SessionEvent[] | undefined
-  /** Append durable events to the session log (the dispatch records). */
-  append(sessionId: string, events: SessionEvent[]): Promise<void>
-  /** Deliver a due reminder (the A1-inbox wire lands here later). */
-  onDue?: (due: ScheduleDue) => void | Promise<void>
+  /** Hand one delivery to the host — the ONLY writer of the log (spec §3.4). Throwing = the host
+   *  did not accept; on the session-executor host a failed flush still means in-memory acceptance
+   *  happened (the batch is retained & retried — `deliveryErrors` is a durability report). */
+  deliver: (delivery: ScheduleDelivery) => void | Promise<void>
   /** Wall-clock source (tests inject). Default Date.now. */
   now?: () => number
   /** Background tick interval; the first tick runs at start() (restart re-drive). */
@@ -68,56 +98,90 @@ function dispatchEventFor(record: ScheduleRecord, acceptedAt: number): SessionEv
   return { type: "schedule/change", version: 1, operation: "dispatch", id: record.id, acceptedAt: new Date(acceptedAt).toISOString() }
 }
 
+// W6 T6: the per-session log-corruption reporter's default (the driver is the
+// session-side delivery loop and reports a SESSION's stream, hence phase
+// `session`). The body reaches the ambient instance when a host installed one
+// and is the console call it always was when none is: same function, same
+// single verbatim argument. The option's signature is untouched.
+function defaultLogWarn(message: string): void {
+  const d = currentDiagnostics()
+  if (d === undefined) {
+    console.warn(`[schedule] ${message}`)
+    return
+  }
+  d.child("session").warn(`[schedule] ${message}`)
+}
+
 export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDriver {
   const nowFn = opts.now ?? Date.now
   const pollMs = opts.pollMs ?? 30_000
-  const logWarn = opts.logWarn ?? ((message: string) => console.warn(`[schedule] ${message}`))
+  const logWarn = opts.logWarn ?? defaultLogWarn
   let timer: NodeJS.Timeout | null = null
   let running = false
 
+  let ticking = false  // one tick in flight (W1's shape, settings/src/index.ts:1437): a tick that
+                       // arrives while one is running is SKIPPED, not queued — the next tick re-reads
+                       // the fold, and a skipped tick can never miss a state that has settled. Without
+                       // this guard two overlapping ticks can both fold BEFORE either host delivery
+                       // lands, and each would deliver the same occurrence.
   async function tick(): Promise<ScheduleTickResult> {
-    const result: ScheduleTickResult = { delivered: 0, due: [], deliveryErrors: [] }
-    const accepted = nowFn()
-    for (const sessionId of opts.sessions()) {
-      const events = opts.events(sessionId)
-      if (events === undefined) continue
-      let active: readonly ScheduleRecord[]
-      try {
-        active = foldScheduleEvents(events).active
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err)
-        result.deliveryErrors.push(`${sessionId}: ${reason}`)
-        logWarn(`schedule stream of ${sessionId} is corrupt: ${reason}`)
-        continue
-      }
-      for (const record of active) {
-        if (scheduleView(record, accepted).state !== "overdue") continue
-        const occurrenceAt = record.kind === "every"
-          ? resolveEveryOccurrence(record, accepted).occurrenceAt
-          : record.scheduledAt
+    if (ticking) return { delivered: 0, due: [], deliveryErrors: [] }
+    ticking = true
+    try {
+      const result: ScheduleTickResult = { delivered: 0, due: [], deliveryErrors: [] }
+      const accepted = nowFn()
+      for (const sessionId of opts.sessions()) {
+        const events = opts.events(sessionId)
+        if (events === undefined) continue
+        let decision: ScheduleDecision
         try {
-          // durable accept FIRST — a delivery without it double-fires on the next re-drive.
-          await opts.append(sessionId, [dispatchEventFor(record, accepted)])
+          // Fold AND decide under one guard: a corrupt stream and a decision this state cannot
+          // satisfy are the same session-scoped failure — reported, never thrown out of tick()
+          // (the in-flight guard's finally must still reset).
+          decision = decideDue(foldScheduleEvents(events).active, accepted)
         } catch (err) {
           const reason = err instanceof Error ? err.message : String(err)
           result.deliveryErrors.push(`${sessionId}: ${reason}`)
-          logWarn(`schedule dispatch of ${record.id} in ${sessionId} failed: ${reason}`)
+          logWarn(`schedule state of ${sessionId} is corrupt: ${reason}`)
           continue
         }
-        result.due.push({ sessionId, record, occurrenceAt })
-        result.delivered += 1
-        if (opts.onDue !== undefined) {
-          try {
-            await opts.onDue({ sessionId, record, occurrenceAt })
-          } catch (err) {
-            const reason = err instanceof Error ? err.message : String(err)
-            result.deliveryErrors.push(`${sessionId}: ${reason}`)
-            logWarn(`schedule delivery of ${record.id} in ${sessionId} failed: ${reason}`)
-          }
+        if (decision.kind === "none" || decision.kind === "wait") continue
+        try {
+          // ONE decision ⇒ ONE delivery: a single one-shot, or one batch whose dispatch events,
+          // framing and idempotency key are all built from that same decision.
+          const delivery: ScheduleDelivery = decision.kind === "one-shot"
+            ? {
+                sessionId,
+                dispatchEvents: [dispatchEventFor(decision.record, accepted)],
+                text: renderReminderFraming(decision.record),
+                inputId: scheduleOccurrenceInputId(decision.record, decision.occurrenceAt),
+                due: [{ sessionId, record: decision.record, occurrenceAt: decision.occurrenceAt }],
+              }
+            : {
+                sessionId,
+                dispatchEvents: decision.reminders.map(({ record }) => dispatchEventFor(record, accepted)),
+                text: renderEveryReminderBatchFraming(decision.reminders),
+                inputId: scheduleBatchInputId(decision.acceptedAt),
+                due: decision.reminders.map(({ record, occurrenceAt }) => ({ sessionId, record, occurrenceAt })),
+              }
+          // The HOST decides (spec §3.4): accept by writing [dispatch, admitted] as ONE durable
+          // batch, or refuse by throwing — nothing is counted before this returns.
+          await opts.deliver(delivery)
+          result.due.push(...delivery.due)
+          result.delivered += delivery.due.length
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err)
+          const label = decision.kind === "one-shot"
+            ? decision.record.id
+            : `batch [${decision.reminders.map(({ record }) => record.id).join(", ")}]`
+          result.deliveryErrors.push(`${sessionId}: ${reason}`)
+          logWarn(`schedule delivery of ${label} in ${sessionId} failed: ${reason}`)
         }
       }
+      return result
+    } finally {
+      ticking = false
     }
-    return result
   }
 
   return {

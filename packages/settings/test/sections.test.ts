@@ -5,7 +5,6 @@ import { join } from "node:path"
 import {
   SettingsStore,
   normalizeSettings,
-  SETTINGS_DEFAULTS,
 } from "../src/index.ts"
 import {
   describeSection,
@@ -17,6 +16,11 @@ import {
   type SectionOp,
   type SectionSchema,
 } from "../src/index.ts"
+
+/** The defaults, obtained through the PUBLIC api — `SETTINGS_DEFAULTS` is
+ * module-private now (nothing outside `index.ts` read it in production).
+ * `normalizeSettings` is pure, so a module-scope constant is safe. */
+const DEFAULTS = normalizeSettings(undefined)
 
 /** Test-local accessor for the unknown-typed view layers. */
 type AnyRecord = Record<string, any>
@@ -39,23 +43,22 @@ describe("new keys default without migration (old file loads fine)", () => {
     const file = join(root, "settings.json")
     await writeFile(
       file,
-      JSON.stringify({ theme: "dark", sandboxMode: "read-only", fontSize: 15, plugins: { bash: false } }),
+      JSON.stringify({ language: "zh", sandboxMode: "read-only", fontSize: 15, plugins: { bash: false } }),
     )
     const store = new SettingsStore({ path: file })
     await store.load()
-    expect(store.get().theme).toBe("grok-night") // legacy "dark" soft-normalizes
     expect(store.get().sandboxMode).toBe("read-only")
     expect(store.get().fontSize).toBe(15)
     expect(store.get().plugins.bash).toBe(false)
     // the appended keys come from defaults — no migration path
-    expect(store.get().llm).toEqual(SETTINGS_DEFAULTS.llm)
-    expect(store.get().onboarding).toEqual(SETTINGS_DEFAULTS.onboarding)
+    expect(store.get().llm).toEqual(DEFAULTS.llm)
+    expect(store.get().onboarding).toEqual(DEFAULTS.onboarding)
     // load() must not rewrite the document (no migration writes)
-    expect(await readFile(file, "utf8")).toBe(JSON.stringify({ theme: "dark", sandboxMode: "read-only", fontSize: 15, plugins: { bash: false } }))
+    expect(await readFile(file, "utf8")).toBe(JSON.stringify({ language: "zh", sandboxMode: "read-only", fontSize: 15, plugins: { bash: false } }))
     // and a reload from the same file keeps the extra defaults
     const again = new SettingsStore({ path: file })
     await again.load()
-    expect(again.get().llm).toEqual(SETTINGS_DEFAULTS.llm)
+    expect(again.get().llm).toEqual(DEFAULTS.llm)
     await rm(root, { recursive: true, force: true })
   })
 
@@ -72,9 +75,9 @@ describe("new keys default without migration (old file loads fine)", () => {
     })
     // T1 (providers): trailing /v1 stripped at normalize (root convention),
     // old string model entries soft-upgrade to {id}. Protocol is NOT filled
-    // (review r1: the per-route default is the consumers' seed chain —
-    // user > SEEDED_PROTOCOLS > DEFAULT — filling it here would shadow a
-    // seeded route's protocol, e.g. anthropic-messages).
+    // (review r1: resolution belongs to the consumers' seed chain —
+    // user > SEEDED_PROTOCOLS, with no tail after it — filling it here would
+    // shadow a seeded route's protocol, e.g. anthropic-messages).
     expect(s.llm.providers.gateway).toEqual({
       apiKeyEnv: "GATEWAY_KEY",
       baseURL: "https://g.local",
@@ -83,7 +86,7 @@ describe("new keys default without migration (old file loads fine)", () => {
     expect(s.llm.providers.broken).toBeUndefined()
     expect(s.llm.defaultModel).toEqual({ provider: "gateway", model: "g1", reasoningEffort: "high" })
     expect(s.onboarding.welcomeNoticeVersion).toBe("2026-08-30.1")
-    expect(s.theme).toBe("system") // unrelated top-level key untouched
+    expect(s.searchBackend).toBe("jsonl") // unrelated top-level key untouched
   })
 
   it("the revision meta key is additive-only: not part of normalized output", async () => {
@@ -92,7 +95,7 @@ describe("new keys default without migration (old file loads fine)", () => {
     const raw = JSON.parse(await readFile(file, "utf8"))
     expect(raw._revision).toEqual({ llm: 1 })
     expect("_revision" in normalizeSettings(raw)).toBe(false) // old readers never see it
-    expect("llm" in SETTINGS_DEFAULTS).toBe(true)
+    expect("llm" in DEFAULTS).toBe(true)
     await rm(root, { recursive: true, force: true })
   })
 })
@@ -135,12 +138,12 @@ describe("describeSection", () => {
     expect(value.providers.gateway.baseURL).toBe("https://gateway.local") // /v1 stripped on the write path
     expect(value.providers.gateway.models).toEqual([{ id: "g1" }, { id: "g2" }])
     // a route stays protocol-free at describe (resolution is the consumers'
-    // chain: user > SEEDED_PROTOCOLS({}) > DEFAULT — the user layer never got a
-    // protocol write)
+    // chain: user > SEEDED_PROTOCOLS({}), which now ends in absence — the user
+    // layer never got a protocol write)
     expect("protocol" in value.providers.gateway).toBe(false)
     // defaultModel section default: EMPTY ("" = unset — no seeded default model)
     expect(value.defaultModel).toEqual({ provider: "", model: "" })
-    expect(value.defaultModel).toEqual(SETTINGS_DEFAULTS.llm.defaultModel)
+    expect(value.defaultModel).toEqual(DEFAULTS.llm.defaultModel)
     // user layer only holds what was written (no normalize protocol fill)
     const user = view.user as AnyRecord
     const base = view.base as AnyRecord
@@ -184,7 +187,7 @@ describe("mutateSection", () => {
 
   it("set path ops persist and bump the section revision (monotonic across reload)", async () => {
     const { store, file, root } = await newStore()
-    await store.set({ theme: "grok-night" }) // unrelated top-level write must not disturb sections
+    await store.set({ fontSize: 16 }) // unrelated top-level write must not disturb sections
     const v1 = await mutateSection("llm", [{ op: "set", path: ["defaultModel", "provider"], value: "custom" }], store, 0)
     expect(v1.revision).toBe(1)
     expect((v1.value as AnyRecord).defaultModel.provider).toBe("custom")
@@ -194,8 +197,8 @@ describe("mutateSection", () => {
     // persisted: doc on disk is the merged view, old top-level key intact
     const raw = JSON.parse(await readFile(file, "utf8"))
     expect(raw.llm.defaultModel).toEqual({ provider: "custom", model: "m1" })
-    // set() re-normalizes before persisting — legacy "dark" lands as grok-night.
-    expect(raw.theme).toBe("grok-night")
+    // set() re-normalizes before persisting — the top-level write lands normalized.
+    expect(raw.fontSize).toBe(16)
     expect(raw._revision).toEqual({ llm: 2 })
     // revision survives a fresh instance pointing at the same file
     const again = new SettingsStore({ path: file })
@@ -460,31 +463,44 @@ describe("provider protocol + models objects (Task 1)", () => {
     expect(normalizeSettings({ llm: { providers: { p: { protocol: "gpt-5" } } } }).llm.providers.p).toBeUndefined()
   })
 
-  it("resolveProviderProtocol chains user > SEEDED_PROTOCOLS({}) > DEFAULT (T2 probe / T4 dispatch)", () => {
+  it("resolveProviderProtocol chains user > SEEDED_PROTOCOLS({}) — and stops there (T2 probe / T4 dispatch)", () => {
     // user value wins
     expect(resolveProviderProtocol("anthropic", { protocol: "openai-completions" })).toBe("openai-completions")
-    // Amendment: no seeds remain — ANY route without a user protocol resolves
-    // to the generic default (there is no seeded deepseek/anthropic/openai
-    // protocol anymore; every provider is settings-managed).
-    expect(resolveProviderProtocol("anthropic", { apiKeyEnv: "ANTHROPIC_API_KEY" })).toBe("openai-completions")
-    expect(resolveProviderProtocol("openai", {})).toBe("openai-completions")
-    expect(resolveProviderProtocol("deepseek", undefined)).toBe("openai-completions")
-    expect(resolveProviderProtocol("openai-compatible", undefined)).toBe("openai-completions")
-    // unknown route → the generic default (indistinguishable now — no seeds)
-    expect(resolveProviderProtocol("custom-route", {})).toBe("openai-completions")
+    // Amendment: no seeds remain, and there is no tail after them — a route
+    // without a user protocol resolves to ABSENCE, which the callers refuse on
+    // (there is no seeded deepseek/anthropic/openai protocol anymore; every
+    // provider is settings-managed).
+    expect(resolveProviderProtocol("anthropic", { apiKeyEnv: "ANTHROPIC_API_KEY" })).toBeUndefined()
+    expect(resolveProviderProtocol("openai", {})).toBeUndefined()
+    expect(resolveProviderProtocol("deepseek", undefined)).toBeUndefined()
+    expect(resolveProviderProtocol("openai-compatible", undefined)).toBeUndefined()
+    // unknown route → absence too (indistinguishable now — no seeds)
+    expect(resolveProviderProtocol("custom-route", {})).toBeUndefined()
   })
 
-  it("apiKeyEnv-only user entry stays protocol-free; the resolved protocol is the DEFAULT (no seeds remain)", async () => {
+  it("a route with no declared protocol resolves to undefined, not to a default", () => {
+    // The tail this removes: a route nobody declared a protocol for used to
+    // resolve to "openai-completions" SILENTLY. Absence is now absence.
+    expect(resolveProviderProtocol("gateway")).toBeUndefined()
+  })
+
+  it("a declared protocol still wins, and an invalid one is still invalid", () => {
+    expect(resolveProviderProtocol("gateway", { protocol: "anthropic-messages" })).toBe("anthropic-messages")
+    // Read-tolerant: a raw caller's garbage falls through to absence, not to a guess.
+    expect(resolveProviderProtocol("gateway", { protocol: "nope" as never })).toBeUndefined()
+  })
+
+  it("apiKeyEnv-only user entry stays protocol-free; resolution is ABSENT (no seeds remain)", async () => {
     const { store, root } = await newStore()
     // the settings UI's typical partial write: only the key ref, no protocol
     await mutateSection("llm", [{ op: "set", path: ["providers", "anthropic", "apiKeyEnv"], value: "ANTHROPIC_API_KEY_USER" }], store)
     const userCfg = store.get().llm.providers.anthropic
     // user layer stays protocol-free (no normalize fill)
     expect(userCfg).toEqual({ apiKeyEnv: "ANTHROPIC_API_KEY_USER" })
-    expect(resolveProviderProtocol("anthropic", userCfg)).toBe("openai-completions")
+    expect(resolveProviderProtocol("anthropic", userCfg)).toBeUndefined()
     const view = describeSection("llm", store)
     // merged value = the user layer only (every provider is settings-managed);
-    // the resolved default belongs to the consumers' chain, never the view
+    // the resolved protocol belongs to the consumers' chain, never the view
     expect((view.value as AnyRecord).providers.anthropic).toEqual({
       apiKeyEnv: "ANTHROPIC_API_KEY_USER",
     })
@@ -492,7 +508,7 @@ describe("provider protocol + models objects (Task 1)", () => {
     await rm(root, { recursive: true, force: true })
   })
 
-  it("invalid raw protocol in an old file falls back to the DEFAULT protocol at read (no load failure)", async () => {
+  it("invalid raw protocol in an old file degrades to absent at read, and resolution is ABSENT (no load failure)", async () => {
     const root = await tmpRoot()
     const file = join(root, "settings.json")
     await writeFile(file, JSON.stringify({
@@ -503,7 +519,7 @@ describe("provider protocol + models objects (Task 1)", () => {
     const userCfg = store.get().llm.providers.anthropic
     // the bad raw value degrades to absent (not to the old generic default fill)
     expect(userCfg).toEqual({ apiKeyEnv: "ANTHROPIC_API_KEY" })
-    expect(resolveProviderProtocol("anthropic", userCfg)).toBe("openai-completions")
+    expect(resolveProviderProtocol("anthropic", userCfg)).toBeUndefined()
     await rm(root, { recursive: true, force: true })
   })
 
@@ -553,10 +569,11 @@ describe("provider protocol + models objects (Task 1)", () => {
     ])
   })
 
-  it("SEEDED_PROTOCOLS is EMPTY: no built-in provider routes (the resolver keeps the user > {} > DEFAULT chain shape)", () => {
+  it("SEEDED_PROTOCOLS is EMPTY: no built-in provider routes (the resolver keeps the user > {} chain shape)", () => {
     // Amendment: seeds were removed entirely — every provider comes from the
     // user section. The export stays (the resolver chain shape
-    // `user > SEEDED_PROTOCOLS > DEFAULT` is preserved); it simply never matches.
+    // `user > SEEDED_PROTOCOLS` is preserved, with NO tail after it); it simply
+    // never matches.
     expect(SEEDED_PROTOCOLS).toEqual({})
   })
 })

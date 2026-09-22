@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from "vitest"
-import { createProviderRegistry, buildModelClient, buildWireClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+import { readFileSync } from "node:fs"
+import { createProviderRegistry, buildModelClient, resolveModelCard, resolveModelContext, resolveEffectiveModelContext, type ProviderProfile } from "../src/index.ts"
+
+// D3: the table's own shape is asserted by reading the SHIPPED FILE, because
+// the loader's readers are not exported — they have no production consumer yet
+// (see the note in ../src/index.ts). What IS exported is the alias RESOLUTION,
+// and that is what the tests below drive.
+const CATALOG = JSON.parse(
+  readFileSync(new URL("../src/model-catalog.json", import.meta.url), "utf8"),
+) as {
+  generatedAt: string
+  families: Record<string, { source: string; models: Record<string, { aliases?: string[] }> }>
+}
 
 describe("provider registry", () => {
   it("registers, lists, and removes providers", () => {
@@ -40,12 +52,20 @@ describe("provider registry", () => {
     await it.return?.()
   })
 
-  it("buildWireClient dispatches the new wire protocols and returns undefined otherwise", () => {
-    expect(buildWireClient("gemini", { apiKey: "k", model: "m" })).toBeDefined()
-    expect(buildWireClient("bedrock", { apiKey: "", model: "m" })).toBeDefined()
-    expect(buildWireClient("openai-completions", { apiKey: "k", model: "m" })).toBeDefined()
-    expect(buildWireClient("no-such-protocol", { apiKey: "k", model: "m" })).toBeUndefined()
-  })
+  // M1 Phase B Task 4: the case that stood here called `buildWireClient` directly. That
+  // dispatcher was a dead declaration -- nothing reached it on any production path -- so
+  // it and this case were deleted together: the `openai-completions` arm and the
+  // unknown-protocol -> undefined arm tested dead code, and coverage of dead code has no
+  // value. Provenance: `git show 24e9395` (the deletion; its message states what the
+  // factory was for). One claim in that message is superseded -- there is NO live defect
+  // waiting for the factory. `adapterProtocol` in packages/provider-runtime/src/index.ts
+  // maps the resolved wire vocabulary onto the adapter markers injectively (only
+  // "openai-completions" is renamed, to "openai-compatible"; the other four pass
+  // through), so `buildModelClient` -- what provider-runtime actually calls -- already
+  // dispatches every resolved route to the client the deleted switch returned. A
+  // wire-keyed factory is useful only to a consumer that holds the resolved string and
+  // no profile (the frozen web build), so re-adding one is new public surface with no
+  // current consumer.
 
   it("buildModelClient throws on unknown protocol", () => {
     expect(() => buildModelClient({ name: "x", displayName: "X", protocol: "bogus" as never }, "m")).toThrow(/protocol/i)
@@ -188,7 +208,7 @@ describe("M32 model catalog", () => {
     expect(resolveModelCard("bedrock", "anthropic.claude-3-5-haiku-20241022")).toEqual({ contextWindow: 200_000, maxOutputTokens: 8_192 })
   })
 
-  it("resolveModelCard: unknown route/model → undefined", () => {
+  it("resolveModelCard: unknown family/model → undefined", () => {
     expect(resolveModelCard("openai", "gpt-4o")).toBeUndefined()
     expect(resolveModelCard("deepseek", "gpt-4o")).toBeUndefined()
   })
@@ -223,5 +243,42 @@ describe("M32 model catalog", () => {
   it("resolveEffectiveModelContext: no card + no window anywhere → undefined (fail-closed unchanged)", () => {
     const profile: ProviderProfile = { name: "openai", displayName: "O", protocol: "openai-responses" }
     expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })).toBeUndefined()
+  })
+})
+
+// D3 (docs/superpowers/specs/2026-09-19-provider-model-catalog-design.md §3):
+// the table carries WHERE ITS NUMBERS CAME FROM, and a retired model name is an
+// ALIAS of the current row rather than a second copy of its numbers.
+//
+// Both are enforced by the loader instead of promised by a comment: a family
+// with no `source` is refused at load, and duplicated numbers cannot drift
+// because there is only one row to edit.
+describe("D3 model catalog: provenance and aliases", () => {
+  it("declares when the table was last revised, and a source per family", () => {
+    expect(CATALOG.generatedAt).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    // Every family the loader will serve declares where its numbers came from —
+    // the loader REFUSES a table where one does not, so this is the shipped
+    // instance of an enforced invariant, not a convention.
+    expect(Object.keys(CATALOG.families)).toEqual(["deepseek", "gemini", "bedrock"])
+    for (const family of Object.values(CATALOG.families)) {
+      expect(family.source.trim().length).toBeGreaterThan(0)
+    }
+  })
+
+  it("a RETIRED name resolves the SAME card as the current name", () => {
+    const current = resolveModelCard("deepseek", "deepseek-flash")
+    expect(current).toBeDefined()
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash")).toEqual(current)
+    expect(resolveModelCard("deepseek", "deepseek-v4-flash-vision-exp")).toEqual(current)
+  })
+
+  it("an alias is NOT a row of its own — one row holds the numbers, so they cannot drift", () => {
+    const models = CATALOG.families.deepseek!.models
+    expect(Object.keys(models)).toEqual(["deepseek-flash", "deepseek-v4-pro"])
+    expect(models["deepseek-flash"]!.aliases).toEqual(["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"])
+    // The alias names appear as ALIASES and never as keys: `deepseek-v4-flash`
+    // is an entry above and MUST NOT be one here.
+    for (const alias of models["deepseek-flash"]!.aliases!) expect(models[alias]).toBeUndefined()
+    expect(models["deepseek-v4-pro"]!.aliases).toBeUndefined()
   })
 })

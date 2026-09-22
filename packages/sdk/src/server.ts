@@ -2,13 +2,44 @@
 // handler over the C-region SessionService. The CLI wires it to stdio
 // (`i-harness sdk`); an embedder can wire it to any duplex.
 //
-// Wire contract (methods):
-//   initialize             → { name, version, protocolVersion, capabilities }
-//   session/prompt {sessionId, prompt}
-//                          → { sessionId, ok: true }    when the turn drained;
-//                            error response -32603 on a failed turn (data.event
-//                            carries the collected events)
-//   session/status {sessionId} → { running, queued }
+// Wire contract (methods) — ALL 19 switch cases below, in switch order (the
+// list was re-written from the switch on 2026-09-22; it had omitted seven
+// methods — session/create, session/fork, session/model/state,
+// session/model/set, session/tasks, session/tasks/cancel, session/dashboard):
+//   initialize {clientInfo?} [M68 v3 — THE GATE]
+//                          → { name, version, protocolVersion, capabilities };
+//                            opens the gate and captures the connection
+//                            identity ONCE; a second initialize is idempotent
+//                            (same reply, first-wins identity)
+//   session/create {}      [additive; host-gated on opts.createSession]
+//                          → { sessionId } — absent seam → -32601
+//   session/fork {sessionId} [additive; host-gated on opts.forkSession]
+//                          → { sessionId } — absent seam → -32601
+//   session/model/state {sessionId} [additive; host-gated on opts.modelState]
+//                          → SessionModelState — absent seam → -32601
+//   session/model/set {sessionId, selection} [additive; host-gated]
+//                          → the fresh SessionModelState — the host's
+//                            setSessionModel rebinds the LIVE session in place
+//                            (the server never disposes it); a busy session
+//                            refuses -32603
+//   session/status {sessionId} → { running, queued } (count-only surface)
+//   session/queue {sessionId}    [M49 Task 11]
+//                          → { items } — the real per-session queue projection
+//                            (running row first, rest FIFO)
+//   session/queue/cancel {sessionId, id} [M49 Task 11]
+//                          → { cancelled } — one queued row, honest false for
+//                            finished/running/unknown ids
+//   session/tasks {sessionId}    [M49 Task 12]
+//                          → { items } — the real per-session task projection
+//                            (serialized summary rows; an unknown-but-valid
+//                            session answers an honest empty list)
+//   session/tasks/cancel {sessionId, id} [M49 Task 12]
+//                          → { status } — cancelled through the owning
+//                            registry; an unknown id keeps the not-found
+//                            semantics (-32602 "unknown job/task")
+//   session/cancel {sessionId}   [M41b v1.1]
+//                          → { cancelled, reason? } — aborts the in-flight
+//                            submit's per-session AbortController
 //   session/history {sessionId, afterSeq?, limit?}  [M41a v1]
 //                          → { events, nextSeq }; unknown session → -32602
 //                            with an explicit "session not found" message
@@ -16,15 +47,11 @@
 //                          → { sessions, listingUnavailable? } (injectable
 //                            listSessions source; absent source → honest
 //                            listingUnavailable: true)
-//   session/cancel {sessionId}   [M41b v1.1]
-//                          → { cancelled, reason? } — aborts the in-flight
-//                            submit's per-session AbortController
-//   session/queue {sessionId}    [M49 Task 11]
-//                          → { items } — the real per-session queue projection
-//                            (running row first, rest FIFO)
-//   session/queue/cancel {sessionId, id} [M49 Task 11]
-//                          → { cancelled } — one queued row, honest false for
-//                            finished/running/unknown ids
+//   session/dashboard {}   [M49 Task 13]
+//                          → { sessions } — the LOCAL dashboard projection
+//                            (listing rows enriched with KNOWN live fields;
+//                            no cost/team member by shape; absent listing
+//                            source → the honest blank)
 //   session/rewind/points {sessionId}            [M41b v1.1]
 //   session/rewind/plan {sessionId, target, mode?}
 //   session/rewind/execute {sessionId, target, mode?}
@@ -32,14 +59,21 @@
 //                            the injectable rewindFactory (absent →
 //                            -32603 "rewind not enabled"); unknown session →
 //                            -32602 "session not found" (never auto-creates)
-//   shutdown               → { ok: true } (then onShutdown fires)
+//   session/prompt {sessionId, prompt}
+//                          → { sessionId, ok: true }    when the turn drained;
+//                            error response -32603 on a failed turn (data.event
+//                            carries the collected events)
+//   shutdown               → { ok: true } (then onShutdown fires) — EXEMPT from
+//                            the gate (a half-initialized client needs a way out)
 // Notifications (server → client):
 //   session/event  { sessionId, event }   — every appended session event
 //   session/status { sessionId, status, error? } — lifecycle transitions
-// Malformed lines are ignored; unknown methods get -32601; invalid params -32602.
+// Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
+// a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { append, subscribe, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   encodeFrame,
   isRpcNotification,
@@ -49,6 +83,7 @@ import {
   makeSuccess,
   decodeFrame,
   INVALID_PARAMS,
+  INVALID_REQUEST,
   METHOD_NOT_FOUND,
   INTERNAL_ERROR,
   PROTOCOL_VERSION,
@@ -65,6 +100,14 @@ import {
   type TaskCancelStatus,
   type DashboardSessionRow,
 } from "./protocol.ts"
+
+// W6 T6: ONE module-scope handle for this file's reports; the phase is `sdk`
+// because both come from the SDK host's own initialize handshake (a params or
+// clientInfo that is not an object: the connection identity is not captured,
+// and the handshake is never rejected for it). With nothing installed the
+// handle delegates to console.warn verbatim (one argument), so unset mode is
+// the pre-migration bytes.
+const d = diagnosticsFor("sdk")
 
 export const SDK_SERVER_NAME = "i-harness"
 export const SDK_SERVER_PROTOCOL_VERSION = PROTOCOL_VERSION
@@ -130,6 +173,14 @@ export interface SdkServer {
    * Async methods (session/prompt) resolve their response late; notifications
    * are pushed as they happen via onNotify. */
   handleLine(line: string): Promise<string | null>
+  /** M68 batch B (v3): the connection identity captured at the FIRST
+   * `initialize` — `{ name?, version? }`, absent when the client sent none (or
+   * sent garbage, which warns instead of rejecting). Captured ONCE: a second
+   * `initialize` never overwrites it. A CONNECTION-scoped fact (the session
+   * event log cannot derive it), so it is deliberately not persisted or
+   * logged; this accessor is its read path. It returns a COPY — the captured
+   * object is the server's own state, never a handle a caller can mutate. */
+  clientInfo(): { name?: string; version?: string } | undefined
   /** Notification sink (server → client). */
   onNotify(cb: (message: RpcNotification) => void): () => void
   /** Idempotent teardown: detaches the assembly bridges. */
@@ -155,6 +206,41 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const inflight = new Map<string, Inflight>()
   let closed = false
 
+  // M68 batch B (v3): the connection-scoped state — the gate and the identity
+  // captured behind it. Both are per-CONNECTION (this server object), never
+  // per-session: nothing below keys on a sessionId.
+  let initialized = false
+  let capturedClientInfo: { name?: string; version?: string } | undefined
+
+  /** Tolerant read of `params.clientInfo` (v3): a present-but-not-an-object
+   * params/clientInfo captures NOTHING and warns — the handshake is never
+   * rejected for it (the identity is informational; refusing the connection
+   * over it would be a strictly worse trade). Absent fields are dropped rather
+   * than coerced: a `{ name: 42 }` client gets `undefined`, never the string
+   * "42". */
+  const captureClientInfo = (params: unknown): { name?: string; version?: string } | undefined => {
+    if (params === undefined) return undefined
+    if (params === null || typeof params !== "object" || Array.isArray(params)) {
+      d.warn("[sdk-server] initialize: params is not an object — the connection identity was not captured")
+      return undefined
+    }
+    const raw = (params as { clientInfo?: unknown }).clientInfo
+    if (raw === undefined) return undefined
+    if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+      d.warn("[sdk-server] initialize: clientInfo is not an object — the connection identity was not captured")
+      return undefined
+    }
+    const name = typeof (raw as { name?: unknown }).name === "string" ? (raw as { name: string }).name : undefined
+    const version = typeof (raw as { version?: unknown }).version === "string"
+      ? (raw as { version: string }).version
+      : undefined
+    if (name === undefined && version === undefined) return undefined
+    return {
+      ...(name !== undefined ? { name } : {}),
+      ...(version !== undefined ? { version } : {}),
+    }
+  }
+
   /** One sink path for EVERY outgoing message: onWrite (the CLI's stdout
    * writer), then onNotify + subscription listeners for notifications. */
   const emitMessage = (message: RpcMessage): void => {
@@ -170,6 +256,21 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const assemblyUnsubscribes = new Map<string, () => void>()
   const offAssembly = service.onAssembly((assembly) => {
     if (assembly.sessionId === undefined) return
+    // The map holds AT MOST ONE closure per session, so a second assembly for
+    // the same id (the service rebuilds one per closeSession → getOrCreate)
+    // must release the previous subscription instead of orphaning it. A bare
+    // `.set` orphaned it: the map keeps only the current value, so the
+    // overwritten closure was unreachable forever and `close()` could never
+    // detach it — with a host-pre-seeded `session` (the same object on every
+    // build) the client kept receiving session/event twice, and the orphan's
+    // delivery outlived `close()`.
+    //
+    // What is load-bearing is the READ, not where the release call sits: the
+    // previous closure must be CAPTURED before the store overwrites the slot.
+    // Releasing after the store is fine when the capture came first (capture →
+    // set → release measures identically), but reading the slot back AFTER the
+    // store unsubscribes the NEW closure — the inverted bug, measured.
+    assemblyUnsubscribes.get(assembly.sessionId)?.()
     const unsubscribe = subscribe(assembly.session, (event) => {
       emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event }))
     })
@@ -262,13 +363,34 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   }
 
   async function handleRequest(method: string, params: unknown, id: number | string): Promise<RpcMessage> {
+    // M68 batch B (v3): `initialize` is THE GATE — the one funnel every request
+    // passes, so it sits above the switch (an unknown method is gated too: "has
+    // this connection handshaken?" is answered before "does this method exist",
+    // and the -32601 answer is unchanged once past the gate). `shutdown` is
+    // EXEMPT on purpose: a half-initialized client must have a way out. The
+    // error code has existed since v0 with no producer (protocol.ts's own note);
+    // a sequencing error is exactly what it was defined for.
+    if (method !== "initialize" && method !== "shutdown" && !initialized) {
+      return makeFailure(id, INVALID_REQUEST, "not initialized: send initialize first", {
+        reason: "not_initialized",
+      })
+    }
     switch (method) {
       case "initialize": {
+        // M68 batch B (v3): open the gate and capture the identity ONCE. A
+        // second initialize is IDEMPOTENT — same reply, no error — and its
+        // params are never read again (first-wins), so nothing a client sends
+        // later can retarget the connection identity.
+        if (!initialized) {
+          initialized = true
+          capturedClientInfo = captureClientInfo(params)
+        }
         // M41a v1: protocolVersion 2; the capabilities object only GAINS rows
         // (the v0 rows are byte-identical — additive-only). M41b v1.1: four
         // more additive rows total ("session-history"/"session-list" + the
-        // "session-cancel"/"session-rewind" appendix rows) — protocolVersion
-        // STAYS 2; the v1.1 surface is capability-advertised.
+        // "session-cancel"/"session-rewind" appendix rows). M68 batch B is the
+        // one non-additive step: the value is 3 and the gate above is why — the
+        // rows below are STILL only additive.
         return makeSuccess(id, {
           name: SDK_SERVER_NAME,
           version: opts.version ?? "0.1.0",
@@ -352,17 +474,24 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/model/set requires a non-empty sessionId")
         }
-        const selection = parseModelSelection(p.selection)
-        if (selection === undefined) {
-          return makeFailure(id, INVALID_PARAMS, "session/model/set requires non-empty provider and model")
-        }
+        const parsed = parseModelSelection(p.selection)
+        if (!parsed.ok) return makeFailure(id, INVALID_PARAMS, parsed.message)
+        const selection = parsed.selection
         const queue = service.queueState(p.sessionId)
         if (queue.running || queue.queued > 0) {
           return makeFailure(id, INTERNAL_ERROR, `session/model/set: session busy: ${p.sessionId}`)
         }
         try {
+          // Task 4 — DELIBERATE behavior change: the `closeSession` that used to
+          // follow the host call is GONE. It existed only because the change
+          // took effect on the NEXT assembly (tear the live one down, rebuild
+          // from the freshly persisted meta). The host's `setSessionModel`
+          // rebinds the LIVE assembly in place now, so disposing it here would
+          // undo the rebind it just performed — and the selection's protocol
+          // (§4.2②) is never persisted, so a rebuilt assembly could not recover
+          // it. The wiring note is updated in server.test.ts ("leaves the live
+          // session to the host's rebind").
           await opts.setSessionModel(p.sessionId, selection)
-          await service.closeSession(p.sessionId)
           return makeSuccess(id, serializeModelState(await opts.modelState(p.sessionId)))
         } catch (error) {
           return hostMethodFailure(id, "session/model/set", error)
@@ -691,6 +820,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
       emitMessage(reply)
       return encodeFrame(reply)
     },
+    clientInfo() {
+      // a COPY: the capture is the server's own state — a caller must not be
+      // able to mutate it through the accessor
+      return capturedClientInfo === undefined ? undefined : { ...capturedClientInfo }
+    },
     onNotify(cb) {
       notifiers.add(cb)
       return () => { notifiers.delete(cb) }
@@ -712,23 +846,53 @@ function validSessionIdResult(result: SessionIdResult, method: string): SessionI
   return { sessionId: result.sessionId }
 }
 
-function parseModelSelection(value: unknown): SessionModelSelection | undefined {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-  const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown }
+// The field whitelist is DELIBERATE, and the rule it serves is phase-independent:
+// a session's protocol is never PERSISTED — it must not reach `updateMeta` or the
+// session header — by owner decision (docs/superpowers/specs/2026-09-19-protocol-
+// selection-design.md §4.3: "session 的協議不寫進任何檔案", repeated in §7).
+// Task 4 widened this parser for the REBIND path (§6/§10): `protocol` is now
+// ACCEPTED and rides through to the host's `setSessionModel`, which resolves the
+// rebind with it and STRIPS it before anything writes a selection. The strip is
+// the load-bearing half: `updateMeta` takes the durable shape, which already
+// carries `protocol?`, so a relay that forwarded the whole selection would write
+// the header SILENTLY. The guard against exactly that is the "never persists a
+// protocol" case in apps/cli/test/sdk-wire-v11.test.ts (the live-rebind half is
+// its neighbour). The VALUE is not validated here on purpose — this file is the
+// wire contract, not the settings resolver; the host validates the five and
+// refuses an unknown one loudly (never dropping it, which would report "ready"
+// for a wire the caller named and did not get).
+function parseModelSelection(value: unknown):
+  | { ok: true; selection: SessionModelSelection }
+  | { ok: false; message: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return { ok: false, message: "session/model/set requires a selection object" }
+  }
+  const raw = value as { provider?: unknown; model?: unknown; reasoningEffort?: unknown; protocol?: unknown }
   if (typeof raw.provider !== "string" || raw.provider.trim() === ""
     || typeof raw.model !== "string" || raw.model.trim() === "") {
-    return undefined
+    return { ok: false, message: "session/model/set requires non-empty provider and model" }
   }
+  // Task 4 review F-2: the refusal names the FIELD that is wrong. One generic
+  // "provider and model" message for every malformed field told a caller whose
+  // `protocol` or `reasoningEffort` was bad to fix the field that was fine.
   if (raw.reasoningEffort !== undefined
     && (typeof raw.reasoningEffort !== "string" || raw.reasoningEffort.trim() === "")) {
-    return undefined
+    return { ok: false, message: "session/model/set requires reasoningEffort to be a non-empty string when present" }
+  }
+  if (raw.protocol !== undefined
+    && (typeof raw.protocol !== "string" || raw.protocol.trim() === "")) {
+    return { ok: false, message: "session/model/set requires protocol to be a non-empty string when present" }
   }
   return {
-    provider: raw.provider.trim(),
-    model: raw.model.trim(),
-    ...(typeof raw.reasoningEffort === "string"
-      ? { reasoningEffort: raw.reasoningEffort.trim() }
-      : {}),
+    ok: true,
+    selection: {
+      provider: raw.provider.trim(),
+      model: raw.model.trim(),
+      ...(typeof raw.reasoningEffort === "string"
+        ? { reasoningEffort: raw.reasoningEffort.trim() }
+        : {}),
+      ...(typeof raw.protocol === "string" ? { protocol: raw.protocol.trim() } : {}),
+    },
   }
 }
 

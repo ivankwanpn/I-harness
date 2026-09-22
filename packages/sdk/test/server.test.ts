@@ -7,7 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
 import { PassThrough } from "node:stream"
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, type Session, type SessionEvent } from "@i-harness/core-session"
 import { createSessionService, type SessionAssembly, type SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { HarnessClient } from "../src/client.ts"
@@ -18,6 +18,7 @@ import {
   makeRequest,
   INTERNAL_ERROR,
   INVALID_PARAMS,
+  INVALID_REQUEST,
   METHOD_NOT_FOUND,
   isRpcNotification,
   type RpcMessage,
@@ -26,13 +27,28 @@ import {
   type SessionQueueItem,
 } from "../src/protocol.ts"
 
-async function makeService(): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
+/** M68 batch B (v3): `initialize` is the GATE — every request other than
+ * `initialize`/`shutdown` is refused with -32600 until the connection has
+ * handshaken. Every test below that drives a session method therefore has to
+ * handshake first; the helper also pins the version the handshake answered
+ * with (a silent version change would otherwise re-point 30 call sites in
+ * one direction and hide itself). */
+async function handshake(server: SdkServer): Promise<void> {
+  const reply = await server.handleLine(encodeFrame(makeRequest(0, "initialize", {})))
+  expect(JSON.parse(reply!)).toMatchObject({ result: { protocolVersion: 3 } })
+}
+
+async function makeService(session?: Session): Promise<{ service: SessionService; cleanup: () => Promise<void> }> {
   const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-"))
   const service = createSessionService({
     workspace: dir,
     approveAll: true,
     modelPolicy: "test-mock",
     mockScript: [{ role: "assistant", text: "hello from the mock" }],
+    // W2: the optional host-pre-seeded session (assembly.ts's `session:`
+    // option). When given, EVERY build of a session resolves this same object
+    // — the shape that makes a rebuild's orphaned subscription observable.
+    ...(session !== undefined ? { session } : {}),
   })
   return { service, cleanup: () => rm(dir, { recursive: true, force: true }) }
 }
@@ -68,6 +84,9 @@ function makeStubService(): SessionService {
     submit: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
+    // The server itself never rebinds (the host seam does, Task 4) — present
+    // only to satisfy the interface the stub stands in for.
+    rebindModel: vi.fn(() => true),
     liveSession: () => undefined,
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
@@ -89,7 +108,7 @@ describe("createSdkServer", () => {
       const output = await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
       const msg = decodeFrame(output!) as RpcSuccess
       expect(msg.id).toBe(1)
-      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 2, version: "9.9" })
+      expect(msg.result).toMatchObject({ name: "i-harness", protocolVersion: 3, version: "9.9" })
       await server.close()
     } finally {
       await service.close()
@@ -103,7 +122,9 @@ describe("createSdkServer", () => {
   // protocol.ts JSDoc + docs/contracts.md "SDK Wire Contract v1/v1.1"). v1/v1.1
   // are additive bumps: protocolVersion stayed 2 (v1.1 is an APPENDIX — the
   // new surface is capability-advertised rows, the v0/v1 rows byte-identical).
-  it("initialize wire contract v1.1 (field-level lock)", async () => {
+  // M68 batch B: the lock now reads 3 — the initialize GATE is the breaking
+  // sequencing change; the capability rows above are untouched (still additive).
+  it("initialize wire contract v3 (field-level lock)", async () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // default version = "0.1.0" (contract)
@@ -115,7 +136,7 @@ describe("createSdkServer", () => {
         result: {
           name: "i-harness",
           version: "0.1.0",
-          protocolVersion: 2,
+          protocolVersion: 3,
           capabilities: {
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
@@ -174,6 +195,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const driveState = drive(server)
       const responsePromise = server.handleLine(
         encodeFrame(makeRequest(2, "session/prompt", { sessionId: "s1", prompt: "hello" })),
@@ -207,6 +229,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const bad = await server.handleLine(encodeFrame(makeRequest(3, "session/prompt", { sessionId: "", prompt: "" })))
       const msg = decodeFrame(bad!) as RpcFailure
       expect(msg.id).toBe(3)
@@ -222,6 +245,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const written: RpcMessage[] = []
       server.onNotify((m) => written.push(m))
       const unknown = await server.handleLine(encodeFrame(makeRequest(4, "nope-nothing", {})))
@@ -240,6 +264,7 @@ describe("createSdkServer", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const status = await server.handleLine(encodeFrame(makeRequest(5, "session/status", { sessionId: "s9" })))
       expect((decodeFrame(status!) as RpcSuccess).result).toEqual({ running: false, queued: 0 })
       await server.close()
@@ -265,27 +290,198 @@ describe("createSdkServer", () => {
     }
   })
 
-  it("a failed turn rejects the prompt (error response carries the message)", async () => {
-    // Service whose lane rejects on the first turn failure: a mock that calls
-    // a missing skill (SKILL_NOT_FOUND throw) fails the turn.
+  it("a failing tool body no longer fails the prompt — its reason reaches the client in the tool/result", async () => {
+    // M5 T4 block ①: a tool BODY that throws is SOFT — the turn continues and
+    // the reason reaches the model in the tool/result, which the server also
+    // streams to the client (session/event). Before that block the skill_get
+    // throw failed the TURN, so the prompt got an INTERNAL_ERROR response
+    // carrying SKILL_NOT_FOUND. The claim is unchanged ("the reason is never
+    // swallowed"); only the channel moved. The cassette's second step is the
+    // model's continuation, which the soft path now reaches — retrying with the
+    // error visible is the point of the contract.
     const dir = await mkdtemp(join(tmpdir(), "ih-sdk-server-fail-"))
     const service = createSessionService({
       workspace: dir,
       approveAll: true,
       modelPolicy: "test-mock",
-      mockScript: [{ role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] }],
+      mockScript: [
+        { role: "assistant", toolCalls: [{ name: "skill_get", args: { name: "missing" } }] },
+        { role: "assistant", text: "saw the failure" },
+      ],
     })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
+      const driveState = drive(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(7, "session/prompt", { sessionId: "s2", prompt: "go" })))
-      const msg = decodeFrame(reply!) as RpcFailure
+      const msg = decodeFrame(reply!) as RpcSuccess
       expect(msg.id).toBe(7)
-      expect(msg.error.code).toBe(INTERNAL_ERROR)
-      expect(String(msg.error.message)).toContain("SKILL_NOT_FOUND")
+      // The turn SURVIVED the tool failure — the contract change itself.
+      expect(msg.result).toEqual({ sessionId: "s2", ok: true })
+
+      // …and the reason is visible on the channel that replaced the error
+      // response: the tool/result for that call, as streamed to the client.
+      const events = driveState.out
+        .filter(isRpcNotification)
+        .filter((n) => n.method === "session/event")
+        .map((n) => (n.params as { event: SessionEvent }).event)
+      const failed = events.find((e): e is Extract<SessionEvent, { type: "tool/result" }> =>
+        e.type === "tool/result" && e.name === "skill_get")
+      expect(String((failed?.output as { error?: string } | undefined)?.error)).toContain("SKILL_NOT_FOUND")
       await server.close()
     } finally {
       await service.close()
       await rm(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+// M68 batch B (v3): `initialize` is the GATE — every request other than
+// `initialize` and `shutdown` is refused until the connection has handshaken.
+// The code (-32600 INVALID_REQUEST) has been defined since v0 and, per the
+// wire contract's own note, never emitted; the sequencing error this milestone
+// makes visible is its first producer. `shutdown` stays exempt so a
+// half-initialized client always has a way out; an UNKNOWN method stays -32601
+// after the handshake (the gate must not shadow method resolution).
+describe("createSdkServer initialize gate (M68 batch B)", () => {
+  it("refuses a session method before initialize (-32600, data.reason not_initialized)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const refused = await server.handleLine(
+        encodeFrame(makeRequest(1, "session/prompt", { sessionId: "g1", prompt: "too early" })),
+      )
+      const msg = decodeFrame(refused!) as RpcFailure
+      expect(msg.id).toBe(1)
+      expect(msg.error.code).toBe(INVALID_REQUEST)
+      expect(msg.error.data).toMatchObject({ reason: "not_initialized" })
+      // The gate is the ONLY difference: the same call goes through afterwards.
+      await handshake(server)
+      const allowed = await server.handleLine(
+        encodeFrame(makeRequest(2, "session/prompt", { sessionId: "g1", prompt: "hello" })),
+      )
+      expect((decodeFrame(allowed!) as RpcSuccess).result).toEqual({ sessionId: "g1", ok: true })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("captures the connection identity at initialize (clientInfo, once)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      expect(server.clientInfo()).toBeUndefined()
+      const reply = await server.handleLine(
+        encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "probe", version: "9" } })),
+      )
+      expect((decodeFrame(reply!) as RpcSuccess).result).toMatchObject({
+        name: "i-harness",
+        protocolVersion: 3,
+      })
+      expect(server.clientInfo()).toEqual({ name: "probe", version: "9" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("clientInfo() hands back a COPY — mutating it cannot reach the capture", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      await server.handleLine(encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "probe", version: "9" } })))
+      // The captured object is the server's own state; the accessor's contract
+      // is a copy, so a caller that edits what it got back must not be able to
+      // rewrite what the NEXT caller sees (nor the capture itself).
+      const first = server.clientInfo()!
+      first.name = "mutated"
+      delete first.version
+      expect(server.clientInfo()).toEqual({ name: "probe", version: "9" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("a second initialize is idempotent and the FIRST clientInfo wins", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      const first = await server.handleLine(
+        encodeFrame(makeRequest(1, "initialize", { clientInfo: { name: "first", version: "1" } })),
+      )
+      const firstResult = (decodeFrame(first!) as RpcSuccess).result
+      const second = await server.handleLine(
+        encodeFrame(makeRequest(2, "initialize", { clientInfo: { name: "second", version: "2" } })),
+      )
+      const secondMsg = decodeFrame(second!)
+      // no error frame, and the SAME reply (id aside)
+      expect(secondMsg).not.toHaveProperty("error")
+      expect((secondMsg as RpcSuccess).result).toEqual(firstResult)
+      // the captured identity is not overwritten — and the second params are
+      // never read again (a later request sees the FIRST value).
+      expect(server.clientInfo()).toEqual({ name: "first", version: "1" })
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("shutdown is exempt from the gate (a half-initialized client has a way out)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      let shutdownSeen = false
+      const server = createSdkServer(service, { onShutdown: () => { shutdownSeen = true } })
+      const reply = await server.handleLine(encodeFrame(makeRequest(1, "shutdown", {})))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ ok: true })
+      await new Promise((r) => setTimeout(r, 10))
+      expect(shutdownSeen).toBe(true)
+      // …while every other method is still behind the gate.
+      const refused = await server.handleLine(encodeFrame(makeRequest(2, "session/status", { sessionId: "g1" })))
+      expect((decodeFrame(refused!) as RpcFailure).error.code).toBe(INVALID_REQUEST)
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("an unknown method stays -32601 after the handshake (the gate never shadows it)", async () => {
+    const { service, cleanup } = await makeService()
+    try {
+      const server = createSdkServer(service)
+      await handshake(server)
+      const unknown = await server.handleLine(encodeFrame(makeRequest(2, "nope-nothing", {})))
+      expect((decodeFrame(unknown!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
+      await server.close()
+    } finally {
+      await service.close()
+      await cleanup()
+    }
+  })
+
+  it("initialize with garbage params still succeeds — clientInfo undefined, and a warning", async () => {
+    const { service, cleanup } = await makeService()
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const server = createSdkServer(service)
+      const reply = await server.handleLine(encodeFrame(makeRequest(1, "initialize", "not-an-object")))
+      expect((decodeFrame(reply!) as RpcSuccess).result).toMatchObject({
+        name: "i-harness",
+        protocolVersion: 3,
+      })
+      expect(server.clientInfo()).toBeUndefined()
+      expect(warn).toHaveBeenCalled()
+      await server.close()
+    } finally {
+      warn.mockRestore()
+      await service.close()
+      await cleanup()
     }
   })
 })
@@ -310,10 +506,10 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
     }
   })
 
-  it("round-trips create/fork/model state and invalidates the session binding after selection", async () => {
+  it("round-trips create/fork/model state and leaves the live session to the host's rebind", async () => {
     const service = makeStubService()
     const closeSession = vi.mocked(service.closeSession)
-    let selection: { provider: string; model: string; reasoningEffort?: string } | undefined
+    let selection: { provider: string; model: string; reasoningEffort?: string; protocol?: string } | undefined
     const server = createSdkServer(service, {
       createSession: async () => ({ sessionId: "created" }),
       forkSession: async (sessionId) => ({ sessionId: `${sessionId}-fork` }),
@@ -323,6 +519,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel: async (_sessionId, next) => { selection = next },
     })
     try {
+      await handshake(server)
       const created = await server.handleLine(encodeFrame(makeRequest(9, "session/create", {})))
       expect((decodeFrame(created!) as RpcSuccess).result).toEqual({ sessionId: "created" })
       const forked = await server.handleLine(encodeFrame(makeRequest(10, "session/fork", { sessionId: "created" })))
@@ -331,7 +528,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       expect((decodeFrame(before!) as RpcSuccess).result).toEqual({ status: "unconfigured", reason: "No model configured" })
       const selected = await server.handleLine(encodeFrame(makeRequest(12, "session/model/set", {
         sessionId: "created",
-        selection: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" },
+        selection: { provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high", protocol: "anthropic-messages" },
       })))
       expect((decodeFrame(selected!) as RpcSuccess).result).toEqual({
         status: "ready",
@@ -339,8 +536,23 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         modelId: "deepseek-chat",
         label: "deepseek:deepseek-chat",
       })
-      expect(selection).toEqual({ provider: "deepseek", model: "deepseek-chat", reasoningEffort: "high" })
-      expect(closeSession).toHaveBeenCalledWith("created")
+      // Task 4: the wire now CARRIES `protocol` through to the host seam — a
+      // rebind cannot honor a protocol the parser drops. What must NOT carry it
+      // is the durable write: the host (the CLI relay) strips it before
+      // anything reaches `updateMeta` (§4.3; guarded by the sdk-wire e2e).
+      expect(selection).toEqual({
+        provider: "deepseek",
+        model: "deepseek-chat",
+        reasoningEffort: "high",
+        protocol: "anthropic-messages",
+      })
+      // DELIBERATE CHANGE (Task 4): this used to assert closeSession WAS called
+      // here ("invalidate the session binding after selection"). That teardown
+      // existed only because the old mechanism took effect on the NEXT assembly.
+      // The change is LIVE now — the host's setSessionModel retargets the live
+      // assembly's handle — so closing would undo the very rebind it just made.
+      // The server never disposes a session on a model change; the host owns it.
+      expect(closeSession).not.toHaveBeenCalled()
     } finally {
       await server.close()
     }
@@ -354,15 +566,47 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel,
     })
     try {
+      await handshake(server)
       const invalid = await server.handleLine(encodeFrame(makeRequest(13, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "", model: "m" },
       })))
-      expect((decodeFrame(invalid!) as RpcFailure).error.code).toBe(INVALID_PARAMS)
+      const invalidError = (decodeFrame(invalid!) as RpcFailure).error
+      expect(invalidError.code).toBe(INVALID_PARAMS)
+      // The provider/model message is the one case where it belongs — it is
+      // pinned here so the field-specific branches below cannot have been
+      // bought by making this one vaguer.
+      expect(String(invalidError.message)).toContain("provider and model")
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      // A protocol that is not a non-empty string is REFUSED, never dropped:
+      // silently ignoring it would be the degradation this unit removes (the
+      // rebind would report "ready" while the wire the caller named was
+      // discarded).
+      const badProtocol = await server.handleLine(encodeFrame(makeRequest(14, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m", protocol: 42 },
+      })))
+      const protocolError = (decodeFrame(badProtocol!) as RpcFailure).error
+      expect(protocolError.code).toBe(INVALID_PARAMS)
+      // F-2: the refusal names the field that is actually wrong — this used to
+      // answer "requires non-empty provider and model", telling the caller to fix
+      // the field that was fine.
+      expect(String(protocolError.message)).toContain("protocol to be a non-empty string")
+      expect(String(protocolError.message)).not.toContain("provider and model")
+      expect(setSessionModel).not.toHaveBeenCalled()
+
+      const badEffort = await server.handleLine(encodeFrame(makeRequest(15, "session/model/set", {
+        sessionId: "s1",
+        selection: { provider: "p", model: "m", reasoningEffort: 42 },
+      })))
+      const effortError = (decodeFrame(badEffort!) as RpcFailure).error
+      expect(effortError.code).toBe(INVALID_PARAMS)
+      expect(String(effortError.message)).toContain("reasoningEffort to be a non-empty string")
       expect(setSessionModel).not.toHaveBeenCalled()
 
       vi.mocked(service.queueState).mockReturnValue({ running: true, queued: 0 })
-      const busy = await server.handleLine(encodeFrame(makeRequest(14, "session/model/set", {
+      const busy = await server.handleLine(encodeFrame(makeRequest(16, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "p", model: "m" },
       })))
@@ -370,14 +614,14 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       expect(setSessionModel).not.toHaveBeenCalled()
 
       vi.mocked(service.queueState).mockReturnValue({ running: false, queued: 1 })
-      const queued = await server.handleLine(encodeFrame(makeRequest(15, "session/model/set", {
+      const queued = await server.handleLine(encodeFrame(makeRequest(17, "session/model/set", {
         sessionId: "s1",
         selection: { provider: "p", model: "m" },
       })))
       expect((decodeFrame(queued!) as RpcFailure).error.message).toContain("busy")
       expect(setSessionModel).not.toHaveBeenCalled()
 
-      const unavailable = await server.handleLine(encodeFrame(makeRequest(16, "session/create", {})))
+      const unavailable = await server.handleLine(encodeFrame(makeRequest(18, "session/create", {})))
       expect((decodeFrame(unavailable!) as RpcFailure).error.code).toBe(METHOD_NOT_FOUND)
     } finally {
       await server.close()
@@ -402,6 +646,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       setSessionModel: async () => {},
     })
     try {
+      await handshake(server)
       const state = await server.handleLine(encodeFrame(makeRequest(17, "session/model/state", {
         sessionId: "s1",
       })))
@@ -435,6 +680,7 @@ describe("createSdkServer session ownership", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const replies = await Promise.all([
         server.handleLine(encodeFrame(makeRequest(20, "session/prompt", { sessionId: "existing", prompt: "one" }))),
         server.handleLine(encodeFrame(makeRequest(21, "session/prompt", { sessionId: "existing", prompt: "two" }))),
@@ -460,6 +706,7 @@ describe("createSdkServer session ownership", () => {
     const server = createSdkServer(service)
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(23, "session/prompt", {
         sessionId: "memory-only",
         prompt: "hello",
@@ -477,6 +724,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       // Drive one turn so the live session exists and has a full event log
       // (submit resolves AFTER the turn drained, so the log is stable).
       const promptReply = await server.handleLine(
@@ -546,6 +794,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(105, "session/history", { sessionId: "persisted" })),
       )
@@ -572,6 +821,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(106, "session/history", { sessionId: "missing" })),
       )
@@ -601,6 +851,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const server = createSdkServer(service, { coordinator })
 
     try {
+      await handshake(server)
       const reply = await server.handleLine(
         encodeFrame(makeRequest(107, "session/history", { sessionId: "persisted" })),
       )
@@ -621,6 +872,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(110, "session/history", { sessionId: "nope" })))
       const msg = decodeFrame(reply!) as RpcFailure
       expect(msg.id).toBe(110)
@@ -637,6 +889,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       for (const bad of [
         { sessionId: "h1", afterSeq: -1 },
         { sessionId: "h1", afterSeq: 1.5 },
@@ -657,6 +910,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // no listSessions option wired
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(120, "session/list", {})))
       expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({ sessions: [], listingUnavailable: true })
       await server.close()
@@ -677,6 +931,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
           ],
         }),
       })
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(121, "session/list", {})))
       expect((decodeFrame(reply!) as RpcSuccess).result).toEqual({
         sessions: [
@@ -697,6 +952,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       const server = createSdkServer(service, {
         listSessions: () => Promise.reject(new Error("store exploded")),
       })
+      await handshake(server)
       const reply = await server.handleLine(encodeFrame(makeRequest(122, "session/list", {})))
       const msg = decodeFrame(reply!) as RpcFailure
       expect(msg.error.code).toBe(INTERNAL_ERROR)
@@ -718,7 +974,7 @@ describe("createSdkServer v1 (session/history + session/list)", () => {
       const init = await server.handleLine(encodeFrame(makeRequest(130, "initialize", {})))
       expect((decodeFrame(init!) as RpcSuccess).result).toMatchObject({
         name: "i-harness",
-        protocolVersion: 2, // the version moved — but the v0 METHOD surface is intact
+        protocolVersion: 3, // the version moved — but the v0 METHOD surface is intact
       })
       const prompt = await server.handleLine(
         encodeFrame(makeRequest(131, "session/prompt", { sessionId: "v0c", prompt: "hello" })),
@@ -791,6 +1047,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const drv = drive(server)
       const promptPromise = server.handleLine(
         encodeFrame(makeRequest(140, "session/prompt", { sessionId: "c1", prompt: "go" })),
@@ -831,6 +1088,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const first = server.handleLine(encodeFrame(makeRequest(150, "session/prompt", { sessionId: "cq", prompt: "first" })))
       await waitStatus(server, "cq", { running: true })
       // second submit chains behind the running turn → queued; its controller
@@ -862,6 +1120,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const unknown = await server.handleLine(encodeFrame(makeRequest(160, "session/cancel", { sessionId: "nope" })))
       expect((decodeFrame(unknown!) as RpcSuccess).result).toEqual({ cancelled: false, reason: "not-found" })
       const bad = await server.handleLine(encodeFrame(makeRequest(161, "session/cancel", { sessionId: "" })))
@@ -893,6 +1152,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
           },
         }),
       })
+      await handshake(server)
       const drv = drive(server)
       // the live session must exist (never auto-created by a rewind read)
       const promptReply = await server.handleLine(
@@ -942,6 +1202,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service) // no rewindFactory wired
+      await handshake(server)
       // unknown session wins the check order (never auto-creates)
       const unknown = await server.handleLine(encodeFrame(makeRequest(180, "session/rewind/points", { sessionId: "u1" })))
       const unknownMsg = decodeFrame(unknown!) as RpcFailure
@@ -982,6 +1243,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
           },
         }),
       })
+      await handshake(server)
       await server.handleLine(encodeFrame(makeRequest(190, "session/prompt", { sessionId: "r3", prompt: "hello" })))
       for (const bad of [
         { sessionId: "r3", target: -1 },
@@ -1071,6 +1333,7 @@ describe("createSdkServer session/tasks (Task 12)", () => {
     const { service, gate, cleanup } = await gatedTaskService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const promptReply = await server.handleLine(encodeFrame(makeRequest(300, "session/prompt", { sessionId: "s1", prompt: "spawn a helper" })))
       expect(tasksReply(promptReply)?.result).toEqual({ sessionId: "s1", ok: true })
 
@@ -1122,6 +1385,7 @@ describe("createSdkServer session/tasks (Task 12)", () => {
     const { service, cleanup } = await makeService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const listed = tasksReply(await server.handleLine(encodeFrame(makeRequest(307, "session/tasks", { sessionId: "never-seen" }))))
       expect((listed!.result as { items: unknown[] }).items).toEqual([])
       await server.close()
@@ -1169,6 +1433,7 @@ describe("createSdkServer session/queue (Task 11)", () => {
     const { service, gate, cleanup } = await gatedQueueService()
     try {
       const server = createSdkServer(service)
+      await handshake(server)
       const first = service.submit("s1", "first", new AbortController().signal)
       const second = service.submit("s1", "second", new AbortController().signal)
       for (;;) {
@@ -1260,6 +1525,7 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
         ],
       }),
     })
+    await handshake(server)
     const client = linkClient(server)
     try {
       const result = await client.dashboard()
@@ -1279,6 +1545,7 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
 
   it("session/dashboard without a listing source → honest blank (never fabricated rows)", async () => {
     const server = createSdkServer(makeStubService())
+    await handshake(server)
     const client = linkClient(server)
     try {
       const result = await client.dashboard()
@@ -1287,6 +1554,71 @@ describe("createSdkServer session/dashboard (Task 13)", () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+})
+
+// W2: the server's per-session subscription map (`assemblyUnsubscribes`).
+//
+// WHAT THIS PINS, STATED PLAINLY: the CONTRACT of that map — "a second
+// assembly for the same session releases the previous subscription instead of
+// orphaning it" — NOT a shipped path. The rebuild it drives
+// (closeSession → assemblyFor) is a service primitive this test calls
+// DIRECTLY; nothing in the sdk process calls closeSession today (Phase B
+// removed the server's own call — see the deliberate-change comment in
+// session/model/set — and the SDK wire has no session/close, all 19 cases
+// enumerated). So in production the server's onAssembly hook fires once per
+// session and this defect cannot bite. It is LATENT, in a shared path: whoever
+// adds session/close arms it, and this test is the contract they inherit. A
+// unit test that pretends to exercise a production path would be worse than no
+// test at all — this one says what it is.
+describe("createSdkServer assembly bridge (W2)", () => {
+  it("releases the previous subscription when the service rebuilds an assembly for the same session", async () => {
+    // The host-pre-seeded `session:` option (`AssemblyOptions.session`, M14 —
+    // "host owns durability") is a supported, typed configuration, and it is
+    // what makes the overwrite observable at all: every build resolves the SAME
+    // Session object, so a subscription the overwrite orphaned keeps delivering
+    // to the client. (A rebuild that gets a fresh Session per build leaves the
+    // orphaned closure inert — the reason this stayed latent.)
+    const session = createSession()
+    const { service, cleanup } = await makeService(session)
+    try {
+      const server = createSdkServer(service)
+      const drv = drive(server)
+      const countEvents = (text: string): number =>
+        drv.out.filter((m) => isRpcNotification(m) && m.method === "session/event"
+          && (m.params as { event?: { type?: string; text?: string } }).event?.type === "user/message"
+          && (m.params as { event?: { text?: string } }).event?.text === text).length
+
+      const first = await service.assemblyFor("s1")
+      expect(first.session).toBe(session) // the server subscribed to THIS object
+      append(session, { type: "user/message", text: "before the rebuild" })
+      // Live-baseline check: one subscription, one notification — so the "1"
+      // assertion below cannot be satisfied by a harness that delivers nothing.
+      expect(countEvents("before the rebuild")).toBe(1)
+
+      // The rebuild, driven directly: dispose the assembly, then build again
+      // for the SAME sessionId — onAssembly fires a second time.
+      await service.closeSession("s1")
+      const second = await service.assemblyFor("s1")
+      expect(second.session).toBe(session)
+
+      // Exactly ONE listener survives the overwrite. Pre-fix (the bare `.set`)
+      // this counted TWO: the first closure was never unsubscribed, and the map
+      // holds only current values, so nothing could ever reach it again.
+      append(session, { type: "user/message", text: "after the rebuild" })
+      expect(countEvents("after the rebuild")).toBe(1)
+
+      // …and the one the map KEPT is the second one: close() releases it.
+      // This half is not decoration — the inverted bug (unsubscribing the value
+      // read back AFTER the store, i.e. the new closure) leaves the FIRST
+      // listener live, which the check above alone would not catch.
+      await server.close()
+      append(session, { type: "user/message", text: "after close" })
+      expect(countEvents("after close")).toBe(0)
+    } finally {
+      await service.close()
+      await cleanup()
     }
   })
 })

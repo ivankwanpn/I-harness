@@ -3,22 +3,31 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
-import { buildModelClient, type ProviderRegistry } from "@i-harness/provider"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 // M24b (spec §3.3): type-only import — the workflow executor's job store is
 // the THIRD layer of the job_* fallback chain. The dep is optional (injected
 // by the host via RegisterSubagentOptions.workflow), so absent = current
 // behavior (subagent → exec only).
 import type { WorkflowExecutor } from "@i-harness/workflow"
-import { createAgent, type AgentRegistry } from "@i-harness/core-agent"
+import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
+import { runningElapsedMs } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { spawnChild } from "./child.ts"
+import { declaredRoleModel, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
-export interface SubagentToolDeps {
+// W6 T6: ONE module-scope handle for this file's one report; the phase is
+// `session` because the site is the cold-resume sweep (a session restored from
+// its durable log re-drains a child's queued inbox, and one child's failed
+// sweep must not break the host's resume). With nothing installed the handle
+// delegates to console.warn verbatim (one argument) — unset mode is the
+// pre-migration bytes.
+const d = diagnosticsFor("session")
+
+export interface SubagentToolDeps extends RoleModelHost {
   table: AgentTable
   jobs: JobRegistry
   roles: RoleRegistry
@@ -26,7 +35,14 @@ export interface SubagentToolDeps {
   parentSession: ReturnType<typeof createSession>
   parentCtx: PluginContext
   parentModel: ModelClient
-  providers: ProviderRegistry
+  /** Resolve a selection to a live client through the HOST's provider plane —
+   * the same one the session's own model went through, so a role gets the same
+   * credentials, the same card table and the same protocol chain.
+   *
+   * It replaced a `ProviderRegistry` that `assembly.ts` built empty and nothing
+   * ever registered into, which made `role.model` throw `references unknown
+   * provider` for every value it could ever hold. */
+  resolveModel(selection: RoleModelSelection): Promise<RoleModelState>
   exec: ExecService
   // M9: live Agent instances retained for the child's session id, enabling
   // followup re-drives (Task 3) without re-creating the agent.
@@ -47,15 +63,20 @@ export interface SubagentToolDeps {
   // M26-D1: the durable task protocol registry — spawn_agent submissions go
   // through it (identity-keyed submit/claim/terminalize; cancelTree/wait read it).
   tasks: TaskRegistry
+  // W12: the bound on the `background: false` settle-wait. Absent = 300_000 (the
+  // shipped behavior; no host passes it). The wait is a REAL poll to this
+  // deadline, so this is what lets a test drive a genuine timeout through the
+  // real registry instead of pinning the timeout arm's shape with a mock.
+  foregroundWaitMs?: number
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   const spawnTool: Tool<
     { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
-    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string }
+    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean }
   > = {
     name: "spawn_agent",
-    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary.",
+    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary; if it has not settled by the bound it returns timed_out: true instead — the task is still running.",
     inputSchema: {
       type: "object",
       properties: {
@@ -96,6 +117,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       if (callerDepth >= maxDepth) {
         throw new Error(`subagent nesting depth limit reached (max ${maxDepth}) — cannot spawn from depth ${callerDepth}`)
       }
+      // `plugins.subagentModel`, as a PRECONDITION — the same refusal spawnChild
+      // makes (same helper, same message), asked here so a refused spawn writes
+      // nothing durable: below this line the call submits a task record and
+      // appends `subagent/start`, and a refusal that had already done that would
+      // leave an accepted task with no child behind it.
+      const declared = declaredRoleModel(role, deps)
+      if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
       const turns = parseForkTurns(args.fork_turns)
       const delivery = args.background === false ? "tool" : "parent"
       // M26-D1 三元 identity（exact-semantics 表）：callEventSeq 唯一；toolCallId 隨身。
@@ -128,7 +156,12 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         parentCtx: deps.parentCtx,
         role,
         parentModel: deps.parentModel,
-        providers: deps.providers,
+        resolveModel: deps.resolveModel,
+        // Forwarded with the resolver so spawnChild decides the role's model for
+        // EVERY spawn site (this tool's precondition above only exists to refuse
+        // before the task record is written). See child.ts for the rule.
+        roleSelectionFor: deps.roleSelectionFor,
+        allowSubagentModelSelection: deps.allowSubagentModelSelection,
         jobs: deps.jobs,
         table: deps.table,
         agents: deps.agents,
@@ -163,7 +196,18 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       deps.tasks.claim(task.id, executed.sessionId)
       const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
       if (args.background === false) {
-        const settled = await deps.tasks.wait(task.id, 300_000)
+        const settled = await deps.tasks.wait(task.id, deps.foregroundWaitMs ?? 300_000)
+        // W12: a wait that returns without a terminal outcome means it TIMED OUT
+        // (createTaskRegistry returns the still-non-terminal record; the
+        // TaskRegistry contract also admits `undefined`). The task is still
+        // running then — this used to fall through to the settle line below and
+        // report "settled: <status>", a message-shaped lie about something that
+        // did not happen. Same shape as wait_agent's timeout arm below:
+        // `timed_out` + "(still running)".
+        if (settled === undefined || settled.outcome === undefined) {
+          const latest = settled ?? deps.tasks.get(task.id)
+          return { ...base, status: latest?.status ?? "unknown", message: `wait timed out for ${executed.path} (still running)`, timed_out: true }
+        }
         return { ...base, status: settled?.status ?? "unknown", ...(settled?.outcome !== undefined ? { outcome: settled.outcome } : {}), ...(settled?.resultText !== undefined ? { resultText: settled.resultText } : {}), ...(settled?.error !== undefined ? { error: settled.error } : {}), message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
       }
       return base
@@ -213,9 +257,9 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const listTool: Tool<{ path_prefix?: string; scope?: "children" | "descendants" }, { agents: { path: string; status: string; roleName?: string; jobId?: string; sessionId?: string; finalText?: string; error?: string }[] }> = {
+  const listTool: Tool<{ path_prefix?: string; scope?: "children" | "descendants" }, { agents: { path: string; status: string; elapsed_ms?: number; roleName?: string; jobId?: string; sessionId?: string; finalText?: string; error?: string }[] }> = {
     name: "list_agents",
-    description: "List live subagents in the current tree with their role/job/session details. scope 'children' lists only direct children of the prefix (default base 'root'), 'descendants' the whole subtree; without scope, path_prefix keeps the legacy startsWith filter.",
+    description: "List live subagents in the current tree with their role/job/session details. A RUNNING agent's row also carries elapsed_ms — how long its current run has been going (a re-driven child's clock restarts with the new run) — so a long-running child is distinguishable from one that just started. scope 'children' lists only direct children of the prefix (default base 'root'), 'descendants' the whole subtree; without scope, path_prefix keeps the legacy startsWith filter.",
     inputSchema: { type: "object", properties: { path_prefix: { type: "string" }, scope: { type: "string", enum: ["children", "descendants"], description: "children = direct children only; descendants = the whole subtree below the prefix." } } },
     isReadOnly: true,
     execute: async (args) => {
@@ -236,15 +280,25 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
           }
           return e.path.startsWith(prefix) // legacy behavior (backward compat)
         })
-        .map((e) => ({
-          path: e.path,
-          status: e.status,
-          ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
-          ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
-          ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
-          ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
-          ...(e.error !== undefined ? { error: e.error } : {}),
-        }))
+        .map((e) => {
+          // W11: the asked path. `elapsed_ms` is present for a RUNNING child
+          // only — a settled one has no run in flight, and a stale duration
+          // would read as if it did. Absent, never 0: `runningElapsedMs`
+          // returns undefined for both "not running" and "no stamp", and the
+          // section (the unasked path) is where a running-but-unstamped entry
+          // is called out rather than silently dropped.
+          const elapsed = runningElapsedMs(e)
+          return {
+            path: e.path,
+            status: e.status,
+            ...(elapsed !== undefined ? { elapsed_ms: elapsed } : {}),
+            ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+            ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
+            ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
+            ...(e.finalText !== undefined ? { finalText: e.finalText } : {}),
+            ...(e.error !== undefined ? { error: e.error } : {}),
+          }
+        })
       return { agents }
     },
   }
@@ -345,11 +399,17 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       const role = deps.roles.get(roleName)
       if (!role) throw new Error(`unknown role: ${roleName}`)
       if (!(await ensureResidentAgent(deps, existing))) {
-        // After the role check the only remaining failure mode is the role's
-        // model-provider resolution — mirror spawnChild's error shape so the
-        // resume diagnostics match the spawn path.
-        if (role.model && !deps.providers.get(role.model.provider)) {
-          throw new Error(`role '${role.name}' references unknown provider '${role.model.provider}'`)
+        // After the role check the remaining failure modes are the role's model
+        // — the switch refusing it, or the resolver — mirror spawnChild's error
+        // shape so the resume diagnostics match the spawn path. The helper IS
+        // the spawn path's helper, so the two cannot drift.
+        const declared = declaredRoleModel(role, deps)
+        if (subagentModelSelectionGated(deps, declared)) throw subagentModelSelectionDisabled(role.name)
+        if (declared !== undefined) {
+          const state = await deps.resolveModel(declared)
+          if (state.status !== "ready") {
+            throw new Error(`role '${role.name}' cannot resolve its model: ${state.reason}`)
+          }
         }
         throw new Error(`could not resume subagent: ${args.target}`)
       }
@@ -546,24 +606,46 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   }
   const role = deps.roles.get(entry.roleName ?? "general")
   if (!role) return false
+  // The model decision comes BEFORE the scope is mounted: a refused rebuild
+  // must leave nothing behind, and this refusal is decidable without one. A
+  // selection the `plugins.subagentModel` switch does not allow fails the
+  // rebuild — returning false, never inheriting: a restored child of a role
+  // that names a model must not come back on a different one. False (not a
+  // throw) is this function's contract — the callers decide the fail behaviour
+  // and the sweep must never throw — and `resume_agent` re-derives the message
+  // from the same helper spawnChild throws.
+  const declared = declaredRoleModel(role, deps)
+  if (subagentModelSelectionGated(deps, declared)) return false
   const childCtx = deps.parentCtx.scope.mount()
   const childReg = createToolRegistry(childCtx)
-  for (const name of role.tools) {
-    const tool = deps.parentRegistry.get(name)
-    if (tool) childReg.register(tool)
-  }
-  // model resolution identical to spawnChild (child.ts): role.model →
-  // provider → buildModelClient; else inherit the parent model.
+  // Same resolution as spawnChild — a declared-but-unmounted tool is reported.
+  resolveRoleTools(role.name, role.tools, deps.parentRegistry, childReg)
+  // model resolution identical to spawnChild (child.ts): the declared selection
+  // (settings first, then role.model) → the host's resolver; else inherit the
+  // parent model. The binding's `reasoningEffort` rides along for the same
+  // reason it does at spawn: a rebuild that kept only the client would run the
+  // same model at the adapter default.
   let model = deps.parentModel
-  if (role.model) {
-    const profile = deps.providers.get(role.model.provider)
-    if (!profile) return false
-    model = buildModelClient(profile, role.model.model, role.model.extra)
+  let reasoningEffort: ReasoningEffort | undefined
+  if (declared !== undefined) {
+    const state = await deps.resolveModel(declared)
+    if (state.status !== "ready") return false
+    model = state.binding.client
+    reasoningEffort = state.binding.reasoningEffort
   }
+  // The label records what the child runs on NOW, and a rebuild can move it
+  // EITHER way: a settings entry added while the toggle is on moves an
+  // inheriting entry to labeled, and one removed moves it back. Assigning only
+  // in the labeled direction would leave the second case printing "inherited
+  // from the session" while it runs on a configured model. (The switch-off and
+  // non-ready arms returned above — those rebuilds change nothing, so the label
+  // still describes the client the child was last left on.)
+  entry.modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     session: entry.session, tools: childReg, model,
     systemPrompt: role.systemPrompt, signal: controller.signal,
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
     // team member via the durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
@@ -625,6 +707,12 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
       if (!deps.table.get(entry.path)) return // closed mid-drain → stop
       entry.lastInboxSeq = ev.seq ?? 0
       entry.status = "running"
+      // W11: a re-drive starts a NEW run, so the start stamp moves with the
+      // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp
+      // here would report a child woken a moment ago as one that has been
+      // running since it was spawned — the exact wrong answer W11's signal
+      // exists to prevent.
+      entry.startedAt = Date.now()
       entry.controller = new AbortController() // fresh signal per turn (interrupt targets this)
       if (entry.jobId) deps.jobs.updateJob(entry.jobId, { status: "running", output: "" })
       try {
@@ -681,7 +769,7 @@ export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTabl
       // fail-visible log, not throw: one child's failed sweep must not break
       // the host resume (the error stays on the entry for wait_agent /
       // job_output to surface).
-      console.warn(`[subagent] pending inbox sweep failed for ${entry.sessionId}`)
+      d.warn(`[subagent] pending inbox sweep failed for ${entry.sessionId}`)
     })
   }
 }

@@ -17,8 +17,11 @@ import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
-import { createExecService } from "@i-harness/exec"
-import { createProviderRegistry } from "@i-harness/provider"
+import { registerExec } from "@i-harness/exec"
+/** The seam is required; the teammate role carries no model, so it is never
+ * reached — the spawn path that reads a role's model is covered in
+ * @i-harness/subagent's child.test.ts. */
+const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 
@@ -43,8 +46,8 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
       jobs: createJobRegistry(),
       roles: createRoleRegistry(),
       agents: createAgentRegistry(),
-      exec: createExecService(),
-      providers: createProviderRegistry(),
+      exec: registerExec(createContext()),
+      resolveModel: noRoleModel,
     },
     parentModel: model(),
   }
@@ -147,8 +150,8 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
-        providers: createProviderRegistry(),
+        exec: registerExec(createContext()),
+        resolveModel: noRoleModel,
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
     })
@@ -213,8 +216,8 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
-        providers: createProviderRegistry(),
+        exec: registerExec(createContext()),
+        resolveModel: noRoleModel,
         childSessions: { coordinator: failingCoordinator, parentSessionId: "lead-parent" },
       },
     })
@@ -365,8 +368,8 @@ describe("mountAgentTeams lifecycle", () => {
         jobs: createJobRegistry(),
         roles: createRoleRegistry(),
         agents: createAgentRegistry(),
-        exec: createExecService(),
-        providers: createProviderRegistry(),
+        exec: registerExec(createContext()),
+        resolveModel: noRoleModel,
         childSessions: { coordinator, parentSessionId: "sess-parent" },
       },
     }))
@@ -494,4 +497,63 @@ describe("mountAgentTeams lifecycle", () => {
       await handle.unmount()
     }
   })
+
+  // The team spawn is one of the assembly's three role-carrying spawn sites, so
+  // the real bridge must forward `roleSelectionFor` + the switch to spawnChild
+  // exactly as registerSubagent does. Without them the declared selection
+  // collapsed to the role's own (undefined) model — no gate, no message, the
+  // teammate inherited the parent's client — while the SAME teammate's
+  // wakeup/rebuild went through ensureResident with the full deps and resolved
+  // the declared one. One teammate, two models.
+  it("the real teammate spawn resolves the SETTINGS-declared selection", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    // Durable child sessions are a roster precondition (spawn must return a
+    // sessionId and the checkpoint must pass) — an in-memory coordinator keeps
+    // the REAL bridge under test.
+    const memSessions = new Map<string, SessionEvent[]>()
+    const coordinator = {
+      create: async (meta?: { sessionId?: string }) => {
+        const id = meta?.sessionId ?? `mem-${memSessions.size}`
+        memSessions.set(id, [])
+        return { id }
+      },
+      append: async (sessionId: string, events: SessionEvent[]) => { memSessions.get(sessionId)?.push(...events) },
+      enqueue: (sessionId: string, events: SessionEvent[]) => {
+        const list = memSessions.get(sessionId) ?? []
+        list.push(...events)
+        memSessions.set(sessionId, list)
+      },
+      load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
+      list: async () => [...memSessions.keys()],
+      flush: async () => {},
+      close: async () => {},
+      putDocument: async () => {},
+      getDocument: async () => undefined,
+    } as unknown as SessionCoordinator
+    const calls: Array<{ provider: string; model: string }> = []
+    const handle = await mountAgentTeams(ctx, tools, makeDeps({
+      childSessionHoldsPrompt: async () => true,
+      subagents: {
+        ...makeDeps().subagents,
+        childSessions: { coordinator, parentSessionId: "sess-parent" },
+        allowSubagentModelSelection: true,
+        roleSelectionFor: (roleName) => (roleName === "teammate" ? { provider: "gw", model: "small" } : undefined),
+        resolveModel: async (selection) => {
+          calls.push(selection)
+          return { status: "ready" as const, binding: { client: model() } }
+        },
+      },
+    }))
+    try {
+      const spawn = tools.get("spawn_teammate")!
+      const out = (await spawn.execute({ name: "helper", description: "d", prompt: "work" }, {})) as { member: { name: string } }
+      expect(out.member.name).toBe("helper")
+      // The DECLARED selection is what the spawn asked the resolver for — the
+      // same value the wakeup/rebuild path resolves.
+      expect(calls).toEqual([{ provider: "gw", model: "small" }])
+    } finally {
+      await handle.unmount()
+    }
+  }, 15_000)
 })

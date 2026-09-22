@@ -27,6 +27,7 @@
  */
 
 import { chmodSync, readFileSync } from "node:fs"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import { writeFileAtomic } from "@i-harness/fs"
 
 /** Source of a configured value; "file" is also the projected write target
@@ -82,7 +83,7 @@ export interface CredentialDocument {
 /**
  * Invalid ref name or raw set value → code "credential-invalid-ref".
  */
-export class CredentialRefError extends Error {
+class CredentialRefError extends Error {
   readonly code = "credential-invalid-ref"
   constructor(message: string) {
     super(message)
@@ -95,7 +96,7 @@ export class CredentialRefError extends Error {
  * "credential-rejected". Silent shadowed writes would make the user believe
  * the file value took effect; reject instead.
  */
-export class CredentialShadowedError extends Error {
+class CredentialShadowedError extends Error {
   readonly code = "credential-rejected"
   constructor(message: string) {
     super(message)
@@ -235,8 +236,15 @@ function isEnoent(err: unknown): boolean {
   return typeof err === "object" && err !== null && (err as { code?: unknown }).code === "ENOENT"
 }
 
+// W6 T6: the credential document's degrade-to-empty report — the file this
+// package reads IS configuration, hence phase `config`. The call reaches the
+// ambient instance when a host installed one and is the console call it always
+// was when none is: same function, same single verbatim argument.
 function warnBad(path: string, reason: string): void {
-  console.warn(`[credentials] credential file ${path} ${reason}; treating as empty`)
+  const message = `[credentials] credential file ${path} ${reason}; treating as empty`
+  const d = currentDiagnostics()
+  if (d === undefined) console.warn(message)
+  else d.child("config").warn(message)
 }
 
 /** Atomic write + 0600 (mode best-effort on win32; see module doc). The fs

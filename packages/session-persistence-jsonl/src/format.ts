@@ -1,5 +1,8 @@
 import type { SessionEvent } from "@i-harness/core-session"
 import type { SessionMeta, SessionModelSelection } from "@i-harness/session-persistence"
+// The closed set is settings' — imported, never copied (a local list of the
+// five names would be a second place to edit one enum).
+import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 
 export function serializeHeader(meta: SessionMeta): string {
   return JSON.stringify(meta)
@@ -8,7 +11,11 @@ export function serializeHeader(meta: SessionMeta): string {
 // C5: parseHeader passthrough — a repair/read rewrites the header line and
 // must never strip a session's selected model (the title/workspaceId rule).
 // Provider/model may be any non-empty string; a structurally invalid value is
-// DROPPED — absent → the resolution chain falls through honestly.
+// DROPPED — absent → the resolution chain falls through honestly. The protocol
+// joins this passthrough for the same reason (updateMeta rewrites line 0 from
+// parseHeader's output, so an unlisted field is silently deleted) and follows
+// the same rule: a value outside the five settings validates is DROPPED, never
+// passed through — a session must not persist a wire nobody can send on.
 function parseModelSelection(raw: unknown): SessionModelSelection | undefined {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined
   const rec = raw as Record<string, unknown>
@@ -17,6 +24,9 @@ function parseModelSelection(raw: unknown): SessionModelSelection | undefined {
   return {
     provider: rec.provider,
     model: rec.model,
+    ...(typeof rec.protocol === "string" && (PROVIDER_PROTOCOLS as readonly string[]).includes(rec.protocol)
+      ? { protocol: rec.protocol as SettingsProviderProtocol }
+      : {}),
     ...(typeof rec.reasoningEffort === "string" && rec.reasoningEffort !== ""
       ? { reasoningEffort: rec.reasoningEffort }
       : {}),

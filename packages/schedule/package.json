@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./driver": "./src/driver.ts" },
+  "exports": { ".": "./src/index.ts", "./driver": "./src/driver.ts", "./tools": "./src/tools.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@i-harness/core-session": "workspace:*" }
+  "dependencies": {
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/core-tools": "workspace:*",
+    "@i-harness/diagnostics": "workspace:*"
+  }
 }

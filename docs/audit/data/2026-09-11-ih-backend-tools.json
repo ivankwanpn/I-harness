@@ -496,7 +496,7 @@
       "failurePolicy": "Mostly fail-open at the tool boundary with one legible fail-loud case. When bash is missing the tool RETURNS a synthetic result (stdout '', stderr explanation, exitCode -1) rather than throwing (index.ts:229-237). When the sandbox refuses, shell does NOT handle it: deps.exec.run is awaited without a try/catch (index.ts:243, index.ts:263), so exec's SandboxUnavailableError rejection propagates out of the tool body; core-agent records tool/error and rethrows the first error after discarding the batch, i.e. the turn fails (packages/core-agent/src/execute-tool-calls.ts:125-133, :223-227). The background variant is different: exec.runBackground's rejection handler marks the job status 'error' with the message in stderr, so a refusal on a background bash/pwsh surfaces as an errored job, not a thrown turn (packages/exec/src/index.ts:262-267).",
       "events": [],
       "keyConstants": [
-        { "name": "retention maxBytes default", "value": "64_000", "evidence": "packages/shell/src/index.ts:130" },
+        { "name": "retention maxBytes default", "value": "64_000", "evidence": "packages/shell/src/index.ts:132" },
         { "name": "bash argv", "value": "['bash','-c',command]", "evidence": "packages/shell/src/index.ts:238" },
         { "name": "pwsh argv", "value": "[resolvePwshExe(),'-NoLogo','-NoProfile','-NonInteractive','-Command',command]", "evidence": "packages/shell/src/index.ts:258" },
         { "name": "pwsh fallback path", "value": "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", "evidence": "packages/shell/src/index.ts:74" }
@@ -504,7 +504,7 @@
       "gaps": [
         "No gap markers (TODO/FIXME/deferred/limitation) in packages/shell/src; the M59 notes document fixed defects rather than open deferrals."
       ],
-      "evidence": ["packages/shell/src/index.ts:16", "packages/shell/src/index.ts:212", "packages/shell/src/index.ts:247", "packages/shell/src/index.ts:270"]
+      "evidence": ["packages/shell/src/index.ts:16", "packages/shell/src/index.ts:212", "packages/shell/src/index.ts:247", "packages/shell/src/index.ts:444"]
     },
     {
       "name": "exec",
@@ -608,11 +608,11 @@
         { "name": "signal mapping", "value": "INT -> write \\x03; TERM and KILL both -> pty.kill()", "evidence": "packages/terminal/src/service.ts:183" }
       ],
       "gaps": [
-        "No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:5-11, packages/terminal/src/tool.ts:164-174) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).",
+        "No sandbox/confinement parameter on the PTY tools (packages/terminal/src/tool.ts:7-24, packages/terminal/src/tool.ts:354-379) and no timeoutMs on any of them (packages/terminal/src/tool.ts:42-160).",
         "Documented shortcoming: an offset earlier than the ring start is served from the ring start, and the dropped prefix is unrecoverable (packages/terminal/src/service.ts:73-75).",
         "No gap markers (TODO/FIXME/deferred/limitation) beyond the ring-buffer note."
       ],
-      "evidence": ["packages/terminal/src/index.ts:1", "packages/terminal/src/service.ts:135", "packages/terminal/src/tool.ts:122", "packages/terminal/src/tool.ts:164"]
+      "evidence": ["packages/terminal/src/index.ts:1", "packages/terminal/src/service.ts:135", "packages/terminal/src/tool.ts:122", "packages/terminal/src/tool.ts:354"]
     },
     {
       "name": "text-diff",

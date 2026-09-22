@@ -1,19 +1,27 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ConnectedMcpClient } from "./client.ts"
+import { fitPublicName } from "./naming.ts"
 import type { McpServerConfig } from "./types.ts"
 
 // codex resource pattern: resources/list + resources/read per server, exposed
 // as I-harness helper tools. Names are server-qualified so multiple servers can
 // mount without name collisions in the registry (opencode-fork naming keeps the
 // `__serverName` suffix we already use for MCP tools).
+//
+// The qualifier goes through `fitPublicName`, NOT the raw server name: a valid
+// SERVER name is not always a valid TOOL name — a plugin key
+// (`plugin:<id>:<server>`) carries colons that every backend rejects, and all
+// three of these register on every mount, so one plugin mount used to break
+// the whole request. Simple server names stay byte-identical (the function's
+// first branch).
 export function createResourceTools(
   client: ConnectedMcpClient,
   serverName: string,
   config: McpServerConfig,
 ): Tool[] {
-  const listName = `list_mcp_resources__${serverName}`
-  const templatesName = `list_mcp_resource_templates__${serverName}`
-  const readName = `read_mcp_resource__${serverName}`
+  const listName = fitPublicName(`list_mcp_resources__${serverName}`)
+  const templatesName = fitPublicName(`list_mcp_resource_templates__${serverName}`)
+  const readName = fitPublicName(`read_mcp_resource__${serverName}`)
   return [
     {
       name: listName,
@@ -39,7 +47,7 @@ export function createResourceTools(
     },
     {
       name: templatesName,
-      description: `List MCP resource templates from server "${serverName}" (use a template's uriTemplate with read_mcp_resource__${serverName})`,
+      description: `List MCP resource templates from server "${serverName}" (use a template's uriTemplate with ${readName})`,
       inputSchema: { type: "object", properties: { server: { type: "string" } } },
       timeoutMs: config.toolCallTimeoutMs,
       async execute(_args: { server?: string }, exec: ToolExec) {

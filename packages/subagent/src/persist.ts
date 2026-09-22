@@ -15,6 +15,10 @@ export interface DurableAgentEntry {
   // M9: the role name the child was spawned with — needed to rebuild the
   // agent (systemPrompt/tools/model) on cold resume.
   roleName?: string
+  // Task 6: the model the child RAN on, as `provider:model`, recorded at spawn.
+  // Persisted so a restored entry still says what IS (the projection reads it);
+  // absent = the child inherited the parent's client.
+  modelLabel?: string
   // M9: the durable inbox consumption cursor. Persisted so a cold-resumed
   // child does NOT re-process inbox events that were already consumed into
   // followup turns (duplicate-turn bug fixed in Task 5).
@@ -82,6 +86,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     ...(e.jobId !== undefined ? { jobId: e.jobId } : {}),
     ...(e.sessionId !== undefined ? { sessionId: e.sessionId } : {}),
     ...(e.roleName !== undefined ? { roleName: e.roleName } : {}),
+    ...(e.modelLabel !== undefined ? { modelLabel: e.modelLabel } : {}),
     ...(e.lastInboxSeq !== undefined ? { lastInboxSeq: e.lastInboxSeq } : {}),
   }))
 
@@ -124,6 +129,7 @@ export function restoreState(
       ...(entry.jobId !== undefined ? { jobId: entry.jobId } : {}),
       ...(entry.sessionId !== undefined ? { sessionId: entry.sessionId } : {}),
       ...(entry.roleName !== undefined ? { roleName: entry.roleName } : {}),
+      ...(entry.modelLabel !== undefined ? { modelLabel: entry.modelLabel } : {}),
       ...(entry.lastInboxSeq !== undefined ? { lastInboxSeq: entry.lastInboxSeq } : {}),
     })
   }
