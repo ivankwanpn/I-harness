@@ -247,6 +247,10 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
             for (const choice of choices) {
               const delta = choice.delta ?? {}
+              // R12: the same rule as the main loop — a final frame that lost
+              // its trailing "\n\n" is parsed HERE, and the provider's failure
+              // channel must not depend on where the frame boundary fell.
+              if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
               if (typeof delta.content === "string" && delta.content.length > 0) events.push({ type: "text/chunk", text: delta.content })
             }
             if (yield* emit(events)) return
