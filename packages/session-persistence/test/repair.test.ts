@@ -12,7 +12,12 @@ import { deriveMessages } from "@i-harness/core-session"
 import type { SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createSessionCoordinator } from "../src/index.ts"
-import { repairTurnTail, TOOL_ABORTED_RECOVERY_RESULT } from "../src/repair.ts"
+import {
+  repairTurnTail,
+  TOOL_ABORTED_RECOVERY_RESULT,
+  TOOL_OUTCOME_UNKNOWN_RESULT,
+  TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT,
+} from "../src/repair.ts"
 
 function events(...types: Array<Partial<SessionEvent> & { type: SessionEvent["type"] }>): SessionEvent[] {
   return types as SessionEvent[]
@@ -27,6 +32,14 @@ function events(...types: Array<Partial<SessionEvent> & { type: SessionEvent["ty
 //
 // `tool/dispatch` is written before the body starts, so the two are now READ
 // apart instead of guessed apart.
+//
+// Q8 (M71): the read is WHOLE-LOG, and that is load-bearing in both directions.
+// A marker anywhere proves the WRITING BUILD had the boundary, so a marker-less
+// call in that same log is honestly "never dispatched" (the mixed case below).
+// A log with no marker ANYWHERE proves no such thing, so its pending calls get
+// the unknown verdict, conservatively — from their own payload, because the
+// dispatched arm's message says the call WAS dispatched, which is precisely
+// what such a log cannot establish.
 describe("repairTurnTail — the dispatch boundary (M4)", () => {
   const syntheticResultCode = (out: SessionEvent[]): unknown =>
     (out.find((e) => e.type === "tool/result") as { output?: { code?: unknown } } | undefined)?.output?.code
@@ -43,14 +56,24 @@ describe("repairTurnTail — the dispatch boundary (M4)", () => {
     expect(JSON.stringify(out)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
   })
 
-  it("a tool with NO dispatch marker keeps the before-dispatch verdict", () => {
-    // The control, and it is not decoration: an implementation that simply
-    // renamed the constant would pass the case above and be wrong here.
+  it("a tool in a log with NO dispatch marker ANYWHERE is outcome-unknown (Q8)", () => {
+    // M71 T2 — DELIBERATE CONTRACT CHANGE (was: "a tool with NO dispatch marker
+    // keeps the before-dispatch verdict"). Q8: this log records no marker
+    // ANYWHERE, so it cannot prove the body never ran, and the benign verdict is
+    // the one that licenses a re-run. If any earlier turn bore a marker this
+    // call would still read "before dispatch" — see the mixed case below and the
+    // acceptance test's earlier-turn case, which is what pins the scope.
     const out = repairTurnTail(events(
       { type: "turn/start", seq: 0 },
       { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 },
     ))
-    expect(syntheticResultCode(out)).toBe("TOOL_ABORTED_BEFORE_DISPATCH")
+    expect(syntheticResultCode(out)).toBe("TOOL_OUTCOME_UNKNOWN")
+    const output = (out.find((e) => e.type === "tool/result") as { output?: unknown }).output
+    // ...and it is THIS arm's payload, not the dispatched one: its message must
+    // claim only what is known (no marker anywhere), and must not assert that
+    // the call WAS dispatched.
+    expect(output).toEqual(TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT)
+    expect(JSON.stringify(output)).not.toContain("was dispatched")
   })
 
   it("one dispatch marker does not change the verdict for a DIFFERENT call", () => {
@@ -63,6 +86,11 @@ describe("repairTurnTail — the dispatch boundary (M4)", () => {
     const codes = out.filter((e) => e.type === "tool/result")
       .map((e) => (e as { output?: { code?: unknown } }).output?.code)
     expect(codes).toEqual(["TOOL_OUTCOME_UNKNOWN", "TOOL_ABORTED_BEFORE_DISPATCH"])
+    // Q8 (M71 T2): and c2 keeps the M10a PAYLOAD — not the no-marker arm's. The
+    // marker ANYWHERE in this log is what makes c2's absence honest, so this
+    // assertion is the whole-log rule read from the other side.
+    const outputs = out.filter((e) => e.type === "tool/result").map((e) => (e as { output?: unknown }).output)
+    expect(outputs).toEqual([TOOL_OUTCOME_UNKNOWN_RESULT, TOOL_ABORTED_RECOVERY_RESULT])
   })
 })
 
@@ -77,7 +105,12 @@ describe("repairTurnTail", () => {
     expect(out[1]?.type).toBe("assistant/message")
   })
 
-  it("fills a missing tool/result with the M10a aborted-dispatch vocabulary", () => {
+  it("fills a missing tool/result with the conservative unknown vocabulary (Q8)", () => {
+    // M71 T2 — DELIBERATE CONTRACT CHANGE (was: "...with the M10a
+    // aborted-dispatch vocabulary"). This log is marker-less THROUGHOUT, so the
+    // M10a vocabulary would assert "never dispatched" — a fact this log does not
+    // contain. The synthetic shape (fields, position, order) is unchanged; only
+    // the payload is, and it keeps the same `code` class.
     const evs = events({ type: "turn/start", seq: 0 }, { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 1 })
     const out = repairTurnTail(evs)
     const tr = out.find((e) => e.type === "tool/result")
@@ -86,7 +119,7 @@ describe("repairTurnTail", () => {
       type: "tool/result",
       callId: "c1",
       name: "bash",
-      output: TOOL_ABORTED_RECOVERY_RESULT,
+      output: TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT,
     })
     // order: result before the closers
     expect(out.map((e) => e.type)).toEqual(["turn/start", "tool/call", "tool/result", "step/end", "turn/end"])
@@ -173,14 +206,16 @@ describe("repairTurnTail through coordinator.load()", () => {
       const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { session } = await coordinator.load(sessionId)
       const events = session.events
-      // semantic layer: the missing result synthesized (M10a vocabulary)
+      // semantic layer: the missing result synthesized. M71 T2 — DELIBERATE
+      // CONTRACT CHANGE: this hand-written log is marker-less throughout, so the
+      // verdict is the conservative unknown, not the M10a aborted-dispatch one.
       const result = events.find((e) => e.type === "tool/result") as {
         callId: string
         output: unknown
       }
       expect(result).toBeDefined()
       expect(result.callId).toBe("c1")
-      expect(result.output).toEqual(TOOL_ABORTED_RECOVERY_RESULT)
+      expect(result.output).toEqual(TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT)
       // structural closers present last
       expect(events.at(-1)?.type).toBe("turn/end")
       expect(events.filter((e) => e.type === "step/end")).toHaveLength(1)
@@ -192,7 +227,9 @@ describe("repairTurnTail through coordinator.load()", () => {
       const messages = deriveMessages(session)
       const toolMessages = messages.filter((m) => m.role === "tool")
       expect(toolMessages).toHaveLength(1)
-      expect(JSON.stringify(toolMessages[0]?.content)).toContain("TOOL_ABORTED_BEFORE_DISPATCH")
+      // the model sees the CONSERVATIVE code (M71 T2: flipped from
+      // TOOL_ABORTED_BEFORE_DISPATCH — a marker-less log may not license a re-run)
+      expect(JSON.stringify(toolMessages[0]?.content)).toContain("TOOL_OUTCOME_UNKNOWN")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
@@ -313,15 +350,20 @@ describe("repairTurnTail through coordinator.load()", () => {
       const second = createSessionCoordinator(createJsonlBackend(dir))
       const reloaded = await second.loadOwned(sessionId)
       expect(reloaded.session.events.map((event) => event.seq)).toEqual(reloaded.session.events.map((_, index) => index))
+      // M71 T2 — DELIBERATE CONTRACT CHANGE: the marker-less crash log now
+      // canonicalizes to the CONSERVATIVE code (was TOOL_ABORTED_BEFORE_DISPATCH).
+      // The claim of this test is unchanged: the repaired verdict is what a
+      // second load reads, and it is the one on DISK.
       expect(reloaded.session.events.some((event) =>
         event.type === "tool/result"
-        && (event.output as { code?: string }).code === "TOOL_ABORTED_BEFORE_DISPATCH",
+        && (event.output as { code?: string }).code === "TOOL_OUTCOME_UNKNOWN",
       )).toBe(true)
       await second.close()
 
       const raw = readFileSync(join(dir, `${sessionId}.jsonl`), "utf8").trim().split("\n").slice(1)
         .map((line) => JSON.parse(line) as SessionEvent)
       expect(raw.map((event) => event.seq)).toEqual(raw.map((_, index) => index))
+      expect(JSON.stringify(raw)).not.toContain("TOOL_ABORTED_BEFORE_DISPATCH")
     } finally {
       await rm(dir, { recursive: true, force: true })
     }
