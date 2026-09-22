@@ -3,8 +3,17 @@ import { readFileSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import { isAbsolute, join, resolve } from "node:path"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { HookHandlerSpec } from "./types.ts"
 import { HookTrustError } from "./types.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report. The phase is
+// `config`: the trust store IS configuration (which handlers the user has
+// approved), which is why this file takes `config` while the registry's own
+// failure report takes `mount`. With nothing installed the handle delegates
+// to console.warn verbatim (one argument) — unset mode is the pre-migration
+// bytes.
+const d = diagnosticsFor("config")
 
 /** sha256 of a file (the trust primitive). */
 export async function sha256File(file: string): Promise<string> {
@@ -75,7 +84,7 @@ function loadApprovals(path: string): Map<string, HookApproval> {
   try {
     raw = JSON.parse(text)
   } catch {
-    console.warn(`[hooks] trust store ${path} is not valid JSON; treating as NO approvals`)
+    d.warn(`[hooks] trust store ${path} is not valid JSON; treating as NO approvals`)
     return out
   }
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out
