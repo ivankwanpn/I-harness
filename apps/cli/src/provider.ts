@@ -200,8 +200,9 @@ export function renderProviderList(
         : "no card"
       // Same ruling as `models list`'s line (the two listings must not
       // disagree about the same row): the card is the model's documented
-      // ceiling, this value the user wrote is what a request will actually
-      // carry. Absent → nothing printed (an unset switch is off).
+      // ceiling; this row's own cap — user-written or refresh-persisted — is
+      // what a request will actually carry. Absent → nothing printed (an unset
+      // switch is off).
       const setCap = model.maxTokens !== undefined ? `  set: ${model.maxTokens}` : ""
       return `      ${model.id}  (${numbers})${setCap}${aliases.length > 0 ? `  +${aliases.length} retired name(s): ${aliases.join(", ")}` : ""}`
     })
