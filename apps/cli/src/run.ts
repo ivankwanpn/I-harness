@@ -28,6 +28,7 @@ import {
 } from "@i-harness/session-executor"
 import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-runtime"
 import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
+import { registerCliSecrets } from "./diagnostics-bootstrap.ts"
 
 // M33 §5: the session-compact command handler — pure (testable) surface.
 // v0 error semantics: busy text while the executor lane is running (the
@@ -395,7 +396,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     const runtimeNow = (): Promise<ProviderRuntime> => {
       runtimePromise ??= opts.providerRuntime !== undefined
         ? Promise.resolve(opts.providerRuntime)
-        : loadProviderRuntime().then((loaded) => loaded.runtime)
+        : loadProviderRuntime().then((loaded) => {
+            // W6 T4: the handle this line used to DROP. §3.5's declared refs
+            // (`settings.llm.providers[*].apiKeyEnv`) are resolved through this
+            // store and registered on the CLI's redactor — the second source of
+            // the registered set, and the file half the env scan cannot see.
+            //
+            // It is fed HERE because this is the earliest instant that store
+            // exists on this path: the load is lazy on purpose (a `--model` run
+            // and a run that spawns no model-carrying role pay nothing for it),
+            // so the host entry that installs the instance cannot have one yet.
+            // A no-op when no CLI instance is installed — an embedder calling
+            // `runHeadless` directly has no redactor to feed.
+            registerCliSecrets(loaded.settings, loaded.credentials)
+            return loaded.runtime
+          })
       return runtimePromise
     }
     let providerBinding: SessionModelBinding | undefined
