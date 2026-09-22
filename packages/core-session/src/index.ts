@@ -137,6 +137,18 @@ export type SessionEvent =
     // deriveSearchText returns "" (team/* precedent). version 1 (M19/M21
     // convention for structured new event slots).
     | { type: "rewind/point"; version: 1; targetTurn: number; anchorSeq: number; mode: "all" | "files" | "conversation"; fileOps: Array<{ path: string; op: "restore" | "delete" }>; seq?: number }
+    // M3 §3.4: the durable run-end record. The CLI's run path appends it at
+    // each producing exit (pre-assembly failure / success / run failure) so a
+    // failed run is diagnosable AFTER the fact — `failureReport` lives only on
+    // stderr, and the completion definition ("一次失敗的執行不需要人手讀 JSONL
+    // 就能定位") needs a record that outlives the process. The phase vocabulary
+    // is @i-harness/diagnostics' DiagnosticPhase — INLINED because core-session
+    // must stay dependency-free (job/status precedent, :81-83); the producer
+    // (the CLI run path) owns the event, and its assignment is the compile-time
+    // check that the two sets stay equal. UI-plane: deriveMessages' default
+    // branch keeps it model-invisible and deriveSearchText would return ""
+    // (unindexed). Additive; format version stays 1.
+    | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "acp" | "session" | "mount" | "telemetry" | "shutdown"; error?: string; seq?: number }
   )
   & { ignorable?: true }
 
