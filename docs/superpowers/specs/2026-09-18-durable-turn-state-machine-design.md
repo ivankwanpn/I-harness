@@ -160,7 +160,7 @@ turn/start
 > 而 store 的錯誤往外丟 ⇒ turn 失敗。縫由組裝點提供
 > （`packages/session-executor/src/assembly.ts:1263-1265`；其餘兩個見 §5 的註）。
 >
-> **後果（這一節的主張因此變強）**：**從現在起寫下的每一份日誌，「沒有標記」誠實地等於「從未派送」**
+> **後果（這一節的主張因此變強）**：**在提供縫的宿主上，從現在起寫下的每一份日誌，「沒有標記」誠實地等於「從未派送」**（縫是選配的；沒有縫的情形見 §5 的註）
 > —— 對新日誌，`not-dispatched` 不再是一個選擇，而是被記錄下來的（或由 checkpoint 保證過的）事實。
 >
 > **為什麼不採字面讀法（全 log 無標記 ⇒ 一律 unknown）**：一個**新的**日誌可以合法地整份沒有標記 ——
@@ -196,13 +196,16 @@ turn/start
   而那個狀態在今天的介面上**沒有地方顯示** —— 那是前端的事，不是 M4 的。
 - **不保證 `tool/dispatch` 一定寫得進去。** 它走同一個 write-behind，所以在它自己的 200ms 窗裡
   被殺，就等於它沒被寫。**這是損失契約的必然結果**，不是缺陷：日誌只保證它寫下的事。
-  > **▶ 2026-09-22（M70）：這一條的缺口被縮到兩個沒有縫的地方。** 出貨的宿主現在在**本體之前**
+  > **▶ 2026-09-22（M70）：這一條的缺口被縮到三個地方。** 出貨的宿主現在在**本體之前**
   > await 排空（checkpoint，fail-closed：`packages/core-agent/src/execute-tool-calls.ts:249-305`；
   > 縫在 `packages/session-executor/src/assembly.ts:1263-1265`、`packages/subagent/src/child.ts:313-314`
-  > 與 `packages/subagent/src/tools.ts:661-663`）。**仍然成立的兩種**：(a) 不提供 `flush` 的 deps
+  > 與 `packages/subagent/src/tools.ts:661-663`）。**仍然成立的三種**：(a) 不提供 `flush` 的 deps
   > —— 縫是選配的，缺席＝pre-M70 位元；(b) 一個已命名的殘餘 —— 復原後載入失敗的子代理 entry
   > 留著 `createSessionFromEmpty()` 的替身（沒有東西把它的 append 鏡像出去）⇒ checkpoint 是 no-op，
-  > 實測 **0** 筆後端寫入，而該 entry 已以 `error` 現形。
+  > 實測 **0** 筆後端寫入，而該 entry 已以 `error` 現形；(c) 呼叫者自帶 `opts.session`**而它沒有在
+  > `(coordinator, sessionId)` 這一對下被鏡像** ⇒ 縫**解析在一個空佇列上**：不報錯，也不耐久
+  > （本檔就地說明，`packages/session-executor/src/assembly.ts:1251-1262`；出貨的呼叫者只有 CLI 的
+  > resume 路徑自帶 session，而它在同一對下鏡像 —— 合格）。
 - **不動 opencode-fork 那個 kernel 的任何結構**（§6）。
 
 ---
