@@ -146,10 +146,19 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
         // M72 Ⅱ: the parent object does not exist today — Gemini takes the cap
-        // at generationConfig.maxOutputTokens, and the parent is optional on
-        // the wire, so when there is no cap we do not build it at all.
+        // at generationConfig.maxOutputTokens, and the parent is optional on the
+        // wire, so when there is no cap we do not build it at all. A route that
+        // already configures generation parameters through
+        // `options.generationConfig` keeps them: only the cap key is ours.
         ...(request.maxOutputTokens !== undefined
-          ? { generationConfig: { maxOutputTokens: request.maxOutputTokens } }
+          ? {
+              generationConfig: {
+                ...(typeof config.options?.generationConfig === "object" && config.options.generationConfig !== null
+                  ? (config.options.generationConfig as Record<string, unknown>)
+                  : {}),
+                maxOutputTokens: request.maxOutputTokens,
+              },
+            }
           : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
