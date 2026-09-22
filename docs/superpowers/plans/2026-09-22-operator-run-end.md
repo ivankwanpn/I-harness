@@ -558,12 +558,14 @@ git commit -m "feat(cli): sessions list and show read the durable run-end — a 
 
 - [ ] **Step 2: 記錄**
 1. queue doc `:950` 的 C1 列 → **✅ 完成**，附提交區間與一句「§3.4 落地」＋它現在的消費面（`sessions list`／`show`）。
-2b. **本單元自己的 spec**（`docs/superpowers/specs/2026-09-22-operator-run-end-design.md`）§4「它不保證什麼」加第 5 條：**一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**（成功站點在 flush 前寫的 `exit 0`，與失敗 catch 寫的 `exit 1`；write-behind 保留失敗批次，`close()` best-effort 排空，兩筆都可能落地）。**讀取端的契約是最後一筆為準**——`listStoredSessions` 的 `.at(-1)`，Task 3 的測試釘住它。這條是 T2 複審的 Important 發現（labeled plan-mandated），裁定寫在 ledger R7。
+2. **本單元自己的 spec**（`docs/superpowers/specs/2026-09-22-operator-run-end-design.md`）§4「它不保證什麼」加第 5 條：**一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**（成功站點在 flush 前寫的 `exit 0`，與失敗 catch 寫的 `exit 1`；write-behind 保留失敗批次，`close()` best-effort 排空，兩筆都可能落地）。**讀取端的契約是最後一筆為準**——`listStoredSessions` 的 `.at(-1)`，Task 3 的測試釘住它。這條是 T2 複審的 Important 發現（labeled plan-mandated），裁定寫在 ledger R7。
 3. M3 spec `:197-213` 的 §3.4 旁加 dated 註記：實作落點與**三處與原稿不同**的量測事實（生產者是三站不是漏斗；完成定義的「失敗那一行」取在 `sessions show`；**紀錄只存在於 store-backed 的執行**——協調器只在 `--session-dir` 下接線，`apps/cli/src/index.ts:345-376`，所以無 store 的 `i-harness run` 一律不留紀錄，這比 §4.1 原稿的「session 存在之前就死」更寬）。行號寫入前重量。
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/handoff/2026-09-20-queued-work.md docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md
-git commit -m "docs(queue,spec): §3.4 lands — the orphan row closes, and the record says which two facts moved from the original sketch"
+git add docs/handoff/2026-09-20-queued-work.md docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md docs/superpowers/specs/2026-09-22-operator-run-end-design.md
+git commit -m "docs(queue,spec): §3.4 lands — the orphan row closes, and the record says which three facts moved from the original sketch"
 ```
+
+> **2026-09-22 執行期更正（控制器）**：原稿的 `git add` **漏了第三個檔**（本單元自己的 spec），而 Step 2 已要求改它；提交訊息也還寫著「two facts」，但 Step 2 第 3 條列的是**三**條。兩處都已在上面更正。另：Step 2 所有出現的行號（queue doc 的 C1 列、M3 spec 的 §3.4）**寫入前先重量**——遷移到私人電腦後工作區是全新的 checkout，舊行號一律視為已腐。
