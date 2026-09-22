@@ -70,10 +70,12 @@ describe("spawnChild", () => {
 function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enqueued: { id: string; events: unknown[] }[]; flushed: { id: string; types: string[] }[] } {
   const created: SessionMeta[] = []
   const enqueued: { id: string; events: unknown[] }[] = []
-  // M70: a flush is recorded with WHAT WAS QUEUED FOR THAT SESSION at the time
-  // it ran — the write-behind's own semantics (a drain persists what is in the
-  // queue). "flush was called" alone would not be discriminating: this mirror
-  // also flushes on `turn/end`.
+  // M70: a flush is recorded with WHAT HAD BEEN ENQUEUED FOR THAT SESSION when
+  // it ran. That is the discriminator this fake needs and the reason it is not
+  // "flush was called" (this mirror also flushes on `turn/end`), but it is NOT
+  // a model of the write-behind: the real drain persists a stable ordered
+  // PREFIX and re-queues what a failed write retained, while this recording is
+  // the whole enqueue history and never empties.
   const flushed: { id: string; types: string[] }[] = []
   return {
     created,
