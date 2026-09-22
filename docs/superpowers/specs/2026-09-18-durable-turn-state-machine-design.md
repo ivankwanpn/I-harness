@@ -169,6 +169,29 @@ turn/start
 > **第一次真的復原到 pre-M4 日誌時做**（母體**已封閉** —— 不可能再產生新的 pre-boundary 日誌；
 > **這台機器上是空的**：2026-09-22 實測 `~/.i-harness/sessions` 不存在、`~/.i-harness` 下 **0** 個 `.jsonl`）。
 > 記錄：`docs/handoff/2026-09-22-m70-dispatch-boundary.md`。
+>
+> **【2026-09-22 稍晚，M71：字面重讀落地了 —— 上面「為什麼不採」那個例子仍然存在，而它現在是這條規則的接受代價。】**
+>
+> 全 log 檢查已實作：**任何地方都沒有 `tool/dispatch` 的日誌，其 pending tail 呼叫拿到 `outcome-unknown`**，
+> 而不是「派送前中止」—— `const boundaryProven = events.some((e) => e.type === "tool/dispatch")`
+> （`packages/session-persistence/src/repair.ts:143`；判決點 `:223-227`）。**一個 marker 在任一 turn
+> 就足以證明寫進這份日誌的 build 有邊界**，所以同一份日誌裡其他 marker-less 呼叫的「從未派送」
+> 仍是誠實的 —— **這是全 log 讀，不是 last-turn**（這是那個判別的關鍵，也是驗收第三模式證明的東西）。
+> 新 payload（`repair.ts:91-95`）沿用同一個 `code: TOOL_OUTCOME_UNKNOWN`（機器消費端不變）、
+> `replay: false`，訊息只宣稱缺席；**不從 `src/index.ts` 匯出**。
+>
+> **接受的代價，用上面那個例子講清楚**：一份**新的**日誌可以合法地整份沒有標記（唯一呼叫在
+> `prepare` 被擋下），而它現在讀 **unknown** —— 那**就是**代價，不是反駁。而且它比原句的例子更寬：
+> 被拒的呼叫裡**只有 `ToolArgsError`（參數畸形）是軟的、寫一筆失敗結果**；
+> guard／approval／guardian／unknown-tool 四類都 `throw` 而**什麼都不寫**
+> （`packages/core-tools/src/index.ts:311`／`:351`／`:354`／`:363`／`:366`／`:380`）
+> ⇒ **凡是從未派送過任何東西的 session —— 拒絕在內 —— 現在整份讀 unknown**。
+> 上面那句「今天讀成 `not-dispatched` 是**對的**」在本單元之後**不再成立**：那個讀數現在是 unknown。
+>
+> **M4 驗收的判別器也修了**：helper 的兩個模式原本只差 marker ⇒ 規則下兩個模式同一個裁決；
+> 新增的 `earlier-turn-marker` 模式（標記在**已關閉的前一 turn**、pending 呼叫在**下一個** turn）
+> 讓那個呼叫仍讀 `TOOL_ABORTED_BEFORE_DISPATCH`（`packages/session-persistence/test/m4-crash-acceptance.test.ts:118`；
+> 便宜的 unit pin `test/repair.test.ts:96`）。記錄：`docs/handoff/2026-09-22-m71-residuals.md`。
 
 ---
 
@@ -206,6 +229,10 @@ turn/start
   > `(coordinator, sessionId)` 這一對下被鏡像** ⇒ 縫**解析在一個空佇列上**：不報錯，也不耐久
   > （本檔就地說明，`packages/session-executor/src/assembly.ts:1251-1262`；出貨的呼叫者只有 CLI 的
   > resume 路徑自帶 session，而它在同一對下鏡像 —— 合格）。
+  > **▶ 2026-09-22 稍晚（M71）：這三種缺口產生的日誌，現在會被保守地讀。** 一份出自這些路徑、
+  > 整份沒有標記的日誌，其 pending 呼叫從 `m71` 起是 **`outcome-unknown`**（全 log 規則，見 §3.4 的
+  > M71 註）—— 也就是說 (a)／(b)／(c) 的 marker-less 日誌不再被讀成 benign。**代價不是新的**：
+  > 它就是同一條規則的代價（每一個從未派送過東西的 session 都讀 unknown，拒絕在內）。
 - **不動 opencode-fork 那個 kernel 的任何結構**（§6）。
 
 ---
@@ -226,8 +253,10 @@ turn/start
 
 - ~~**§5 Q8**（舊日誌要不要保守）—— 產品決定。~~ **✅ 2026-09-22 已答（owner：保守），並於同日由 M70 落地** ——
   以「讓 `tool/dispatch` 不可遺失」（checkpoint：本體之前 flush、fail-closed）實作 Q8 的**意圖**，
-  而不是把「標記缺席」重讀成 unknown；**字面重讀是觸發項**（第一次真的復原到 pre-M4 日誌時做，
+  而不是把「標記缺席」重讀成 unknown；**字面重讀是~~觸發項~~**（第一次真的復原到 pre-M4 日誌時做，
   見 §3.4 的 2026-09-22 註）。記錄：`docs/handoff/2026-09-22-m70-dispatch-boundary.md`。
+  **▶ 2026-09-22 稍晚（M71）：觸發項已消費 —— 字面重讀落地了**（全 log 檢查、判決點與新 payload 見
+  §3.4 的 M71 註；接受代價同處照實記）。記錄：`docs/handoff/2026-09-22-m71-residuals.md`。
 - **`outcome-unknown` 的使用者介面** —— 前端。
 - **跨行程的擁有權** —— 見 §6，我們沒有那個問題。
 - **`subagent/src/persist.ts` 的 `running → error`**（§1.3）**是否同一批改**。它是同一個形狀，

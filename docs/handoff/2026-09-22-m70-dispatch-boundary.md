@@ -52,7 +52,7 @@ git log --oneline -8 m70 && git status -sb
 
 | # | 裁定 | 若錯的代價 |
 |---|---|---|
-| R15 | **Q8 的意圖以「讓標記不可遺失」實作，不以「重讀缺席」實作。** owner 答「保守」（舊日誌不得讀成 benign）；量測顯示缺席之所以有歧義，是因為**標記會丟**（200 ms 窗、無 flush），所以把標記做成不可遺失（checkpoint、fail-closed）。**字面的「全 log 無標記 ⇒ unknown」park 成觸發項** —— 理由是**新的**日誌可以合法地整份沒有標記（一個 session 的唯一呼叫在 `prepare` 就被拒，例如被拒的批准），今天讀成 `not-dispatched` **是對的**，全 log 規則會把它標成錯的；**我們讀過的**參考實作沒有一個把缺席讀成 unknown（耐久檢查點的做法本身取自 dsh 的 `session-checkpoint-policy`，見 `packages/core-agent/src/execute-tool-calls.ts:255`；opencode-fork 的 kernel 見 design spec §6）。 | 觸發項生效前，若真的復原到一份 pre-M4 日誌，它 pending 的呼叫仍讀成 benign；觸發項就是**接住它的東西**，而 checkpoint 把等價的洞對**有縫的宿主**此後寫下的日誌關掉 |
+| R15 | **Q8 的意圖以「讓標記不可遺失」實作，不以「重讀缺席」實作。** owner 答「保守」（舊日誌不得讀成 benign）；量測顯示缺席之所以有歧義，是因為**標記會丟**（200 ms 窗、無 flush），所以把標記做成不可遺失（checkpoint、fail-closed）。**字面的「全 log 無標記 ⇒ unknown」park 成觸發項** —— 理由是**新的**日誌可以合法地整份沒有標記（一個 session 的唯一呼叫在 `prepare` 就被拒，例如被拒的批准），今天讀成 `not-dispatched` **是對的**，全 log 規則會把它標成錯的；**我們讀過的**參考實作沒有一個把缺席讀成 unknown（耐久檢查點的做法本身取自 dsh 的 `session-checkpoint-policy`，見 `packages/core-agent/src/execute-tool-calls.ts:255`；opencode-fork 的 kernel 見 design spec §6）。 **▶ 2026-09-22 稍晚（`m71`）：這一列的理由已被取代 —— 它現在是那條規則的接受代價，不是反對它的論證。** 量到的：只有 `ToolArgsError`（參數畸形）寫得出 `TOOL_FAILED`；guard／approval／guardian／unknown-tool 四類拒絕都 `throw`、**什麼都不寫**（`packages/core-tools/src/index.ts:311`／`:351`／`:354`／`:363`／`:366`／`:380`）⇒ 上面那個「被拒的批准」的例子**成立**，而全 log 規則已落地（見 §5 第 2 條）。 | 觸發項生效前，若真的復原到一份 pre-M4 日誌，它 pending 的呼叫仍讀成 benign；觸發項就是**接住它的東西**，而 checkpoint 把等價的洞對**有縫的宿主**此後寫下的日誌關掉。**▶（`m71`）觸發項已消費；這條規則的量到代價是「每一個從未派送過東西的 session（拒絕在內）整份讀 unknown」** |
 | R16 | **controller 的合流預測被實作方的量測推翻，照實記錄、不掩蓋**（見 §2）。 | 核准是照「一批一次排空」的概念給的，實際是**每呼叫一次**；絕對值小（整批 62 ms），但 owner 若要重讀那個核准，重讀的是這個數字。替代設計（批次層 checkpoint：先 append 全部標記再一次排空）是設計變更，刻意出界 |
 | R17 | **被拒的 checkpoint 讓 turn 失敗**（呼叫的裁決照樣寫下、store 錯誤再往外丟）—— 這是本檔自己的規則（M5 T4 R5：「失去的耐久寫入不得變成靜默續行的 turn」），而 `run.ts` 的失敗站點本來就列了「a durable flush that rejected」（`apps/cli/src/run.ts:835`）。 | 一次「以前會繼續、現在會失敗」的 run；失敗是響的，且落在既有的 exit-1 耐久路徑上 |
 
@@ -65,7 +65,7 @@ git log --oneline -8 m70 && git status -sb
 ## 5. 殘餘、觸發項與 parked
 
 1. **已命名的殘餘（量到）**：復原後**載入失敗**的子代理 entry 留著 `createSessionFromEmpty()` 的替身（`packages/subagent/src/persist.ts:124`），而鏡像只在 `childSessions` 存在且載入成功時才換上去 —— 該替身**沒有 append 鉤子**，所以 append 一個 `tool/dispatch` 到不了任何 write-behind，`flush(entry.sessionId)` 造成 **0** 筆後端寫入（探針 C）。接縫在該處是 no-op；**誠實**（M70 前後都沒有東西鏡像那些 append），且那個 entry 已以 `error` 現形。**不修** —— 那是 resume 路徑的耐久修復，不是本單元。
-2. **觸發項（parked，不是丟掉）**：Q8 的字面重讀（全 log 無標記 ⇒ `outcome-unknown`）—— **第一次真的復原到 pre-M4 日誌時做**。母體**已封閉**（不可能再產生新的 pre-boundary 日誌）、**這台機器上是空的**（2026-09-22 實測：`~/.i-harness/sessions` 不存在；`~/.i-harness` 下 0 個 `.jsonl`）。
+2. ~~**觸發項（parked，不是丟掉）**：Q8 的字面重讀（全 log 無標記 ⇒ `outcome-unknown`）—— **第一次真的復原到 pre-M4 日誌時做**。~~ → **✅ 已觸發、已消費（2026-09-22 稍晚，`m71`）**：**字面重讀已落地** —— 全 log 無 `tool/dispatch` ⇒ pending 呼叫讀 `TOOL_OUTCOME_UNKNOWN`（`packages/session-persistence/src/repair.ts:143`；新 payload 不從 index 匯出；M4 驗收的判別器由 helper 的 `earlier-turn-marker` 模式修回）。**注意它為什麼被觸發**：不是因為復原到 pre-M4 日誌（母體仍封閉、這台機器上仍是空的），而是 owner 2026-09-22 指示把 Q8 收線（設計判斷授權給執行方）之後的直接落地。**§3 的 R15 理由已被取代**（它現在是這條規則的接受代價，見該列末的註）。記錄：`docs/handoff/2026-09-22-m71-residuals.md`。
 3. **parked 的 Minor（明說，不動）**：abort／refusal 的支配巧合會蓋掉 store 錯誤的**訊息**（turn 兩種都失敗，沒有靜默續行）；沒有「批次中途 flush 被拒 ＋ 兄弟取消」的案例；複審新增的一條 —— 先到先贏現在也套在**值**上，所以一個沒有 reason 的拒絕會遮住後到的 `Error` 訊息（turn 仍失敗；`run.ts` 以 `instanceof Error` 防守）。
 4. **有量到、但沒有套件測試釘住**：`tools.ts` 的 resume 子代理站點（`tools.ts:661-663`）—— 探針 C 量過，但**沒有 package 測試釘它**；指名以免被當成覆蓋。順帶：62 條 `spill GC failed: ENOENT` 的收尾警告**在改動前後同數**，不是本單元的。
 
@@ -79,3 +79,4 @@ git log --oneline -8 m70 && git status -sb
 ---
 
 **這份記錄的性質**：本單元是 M4「只差 Q8」的收尾，而它把 Q8 落地成**「讓標記不可遺失」而不是「重讀缺席」**（§3 R15）—— 因此它的判準要連著 `docs/superpowers/specs/2026-09-18-durable-turn-state-machine-design.md` 的 2026-09-22 註一起讀，那份文件才是 Q8 的家。
+**▶ 2026-09-22 稍晚（`m71`）：Q8 的另一半也落地了 —— 字面重讀（全 log 規則）已實作**，§3 R15 的反對理由因此**降級為那條規則的接受代價**（見 R15 列末與 §5 第 2 條的註）。Q8 的完整現況以 M4 spec §3.4 的 M71 註與 `docs/handoff/2026-09-22-m71-residuals.md` 為準。

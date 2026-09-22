@@ -188,8 +188,8 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 **兩條被 park 的 Important（控制器裁定；編號續 §3 的 R 系列）：**
 
-- **R14 —— 掃描①（鍵名）不認複數鍵名**（`apiKeys`／`tokens`／`secrets`）。**Park，不是修**，三個理由：①**今天沒有任何站點傳 `data`**（§2.5 第 5 點），所以這條缺口沒有可被利用的路徑；②修法要與**過度遮蔽**對賭（`tokens: 1234`、`keys` 這種正常鍵名會被吃掉）；③**已註冊的值仍由第③趟按值擋住**。**⇒ 它是「下一個單元裡第一個傳 `data` 的站點」落地時要先修的東西**，不是「有空再修」。**若錯的代價：** 那第一個站點傳進去的複數鍵名下的秘密不被鍵名遮蔽（值仍可能被第③趟擋住）。
-- **R15 —— 沒有任何 package 測試 install 實例 ⇒ 44 個 package 站點的「已安裝」分支無守衛**（§2.5 第 7 點的另一面，量過的）。**Park。** **最便宜的守衛＝一個捕捉型實例的測試，斷言 `phase` ＋ `level`**。**若錯的代價：** 已安裝模式的路徑在 packages 側一直沒有回歸網，相位或級別被翻掉不會紅（§2.5 第 6 點）。
+- **R14 —— 掃描①（鍵名）不認複數鍵名**（`apiKeys`／`tokens`／`secrets`）。**Park，不是修**，三個理由：①**今天沒有任何站點傳 `data`**（§2.5 第 5 點），所以這條缺口沒有可被利用的路徑；②修法要與**過度遮蔽**對賭（`tokens: 1234`、`keys` 這種正常鍵名會被吃掉）；③**已註冊的值仍由第③趟按值擋住**。**⇒ 它是「下一個單元裡第一個傳 `data` 的站點」落地時要先修的東西**，不是「有空再修」。**若錯的代價：** 那第一個站點傳進去的複數鍵名下的秘密不被鍵名遮蔽（值仍可能被第③趟擋住）。 **▶ 2026-09-22 已收線（`m71`）** —— 提交 `4ea43624`（實作）＋ `9678d773`（註解修）：**第二份清單 `PLURAL_KEY_STEMS`**（`packages/diagnostics/src/redactor.ts:153`，`endsWith(stem + "s")`，**不剝尾 `s`** —— 剝法會讓 `maxTokens` 中，而被釘住的負面案例量到了）；只收不能碰撞的詞幹（`tokens`／`cookies`／`auths`／`authorizations`／`bearers`／裸 `keys` 維持排除，理由在 `redactor.ts:138-146`）。**真正的缺口是粒度**（無形狀的葉子：`apiKeys: { openai: "abc123def" }`）。**代價被釘在測試**：`packages/diagnostics/test/redactor.test.ts:112` 斷言 `{ secrets: 42 }` → `TOKEN`；flag 形狀的加寬（`noSecrets: true`／`hasCredentials: false`）也量過、接受並記在 `redactor.ts:129-136`。**記錄：`docs/handoff/2026-09-22-m71-residuals.md`。**
+- **R15 —— 沒有任何 package 測試 install 實例 ⇒ 44 個 package 站點的「已安裝」分支無守衛**（§2.5 第 7 點的另一面，量過的）。**Park。** **最便宜的守衛＝一個捕捉型實例的測試，斷言 `phase` ＋ `level`**。**若錯的代價：** 已安裝模式的路徑在 packages 側一直沒有回歸網，相位或級別被翻掉不會紅（§2.5 第 6 點）。 **▶ 2026-09-22 已收線（`m71`）** —— **十個站點／九個套件，各一條新檔**（`8188dab0`…`0c47bd46`，九個提交，**+849／−0**，既有測試零改動）：**六個縫**（`credentials:247`／`hooks:363`／`plugin-registry/state:78`／`schedule/driver:112`／`skills/registry:123`／`workflow/registry:37`）＋**四個 ambient handle**（`plugin-registry/agents:112`／`subagent/child:85`／`compaction:169`／`output-retention/spill-guard:257`）；每一條斷言 `phase` ＋ `level`（六個 `mount` 站斷言 `level === "warn"`；**10／12 條也斷言 `run`** —— 例外是 `plugin-registry` 的 `loadStateSync` 案 `:104` 與 `schedule` 的 delivery-failure 案 `:107`）。**突變證明有對照**：翻 `state.ts` 的 phase 時既有套件 **175 passed／0 red**、翻 `skills/registry.ts` 的 level 時 **59 passed／0 red**（後者重現了 §2.7 建議 3 引的 T5 的 M1 讀數：翻 `warn`→`error` 紅 0 條），net 放回後各自轉紅 **2** 條／**1** 條，回退 sha 驗證。**仍然沒有守衛的一站是 `packages/subagent/src/tools.ts:787`**（量到的理由在記錄裡；另有兩個便宜的同形狀站點 `plugin-registry/src/commands.ts:76`、`hooks/src/trust.ts:87` 留給後續）。**記錄：`docs/handoff/2026-09-22-m71-residuals.md`。**
 
 **複審對下一個單元的建議（原樣記下）：**
 
@@ -202,7 +202,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 ## 3. Rulings（全部；每條附「若錯的代價」）
 
-**⚠ R14／R15 是 T1–T6 之後才出現的兩條（最終整支複審 park 的 Important），記在 §2.7** —— 本節保留 T1–T6 那 13 條的原文不動。
+**⚠ R14／R15 是 T1–T6 之後才出現的兩條（最終整支複審 park 的 Important），記在 §2.7** —— 本節保留 T1–T6 那 13 條的原文不動。（**兩條都已在 2026-09-22 由 `m71` 收線；各自的收線註在 §2.7 該條末**，記錄：`docs/handoff/2026-09-22-m71-residuals.md`。）
 
 - **R1（T1 複審，2026-09-22）**：`index.ts:178` help（exit 0）、`models.ts:343`、`roles.ts:287`、`provider.ts:222`、`run.ts:752` 五站**維持原樣、列名不遷移** —— T1 的 API 讓通道＝級別，「info 級、通道 stderr」不可表達，而四個既有斷言釘著它們。**代價（明說）**：這五個 argv/notice 站點沒有結構化記錄。計畫 §0.3 與 T5 表已就地更正（`364e7cd3`）。
 - **R2（T2 派工前）**：T2 紅測試的 redactor 用**測試內 double**（`/sk-live-[A-Za-z0-9]+/` → 恰好 `[REDACTED]`）。**代價**：T3 落地後一行換真工廠 ⇒ **已由 T3 履行**（`99c287e`，複審確認強化）。
