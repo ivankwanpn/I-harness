@@ -179,10 +179,22 @@ describe("M15 context catalog", () => {
     expect(r2?.maxOutputTokens).toBe(8192)
   })
 
-  it("resolveEffectiveModelContext: no window knowledge anywhere → undefined (fail-closed)", () => {
+  // M72 Ⅱ (R5): the fail-closed gate used to be the WINDOW alone, so a user row
+  // carrying ONLY `maxTokens` — no card, no window anywhere — lost the user's
+  // explicit cap: the whole resolution came back undefined and the cap with it.
+  // That contradicted the chain's own order (the user's setting is the FIRST
+  // source, spec §1.1), and it contradicts the clamp design, which already
+  // handles "no window ⇒ the value passes through unclamped". The gate is now
+  // "NEITHER resolved"; window-only readers are unaffected because they read
+  // `.contextWindow`, which is absent in exactly the cases it always was.
+  it("resolveEffectiveModelContext: nothing at all resolves → undefined; a user maxTokens alone is CARRIED (M72 Ⅱ R5)", () => {
     const profile: ProviderProfile = { name: "p", displayName: "P", protocol: "openai-compatible" }
     expect(resolveEffectiveModelContext({ profile, modelId: "m" })).toBeUndefined()
-    expect(resolveEffectiveModelContext({ profile, modelId: "m", userModel: { maxTokens: 100 } })).toBeUndefined()
+    // RED before the R5 fix — this asserted `toBeUndefined()`, i.e. it pinned
+    // the loss of the user's own setting rather than the fail-closed rule.
+    const r = resolveEffectiveModelContext({ profile, modelId: "m", userModel: { maxTokens: 100 } })
+    expect(r?.maxOutputTokens).toBe(100)
+    expect(r?.contextWindow).toBeUndefined()
   })
 })
 
@@ -240,9 +252,13 @@ describe("M32 model catalog", () => {
     expect(r?.maxOutputTokens).toBe(384_000)
   })
 
-  it("resolveEffectiveModelContext: no card + no window anywhere → undefined (fail-closed unchanged)", () => {
+  it("resolveEffectiveModelContext: no card + no window anywhere → undefined; a user maxTokens survives (M72 Ⅱ R5)", () => {
     const profile: ProviderProfile = { name: "openai", displayName: "O", protocol: "openai-responses" }
-    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })).toBeUndefined()
+    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o" })).toBeUndefined()
+    // M72 Ⅱ (R5): the route that has no card is exactly the realistic path —
+    // every `openai`-family route resolves no card, so `models add … --max-tokens
+    // 4096` on one used to silently drop the cap.
+    expect(resolveEffectiveModelContext({ profile, modelId: "gpt-4o", userModel: { maxTokens: 500 } })?.maxOutputTokens).toBe(500)
   })
 })
 

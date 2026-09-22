@@ -467,18 +467,21 @@ describe("model resolution", () => {
     })
     await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
       status: "ready",
-      binding: { contextWindow: 1_048_576 },
+      binding: { contextWindow: 1_048_576, maxOutputTokens: 384_000 },
     })
-    // NOT asserted: the card's `maxOutputTokens`, because it does not reach the
-    // binding. Measured 2026-09-19 — `SessionModelBinding` has no such field and
-    // `resolveModel` takes only `.contextWindow` off `resolveEffectiveModelContext`,
-    // so the card parses it, validates it, threads it through the five-tier chain
-    // and then drops it. Nothing in production reads it (its only mentions are in
-    // this package's own loader and chain), which is the repo's familiar shape:
-    // a capability built to the last link with no consumer. Recorded in the
-    // design's open questions; NOT fixed here, because whether we should SEND
-    // `max_output_tokens` at all is a separate decision (Codex does not model it;
-    // Pi, DSH and Grok do).
+    // `maxOutputTokens` is asserted above because M72 Ⅱ changed the answer this
+    // comment used to carry. Measured 2026-09-19: the card parses the cap,
+    // validates it, threads it through the five-tier chain — and `resolveModel`
+    // took only `.contextWindow` off the resolution, so the cap was dropped one
+    // line after being computed and `SessionModelBinding` had no field for it.
+    // The comment recorded that as an open question and NOT fixed here, because
+    // whether to SEND `max_output_tokens` at all was a separate decision (Codex
+    // does not model it; Pi, DSH and Grok do) — M72 Ⅱ made that decision: the
+    // field exists, the cap travels to `AgentDeps`, and the request assembly
+    // (whose clamp lives where the window and the input estimate meet) is its
+    // first reader. This route is the CARD arm, the one the M72 Ⅱ case above
+    // does not cover (its rows resolve no card), which is why the number is
+    // pinned rather than noted.
   })
 
   it("with NO catalog declared, the route name IS the family — unchanged, and deliberately so", async () => {
