@@ -130,9 +130,13 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 | 類別（recon 的計數） | level | phase（依檔案） |
 |---|---|---|
-| CLI usage error（17：argv/flag/子命令用法） | `error`（`index.ts:178` 的 help **例外：`info`**） | `cli` |
+| CLI usage error（17：argv/flag/子命令用法） | `error` | `cli` |
 | CLI run/command failure（16） | `error` | `run`／`cli` |
-| 五個列名例外（`index.ts:178` help、`models:343`、`roles:287`、`provider:222`、`run:752`） | **不遷移**（維持 `console.error` 原樣；§0.3 的修正） | — |
+| 五個列名例外（`index.ts:196` help、`models:348`、`roles:292`、`provider:227`、`run:776`） | **不遷移**（維持 `console.error` 原樣；§0.3 的修正） | — |
+
+**⚠ 修正（T5 落地時量的，2026-09-22）:** 第 1 列的括號（`index.ts:178` 的 help **例外：`info`**）是 edit 殘留，照 §0.3 的 R1 更正 —— 那個站點（**現位置 `index.ts:196`**）是 exit 0 的 help print，屬**五個列名例外**、不遷移，而 `info` 級在這裡不可表達（級別即通道）；argv 的**錯誤**路徑（**現位置 `index.ts:205`**）才是本列的 `error`／`cli`。第 3 列的五個例外與 `run.ts` 的註解行號一併重量（見上格）。**T5 遷移 54 站**：index 21／provider 10／run 5／roles 4／models 4／hooks 5／plugins 3／sessions 2。
+
+**⚠ 未決 —— T5 回報的那一站（2026-09-22）:** 60 站裡有 **1 站既不遷移、也不在列名例外中**：`index.ts:486` 的 run 失敗報告（`console.error(failureReport(r.error, …))`）。量到的事實：它一旦走 handle，`I_HARNESS_LOG=stderr` 時 sink 接手而 console 通道不再被呼叫，而 T4 的 `apps/cli/test/diagnostics-bootstrap.test.ts` 案例 ②（stderr 第一行是 stand-in 的記錄）與 ⑤×3（從 `console.error` 的 spy 裡取已安裝的實例）正是靠那一次呼叫 —— **只**回退該站、其餘不動，18/18 全綠（逐條回退量過）。測試檔不得改動（Global Constraints 與派工），故 T5 把它留在原樣並回報：**待裁定** —— 要嘛它成為第六個列名例外，要嘛 T4 那四條案例以裁定後的方式改寫（其註解自陳「No site is migrated in this task」，本就以 T5 為界）。
 
 - [ ] **Step 1: 遷移一批（例如 index.ts 23 站）** → 跑 `pnpm --filter <cli-pkg> test`：**既有 spy 斷言全綠即為驗收**（有任何文字斷言紅 ⇒ 遷移改變了 bytes ⇒ 修遷移，不是修測試）→ commit per 檔或小批（SDD 的批處理規則）。
 - [ ] **Step 2: 其餘檔同法**（provider→roles→models→hooks→plugins→sessions→run）→ **Step 3: 全 CLI 綠＋`--gate`** → commit。
