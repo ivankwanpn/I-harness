@@ -35,6 +35,15 @@ export interface ExecuteToolCallsOptions {
   // M25: optional host telemetry stream (Ruling M25-P3 — independent of the
   // session log, agent-invisible). Absent = no tool events.
   telemetry?: Telemetry
+  // M70: optional host checkpoint capability — make the session log durable up
+  // to the `tool/dispatch` marker that was just appended, and REJECT when that
+  // could not be done. The shipped host passes the coordinator's write-behind
+  // drain (`() => coordinator.flush(sessionId)`), which resolves only after the
+  // backend write returned; the marker is therefore on disk before the body
+  // runs, and a kill cannot lose it. Absent (every subagent host today, and
+  // every test that does not opt in) → NO checkpoint and byte-identical pre-M70
+  // behavior — this seam is optional exactly like `telemetry` above.
+  flush?: () => Promise<void>
 }
 
 // M13 bounded rolling-pool scheduler. Model-order guarantees:
@@ -122,6 +131,14 @@ export async function executeToolCalls(
   // remembering to add it here. (A list is what gets forgotten — which is how
   // the first draft of this task got it wrong.)
   let firstRefusal: unknown
+  // M70: the checkpoint's own failure, carried to the END of the function.
+  // It cannot be thrown from `startCall`: the fills and the commit lane still
+  // have to run (a throw from there leaves the log half-committed — the M5 T4
+  // R5 defect the commit-lane error below is also built around). It is NOT a
+  // refusal either, for the same reason, plus a second one: a refusal discards
+  // the batch, and a store failure must not discard the record of what DID
+  // happen before the store broke.
+  let firstFlushError: unknown
   // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
   // path said "drain started (results discarded)" and awaited `allSettled`, so a
   // failed call left its siblings running — a `bash` still spawning, a fetch
@@ -223,9 +240,59 @@ export async function executeToolCalls(
       callId: call.callId,
       ...(call.eventSeq !== undefined ? { eventSeq: call.eventSeq } : {}),
     })
+    // M70: make the marker above DURABLE before the body runs (checkpoint
+    // policy, ported from dsh's `session-checkpoint-policy`). The append alone
+    // is not enough: the host's write-behind batches on a fixed deadline
+    // (200 ms shipped), so a kill inside that window takes the marker with the
+    // batch — and recovery reads the marker to tell "the body started" from
+    // "the body never ran" (`repair.ts`), so a lost marker makes a re-run of a
+    // side effect look licensed. Awaiting the host's drain closes that window:
+    // when this resolves, the marker is on disk. It is the LAST await before
+    // the body, and there is no path to the body that skips it.
+    if (opts.flush !== undefined) {
+      try {
+        await opts.flush()
+      } catch (err: unknown) {
+        // FAIL CLOSED: the body does not run. Its verdict is that fact, in the
+        // vocabulary that already exists — the body never ran, so
+        // TOOL_ABORTED_BEFORE_DISPATCH is literally true of it (M4's constant,
+        // no new code: a flush failure is not a new KIND of outcome).
+        //
+        // Recorded FIRST, like the dispatch `.catch` and the typed-argument
+        // arm: this call's own failure goes down before anything else can stamp
+        // a sibling's message on its slot.
+        failures.set(index, err)
+        slots[index] = {
+          name: call.name,
+          callId: call.callId,
+          synthetic: true,
+          output: {
+            error: `tool call aborted before dispatch: ${err instanceof Error ? err.message : String(err)}`,
+            code: TOOL_ABORTED_BEFORE_DISPATCH,
+          },
+        }
+        if (!hasFailed) {
+          firstError = err
+          hasFailed = true
+        }
+        // A broken store is an EXECUTION-level event, and this file already
+        // rules on a lost durable write: record it, let the fills and the
+        // commit lane run so the log is not half-committed, then RETHROW (M5
+        // T4 R5 — "a durable write failure must not become a silently
+        // continuing turn"). The throw happens at the end of this function;
+        // see `firstFlushError` above for why it cannot happen here.
+        firstFlushError ??= err
+        // Cancel the siblings: a batch whose store is broken must not keep
+        // starting bodies (the same channel a body failure uses).
+        batchAbort.abort()
+        return
+      }
+    }
     // M25: tool/start only once the call is REALLY dispatched (after prepare —
     // a prepare failure means the tool never started, mirroring the
-    // never-started boundary that abort synthesis relies on).
+    // never-started boundary that abort synthesis relies on; M70 adds the
+    // checkpoint to that same rule, so a call whose marker could not be made
+    // durable is never reported as started).
     opts.telemetry?.emit({ type: "tool/start", ts: Date.now(), data: { tool: call.name, callId: call.callId } })
     const promise = tools
       .dispatch(prepared)
@@ -513,6 +580,22 @@ export async function executeToolCalls(
     // they do get theirs. The abort path has the same hole. The rethrow below
     // does not repair the cursor; it makes the half-committed log fail the turn
     // loudly instead of letting the turn continue in silence.
+    //
+    // M70: the checkpoint's failure is rethrown FIRST, and it is the same rule
+    // read from the other end — a store that cannot accept a write is exactly
+    // the "lost durable write" this rethrow exists for (M5 T4 R5), and every
+    // fill and commit above has already run, so the log keeps the record of what
+    // happened before the store broke. It dominates a coincident commit-lane
+    // error because it is the root cause of it; both mean the same thing here.
+    // The body's OWN failure is still on its result (`failures`), and this
+    // error is the store's — the two are different facts and neither hides the
+    // other. Two coincidences keep their existing dominance, and in both the
+    // turn fails anyway, so only the MESSAGE differs: a POLICY refusal (rethrown
+    // above this branch, on the rule that makes a refusal never soft) and a
+    // user ABORT (the branch above this one, "agent aborted"). In the abort case
+    // the failed call's own verdict is still committed first — the abort path's
+    // commit lane runs the slot filled here, synthetic as it is.
+    if (firstFlushError !== undefined) throw firstFlushError
     if (hasCommitError) throw commitError
   }
 }
