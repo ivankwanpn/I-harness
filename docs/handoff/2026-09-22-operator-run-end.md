@@ -33,6 +33,8 @@ git log --oneline -3 m69 && git status -sb
 
 讀數（各自在自己的 commit 上量）：T1 focused 1/1、`session-persistence` 82/82、`core-session` 94/94；T2 `run-end` 6/6 與 CLI 全包 289 passed｜1 skipped；T3 sessions 15/15 與 CLI 全包 **291 passed｜1 skipped**；`check-reachability --gate` 在 `c2824ab` 上 **PASS -- no new rows**（控制器親跑）。T4 與修復 wave 看上一張表。
 
+**分支 tip 上的最終閘門（`ff40ec32`，修復 wave 之後，控制器親跑）**：`pnpm verify:all` → **`VERIFY:ALL PASSED`**——suite exit 0 · **2899 passed｜9 skipped｜0 failed** · 母體 **67／67** · typecheck exit 0 · e2e exit 0／5 檔 · gate exit 0 · **435 列**（baseline 472，**無新增 row**）。比 T4 那次的 2898 **多 1，正是修復 wave 新增的那條 pin**。**為什麼要重量**：修復 wave 動了 `run.ts`（`runId` 上提），而 T4 的讀數是在那之前量的——**一次綠只證明它跑的那棵樹**（W6 的教訓）。
+
 ## 2. 修復 wave 做了什麼（終審 0C／3I ＋ 5 項）
 
 **做完了**（程式＋測試＝`082cc0e5`；文件＝本檔所在的那個提交）：
