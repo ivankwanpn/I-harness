@@ -370,4 +370,30 @@ describe("M72 Ⅱ: the output cap on the gemini wire", () => {
     expect("generationConfig" in body).toBe(false)
     await it.return?.()
   })
+
+  // R10: `...(config.options ?? {})` is how a gemini route configures
+  // generation parameters today (`options.generationConfig.temperature`). The
+  // request-level cap wins over an OPTION's cap — it must not win over the
+  // whole parent object that carries the route's other parameters.
+  it("M72 Ⅱ: a route's other generationConfig keys survive the cap reaching the parent", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro", options: { generationConfig: { temperature: 0.2 } } })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.generationConfig).toEqual({ temperature: 0.2, maxOutputTokens: 4096 })
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: without a request cap the route's generationConfig passes through untouched", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro", options: { generationConfig: { temperature: 0.2 } } })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "sys" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.generationConfig).toEqual({ temperature: 0.2 })
+    await it.return?.()
+  })
 })
