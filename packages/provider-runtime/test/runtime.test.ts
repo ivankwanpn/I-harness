@@ -385,6 +385,45 @@ describe("model resolution", () => {
     expect(plain.builds[0]?.profile.inputModalities).toBeUndefined()
   })
 
+  it("M72 Ⅱ: the route's maxTokensField survives settings → profile (absent stays absent)", async () => {
+    // The value has to cross TWO silent-drop sites to get here: the settings
+    // normalizer (normalizeProviderConfig keeps only fields it knows) and the
+    // providerView/runtimeProfile hand-off. Both are invisible in the adapter's
+    // own suite, which hands the factory a config directly.
+    const declared = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+          maxTokensField: "max_completion_tokens",
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(declared.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(declared.builds[0]?.profile.maxTokensField).toBe("max_completion_tokens")
+
+    // Undeclared → no field at all: the ADAPTER's own default names the wire
+    // field, so an injected default here would be a second place to be wrong.
+    const plain = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(plain.builds[0]?.profile.maxTokensField).toBeUndefined()
+  })
+
   it("returns discriminated unconfigured and invalid states without building a client", async () => {
     const empty = await fixture()
     await expect(empty.runtime.resolveModel({})).resolves.toEqual({

@@ -40,6 +40,14 @@ export interface ProviderProfile {
   models?: string[]
   defaultModel?: string
   inputModalities?: ("text" | "image")[] // M14: absent = text-only (negative capability)
+  /** M72 Ⅱ: which wire field THIS route's `openai-compatible` requests carry
+   * the output cap on — `max_tokens` (the compatible-gateway spelling, and the
+   * adapter's default when this is absent) or `max_completion_tokens` (what the
+   * newest OpenAI models demand; `max_tokens` is rejected there as a legacy
+   * name). Read by the openai-compatible adapter only — every other protocol
+   * owns a single fixed spelling (llm-openai: `max_output_tokens`,
+   * llm-anthropic: required `max_tokens`). */
+  maxTokensField?: "max_tokens" | "max_completion_tokens"
   contextWindow?: number                // M15: default window (tokens) for this provider
   maxContextWindow?: number             // M15: absolute ceiling; budget-enforcement hook (no enforcement in M15)
   modelContexts?: Record<string, ProviderModelContext> // M15: per-model overrides
@@ -67,10 +75,14 @@ export function resolveModelContext(
 // model-catalog.json is a DATA FILE of per-model capability cards
 // ({ contextWindow, maxOutputTokens }) — the last arm of the unified
 // resolution chain (userModel > modelContexts > profile > CARD > undefined).
-// Capability semantics: the model's documented limits — display/validation
-// only; NO request default is ever derived from a card ("缺省不發" — the
-// absence stance); a request maxTokens ABOVE the card is fail-loud at the
-// model end (no clamping).
+// Capability semantics: the model's documented limits. SUPERSEDED BY M72 Ⅱ
+// (spec §1.1) — this block used to read "display/validation only; NO request
+// default is ever derived from a card ('缺省不發' — the absence stance); a
+// request maxTokens ABOVE the card is fail-loud at the model end (no
+// clamping)". The card's `maxOutputTokens` IS now the SECOND source of a
+// request's output cap (the user's own row is the first), so the resolution
+// below feeds a REQUEST and not only a display; the clamp against what the
+// request has left lives in core-agent (one place, next to the window).
 //
 // D3 (2026-09-19): the file is `{ generatedAt, families }`, and it now carries
 // WHERE ITS NUMBERS CAME FROM. Two properties are ENFORCED by the loader below
@@ -260,8 +272,12 @@ export function listModelCatalogFamily(family: string): ModelCatalogRow[] {
 // userModel.contextWindow overlaps the window chain; userModel.maxTokens is
 // the OUTPUT-LENGTH cap (same semantics as the card's maxOutputTokens — M31
 // G1's maxTokens→maxContextWindow mapping is REMOVED; maxContextWindow keeps
-// its M15 native meaning). The card arm is value-only (capabilities — display/
-// validation); it never provides a request default. M72 Ⅱ (R5): the result is
+// its M15 native meaning). The card arm used to be called "value-only … it
+// never provides a request default" — SUPERSEDED BY M72 Ⅱ (spec §1.1): the
+// card's number IS the second source of the request's output cap, behind the
+// user's row, and core-agent clamps the winner against the request's remaining
+// room. What nothing here may do is CLAMP: a user number above the card stays
+// as written, and travels as written. M72 Ⅱ (R5): the result is
 // undefined only when NEITHER number resolved. Gating on the WINDOW alone was
 // wrong on the chain's own terms — the user's setting is the FIRST source
 // (spec §1.1) — and it silently dropped a row's `maxTokens` wherever no card
@@ -875,7 +891,7 @@ function buildClient(profile: ProviderProfile, model: string, extra?: Record<str
     case "openai-responses":
       return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":
       return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "gemini":
@@ -909,6 +925,9 @@ export interface WireClientConfig {
   model: string
   options?: Record<string, unknown>
   inputModalities?: ("text" | "image")[]
+  /** M72 Ⅱ: the route's chosen output-cap field name (openai-compatible only;
+   * absent → the adapter's `max_tokens` default). */
+  maxTokensField?: "max_tokens" | "max_completion_tokens"
   /** M59: literal extra request headers merged into every request. */
   headers?: Record<string, string>
 }

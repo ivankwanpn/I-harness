@@ -9,6 +9,9 @@ export interface OpenAICompatibleConfig {
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
   inputModalities?: ("text" | "image")[]
+  /** M72 Ⅱ: which wire field carries the cap on THIS route. Default
+   * `max_tokens` (the compatible-gateway spelling). */
+  maxTokensField?: "max_tokens" | "max_completion_tokens"
   /** M59: literal extra request headers (gateway-required, e.g. OpenCode
    * Zen's x-opencode-session). The adapter's own headers win on collision. */
   headers?: Record<string, string>
@@ -119,6 +122,13 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: the field NAME is a per-route choice — `max_tokens` is what
+        // compatible gateways take, `max_completion_tokens` is what the newest
+        // OpenAI models demand. Explicit config, not a guess (Pi's
+        // maxTokensField solves the same problem by probing).
+        ...(request.maxOutputTokens !== undefined
+          ? { [config.maxTokensField ?? "max_tokens"]: request.maxOutputTokens }
+          : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /

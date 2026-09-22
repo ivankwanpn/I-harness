@@ -20,6 +20,7 @@ import {
   type SettingsDefaultModel,
   type SettingsInputModality,
   type SettingsLlm,
+  type SettingsMaxTokensField,
   type SettingsModel,
   type SettingsProviderConfig,
   type SettingsProviderProtocol,
@@ -175,6 +176,9 @@ interface ProviderView {
   /** M61: the ROUTE's declared content types (user config wins over the
    * template; a model entry may narrow/override it — see resolveModel). */
   inputModalities?: SettingsInputModality[]
+  /** M72 Ⅱ: the ROUTE's chosen output-cap field name (user config wins over
+   * the template; absent → the adapter's own default). */
+  maxTokensField?: SettingsMaxTokensField
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -727,6 +731,13 @@ function providerView(
     ...(user?.inputModalities !== undefined
       ? { inputModalities: user.inputModalities }
       : template?.inputModalities !== undefined ? { inputModalities: template.inputModalities } : {}),
+    // M72 Ⅱ: the cap's field NAME — same user-wins-over-template rule. The
+    // user setting is the only source in practice (no built-in template
+    // declares it), but the chain is written out for the same reason the M59/M61
+    // arms are: "absent" and "declared" must stay distinguishable here.
+    ...(user?.maxTokensField !== undefined
+      ? { maxTokensField: user.maxTokensField }
+      : template?.maxTokensField !== undefined ? { maxTokensField: template.maxTokensField } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
@@ -773,6 +784,9 @@ function runtimeProfile(
     ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
     ...(view.headers !== undefined ? { headers: view.headers } : {}),
     ...(modalities !== undefined ? { inputModalities: modalities } : {}),
+    // M72 Ⅱ: route-level only (there is no per-model override of the wire's
+    // field name — one endpoint spells a field one way).
+    ...(view.maxTokensField !== undefined ? { maxTokensField: view.maxTokensField } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }

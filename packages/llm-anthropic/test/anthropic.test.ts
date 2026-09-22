@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAnthropicClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 
 describe("llm-anthropic protocol", () => {
   it("translates LLMRequest to the Anthropic Messages request body", async () => {
@@ -471,5 +471,36 @@ describe("M72 Ⅰ in-stream provider failures (anthropic)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.map((e) => e.type)).toEqual(["error"])
     expect((events[0] as { error: Error }).error.message).toContain("Overloaded")
+  })
+})
+
+// M72 Ⅱ. `max_tokens` is the one wire field in this phase whose SENDING is not
+// optional: the Messages API lists it as required, so "the chain resolved
+// nothing" still has to become a number here (the seam's documented fallback).
+describe("M72 Ⅱ: the output cap on the anthropic wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap is body-level max_tokens (the messages API requires it)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(4096)
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → the fallback constant, never nothing", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(ANTHROPIC_MAX_TOKENS_FALLBACK)
+    await it.return?.()
   })
 })
