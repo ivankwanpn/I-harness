@@ -503,4 +503,30 @@ describe("M72 Ⅱ: the output cap on the anthropic wire", () => {
     expect(body.max_tokens).toBe(ANTHROPIC_MAX_TOKENS_FALLBACK)
     await it.return?.()
   })
+
+  // R9: the required field needs THREE rungs, not two. A route that worked
+  // around the field's absence with `options: { max_tokens: N }` must keep
+  // that number — otherwise M72 Ⅱ would answer every one of its requests with
+  // the 128,000 constant, i.e. take away a workaround that works today.
+  it("M72 Ⅱ: a route's own options.max_tokens is the middle rung", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x", options: { max_tokens: 8192 } })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(8192)
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: the resolved request cap still beats the route's option", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x", options: { max_tokens: 8192 } })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(4096)
+    await it.return?.()
+  })
 })

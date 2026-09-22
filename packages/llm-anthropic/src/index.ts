@@ -151,9 +151,12 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
         // M72 Ⅱ: `max_tokens` is REQUIRED by the Messages API — the one wire
-        // where "send nothing" is not an option, so the fallback lives here and
-        // is documented as "no practical ceiling", not as a guess.
-        max_tokens: request.maxOutputTokens ?? ANTHROPIC_MAX_TOKENS_FALLBACK,
+        // where "send nothing" is not an option. The chain is request → route
+        // options → the named constant, so a route that already configured
+        // `options.max_tokens` keeps working and the constant is the last resort.
+        max_tokens:
+          request.maxOutputTokens ??
+          (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
