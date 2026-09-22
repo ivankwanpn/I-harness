@@ -3,10 +3,17 @@ import { append, deriveMessagesUpTo, deriveSearchText, renderPruneSubstitute, ty
 import type { LLMMessage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import type { ProviderProfile } from "@i-harness/provider"
 import type { Telemetry } from "@i-harness/telemetry"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
 import { selectShadowableRange } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report, phase `turn`:
+// auto-compaction happens at a turn's step boundary (the summary is what the
+// NEXT step sees). With nothing installed the handle delegates to console.warn
+// verbatim (one argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("turn")
 
 export { approxTokens, activeTokens, IMAGE_TOKEN_ESTIMATE } from "./tokens.ts"
 export { selectShadowableRange } from "./region.ts"
@@ -155,7 +162,11 @@ export function createCompactionEngine(deps: {
     } catch (err) {
       // Fail-soft: never block the agent on a summarizer failure. The warning
       // makes the otherwise-silent retry observable under sustained pressure.
-      console.warn("[i-harness] compaction summarizer failed (fail-soft, retrying next step):", err instanceof Error ? err.message : String(err))
+      // W6 T6: phase `turn` — the summarizer runs at a turn's step boundary, and
+      // the message says so. R13 FOLD: the second argument was already a STRING
+      // and the first carries no `%` specifier, so `util.format` joined them with
+      // one space — the single template below is that same byte sequence.
+      d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${err instanceof Error ? err.message : String(err)}`)
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [] }
     }
