@@ -9,7 +9,7 @@
 // Covered: `src/spill-guard.ts:19`'s ambient handle (`diagnosticsFor("mount")`),
 // driven through the real `createOutputSpillGuard` — its mount-time GC is
 // best-effort and reports a failure rather than blocking the mount
-// (spill-guard.ts:256), so an unusable spill root is the honest trigger.
+// (spill-guard.ts:257), so an unusable spill root is the honest trigger.
 //
 // Discipline is COPIED from `packages/diagnostics/test/diagnostics.test.ts:47-55`
 // (the capture stream) and `:59-68` (the teardown): the ambient slot is MODULE
