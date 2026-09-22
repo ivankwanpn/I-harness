@@ -406,6 +406,14 @@ git commit -m "feat(cli): the run path leaves a durable record — three sites b
 
 ### Task 3: 表面（`sessions list` ＋ `sessions show`）
 
+> **2026-09-22 執行期裁定（R9，計畫內部衝突）**：`apps/cli/test/sessions.test.ts:126` 的既有斷言
+> `expect(lines[0]).toMatch(/^ID\s+TITLE\s+TURNS\s+UPDATED$/)` 是**錨定的（`$`）**，新增欄位必然打破它。
+> 它**必須**隨新欄更新為 `/^ID\s+TITLE\s+TURNS\s+UPDATED\s+LAST RUN$/`——這是本單元**唯一**被改動的既有斷言
+> （已量測：`ID/TITLE/TURNS/UPDATED` 的字串只在 `test/sessions.test.ts:126` 被斷言）。
+> 這與 Global Constraints「既有測試案例一條不改」**表面**衝突；該條的**意圖**是「不得為了讓新碼通過而**弱化**既有測試」，
+> 而這裡是**設計刻意改變了格式**，釘住格式的斷言隨之更新——**只改這一條**，且不得改動它的意圖（欄位對齊與欄序）。
+> 同檔 `:113` 的 doc comment 也列了欄名，一起更新（那是 src，不受此限）。
+
 **Files:**
 - Modify: `apps/cli/src/sessions.ts`
 - Test: `apps/cli/test/sessions.test.ts`（**追加**案例到檔尾；既有案例不動）
