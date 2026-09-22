@@ -402,4 +402,17 @@ describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end" })
   })
+
+  // R12: the SAME frame shape as above, but with no trailing "\n\n" — so the
+  // main loop parses nothing and the RESIDUAL FLUSH is what reads the frame.
+  // A provider's observable failure channel must not depend on where the frame
+  // boundary fell, so the flush must apply the same finish_reason rule.
+  it("M72 Ⅱ: a final frame with no trailing blank line still reports its truncation", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
 })
