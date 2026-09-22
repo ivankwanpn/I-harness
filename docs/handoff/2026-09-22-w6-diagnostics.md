@@ -17,7 +17,7 @@
 | 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4 ✅ · T5 ✅ · T6 ✅ · T7 ✅**（**7／7**；§1 的 T1–T6 ＋ §2 的 T7） |
 | **最終驗證** | **`pnpm verify:all` 五步全綠、exit 0**（2026-09-22，T7 親量；母體 **67／67**；suite **2889 passed／9 skipped／0 failed**；typecheck exit 0；e2e exit 0／5 檔；`--gate` exit 0／**`PASS -- no new rows`**）。指令、五步讀數與**兩筆 allowlist** 見 §2 |
 
-**設計依據**：spec `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-193`）＋§3.5（`:215-235`）**；B1 裁定 **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）。
+**設計依據**：spec `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-195`）＋§3.5（`:217-239`）**（**2026-09-22 重測**：T7 加了兩則 dated 註記，兩節各因此 +2 行 —— 計畫裡寫的 `:177-193`／`:215-235` 是**加註之前**的位置）；B1 裁定 **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）。
 **計畫**：`docs/superpowers/plans/2026-09-22-w6-diagnostics.md`（7 任務；**§0.1 的普查指令是唯一有效的量法**——舊的 `grep -rn "console\.(warn\|error)"` 在 BRE 裡是字面量，數到 152 條裡 140 條不是呼叫）。
 **SDD ledger**：`.superpowers/sdd/2026-09-22-w6-diagnostics/`（`progress.md`＋task brief／report／review diff）—— **gitignored**；依 owner 2026-09-22 裁定**維持不納版控、靠複製遷移**（遷移包：`ih-migration-2026-09-22`）。本文自足，不依賴它。
 
@@ -150,7 +150,7 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 **兩個修訂上的讀數**（同一個指令，T7 親量、無截斷）：
 
-- 在 W6 的起點 **`e78bad3`**：**108 行／34 檔**（`console.warn(` **51**、`console.error(` **57**），扣掉 `apps/cli/src/run.ts:236` 那**一條註解**（同一條在 `f307cdb` 位於 `:246`）⇒ **107 個可執行站點**。逐檔分佈（`cut -d: -f1 | sort | uniq -c` 實測）：`apps/cli` **61 行／8 檔**（＝60 站 ＋ 那條註解；index 23／provider 11／run 7／roles 5／models 5／hooks 5／plugins 3／sessions 2）、**16 個 package 目錄 47 行**（session-executor 13、plugin-registry 8、mcp-client 8、telemetry／subagent／sdk／rewind／hooks **各 2**、另 8 個**各 1**；16 = 3 ＋ 5 ＋ 8）。
+- 在 W6 的起點 **`e78bad3`**：**108 行／34 檔**（`console.warn(` **51**、`console.error(` **57**），扣掉 `apps/cli/src/run.ts:236` 那**一條註解**（同一條在 `f307cdb` 位於 `:246`）⇒ **107 個可執行站點**。逐檔分佈（`cut -d: -f1 | sort | uniq -c` 實測）：`apps/cli` **61 行／8 檔** ＝ 60 站 ＋ 那條註解（index 23／provider 11／**run 7**／roles 5／models 5／hooks 5／plugins 3／sessions 2）、**16 個 package 目錄 47 行**（session-executor 13、plugin-registry 8、mcp-client 8、telemetry／subagent／sdk／rewind／hooks **各 2**、另 8 個**各 1**；16 = 3 ＋ 5 ＋ 8）。**單位注意：** 這裡的逐檔數字是**行數**；計畫 §0.1 的同一份清單寫的是**站數**（所以它寫 `run 6`，差別就是 `run.ts` 那條註解），而兩邊的 `apps/cli` 總數、`16`、`47` 三個數逐字相同。
 - 在 **`f307cdb`**（遷移後）：**23 行** ＝ **13 個列名例外** ＋ **9 行機制**（6 個縫的 fallback ＋ `packages/diagnostics/src/index.ts:116/139/140` 的委派與內部報告）＋ **1 條註解**。**94 個分級站點已經不在這條指令的視野裡 —— 因為它們已經走 logger。** ⇒ 這條指令是**普查**指令，只在遷移前的樹上讀得出母體；**它從來不是驗收指令**（驗收是 §2.1 的 `pnpm verify:all`）。
 
 **最終切分：** 全樹 **107 站 ＝ 94 分級 ＋ 13 列名例外**（`apps/cli` **50＋10**；packages **44＋3**）。那 13 條例外（全部 byte-untouched）＝ `apps/cli` 的 `hooks.ts:161`／`index.ts:194`／`models.ts:348`／`models.ts:364`／`plugins.ts:443`／`provider.ts:227`／`provider.ts:254`／`roles.ts:241`／`roles.ts:295`／`run.ts:776` ＋ packages 的 `session-persistence/src/index.ts:251`／`telemetry/src/telemetry.ts:11`／`:13`。

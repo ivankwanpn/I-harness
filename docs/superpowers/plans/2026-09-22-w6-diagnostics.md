@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript ESM · pnpm workspaces · vitest
 
-**Spec:** `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-193`）＋§3.5（`:215-235`）** · **裁定：** queued doc B1 → **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）· **分支：** `m68`
+**Spec:** `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-195`）＋§3.5（`:217-239`）**（**T7 於 2026-09-22 重測**：T7 依本計畫的 Step 2 在兩節各加了一則 dated 註記，兩節因此各 +2 行；`m68` 起點的 `:177-193`／`:215-235` 是加註前的位置）· **裁定：** queued doc B1 → **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）· **分支：** `m68`
 
 ---
 
