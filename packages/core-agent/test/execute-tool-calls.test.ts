@@ -1206,6 +1206,43 @@ describe("executeToolCalls — the dispatch checkpoint (M70)", () => {
     expect(results[0]!.output).not.toMatchObject({ code: TOOL_ABORTED_MID_FLIGHT })
   })
 
+  it("a flush that rejects with NO reason still fails the turn closed (the flag, not the value)", async () => {
+    // `throw undefined` / `Promise.reject()` are legal, and `flush`'s whole
+    // contract is "reject" — the REASON is not part of it. A guard written as
+    // `if (firstFlushError !== undefined)` reads this failure as "no failure":
+    // the call still fails closed (slot filled, body never run), but the
+    // function returns on the soft path and the turn CONTINUES against a store
+    // that just proved it cannot persist — the M5 T4 R5 defect this unit exists
+    // to close, arriving through the one door a value test cannot see. The
+    // file's other flag/value pairs (`hasFailed`/`firstError`,
+    // `hasCommitError`/`commitError`) are split for exactly this reason.
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const session = createSession()
+    let ran = 0
+    tools.register({
+      name: "push", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { ran += 1; return { pushed: true } },
+    })
+
+    const outcome = await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "push", args: {} }], {
+      maxParallel: 10,
+      flush: async () => { throw undefined },
+    }).then(() => "resolved" as const, () => "rejected" as const)
+
+    // "Rejected" — not "rejected with something", and deliberately NOT
+    // `rejects.toThrow()`: the point is that the TURN fails even when there is
+    // no value to throw.
+    expect(outcome).toBe("rejected")
+    expect(ran).toBe(0)
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    expect(results).toHaveLength(1)
+    expect(results[0]!.output).toEqual({
+      error: expect.stringContaining("tool call aborted before dispatch"),
+      code: TOOL_ABORTED_BEFORE_DISPATCH,
+    })
+  })
+
   it("with no `flush` supplied, the batch is byte-identical (the seam is OPTIONAL)", async () => {
     const tools = createToolRegistry(createContext())
     const echo: Tool = {
