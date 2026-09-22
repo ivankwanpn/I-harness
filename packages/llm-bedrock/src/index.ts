@@ -150,6 +150,12 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         ...(config.options !== undefined || reasoning !== undefined
           ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(reasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
           : {}),
+        // M72 Ⅱ: Converse accepts maxTokens ONLY inside inferenceConfig, which
+        // this adapter has never built (every option went to
+        // additionalModelRequestFields, which the wire does not read for it).
+        ...(request.maxOutputTokens !== undefined
+          ? { inferenceConfig: { maxTokens: request.maxOutputTokens } }
+          : {}),
       }
       // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
       // kill a parked Converse call, not wait for the first event.
