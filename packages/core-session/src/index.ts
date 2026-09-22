@@ -22,7 +22,7 @@ export type SessionEvent =
     // it belongs to, present when the caller knows it (the production path does).
     | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
     | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
-    | { type: "step/end"; seq?: number }
+    | { type: "step/end"; seq?: number; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true }
     | { type: "turn/end"; seq?: number }
     | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }
     | { type: "compaction/start"; seq?: number }
