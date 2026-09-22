@@ -9,10 +9,19 @@ import type { ModelClient } from "@i-harness/llm-seam"
 // be a fourth place to edit one enum. Erased at build time, no runtime edge.
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
 import { builtinRoles, type SubagentRole } from "./roles.ts"
 import { forkTurns } from "./fork.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report, and the phase is
+// `run`: the message is the spawn path's own — a role's declared tool is
+// absent from the parent registry, so the child RUNS without it (a spawned
+// child is a run of its own; the parent's turn is where the spawn happens).
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("run")
 
 /**
  * M49 Task 14 (spec §11): the subagent prompt contract — appended AFTER the
@@ -73,7 +82,7 @@ export function resolveRoleTools(
     else missing.push(name)
   }
   if (missing.length > 0) {
-    console.warn(
+    d.warn(
       `[subagent] role '${roleName}' declares ${missing.length} tool(s) absent from the parent registry; ` +
         `the child runs without them: ${missing.join(", ")}`,
     )

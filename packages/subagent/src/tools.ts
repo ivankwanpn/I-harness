@@ -5,6 +5,7 @@ import { createToolRegistry, type Tool, type ToolRegistry } from "@i-harness/cor
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 // M24b (spec §3.3): type-only import — the workflow executor's job store is
 // the THIRD layer of the job_* fallback chain. The dep is optional (injected
 // by the host via RegisterSubagentOptions.workflow), so absent = current
@@ -17,6 +18,14 @@ import { runningElapsedMs } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
 import { declaredRoleModel, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report; the phase is
+// `session` because the site is the cold-resume sweep (a session restored from
+// its durable log re-drains a child's queued inbox, and one child's failed
+// sweep must not break the host's resume). With nothing installed the handle
+// delegates to console.warn verbatim (one argument) — unset mode is the
+// pre-migration bytes.
+const d = diagnosticsFor("session")
 
 export interface SubagentToolDeps extends RoleModelHost {
   table: AgentTable
@@ -760,7 +769,7 @@ export async function sweepPendingInbox(deps: SubagentToolDeps, table: AgentTabl
       // fail-visible log, not throw: one child's failed sweep must not break
       // the host resume (the error stays on the entry for wait_agent /
       // job_output to surface).
-      console.warn(`[subagent] pending inbox sweep failed for ${entry.sessionId}`)
+      d.warn(`[subagent] pending inbox sweep failed for ${entry.sessionId}`)
     })
   }
 }
