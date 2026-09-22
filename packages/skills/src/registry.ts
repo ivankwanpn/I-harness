@@ -6,6 +6,7 @@
 // is cheap); one bad skill warns and skips, never breaking the registry.
 import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join } from "node:path"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import { parseFrontmatter } from "./frontmatter.ts"
 import { searchSkillSummaries } from "./search.ts"
 import { resolveHarnessHome } from "@i-harness/harness-home"
@@ -107,8 +108,19 @@ function globalSkillsDir(): string {
   return join(resolveHarnessHome(), "skills")
 }
 
+// W6 T6: the registry's warn+skip seam (a bad SKILL.md is skipped, and the
+// scan is how a host MOUNTS skills, hence phase `mount`). The default's body
+// now reaches the ambient instance and is the console call it always was when
+// none is installed — the same function, the same single verbatim argument,
+// which is what the console spies in this tree compare. The signature is
+// untouched; only the body moved.
 function defaultWarn(message: string): void {
-  console.warn(`[skills] ${message}`)
+  const d = currentDiagnostics()
+  if (d === undefined) {
+    console.warn(`[skills] ${message}`)
+    return
+  }
+  d.child("mount").warn(`[skills] ${message}`)
 }
 
 function errorText(err: unknown): string {
