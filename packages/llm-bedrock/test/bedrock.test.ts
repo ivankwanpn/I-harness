@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import type { Mock } from "vitest"
 import { createBedrockClient, resolveBedrockRegion, translateReasoning, type BedrockRuntimeFace } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -288,5 +288,48 @@ describe("M32 reasoning effort (bedrock Converse)", () => {
       reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" },
       thinking: { type: "adaptive" },
     })
+  })
+})
+
+// M72 Ⅰ. `await client.send(...)` (the Converse request itself) had no
+// try/catch, so every request-level failure — auth, throttling, network —
+// escaped as a raw SDK throw and bypassed the seam's `error` event channel
+// that the other four adapters route through. Abort is NOT a provider
+// failure: it keeps today's behaviour (a throw out of the generator).
+describe("M72 Ⅰ request-level failures (bedrock)", () => {
+  it("M72 Ⅰ: a request-level failure is an error event with a diagnosis, not a raw throw", async () => {
+    const { fake } = fakeRuntime([])
+    ;(fake.send as unknown as Mock).mockRejectedValueOnce(new Error("AccessDeniedException: nope"))
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("AccessDeniedException")
+  })
+
+  // The constraint the case above makes easy to break: abort is NOT a provider
+  // failure. A cancelled request must keep rejecting out of the generator
+  // (M61's cancel contract) — never turn the caller's own abort into an
+  // `error` event that reads as a provider fault.
+  it("M72 Ⅰ: an aborted request rejects instead of yielding an error event", async () => {
+    const { fake } = fakeRuntime([])
+    ;(fake.send as unknown as Mock).mockRejectedValueOnce(
+      Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
+    )
+    const controller = new AbortController()
+    controller.abort()
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: { type: string }[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({
+        messages: [{ role: "user", content: "hi" }],
+        tools: [],
+        systemPrompt: "s",
+        signal: controller.signal,
+      } as LLMRequest)) events.push(ev)
+    }
+    await expect(drain()).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure.
+    expect(events).toEqual([])
   })
 })
