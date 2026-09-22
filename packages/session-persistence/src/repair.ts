@@ -79,9 +79,14 @@ export const TOOL_OUTCOME_UNKNOWN_RESULT = {
  * It also does not say the log is OLD: the rule infers from absence, and
  * absence is the whole of what it cannot interpret.
  *
- * ACCEPTED COST, recorded rather than hidden: a call that genuinely never
- * dispatched (the crash landed between `tool/call` and the marker) lands here
- * too. That is the price of the rule — no in-band signal tells the two apart.
+ * ACCEPTED COST, recorded rather than hidden — and it has TWO instances, not
+ * one. A pending call that genuinely never dispatched lands here too: (1) the
+ * crash fell between `tool/call` and the marker append; (2) the call was
+ * REFUSED before its body — a guard, a denied approval, a guardian, an unknown
+ * tool — and a refusal throws out of `prepare` and appends no `tool/result`, so
+ * the durable `tool/call` is all the log holds. A session whose only call was
+ * refused therefore reads unknown throughout. That is the price of the rule —
+ * no in-band signal tells these apart from a pre-boundary log.
  */
 export const TOOL_OUTCOME_UNKNOWN_UNMARKED_LOG_RESULT = {
   error: "tool call outcome unknown: the log records no tool/dispatch marker anywhere, so whether the body ran is not recorded; do not replay blindly",

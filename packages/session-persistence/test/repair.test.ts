@@ -92,6 +92,30 @@ describe("repairTurnTail — the dispatch boundary (M4)", () => {
     const outputs = out.filter((e) => e.type === "tool/result").map((e) => (e as { output?: unknown }).output)
     expect(outputs).toEqual([TOOL_OUTCOME_UNKNOWN_RESULT, TOOL_ABORTED_RECOVERY_RESULT])
   })
+
+  it("a marker in an EARLIER turn keeps the tail's marker-less call 'before dispatch' (whole-log, not last-turn)", () => {
+    // Q8 (M71 T2, fix round): the FAST pin for the scope. The mixed case above
+    // cannot separate whole-log from last-turn — its marker sits in the last
+    // turn. Here the marker is in a CLOSED earlier turn and the tail is
+    // marker-less, which is the acceptance test's third mode at unit cost: a
+    // turn-scoped read hands the tail call the CONSERVATIVE payload instead.
+    const out = repairTurnTail(events(
+      { type: "turn/start", seq: 0 },
+      { type: "step/start", seq: 1 },
+      { type: "tool/call", callId: "c0", name: "read", args: {}, seq: 2 },
+      { type: "tool/dispatch", callId: "c0", eventSeq: 2, seq: 3 },
+      { type: "tool/result", callId: "c0", name: "read", output: { ok: true }, seq: 4 },
+      { type: "step/end", seq: 5 },
+      { type: "turn/end", seq: 6 },
+      { type: "turn/start", seq: 7 },
+      { type: "tool/call", callId: "c1", name: "bash", args: {}, seq: 8 },
+    ))
+    const results = out.filter((e) => e.type === "tool/result")
+    // tail-only still: c0's real result is untouched, exactly one synthetic added
+    expect(results).toHaveLength(2)
+    const tail = results.find((e) => (e as { callId?: string }).callId === "c1") as { output?: unknown }
+    expect(tail.output).toEqual(TOOL_ABORTED_RECOVERY_RESULT)
+  })
 })
 
 describe("repairTurnTail", () => {
