@@ -11,8 +11,16 @@
 
 import { readFileSync, readdirSync } from "node:fs"
 import { join } from "node:path"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { parseFrontmatter } from "./frontmatter.ts"
 import type { CommandDescriptor } from "./types.ts"
+
+// W6 T6: one module-scope handle for this file's reports; the phase is
+// `mount` because every one of them is the plugins seam's own report —
+// plugin scanning/mounting/install is where a host builds its plugin world.
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 /**
  * Parse one command markdown file into a CommandDescriptor. `fileName` yields
@@ -65,7 +73,7 @@ export function describeCommands(dir: string): CommandDescriptor[] {
       out.push(parseCommandMarkdown(name, readFileSync(join(dir, name), "utf8")))
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e)
-      console.warn(`[plugin-registry] skipping unreadable command file ${join(dir, name)}: ${reason}`)
+      d.warn(`[plugin-registry] skipping unreadable command file ${join(dir, name)}: ${reason}`)
     }
   }
   return out

@@ -45,9 +45,17 @@ import { existsSync, realpathSync, readFileSync } from "node:fs"
 import { cp, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
 import { dirname, join, resolve, sep } from "node:path"
 import { promisify } from "node:util"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { inspectCapabilities, type Capabilities } from "./capability.ts"
 import { githubGitUrl, MarketplaceFetchError, type PluginSource } from "./marketplaces.ts"
 import type { MCP_CONFIG_SHAPE } from "./types.ts"
+
+// W6 T6: one module-scope handle for this file's reports; the phase is
+// `mount` because every one of them is the plugins seam's own report —
+// plugin scanning/mounting/install is where a host builds its plugin world.
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 const execFileAsync = promisify(execFile)
 
@@ -129,7 +137,7 @@ function parseMcpConfigText(text: string, context: string): Record<string, MCP_C
   const out: Record<string, MCP_CONFIG_SHAPE> = {}
   for (const [server, rawCfg] of Object.entries(raw.mcpServers)) {
     if (server === "") {
-      console.warn(`[plugin-registry] skipping MCP server with an empty name in ${context}: a server needs a key`)
+      d.warn(`[plugin-registry] skipping MCP server with an empty name in ${context}: a server needs a key`)
       continue
     }
     if (!isRecord(rawCfg)) {
@@ -140,7 +148,7 @@ function parseMcpConfigText(text: string, context: string): Record<string, MCP_C
         failInvalid(`.mcp.json server '${server}': 'type' must be a string (${context})`)
       }
       if (!SUPPORTED_MCP_TYPES.has(rawCfg.type)) {
-        console.warn(
+        d.warn(
           `[plugin-registry] skipping MCP server '${server}' in ${context}: unsupported type ${JSON.stringify(rawCfg.type)} (this host supports stdio and http/streamable-http; SSE is not implemented)`,
         )
         continue

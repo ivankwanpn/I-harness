@@ -61,12 +61,20 @@ import type {
   RegistryOptions,
   RuntimeInputs,
 } from "./types.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   PluginArtifactError,
   PluginNotFoundError,
   SourceConflictError,
   SourceNotFoundError,
 } from "./types.ts"
+
+// W6 T6: one module-scope handle for this file's reports; the phase is
+// `mount` because every one of them is the plugins seam's own report —
+// plugin scanning/mounting/install is where a host builds its plugin world.
+// With nothing installed the handle delegates to console.warn verbatim (one
+// argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 export {
   SourceConflictError,
@@ -246,7 +254,7 @@ export class PluginRegistry {
         collected = await this.collectSource(src.source)
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
-        console.warn(`[plugin-registry] catalog: source ${src.name} (${src.source}) unreadable: ${reason}`)
+        d.warn(`[plugin-registry] catalog: source ${src.name} (${src.source}) unreadable: ${reason}`)
         continue
       }
       for (const entry of collected.manifest.plugins) {
@@ -257,7 +265,7 @@ export class PluginRegistry {
           // Documented v1 behavior: the first registered source wins, the host
           // is warned, install() resolves the same way (findEntry order).
           if (existing.source !== src.source || existing.name !== entry.name) {
-            console.warn(
+            d.warn(
               `[plugin-registry] catalog: duplicate plugin id ${id} (${existing.marketplace}/${existing.name} vs ${collected.manifest.name}/${entry.name}); keeping the first`,
             )
           }
@@ -477,7 +485,7 @@ export class PluginRegistry {
         Object.assign(mcpServerConfigs, readMcpServersSync(join(this.root, rec.id)))
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
-        console.warn(`[plugin-registry] runtime: skipping MCP config of ${rec.id}: ${reason}`)
+        d.warn(`[plugin-registry] runtime: skipping MCP config of ${rec.id}: ${reason}`)
       }
       commandDescriptors.push(...this.effectiveDescriptors(rec))
       // Agents are read from the INSTALLED copy, not a materialized overlay —
