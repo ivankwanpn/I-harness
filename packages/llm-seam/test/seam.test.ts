@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, describeTransportError } from "../src/index.ts"
+import { assertMessagesFromLog, clampOutputCap, describeTransportError } from "../src/index.ts"
 import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
@@ -122,5 +122,26 @@ describe("M72 Ⅰ describeTransportError remediation", () => {
     const original = new Error("AccessDeniedException: nope")
     expect((await describeTransportError("bedrock", "us-east-1", original, { remediation: "none" })).cause).toBe(original)
     expect((await describeTransportError("bedrock", "us-east-1", original)).cause).toBe(original)
+  })
+})
+
+describe("M72 Ⅱ: the output cap", () => {
+  it("leaves the value alone when no window is known", () => {
+    expect(clampOutputCap(8192, undefined, 100_000)).toBe(8192)
+  })
+
+  it("leaves the value alone when the window has room", () => {
+    expect(clampOutputCap(8192, 200_000, 1_000)).toBe(8192)
+  })
+
+  it("clamps to the room left after the estimated input and the safety margin", () => {
+    // 200000 - 190000 - 4096 = 5904
+    expect(clampOutputCap(65_536, 200_000, 190_000)).toBe(5904)
+  })
+
+  it("returns the value unchanged when the window has no room at all", () => {
+    // room = 200000 - 199000 - 4096 < 1 → the request cannot run either way;
+    // clamping to 1 would dress a context overflow up as a truncation.
+    expect(clampOutputCap(8192, 200_000, 199_000)).toBe(8192)
   })
 })
