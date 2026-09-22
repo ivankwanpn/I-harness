@@ -238,6 +238,36 @@ describe("llm-anthropic protocol", () => {
     expect(events.map((e) => e.type)).toEqual(["error"])
     expect((events[0] as { error: Error }).error.message).toContain("not json")
   })
+
+  it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {
+    // The caller's OWN abort is not a provider failure (unlike the corrupt chunk
+    // above): it keeps today's behaviour — the for-await throws — and must NOT
+    // arrive as an `error` event that reads as a fault. The body parks the read and
+    // rejects it on abort, which is what a real fetch does to a parked body read.
+    const controller = new AbortController()
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal
+      const body = new ReadableStream({
+        start(stream) {
+          signal.addEventListener("abort", () => stream.error(Object.assign(new Error("The operation was aborted"), { name: "AbortError" })))
+        },
+      })
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+    }
+    const pending = drain()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the body read park
+    controller.abort()
+    await expect(pending).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure. Deleting the
+    // read loop's abort guard turns the rejection above AND this line red.
+    expect(events).toEqual([])
+  })
 })
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
