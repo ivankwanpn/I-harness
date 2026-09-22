@@ -42,26 +42,20 @@
 - **`error` 是已 redact 的一行**（`fromError(err, redactor).message` 的產物），**不是裸 `Error`**——沿用 W6 §3.5 強制力第 2 層：衍生的才可以進記錄。
 - `version: 1` 沿用 `rewind/point` 的先例（additive union 成員帶 version）。
 
-### 1.2 生產者＝**既有的漏斗**（單一站点）
+### 1.2 生產者＝**三個 append 站點，各自緊鄰既有的排空**（**寫計畫時量測後更正**）
 
-`apps/cli/src/run.ts:317` 已有：
+原稿寫「既有的 `emitSessionEnd` 漏斗即生產者」。**`run.ts` 的順序量測推翻了它**：漏斗是 **telemetry 專用**的，而成功路徑的 `coordinator.close()` 在 `:748`、`emitSessionEnd(0)` 在 `:778`——**append 若放進漏斗，成功那一筆會被已關閉的 coordinator 吃掉**。更正後：**漏斗一字不動**（telemetry 契約不變），append 獨立成三站。
 
-```ts
-const emitSessionEnd = (exitCode: number): void => { telemetry?.emit({ type: "session/end", … exitCode }) }
-```
+| 出口 | append 站點 | 緊鄰的**既有**排空 | phase |
+|---|---|---|---|
+| 組裝／掛載前失敗 | `run.ts:652` 的 catch 內 | `:654` `await coordinator.close()` | `mount` |
+| 成功 | **`:740-741` 的 `flush` 之前** | `:741` `flush` → `:748` `close()` | `run` |
+| run 期間失敗 | `:782` 的 catch 內 | `:784` `await coordinator.close()` | `run` |
+| resume 載入失敗 | **不寫**（見下） | —（`:343-345` 既不關 coordinator 也沒有 flush 可借） | — |
 
-而四個出口已經全部經過它——**exit code 已經在手上**：
-
-| 出口 | 站點 | phase（誠實命名） |
-|---|---|---|
-| resume 載入失敗 | `run.ts:343` | `session`（死的是 session store 的載入） |
-| 組裝／掛載前失敗 | `run.ts:652` | `mount`（那個 catch 包的正是組裝與 hooks 掛載） |
-| 成功 | `run.ts:778` | `run` |
-| run 期間失敗 | `run.ts:782` | `run` |
-
-改動：漏斗簽名擴為 `emitSessionEnd(exitCode, phase)`，並在 `activeId !== undefined` 時 **`append(session, ev)`**（`packages/core-session/src/index.ts:323`）——那條路徑已經把事件鏡射進 coordinator（`run.ts:319-323`），所以**不需要新的寫入 API**。
-
-**drain 的順序（必須說清楚）**：出口 2／4 之後緊接著 `coordinator.close()`（`run.ts:654`）——write-behind 由它排空，紀錄落地。出口 3 的排空在 `finally`（`:369` 的註解記著沒有它「no dispose, no `coordinator.close()`」）。**出口 1（resume 載入失敗）今天不關 coordinator** ⇒ 該站點必須在 append 之後顯式排空（`coordinator.flush(activeId)`，先例 `:323`），否則那一筆會隨行程消失——**這是本單元唯一的真陷阱**。
+- **為什麼 resume 失敗不寫**：`loadOwned` 失敗 ⇒ **那個 id 在 store 裡沒有 session 文件**，這一筆沒有可落地的家——§4.1 的原則本來就涵蓋它。**因此不需要任何新的排空機制**：三個站點的既有 `flush`／`close` 就是排空。
+- append 走 **`append(session, ev)`**（`packages/core-session/src/index.ts:323`），由既有的鏡射回呼進 coordinator（`run.ts:319-323`）⇒ **不需要新的寫入 API**。
+- `durationMs` 的起點：在 `run.ts:308-312` 的 `session/start` 發射**旁邊、且無條件**記一個 `const runStartedAt = Date.now()`——那一塊包在 `if (telemetry)` 裡，**telemetry 關掉時它不執行**，所以時間戳必須在它之外（否則關掉 telemetry 的執行就沒有時長）。
 
 ### 1.3 `runId` 的接合（本單元最大的附加價值）
 
@@ -79,7 +73,7 @@ W6 的 bootstrap 每次宿主入口 mint 一個 `runId`，**診斷 JSONL 的每�
 ## 2. 驗收
 
 1. **載入往返**：`operator/run-end` 過了存／載之後仍在（`session-persistence`）。
-2. **四個出口各一例**：drive 真實的 `main(["…","run",…])`，斷言 records 的 `exitCode`／`phase` 對上（`session`／`mount`／`run`；成功與失敗各一）。**含出口 1 的排空**——那一筆必須落地（突變：拿掉 flush ⇒ 紅）。
+2. **三個生產出口各一例**：drive 真實的 `main(["…","run",…])`，斷言 `exitCode`／`phase` 對上（`mount`／`run`／`run`；成功與失敗各一）**且那一筆真的落地**（用 fresh coordinator 對同一個 store 讀回）。**突變：拿掉成功路徑的 append ⇒ 成功那一次沒有紀錄（紅）**。**另加一例**：`--resume <不存在>` ⇒ exit 1 且**沒有** `operator/run-end`（沒有 session 文件可寫——釘住 §1.2 的那條規則）。
 3. **表面**：`sessions list` 有 `LAST RUN` 欄且舊 session 顯示 `—`；`sessions show` 把那行放進 transcript。
 4. **redaction 接得上**：一則含已註冊秘密的錯誤 ⇒ 記錄的 `error` 已遮蔽（把 W6 的 redactor 與 durable 線釘在一起）。
 5. **runId 可接合**：同一跑之中，`I_HARNESS_LOG=stderr` 的 JSONL `run` 欄位**等於** durable 記錄的 `runId`。
