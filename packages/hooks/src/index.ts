@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { isCascadeRedispatch, type PluginContext } from "@i-harness/core-plugin"
 import type { ToolCall, ToolDecision } from "@i-harness/core-tools"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import type {
   HandlerMatcher,
   HookContext,
@@ -350,6 +351,18 @@ async function permissionDecision(
  * throws (fail-closed); a missing DEFAULT config simply yields zero handlers
  * (the host may not use hooks at all).
  */
+// W6 T6: the observer-side failure reporter's default. The registry is created
+// as a host MOUNTS hooks, so its reports are phase `mount`. The body reaches the
+// ambient diagnostics instance when a host installed one and is the console call
+// it always was when none is: same function, same single verbatim argument. The
+// `report` option's signature is untouched.
+function defaultReport(err: unknown): void {
+  const message = `[hooks] ${err instanceof Error ? err.message : String(err)}`
+  const d = currentDiagnostics()
+  if (d === undefined) console.warn(message)
+  else d.child("mount").warn(message)
+}
+
 export async function createHookRegistry(
   ctx: PluginContext,
   opts: HookRegistryOptions = {},
@@ -361,7 +374,7 @@ export async function createHookRegistry(
     loaded: [],
     reportedUnapproved: new Set<string>(),
     opts: {
-      report: opts.report ?? ((err: unknown) => console.warn(`[hooks] ${err instanceof Error ? err.message : String(err)}`)),
+      report: opts.report ?? defaultReport,
       env: opts.env ?? {},
       configDir,
     },
