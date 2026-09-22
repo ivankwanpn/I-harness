@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process"
 // node:sqlite import) — no explicit wiring needed here.
 import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
+import { createCliDiagnostics } from "./diagnostics-bootstrap.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator, forkSession } from "@i-harness/session-persistence"
@@ -442,14 +443,38 @@ export async function main(argv: string[]): Promise<number> {
     if (resumeSessionId) opts.resumeSessionId = resumeSessionId
   }
   if (sessionQuery) opts.sessionQuery = sessionQuery
-  return runHeadless(task, opts).then((r) => {
-    if (r.finalText) console.log(r.finalText)
-    // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
-    // naming no session and saying nothing about what survived. It now gets the
-    // same report an unhandled crash gets, because it is the same question.
-    if (r.error) console.error(failureReport(r.error, { ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}), kind: "failed" }))
-    return r.exitCode
-  })
+  // W6 T4: the CLI's own diagnostics instance, installed for the run this
+  // command is about to start. The three hosts install their own — this is the
+  // run path's, and `runSdkCommand`/`runAcpCommand` below are the other two.
+  //
+  // WHERE IT GOES, and why nothing earlier: the flags above are refused with
+  // direct `console.error` calls — sites T5 migrates (the help usage among them
+  // is one of the plan's five named exceptions) — and a run refused during
+  // parsing has no run to instrument. The `finally` below is the ONE teardown
+  // for every way `runHeadless` can end: the four returns (a failed resume, a
+  // failed assembly, success, a failed run) and a rejection alike.
+  //
+  // The redactor's second source (settings' `llm.providers[*].apiKeyEnv`) is NOT
+  // fed here on purpose: the credential store `loadProviderRuntime()` builds
+  // does not exist until the run needs a model, so `run.ts` feeds it there — see
+  // the bootstrap's header.
+  const boot = createCliDiagnostics()
+  try {
+    return await runHeadless(task, opts).then((r) => {
+      if (r.finalText) console.log(r.finalText)
+      // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
+      // naming no session and saying nothing about what survived. It now gets the
+      // same report an unhandled crash gets, because it is the same question.
+      if (r.error) console.error(failureReport(r.error, { ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}), kind: "failed" }))
+      return r.exitCode
+    })
+  } finally {
+    // close() releases the instance AND detaches it; the uninstaller is the
+    // slot's own pairing discipline (`installDiagnostics`'s contract). Both, so
+    // neither a replaced slot nor a retained handle can outlive the entry.
+    boot.diagnostics.close()
+    boot.uninstall()
+  }
 }
 
 /** Hidden `__dist-selfcheck` (see the dispatch in main()). Every probe drives
@@ -529,7 +554,15 @@ async function runSdkCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { settings, runtime } = await loadProviderRuntime()
+  const { settings, credentials, runtime } = await loadProviderRuntime()
+  // W6 T4: this host's diagnostics instance. It goes in HERE rather than before
+  // the load because the redactor's second source needs BOTH halves of what
+  // `loadProviderRuntime()` returns — the settings that name the refs and the
+  // store that resolves them (see the bootstrap). Installing earlier would mean
+  // feeding them late through module state, for no coverage gain: everything
+  // above this line logs through the console directly (that is `--session-dir`
+  // validation), so no record is being missed.
+  const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
     workspace: process.cwd(),
     modelPolicy: "required",
@@ -726,6 +759,11 @@ async function runSdkCommand(args: string[]): Promise<number> {
     await server.close()
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
+    // W6 T4: LAST, so the closes above still reach the record — a closed
+    // instance takes no further records — and so terminating this host leaves no
+    // installed instance behind (the process may outlive the command in tests).
+    boot.diagnostics.close()
+    boot.uninstall()
   })()
   rl.on("close", () => { void teardown() })
   const onSignal = (): void => { void teardown() }
@@ -766,7 +804,9 @@ async function runAcpCommand(args: string[]): Promise<number> {
     storeRoot = dir
     coordinator = createSessionCoordinator(createJsonlBackend(dir), { lock: { enabled: true, lockRoot: dir } })
   }
-  const { settings, runtime } = await loadProviderRuntime()
+  const { settings, credentials, runtime } = await loadProviderRuntime()
+  // W6 T4: same seam as the sdk path above, same reason — see there.
+  const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
     workspace: process.cwd(),
     modelPolicy: "required",
@@ -807,6 +847,9 @@ async function runAcpCommand(args: string[]): Promise<number> {
     connection.close()
     await service.close()
     if (coordinator !== undefined) await coordinator.close()
+    // W6 T4: last, for the reason spelled out in the sdk path's teardown.
+    boot.diagnostics.close()
+    boot.uninstall()
   })()
   const onSignal = (): void => { void teardown() }
   process.on("SIGINT", onSignal)
