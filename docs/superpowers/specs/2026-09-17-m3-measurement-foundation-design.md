@@ -192,6 +192,8 @@ export function createDiagnostics(opts: {
 
 **stderr 診斷必須預設關閉 —— 這不是禮貌，是被測試逼的。** `apps/cli/test/bin.test.ts:36,62,69,74,82-83` 斷言 stderr 的**內容與不存在**，`cli.test.ts:168` 斷言 `result.error`。`I_HARNESS_LOG` 未設 → 今天的行為**逐位元組不變**；`=stderr` → stderr 上的 JSONL；`=<path>` → 追加 JSONL。既有的白話訊息保留 —— 人不應該為了知道「沒設模型」而去解析 JSON。
 
+> **行號重測（2026-09-22，W6 的 T7，於 `f307cdb`）：** 上面那串引註裡 **`:69` 已漂成一行 timeout** —— 逐字是 `}, 60_000)`，不是斷言；`:36`／`:62`／`:82` 今天是**測試的宣告行**、真正的 `stderr` 斷言在其後幾行；`:74` 逐字不變。該檔今天的 `stderr` 斷言全集（`grep -n "stderr" apps/cli/test/bin.test.ts` 實測，該檔 91 行，**無截斷**）是 **`:39`、`:46-50`、`:67-68`、`:74`、`:79`、`:87-88`**。**原句的論點不變** —— 這些斷言確實同時釘著 stderr 的內容與不存在。同句的 `cli.test.ts:168` 重測**仍然正確**（逐字 `expect(result.error).toContain("No model configured")`）。
+
 ### 3.4 常駐的那一半：一個 durable 的 `operator/run-end`
 
 **只放在 stderr 的紀錄，正好在需要它的時候消失**（headless 的常態）。所以必須有一筆預設就落地的紀錄：
@@ -231,6 +233,8 @@ export function createRedactor(opts?: { extraRules?: readonly Rule[] }): {
 **已註冊的值從哪來（誠實的部分）：** 形狀規則抓不到自訂閘道的 token（`Bearer corp-abc123`），所以 CLI 必須餵真實的值 —— 一次 **env 掃描**（`/(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)/i` 且值 ≥8 字元；這是有依據的，因為憑證的讀取優先序是 env > file），加上對 settings 已指名的每個 `apiKeyEnv` 呼叫 `store.resolve(ref)`。
 
 **實測到的障礙：** CLI 沒有曝露那個 store（`provider-runtime.ts:24-26` 在內部建構它，非 web 的呼叫者只解構 `runtime`）。修在 `apps/cli`，**永遠不要修在 `credentials`**。
+
+> **行號重測（2026-09-22，W6 的 T7，於 `f307cdb`）：** 引註指的是 `apps/cli/src/provider-runtime.ts`（不是 `packages/provider-runtime`），而 **`:24-26` 今天是 `roleModelOptionsFor` 的說明註解**，不是 store 的建構。**原句的前提也不再成立：** 該檔（70 行）**一直**把 store 回傳出去 —— 回傳型別在 **`:50`**（`credentials: CredentialStore`）、回傳的物件在 **`:63`**（`credentials,`）、**建構**在 `:58`（`createCredentialStore`）—— 而 W6 動的是**保留那個 handle 的呼叫端**：`apps/cli/src/index.ts:577`／`:833`、`apps/cli/src/run.ts:408`。**量法：** `git log --oneline ec18c9d0^..HEAD -- apps/cli/src/provider-runtime.ts` **為空**（W6 一個字沒動它；`:50` 在 W6 的起點 `e78bad3` 逐字相同），所以這裡是**引註漂移**而不是本單元造成的改變。`packages/credentials` 與 `packages/provider-runtime` 零改動，如原句所要求。
 
 **殘餘，說出來而不是藏起來：** v1 **不能**承諾「沒有秘密離開行程」。它承諾「沒有被**名稱比對到、形狀比對到、或註冊過**的秘密離開」。`size()` 與覆蓋率測試讓已註冊集合**可稽核**，而不是被斷言。
 

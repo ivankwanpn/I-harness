@@ -159,6 +159,8 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 
 - [ ] **Step 1: `pnpm verify:all`**（一次；母體 **67**；五步全綠）→ **Step 2: 記錄**：queued doc 的普查句（`:535`／`:934`）改成 §0.1 的指令與數字＋「舊指令壞在哪」；W6 兩列狀態（§1 表與 §9.2 A2）→ ✅ 附提交區間；`docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` 加 dated 註記（§3.3 的 stderr 斷言引用 `bin.test.ts:69` 已漂成 timeout 行；`provider-runtime.ts:24-26` 的障礙在現行為 `:50` 已回傳）→ **Step 3: commit**。
 
+**⚠ 落地記錄（T7 執行完的 2026-09-22 補記）：** 本 Task 的三步都做了，**但 Step 1 的「一次」實際上跑了兩次** —— 第一次在加 allowlist **之前**，`--gate` exit 1／**2 NEW**（`#RedactedError`／`#Rule`）且 suite 有 1 條 `session-executor` 的**負載 flake**（隔離跑 136/136 綠）；加了兩筆逐列 allowlist（`reason`＋`dated`）之後第二次**五步全綠、exit 0**（母體 **67／67**、suite **2889 passed／9 skipped／0 failed**、`--gate` **`PASS -- no new rows`**、435 rows）。**兩次讀數都記在** `docs/handoff/2026-09-22-w6-diagnostics.md` **§2.1**。**本 Task 的第一句「一次」因此不成立**（它假定 `--gate` 那 2 列已解決），**上面那行原樣保留、以本註記為準**。**Step 2 的另一項修正**：兩個 `:535`／`:934` 在改寫後**仍是同兩行**（每一列都維持單行，行號不漂），所以本 Task 引的位置今天仍解析得開。**本文件的 checkboxes 一律不動**（T1–T6 也仍是 `- [ ]`；本單元的慣例是補 dated 註記、不勾框）。
+
 ---
 
 ## Self-review（寫完後跑過的檢查）

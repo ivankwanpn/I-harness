@@ -1,8 +1,8 @@
-# W6 — 結構化診斷 ＋ redactor：**進行中**交接（T1–T6／7 完成）
+# W6 — 結構化診斷 ＋ redactor：**完成**（T1–T7／7）
 
-**Written:** 2026-09-22，前一個爆 context 的 controller session 寫下 T1–T2 的部分（依 owner 指示在 T2 收線、push）；同日工作電腦接手後續作 **T3–T6**，本文件隨之更新。
-**Audience:** 續作 W6 的人（可能是 fresh clone、沒有本機 scratch 的工作電腦）。
-**State measured at:** `4bdff25`（T6 的 head；本文件的更新提交在其後）— 本文每一條 `path:line` 都在此修訂量過；**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
+**Written:** 2026-09-22，前一個爆 context 的 controller session 寫下 T1–T2 的部分（依 owner 指示在 T2 收線、push）；同日工作電腦接手後續作 **T3–T7**，本文件隨之更新，並在 T7 收成**終態**（檔名由 `…-partial.md` `git mv` 而來）。
+**Audience:** 讀這份記錄的人。本單元已完成，所以沒有「接手續作」的讀者了；最近的讀者是**這個分支的終審複審**，以及日後要查 W6 究竟證明了什麼的人。
+**State measured at:** `f307cdb`（T6 的最後一個提交；`ec18c9d0`…`f307cdb` 收在這裡，**T7 的兩筆提交緊隨其後**）—— §1 各節在**各自的**量測修訂上量測（那一節自己寫了是哪一個），§2 是 T7 在 `f307cdb` 上跑出來的最終讀數。**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
 
 ---
 
@@ -12,9 +12,10 @@
 |---|---|
 | Repo / remote | 原工作站 `D:\I-harness-main` ↔ `https://github.com/ivankwanpn/I-harness.git`（authoritative）；工作電腦同路徑 |
 | Branch | **`m68`**（本單元的里程碑分支；`main` 的合併時機由人決定） |
-| HEAD / origin | T6 head `4bdff25`；`origin/m68` 於 2026-09-22 的第五次 push 同步（T1–T6 ＋ handoff 提交）。**自重** |
+| HEAD / origin | **HEAD 於 2026-09-22 是 `f307cdb`**（T6 的最後一個提交、T7 的起點）；`origin/m68` 於同日第五次 push 同步到 T6，**T7 的兩筆提交在它之後**。**自重** |
 | 本單元 | **W6**：建 `@i-harness/diagnostics`（`createDiagnostics` ＋ `createRedactor`），把 **107 個 `console.warn/error` 站點**分級上去 —— 而 **`I_HARNESS_LOG` 未設時 stderr 逐位元組不變** |
-| 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4 ✅ · T5 ✅ · T6 ✅ · T7 ⬜**（7 任務；§1–§2） |
+| 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4 ✅ · T5 ✅ · T6 ✅ · T7 ✅**（**7／7**；§1 的 T1–T6 ＋ §2 的 T7） |
+| **最終驗證** | **`pnpm verify:all` 五步全綠、exit 0**（2026-09-22，T7 親量；母體 **67／67**；suite **2889 passed／9 skipped／0 failed**；typecheck exit 0；e2e exit 0／5 檔；`--gate` exit 0／**`PASS -- no new rows`**）。指令、五步讀數與**兩筆 allowlist** 見 §2 |
 
 **設計依據**：spec `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` **§3.3（`:177-193`）＋§3.5（`:215-235`）**；B1 裁定 **B**（owner 2026-09-22：「追求完整性，別人後面要修要改很麻煩」）。
 **計畫**：`docs/superpowers/plans/2026-09-22-w6-diagnostics.md`（7 任務；**§0.1 的普查指令是唯一有效的量法**——舊的 `grep -rn "console\.(warn\|error)"` 在 BRE 裡是字面量，數到 152 條裡 140 條不是呼叫）。
@@ -94,7 +95,7 @@
 **Commits**：`be6ee8e`（14 個 manifest 加 `workspace:*`＋lockfile）· 六個縫包：`07f2a9d` skills／`7339f86` workflow／`ae0f9d4` plugin-registry／`7264513` credentials／`407bcbc` hooks／`3f56c2f` schedule · 十個套件包：`5d3c727` session-executor／`55e5b0c` plugin-registry／`bf485b5` mcp-client／`3136ef6` sdk／`c43834f` hooks／`0738b86` subagent／`c6cf609` rewind／`a334aed` output-retention／`29b0a15` core-plugin／`f6398fc` compaction · `88c05c6`（計畫 T6 Step 3 的 dated 更正：`--gate PASS` 不可達）· `6c47681`（複審 Minor 1 的 fold：§0.3 加 dated 指針）。
 
 - **census**：47 = **44 遷移 ＋ 3 例外**；全樹 **107 → 94 分級 ＋ 13 例外**。level：43 `warn` ＋ 1 `error`（`core-plugin:458`），全部繼承自舊通道。
-- **六個縫的形狀＝`currentDiagnostics()` ＋顯式 console fallback**（計畫 :150 本來就寫「取環境實例、無則 console」；複審判定**可辯護、非 instrument-chasing**，且 `diagnosticsFor(phase)` 行為等價——差別只在 gate row 與 census 可見性）。**代價（T7 要記）**：6 行 fallback 仍是 census 的可見子群（重跑 grep 會讀到 12 行，不是 50→44 的直覺數）；`#currentDiagnostics` 由這六個**真 import** 清除。
+- **六個縫的形狀＝`currentDiagnostics()` ＋顯式 console fallback**（計畫 :150 本來就寫「取環境實例、無則 console」；複審判定**可辯護、非 instrument-chasing**，且 `diagnosticsFor(phase)` 行為等價——差別只在 gate row 與 census 可見性）。**代價（T7 已記，§2.5 第 4 點）**：6 行 fallback 仍是 census 的可見子群（重跑 grep 會讀到 12 行，不是 50→44 的直覺數）；`#currentDiagnostics` 由這六個**真 import** 清除。
 - **R13 的三個例外**（byte-untouched）：`session-persistence:251`、`telemetry:11,13`（第二參數 `unknown` ⇒ 折疊不能保證逐位元組）；**`compaction:158` 折疊**（第二參數是字串；複審以 `util.format` 語義證明等價）。
 - **T5 的警報未響**：CLI 283/1 綠 ⇒ 失敗路徑上沒有留下未遷移的 package 站點。
 
@@ -104,11 +105,80 @@
 
 ---
 
-## 2. 未完成的部分（T7）——下一個動作就是 T7
+## 2. T7 — 收尾（**已完成**）
 
-| 任務 | 範圍 | 已知裁定／注意 |
+**本節是 T7 的最終記錄，取代原本那張「未完成的部分」表。** 那張表上的每一項都在下面結掉，或指名仍開著的是什麼。
+
+### 2.1 跑了什麼、讀到什麼
+
+**指令：** `pnpm verify:all`（＝ `node scripts/verify-all.mjs`；五步）。**跑兩次**，兩次都在 `f307cdb` 的樹上，差別只有 allowlist 的那兩筆（§2.2）：
+
+| # | 時點 | exit | 五步讀數 |
+|---|---|---|---|
+| ① | **加 allowlist 之前** | **1** | 1/5 suite **exit 1 · 2888 passed／9 skipped／1 failed**（67/67 專案都回報；`FAILED: packages/session-executor`）· 2/5 population **✓ 67／67** · 3/5 typecheck **exit 0** · 4/5 e2e **exit 0**（5 檔）· 5/5 gate **exit 1 · 435 rows · 2 NEW**（`#RedactedError`、`#Rule`，兩列都在 `packages/diagnostics/src/index.ts`） |
+| ② | **加 allowlist 之後** | **0** | 1/5 suite **exit 0 · 2889 passed／9 skipped／0 failed**（67/67）· 2/5 population **✓ 67／67** · 3/5 typecheck **exit 0** · 4/5 e2e **exit 0**（5 檔）· 5/5 gate **exit 0 · 435 rows · `PASS -- no new rows`** |
+
+**① 的那 1 個 failed 是負載 flake，不是回歸 —— 兩邊都量了：** 平行跑紅的是 `packages/session-executor` 的 `test/shell-promotion.test.ts` › *FALSIFICATION: a threshold ABOVE the deadline never fires — the command dies, and dies branded as a timeout*，**30011 ms 撞 30000 ms 的死線**。把它**單獨跑**（`pnpm --filter @i-harness/session-executor test`）＝ **136 passed／136（20 檔）、exit 0、9.08 s**；而在**② 的第二次全套平行跑裡它自己就綠了**。同一個站點在本單元更早的複審裡已經記過（§7 T5⑧：「已量測、既有、不追」）。**⇒ 這條紅與 W6 的改動無關，且沒有被追。** 兩次跑都**沒有**出現 `apps/cli` 的紅。
+
+### 2.2 allowlist 的兩筆（**一列一筆**，各是一則有日期的裁定）
+
+`scripts/audit/reachability-allowlist.json` 的 `entries` 由 **31 筆增為 33 筆**（diff 為 `+12` 行、純新增；worktree 維持該檔自己的 **CRLF／無 BOM** 慣例，commit 的 blob 仍為 LF —— 與該檔 `note` 記載的規則一致）：
+
+| key | 為什麼這是誠實的裁定 |
+|---|---|
+| `unused-export\t@i-harness/diagnostics#RedactedError` | **儀器盲區，不是孤兒。** 型別**確實被到達**：`fromError` 拿它在回傳型別（`packages/diagnostics/src/record.ts:87`）、在 `:92` 建構它，`DiagnosticRecord.err?` 也用它（`:107`）。這列存在是因為掃描器自己的 class-1 盲區 —— `withoutReExportStatements` 把每個 `export … from` 語句**塗白**再掃（`scripts/audit/check-reachability.mjs:365-372`，套用點 `:416`），而這個名字在**入口檔裡的唯一提及正好就是**那句話（`packages/diagnostics/src/index.ts:25`）；那也正是這列的第三欄寫**入口**（`src/index.ts`）而不是宣告檔（`src/record.ts`）的原因。**要讓它消失：** 有 repo 內的檔案按名字 import 它，或修掉那個盲區（M1 的 R-L／M2 Task 4 刻意不修 —— 兩者都會動 row set、digest 與已發布的精度樣本） |
+| `unused-export\t@i-harness/diagnostics#Rule` | **有文件記載的擴充縫，本單元沒有消費者。** `Rule`（`packages/diagnostics/src/redactor.ts:81`）就是 `createRedactor` 自己那個公開選項 `extraRules?: readonly Rule[]` 的形狀（`:240`，在 `:249` 加成式併入）；**真正傳 `extraRules` 的呼叫端全部是測試**（`packages/diagnostics/test/redactor.test.ts:259,272,289,290`）—— 生產檔一個都沒傳（`grep -rn "extraRules" packages/*/src apps/*/src` 在 `packages/diagnostics` **之外零命中**），而建 redactor 的 CLI bootstrap（`apps/cli/src/diagnostics-bootstrap.ts`）只註冊秘密、不傳規則。**R7 預告的就是這一列**，量出來的答案是「T4 用不上」。**要讓它消失：** 一個生產的 `extraRules` 呼叫端 —— 那是縫按設計工作，不是修復 |
+
+### 2.3 記錄更正（每一條都**重量過才寫**）
+
+| 檔案 | 改了什麼 | 背後的重測 |
 |---|---|---|
-| **T7** 收尾 | `pnpm verify:all`（**母體 67**；五步全綠——但注意 **`--gate` 尚有 2 NEW rows**：`RedactedError`（黏著）與 `Rule`（無消費者）；PASS 需要逐列 allowlist（`reason`＋`dated`）或替 `Rule` 找到真消費者）＋ queue doc 普查句更正（`:535`／`:934`）＋ W6 兩列狀態翻 ✅＋ spec 加 dated 註記＋**把本文件改成終態** | ①儀器盲區的實例（§5；本單元已量到四例）②**R5 的 named residual**（`Bearer \S+` 對散文過度遮蔽）③**T4 的 shutdown 記帳一行**（`index.ts:48-53` 的 `process.exit(1)` 繞過新 `finally`）④**census 精度**：全樹 **94 分級＋13 例外**；六行縫 fallback 是**可見子群**（重跑 grep 讀到 12 行不是 6）；`mcp-client/src/oauth.ts:233` 的 `console.info` 在普查之外（只數 warn/error）⑤**`record.err` 無站點級寫者**（API 收第三參數，44 站全只傳 msg——而多個站點手上就有 caught value）⑥**六個可翻相位**（schedule→`session`、subagent/child→`run`、subagent/tools→`session`、compaction→`turn`、plugin-registry/state→`mount`、output-retention→`mount`；無測試斷言相位）⑦**縫的通道無牙**：`schedule/driver.ts:106` 與 `workflow/registry.ts:31` 的預設體**無測試行使**、其餘四個只 `toHaveBeenCalled()`；且**沒有任何 package 測試 install 實例** ⇒ 安裝模式的站點全無守衛（與 T5 的 M1 同類，具名揭露）⑧§7 的 deferred minors 在此 triage |
+| `docs/handoff/2026-09-20-queued-work.md` | **§6** 的普查句（`:535`；該列講的是「本地結構化診斷日誌」）與 **§9.2** 的 **A2** row（`:934`）：刪掉舊的「110」（以及 A2 格的 58／52）與過渡期的「107 ＝ 102 分級 ＋ 5 列名例外」，改成**可重現的指令**＋**舊指令壞在哪**＋**兩個修訂上的原始讀數**＋**最終切分 107 ＝ 94 分級 ＋ 13 列名例外** | §2.4（同一條指令在 `e78bad3`／`f307cdb` 上各跑一次）；`§6`／`§9.2` 兩個節號是 `grep -n "^## "` 對著改完的檔案量的 |
+| 同上 | §1 的 **W6** row（`:64`）與 A2 row（`:934`）→ **✅ 完成**，附提交區間、計畫與**終態記錄檔名** | `git grep -n w6-diagnostics-partial` 在改名前只命中 `:64`／`:934` 兩行（該檔名在本樹只有這兩個 tracked 引用），兩行已一併改指新檔名 |
+| `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md` | §3.3 加 dated 註記（`bin.test.ts:69` 已漂成 timeout 行）；§3.5 加 dated 註記（`provider-runtime.ts:24-26` 今天是 `roleModelOptionsFor` 的註解，而那個 store **一直在回傳**：型別 `:50`、物件 `:63`、建構 `:58`） | 兩者都是**引用漂移**、不是本單元造成的：`git log --oneline ec18c9d0^..HEAD -- apps/cli/src/provider-runtime.ts` **為空**（W6 的整個區間一個字沒動它），而 `:50` 在 W6 的起點 `e78bad3` 逐字相同 |
+| 本文件 | `git mv` 由 `2026-09-22-w6-diagnostics-partial.md` → `2026-09-22-w6-diagnostics.md`；標題不再是「進行中」；§0 補「最終驗證」列；§2 由「未完成」改成這份 T7 記錄；§8 改成終態 | **改名前** `git grep -n w6-diagnostics-partial` 命中**兩行**（queue doc 的 `:64`／`:934` —— 該檔名在本樹全部的 tracked 引用），兩行已一併改指新名；**改名後**同一條指令只剩**本文件的這兩行**（`git grep -c` ＝ **2**），而它們是**對這次改名的記述**、不是指向舊路徑的引用 |
+
+### 2.4 普查：指令、舊指令壞在哪、最終切分
+
+**會重現的指令**（計畫 §0.1 的兩式；`-F` ＋ 兩個 `-e`，不是 BRE 的 `\|`）：
+
+```bash
+grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --include=*.ts | grep -v "\.test\.\|/test/"
+```
+
+**舊指令壞在哪：** queued doc 原本寫的 `grep -rn "console\.(warn\|error)"` 在 **BRE** 裡把 `(warn\|error)` 當**字面量**（基本正則沒有 `\|` 交替，`(` 也不是群組）。它因此**兩個方向都錯**：數到的 152 條裡**有 140 條不是呼叫**（`} catch (error) {`、含 `error)` 的註解…），而真實的呼叫它**又漏掉**（`console.error(USAGE)` 這種 `error(` 之後不是 `)` 的、整個 argv 驗證區塊）。所以「110」既不是站點數、也不是任何東西的數。
+
+**兩個修訂上的讀數**（同一個指令，T7 親量、無截斷）：
+
+- 在 W6 的起點 **`e78bad3`**：**108 行／34 檔**（`console.warn(` **51**、`console.error(` **57**），扣掉 `apps/cli/src/run.ts:236` 那**一條註解**（同一條在 `f307cdb` 位於 `:246`）⇒ **107 個可執行站點**。逐檔分佈（`cut -d: -f1 | sort | uniq -c` 實測）：`apps/cli` **61 行／8 檔**（＝60 站 ＋ 那條註解；index 23／provider 11／run 7／roles 5／models 5／hooks 5／plugins 3／sessions 2）、**16 個 package 目錄 47 行**（session-executor 13、plugin-registry 8、mcp-client 8、telemetry／subagent／sdk／rewind／hooks **各 2**、另 8 個**各 1**；16 = 3 ＋ 5 ＋ 8）。
+- 在 **`f307cdb`**（遷移後）：**23 行** ＝ **13 個列名例外** ＋ **9 行機制**（6 個縫的 fallback ＋ `packages/diagnostics/src/index.ts:116/139/140` 的委派與內部報告）＋ **1 條註解**。**94 個分級站點已經不在這條指令的視野裡 —— 因為它們已經走 logger。** ⇒ 這條指令是**普查**指令，只在遷移前的樹上讀得出母體；**它從來不是驗收指令**（驗收是 §2.1 的 `pnpm verify:all`）。
+
+**最終切分：** 全樹 **107 站 ＝ 94 分級 ＋ 13 列名例外**（`apps/cli` **50＋10**；packages **44＋3**）。那 13 條例外（全部 byte-untouched）＝ `apps/cli` 的 `hooks.ts:161`／`index.ts:194`／`models.ts:348`／`models.ts:364`／`plugins.ts:443`／`provider.ts:227`／`provider.ts:254`／`roles.ts:241`／`roles.ts:295`／`run.ts:776` ＋ packages 的 `session-persistence/src/index.ts:251`／`telemetry/src/telemetry.ts:11`／`:13`。
+
+### 2.5 交出去的八件事（**T7 一條都沒修**）
+
+以下每一件都仍然開著，**原樣交給最終複審 triage**：
+
+1. **儀器盲區的實例** —— §5（三則記述；第三則本身是兩次重現）。§2.2 那筆 `#RedactedError` 就是第 2 則的落地。
+2. **R5 的 named residual** —— `\bBearer\s+\S+` 對散文過度遮蔽；代價已寫在 `redactor.ts:49-53`，規則大小寫敏感（§3 R5）。
+3. **T4 的 shutdown 記帳一行** —— `uncaughtException`／`unhandledRejection` 的 `process.exit(1)` **繞過新的 `finally`**（既有；兩個 sink 皆 flush-free，今日無害）—— §3.6 的 fail-loud 記帳要有一行（§7 T4⑥）。**位置 T7 重測：`apps/cli/src/index.ts:61-66`**（`:61-62` 是理由註解、`:63` 是那個 `for (const event of ["uncaughtException", "unhandledRejection"])`、`:66` 是 `process.exit(1)`）—— **§7 T4⑥ 記的 `:48-53` 已漂**（今天那幾行是三個 `diagnosticsFor` handle 的宣告），**引用以本行為準**。
+4. **census 精度** —— ①**六行縫 fallback 是普查的可見子群**（計畫 T6 的 §0.3 縫清單有 8 個位置；T6 遷移 6 個、留 3 個當例外（`session-persistence:251` ＋ `telemetry:11,13`），所以**遷移後的 packages 側重跑那條指令讀到 12 行** ＝ 6 個縫 ＋ `packages/diagnostics` 自己的 3 行 ＋ 3 個例外，**不是 6**）。②`packages/mcp-client/src/oauth.ts:233` 的 **`console.info` 在普查之外**（普查只數 warn／error）—— `grep -rn "console\.info" packages/*/src apps/*/src --include=*.ts` 在 `f307cdb` 命中 **3 行**，扣掉 `packages/diagnostics/src/index.ts:138`（委派的 info 通道）與 `packages/mcp-client/src/types.ts:31`（一句註解）⇒ **普查之外的生產站點是 1 個**。
+5. **`record.err` 沒有站點級的寫者** —— API 收第三參數（§3 R3），**44 個 packages 站點全部只傳 `msg`**，而多個站點手上就有 caught value。**⇒ 本記錄不得被讀成「`record.err` 被生產路徑填過」。**
+6. **六個可翻的相位** —— `schedule→session`、`subagent/child→run`、`subagent/tools→session`、`compaction→turn`、`plugin-registry/state→mount`、`output-retention→mount`；**沒有測試斷言相位**，所以翻動不會紅。`telemetry` 與 `acp` 兩個 union 成員**零站點**。
+7. **縫的覆蓋缺口** —— `schedule/driver.ts:106` 與 `workflow/registry.ts:31` 的預設體**無測試行使**；`hooks`／`skills` 行使了但**不斷言**；`plugin-registry/state.ts:74`／`credentials:243` 只有 `toHaveBeenCalled()`；而且**沒有任何 package 測試 install 實例** ⇒ **安裝模式的站點全無守衛**（與 T5 的 M1 同類，具名揭露）。
+8. **§7 的 deferred minors 整份 —— 指向最終複審 triage。** T7 沒有一條進修復迴圈。
+
+**§7 自己指名「T7 的記錄要說」的三條，在這裡說：**
+
+- **T4 的測試改寫是五條案例，不是四條**（§7 T5⑥，T5 複審的重量）—— R10 的**授權文字**寫「四條」，實際改寫的是 **5** 個；第 5 條是 **SUCCESS 出口**，它用的是 `console.log`、**不是遷移通道**，所以它落在 R10 的原始範圍之外，但捕捉點跟著同一套機制一起改了。
+- **SUCCESS 出口的捕捉點變窄，不是嚴格等價**（§7 T5④）—— 捕捉改成「工廠回傳後立刻讀 `currentDiagnostics()`」之後，四條性質逐條保留、case ① 反而變強（多一條 `toHaveLength(1)`），但 SUCCESS 出口那條**可觀察的範圍比原本窄**。
+- **「50 站走 handle」≠「50 站寫記錄」**（§7 T5⑦）—— 實例只在三條路徑 install（`apps/cli/src/index.ts:477`／`:585`／`:835` 的 `createCliDiagnostics()`），其餘命令在 `=stderr` 下仍委派 console。**這是計畫的契約，不是缺口**（§1 T5 的 ⚠）。
+
+**還有一條精度的警語：`durMs` 在 W6 沒有生產者** —— §7 T1 的 concern；**本記錄不暗示它被填過**。
+
+### 2.6 未完成的部分
+
+**沒有。** 七個任務全部落地，最終 `pnpm verify:all` 五步全綠（§2.1）。仍然開著的是 §2.5 的**已具名殘餘**與 §7 的 **deferred minors**，兩者都**明確交給最終複審 triage** —— 它們不是未完成的任務。
 
 ---
 
@@ -134,14 +204,14 @@
 
 - `pnpm --filter @i-harness/diagnostics test` → **46/46**（3 檔）at `7c78589`；typecheck exit 0。（T1 的 17／T2 的 27 是同一條曲線上的中途讀數。）
 - `pnpm --filter @i-harness/cli test` → **283 passed／1 skipped／0 failed**（25 檔）at `4b622fd`（前置基線 265 passed＋1 skipped；＋18 新案例、＋1 檔）。
-- `node scripts/audit/check-reachability.mjs --gate` at `6c47681`（**controller 親量**）→ **exit 1、435 rows、2 NEW rows**（`RedactedError`／`Rule`）。逐輪清除：T4 清 `createDiagnostics`／`createRedactor`／`installDiagnostics`；T5 清 `diagnosticsFor`；T6 由六個縫檔的**真 import** 清 `currentDiagnostics`。**T7 之前不得加 allowlist**；`Rule` 無消費者、`RedactedError` 黏著（§5）。
+- `node scripts/audit/check-reachability.mjs --gate` at `6c47681`（**controller 親量**）→ **exit 1、435 rows、2 NEW rows**（`RedactedError`／`Rule`）。逐輪清除：T4 清 `createDiagnostics`／`createRedactor`／`installDiagnostics`；T5 清 `diagnosticsFor`；T6 由六個縫檔的**真 import** 清 `currentDiagnostics`。**當時的紀律是「T7 之前不得加 allowlist」** —— T7 已履行：兩列各以一筆 dated 裁定結掉（§2.2），其餘沒有任何 allowlist 動過（`Rule` 無消費者、`RedactedError` 黏著，§5）。
 - `pnpm --filter @i-harness/cli test` at `6c47681` → **283 passed／1 skipped**（T5 的警報未響）；`pnpm --filter @i-harness/session-executor test` → **136/136**（隔離跑；結掉 workspace 第二跑的 flake ⚠）。workspace 兩跑＝67/0 與 66/1（後者是負載 flake，非回歸）。
 - 母體（帶 `test` script 的 workspace 目錄）：**67**（66 → 67，T1 實測）。
-- 全樹閘門 `pnpm verify:all`：最後一次全綠在 `a955c4d1`（M6，母體 66、433 rows、`--gate PASS`）；**本單元中途必然紅在 7 NEW rows 上**，T7 是它轉綠的時點。
+- 全樹閘門 `pnpm verify:all`：本單元的中途紅在 7 → 4 → 3 → 2 NEW rows 上（上面逐輪清除），**T7 是它轉綠的時點** —— 加上 §2.2 的兩筆 allowlist 後，於 `f307cdb` 讀到 **exit 0／五步全綠／`--gate PASS -- no new rows`**（完整五步讀數、含加 allowlist **之前**的那次失敗，見 §2.1）。再之前的最後一次全綠在 `a955c4d1`（M6，母體 66、433 rows）。
 
 ---
 
-## 5. 儀器盲區的實例（T7 要記進記錄）
+## 5. 儀器盲區的實例（**已記進 T7 的記錄**；§2.2 的 `#RedactedError` 那筆就是下面第 2 則的落地）
 
 `check-reachability.mjs` 的「這個名字被用了嗎」是**對生產檔的文字比對** ⇒ **正在解釋這個危險的註解本身會讓 row 消失**。本單元量到三例：
 
@@ -162,7 +232,7 @@
 
 ---
 
-## 7. Deferred minors（T7 triage 用；都不入修復迴圈）
+## 7. Deferred minors（**交給最終複審 triage**；都不入修復迴圈。**T7 一條都沒修**）
 
 - **T1**：④ double install/uninstall、`stream` 勝 env 未測（deferred）。**concern**：`durMs` **在 W6 沒有生產者** —— T7 的記錄不要暗示它被填。
 - **T2**：①`src/index.ts:29` 的 `fromError` 公開 re-export 無套件外消費者（一行可撤）②no-err-key 案例只釘 wire shape（`rec.err = undefined` 會穿過 `JSON.stringify`）③`[REDACTED]` token 的 double 斷言 ⇒ **已由 T3 履行**（`99c287e`）（保留此列僅為記錄）④非 Error 的 `name = typeof err`（語意選擇）。
@@ -176,6 +246,8 @@
 
 ## 8. 本文件沒有建立的事
 
-- **`pnpm verify:all` 沒有在本單元的任何提交上跑過** —— 中途必紅（§4），跑它沒有資訊；T7 是時點。
-- **T4–T7 的每一條「注意」都取自計畫與歷次裁定，不是實作量測**；執行者仍要自己量（引用先量）。
-- **`.superpowers/` 的 ledger、task brief／report、review diff 不在 git 裡** —— 若你在 fresh clone 上，這份文件就是全部的接手面；task brief 可用 SDD skill 的 `scripts/task-brief <plan> <N>` 重新抽出。遷移包（2026-09-22 建立）另含 ledger 與 session transcripts，但那是**複製**、不是版控。
+- **`pnpm verify:all` 現在跑過了 —— 而且通過了：** **exit 0 · 2889 passed／9 skipped／0 failed · 67／67 專案 · typecheck exit 0 · e2e exit 0（5 檔）· `--gate` `PASS -- no new rows`**（§2.1）。**但它只證明「有多少東西跑了」，不證明那些測試有意義** —— `verify-all.mjs` 自己在輸出結尾就這麼說。**一次綠燈不等於「這個單元沒有缺陷」**，尤其它與本記錄是同一天、同一台機器量的。
+- **T4–T7 的「注意」大多取自計畫與歷次裁定，不是 T7 的實作量測** —— 沿用原本的警語。T7 親量的是**它自己寫下來的每一個數字**（§2.1 的兩次 `verify:all`、§2.4 的兩次普查、§2.2 的 allowlist 兩列）；其餘仍要引用者自己量（**引用先量**）。
+- **本文件沒有建立「殘餘已經清空」。** §2.5 的八件事、§3 的 R5、§7 的全部 deferred minors **仍然開著**，而且**故意**沒有在 T7 修 —— 它們是**最終複審的 triage**，不是遺漏。
+- **本文件沒有建立「相位是對的」。** 六個相位**可翻而不會讓任何測試轉紅**（§2.5 第 6 點），而安裝模式的站點**全無守衛**（§2.5 第 7 點）。
+- **`.superpowers/` 的 ledger、task brief／report、review diff 不在 git 裡** —— 若你在 fresh clone 上，這份文件就是全部的記錄面；task brief 可用 SDD skill 的 `scripts/task-brief <plan> <N>` 重新抽出。遷移包（2026-09-22 建立）另含 ledger 與 session transcripts，但那是**複製**、不是版控。
