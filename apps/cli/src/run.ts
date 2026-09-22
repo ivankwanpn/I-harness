@@ -322,6 +322,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // UNCONDITIONALLY, not beside the emit below, because a run with telemetry off
   // still owes its record a duration.
   const runStartedAt = Date.now()
+  // The record's identity, minted ONCE per run. `randomUUID` is a fallback, not
+  // a second source of truth — the CLI always passes the instance's own runId —
+  // but minting it per append would stamp the double-record case's two records
+  // with two different ids, leaving one run un-joinable to itself. No shipped
+  // path reaches the fallback either way; this is what keeps it safe if one does.
+  const runId = opts.runId ?? randomUUID()
   if (telemetry) {
     telemetry.emit({
       type: "session/start",
@@ -347,14 +353,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   //
   // Appended through `append`, so it rides the same mirror as every other event
   // (the coordinator enqueue in the callback above) and the record's `seq` is
-  // assigned like any other's. `randomUUID` is the fallback identity, not a
-  // second source of truth: the CLI always passes the instance's own runId.
+  // assigned like any other's; its identity is the single `runId` minted above.
   const appendRunEnd = (exitCode: number, phase: DiagnosticPhase, err?: unknown): void => {
     if (!opts.coordinator || activeId === undefined) return
     const error = err !== undefined && opts.redactor !== undefined ? fromError(err, opts.redactor).message : undefined
     append(session, {
       type: "operator/run-end", version: 1,
-      runId: opts.runId ?? randomUUID(),
+      runId,
       exitCode, durationMs: Date.now() - runStartedAt, phase,
       ...(error !== undefined ? { error } : {}),
     })
