@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAICompatibleConfig {
   apiKey: string
@@ -63,7 +63,11 @@ export function parseSSE(text: string): Record<string, unknown>[] {
       const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
       const data = dataLine.slice(5).trim()
       if (data === "[DONE]") return { type: "[DONE]" }
-      return JSON.parse(data) as Record<string, unknown>
+      try {
+        return JSON.parse(data) as Record<string, unknown>
+      } catch (err) {
+        throw new SSEParseError(data)
+      }
     })
 }
 
@@ -244,6 +248,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             if (yield* emit([{ type: "error", error: new Error(`openai-compatible malformed tool args: ${pending.argsBuffer}`) }])) return
           }
         }
+      } catch (err) {
+        // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
+        // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
+        return
       } finally {
         reader.releaseLock()
       }

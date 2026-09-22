@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAnthropicClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 describe("llm-anthropic protocol", () => {
   it("translates LLMRequest to the Anthropic Messages request body", async () => {
@@ -222,6 +222,21 @@ describe("llm-anthropic protocol", () => {
     const last = secondBody.messages[secondBody.messages.length - 1] as { role: string; content: unknown[] }
     expect(last.role).toBe("user")
     expect(JSON.stringify(last.content)).toContain("tool_result")
+  })
+
+  it("M72 Ⅰ: a corrupt chunk is an error event, not an exception out of the generator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: {not json\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The discrimination is the SHAPE of the failure: today the SyntaxError escapes
+    // out of the for-await and NO event arrives; after the fix exactly one `error`
+    // arrives and the stream ends there. Whether a VALID PREFIX that preceded the
+    // bad chunk was already yielded is deliberately NOT asserted: `new Response(string)`
+    // may hand the whole body over as ONE chunk, so pinning that would be a test of
+    // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("not json")
   })
 })
 

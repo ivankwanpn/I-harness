@@ -366,3 +366,18 @@ export async function describeTransportError(label: string, url: string, error: 
   err.cause = error
   return err
 }
+
+/**
+ * M72 Ⅰ: a stream body that was not valid SSE/JSON. Thrown by an adapter's
+ * `parseSSE` so the READING LOOP can decide — a corrupt chunk is a provider
+ * failure like any other and belongs on the seam's `error` channel, not out of
+ * the generator as an exception while the same adapter reports HTTP failures as
+ * events. The message carries a truncated copy of the offending text: without
+ * it a 4000-chunk stream gives no way to tell WHAT was malformed.
+ */
+export class SSEParseError extends Error {
+  constructor(text: string) {
+    super(`malformed SSE chunk: ${text.slice(0, 80)}`)
+    this.name = "SSEParseError"
+  }
+}
