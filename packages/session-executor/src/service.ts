@@ -56,6 +56,9 @@ export type SessionModelBindingResult =
         label: string
         reasoningEffort?: ReasoningEffort
         contextWindow?: number
+        /** M72 Ⅱ: the resolved output cap. Absent → nothing was resolved, and
+         * nothing is defaulted in its place (the adapter sends none). */
+        maxOutputTokens?: number
       }
     }
 
@@ -155,7 +158,11 @@ export interface SessionService {
    * process starts from. KNOWN BOUNDARY, not a silent one: the assembly's
    * compaction WINDOW is construction-time config (`contextWindow` →
    * assembly.ts's `budget: { contextWindow: … }`) — a rebind moves the client,
-   * not the window; a new window takes effect at the next build. */
+   * not the window; a new window takes effect at the next build. M72 Ⅱ's
+   * output cap is the same kind of config (`AgentDeps.maxOutputTokens`, read
+   * when the agent assembles a request) and follows the same rule — the
+   * refreshed binding reports the new cap immediately, the live assembly
+   * sends it from the next build. */
   rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
   hasAssembly(sessionId: string): boolean
@@ -351,6 +358,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             model: binding.model,
             modelLabel: binding.label,
             contextWindow: binding.contextWindow,
+            maxOutputTokens: binding.maxOutputTokens,
             reasoningEffort: binding.reasoningEffort,
             compact,
           })

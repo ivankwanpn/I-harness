@@ -504,6 +504,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       providerBinding = state.binding
     }
     const contextWindow = providerBinding?.contextWindow
+    // M72 Ⅱ: the same binding's resolved output cap. Handed on verbatim —
+    // undefined stays undefined, because "no cap resolved" is a fact the
+    // request has to keep (nothing here defaults it; core-agent clamps it).
+    const maxOutputTokens = providerBinding?.maxOutputTokens
     // The window is handed to the assembly as `contextWindow` either way; it is
     // the assembly that feeds it INTO the compaction config. Merging it here as
     // well was a second copy of that logic — and the copy was wrong: when no
@@ -622,6 +626,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           ? { reasoningEffort: providerBinding.reasoningEffort }
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       resolveRoleModel: roleModelResolverFor(runtimeNow),
       // The role-model gate, from whoever supplied the run (the CLI's main()
       // reads it from the settings store). Omitted when the caller passed

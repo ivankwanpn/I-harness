@@ -69,6 +69,9 @@ export interface SessionModelBinding {
   label: string
   reasoningEffort?: ReasoningEffort
   contextWindow?: number
+  /** M72 Ⅱ: the resolved output cap (user row > card). Absent → the adapter
+   * sends nothing (anthropic falls back to its own constant). */
+  maxOutputTokens?: number
 }
 
 export interface ProviderRuntimeEntry {
@@ -643,11 +646,17 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           modelId,
         )
       }
-      const contextWindow = resolveEffectiveModelContext({
+      const effective = resolveEffectiveModelContext({
         profile,
         modelId,
         ...(userModel !== undefined ? { userModel } : {}),
-      })?.contextWindow
+      })
+      const contextWindow = effective?.contextWindow
+      // M72 Ⅱ: the same resolution already produced the output cap — it was
+      // thrown away one line after being computed. Both numbers travel: the
+      // window is what the host compacts against, the cap is what the request
+      // must actually carry.
+      const maxOutputTokens = effective?.maxOutputTokens
 
       try {
         const client = buildClient(profile, modelId)
@@ -665,6 +674,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
               : `${view.displayName} · ${modelId}`,
             ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
             ...(contextWindow !== undefined ? { contextWindow } : {}),
+            ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
           },
         }
       } catch (error) {
