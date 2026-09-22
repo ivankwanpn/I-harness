@@ -138,7 +138,18 @@ export async function executeToolCalls(
   // refusal either, for the same reason, plus a second one: a refusal discards
   // the batch, and a store failure must not discard the record of what DID
   // happen before the store broke.
+  //
+  // THE FLAG IS SEPARATE FROM THE VALUE, for the same reason `hasFailed` /
+  // `firstError` and `hasCommitError` / `commitError` are split (see their own
+  // notes): a host whose `flush` rejects with NO reason — `Promise.reject()` /
+  // `throw undefined` are legal, and the seam's whole contract is "reject" —
+  // leaves the value `undefined`, so a value test would read a failure that
+  // HAPPENED as "no failure", skip the rethrow, and return normally on the
+  // soft-failure path: the turn would continue against a store that just proved
+  // it cannot persist, which is exactly the lost-durable-write defect M5 T4 R5
+  // names. The flag carries "it happened"; the value carries what it was.
   let firstFlushError: unknown
+  let hasFlushError = false
   // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
   // path said "drain started (results discarded)" and awaited `allSettled`, so a
   // failed call left its siblings running — a `bash` still spawning, a fetch
@@ -280,8 +291,12 @@ export async function executeToolCalls(
         // commit lane run so the log is not half-committed, then RETHROW (M5
         // T4 R5 — "a durable write failure must not become a silently
         // continuing turn"). The throw happens at the end of this function;
-        // see `firstFlushError` above for why it cannot happen here.
-        firstFlushError ??= err
+        // see `firstFlushError`/`hasFlushError` above for why it cannot happen
+        // here and why the flag is what the rethrow tests.
+        if (!hasFlushError) {
+          firstFlushError = err
+          hasFlushError = true
+        }
         // Cancel the siblings: a batch whose store is broken must not keep
         // starting bodies (the same channel a body failure uses).
         batchAbort.abort()
@@ -595,7 +610,12 @@ export async function executeToolCalls(
     // user ABORT (the branch above this one, "agent aborted"). In the abort case
     // the failed call's own verdict is still committed first — the abort path's
     // commit lane runs the slot filled here, synthetic as it is.
-    if (firstFlushError !== undefined) throw firstFlushError
+    //
+    // The FLAG decides, never `firstFlushError !== undefined`: a `flush` that
+    // rejects without a reason is a failure that happened, and the value
+    // test would call it "no failure" (the trap `hasFailed`/`hasCommitError`
+    // are split for — see their notes above).
+    if (hasFlushError) throw firstFlushError
     if (hasCommitError) throw commitError
   }
 }
