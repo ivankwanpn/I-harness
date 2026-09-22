@@ -67,12 +67,20 @@ describe("spawnChild", () => {
   }, 10_000)
 })
 
-function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enqueued: { id: string; events: unknown[] }[] } {
+function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enqueued: { id: string; events: unknown[] }[]; flushed: { id: string; types: string[] }[] } {
   const created: SessionMeta[] = []
   const enqueued: { id: string; events: unknown[] }[] = []
+  // M70: a flush is recorded with WHAT HAD BEEN ENQUEUED FOR THAT SESSION when
+  // it ran. That is the discriminator this fake needs and the reason it is not
+  // "flush was called" (this mirror also flushes on `turn/end`), but it is NOT
+  // a model of the write-behind: the real drain persists a stable ordered
+  // PREFIX and re-queues what a failed write retained, while this recording is
+  // the whole enqueue history and never empties.
+  const flushed: { id: string; types: string[] }[] = []
   return {
     created,
     enqueued,
+    flushed,
     async create(meta) {
       created.push(meta as SessionMeta)
       return { id: (meta as { sessionId?: string }).sessionId ?? "sess-x" }
@@ -82,7 +90,12 @@ function fakeCoordinator(): SessionCoordinator & { created: SessionMeta[]; enque
     async load() { return { session: { formatVersion: 1, events: [] } } },
     async loadOwned() { return { session: { formatVersion: 1, events: [] } } },
     async list() { return [] },
-    async flush() {},
+    async flush(id) {
+      flushed.push({
+        id,
+        types: enqueued.filter((batch) => batch.id === id).flatMap((batch) => batch.events.map((ev) => (ev as { type?: string }).type ?? "?")),
+      })
+    },
     async close() {},
     async putDocument() {},
     async getDocument() { return undefined },
@@ -142,6 +155,70 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength: 4 })
     expect(agents.get(sessionId!)).toBeDefined() // agent retained in the registry
   })
+
+  // M70: the child's OWN dispatch boundary is checkpointed, through the same
+  // coordinator and under its OWN session id. Measured before wiring it: this
+  // child's appends are mirrored into `childSessions.coordinator` by the session
+  // hook, so `coordinator.flush(childSessionId)` drains the very write-behind
+  // that received the `tool/dispatch` marker.
+  it("M70: a child's tool dispatch is durable BEFORE its body — flushed under the child's own id", async () => {
+    const coordinator = fakeCoordinator()
+    const jobs = createJobRegistry()
+    const table = createAgentTable()
+    const roles = createRoleRegistry()
+    roles.register({ name: "general", description: "d", systemPrompt: "p", tools: ["read"] })
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+
+    // What the body could observe at its first statement, and the only
+    // observable that DISCRIMINATES: this file also flushes on `turn/end`, so a
+    // "flush happened" test would be green with or without the checkpoint. This
+    // snapshots the drains so far (and what each of them was draining).
+    let drainsAtBody: { id: string; types: string[] }[] | undefined
+    let bodies = 0
+    parentRegistry.register({
+      name: "read", description: "", inputSchema: {},
+      execute: async () => {
+        bodies += 1
+        drainsAtBody = coordinator.flushed.map((f) => ({ ...f, types: [...f.types] }))
+        return { ok: true }
+      },
+    })
+    const mock = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: {} }] },
+      { role: "assistant", text: "child done" },
+    ])
+    let settled: (() => void) | undefined
+    const runDone = new Promise<void>((resolve) => { settled = resolve })
+
+    const { sessionId } = await spawnChild({
+      taskName: "checkpointed",
+      message: "read something",
+      parentPath: "root",
+      parentRegistry,
+      parentSession,
+      parentCtx: ctx,
+      role: roles.get("general")!,
+      parentModel: mock,
+      resolveModel: noRoleModel,
+      jobs,
+      table,
+      agents: createAgentRegistry(),
+      childSessions: { coordinator, parentSessionId: "sess-main" },
+      onSettled: () => settled!(),
+    })
+    await runDone
+
+    // The body DID run (otherwise "no flush before it" would be trivially true).
+    expect(bodies).toBe(1)
+    // …and by then the child's marker had been DRAINED through the coordinator,
+    // under the child's own session id: the checkpoint is the child's, not the
+    // parent's, and it covers the marker that recovery reads.
+    expect(drainsAtBody).toHaveLength(1)
+    expect(drainsAtBody![0]!.id).toBe(sessionId)
+    expect(drainsAtBody![0]!.types).toContain("tool/dispatch")
+  }, 10_000)
 
   // M24a (B1): delegationDepth recursion — a child of a depth-1 subagent is
   // depth 2 (resolveChildDepth = parent + 1), not the hardcoded 1.

@@ -310,12 +310,27 @@ describe("headless CLI (M2)", () => {
           ],
         })
         expect(result.exitCode).toBe(0)
-        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; snippet: string }[] } } | undefined
+        const resultEvent = result.session!.events.find((e) => e.type === "tool/result") as { output: { hits: { sessionId: string; eventType: string; snippet: string }[] } } | undefined
         expect(resultEvent).toBeDefined()
         const hits = resultEvent!.output.hits
-        expect(hits.length).toBe(1)
-        expect(hits[0]!.sessionId).toBe("main")
-        expect(hits[0]!.snippet).toContain("unicorn")
+        // M70 CHANGED THIS EXPECTATION, deliberately and in the strict
+        // direction. The search is a durable reader (reconcile-on-search over
+        // the jsonl store), and this run's own `tool/call` event — the one whose
+        // args ARE `{"query":"purple unicorn"}` — is appended before the batch
+        // dispatches. Until M70 that event was still inside the coordinator's
+        // 200 ms write-behind window when the search body ran, so the ONLY hit
+        // was the seeded user/message; the dispatch checkpoint now drains the
+        // session's prefix BEFORE the body, so the search honestly sees its own
+        // invocation as a durable event and returns TWO hits.
+        //
+        // Asserting the exact SET — both hits named, by session and by event
+        // type — is STRICTER than the `toBe(1)` it replaces: it fails on a third
+        // hit as well as on a missing one. (Measured before the change: with the
+        // checkpoint's seam removed the result is one hit, `user/message`; with
+        // it, the additional hit is `tool/call` at seq 6.)
+        expect(hits.map((h) => `${h.sessionId}:${h.eventType}`).sort())
+          .toEqual(["main:tool/call", "main:user/message"])
+        expect(hits.find((h) => h.eventType === "user/message")!.snippet).toContain("unicorn")
       } finally {
         closeSessionQueries()
       }

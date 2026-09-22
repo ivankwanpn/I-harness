@@ -641,11 +641,26 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // non-ready arms returned above — those rebuilds change nothing, so the label
   // still describes the client the child was last left on.)
   entry.modelLabel = declared !== undefined ? modelLabelOf(declared) : undefined
+  // M70: the resumed child's checkpoint, read off the entry NOW rather than
+  // inside the closure, so the seam is built from the pair that is true at
+  // construction. MEASURED before wiring it: a restored entry's session is the
+  // mirror `restoreMirrorsAndSweep` rebuilt (`index.ts:269-276` — enqueue +
+  // flush under `entry.sessionId`), so `coordinator.flush(entry.sessionId)`
+  // drains exactly the write-behind that receives the marker. For the one
+  // session that is NOT mirrored — the `createSessionFromEmpty` stub a FAILED
+  // mirror rebuild leaves behind (`persist.ts:124`, entry marked "error") — the
+  // flush is a no-op (measured: 0 backend writes), which is honest: nothing
+  // mirrored those appends in the first place.
+  const childCoordinator = deps.childSessions?.coordinator
+  const childSessionId = entry.sessionId
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     session: entry.session, tools: childReg, model,
     systemPrompt: role.systemPrompt, signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(childCoordinator !== undefined && childSessionId !== undefined
+      ? { flush: (): Promise<void> => childCoordinator.flush(childSessionId) }
+      : {}),
     // M19 (Ruling 24): attribute the resumed child's tool calls to its
     // team member via the durable session id.
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
