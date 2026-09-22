@@ -1,4 +1,4 @@
-import { createSession, deriveMessages, type Session } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, type Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
 import type { CompactionRequest, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
@@ -13,6 +13,7 @@ import type { McpServerConfig } from "@i-harness/mcp-client"
 import type { LspServerConfig } from "@i-harness/lsp"
 import type { TeamConfig } from "@i-harness/agent-team"
 import { dirname, join } from "node:path"
+import { randomUUID } from "node:crypto"
 import { createPromptCommand, registerCommand, registerPromptCommand } from "@i-harness/interaction"
 import { resolveHarnessHome } from "@i-harness/harness-home"
 import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
@@ -29,7 +30,7 @@ import {
 import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-runtime"
 import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 import { registerCliSecrets } from "./diagnostics-bootstrap.ts"
-import { diagnosticsFor } from "@i-harness/diagnostics"
+import { diagnosticsFor, fromError, type DiagnosticPhase, type Redactor } from "@i-harness/diagnostics"
 
 // W6 T5: one module-scope handle, and the phase is the SEAM rather than the
 // file: all five migrated sites here are the plugin/hook/mcp mount's own
@@ -161,6 +162,18 @@ export interface HeadlessOptions {
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10)
   sessionId?: string // new session: persist under this id
   resumeSessionId?: string // resume: load this id, restore history, continue appending
+  /** M3 §3.4: the HOST's identity — the diagnostics instance's runId, put on
+   *  the durable run-end record so the live JSONL (which stamps the same id on
+   *  every line) and the session log can be joined after the fact. Absent ⇒ the
+   *  record mints its own, which is what an embedder with no diagnostics
+   *  instance gets. */
+  runId?: string
+  /** The redactor the record's `error` is DERIVED through. ABSENT ⇒ no `error`
+   *  field at all, deliberately not an un-redacted one: the four llm adapters
+   *  throw the provider's response body, which is where a credential comes back
+   *  in (`fromError`'s contract). A host with no redactor records the exit
+   *  without a reason rather than a reason it cannot trust. */
+  redactor?: Redactor
   session?: Session // M14: host-provided pre-seeded session (the harness is headless; a host can seed a session with image-bearing user/message events before the run)
   coordinator?: SessionCoordinator
   // M10b: host-provided query surface; when present the session_search +
@@ -305,6 +318,16 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   const telemetry: Telemetry | undefined = opts.telemetry === "jsonl"
     ? createTelemetry([createJsonlSink(process.stdout), metrics])
     : createTelemetry([metrics])
+  // M3 §3.4: the clock the durable record's `durationMs` is measured from — read
+  // UNCONDITIONALLY, not beside the emit below, because a run with telemetry off
+  // still owes its record a duration.
+  const runStartedAt = Date.now()
+  // The record's identity, minted ONCE per run. `randomUUID` is a fallback, not
+  // a second source of truth — the CLI always passes the instance's own runId —
+  // but minting it per append would stamp the double-record case's two records
+  // with two different ids, leaving one run un-joinable to itself. No shipped
+  // path reaches the fallback either way; this is what keeps it safe if one does.
+  const runId = opts.runId ?? randomUUID()
   if (telemetry) {
     telemetry.emit({
       type: "session/start",
@@ -322,6 +345,25 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     opts.coordinator.enqueue(activeId, [ev])
     if (ev.type === "turn/end") void opts.coordinator.flush(activeId).catch(() => {})
   })
+
+  // M3 §3.4: the durable run-end record. Written while the coordinator is still
+  // open — the success path closes it before `emitSessionEnd` fires, which is
+  // why this is NOT part of `emitSessionEnd` (that funnel runs after the close,
+  // and a coordinator closed under it takes no further events).
+  //
+  // Appended through `append`, so it rides the same mirror as every other event
+  // (the coordinator enqueue in the callback above) and the record's `seq` is
+  // assigned like any other's; its identity is the single `runId` minted above.
+  const appendRunEnd = (exitCode: number, phase: DiagnosticPhase, err?: unknown): void => {
+    if (!opts.coordinator || activeId === undefined) return
+    const error = err !== undefined && opts.redactor !== undefined ? fromError(err, opts.redactor).message : undefined
+    append(session, {
+      type: "operator/run-end", version: 1,
+      runId,
+      exitCode, durationMs: Date.now() - runStartedAt, phase,
+      ...(error !== undefined ? { error } : {}),
+    })
+  }
 
   // Resume: restore the persisted history into the session WITHOUT re-appending
   // it (it is already durable); subsequent appends continue from this history.
@@ -650,6 +692,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
   } catch (err) {
     emitSessionEnd(1)
+    // Site ①: the exit taken when the run died BEFORE the assembly was built
+    // (the model resolution above is the shipped trigger). `mount` — no turn
+    // ever ran. The append must precede the close below: a closed coordinator
+    // drains what it holds, it does not accept new events.
+    appendRunEnd(1, "mount", err)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
@@ -734,6 +781,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     await executor.drain()
     const derived = deriveMessages(session).at(-1)
     const finalText = typeof derived?.content === "string" ? derived.content : ""
+    // Site ②: the success exit. Appended BEFORE the flush — this is the one
+    // path that closes the coordinator only later (`maybeAutoTitle` runs in
+    // between), so this append is what makes the record's own durability the
+    // same event as every other event's: it rides the flush below.
+    appendRunEnd(0, "run")
     if (opts.coordinator) {
       // flush first: this is the durability-failure signal (rejects on a durable
       // write failure → exitCode 1); close() then drains everything best-effort.
@@ -780,6 +832,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     return { finalText, exitCode: 0, session, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
+    // Site ③: the run's own failure (a turn that threw, a durable flush that
+    // rejected) — the assembly WAS built, so `run` and not `mount`. Before the
+    // close below for the same reason as site ①.
+    appendRunEnd(1, "run", err)
     telemetry?.close()
     if (opts.coordinator) await opts.coordinator.close().catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }

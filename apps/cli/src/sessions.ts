@@ -35,6 +35,9 @@ export interface StoredSessionRow {
   updatedAt?: number
   /** turn/start count from a full-log read; absent when the read failed. */
   turnCount?: number
+  /** M3 §3.4: the LAST `operator/run-end` in the log. Absent for a session
+   * older than the record — the cell renders `—`, never a fabricated success. */
+  lastRun?: { exitCode: number; durationMs: number; error?: string }
   /** Set when the read failed — the row is still listed, honestly labelled. */
   problem?: string
 }
@@ -85,6 +88,19 @@ export async function listStoredSessions(coordinator: SessionCoordinator, storeR
       try {
         const { session } = await coordinator.load(id)
         row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
+        // M3 §3.4: the durable run-end record rides the full-log read the turn
+        // count already pays for. The LAST one wins — a run whose success
+        // `flush` rejected carries TWO records (exit 0 appended before the
+        // flush, exit 1 appended by the failure catch) and the later one is the
+        // exit that actually happened.
+        const runEnd = session.events.filter((ev) => ev.type === "operator/run-end").at(-1)
+        if (runEnd !== undefined) {
+          row.lastRun = {
+            exitCode: runEnd.exitCode,
+            durationMs: runEnd.durationMs,
+            ...(runEnd.error !== undefined ? { error: runEnd.error } : {}),
+          }
+        }
       } catch (error) {
         row.problem = `log unreadable: ${error instanceof Error ? error.message : String(error)}`
       }
@@ -110,19 +126,30 @@ export function formatAge(ms: number | undefined, now = Date.now()): string {
   return `${Math.floor(hours / 24)}d`
 }
 
-/** Aligned `ID · TITLE · TURNS · UPDATED` table (headers included; no rows →
- * an honest "no sessions" line, never an empty screen). */
+/** The run-end record in one cell — `ok 1.2s` / `failed exit 1 0.4s`. A session
+ * with no record (older than M3 §3.4) renders an honest `—`. */
+export function formatLastRun(lastRun: StoredSessionRow["lastRun"]): string {
+  if (lastRun === undefined) return "—"
+  return `${lastRun.exitCode === 0 ? "ok" : `failed exit ${lastRun.exitCode}`} ${(lastRun.durationMs / 1000).toFixed(1)}s`
+}
+
+/** Aligned `ID · TITLE · TURNS · UPDATED · LAST RUN` table (headers included;
+ * no rows → an honest "no sessions" line, never an empty screen). */
 export function renderSessionTable(rows: StoredSessionRow[], now = Date.now()): string {
   if (rows.length === 0) return "no sessions in this store"
   const titleOf = (row: StoredSessionRow): string => row.problem !== undefined ? `(${row.problem})` : row.title ?? "(untitled)"
   const turnsOf = (row: StoredSessionRow): string => row.turnCount === undefined ? "?" : String(row.turnCount)
+  const ageOf = (row: StoredSessionRow): string => formatAge(row.updatedAt, now)
   const idW = Math.max(2, ...rows.map((r) => r.id.length))
   const titleW = Math.min(48, Math.max(5, ...rows.map((r) => titleOf(r).length)))
-  const lines = [`${"ID".padEnd(idW)}  ${"TITLE".padEnd(titleW)}  ${"TURNS".padStart(5)}  UPDATED`]
+  // UPDATED still ends with LAST RUN after it, so it pads like the interior
+  // columns do (the widest age, never narrower than the header).
+  const ageW = Math.max(7, ...rows.map((r) => ageOf(r).length))
+  const lines = [`${"ID".padEnd(idW)}  ${"TITLE".padEnd(titleW)}  ${"TURNS".padStart(5)}  ${"UPDATED".padEnd(ageW)}  LAST RUN`]
   for (const row of rows) {
     const title = titleOf(row)
     lines.push(
-      `${row.id.padEnd(idW)}  ${(title.length > titleW ? `${title.slice(0, titleW - 1)}…` : title).padEnd(titleW)}  ${turnsOf(row).padStart(5)}  ${formatAge(row.updatedAt, now)}`,
+      `${row.id.padEnd(idW)}  ${(title.length > titleW ? `${title.slice(0, titleW - 1)}…` : title).padEnd(titleW)}  ${turnsOf(row).padStart(5)}  ${ageOf(row).padEnd(ageW)}  ${formatLastRun(row.lastRun)}`,
     )
   }
   return lines.join("\n")
@@ -153,6 +180,9 @@ function transcriptLine(ev: SessionEvent): string | undefined {
     case "assistant/message": return ev.text
     case "tool/call": return `  ◆ ${ev.name} ${oneLine(ev.args)}`
     case "tool/result": return `  → ${oneLine(ev.output).slice(0, 200)}`
+    // M3 §3.4: the durable run-end record, in the transcript `show` prints.
+    case "operator/run-end":
+      return `── run end: exit ${ev.exitCode} · ${(ev.durationMs / 1000).toFixed(1)}s${ev.error !== undefined ? ` — ${ev.error}` : ""}`
     default: return undefined
   }
 }
