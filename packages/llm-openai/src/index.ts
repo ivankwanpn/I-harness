@@ -199,6 +199,17 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           receivedDone = true
           return []
         }
+        // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
+        // and can also send a bare `error` event. Both used to fall through to the
+        // empty default, so a failed response was indistinguishable from an empty
+        // one. `response.incomplete` is deliberately NOT handled here — that is
+        // truncation, i.e. phase Ⅱ's `truncated` bit.
+        if (t === "response.failed" || t === "error") {
+          const r = event.response as { error?: { message?: string; code?: string } } | undefined
+          const e = event.error as { message?: string } | undefined
+          const message = r?.error?.message ?? e?.message ?? "the provider reported a failed response"
+          return [{ type: "error", error: new Error(message) }]
+        }
         return []
       }
       const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {

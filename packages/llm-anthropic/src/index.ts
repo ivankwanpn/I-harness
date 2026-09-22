@@ -231,6 +231,14 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           }
           return []
         }
+        // M72 Ⅰ: Anthropic reports mid-stream failures as an SSE `error` event on
+        // an HTTP 200 stream. Without this arm the event fell into `return []`,
+        // the loop finished, and the caller got a clean `end` for a failed
+        // round-trip — the seam's own words: a failure must not read as success.
+        if (t === "error") {
+          const err = event.error as { type?: string; message?: string } | undefined
+          return [{ type: "error", error: new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`) }]
+        }
         return []
       }
       const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
