@@ -1,9 +1,18 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import { createConnectedClient, type ConnectedMcpClient, type McpConnectOptions } from "./client.ts"
 import { createMcpSupervisor, type McpServerStatusEvent, type McpSupervisor } from "./supervisor.ts"
 import { McpServerUnavailableError } from "./errors.ts"
 import { validateMcpConfig, type McpServerConfig } from "./types.ts"
+
+// W6 T6: ONE module-scope handle for this file's reports; the phase is
+// `mount` because both are the MCP seam's own reports about a server it is
+// mounting: a background reconnect/lost status, and a start failure kept soft
+// by failOnStartupError=false. With nothing installed the handle delegates to
+// console.warn verbatim (one argument), so unset mode is the pre-migration
+// bytes.
+const d = diagnosticsFor("mount")
 
 export interface McpMountHandle {
   serverName: string
@@ -42,7 +51,7 @@ const defaultStatusLogger = (ev: McpServerStatusEvent): void => {
     ]
       .filter(Boolean)
       .join("; ")
-    console.warn(`[i-harness] mcp-server(${ev.server}) ${ev.state}${detail ? `: ${detail}` : ""}`)
+    d.warn(`[i-harness] mcp-server(${ev.server}) ${ev.state}${detail ? `: ${detail}` : ""}`)
   }
 }
 
@@ -107,7 +116,7 @@ export async function mountMcpClient(
   } catch (err) {
     await unmount()
     if (config.failOnStartupError !== false) throw err
-    console.warn(`mcp-client(${config.serverName}): start failed (failOnStartupError=false), mounted empty — ${String(err)}`)
+    d.warn(`mcp-client(${config.serverName}): start failed (failOnStartupError=false), mounted empty — ${String(err)}`)
   }
 
   return handle

@@ -1,8 +1,16 @@
 import type { Tool, ToolExec, ToolRegistry } from "@i-harness/core-tools"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { publicToolName } from "./naming.ts"
 import type { ConnectedMcpClient, McpTool } from "./client.ts"
 import { MAX_CURSOR_LENGTH, MAX_TOOL_ITEMS, MAX_TOOL_PAGES, type McpServerConfig } from "./types.ts"
 import { McpCatalogError } from "./errors.ts"
+
+// W6 T6: ONE module-scope handle for this file's reports; the phase is
+// `mount` because each is the MCP seam's own report about mounting a server:
+// a tool the config blocks, a blocked/unlisted name, and a refused catalogue
+// rollback. With nothing installed the handle delegates to console.warn
+// verbatim (one argument), so unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 // Build one generation-local tool definition. Raw name sent on the wire; the
 // public name is the model-facing registry name (never parsed back).
@@ -96,7 +104,7 @@ export async function syncTools(
     for (const tool of response.tools) {
       listedNames.add(tool.name)
       if (blocked.has(tool.name)) {
-        console.warn(`mcp-client(${serverName}): tool "${tool.name}" is blocked by config — not registered`)
+        d.warn(`mcp-client(${serverName}): tool "${tool.name}" is blocked by config — not registered`)
         continue
       }
       const publicName = publicToolName(serverName, tool.name)
@@ -129,7 +137,7 @@ export async function syncTools(
   } while (cursor !== undefined)
   // M26-B1c: 未知清單警告（拼寫錯誤 fail-loud 但不 fail-close）。
   for (const name of [...blocked, ...direct]) {
-    if (!listedNames.has(name)) console.warn(`mcp-client(${serverName}): "${name}" is in blockedTools/directTools but the server never lists it`)
+    if (!listedNames.has(name)) d.warn(`mcp-client(${serverName}): "${name}" is in blockedTools/directTools but the server never lists it`)
   }
 
   // Phase 2: swap generations.
@@ -144,7 +152,7 @@ export async function syncTools(
   } catch (err) {
     // rollback: unregister everything registered so far in this generation
     for (const d of disposers.values()) d()
-    console.warn(`mcp-client(${serverName}): registry conflict, rolled back — ${String(err)}`)
+    d.warn(`mcp-client(${serverName}): registry conflict, rolled back — ${String(err)}`)
     if (previous.size === 0) {
       // Initial sync: fail closed per spec §3.4 — the conflict propagates so
       // the parent mount/agent rejects instead of silently running empty.
