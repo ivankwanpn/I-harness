@@ -249,11 +249,14 @@ export interface ModelsRouteView {
     card: ModelCard | undefined
     aliases: string[]
     protocol?: string
-    /** The value the USER wrote for this row (`models add/set --max-tokens`),
-     * merged off the settings row by the runtime. Absent when nobody set one.
-     * NOT the card's `maxOutputTokens`: the card is the model's documented
-     * ceiling, this is what a request will actually carry, and `renderModels`
-     * prints them as two separate facts. */
+    /** The ROW's own cap — written by the user (`models add/set --max-tokens`)
+     * or persisted by a refresh (`models refresh` merges the probed descriptor
+     * whole, maxTokens included — provider-runtime/src/index.ts:537). One
+     * settings field, so this listing cannot tell the two apart and does not
+     * claim to. Absent when the row carries none. NOT the card's
+     * `maxOutputTokens`: the card is the model's documented ceiling, this is
+     * what a request will actually carry, and `renderModels` prints them as two
+     * separate facts. */
     maxTokens?: number
   }>
 }
@@ -293,9 +296,11 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
       const numbers = model.card?.contextWindow !== undefined
         ? `${model.card.contextWindow}${model.card.maxOutputTokens !== undefined ? ` / ${model.card.maxOutputTokens}` : ""}`
         : "no card"
-      // M72 Ⅱ: the value the USER wrote, said separately from the card — the
-      // card is the model's documented ceiling, this is what a request will
-      // actually carry. Absent → nothing printed (an unset switch is off).
+      // M72 Ⅱ: the ROW's own cap, said separately from the card — the card is
+      // the model's documented ceiling, this is what a request will actually
+      // carry. User-written or refresh-persisted: one settings field, so the
+      // line cannot tell them apart and does not try. Absent → nothing printed
+      // (an unset switch is off).
       const setCap = model.maxTokens !== undefined ? `  set: ${model.maxTokens}` : ""
       // The ROW's protocol matters only where it DIVERGES from the route's: the
       // route line above already printed the inherited answer, and a row that

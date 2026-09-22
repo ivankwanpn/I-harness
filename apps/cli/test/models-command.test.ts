@@ -284,12 +284,14 @@ describe("runModelsCommand", () => {
     expect(overCap.join("\n")).toContain("409600")
   })
 
-  it("the read shows the user-written output cap next to the card, and nothing once it is cleared", async () => {
+  it("the read shows the row's own output cap next to the card, and nothing once it is cleared", async () => {
     // The two numbers are DIFFERENT facts, so the line says them separately:
     // the card is the model's documented ceiling (384000 for deepseek-flash),
-    // the row is what a request will actually carry. Before this the value was
-    // written by `add`/`set` and projected away by `viewOf`, so the only place
-    // it existed was the settings file.
+    // this row's own cap is what a request will actually carry. This fixture
+    // writes that cap with `add --max-tokens`; a refresh persists the same
+    // field (provider-runtime's `mergeDiscoveredModels`). Before this it was
+    // projected away by `viewOf`, so the only place it existed was the
+    // settings file.
     expect(await runModelsCommand(["models", "add", "gw", "deepseek-flash", "--max-tokens", "400k"])).toBe(0)
 
     const list = async (): Promise<string> => {

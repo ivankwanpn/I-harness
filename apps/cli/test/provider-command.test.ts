@@ -247,11 +247,12 @@ describe("renderProviderList", () => {
     expect(out).toContain("DeepSeek API docs")
   })
 
-  it("shows the user-written output cap on a model line, and nothing when the row set none", () => {
+  it("shows the row's own output cap on a model line, and nothing when the row set none", () => {
     // Same ruling as `models list` (the two listings must not disagree about
-    // the same row): the card is the model's documented ceiling, the row's
-    // maxTokens is what a request will actually carry — two facts, said
-    // separately. Absent ⇒ nothing printed: an unset switch is OFF, not 0.
+    // the same row): the card is the model's documented ceiling; the row's own
+    // cap — user-written or refresh-persisted — is what a request will actually
+    // carry, so the two are said separately. Absent ⇒ nothing printed: an unset
+    // switch is OFF, not 0.
     const out = renderProviderList(
       [{
         id: "deepseek1", displayName: "DeepSeek", protocol: "anthropic-messages",
