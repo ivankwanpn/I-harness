@@ -67,6 +67,18 @@ import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness
 import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
 import { createApprovalEscalationApprover, denialFor, type ApprovalPrompt } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T6: ONE module-scope handle for the composition root's own reports, and
+// the phase is `mount` for every one of them — this file IS the assembly seam:
+// host misconfiguration (shellBackgroundAfterMs, subagentStaleAfterMs), the
+// rewind store's binding and pending-turn recovery, the plugin MCP mount's
+// per-server containment, the catalogue refresh a mounted server asks for at a
+// step boundary, the plugin-server mount failure, and the compaction-disabled
+// notices. With nothing installed the handle delegates to console.warn verbatim
+// (one argument) — unset mode is the pre-migration bytes — and it re-reads the
+// installed instance per call, so a host that installs later is still reached.
+const d = diagnosticsFor("mount")
 
 export type ModelPolicy = "required" | "test-mock"
 
@@ -469,11 +481,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // `!(x > 0)` on purpose: it catches 0 AND negative AND NaN (a NaN threshold
     // makes setTimeout fire immediately), all of which promote every foreground
     // call the moment it starts.
-    console.warn(
+    d.warn(
       `[i-harness] shellBackgroundAfterMs is ${shellBackgroundAfterMs} (not a positive number), so EVERY foreground bash/pwsh call is promoted to a background job as soon as it starts: the model gets a job id where it expected a result. Set a positive threshold well under shellTimeoutMs (${shellTimeoutMs}ms).`,
     )
   } else if (shellBackgroundAfterMs >= shellTimeoutMs) {
-    console.warn(
+    d.warn(
       `[i-harness] shellBackgroundAfterMs (${shellBackgroundAfterMs}ms) is not under shellTimeoutMs (${shellTimeoutMs}ms), so foreground promotion will NEVER fire: a command that reaches the deadline is still aborted and its work is lost — the pre-W10 death. Lower shellBackgroundAfterMs (default 30_000) or raise shellTimeoutMs (default 120_000); a host that sets the pair this way on purpose has turned the escape hatch off.`,
     )
   }
@@ -492,11 +504,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // can be told; a comment protects only readers.
   const subagentStaleAfterMs = opts.subagentStaleAfterMs ?? 600_000
   if (!(subagentStaleAfterMs > 0)) {
-    console.warn(
+    d.warn(
       `[i-harness] subagentStaleAfterMs is ${subagentStaleAfterMs} (not a positive number), so EVERY running sub-agent is past the staleness threshold as soon as its run starts: the runtime-context "subagents" section stops being a signal. Set a positive threshold — the default is 600_000 (10 min).`,
     )
   } else if (!Number.isFinite(subagentStaleAfterMs)) {
-    console.warn(
+    d.warn(
       `[i-harness] subagentStaleAfterMs is ${subagentStaleAfterMs} (not finite), so no sub-agent is EVER past it: the runtime-context "subagents" section never renders, and its silence is indistinguishable from "no agent needs attention". Use a finite threshold — the default is 600_000 (10 min).`,
     )
   }
@@ -642,7 +654,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       await store.assertWorkspace(opts.workspace)
     } catch (err) {
       mismatched = err instanceof RewindError && err.code === "REWIND_WORKSPACE_MISMATCH"
-      console.warn(`[rewind] ${err instanceof Error ? err.message : String(err)}`)
+      d.warn(`[rewind] ${err instanceof Error ? err.message : String(err)}`)
     }
     if (!mismatched) {
       // M54 G2: a turn that crashed mid-flight becomes a durable orphan
@@ -652,12 +664,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       try {
         const recovered = await store.recoverPending()
         if (recovered !== null) {
-          console.warn(
+          d.warn(
             `[rewind] recovered an unfinished turn (anchor seq ${recovered.anchorSeq}, ${recovered.entries.length} file(s)) as an orphan — plan() reports it`,
           )
         }
       } catch (err) {
-        console.warn(`[rewind] pending-turn recovery failed: ${err instanceof Error ? err.message : String(err)}`)
+        d.warn(`[rewind] pending-turn recovery failed: ${err instanceof Error ? err.message : String(err)}`)
       }
       rewindStore = store
       rewindRecorder = new RewindRecorder({ store, workspace: opts.workspace })
@@ -797,7 +809,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // (a crash in between is recognised by recoverPending via the point).
           await recorder.commit(committed.anchorSeq)
         }).catch((err) => {
-          console.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`)
+          d.warn(`[rewind] point append failed: ${err instanceof Error ? err.message : String(err)}`)
         })
       }
     })
@@ -956,7 +968,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         currentState: () => mcpStates.get(cfg.serverName),
         ...(cfg.auth.onAuthRefreshFailed !== undefined ? { hostHandler: cfg.auth.onAuthRefreshFailed } : {}),
         onHostError: (err) => {
-          console.warn(
+          d.warn(
             `[i-harness] mcp-server(${cfg.serverName}) OAuth: host onAuthRefreshFailed handler threw (${err instanceof Error ? err.message : String(err)}); visibility event still emitted`,
           )
         },
@@ -986,7 +998,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         pluginMcpResults.set(cfg.serverName, true)
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error)
-        console.warn(`[i-harness] plugin MCP server "${cfg.serverName}" failed to mount (skipped for this agent): ${reason}`)
+        d.warn(`[i-harness] plugin MCP server "${cfg.serverName}" failed to mount (skipped for this agent): ${reason}`)
         pluginMcpResults.set(cfg.serverName, false)
       }
     }
@@ -1017,7 +1029,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         try {
           await mcpHandle.refreshCatalog()
         } catch (err) {
-          console.warn(
+          d.warn(
             `[i-harness] mcp-server(${mcpHandle.serverName}) catalogue refresh failed: ${err instanceof Error ? err.message : String(err)}`,
           )
         }
@@ -1206,7 +1218,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           ...(opts.compact.overheadTokens === undefined && overheadEstimate !== undefined ? { overheadTokens: overheadEstimate } : {}),
         }
       } else {
-        console.warn(
+        d.warn(
           "[i-harness] compaction was requested but no context window could be resolved, so auto-compaction is DISABLED for this session. " +
             "Pressure will not trigger a summary; once the budget is exhausted the turn will be refused with prompt_too_long instead. " +
             "Supply `contextWindow`, put one in the compact config, or use a model binding that carries one.",

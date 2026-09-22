@@ -28,6 +28,15 @@ import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
 import type { AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T6: ONE module-scope handle for this file's single report. The phase is
+// `session`: the message is about THIS session's resolved model binding (a
+// window-less binding disables auto-compaction despite the requested config),
+// and the service is the per-session registry that owns the assembly
+// lifecycle. With nothing installed the handle delegates to console.warn
+// verbatim (one argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("session")
 import {
   createSessionAssembly,
   ModelUnavailableError,
@@ -329,7 +338,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // compaction and will otherwise assume it is running.
           const compact = binding.contextWindow !== undefined ? opts.compact : undefined
           if (opts.compact !== undefined && binding.contextWindow === undefined) {
-            console.warn(
+            d.warn(
               "[i-harness] the resolved model binding carries no contextWindow, so auto-compaction is DISABLED for this session despite the requested config. " +
                 "The binding is authoritative — a window from the config is not used to override its absence.",
             )
