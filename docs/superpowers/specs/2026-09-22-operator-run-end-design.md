@@ -92,6 +92,7 @@ W6 的 bootstrap 每次宿主入口 mint 一個 `runId`，**診斷 JSONL 的每�
 2. **SIGKILL／崩潰不產生它**——行程已死；那是 spec §3.6（崩潰紀錄與下次開啟時回報）的另一半，不在本單元。
 3. **只涵蓋 CLI 的 `run`**（見 §3）。
 4. **成功與失敗都寫**（`exitCode` 0 也寫）——那讓這一欄同時是**時長遙測**；成本是每次執行多一筆事件，這是有意的。
+5. **一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**——成功站點在 flush **之前**寫下 `exit 0`（§1.2 的站點 ②，`run.ts:783`），而 flush 拒絕後落進的失敗 catch 再寫一筆 `exit 1`（站點 ③，`run.ts:833`）：write-behind 保留失敗的批次，`close()` 再 best-effort 排空 ⇒ **兩筆都可能落地**。**讀取端的契約是「最後一筆為準」**——`listStoredSessions` 的 `.at(-1)`（`apps/cli/src/sessions.ts:96`），由 T3 的兩筆案例釘住（`apps/cli/test/sessions.test.ts:274`：同一 `runId` 的 `exit 0` 與 `exit 1` ⇒ 那一列讀到 `failed exit 1 0.9s`）。**這是 T2 複審的 Important 發現**（標記 plan-mandated），裁定見 ledger **R7**：**不**把站點 ② 移到 flush 之後——把紀錄押在一次「失敗會被吞掉」的排空上，代價是**常見**的成功路徑會丟紀錄；重複則在讀取端自我修正。
 
 ## 5. 殘餘（寫出來，不是藏起來）
 
