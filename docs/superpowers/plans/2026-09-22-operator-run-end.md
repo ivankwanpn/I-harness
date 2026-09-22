@@ -480,6 +480,9 @@ Expected: `formatLastRun is not a function`／欄位不存在。
         const { session } = await coordinator.load(id)
         row.turnCount = session.events.filter((ev) => ev.type === "turn/start").length
         // M3 §3.4: the same full-log read the turn count already pays for.
+        // LAST one wins: a run whose success `flush` rejected carries TWO records
+        // (exit 0 appended before the flush, exit 1 appended by the failure catch)
+        // and the later one is the exit that actually happened. Keep `.at(-1)`.
         const last = session.events.filter((ev) => ev.type === "operator/run-end").at(-1)
         if (last !== undefined) {
           row.lastRun = { exitCode: last.exitCode, durationMs: last.durationMs, ...(last.error !== undefined ? { error: last.error } : {}) }
