@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -112,7 +112,12 @@ export function parseSSE(text: string): Record<string, unknown>[] {
     .filter((chunk) => chunk.includes("data:"))
     .map((chunk) => {
       const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
-      return JSON.parse(dataLine.slice(5).trim()) as Record<string, unknown>
+      const data = dataLine.slice(5).trim()
+      try {
+        return JSON.parse(data) as Record<string, unknown>
+      } catch (err) {
+        throw new SSEParseError(data)
+      }
     })
 }
 
@@ -231,6 +236,14 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           }
           return []
         }
+        // M72 Ⅰ: Anthropic reports mid-stream failures as an SSE `error` event on
+        // an HTTP 200 stream. Without this arm the event fell into `return []`,
+        // the loop finished, and the caller got a clean `end` for a failed
+        // round-trip — the seam's own words: a failure must not read as success.
+        if (t === "error") {
+          const err = event.error as { type?: string; message?: string } | undefined
+          return [{ type: "error", error: new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`) }]
+        }
         return []
       }
       const emitEvents = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
@@ -263,6 +276,12 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
             if (yield* emitEvents(handleEvent(event))) return
           }
         }
+      } catch (err) {
+        // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
+        // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
+        return
       } finally {
         reader.releaseLock()
       }

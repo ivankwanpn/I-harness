@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createGeminiClient, translateReasoning } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
@@ -196,6 +196,51 @@ describe("llm-gemini protocol", () => {
     await it.next()
     expect(fetchMock.mock.calls[0]![0]).toContain("https://generativelanguage.googleapis.com")
     await it.return?.()
+  })
+
+  it("M72 Ⅰ: a corrupt chunk is an error event, not an exception out of the generator", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("data: {not json\n\n", { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The discrimination is the SHAPE of the failure: today the SyntaxError escapes
+    // out of the for-await and NO event arrives; after the fix exactly one `error`
+    // arrives and the stream ends there. Whether a VALID PREFIX that preceded the
+    // bad chunk was already yielded is deliberately NOT asserted: `new Response(string)`
+    // may hand the whole body over as ONE chunk, so pinning that would be a test of
+    // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("not json")
+  })
+
+  it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {
+    // The caller's OWN abort is not a provider failure (unlike the corrupt chunk
+    // above): it keeps today's behaviour — the for-await throws — and must NOT
+    // arrive as an `error` event that reads as a fault. The body parks the read and
+    // rejects it on abort, which is what a real fetch does to a parked body read.
+    const controller = new AbortController()
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal
+      const body = new ReadableStream({
+        start(stream) {
+          signal.addEventListener("abort", () => stream.error(Object.assign(new Error("The operation was aborted"), { name: "AbortError" })))
+        },
+      })
+      return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })
+    })
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    const drain = async (): Promise<void> => {
+      for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", signal: controller.signal } as LLMRequest)) events.push(ev)
+    }
+    const pending = drain()
+    await new Promise((resolve) => setTimeout(resolve, 0)) // let the body read park
+    controller.abort()
+    await expect(pending).rejects.toThrow("aborted")
+    // No event at all — an aborted request is not a provider failure. Deleting the
+    // read loop's abort guard turns the rejection above AND this line red.
+    expect(events).toEqual([])
   })
 })
 

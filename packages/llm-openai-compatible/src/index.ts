@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAICompatibleConfig {
   apiKey: string
@@ -63,7 +63,11 @@ export function parseSSE(text: string): Record<string, unknown>[] {
       const dataLine = chunk.split("\n").find((l) => l.startsWith("data:"))!
       const data = dataLine.slice(5).trim()
       if (data === "[DONE]") return { type: "[DONE]" }
-      return JSON.parse(data) as Record<string, unknown>
+      try {
+        return JSON.parse(data) as Record<string, unknown>
+      } catch (err) {
+        throw new SSEParseError(data)
+      }
     })
 }
 
@@ -97,7 +101,16 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       const messages = config.inputModalities?.includes("image") ?? false ? request.messages : projectImagesForTextModel(request.messages)
       const body = {
         model: config.model,
-        messages: messages.map(toWireMessage),
+        // M72 Ⅰ: the system prompt is the first MESSAGE. The old code sent no
+        // system content at all — chat/completions has no top-level `system`
+        // FIELD, but the role IS the mapping, and dropping it meant every
+        // request to a compatible gateway ran without its system prompt.
+        // Blank → no message: same rule as llm-gemini/llm-bedrock, and an
+        // empty system turn is pure overhead.
+        messages: [
+          ...(request.systemPrompt.trim() !== "" ? [{ role: "system", content: request.systemPrompt }] : []),
+          ...messages.map(toWireMessage),
+        ],
         tools: request.tools.map((t) => ({
           type: "function",
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
@@ -235,6 +248,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             if (yield* emit([{ type: "error", error: new Error(`openai-compatible malformed tool args: ${pending.argsBuffer}`) }])) return
           }
         }
+      } catch (err) {
+        // M72 Ⅰ: a corrupt chunk is a provider failure → the seam's error channel.
+        // Abort is NOT: an aborted signal keeps today's behaviour (a throw).
+        if (request.signal?.aborted === true) throw err
+        yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
+        return
       } finally {
         reader.releaseLock()
       }
