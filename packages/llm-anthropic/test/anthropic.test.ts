@@ -407,3 +407,24 @@ describe("M5 T2 provider usage (anthropic)", () => {
     expect(seen).toEqual([])
   })
 })
+
+// M72 Ⅰ. Anthropic reports a mid-stream failure as an SSE `error` event on an
+// HTTP 200 stream. `handleEvent` had no arm for it, so the event fell into
+// `return []`, the loop drained, and the caller got a clean `end` — a failed
+// round-trip reading as an empty success.
+describe("M72 Ⅰ in-stream provider failures (anthropic)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅰ: an in-stream error event is surfaced, not swallowed", async () => {
+    const sse =
+      `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("Overloaded")
+  })
+})

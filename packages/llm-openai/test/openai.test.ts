@@ -335,3 +335,24 @@ describe("M32 reasoning effort (openai-family Responses)", () => {
     expect((JSON.parse(init2.body as string) as Record<string, unknown>).reasoning).toBeUndefined()
   })
 })
+
+// M72 Ⅰ. The Responses API signals a failure on the stream itself
+// (`response.failed`) and can also send a bare `error` event — both on an HTTP
+// 200. Neither had an arm in `handleEvent`, so both fell through to `return []`
+// and the caller got a clean `end` for a failed response.
+describe("M72 Ⅰ in-stream provider failures (openai)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅰ: a failed Responses stream is surfaced, not swallowed", async () => {
+    const sse =
+      `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { error: { code: "server_error", message: "boom" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("boom")
+  })
+})
