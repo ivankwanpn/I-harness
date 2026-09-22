@@ -261,9 +261,15 @@ export function listModelCatalogFamily(family: string): ModelCatalogRow[] {
 // the OUTPUT-LENGTH cap (same semantics as the card's maxOutputTokens — M31
 // G1's maxTokens→maxContextWindow mapping is REMOVED; maxContextWindow keeps
 // its M15 native meaning). The card arm is value-only (capabilities — display/
-// validation); it never provides a request default. A maxOutputTokens-only
-// card still folds to undefined here (fail-closed consumers gate on
-// contextWindow; callers needing only the card use resolveModelCard).
+// validation); it never provides a request default. M72 Ⅱ (R5): the result is
+// undefined only when NEITHER number resolved. Gating on the WINDOW alone was
+// wrong on the chain's own terms — the user's setting is the FIRST source
+// (spec §1.1) — and it silently dropped a row's `maxTokens` wherever no card
+// and no window existed (every `openai`-family route is exactly that route).
+// A resolution carrying only `maxOutputTokens` is therefore returned with
+// `contextWindow` absent; window-only readers are unaffected — they read
+// `.contextWindow`, absent in exactly the cases it always was — and callers
+// needing only the card still use resolveModelCard.
 export interface EffectiveContextInput {
   profile: ProviderProfile
   modelId: string
@@ -298,7 +304,7 @@ export function resolveEffectiveModelContext(input: EffectiveContextInput): Effe
   const user = input.userModel
   if (user?.contextWindow !== undefined) merged.contextWindow = user.contextWindow
   if (user?.maxTokens !== undefined) merged.maxOutputTokens = user.maxTokens
-  return merged.contextWindow === undefined ? undefined : merged
+  return merged.contextWindow === undefined && merged.maxOutputTokens === undefined ? undefined : merged
 }
 
 // ── Task 3 (models plan D3): the registry IS the directory ───────────────────
