@@ -400,4 +400,35 @@ describe("M72 Ⅰ in-stream provider failures (openai)", () => {
     expect(events.map((e) => e.type)).toEqual(["error"])
     expect((events[0] as { error: Error }).error.message).toContain("boom")
   })
+
+  // The canonical `error` event on the Responses wire is FLAT:
+  // {"type":"error","code":…,"message":…,"param":…,"sequence_number":…}. The
+  // first cut of the arm above read only `event.error?.message`, so this shape
+  // fell to the generic fallback and the `code` — declared on the cast, never
+  // read — was lost; that also costs `retryErrorCode` the structured
+  // classification its regexes need (rate_limit_exceeded → RATE_LIMIT).
+  it("M72 Ⅰ: the flat `error` event is read from its top-level code/message", async () => {
+    const sse =
+      `data: ${JSON.stringify({ type: "error", code: "rate_limit_exceeded", message: "Rate limit reached", param: null, sequence_number: 3 })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    const message = (events[0] as { error: Error }).error.message
+    expect(message).toContain("Rate limit reached")
+    // `${code}: ${text}` — without the code the classifier sees no rate limit.
+    expect(message).toContain("rate_limit_exceeded")
+  })
+
+  // …while the older nested shape keeps working: both occur.
+  it("M72 Ⅰ: a bare `error` event carrying only the nested error.message still surfaces", async () => {
+    const sse = `data: ${JSON.stringify({ type: "error", error: { message: "nested only" } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["error"])
+    expect((events[0] as { error: Error }).error.message).toContain("nested only")
+  })
 })
