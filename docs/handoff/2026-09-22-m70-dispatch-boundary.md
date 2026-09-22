@@ -52,7 +52,7 @@ git log --oneline -8 m70 && git status -sb
 
 | # | 裁定 | 若錯的代價 |
 |---|---|---|
-| R15 | **Q8 的意圖以「讓標記不可遺失」實作，不以「重讀缺席」實作。** owner 答「保守」（舊日誌不得讀成 benign）；量測顯示缺席之所以有歧義，是因為**標記會丟**（200 ms 窗、無 flush），所以把標記做成不可遺失（checkpoint、fail-closed）。**字面的「全 log 無標記 ⇒ unknown」park 成觸發項** —— 理由是**新的**日誌可以合法地整份沒有標記（一個 session 的唯一呼叫在 `prepare` 就被拒，例如被拒的批准），今天讀成 `not-dispatched` **是對的**，全 log 規則會把它標成錯的；沒有任何參考實作把缺席讀成 unknown。 | 觸發項生效前，若真的復原到一份 pre-M4 日誌，它 pending 的呼叫仍讀成 benign；觸發項就是**接住它的東西**，而 checkpoint 把等價的洞對「此後寫下的每一份日誌」關掉 |
+| R15 | **Q8 的意圖以「讓標記不可遺失」實作，不以「重讀缺席」實作。** owner 答「保守」（舊日誌不得讀成 benign）；量測顯示缺席之所以有歧義，是因為**標記會丟**（200 ms 窗、無 flush），所以把標記做成不可遺失（checkpoint、fail-closed）。**字面的「全 log 無標記 ⇒ unknown」park 成觸發項** —— 理由是**新的**日誌可以合法地整份沒有標記（一個 session 的唯一呼叫在 `prepare` 就被拒，例如被拒的批准），今天讀成 `not-dispatched` **是對的**，全 log 規則會把它標成錯的；**我們讀過的**參考實作沒有一個把缺席讀成 unknown（耐久檢查點的做法本身取自 dsh 的 `session-checkpoint-policy`，見 `packages/core-agent/src/execute-tool-calls.ts:255`；opencode-fork 的 kernel 見 design spec §6）。 | 觸發項生效前，若真的復原到一份 pre-M4 日誌，它 pending 的呼叫仍讀成 benign；觸發項就是**接住它的東西**，而 checkpoint 把等價的洞對**有縫的宿主**此後寫下的日誌關掉 |
 | R16 | **controller 的合流預測被實作方的量測推翻，照實記錄、不掩蓋**（見 §2）。 | 核准是照「一批一次排空」的概念給的，實際是**每呼叫一次**；絕對值小（整批 62 ms），但 owner 若要重讀那個核准，重讀的是這個數字。替代設計（批次層 checkpoint：先 append 全部標記再一次排空）是設計變更，刻意出界 |
 | R17 | **被拒的 checkpoint 讓 turn 失敗**（呼叫的裁決照樣寫下、store 錯誤再往外丟）—— 這是本檔自己的規則（M5 T4 R5：「失去的耐久寫入不得變成靜默續行的 turn」），而 `run.ts` 的失敗站點本來就列了「a durable flush that rejected」（`apps/cli/src/run.ts:835`）。 | 一次「以前會繼續、現在會失敗」的 run；失敗是響的，且落在既有的 exit-1 耐久路徑上 |
 
