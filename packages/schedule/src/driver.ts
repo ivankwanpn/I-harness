@@ -24,6 +24,7 @@
  */
 
 import type { SessionEvent } from "@i-harness/core-session"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import {
   decideDue,
   foldScheduleEvents,
@@ -97,10 +98,24 @@ function dispatchEventFor(record: ScheduleRecord, acceptedAt: number): SessionEv
   return { type: "schedule/change", version: 1, operation: "dispatch", id: record.id, acceptedAt: new Date(acceptedAt).toISOString() }
 }
 
+// W6 T6: the per-session log-corruption reporter's default (the driver is the
+// session-side delivery loop and reports a SESSION's stream, hence phase
+// `session`). The body reaches the ambient instance when a host installed one
+// and is the console call it always was when none is: same function, same
+// single verbatim argument. The option's signature is untouched.
+function defaultLogWarn(message: string): void {
+  const d = currentDiagnostics()
+  if (d === undefined) {
+    console.warn(`[schedule] ${message}`)
+    return
+  }
+  d.child("session").warn(`[schedule] ${message}`)
+}
+
 export function createScheduleDriver(opts: ScheduleDriverOptions): ScheduleDriver {
   const nowFn = opts.now ?? Date.now
   const pollMs = opts.pollMs ?? 30_000
-  const logWarn = opts.logWarn ?? ((message: string) => console.warn(`[schedule] ${message}`))
+  const logWarn = opts.logWarn ?? defaultLogWarn
   let timer: NodeJS.Timeout | null = null
   let running = false
 
