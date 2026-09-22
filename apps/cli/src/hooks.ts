@@ -155,7 +155,10 @@ export async function runHooksCommand(args: string[]): Promise<number> {
     return 1
   }
   if (parsed.subcommand === "help") {
-    d.error(HOOKS_USAGE)
+    // Named exception (T5/R11): an exit-0 help print on the stderr channel.
+    // This API cannot express a non-`error` level over that channel, and a
+    // record calling a help request an error would be the sentence lying.
+    console.error(HOOKS_USAGE)
     return 0
   }
   if (parsed.subcommand === "list") {

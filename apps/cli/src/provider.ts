@@ -248,7 +248,10 @@ export async function runProviderCommand(args: string[], options: ProviderComman
     return 1
   }
   if (parsed.subcommand === "help") {
-    d.error(PROVIDER_USAGE)
+    // Named exception (T5/R11): an exit-0 help print on the stderr channel.
+    // This API cannot express a non-`error` level over that channel, and a
+    // record calling a help request an error would be the sentence lying.
+    console.error(PROVIDER_USAGE)
     return 0
   }
 
