@@ -459,15 +459,42 @@ describe("sessions — the durable run-end record (M3 §3.4)", () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it("two records for one run: the LAST one is what the row shows", async () => {
+    // The success path appends exit 0 BEFORE the durable flush; when that flush
+    // rejects, the run-failure catch appends exit 1, and the write-behind retains
+    // the failed batch so close() drains both. The reader's contract is
+    // **last wins** — the later record is the exit that actually happened.
+    const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-twice-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    try {
+      const { id } = await coordinator.create({})
+      const log = createSession()
+      append(log, { type: "turn/start" })
+      append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 0, durationMs: 800, phase: "run" })
+      append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 1, durationMs: 900, phase: "run", error: "durable write failed" })
+      coordinator.enqueue(id, log.events)
+      await coordinator.flush(id)
+
+      const rows = await listStoredSessions(coordinator, dir)
+      expect(rows[0]!.lastRun).toMatchObject({ exitCode: 1, durationMs: 900 })
+      expect(formatLastRun(rows[0]!.lastRun)).toBe("failed exit 1 0.9s")
+      const { session } = await coordinator.load(id)
+      expect(renderTranscript(session, 20)).toContain("run end: exit 1 · 0.9s — durable write failed")
+    } finally {
+      await coordinator.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 ```
 
-（`formatLastRun` 的契約：`undefined` ⇒ `"—"`；否則 `` `${exitCode === 0 ? "ok" : `failed exit ${exitCode}`} ${(durationMs / 1000).toFixed(1)}s` ``。測試檔需要的 import：`listStoredSessions`、`renderSessionTable`、`renderTranscript` 自 `../src/sessions.ts`，`createSessionCoordinator`／`createJsonlBackend`／`createSession`／`append` 照 Task 1 測試的形狀。）
+（`formatLastRun` 的契約：`undefined` ⇒ `"—"`；否則 `` `${exitCode === 0 ? "ok" : `failed exit ${exitCode}`} ${(durationMs / 1000).toFixed(1)}s` ``。測試檔需要的 import：`listStoredSessions`、`renderSessionTable`、`renderTranscript`、`formatLastRun` 自 `../src/sessions.ts`，`createSessionCoordinator`／`createJsonlBackend`／`createSession`／`append` 照 Task 1 測試的形狀。）
 
 - [ ] **Step 2: 跑它，看到 RED**
 
 Run: `pnpm --filter @i-harness/cli test sessions`
-Expected: `formatLastRun is not a function`／欄位不存在。
+Expected: **兩條都紅**——`formatLastRun is not a function`／`lastRun` 欄位不存在，且表頭沒有 `LAST RUN`。
 
 - [ ] **Step 3: 實作**
 
@@ -517,12 +544,14 @@ git commit -m "feat(cli): sessions list and show read the durable run-end — a 
 **Files:**
 - Modify: `docs/handoff/2026-09-20-queued-work.md`（C1 列）
 - Modify: `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md`（§3.4 加 dated 落地註記）
+- Modify: `docs/superpowers/specs/2026-09-22-operator-run-end-design.md`（§4 加一條新的「不保證」）
 
 - [ ] **Step 1: `pnpm verify:all`**（母體 67；五步全綠；`--gate` 不得新增 row）——若 suite 紅在負載 flake，隔離跑該套件、兩個讀數都記。
 
 - [ ] **Step 2: 記錄**
 1. queue doc `:950` 的 C1 列 → **✅ 完成**，附提交區間與一句「§3.4 落地」＋它現在的消費面（`sessions list`／`show`）。
-2. M3 spec `:197-213` 的 §3.4 旁加 dated 註記：實作落點與**三處與原稿不同**的量測事實（生產者是三站不是漏斗；完成定義的「失敗那一行」取在 `sessions show`；**紀錄只存在於 store-backed 的執行**——協調器只在 `--session-dir` 下接線，`apps/cli/src/index.ts:345-376`，所以無 store 的 `i-harness run` 一律不留紀錄，這比 §4.1 原稿的「session 存在之前就死」更寬）。行號寫入前重量。
+2b. **本單元自己的 spec**（`docs/superpowers/specs/2026-09-22-operator-run-end-design.md`）§4「它不保證什麼」加第 5 條：**一次 durable 寫入失敗的 run 可能有兩筆 `operator/run-end`**（成功站點在 flush 前寫的 `exit 0`，與失敗 catch 寫的 `exit 1`；write-behind 保留失敗批次，`close()` best-effort 排空，兩筆都可能落地）。**讀取端的契約是最後一筆為準**——`listStoredSessions` 的 `.at(-1)`，Task 3 的測試釘住它。這條是 T2 複審的 Important 發現（labeled plan-mandated），裁定寫在 ledger R7。
+3. M3 spec `:197-213` 的 §3.4 旁加 dated 註記：實作落點與**三處與原稿不同**的量測事實（生產者是三站不是漏斗；完成定義的「失敗那一行」取在 `sessions show`；**紀錄只存在於 store-backed 的執行**——協調器只在 `--session-dir` 下接線，`apps/cli/src/index.ts:345-376`，所以無 store 的 `i-harness run` 一律不留紀錄，這比 §4.1 原稿的「session 存在之前就死」更寬）。行號寫入前重量。
 
 - [ ] **Step 3: Commit**
 
