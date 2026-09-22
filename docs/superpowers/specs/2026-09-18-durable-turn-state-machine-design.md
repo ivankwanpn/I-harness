@@ -145,6 +145,31 @@ turn/start
 **那正是今天的行為**，所以是相容的 —— 但它**是一個選擇，不是一個遺漏**：舊日誌沒有記錄派送，
 所以「不知道」是它唯一誠實的讀數。**要不要對舊日誌保守（一律 `outcome-unknown`）是一個產品決定**（§5 Q8）。
 
+> **【2026-09-22，M70：Q8 有答案了，而它落地的形狀是「讓標記不可遺失」，不是「重讀缺席」。】**
+>
+> **owner 的答案（Q8）＝保守** —— 舊日誌不得被讀成 benign。**M70 讀的是這個答案的意圖**：
+> 「一個沒有 `tool/dispatch` 的 `tool/call` 不可以被當成『本體沒跑』」，而**缺席之所以有歧義，
+> 是因為標記會丟**。量到的事實：標記 append 之後**沒有 flush、沒有 await**，而 write-behind
+> 以固定 **200 ms** 截止（`packages/session-persistence/src/index.ts:257`；CLI 不覆寫），
+> 所以在窗裡被 SIGKILL，標記隨批次消失 ——
+> **而復原讀的正是標記本身**（`packages/session-persistence/src/repair.ts:123-134`）。
+>
+> **⇒ M70 的處置是 checkpoint：把標記做成不可遺失。** `tool/dispatch` append 之後、
+> `tools.dispatch` 之前 await 宿主的排空（`packages/core-agent/src/execute-tool-calls.ts:249-305`），
+> **fail-closed** —— 排空失敗 ⇒ 本體不跑，該呼叫的裁決就是既有的 `TOOL_ABORTED_BEFORE_DISPATCH`，
+> 而 store 的錯誤往外丟 ⇒ turn 失敗。縫由組裝點提供
+> （`packages/session-executor/src/assembly.ts:1263-1265`；其餘兩個見 §5 的註）。
+>
+> **後果（這一節的主張因此變強）**：**從現在起寫下的每一份日誌，「沒有標記」誠實地等於「從未派送」**
+> —— 對新日誌，`not-dispatched` 不再是一個選擇，而是被記錄下來的（或由 checkpoint 保證過的）事實。
+>
+> **為什麼不採字面讀法（全 log 無標記 ⇒ 一律 unknown）**：一個**新的**日誌可以合法地整份沒有標記 ——
+> 一個 session 的唯一呼叫在 `prepare` 就被擋下（例如被拒的批准），今天讀成 `not-dispatched`
+> 是**對的**；一條全 log 的規則會把那筆正確的讀數標成錯的。**⇒ 字面重讀是觸發項**：
+> **第一次真的復原到 pre-M4 日誌時做**（母體**已封閉** —— 不可能再產生新的 pre-boundary 日誌；
+> **這台機器上是空的**：2026-09-22 實測 `~/.i-harness/sessions` 不存在、`~/.i-harness` 下 **0** 個 `.jsonl`）。
+> 記錄：`docs/handoff/2026-09-22-m70-dispatch-boundary.md`。
+
 ---
 
 ## 4. Red-first 測試
@@ -171,6 +196,13 @@ turn/start
   而那個狀態在今天的介面上**沒有地方顯示** —— 那是前端的事，不是 M4 的。
 - **不保證 `tool/dispatch` 一定寫得進去。** 它走同一個 write-behind，所以在它自己的 200ms 窗裡
   被殺，就等於它沒被寫。**這是損失契約的必然結果**，不是缺陷：日誌只保證它寫下的事。
+  > **▶ 2026-09-22（M70）：這一條的缺口被縮到兩個沒有縫的地方。** 出貨的宿主現在在**本體之前**
+  > await 排空（checkpoint，fail-closed：`packages/core-agent/src/execute-tool-calls.ts:249-305`；
+  > 縫在 `packages/session-executor/src/assembly.ts:1263-1265`、`packages/subagent/src/child.ts:313-314`
+  > 與 `packages/subagent/src/tools.ts:661-663`）。**仍然成立的兩種**：(a) 不提供 `flush` 的 deps
+  > —— 縫是選配的，缺席＝pre-M70 位元；(b) 一個已命名的殘餘 —— 復原後載入失敗的子代理 entry
+  > 留著 `createSessionFromEmpty()` 的替身（沒有東西把它的 append 鏡像出去）⇒ checkpoint 是 no-op，
+  > 實測 **0** 筆後端寫入，而該 entry 已以 `error` 現形。
 - **不動 opencode-fork 那個 kernel 的任何結構**（§6）。
 
 ---
@@ -189,7 +221,10 @@ turn/start
 
 ## 7. 這份設計沒有解決的
 
-- **§5 Q8**（舊日誌要不要保守）—— 產品決定。
+- ~~**§5 Q8**（舊日誌要不要保守）—— 產品決定。~~ **✅ 2026-09-22 已答（owner：保守），並於同日由 M70 落地** ——
+  以「讓 `tool/dispatch` 不可遺失」（checkpoint：本體之前 flush、fail-closed）實作 Q8 的**意圖**，
+  而不是把「標記缺席」重讀成 unknown；**字面重讀是觸發項**（第一次真的復原到 pre-M4 日誌時做，
+  見 §3.4 的 2026-09-22 註）。記錄：`docs/handoff/2026-09-22-m70-dispatch-boundary.md`。
 - **`outcome-unknown` 的使用者介面** —— 前端。
 - **跨行程的擁有權** —— 見 §6，我們沒有那個問題。
 - **`subagent/src/persist.ts` 的 `running → error`**（§1.3）**是否同一批改**。它是同一個形狀，
