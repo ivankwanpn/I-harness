@@ -28,6 +28,14 @@ export type { DiagnosticPhase, DiagnosticRecord, Level, RedactedError, Redactor 
 // — and with the exports map exposing only ".", this entry is the only way in.
 export { fromError } from "./record.ts"
 
+// The redactor's factory is a value and the type its option is spelled with is a
+// type; both reach the host through this entry for the same reason, and both are
+// named in the two statements below and nowhere else in this file. That is
+// deliberate: to the reachability gate a mention in a comment is a use, so a
+// comment naming them would hide their rows (T1 and T2 each measured a case).
+export { createRedactor } from "./redactor.ts"
+export type { Rule } from "./redactor.ts"
+
 /** What a call site holds. `child(phase)` binds the phase once, so the site does
  *  not spell it at every call.
  *
