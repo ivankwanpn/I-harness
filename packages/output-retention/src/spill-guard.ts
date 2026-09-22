@@ -1,6 +1,7 @@
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { Plugin, PluginContext } from "@i-harness/core-plugin"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_ABORTED_MID_FLIGHT,
@@ -9,6 +10,13 @@ import {
   TOOL_TIMEOUT,
 } from "@i-harness/core-tools"
 import { createSpillStore, createTextRetainer, spillNotice, type SpillStore } from "./index.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report, and the phase is
+// `mount` because the GC it reports runs once at MOUNT (best-effort: the
+// spill-house chore never blocks a mount, but a failure is not silent). With
+// nothing installed the handle delegates to console.warn verbatim (one
+// argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("mount")
 
 export interface OutputSpillGuardConfig {
   // 缺省 64_000. The cap has a FLOOR as well: the replacement always carries the
@@ -245,7 +253,7 @@ export function createOutputSpillGuard(_ctx: PluginContext, config?: OutputSpill
   const store: SpillStore = createSpillStore({ root })
   // 掛載時跑一次 GC（best-effort；失敗只 warn——GC 是維生屋事，不阻擋掛載）
   const gcOpts = { maxAgeMs: config?.gc?.maxAgeMs ?? DEFAULT_MAX_AGE_MS, maxTotalBytes: config?.gc?.maxTotalBytes ?? DEFAULT_MAX_TOTAL_BYTES }
-  void gcSpillStore(root, gcOpts).catch((e) => console.warn(`[i-harness] spill GC failed: ${String(e)}`))
+  void gcSpillStore(root, gcOpts).catch((e) => d.warn(`[i-harness] spill GC failed: ${String(e)}`))
 
   return {
     name: "output-spill",
