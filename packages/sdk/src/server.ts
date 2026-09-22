@@ -73,6 +73,7 @@
 import { append, subscribe, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import {
   encodeFrame,
   isRpcNotification,
@@ -99,6 +100,14 @@ import {
   type TaskCancelStatus,
   type DashboardSessionRow,
 } from "./protocol.ts"
+
+// W6 T6: ONE module-scope handle for this file's reports; the phase is `sdk`
+// because both come from the SDK host's own initialize handshake (a params or
+// clientInfo that is not an object: the connection identity is not captured,
+// and the handshake is never rejected for it). With nothing installed the
+// handle delegates to console.warn verbatim (one argument), so unset mode is
+// the pre-migration bytes.
+const d = diagnosticsFor("sdk")
 
 export const SDK_SERVER_NAME = "i-harness"
 export const SDK_SERVER_PROTOCOL_VERSION = PROTOCOL_VERSION
@@ -212,13 +221,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const captureClientInfo = (params: unknown): { name?: string; version?: string } | undefined => {
     if (params === undefined) return undefined
     if (params === null || typeof params !== "object" || Array.isArray(params)) {
-      console.warn("[sdk-server] initialize: params is not an object — the connection identity was not captured")
+      d.warn("[sdk-server] initialize: params is not an object — the connection identity was not captured")
       return undefined
     }
     const raw = (params as { clientInfo?: unknown }).clientInfo
     if (raw === undefined) return undefined
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-      console.warn("[sdk-server] initialize: clientInfo is not an object — the connection identity was not captured")
+      d.warn("[sdk-server] initialize: clientInfo is not an object — the connection identity was not captured")
       return undefined
     }
     const name = typeof (raw as { name?: unknown }).name === "string" ? (raw as { name: string }).name : undefined
