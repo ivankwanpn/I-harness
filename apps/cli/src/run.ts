@@ -224,6 +224,11 @@ export interface HeadlessResult {
    * failure (M3's diagnose-ability). Absent when the caller supplied no id and
    * none was generated. */
   sessionId?: string
+  /** M72 Ⅱ: the provider stopped at the output cap on this run's last turn, so
+   * `finalText` is an INCOMPLETE answer. Present only as `true` — a clean run
+   * carries no field at all (a caller must be able to tell "ended on its own"
+   * from "we never looked"). Read from the session log's `step/end`. */
+  truncated?: boolean
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -786,6 +791,13 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     await executor.drain()
     const derived = deriveMessages(session).at(-1)
     const finalText = typeof derived?.content === "string" ? derived.content : ""
+    // M72 Ⅱ: the run's ending, read from the DURABLE log rather than from a
+    // flag threaded down the call chain — the record the answer's reader opens
+    // and this line are then the same fact by construction. Scoped to the last
+    // turn: an earlier turn's truncation is not this run's ending (a fresh turn
+    // after it can have ended cleanly).
+    const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
+    const truncated = session.events.slice(lastTurnStart).some((e) => e.type === "step/end" && e.truncated === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -832,9 +844,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const continuity = m.prefix.requests === 0 ? "" : `${m.prefix.broke}/${m.prefix.observed}`
       console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${continuity === "" ? "" : `  prefix(broke/observed): ${continuity}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
     }
+    // M72 Ⅱ: the truncation the operator has to know about, on STDERR for the
+    // reason the summary above is: stdout carries ONLY the telemetry's NDJSON
+    // frames and the final text. Printed unconditionally (not only when
+    // telemetry was asked for) — an incomplete answer is not an opt-in fact.
+    if (truncated) console.error("[truncated] the provider stopped at the output cap; the answer is incomplete")
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that

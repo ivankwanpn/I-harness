@@ -377,6 +377,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // report carries only its own fields.
       const stepUsage: Record<string, number> = {}
       const batch: BatchCall[] = []
+      // M72 Ⅱ: this step's ending, decided by the provider's own terminal
+      // literal (Task 6) and carried to the durable log below. Per-STEP, so
+      // declared here rather than beside `steps`/`callSeq`: a truncated step
+      // must not mark the next one, and a clean ending writes no field at all.
+      let truncatedThisStep = false
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
         switch (ev.type) {
@@ -413,6 +418,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
+            // M72 Ⅱ. Recorded in TWO places on purpose: the durable log (what a
+            // reopen reads) and the host's telemetry (what an operator watches).
+            // Absent stays absent — a clean ending writes no field at all.
+            if (ev.truncated === true) {
+              truncatedThisStep = true
+              deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
+            }
             break
         }
       }
@@ -456,7 +468,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
       else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
 
-      append(deps.session, { type: "step/end" })
+      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}) })
 
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a

@@ -485,6 +485,12 @@ export async function main(argv: string[]): Promise<number> {
   try {
     return await runHeadless(task, opts).then((r) => {
       if (r.finalText) console.log(r.finalText)
+      // M72 Ⅱ: `run`'s output carries the ending. A plain console call, NOT the
+      // run's diagnostics handle: with a sink configured the handle writes a
+      // JSON record and the human-readable line never reaches stderr — and an
+      // incomplete answer must reach the operator whatever the log is set to.
+      // (Same line run.ts prints beside its metrics summary.)
+      if (r.truncated) console.error("[truncated] the provider stopped at the output cap; the answer is incomplete")
       // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
       // naming no session and saying nothing about what survived. It now gets the
       // same report an unhandled crash gets, because it is the same question.

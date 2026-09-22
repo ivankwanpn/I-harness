@@ -3,6 +3,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
 
 function makeDeps(ctx: PluginContext) {
@@ -494,5 +495,58 @@ describe("M72 II: the request's output cap", () => {
     const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1 })
     await agent.run("hi")
     expect("maxOutputTokens" in seen[0]!).toBe(false)
+  })
+})
+
+describe("M72 II: a truncated ending reaches the durable log and telemetry", () => {
+  // The sink shape is provider-usage.test.ts's: a spy that records every event,
+  // so the assertions read the HOST stream rather than the switch.
+  function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
+    const events: TelemetryEvent[] = []
+    const telemetry: Telemetry = {
+      emit: (ev) => {
+        events.push(ev)
+      },
+      close: () => {},
+    }
+    return { telemetry, events }
+  }
+
+  it("M72 Ⅱ: a truncated step is written durably and reported as telemetry", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "partial" }
+        yield { type: "end", truncated: true }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
+    // The same fact on the host's independent stream. `toEqual` is deliberate:
+    // the payload is exactly the step it happened on — a `step` field that were
+    // summed elsewhere would read as a measurement it is not.
+    const reports = emitted.filter((e) => e.type === "provider/truncated")
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.data).toEqual({ step: 1 })
+  })
+
+  it("M72 Ⅱ: a clean step writes no truncated field", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("truncated")
+    // Absent stays absent on the host stream too — never a `false` report.
+    expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(0)
   })
 })

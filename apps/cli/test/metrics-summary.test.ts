@@ -106,4 +106,23 @@ describe("runHeadless — the metrics summary", () => {
     // nothing was compared, where a bare `0` would read as a measurement.
     expect(summary).toMatch(/prefix\(broke\/observed\): 0\/0/)
   }, 30_000)
+
+  // M72 II: the run-level end of the truncation chain. The seam bit (Task 6)
+  // and the durable field are separate hops; this is the one that proves the
+  // VALUE arrives at the host's `run` — and it is the only end-to-end proof,
+  // since the three middle hops have no unit test of their own.
+  it("M72 Ⅱ: a truncated run says so on STDERR and on the result", async () => {
+    const result = await runHeadless("say hi", {
+      workspace: root,
+      mockScript: [{ role: "assistant", text: "partial", truncated: true }],
+    })
+    expect(result.truncated).toBe(true)
+    expect(errors.some((line) => line.includes("[truncated]"))).toBe(true)
+  }, 30_000)
+
+  it("M72 Ⅱ: a clean run neither says it nor sets the field", async () => {
+    const result = await runHeadless("say hi", { workspace: root, mockScript: [{ role: "assistant", text: "hi" }] })
+    expect(result.truncated).toBeUndefined()
+    expect(errors.some((line) => line.includes("[truncated]"))).toBe(false)
+  }, 30_000)
 })
