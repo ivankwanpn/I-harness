@@ -151,6 +151,8 @@ grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --i
 - [ ] **Step 2: 逐套件遷移**（session-executor 13 → plugin-registry 8 → mcp-client 8 → 5×2 → 8×1；每包一提交或小批）—— **每包的完成條件＝該套件測試全綠（spy 斷言為守衛）**。
 - [ ] **Step 3: 全 workspace 綠**（`pnpm -r --no-bail test`；母體此時 67）＋`--gate PASS` → commit。
 
+**⚠ 修正（T6 落地時量的，2026-09-22）：本 Step 的「`--gate PASS`」在本次修訂不可達 —— 不追、不加 allowlist。** 實測：`pnpm -r --no-bail test` **綠**（母體 **67**、exit 0）；`node scripts/audit/check-reachability.mjs --gate` **exit 1、2 個 NEW row**＝`@i-harness/diagnostics#RedactedError`（黏著）＋`#Rule`（無消費者）。T6 清掉了第三個 `#currentDiagnostics` —— 消費者是**縫**，而且是**真實 import**：六個縫的 fallback 直接問 `currentDiagnostics()`（`packages/{skills,workflow,hooks}/src/…`、`plugin-registry/src/state.ts`、`credentials/src/index.ts`、`schedule/src/driver.ts`）。**T6 的普查**：packages 47 站＝**44 分級 ＋ 3 列名例外**（R13：`session-persistence/src/index.ts:251`、`telemetry/src/telemetry.ts:11,13`——第二參數是 `unknown`，`delegate` 只送一個參數，折疊不保證逐位元組）；全樹 107＝**94 分級 ＋ 13 列名例外**。**相位的兩個事實**（延續 T5 的「縫優先於檔」）：`turn` 不再是零使用者（`packages/compaction/src/index.ts:158` 的 fail-soft 摘要失敗，一次呼叫）；`run` 多一個（`packages/subagent/src/child.ts:76`，spawn 時的角色工具缺席警告）；`acp` 仍無站點。縫的**未設模式機制**因此有一條更精確的說法：預設值「取環境實例、無則 console」在原始碼裡是可見的兩分支，而未被遷移的兩個縫位置（R13）一字不動。
+
 ---
 
 ### Task 7: 收尾
