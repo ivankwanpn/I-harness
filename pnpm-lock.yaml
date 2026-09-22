@@ -320,6 +320,8 @@ importers:
         specifier: workspace:*
         version: link:../fs
 
+  packages/diagnostics: {}
+
   packages/exec:
     dependencies:
       '@i-harness/core-plugin':
