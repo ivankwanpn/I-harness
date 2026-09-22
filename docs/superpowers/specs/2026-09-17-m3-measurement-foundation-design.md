@@ -215,8 +215,8 @@ I_HARNESS_LOG=stderr i-harness run "…"  # 敘事：phase 時間軸 ＋ cause c
 第 3 步今天是空的，第 4 步不存在。
 
 > **落地註記（2026-09-22，`m69`，於 `c2824ab`）：** §3.4 已實作收線（`operator/run-end`；T1–T3 ＝ `db996b3`／`fb0349f`／`c2824ab`）。**三處執行期的量測事實，逐條記下它與原稿的關係：**
-> 1. **生產者是三個 append 站點，不是一個漏斗。** 實作計畫的原稿寫「既有的 `emitSessionEnd` 漏斗即生產者」，被 `run.ts` 的順序推翻：成功路徑在 `emitSessionEnd(0)` **之前**就 `coordinator.close()`，append 若進漏斗會被已關閉的 coordinator 吃掉。三站各自緊鄰既有的排空 —— `apps/cli/src/run.ts:694`（組裝／掛載前失敗，phase `mount`）、`:783`（成功，`run`；在 `:787` 的 `flush` 之前）、`:833`（run 期間失敗，`run`）。
-> 2. **「失敗那一行」取在 `sessions show`。** 上面 `:211` 許諾的那一行由 `apps/cli/src/sessions.ts:184` 渲染（`sessions list` 另有 `LAST RUN` 欄，`:96` 掃最後一筆）⇒ **「第 3 步今天是空的」已不再成立**。原稿沒有預見的是**兩筆紀錄**：durable 寫入失敗時，成功站點（flush 前）與失敗 catch 各寫一筆，讀取端的契約是**最後一筆為準** —— 見本單元設計 spec（`docs/superpowers/specs/2026-09-22-operator-run-end-design.md`）§4 第 5 條。
+> 1. **生產者是三個 append 站點，不是一個漏斗。** 實作計畫的原稿寫「既有的 `emitSessionEnd` 漏斗即生產者」，被 `run.ts` 的順序推翻：成功路徑在 `emitSessionEnd(0)` **之前**就 `coordinator.close()`，append 若進漏斗會被已關閉的 coordinator 吃掉。三站各自緊鄰既有的排空 —— `apps/cli/src/run.ts:699`（組裝／掛載前失敗，phase `mount`）、`:788`（成功，`run`；在 `:792` 的 `flush` 之前）、`:838`（run 期間失敗，`run`）。**（2026-09-22 修復 wave 重量：`runId` 的單次 mint 讓這三站各 +5；上面是重量值，原值 `694`／`783`／`833`。）**
+> 2. **「失敗那一行」取在 `sessions show`。** 上面 `:211` 許諾的那一行由 `apps/cli/src/sessions.ts:184` 渲染（`sessions list` 另有 `LAST RUN` 欄，`:96` 掃最後一筆）——**但那一行只帶 exit code、時長與（失敗時的）已 redact error**：`:211` 逐字列出的 **`runId` 與 `phase` 不在那一行上**（本單元設計 spec §1.4 的刻意範圍），它們在 durable 紀錄裡、並已可從出貨表面取回 —— `sessions show <id> --json` 把 `session.events` 原樣 dump（`apps/cli/src/sessions.ts:227-230`）⇒ **「第 3 步今天是空的」已不再成立**。原稿沒有預見的是**兩筆紀錄**：durable 寫入失敗時，成功站點（flush 前）與失敗 catch 各寫一筆，讀取端的契約是**最後一筆為準** —— 見本單元設計 spec（`docs/superpowers/specs/2026-09-22-operator-run-end-design.md`）§4 第 5 條。
 > 3. **紀錄只存在於 store-backed 的執行。** 協調器只在 `--session-dir` 下接線（`apps/cli/src/index.ts:345-376`），所以**沒有 store 的 `i-harness run` 一律不留紀錄**（成功的執行也一樣）—— 這比本單元設計 spec §4 第 1 條原稿的「在 session 存在之前就死」**更寬**。
 
 ### 3.5 redactor

@@ -100,7 +100,7 @@ describe("the durable run-end record (M3 §3.4)", () => {
   })
 
   it("resume of a missing session: no record — there is no document to hold one", async () => {
-    // Store-backed, so this is the REAL resume-load-failure path (`run.ts:379-382`
+    // Store-backed, so this is the REAL resume-load-failure path (`run.ts:384-387`
     // returns early, before any append site) — not the `--resume`-without-store
     // refusal at `index.ts:336-339`, which would make this case pass vacuously.
     expect(await main(["node", "i-harness", "run", "hello", "--session-dir", storeDir, "--resume", "no-such-session"])).toBe(1)
