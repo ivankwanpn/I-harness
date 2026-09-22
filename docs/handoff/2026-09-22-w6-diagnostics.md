@@ -2,7 +2,7 @@
 
 **Written:** 2026-09-22，前一個爆 context 的 controller session 寫下 T1–T2 的部分（依 owner 指示在 T2 收線、push）；同日工作電腦接手後續作 **T3–T7**，本文件隨之更新，並在 T7 收成**終態**（檔名由 `…-partial.md` `git mv` 而來）。
 **Audience:** 讀這份記錄的人。本單元已完成，所以沒有「接手續作」的讀者了；最近的讀者是**這個分支的終審複審**，以及日後要查 W6 究竟證明了什麼的人。
-**State measured at:** `f307cdb`（T6 的最後一個提交；`ec18c9d0`…`f307cdb` 收在這裡，**T7 的兩筆提交緊隨其後**）—— §1 各節在**各自的**量測修訂上量測（那一節自己寫了是哪一個），§2 是 T7 在 `f307cdb` 上跑出來的最終讀數。**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
+**State measured at:** `f307cdb`（T6 的最後一個提交；`ec18c9d0`…`f307cdb` 收在這裡，**T7 的收尾提交緊隨其後（數目不在這裡寫死 —— 這份記錄本身就是其中一筆）**）—— §1 各節在**各自的**量測修訂上量測（那一節自己寫了是哪一個），§2 是 T7 在 `f307cdb` 上跑出來的最終讀數。**行號會腐，引用前先重量**（本 repo 的既有紀律）。**自重**：`git rev-parse HEAD origin/m68`。
 
 ---
 
@@ -12,7 +12,7 @@
 |---|---|
 | Repo / remote | 原工作站 `D:\I-harness-main` ↔ `https://github.com/ivankwanpn/I-harness.git`（authoritative）；工作電腦同路徑 |
 | Branch | **`m68`**（本單元的里程碑分支；`main` 的合併時機由人決定） |
-| HEAD / origin | **HEAD 於 2026-09-22 是 `f307cdb`**（T6 的最後一個提交、T7 的起點）；`origin/m68` 於同日第五次 push 同步到 T6，**T7 的兩筆提交在它之後**。**自重** |
+| HEAD / origin | **HEAD 於 2026-09-22 是 `f307cdb`**（T6 的最後一個提交、T7 的起點）；`origin/m68` 於同日第五次 push 同步到 T6，**T7 的收尾提交在它之後**。**自重** |
 | 本單元 | **W6**：建 `@i-harness/diagnostics`（`createDiagnostics` ＋ `createRedactor`），把 **107 個 `console.warn/error` 站點**分級上去 —— 而 **`I_HARNESS_LOG` 未設時 stderr 逐位元組不變** |
 | 進度 | **T1 ✅ · T2 ✅ · T3 ✅ · T4 ✅ · T5 ✅ · T6 ✅ · T7 ✅**（**7／7**；§1 的 T1–T6 ＋ §2 的 T7） |
 | **最終驗證** | **`pnpm verify:all` 五步全綠、exit 0**（2026-09-22，T7 親量；母體 **67／67**；suite **2889 passed／9 skipped／0 failed**；typecheck exit 0；e2e exit 0／5 檔；`--gate` exit 0／**`PASS -- no new rows`**）。指令、五步讀數與**兩筆 allowlist** 見 §2 |
