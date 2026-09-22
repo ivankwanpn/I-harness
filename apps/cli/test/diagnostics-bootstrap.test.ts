@@ -27,16 +27,30 @@ import { SettingsStore } from "@i-harness/settings"
 //
 // TWO SEAMS ARE OBSERVED, NEVER ALTERED (the `importOriginal` + delegate pattern
 // this suite already uses): the bootstrap (its calls are recorded, the real
-// functions run) and session-executor's `createSessionService` (recorded, and
-// used to capture what is installed at the moment a host builds its service).
-const bootstrapLog = vi.hoisted(() => ({ log: [] as unknown[][] }))
+// functions run, and the instance it BUILT is kept — the exit-path cases read
+// their subject from there rather than from a console call a site happens to
+// make: R10, 2026-09-22) and session-executor's `createSessionService`
+// (recorded, and used to capture what is installed at the moment a host builds
+// its service).
+const bootstrapLog = vi.hoisted(() => ({
+  log: [] as unknown[][],
+  /** What each `createCliDiagnostics` call BUILT, together with the slot as it
+   *  stood immediately after that call (`installed`) — see the seam note above. */
+  installs: [] as { diagnostics: unknown; installed: unknown }[],
+}))
 vi.mock("../src/diagnostics-bootstrap.ts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/diagnostics-bootstrap.ts")>()
+  const { currentDiagnostics: current } = await import("@i-harness/diagnostics")
   return {
     ...actual,
     createCliDiagnostics: (opts?: Parameters<typeof actual.createCliDiagnostics>[0]) => {
       bootstrapLog.log.push(["create", opts])
-      return actual.createCliDiagnostics(opts)
+      const boot = actual.createCliDiagnostics(opts)
+      // The instance the ENTRY installed, taken from the factory that built it.
+      // NOT a console hook: which sites are migrated must not decide whether the
+      // exit-path cases can see their subject (R10).
+      bootstrapLog.installs.push({ diagnostics: boot.diagnostics, installed: current() })
+      return boot
     },
     registerCliSecrets: (...args: Parameters<typeof actual.registerCliSecrets>) => {
       bootstrapLog.log.push(["feed", ...args])
@@ -108,6 +122,28 @@ function expectClosed(captured: Diagnostics | undefined, stderr: { lines: () => 
   expect(stderr.lines()).toHaveLength(before)
 }
 
+/** The instance the RUN path's own `createCliDiagnostics` call built, with the
+ *  slot as it stood right after that call — so the handle the exit-path cases
+ *  probe is proven to be the INSTALLED one, not merely one that exists. That is
+ *  the clause the old console hook carried (its `captured` was whatever sat in
+ *  the slot at the failure moment), preserved one step earlier and without
+ *  depending on an unmigrated site. */
+function expectRunExitClosed(stderr: { lines: () => string[] }): void {
+  const install = bootstrapLog.installs.at(-1)
+  expect(install?.installed).toBeDefined()
+  expect(install?.installed).toBe(install?.diagnostics)
+  expectClosed(install?.diagnostics as Diagnostics | undefined, stderr)
+}
+
+/** The `msg` of the run's failure report, read from the record it wrote: R10
+ *  migrated that site (phase `run`), so with `I_HARNESS_LOG` naming a sink the
+ *  report lands in the record and never on the console — the text clause the old
+ *  `console.error` spy carried moves here with it. */
+function failureMsg(stderr: { lines: () => string[] }): string {
+  const record = JSON.parse(stderr.lines().at(-1)!) as { msg?: unknown }
+  return String(record.msg)
+}
+
 let configDir: string
 let previousConfigDir: string | undefined
 let previousLog: string | undefined
@@ -116,6 +152,7 @@ const envSet: string[] = []
 
 beforeEach(() => {
   bootstrapLog.log.length = 0
+  bootstrapLog.installs.length = 0
   serviceCalls.list.length = 0
   // Hermetic config home (the pattern run-flag-routing.test.ts documents): an
   // EMPTY temp config dir is what keeps a run from resolving a real provider and
@@ -158,10 +195,12 @@ describe("the CLI's diagnostics bootstrap", () => {
     const stderr = captureStderr()
     let installedAtTheFailureSite: boolean | undefined
     const err = vi.spyOn(console, "error").mockImplementation(() => {
-      // A STAND-IN for the sites T5 migrates: a real run's failure-report
-      // moment, driven through the ambient path exactly as a migrated site will
-      // be (`diagnosticsFor(phase)` + one verbatim message). No site is migrated
-      // in this task — that is T5's and T6's.
+      // A STAND-IN for the migrated sites: a real run's failure-report moment,
+      // driven through the ambient path exactly as they are — one handle, one
+      // verbatim message. The stand-in is the UNSET-MODE shape on purpose: with
+      // `I_HARNESS_LOG` unset the installed instance delegates, so this console
+      // call still happens, while case ② asserts the set-mode half through the
+      // run's own record (T5 migrated these sites; R10 the failure report).
       installedAtTheFailureSite = currentDiagnostics() !== undefined
       diagnosticsFor("run").warn("[stand-in] a message a human reads today")
     })
@@ -188,26 +227,37 @@ describe("the CLI's diagnostics bootstrap", () => {
   })
 
   // ── ② the structured channel, on the run path ─────────────────────────────
-  it("② I_HARNESS_LOG=stderr: a site's record is the FIRST thing on stderr, phased, with the minted uuid", async () => {
+  it("② I_HARNESS_LOG=stderr: the failing run's OWN record is the FIRST thing on stderr, phased, with the minted uuid", async () => {
     process.env.I_HARNESS_LOG = "stderr"
     const stderr = captureStderr()
-    const err = vi.spyOn(console, "error").mockImplementation(() => {
-      diagnosticsFor("run").warn("[stand-in] going to the record")
-    })
+    // No stand-in and no console hook: T5 migrated the sites and R10 the run's
+    // failure report, so this case is integration evidence about the REAL site
+    // — the direction the migration is supposed to move in.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
     try {
       const code = await main(["node", "i-harness", "run", "hello"])
       expect(code).toBe(1)
       const lines = stderr.lines()
       // FIRST and ONLY: neither the install nor the run wrote anything else, so
-      // the record is the first line a reader would see.
+      // the record is the first line a reader would see — and it is this run's
+      // own report of why it ended (M3's headline), phased `run`.
       expect(lines).toHaveLength(1)
       const record = JSON.parse(lines[0]!) as Record<string, unknown>
-      expect(record).toMatchObject({ level: "warn", phase: "run", msg: "[stand-in] going to the record" })
+      expect(record).toMatchObject({ level: "error", phase: "run" })
+      expect(String(record.msg)).toContain("i-harness run did not finish")
       // `run` is the uuid the ENTRY minted (nothing in the tree had one to lend).
       expect(String(record.run)).toMatch(UUID_RE)
       expect(typeof record.ts).toBe("number")
+      // The record REPLACED the console line instead of joining it: a sink means
+      // the console channel is not touched at all (packages/diagnostics' two-
+      // channel rule). From stderr alone, a site that kept delegating would look
+      // identical — this is the clause that tells them apart.
+      expect(err).not.toHaveBeenCalled()
+      expect(warn).not.toHaveBeenCalled()
     } finally {
       err.mockRestore()
+      warn.mockRestore()
       stderr.restore()
     }
   })
@@ -390,18 +440,17 @@ describe("the CLI's diagnostics bootstrap", () => {
     process.env.I_HARNESS_LOG = "stderr"
     const stderr = captureStderr()
     const sessionDir = mkdtempSync(join(tmpdir(), "ih-diag-resume-"))
-    let captured: Diagnostics | undefined
-    const err = vi.spyOn(console, "error").mockImplementation(() => { captured ??= currentDiagnostics() })
     try {
       // No such session in an empty store: `loadOwned` fails and `runHeadless`
       // returns at its FIRST exit — before any model work, which is why this
       // exit is reachable here at all.
       const code = await main(["node", "i-harness", "run", "hello", "--session-dir", sessionDir, "--resume", "no-such-session"])
       expect(code).toBe(1)
-      expect(String(err.mock.calls.at(-1)![0])).toContain("i-harness run did not finish")
-      expectClosed(captured, stderr)
+      // The report's text clause, read from the record: the site that emits it is
+      // migrated (R10), so the console carries nothing on this path.
+      expect(failureMsg(stderr)).toContain("i-harness run did not finish")
+      expectRunExitClosed(stderr)
     } finally {
-      err.mockRestore()
       stderr.restore()
       rmSync(sessionDir, { recursive: true, force: true })
     }
@@ -410,17 +459,14 @@ describe("the CLI's diagnostics bootstrap", () => {
   it("⑤ run path / the PRE-ASSEMBLY failure exit: the instance is closed and detached", async () => {
     process.env.I_HARNESS_LOG = "stderr"
     const stderr = captureStderr()
-    let captured: Diagnostics | undefined
-    const err = vi.spyOn(console, "error").mockImplementation(() => { captured ??= currentDiagnostics() })
     try {
       // The empty config home makes the model resolution throw inside
       // `runHeadless`'s try — the exit taken when the assembly is never built.
       const code = await main(["node", "i-harness", "run", "hello"])
       expect(code).toBe(1)
-      expect(String(err.mock.calls.at(-1)![0])).toContain("No model configured")
-      expectClosed(captured, stderr)
+      expect(failureMsg(stderr)).toContain("No model configured")
+      expectRunExitClosed(stderr)
     } finally {
-      err.mockRestore()
       stderr.restore()
     }
   })
@@ -431,13 +477,14 @@ describe("the CLI's diagnostics bootstrap", () => {
     // A REAL successful run, over a stubbed transport: the built-in deepseek
     // profile speaks openai-compatible, so one SSE body is a whole turn.
     vi.stubGlobal("fetch", (async () => new Response(SSE_OK, { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch)
-    let captured: Diagnostics | undefined
-    const log = vi.spyOn(console, "log").mockImplementation(() => { captured ??= currentDiagnostics() })
+    const log = vi.spyOn(console, "log").mockImplementation(() => {})
     try {
       const code = await main(["node", "i-harness", "run", "hello", "--model", "deepseek:deepseek-chat", "--api-key", "sk-fixture-key-1234"])
       expect(code).toBe(0)
       expect(log.mock.calls.map((c) => c.join(""))).toContain("ok")
-      expectClosed(captured, stderr)
+      // The same capture as its three siblings, so the ⑤ block has ONE hook and
+      // none of them depends on which sites are migrated.
+      expectRunExitClosed(stderr)
     } finally {
       log.mockRestore()
       stderr.restore()
@@ -450,15 +497,12 @@ describe("the CLI's diagnostics bootstrap", () => {
     // 401 from the provider: the adapter turns it into a model stream error and
     // the turn fails — the exit a run takes AFTER the assembly was built.
     vi.stubGlobal("fetch", (async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch)
-    let captured: Diagnostics | undefined
-    const err = vi.spyOn(console, "error").mockImplementation(() => { captured ??= currentDiagnostics() })
     try {
       const code = await main(["node", "i-harness", "run", "hello", "--model", "deepseek:deepseek-chat", "--api-key", "sk-fixture-key-1234"])
       expect(code).toBe(1)
-      expect(String(err.mock.calls.at(-1)![0])).toContain("401")
-      expectClosed(captured, stderr)
+      expect(failureMsg(stderr)).toContain("401")
+      expectRunExitClosed(stderr)
     } finally {
-      err.mockRestore()
       stderr.restore()
     }
   })
