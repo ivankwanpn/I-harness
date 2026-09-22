@@ -26,6 +26,11 @@ import {
   type LoadedHandler,
 } from "@i-harness/hooks"
 import { PluginRegistry } from "@i-harness/plugin-registry"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle — every site here reports the `hooks`
+// command's own refusals (phase `cli`).
+const d = diagnosticsFor("cli")
 
 export interface HooksCommandOptions {
   configDir?: string
@@ -145,12 +150,12 @@ export function renderHookTable(rows: DeclaredHookRow[]): string {
 export async function runHooksCommand(args: string[]): Promise<number> {
   const parsed = parseHooksArgs(args)
   if (parsed.error !== undefined) {
-    console.error(`hooks: ${parsed.error}`)
-    console.error(HOOKS_USAGE)
+    d.error(`hooks: ${parsed.error}`)
+    d.error(HOOKS_USAGE)
     return 1
   }
   if (parsed.subcommand === "help") {
-    console.error(HOOKS_USAGE)
+    d.error(HOOKS_USAGE)
     return 0
   }
   if (parsed.subcommand === "list") {
@@ -166,11 +171,11 @@ export async function runHooksCommand(args: string[]): Promise<number> {
   const matches = (await listDeclaredHooks()).filter((row) => row.sha256.startsWith(target))
   const distinct = [...new Set(matches.map((row) => row.sha256))]
   if (distinct.length === 0) {
-    console.error(`hooks: no declared handler matches ${target}`)
+    d.error(`hooks: no declared handler matches ${target}`)
     return 1
   }
   if (distinct.length > 1) {
-    console.error(`hooks: ${target} is ambiguous — it matches ${distinct.length} declared handlers`)
+    d.error(`hooks: ${target} is ambiguous — it matches ${distinct.length} declared handlers`)
     return 1
   }
 

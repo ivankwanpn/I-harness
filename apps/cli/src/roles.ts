@@ -16,6 +16,11 @@ import { builtinRoles } from "@i-harness/subagent"
 import type { Settings } from "@i-harness/settings"
 import { PROVIDER_PROTOCOLS, type CliProtocol } from "./provider.ts"
 import { loadProviderRuntime } from "./provider-runtime.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle — every site here reports the `roles`
+// command's own refusals and failures (phase `cli`).
+const d = diagnosticsFor("cli")
 
 /** The four built-in names, read from the ONE place that declares them
  * (`packages/subagent/src/roles.ts` via the package's own export). A literal
@@ -225,12 +230,12 @@ function rowsOf(roles: Readonly<Record<string, RoleSelection>>): RoleRow[] {
 export async function runRolesCommand(args: string[]): Promise<number> {
   const parsed = parseRolesArgs(args)
   if (parsed.error !== undefined) {
-    console.error(`roles: ${parsed.error}`)
-    console.error(ROLES_USAGE)
+    d.error(`roles: ${parsed.error}`)
+    d.error(ROLES_USAGE)
     return 1
   }
   if (parsed.subcommand === "help") {
-    console.error(ROLES_USAGE)
+    d.error(ROLES_USAGE)
     return 0
   }
 
@@ -288,7 +293,7 @@ export async function runRolesCommand(args: string[]): Promise<number> {
     }
     return 0
   } catch (error) {
-    console.error(`roles: ${error instanceof Error ? error.message : String(error)}`)
+    d.error(`roles: ${error instanceof Error ? error.message : String(error)}`)
     return 1
   }
 }
