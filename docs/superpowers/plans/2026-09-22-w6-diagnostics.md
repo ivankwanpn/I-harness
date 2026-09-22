@@ -16,7 +16,7 @@
 
 ### 0.1 普查指令本來是壞的 —— 而這一條先修記錄
 
-queued doc（`:535`／`:934`）寫的 `grep -rn "console\.(warn\|error)"` **在 BRE 裡是字面量**：它數到 152，其中 **140 條不是呼叫**（`} catch (error) {`、含 `error)` 的註解…），而**漏掉**真實的呼叫（`console.error(USAGE)` 這種 `error(` 後沒有 `)` 的、整個 argv 驗證區塊）。**會重現的指令（兩式一致）：**
+queued doc（`:535`／`:934`）寫的 `grep -rn "console\.(warn\|error)"` **在 BRE 裡是字面量**：它數到 152，其中 **140 條不是呼叫**（`} catch (error) {`、含 `error)` 的註解…），而**漏掉**真實的呼叫（`console.error(USAGE)` 這種 `error(` 後沒有 `)` 的、整個 argv 驗證區塊）。**⚠ 機制更正（2026-09-22 複審量到的，T7 實測）：** 上面那句「**在 BRE 裡是字面量**」**是錯的** —— GNU BRE 認得 `\|` 交替（GNU 擴充），而 `(`／`)` 才是字面量，所以那條模式實際是「字面 `console.(warn`」**或**「字面 `error)`」，**退化成「含有 `error)` 的行」**（第一支在真碼裡不存在）。**原句的 152／140 兩個數字仍然正確，而且正是這個機制造成的**：152 行全部靠 `error)` 那一支命中，其中只有 12 條是真呼叫（量於 `e78bad3`）⇒ 152 − 12 = 140。**完整實測與最終切分見 `docs/handoff/2026-09-22-w6-diagnostics.md` §2.4。****以下的結論（兩個方向都錯；要用 `-F` ＋ 兩個 `-e` 的那一版）不受影響。** **會重現的指令（兩式一致）：**
 
 ```bash
 grep -rn -F -e "console.warn(" -e "console.error(" packages/*/src apps/*/src --include=*.ts | grep -v "\.test\.\|/test/"
