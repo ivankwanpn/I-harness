@@ -1104,3 +1104,175 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
   })
 })
+
+// M70: the marker must be DURABLE before the body runs.
+//
+// Measured before this block was written: `tool/dispatch` is appended and the
+// body dispatched on the very next line, with NO flush and NO await (the
+// append → `tools.dispatch(prepared)` pair in `src/execute-tool-calls.ts`;
+// PRE-M70 line numbers 221-230, shifted since), while the host's write-behind
+// batches on a fixed 200 ms deadline (`session-persistence/src/index.ts:257`)
+// that the CLI never overrides. So a kill inside that window took the marker
+// with the batch, and recovery — which reads the log's OWN marker
+// (`session-persistence/src/repair.ts:123-134`) — then handed the call
+// TOOL_ABORTED_BEFORE_DISPATCH. That verdict licenses a re-run, so a `git push`
+// whose body HAD run could run twice. M4's acceptance cannot see this: its
+// helper flushes explicitly and says why
+// (`session-persistence/test/helpers/kill-mid-tool.mts:47-50`) — it proves the
+// READER's logic, not the WRITER's durability.
+//
+// The host's checkpoint capability is an OPTIONAL `flush` seam, exactly like
+// `telemetry` beside it (M25). Absent → the pre-M70 bytes, for every subagent
+// host and every test that does not supply one.
+describe("executeToolCalls — the dispatch checkpoint (M70)", () => {
+  it("the marker is DURABLE before the body runs (order)", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    // The CLI host's pair, MODELLED rather than imported — session-persistence
+    // sits above core-agent and core-agent must not depend on it. Appends only
+    // queue; `flush` is what makes the queue durable. `durable` is therefore
+    // exactly what a crash would leave behind, and `markerDurableAtBody` is the
+    // question the milestone asks: at the body's first statement, is the marker
+    // one of them?
+    const queued: string[] = []
+    const durable: string[] = []
+    const session = createSession((ev) => { queued.push(ev.type) })
+    const order: string[] = []
+    let markerDurableAtBody = false
+    tools.register({
+      name: "push", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => {
+        order.push("body")
+        markerDurableAtBody = durable.includes("tool/dispatch")
+        return { pushed: true }
+      },
+    })
+
+    await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "push", args: {} }], {
+      maxParallel: 10,
+      flush: async () => {
+        order.push("flush")
+        durable.push(...queued.splice(0))
+      },
+    })
+
+    // An ORDER, not a set: the drain lands before the body's first statement.
+    // (Before M70 this is `["body"]` — the flush seam is never called at all.)
+    expect(order).toEqual(["flush", "body"])
+    expect(markerDurableAtBody).toBe(true)
+  })
+
+  it("a rejected flush is FAIL-CLOSED: no body, and the verdict is aborted-before-dispatch", async () => {
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const session = createSession()
+    const order: string[] = []
+    let ran = 0
+    tools.register({
+      name: "push", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { ran += 1; order.push("body"); return { pushed: true } },
+    })
+    // The store is broken (disk full, lease conflict, backend down). The host's
+    // own success-path flush rejects on the same fault — a store failure is an
+    // execution-level event, never a per-call detail to paper over.
+    await expect(
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "push", args: {} }], {
+        maxParallel: 10,
+        flush: async () => { order.push("flush"); throw new Error("durable write failed: ENOSPC") },
+      }),
+    ).rejects.toThrow("durable write failed: ENOSPC")
+
+    // The body never ran: that is what "fail-closed" means here, and it is the
+    // ONLY thing that keeps a side effect from happening un-recorded.
+    expect(ran).toBe(0)
+    expect(order).toEqual(["flush"])
+    // The marker IS in the log — the call reached the boundary, and the log
+    // says so (the marker is appended before the drain is attempted; a flush
+    // that ran first would drain nothing).
+    expect(session.events.filter((e) => e.type === "tool/dispatch").map((e) => (e as { callId: string }).callId))
+      .toEqual(["c0"])
+    // …and the call is answered ONCE, with the verdict that is literally true
+    // for it: it was aborted before dispatch. No new code is invented for a
+    // failure the existing vocabulary already names exactly.
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    expect(results).toHaveLength(1)
+    expect(results[0]!.callId).toBe("c0")
+    expect(results[0]!.output).toEqual({
+      error: expect.stringContaining("durable write failed: ENOSPC"),
+      code: TOOL_ABORTED_BEFORE_DISPATCH,
+    })
+    // The verdict is the ABORTED one, not the mid-flight one: nothing was in
+    // flight. (The two demand opposite responses from a reader.)
+    expect(results[0]!.output).not.toMatchObject({ code: TOOL_ABORTED_MID_FLIGHT })
+  })
+
+  it("a flush that rejects with NO reason still fails the turn closed (the flag, not the value)", async () => {
+    // `throw undefined` / `Promise.reject()` are legal, and `flush`'s whole
+    // contract is "reject" — the REASON is not part of it. A guard written as
+    // `if (firstFlushError !== undefined)` reads this failure as "no failure":
+    // the call still fails closed (slot filled, body never run), but the
+    // function returns on the soft path and the turn CONTINUES against a store
+    // that just proved it cannot persist — the M5 T4 R5 defect this unit exists
+    // to close, arriving through the one door a value test cannot see. The
+    // file's other flag/value pairs (`hasFailed`/`firstError`,
+    // `hasCommitError`/`commitError`) are split for exactly this reason.
+    const ctx = createContext()
+    const tools = createToolRegistry(ctx)
+    const session = createSession()
+    let ran = 0
+    tools.register({
+      name: "push", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async () => { ran += 1; return { pushed: true } },
+    })
+
+    const outcome = await executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "push", args: {} }], {
+      maxParallel: 10,
+      flush: async () => { throw undefined },
+    }).then(() => "resolved" as const, () => "rejected" as const)
+
+    // "Rejected" — not "rejected with something", and deliberately NOT
+    // `rejects.toThrow()`: the point is that the TURN fails even when there is
+    // no value to throw.
+    expect(outcome).toBe("rejected")
+    expect(ran).toBe(0)
+    const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
+    expect(results).toHaveLength(1)
+    expect(results[0]!.output).toEqual({
+      error: expect.stringContaining("tool call aborted before dispatch"),
+      code: TOOL_ABORTED_BEFORE_DISPATCH,
+    })
+  })
+
+  it("with no `flush` supplied, the batch is byte-identical (the seam is OPTIONAL)", async () => {
+    const tools = createToolRegistry(createContext())
+    const echo: Tool = {
+      name: "echo", description: "", inputSchema: {}, isConcurrencySafe: true,
+      execute: async ({ v }: { v: number }) => ({ v }),
+    }
+    tools.register(echo)
+    const drive = async (flush?: () => Promise<void>): Promise<Session> => {
+      const session = createSession()
+      await executeToolCalls(
+        createContext(), session, tools,
+        [{ callId: "c0", name: "echo", args: { v: 7 }, eventSeq: 0 }],
+        { maxParallel: 10, ...(flush !== undefined ? { flush } : {}) },
+      )
+      return session
+    }
+
+    const without = await drive()
+    // The literal is today's contract, pinned: a host that supplies no
+    // checkpoint gets the events it always got — the marker, then the result.
+    expect(without.events).toEqual([
+      { type: "tool/dispatch", callId: "c0", eventSeq: 0, seq: 0 },
+      { type: "tool/result", callId: "c0", name: "echo", output: { v: 7 }, seq: 1 },
+    ])
+    // …and supplying one changes NOTHING about the log. (The equivalence is the
+    // real guard: a `flush` that is REQUIRED, or that quietly appends something
+    // of its own, dies here rather than in a subagent host.)
+    let calls = 0
+    const withFlush = await drive(async () => { calls += 1 })
+    expect(withFlush.events).toEqual(without.events)
+    expect(calls).toBe(1)
+  })
+})

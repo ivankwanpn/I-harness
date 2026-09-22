@@ -68,6 +68,13 @@ export interface AgentDeps {
   // its tools cannot see them). Absent = no events at all (backward compat:
   // every pre-M25 deps object behaves byte-identically).
   telemetry?: Telemetry
+  // M70: optional checkpoint capability handed to the tool scheduler — see
+  // `ExecuteToolCallsOptions.flush`. The host builds it over its coordinator
+  // (`() => coordinator.flush(sessionId)`), so the `tool/dispatch` marker is
+  // durable BEFORE the tool body runs; a rejected flush fails the turn closed.
+  // Absent → no checkpoint, byte-identical pre-M70 behavior (every existing
+  // deps object, subagent hosts included).
+  flush?: () => Promise<void>
   // R-A1: optional step-boundary input seam (steer tier). The loop calls it at
   // the START of every step (including the first) so mid-turn steering lands in
   // the log before the model sees this step's messages. The seam itself appends
@@ -422,6 +429,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           sessionId: deps.sessionId,
           // M25: tool/start|end|error host telemetry rides the scheduler.
           ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
+          // M70: the host's checkpoint seam rides the same way — absent stays
+          // absent, so a deps object without one is byte-identical to pre-M70.
+          ...(deps.flush ? { flush: deps.flush } : {}),
         })
       }
 

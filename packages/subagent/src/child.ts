@@ -301,6 +301,18 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // prepared ToolExec so the agent-team scheduler can attribute the child's
     // tool calls to its team member (the roster maps sessionId → member).
     ...(sessionId !== undefined ? { sessionId } : {}),
+    // M70: the child's own dispatch boundary gets the same checkpoint the
+    // parent's does. MEASURED before wiring it: this child's appends are
+    // mirrored into `opts.childSessions.coordinator` under THIS `sessionId`
+    // (the createSession hook above), so `coordinator.flush(sessionId)` drains
+    // the very write-behind that received the `tool/dispatch` marker — the same
+    // closure shape the assembly builds for the parent, from the same pair.
+    // Without `childSessions` there is no durable child session at all (the
+    // non-durable `createSession()` arm above), so no seam is built and the
+    // deps object is the pre-M70 one.
+    ...(opts.childSessions !== undefined && sessionId !== undefined
+      ? { flush: (): Promise<void> => opts.childSessions!.coordinator.flush(sessionId!) }
+      : {}),
   })
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
   const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
