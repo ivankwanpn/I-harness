@@ -215,9 +215,9 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // `{type:"error",code,message,param,sequence_number}` — with an older
         // nested `error.message` still seen in the wild (tracked as a fallback).
         // Reading only `event.error?.message` sent the flat shape to the generic
-        // fallback and dropped `code`, which is exactly what `retryErrorCode`'s
-        // regexes need to classify (rate_limit_exceeded → RATE_LIMIT), so the
-        // code is composed into the message (`${code}: ${text}`), mirroring the
+        // fallback and dropped `code`, which the seam's retry classifier reads
+        // off the message (rate_limit_exceeded → RATE_LIMIT), so the code is
+        // composed into the message (`${code}: ${text}`), mirroring the
         // anthropic arm's `${type}: ${message}`.
         if (t === "response.failed" || t === "error") {
           const r = event.response as { error?: { message?: string; code?: string } } | undefined
