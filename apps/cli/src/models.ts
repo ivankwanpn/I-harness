@@ -244,7 +244,18 @@ export interface ModelsRouteView {
   /** Whether the route's endpoint can be probed at all — `directory()`'s own
    * answer (bedrock is manual-only). Spec §4's read shows 能不能 discovery. */
   discovery: "available" | "manual-only"
-  models: Array<{ id: string; card: ModelCard | undefined; aliases: string[]; protocol?: string }>
+  models: Array<{
+    id: string
+    card: ModelCard | undefined
+    aliases: string[]
+    protocol?: string
+    /** The value the USER wrote for this row (`models add/set --max-tokens`),
+     * merged off the settings row by the runtime. Absent when nobody set one.
+     * NOT the card's `maxOutputTokens`: the card is the model's documented
+     * ceiling, this is what a request will actually carry, and `renderModels`
+     * prints them as two separate facts. */
+    maxTokens?: number
+  }>
 }
 
 export function renderModels(routes: readonly ModelsRouteView[]): string {
@@ -282,6 +293,10 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
       const numbers = model.card?.contextWindow !== undefined
         ? `${model.card.contextWindow}${model.card.maxOutputTokens !== undefined ? ` / ${model.card.maxOutputTokens}` : ""}`
         : "no card"
+      // M72 Ⅱ: the value the USER wrote, said separately from the card — the
+      // card is the model's documented ceiling, this is what a request will
+      // actually carry. Absent → nothing printed (an unset switch is off).
+      const setCap = model.maxTokens !== undefined ? `  set: ${model.maxTokens}` : ""
       // The ROW's protocol matters only where it DIVERGES from the route's: the
       // route line above already printed the inherited answer, and a row that
       // overrode nothing is not making a statement. This is the read half of
@@ -289,7 +304,7 @@ export function renderModels(routes: readonly ModelsRouteView[]): string {
       const ownProtocol = model.protocol !== undefined && model.protocol !== route.protocol
         ? `  protocol: ${model.protocol}`
         : ""
-      lines.push(`  ${model.id}  (${numbers})${ownProtocol}${model.aliases.length > 0 ? `  +retired: ${model.aliases.join(", ")}` : ""}`)
+      lines.push(`  ${model.id}  (${numbers})${setCap}${ownProtocol}${model.aliases.length > 0 ? `  +retired: ${model.aliases.join(", ")}` : ""}`)
     }
     // The D1/D2 symptom, said out loud: a route whose family resolves nothing
     // is exactly the state that used to fail silently.
@@ -325,6 +340,7 @@ async function viewOf(runtime: ProviderRuntime): Promise<ModelsRouteView[]> {
             card: own?.card ?? owner?.card,
             aliases: own?.aliases ?? (owner !== undefined ? [`alias of ${owner.modelId}`] : []),
             ...(model.protocol !== undefined ? { protocol: model.protocol } : {}),
+            ...(model.maxTokens !== undefined ? { maxTokens: model.maxTokens } : {}),
           }
         }),
       }
