@@ -126,7 +126,14 @@ const KEY_STEMS = [
  *  A second list rather than a trailing `s` stripped off the name before the test
  *  above: stripping is the naive form, and `maxTokens` strips to `maxtoken`, which
  *  ends with `token` — a field an existing case pins as untouched, and a count a
- *  human reads. The plural is added only where it cannot collide.
+ *  human reads. The plural is added only where the NAME cannot collide; the price
+ *  is on the VALUE, which goes whole whatever it is — a count (`secrets: 42`) is
+ *  masked too, paid for closing the unshaped-leaf gap and not an oversight. The
+ *  same price buys the flag-shaped compounds (`noSecrets: true`, `hasCredentials:
+ *  false` — measured, both masked), the "lie in the record" the `tokenBudget`
+ *  comment above refuses; accepted, because a name-level `no`/`has` heuristic would
+ *  be a weaker rule than everything else here, and written down so it is seen
+ *  rather than missed.
  *
  *  Deliberately absent, for two reasons a reader can check:
  *   - `token`, `cookie`, `auth`, `authorization` and `bearer` take no plural here,
@@ -139,9 +146,10 @@ const KEY_STEMS = [
  *     predicate is `includes` and therefore wider than this one.
  *
  *  The test that pairs with this list is an equality assertion on an UNTOUCHED
- *  object (`tokens`, `maxTokens`, `keywords`, `monkey`, `cookieCount`, `hotkey`,
- *  `keychain`, `author`, `turkey`, `cookies`, bare `keys`), so the narrowness is
- *  measured rather than asserted. */
+ *  object (`monkey`, `tokenBudget`, `maxTokens`, `tokens`, `author`, `keywords`,
+ *  `cookieCount`, `cookies`, `hotkey`, `turkey`, `keychain`, bare `keys` — the
+ *  test's own twelve, in its order), so the narrowness is measured rather than
+ *  asserted. */
 const PLURAL_KEY_STEMS = ["apikey", "secret", "password", "passwd", "credential", "hmac"] as const
 
 /** The scan ① predicate. */
