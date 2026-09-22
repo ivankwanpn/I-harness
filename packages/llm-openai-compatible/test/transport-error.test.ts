@@ -22,7 +22,10 @@ function transportRejection(code: string, message: string): Error {
 const base = { apiKey: "k", baseUrl: "https://provider.example", model: "m" }
 
 function request(): LLMRequest {
-  return { messages: [{ role: "user", content: "hi" }], tools: [] } as unknown as LLMRequest
+  // M72 Ⅰ: the adapter now READS the required seam field `systemPrompt`
+  // (exactly as llm-gemini/llm-bedrock already do), so the fixture must
+  // supply it — the old `as unknown as` cast hid its absence.
+  return { messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as unknown as LLMRequest
 }
 
 async function drain(client: ReturnType<typeof createOpenAICompatibleClient>): Promise<string> {
