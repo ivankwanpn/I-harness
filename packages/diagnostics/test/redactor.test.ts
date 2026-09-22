@@ -65,16 +65,26 @@ it("key names: a name that merely CONTAINS a stem is not one", () => {
   // This is the `monkey` case of the brief, in its full company. Each of these
   // would be masked by an `includes(stem)` rule and would be a lie in a record:
   // a `tokenBudget` of 4096 is a number a human reads to debug context overflow.
+  //
+  // R14/M71 PAYS THE PARK'S BET HERE. The plural fix was parked because it "bets
+  // against over-redaction"; this object is the measurement that replaces the bet.
+  // The plural scan accepts only the stems that cannot collide with a count or a
+  // label, so `tokens`, `cookies` and bare `keys` are not plurals it knows — and an
+  // equality assertion on the WHOLE object, not a per-key spot check, is what makes
+  // that narrowness measured rather than asserted.
   const untouched = {
     monkey: "banana",
     tokenBudget: 4096,
     maxTokens: 8192,
+    tokens: 1234,
     author: "Ivan",
     keywords: "a, b",
     cookieCount: 3,
+    cookies: 3,
     hotkey: "ctrl+k",
     turkey: "gobble",
     keychain: "login",
+    keys: ["primary", "secondary"],
   }
 
   expect(createRedactor().redact(untouched)).toEqual(untouched)
@@ -88,6 +98,33 @@ it("a key-name hit masks the whole value, whatever its type — and a nested one
   expect(r.redact({ llm: { providers: [{ apiKey: "sk-live-ABC123" }] } })).toEqual({
     llm: { providers: [{ apiKey: TOKEN }] },
   })
+})
+
+it("a PLURAL key name masks the whole value too — whatever its type", () => {
+  // R14/M71. Scan ① is a SUFFIX test, so `apiKeys` never reached the `apikey`
+  // stem and its value was not replaced whole: the redactor recursed into it
+  // instead. The gap is one of granularity, not of a missing rule — `abc123def`
+  // below is neither `sk-`-shaped nor a ≥32-character base64 run, so no
+  // downstream rule catches the leaves a plural key exposes.
+  const r = createRedactor()
+
+  expect(r.redact({ apiKeys: "v1" })).toEqual({ apiKeys: TOKEN })
+  expect(r.redact({ secrets: 42 })).toEqual({ secrets: TOKEN })
+  expect(r.redact({ passwords: "hunter2" })).toEqual({ passwords: TOKEN })
+  expect(r.redact({ passwds: "hunter2" })).toEqual({ passwds: TOKEN })
+  expect(r.redact({ requestHMACs: "98f2" })).toEqual({ requestHMACs: TOKEN })
+  expect(r.redact({ credentials: { llm: { providers: [{ openai: "abc123def" }] } } })).toEqual({ credentials: TOKEN })
+})
+
+it("the plural gap was one of GRANULARITY: an unshaped leaf under a plural key, beside the singular's answer", () => {
+  // The before/after contrast in one place. The singular key replaced the whole
+  // object before this change and after it (green either way); the plural recursed
+  // in and left `abc123def` in the record — 9 characters, not `sk-`-shaped, not
+  // long base64, not registered, under an inner key (`openai`) that is no stem.
+  const r = createRedactor()
+
+  expect(r.redact({ apiKey: { openai: "abc123def" } })).toEqual({ apiKey: TOKEN })
+  expect(r.redact({ apiKeys: { openai: "abc123def" } })).toEqual({ apiKeys: TOKEN })
 })
 
 // ----------------------------------------------------- ② the shape scan
