@@ -442,3 +442,57 @@ describe("M13 parallel tool calls", () => {
     expect(() => createAgent(ctx, { ...deps, systemPrompt: "p", maxParallelToolCalls: 2.5 })).toThrow(/maxParallelToolCalls/)
   })
 })
+
+describe("M72 II: the request's output cap", () => {
+  it("M72 Ⅱ: the request carries the cap", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    // A window far larger than anything this test sends → nothing to clamp
+    // against, so the value is the one that went in. (The arithmetic itself is
+    // pinned exactly by Task 1's seam tests; this pins the WIRING.)
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 1_000_000 } })
+    await agent.run("hi")
+    expect(seen[0]!.maxOutputTokens).toBe(8_000)
+  })
+
+  it("M72 Ⅱ: the cap is clamped down when the window is nearly full", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "end" }
+      },
+    }
+    // 10,000 − (estimated input + overhead) − 4096 < 8,000 for any non-empty
+    // prompt → strictly less, and still a positive number.
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 10_000 } })
+    await agent.run("hi")
+    expect(seen[0]!.maxOutputTokens).toBeLessThan(8_000)
+    expect(seen[0]!.maxOutputTokens).toBeGreaterThan(0)
+  })
+
+  it("M72 Ⅱ: no cap resolved → the field is ABSENT, not 8000 and not 0", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1 })
+    await agent.run("hi")
+    expect("maxOutputTokens" in seen[0]!).toBe(false)
+  })
+})
