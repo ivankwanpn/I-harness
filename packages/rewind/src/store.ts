@@ -32,6 +32,7 @@ import { createHash } from "node:crypto"
 import { mkdir, readFile, stat, unlink } from "node:fs/promises"
 import { join, relative, resolve } from "node:path"
 import { writeFileAtomic } from "@i-harness/fs"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import { RewindError } from "./error.ts"
 import type {
   RewindOrphanRecord,
@@ -40,6 +41,13 @@ import type {
   RewindPoint,
   RewindWorkspaceMeta,
 } from "./types.ts"
+
+// W6 T6: ONE module-scope handle for this file's one report; the phase is
+// `session` because the message is about this session's journal gaining its
+// workspace binding (the one irreversible decision is never silent). With
+// nothing installed the handle delegates to console.warn verbatim (one
+// argument) — unset mode is the pre-migration bytes.
+const d = diagnosticsFor("session")
 
 export function sha256Hex(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex")
@@ -326,7 +334,7 @@ export class RewindStore {
       // The one irreversible decision (a pre-M54 journal has no binding) is
       // never silent: the adoption is reported so a wrong-cwd first write is
       // at least visible in the host log.
-      console.warn(`[rewind] bound pre-M54 journal ${this.dir} to workspace ${written.workspace} (no meta.json existed)`)
+      d.warn(`[rewind] bound pre-M54 journal ${this.dir} to workspace ${written.workspace} (no meta.json existed)`)
       return
     }
     if (this.workspace !== undefined && !sameWorkspacePath(meta.workspace, this.workspace)) {
