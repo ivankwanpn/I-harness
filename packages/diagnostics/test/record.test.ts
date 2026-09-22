@@ -6,16 +6,22 @@
 // WHY A SEPARATE FILE: diagnostics.test.ts owns the logger's three modes and
 // carries the env/ambient teardown they need; this is a pure function over
 // (unknown, Redactor) that wants none of that — and the boundary cases at the end
-// are here because the double they need lives in this file.
+// are here because the harness they need lives in this file.
 //
-// THE REDACTOR HERE IS A LOCAL DOUBLE — T3 owns `createRedactor`, and T2's
-// property is WHERE the derivation places the values (message and stack reach
-// the redactor, the name never does), not which rules exist. T3 must emit the
-// same `[REDACTED]` token, and swapping this double for the real factory is the
-// one line that changes when it lands.
+// THE REDACTOR HERE IS THE REAL FACTORY (T3), wrapped so the wrapper does ONE
+// thing the factory will not: record the values the derivation handed over
+// (`seen`). T2's property is WHERE the derivation places them — message and stack
+// reach the redactor, the name never does — and this file was written against a
+// rule-less double only because the factory did not exist yet. With the factory in
+// place the `[REDACTED]` assertions below stopped being evidence about a double and
+// became integration evidence: dropping the `sk-` rule reddens two cases here (the
+// exact-equality ones — measured, not assumed). The four adapter rows carry the
+// header form, so the `Bearer` rule covers them too and a single-rule mutation
+// leaves them green; those two cases are what pin the shape scan from this file.
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import {
   createDiagnostics,
+  createRedactor,
   currentDiagnostics,
   diagnosticsFor,
   fromError,
@@ -24,17 +30,19 @@ import {
   type Redactor,
 } from "../src/index.ts"
 
-/** The minimal double: ONE value rule, so a value that went through it is
- *  visible in the output. `seen`, when passed, records every value the
- *  derivation handed over — that array is the placement evidence below. */
+/** The real factory behind a recording proxy. `seen`, when passed, collects every
+ *  value the derivation handed over — that array is the placement evidence below.
+ *  The proxy adds no rules of its own: it forwards, so nothing here can mask a
+ *  secret the factory would have written. */
 function redactor(seen?: unknown[]): Redactor {
+  const real = createRedactor()
   return {
-    redact: (value) => {
+    redact: (value, key) => {
       seen?.push(value)
-      return typeof value === "string" ? value.replace(/sk-live-[A-Za-z0-9]+/g, "[REDACTED]") : value
+      return real.redact(value, key)
     },
-    registerSecret: () => {},
-    size: () => ({ rules: 1, secrets: 0 }),
+    registerSecret: (value) => { real.registerSecret(value) },
+    size: () => real.size(),
   }
 }
 
