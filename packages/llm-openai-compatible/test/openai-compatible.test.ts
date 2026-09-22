@@ -331,3 +331,48 @@ describe("M32 reasoning effort (openai-family Chat Completions)", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅱ. Chat Completions has NO universal spelling: `max_tokens` is what the
+// compatible gateways this adapter exists for take, `max_completion_tokens` is
+// what the newest OpenAI models demand. The route decides (explicit config),
+// because a guess here is a 400 on exactly one of the two.
+describe("M72 Ⅱ: the output cap on the compatible wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap goes on the default field name", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(4096)
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: a route can name its own field (new OpenAI models reject max_tokens)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m", maxTokensField: "max_completion_tokens" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_completion_tokens).toBe(4096)
+    expect(body.max_tokens).toBeUndefined()
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → no cap field at all", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("max_tokens" in body).toBe(false)
+    expect("max_completion_tokens" in body).toBe(false)
+    await it.return?.()
+  })
+})

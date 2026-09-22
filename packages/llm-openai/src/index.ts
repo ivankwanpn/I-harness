@@ -123,6 +123,9 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: a request-level cap, so it lands after config.options (the
+        // same precedence rule the reasoning line above documents).
+        ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /

@@ -67,3 +67,26 @@ describe("buildModelClient retry wiring", () => {
     ).toThrow(/retryPolicy/)
   })
 })
+
+// M72 Ⅱ: the route-level field-name switch only earns its six files if it
+// actually arrives at the wire. This drives the REAL compatible client through
+// buildModelClient, so the assertion is about the shipped plumbing (profile →
+// factory config → body), not about a config object handed straight to the
+// adapter (which the adapter's own suite already covers).
+describe("M72 Ⅱ: the route's cap field name reaches the wire", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("M72 Ⅱ: a route's own field name reaches the wire", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = buildModelClient({
+      name: "gw", displayName: "GW", protocol: "openai-compatible",
+      apiKey: "k", baseUrl: "https://gw.test", maxTokensField: "max_completion_tokens",
+    }, "m")
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 7 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_completion_tokens).toBe(7)
+    await it.return?.()
+  })
+})

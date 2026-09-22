@@ -85,6 +85,16 @@ export interface SettingsModel {
  * `read_image` could never deliver a real picture to a model. */
 export type SettingsInputModality = "text" | "image"
 
+/** M72 Ⅱ: the two CHAT-completions spellings of the output cap. Which one a
+ * route sends is a PER-ROUTE choice rather than a rule of the protocol:
+ * `max_tokens` is the spelling compatible gateways take (why this adapter
+ * exists), while the newest OpenAI models reject it as a legacy name and want
+ * `max_completion_tokens`. A wrong name here is a 400, which is why it is
+ * declared rather than probed. */
+export type SettingsMaxTokensField = "max_tokens" | "max_completion_tokens"
+
+const MAX_TOKENS_FIELDS: readonly SettingsMaxTokensField[] = ["max_tokens", "max_completion_tokens"]
+
 const INPUT_MODALITIES: readonly SettingsInputModality[] = ["text", "image"]
 
 /** Keep only the known modality names, in declaration order, deduped; an empty
@@ -143,6 +153,12 @@ export interface SettingsProviderConfig {
   /** M61: content types this ROUTE accepts — the fallback when the selected
    * model entry does not declare its own. Absent = text-only (M14). */
   inputModalities?: SettingsInputModality[]
+  /** M72 Ⅱ: the wire field this ROUTE's openai-compatible requests carry the
+   * output cap on. Absent = the adapter's own `max_tokens` default, which is
+   * the compatible-gateway spelling; a route aimed at the newest OpenAI models
+   * says `max_completion_tokens` here. Read by that one protocol — the other
+   * wires each have a single fixed spelling. */
+  maxTokensField?: SettingsMaxTokensField
 }
 
 /** The section-level default model (resolution chain in Task 5:
@@ -366,6 +382,13 @@ function isProviderProtocol(value: unknown): value is SettingsProviderProtocol {
   return typeof value === "string" && (PROVIDER_PROTOCOLS as readonly string[]).includes(value)
 }
 
+/** M72 Ⅱ: the closed pair (see SettingsMaxTokensField). Anything else — a
+ * Responses spelling, a number, a typo — degrades to absent rather than
+ * travelling to a wire that would reject the whole request. */
+function isMaxTokensField(value: unknown): value is SettingsMaxTokensField {
+  return typeof value === "string" && (MAX_TOKENS_FIELDS as readonly string[]).includes(value)
+}
+
 /** M49 Task 13: a string id list (non-empty strings, deduped — corrupt entries
  * dropped, non-array input degrades to []). */
 function stringList(value: unknown): string[] {
@@ -485,6 +508,7 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (headers !== undefined) out.headers = headers
   const modalities = normalizeInputModalities(raw.inputModalities)
   if (modalities !== undefined) out.inputModalities = modalities
+  if (isMaxTokensField(raw.maxTokensField)) out.maxTokensField = raw.maxTokensField
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out

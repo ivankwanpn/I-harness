@@ -432,3 +432,37 @@ describe("M72 Ⅰ in-stream provider failures (openai)", () => {
     expect((events[0] as { error: Error }).error.message).toContain("nested only")
   })
 })
+
+// M72 Ⅱ. The Responses wire spells the cap `max_output_tokens` and — unlike
+// Anthropic — has a default of its own, so an unresolved cap sends NOTHING:
+// inventing a number here would make every request a statement we cannot back.
+describe("M72 Ⅱ: the output cap on the openai wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap is top-level max_output_tokens", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_output_tokens).toBe(4096)
+    // the chat-completions spelling is NOT this wire's
+    expect(body.max_tokens).toBeUndefined()
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → neither spellings are sent", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("max_output_tokens" in body).toBe(false)
+    expect("max_tokens" in body).toBe(false)
+    await it.return?.()
+  })
+})
