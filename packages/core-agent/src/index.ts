@@ -4,8 +4,8 @@ import type { Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
-import { assertMessagesFromLog } from "@i-harness/llm-seam"
-import { activeTokens, checkBudget } from "@i-harness/token-meter"
+import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
+import { activeTokens, checkBudget, estimateContent } from "@i-harness/token-meter"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export {
@@ -295,6 +295,21 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         messages,
         tools: deps.tools.schemas(),
         systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+        // M72 Ⅱ: the cap the host resolved for this model, CLAMPED here because
+        // this is the only place that holds all three inputs at once: the value
+        // (deps), the window (budgetCfg) and the input we are about to send.
+        // Estimated with the same meter the budget check uses, plus the same
+        // overhead it charges — so the clamp and the compaction ladder agree on
+        // what "the input" costs. Absent deps value → absent field.
+        ...(deps.maxOutputTokens !== undefined
+          ? {
+              maxOutputTokens: clampOutputCap(
+                deps.maxOutputTokens,
+                budgetCfg?.contextWindow,
+                estimateContent(messages) + (budgetCfg?.overheadTokens ?? 0),
+              ),
+            }
+          : {}),
         // M32 T3: verbatim effort passthrough (absent → the field is never set;
         // the adapter's translateReasoning owns the wire vocabulary).
         ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
