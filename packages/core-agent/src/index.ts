@@ -86,6 +86,9 @@ export interface AgentDeps {
   // translateReasoning in the llm-* adapters). Absent → the request never
   // carries the field (缺省不發 — the provider's own default applies).
   reasoningEffort?: ReasoningEffort
+  /** M72 Ⅱ: the resolved output cap for this session's model (undefined → the
+   * adapter sends none). Read at request assembly, clamped there. */
+  maxOutputTokens?: number
 }
 
 // M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — import

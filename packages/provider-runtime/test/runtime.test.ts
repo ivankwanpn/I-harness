@@ -265,6 +265,56 @@ describe("model resolution", () => {
     })
   })
 
+  it("M72 Ⅱ: the binding carries the resolved output cap, not just the window", async () => {
+    // readyFixture's settings-row shape (`{ id, contextWindow }`), with one row
+    // that also carries the user-written output cap.
+    const { runtime } = await fixture({
+      providers: {
+        deepseek: {
+          displayName: "Private DeepSeek",
+          baseURL: "https://gateway.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [
+            { id: "session-model", contextWindow: 96_000, maxTokens: 1_234 },
+            { id: "default-model", contextWindow: 128_000 },
+          ],
+        },
+      },
+      defaultModel: { provider: "deepseek", model: "default-model" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({
+          name: "deepseek",
+          displayName: "DeepSeek",
+          protocol: "openai-compatible",
+          baseUrl: "https://api.deepseek.com",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: ["static-model", "default-model"],
+          defaultModel: "default-model",
+          contextWindow: 64_000,
+        })
+      },
+    })
+
+    // The row that declares NO cap. This assertion checks only the keys it
+    // names, so on its own it does not pin the field's ABSENCE — that property
+    // belongs to the resolution shape (nothing resolves → nothing spread), and
+    // is stated in the M72 Ⅱ task report rather than asserted here.
+    await expect(runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { modelId: "default-model", contextWindow: 128_000 },
+    })
+    // The row that DOES declare one: the resolved cap must travel on the
+    // binding instead of being dropped one line after it was computed.
+    await expect(runtime.resolveModel({
+      sessionSelection: { provider: "deepseek", model: "session-model" },
+    })).resolves.toMatchObject({
+      status: "ready",
+      binding: { modelId: "session-model", maxOutputTokens: 1_234 },
+    })
+  })
+
   it("M59: provider headers reach the built client's profile", async () => {
     const f = await fixture({
       providers: {
