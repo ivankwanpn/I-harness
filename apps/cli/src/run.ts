@@ -29,6 +29,15 @@ import {
 import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-runtime"
 import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 import { registerCliSecrets } from "./diagnostics-bootstrap.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: one module-scope handle, and the phase is the SEAM rather than the
+// file: all five migrated sites here are the plugin/hook/mcp mount's own
+// warnings (the `[plugins]`/`[hooks]` tags in their messages), so they report
+// as `mount`. The one site that is NOT the mount — the `[metrics]` report at
+// the end of a run — is one of the plan's five named exceptions and stays a
+// plain console call.
+const d = diagnosticsFor("mount")
 
 // M33 §5: the session-compact command handler — pure (testable) surface.
 // v0 error semantics: busy text while the executor lane is running (the
@@ -474,7 +483,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     const pluginInputs = pluginRegistry.runtimeInputs()
     const pluginMcp = toMcpServerConfigs(pluginInputs.mcpServerConfigs)
     for (const skippedMcp of pluginMcp.skipped) {
-      console.warn(`[plugins] skipping MCP server ${skippedMcp.serverName}: ${skippedMcp.reason}`)
+      d.warn(`[plugins] skipping MCP server ${skippedMcp.serverName}: ${skippedMcp.reason}`)
     }
     for (const desc of pluginInputs.commandDescriptors) {
       if (desc.unsupported !== undefined) {
@@ -483,7 +492,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         // to be restricted when nothing enforces it. Durable recording onto the
         // plugin record is owed and belongs at enable() time, because
         // `runtimeInputs()` is read-only by contract ("reads never materialize").
-        console.warn(`[plugins] command ${desc.name} declares unsupported frontmatter: ${desc.unsupported.join(", ")}`)
+        d.warn(`[plugins] command ${desc.name} declares unsupported frontmatter: ${desc.unsupported.join(", ")}`)
       }
     }
     // Agent roles. The plugin writes Claude Code's tool vocabulary and this repo
@@ -495,7 +504,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       allowedTools: [...PLUGIN_AGENT_TOOLS],
     })
     for (const missed of pluginAgents.unresolved) {
-      console.warn(`[plugins] agent ${missed.role} declares an unusable tool (${missed.reason}): ${missed.tool}`)
+      d.warn(`[plugins] agent ${missed.role} declares an unusable tool (${missed.reason}): ${missed.tool}`)
     }
 
     assembly = await createSessionAssembly({
@@ -630,7 +639,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         // propagate meant ANY enabled CC plugin carrying hooks failed EVERY run
         // — measured 2026-09-19 against the real home, with `superpowers`
         // enabled, on runs that never touch a hook.
-        console.warn(
+        d.warn(
           `[plugins] hooks config ${hookConfig} could not be loaded; its hooks contribute nothing for this run: ` +
             `${err instanceof Error ? err.message : String(err)}`,
         )
@@ -790,7 +799,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     if (activeId !== undefined) {
       for (const registry of hookRegistries) {
         await registry.endSession(activeId).catch((err: unknown) => {
-          console.warn(`[hooks] session/end handler failed: ${err instanceof Error ? err.message : String(err)}`)
+          d.warn(`[hooks] session/end handler failed: ${err instanceof Error ? err.message : String(err)}`)
         })
       }
     }
