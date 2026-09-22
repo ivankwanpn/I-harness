@@ -215,8 +215,10 @@ describe("the CLI's diagnostics bootstrap", () => {
       expect(warn.mock.calls).toEqual([["[stand-in] a message a human reads today"]])
       // ... and nothing structured anywhere: no sink means no record.
       expect(stderr.lines()).toEqual([])
-      // The un-migrated report keeps its own shape (one string, the M3 headline)
-      // — the shape the suite's existing text assertions compare against.
+      // The report's DELEGATED shape stays one string, the M3 headline — the
+      // shape the suite's existing text assertions compare against. (R10 migrated
+      // the site that emits it; in unset mode what lands here is the delegation,
+      // which is why this case can still read it off a console spy.)
       expect(err.mock.calls[0]).toHaveLength(1)
       expect(String(err.mock.calls[0]![0])).toContain("i-harness run did not finish")
     } finally {
