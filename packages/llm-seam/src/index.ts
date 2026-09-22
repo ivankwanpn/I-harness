@@ -435,13 +435,22 @@ export const ANTHROPIC_MAX_TOKENS_FALLBACK = 128_000
  * same way; the host supplies the estimate because only the host knows how it
  * prices a message (this package deliberately owns no tokenizer).
  *
- * When no window is known the value is returned untouched. When the estimated
- * input plus the margin already fills the window, the value is ALSO returned
- * untouched: the request cannot run at that size whichever cap it carries, and
- * clamping to 1 token would turn a context overflow into a silent truncation.
+ * Three arms. No window known ⇒ the value is returned untouched. The estimated
+ * input alone fills the window ⇒ ALSO untouched: the request cannot run at that
+ * size whichever cap it carries, and clamping to 1 token would turn a context
+ * overflow into a silent truncation. Otherwise the value is clamped into the
+ * hard room, preferring `hardRoom − margin` and falling back to the hard room
+ * itself when the margin does not fit — the margin is insurance against our
+ * estimate being low, never a licence to exceed the provider's rule.
  */
 export function clampOutputCap(value: number, contextWindow: number | undefined, estimatedInputTokens: number): number {
   if (contextWindow === undefined) return value
-  const room = contextWindow - estimatedInputTokens - OUTPUT_CAP_SAFETY_MARGIN
-  return room >= 1 ? Math.min(value, room) : value
+  // The provider's OWN rule is `input + max_tokens <= context` — the safety
+  // margin is insurance against our estimate being low, NOT a licence to exceed
+  // that rule. So the hard room is computed first and always honoured; the
+  // margin only decides how much of it we are willing to promise.
+  const hardRoom = contextWindow - estimatedInputTokens
+  if (hardRoom < 1) return value
+  const room = hardRoom - OUTPUT_CAP_SAFETY_MARGIN
+  return Math.min(value, room >= 1 ? room : hardRoom)
 }
