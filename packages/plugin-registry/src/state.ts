@@ -14,6 +14,7 @@
 import { mkdir, readFile } from "node:fs/promises"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
+import { currentDiagnostics } from "@i-harness/diagnostics"
 import { writeFileAtomic } from "@i-harness/fs"
 import type { PluginSourceInfo, PluginRecord, PluginState } from "./types.ts"
 
@@ -65,8 +66,16 @@ function isPluginState(value: unknown): value is PluginState {
   )
 }
 
+// W6 T6: the state file's rebuild report — this is how the plugins SEAM
+// announces that a corrupt/unshapeable document was replaced by the defaults,
+// hence phase `mount`. The call reaches the ambient instance when a host
+// installed one and is the console call it always was when none is: same
+// function, same single verbatim argument.
 function rebuilt(reason: string, file: string): PluginState {
-  console.warn(`[plugin-registry] state file ${reason} (${file}); rebuilding defaults`)
+  const message = `[plugin-registry] state file ${reason} (${file}); rebuilding defaults`
+  const d = currentDiagnostics()
+  if (d === undefined) console.warn(message)
+  else d.child("mount").warn(message)
   return defaultState()
 }
 
