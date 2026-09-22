@@ -24,6 +24,11 @@ import {
 import type { ProviderRuntimeEntry } from "@i-harness/provider-runtime"
 import { PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { loadProviderRuntime } from "./provider-runtime.ts"
+import { diagnosticsFor } from "@i-harness/diagnostics"
+
+// W6 T5: this file's call sites all report the `provider` command's own
+// refusals and failures (phase `cli`), so one module-scope handle covers them.
+const d = diagnosticsFor("cli")
 
 /** The five wire protocols a route may declare. ONE list, and it lives in
  * settings — the CLI used to re-declare the same enum, which is two places to
@@ -238,12 +243,12 @@ export interface ProviderCommandOptions {
 export async function runProviderCommand(args: string[], options: ProviderCommandOptions = {}): Promise<number> {
   const parsed = parseProviderArgs(args)
   if (parsed.error !== undefined) {
-    console.error(`provider: ${parsed.error}`)
-    console.error(PROVIDER_USAGE)
+    d.error(`provider: ${parsed.error}`)
+    d.error(PROVIDER_USAGE)
     return 1
   }
   if (parsed.subcommand === "help") {
-    console.error(PROVIDER_USAGE)
+    d.error(PROVIDER_USAGE)
     return 0
   }
 
@@ -260,8 +265,8 @@ export async function runProviderCommand(args: string[], options: ProviderComman
       } catch (error) {
         // The runtime's message deliberately names no sibling method; this is
         // where the CLI verb the user can actually type belongs.
-        console.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
-        console.error(`  to change an existing route: i-harness provider set ${id} [flags]`)
+        d.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
+        d.error(`  to change an existing route: i-harness provider set ${id} [flags]`)
         return 1
       }
       // The credential REF is decided by the runtime; print it so the next
@@ -273,8 +278,8 @@ export async function runProviderCommand(args: string[], options: ProviderComman
       try {
         await runtime.patchProvider(id, { ...parsed.fields })
       } catch (error) {
-        console.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
-        console.error(`  to create a route: i-harness provider add ${id} --base-url URL --protocol P`)
+        d.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
+        d.error(`  to create a route: i-harness provider add ${id} --base-url URL --protocol P`)
         return 1
       }
       // A no-flag `set` writes the row back unchanged (and still proves the
@@ -293,12 +298,12 @@ export async function runProviderCommand(args: string[], options: ProviderComman
       // is symmetric with it now.
       const known = (await runtime.directory()).some((row) => row.id === id)
       if (!known) {
-        console.error(`provider: no route "${id}" — create it first: i-harness provider add ${id} --base-url URL --protocol P`)
+        d.error(`provider: no route "${id}" — create it first: i-harness provider add ${id} --base-url URL --protocol P`)
         return 1
       }
       const value = (await (options.readKey ?? readStdinLine)()).trim()
       if (value === "") {
-        console.error("provider: no key on stdin")
+        d.error("provider: no key on stdin")
         return 1
       }
       await runtime.setApiKey(id, value)
@@ -312,7 +317,7 @@ export async function runProviderCommand(args: string[], options: ProviderComman
     console.log(`removed provider "${id}"`)
     return 0
   } catch (error) {
-    console.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
+    d.error(`provider: ${error instanceof Error ? error.message : String(error)}`)
     return 1
   }
 }
