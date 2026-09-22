@@ -475,6 +475,13 @@ export async function main(argv: string[]): Promise<number> {
   // does not exist until the run needs a model, so `run.ts` feeds it there — see
   // the bootstrap's header.
   const boot = createCliDiagnostics()
+  // M3 §3.4: the instance's identity and its redactor, handed to the one place
+  // that writes the durable run-end record (`run.ts`'s `appendRunEnd`). Both are
+  // the INSTANCE's, never a fresh pair: a record redacted by a different
+  // redactor than the JSONL's would be a second, weaker masking rule, and a
+  // record carrying a second id could not be joined to this run's log lines.
+  opts.runId = boot.runId
+  opts.redactor = boot.redactor
   try {
     return await runHeadless(task, opts).then((r) => {
       if (r.finalText) console.log(r.finalText)

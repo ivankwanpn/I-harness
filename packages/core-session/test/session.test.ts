@@ -498,6 +498,18 @@ describe("sandbox/mode session event (M16, log-only)", () => {
   })
 })
 
+describe("operator/run-end session event (M3 §3.4, log-only)", () => {
+  it("is model-invisible and unindexed — the union comment's two UI-plane claims", () => {
+    const s = createSession()
+    append(s, { type: "operator/run-end", version: 1, runId: "run-1", exitCode: 1, durationMs: 42, phase: "run", error: "boom" })
+    append(s, { type: "user/message", text: "hi" })
+    // log-only: never in the model transcript (the default branch skips it)
+    expect(deriveMessages(s)).toEqual([{ role: "user", content: "hi" }])
+    // control event → no search text
+    expect(deriveSearchText(s.events[0]!)).toBe("")
+  })
+})
+
 describe("M14 multimodal", () => {
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 

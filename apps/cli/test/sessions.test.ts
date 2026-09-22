@@ -11,6 +11,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   formatAge,
+  formatLastRun,
   listStoredSessions,
   parseSessionsArgs,
   renderSessionTable,
@@ -123,7 +124,7 @@ describe("renderSessionTable", () => {
       { id: "s-2-long-id", turnCount: 0, updatedAt: now - 3 * 3600_000 },
     ], now)
     const lines = table.split("\n")
-    expect(lines[0]).toMatch(/^ID\s+TITLE\s+TURNS\s+UPDATED$/)
+    expect(lines[0]).toMatch(/^ID\s+TITLE\s+TURNS\s+UPDATED\s+LAST RUN$/)
     expect(lines[1]).toContain("s-1")
     expect(lines[1]).toContain("just now")
     expect(lines[2]).toContain("3h")
@@ -226,5 +227,74 @@ describe("runSessionsCommand", () => {
     }
     expect(code).toBe(0)
     expect(logs.join("\n")).toContain("good")
+  })
+})
+
+describe("sessions — the durable run-end record (M3 §3.4)", () => {
+  it("list renders ok / failed / — and the transcript renders the run-end line", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    try {
+      const ok = await coordinator.create({})
+      const failed = await coordinator.create({})
+      const older = await coordinator.create({})
+      const logOk = createSession()
+      append(logOk, { type: "turn/start" })
+      append(logOk, { type: "turn/end" })
+      append(logOk, { type: "operator/run-end", version: 1, runId: "r-ok", exitCode: 0, durationMs: 1200, phase: "run" })
+      const logFailed = createSession()
+      append(logFailed, { type: "turn/start" })
+      append(logFailed, { type: "turn/end" })
+      append(logFailed, { type: "operator/run-end", version: 1, runId: "r-bad", exitCode: 1, durationMs: 400, phase: "run", error: "boom" })
+      const logOlder = createSession()
+      append(logOlder, { type: "turn/start" })
+      append(logOlder, { type: "turn/end" })
+      coordinator.enqueue(ok.id, logOk.events)
+      coordinator.enqueue(failed.id, logFailed.events)
+      coordinator.enqueue(older.id, logOlder.events)
+      await coordinator.flush(ok.id)
+      await coordinator.flush(failed.id)
+      await coordinator.flush(older.id)
+
+      const rows = await listStoredSessions(coordinator, dir)
+      const table = renderSessionTable(rows, Date.now())
+      expect(table.split("\n")[0]).toContain("LAST RUN")
+      expect(table).toContain("ok 1.2s")
+      expect(table).toContain("failed exit 1 0.4s")
+      expect(table.split("\n").find((line) => line.startsWith(older.id))).toContain("—")
+
+      const { session } = await coordinator.load(failed.id)
+      expect(renderTranscript(session, 20)).toContain("run end: exit 1 · 0.4s — boom")
+    } finally {
+      await coordinator.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("two records for one run: the LAST one is what the row shows", async () => {
+    // The success path appends exit 0 BEFORE the durable flush; when that flush
+    // rejects, the run-failure catch appends exit 1, and the write-behind retains
+    // the failed batch so close() drains both. The reader's contract is
+    // **last wins** — the later record is the exit that actually happened.
+    const dir = mkdtempSync(join(tmpdir(), "ih-sessions-run-end-twice-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), {})
+    try {
+      const { id } = await coordinator.create({})
+      const log = createSession()
+      append(log, { type: "turn/start" })
+      append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 0, durationMs: 800, phase: "run" })
+      append(log, { type: "operator/run-end", version: 1, runId: "r-twice", exitCode: 1, durationMs: 900, phase: "run", error: "durable write failed" })
+      coordinator.enqueue(id, log.events)
+      await coordinator.flush(id)
+
+      const rows = await listStoredSessions(coordinator, dir)
+      expect(rows[0]!.lastRun).toMatchObject({ exitCode: 1, durationMs: 900 })
+      expect(formatLastRun(rows[0]!.lastRun)).toBe("failed exit 1 0.9s")
+      const { session } = await coordinator.load(id)
+      expect(renderTranscript(session, 20)).toContain("run end: exit 1 · 0.9s — durable write failed")
+    } finally {
+      await coordinator.close()
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

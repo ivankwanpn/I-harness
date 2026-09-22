@@ -245,6 +245,11 @@ registerEventType("sandbox/mode")
 // Registered so it crosses the guardIgnorable load gate on its own — a log that
 // carries a dispatch marker must still load when only this package is present.
 registerEventType("tool/dispatch")
+// M3 §3.4: the CLI run path's durable run-end record. NOT `ignorable: true`:
+// load() DROPS ignorable events, which would erase the very record this event
+// exists to keep — the same defect class as `rewind/point` above and
+// `sandbox/mode` before it.
+registerEventType("operator/run-end")
 
 export function createSessionCoordinator(backend: PersistenceBackend, opts?: CoordinatorOptions): SessionCoordinator {
   const report = opts?.reportBackgroundFailure

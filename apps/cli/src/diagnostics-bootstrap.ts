@@ -74,6 +74,15 @@ export interface CreateCliDiagnosticsOptions {
 export interface CliDiagnostics {
   /** The installed instance. The entries close it on every exit. */
   diagnostics: Diagnostics
+  /** The identity every record of this instance carries. Returned so a caller
+   *  can write the SAME id somewhere else — `run` puts it on the durable
+   *  run-end record, which is what lets the JSONL and the session log be
+   *  joined after the fact (M3 §3.4). */
+  runId: string
+  /** The instance's own redactor, returned for the same reason the runId is:
+   *  the run path derives the record's `error` through it (`fromError`), and an
+   *  error message is where a credential comes back in. */
+  redactor: Redactor
   /** `installDiagnostics`'s uninstaller — see the caller's teardown for why both
    *  this and `diagnostics.close()` are called: they are different contracts
    *  (release the INSTANCE vs detach the SLOT), and the pairing discipline the
@@ -157,10 +166,15 @@ export function createCliDiagnostics(opts: CreateCliDiagnosticsOptions = {}): Cl
   if (opts.settings !== undefined && opts.credentials !== undefined) {
     registerCliSecrets(opts.settings, opts.credentials)
   }
-  const diagnostics = createDiagnostics({ runId: opts.runId ?? randomUUID(), redactor })
+  // Bound to a name rather than inlined into the constructor call: the id is
+  // returned below, and one expression read twice is one chance to mint two.
+  const runId = opts.runId ?? randomUUID()
+  const diagnostics = createDiagnostics({ runId, redactor })
   const uninstall = installDiagnostics(diagnostics)
   return {
     diagnostics,
+    runId,
+    redactor,
     uninstall: () => {
       uninstall()
       // A feed arriving after teardown must not write into a dead instance: the
