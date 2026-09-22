@@ -12,6 +12,7 @@ import { ndJsonStream } from "@agentclientprotocol/sdk"
 import { runHeadless, type HeadlessOptions } from "./run.ts"
 import { createCliDiagnostics } from "./diagnostics-bootstrap.ts"
 import { createProviderRegistry, buildModelClient } from "@i-harness/provider"
+import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { ModelClient } from "@i-harness/llm-seam"
 import { createSessionCoordinator, forkSession } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -35,6 +36,22 @@ import { runModelsCommand } from "./models.ts"
 import { runRolesCommand } from "./roles.ts"
 import { failureReport, diagnosticSessionId } from "./run.ts"
 
+// W6 T5: the phase handles this file's call sites log through.
+//
+// MODULE SCOPE, never a parameter: `diagnosticsFor` re-reads the installed
+// instance on EVERY call, so a handle taken here — at import time, long before
+// any entry body runs — is a live view rather than a snapshot (the ambient
+// handle's contract, packages/diagnostics). ONE handle per phase this file
+// reports under: `cli` for the argv/flag refusals and this entry's own
+// reporters, `sdk` for the sdk host's runtime below (its two messages carry
+// the `[i-harness sdk]` tag). The run's own failure report is deliberately
+// still a plain console call (its phase would be `run`): T4's cases ②/⑤ read
+// the installed instance out of a spy on that call, so a handle with a sink
+// silences the spy and reddens four cases in a test file this task may not
+// touch — measured, and recorded as the open ruling in the W6 plan's T5 note.
+const d = diagnosticsFor("cli")
+const sdkD = diagnosticsFor("sdk")
+
 // M3 fail-loud. An UNHANDLED error is reported with the session it interrupted,
 // instead of as a bare stack trace that names no run — M3's completion definition
 // is that a failed run can be located "不需要人手讀 JSONL".
@@ -47,7 +64,7 @@ import { failureReport, diagnosticSessionId } from "./run.ts"
 // v15 and `uncaughtException` always was. What changes is what the reader is TOLD.
 for (const event of ["uncaughtException", "unhandledRejection"] as const) {
   process.on(event, (err: unknown) => {
-    console.error(failureReport(err, { sessionId: diagnosticSessionId(), kind: "crashed" }))
+    d.error(failureReport(err, { sessionId: diagnosticSessionId(), kind: "crashed" }))
     process.exit(1)
   })
 }
@@ -106,7 +123,7 @@ export async function main(argv: string[]): Promise<number> {
   // and the search index is derived from it (reconcile-on-search). Fail loud
   // instead of silently ignoring the old flag.
   if (args.includes("--session-backend")) {
-    console.error("--session-backend is removed (M29: JSONL-only persistence; the search index derives from the store)")
+    d.error("--session-backend is removed (M29: JSONL-only persistence; the search index derives from the store)")
     return Promise.resolve(1)
   }
   // R-C4 sdk subcommand: NDJSON JSON-RPC 2.0 stdio server (hosted by the
@@ -185,7 +202,7 @@ export async function main(argv: string[]): Promise<number> {
   // token that was not a subcommand. The frontends are gone, so an absent or
   // unknown subcommand is a usage error again: usage on stderr, exit 1.
   if (args[0] !== "run") {
-    console.error(USAGE)
+    d.error(USAGE)
     return Promise.resolve(1)
   }
 
@@ -222,7 +239,7 @@ export async function main(argv: string[]): Promise<number> {
     if (RUN_FLAGS.has(a)) continue
     if (i > 0 && RUN_VALUE_FLAGS.has(runArgs[i - 1]!)) continue
     if (a.startsWith("-")) {
-      console.error(`i-harness run: unknown flag ${a} (a flag-like token would otherwise become the prompt)\n${USAGE}`)
+      d.error(`i-harness run: unknown flag ${a} (a flag-like token would otherwise become the prompt)\n${USAGE}`)
       return Promise.resolve(1)
     }
   }
@@ -237,11 +254,11 @@ export async function main(argv: string[]): Promise<number> {
   if (protocolIdx !== -1) {
     const value = args[protocolIdx + 1]
     if (value === undefined) {
-      console.error(`--protocol requires one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
+      d.error(`--protocol requires one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
       return Promise.resolve(1)
     }
     if (!(PROVIDER_PROTOCOLS as readonly string[]).includes(value)) {
-      console.error(`unknown protocol "${value}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
+      d.error(`unknown protocol "${value}"; expected one of: ${PROVIDER_PROTOCOLS.join(" | ")}`)
       return Promise.resolve(1)
     }
     // `--model` builds its client from the flag's own route and never enters
@@ -249,7 +266,7 @@ export async function main(argv: string[]): Promise<number> {
     // ride. The combination is REFUSED rather than accepted-and-dropped: a
     // silently unused protocol is the degradation this design removed.
     if (args.includes("--model")) {
-      console.error("--protocol cannot be combined with --model (--model builds its client outside the settings chain, so there is no session selection for --protocol to ride)")
+      d.error("--protocol cannot be combined with --model (--model builds its client outside the settings chain, so there is no session selection for --protocol to ride)")
       return Promise.resolve(1)
     }
     protocol = value as CliProtocol
@@ -282,7 +299,7 @@ export async function main(argv: string[]): Promise<number> {
     if (value === undefined || !(allowed as readonly string[]).includes(value)) {
       // Never coerce a typo to a default: `--sandbox readonly` silently meaning
       // workspace-write is exactly the false assurance the web fix removed.
-      console.error(`--sandbox requires one of: ${allowed.join(" | ")}`)
+      d.error(`--sandbox requires one of: ${allowed.join(" | ")}`)
       return Promise.resolve(1)
     }
     sandboxMode = value as SandboxMode
@@ -319,7 +336,7 @@ export async function main(argv: string[]): Promise<number> {
   // by design (no store root means no jsonl, no ownership lease), so resuming
   // simply has nothing to resume FROM — say so instead of pretending.
   if (resumeIdx !== -1 && sessionDirIdx === -1) {
-    console.error("--resume requires --session-dir DIR (headless runs are ephemeral without a store)")
+    d.error("--resume requires --session-dir DIR (headless runs are ephemeral without a store)")
     return Promise.resolve(1)
   }
 
@@ -330,7 +347,7 @@ export async function main(argv: string[]): Promise<number> {
   if (sessionDirIdx !== -1) {
     const dir = args[sessionDirIdx + 1]
     if (!dir) {
-      console.error("--session-dir requires a directory")
+      d.error("--session-dir requires a directory")
       return Promise.resolve(1)
     }
     // M23: the CLI opts into the session ownership lease with lockRoot = the
@@ -341,7 +358,7 @@ export async function main(argv: string[]): Promise<number> {
     if (resumeIdx !== -1) {
       resumeSessionId = args[resumeIdx + 1]
       if (!resumeSessionId) {
-        console.error("--resume requires a session id")
+        d.error("--resume requires a session id")
         return Promise.resolve(1)
       }
     } else {
@@ -354,7 +371,7 @@ export async function main(argv: string[]): Promise<number> {
         // carries the lock path + deadline diagnostics) or
         // SessionLockUnsupportedError off-Windows (M24 boundary). Surface the
         // message cleanly (exitCode 1) instead of an unhandled rejection.
-        console.error(err instanceof Error ? err.message : String(err))
+        d.error(err instanceof Error ? err.message : String(err))
         return Promise.resolve(1)
       }
     }
@@ -377,13 +394,13 @@ export async function main(argv: string[]): Promise<number> {
     const apiKey = args[keyIdx + 1]
     const needsApiKey = modelSpec?.split(":")[0] !== "bedrock"
     if (!modelSpec || (needsApiKey && (keyIdx === -1 || !apiKey))) {
-      console.error("--model requires --api-key KEY")
+      d.error("--model requires --api-key KEY")
       return Promise.resolve(1)
     }
     try {
       model = parseModel(modelSpec, apiKey ?? "")
     } catch (err) {
-      console.error(err instanceof Error ? err.message : String(err))
+      d.error(err instanceof Error ? err.message : String(err))
       return Promise.resolve(1)
     }
   }
@@ -401,7 +418,7 @@ export async function main(argv: string[]): Promise<number> {
   })
   const task = taskArgs.join(" ")
   if (!task) {
-    console.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
+    d.error("usage: i-harness run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access]")
     return Promise.resolve(1)
   }
 
@@ -447,10 +464,11 @@ export async function main(argv: string[]): Promise<number> {
   // command is about to start. The three hosts install their own — this is the
   // run path's, and `runSdkCommand`/`runAcpCommand` below are the other two.
   //
-  // WHERE IT GOES, and why nothing earlier: the flags above are refused with
-  // direct `console.error` calls — sites T5 migrates (the help usage among them
-  // is one of the plan's five named exceptions) — and a run refused during
-  // parsing has no run to instrument. The `finally` below is the ONE teardown
+  // WHERE IT GOES, and why nothing earlier: the flags above are refused through
+  // the module-scope handles at the top of this file — T5 migrated them, and the
+  // help usage among them is one of the plan's five named exceptions (it stays a
+  // plain console call) — and a run refused during parsing has no run to
+  // instrument. The `finally` below is the ONE teardown
   // for every way `runHeadless` can end: the four returns (a failed resume, a
   // failed assembly, success, a failed run) and a rejection alike.
   //
@@ -491,7 +509,7 @@ async function runDistSelfcheck(): Promise<number> {
   let failed = false
   const record = (label: string, error: unknown): void => {
     failed = true
-    console.error(`dist-selfcheck: ${label} FAIL: ${error instanceof Error ? error.message : String(error)}`)
+    d.error(`dist-selfcheck: ${label} FAIL: ${error instanceof Error ? error.message : String(error)}`)
   }
   // The Windows-ACL sandbox seam: confine() must spawn the DIST runner
   // bundle and really confine (child exit mirrored). Windows-only surface —
@@ -548,7 +566,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
-      console.error("--session-dir requires a directory")
+      d.error("--session-dir requires a directory")
       return 1
     }
     storeRoot = dir
@@ -739,7 +757,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
         : async () => {
             const rows = await listStoredSessions(coordinator, storeRoot!)
             for (const row of rows) {
-              if (row.problem !== undefined) console.error(`[i-harness sdk] session list: "${row.id}": ${row.problem}`)
+              if (row.problem !== undefined) sdkD.error(`[i-harness sdk] session list: "${row.id}": ${row.problem}`)
             }
             const sessions: SessionListEntry[] = rows.map((row) => ({
               id: row.id,
@@ -771,7 +789,13 @@ async function runSdkCommand(args: string[]): Promise<number> {
   process.on("SIGTERM", onSignal)
   rl.on("line", (line) => {
     void server.handleLine(line).catch((error: unknown) => {
-      console.error("[i-harness sdk] loop error:", error instanceof Error ? error.message : String(error))
+      // The pre-T5 call passed TWO console arguments (the label, then this
+      // string). The handle takes ONE message, and the second argument cannot
+      // become `data` — that slot is a record, and delegation drops it, which
+      // would lose the text. So the two are folded into one template, and the
+      // stderr bytes are unchanged: Node joins multiple console arguments with a
+      // single space, and both branches of the expression below are strings.
+      sdkD.error(`[i-harness sdk] loop error: ${error instanceof Error ? error.message : String(error)}`)
     })
   })
 
@@ -798,7 +822,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   if (dirIdx !== -1) {
     const dir = args[dirIdx + 1]
     if (dir === undefined || dir === "") {
-      console.error("--session-dir requires a directory")
+      d.error("--session-dir requires a directory")
       return 1
     }
     storeRoot = dir
@@ -882,7 +906,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   main(process.argv).then(
     (code) => { process.exitCode = code },
     (error) => {
-      console.error(error instanceof Error ? error.message : String(error))
+      d.error(error instanceof Error ? error.message : String(error))
       process.exitCode = 1
     },
   )
