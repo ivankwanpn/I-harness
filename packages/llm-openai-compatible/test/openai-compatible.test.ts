@@ -22,14 +22,33 @@ describe("llm-openai-compatible protocol", () => {
     const body = JSON.parse(init.body as string)
     expect(body.model).toBe("m")
     expect(body.stream).toBe(true)
-    expect(body.system).toBeUndefined() // chat/completions has no system field
+    // M72 Ⅰ: the system prompt is a MESSAGE, not a top-level field — the old
+    // assertion (`body.system` undefined) was true about the field and wrong
+    // about the mapping: it left the prompt on the floor.
+    expect(body.system).toBeUndefined()
     expect(body.messages).toEqual([
+      { role: "system", content: "sys" },
       { role: "user", content: "hi" },
       { role: "assistant", content: "", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
       { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
     ])
     expect(body.tools).toEqual([{ type: "function", function: { name: "read", description: "read a file", parameters: {} } }])
     expect((init.headers as Record<string, string> | undefined)?.Authorization).toBe("Bearer k")
+    await it.return?.()
+  })
+
+  it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({
+      messages: [{ role: "user", content: "hi" }],
+      tools: [],
+      systemPrompt: "",
+    } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.messages).toEqual([{ role: "user", content: "hi" }])
     await it.return?.()
   })
 
@@ -130,7 +149,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages; this test pins
+    // the FULL list, so the expectation gains the system entry (nothing below
+    // it changed shape).
     expect(body.messages).toEqual([
+      { role: "system", content: "s" },
       { role: "user", content: "hi, plain string" },
       { role: "assistant", content: "" },
       { role: "tool", tool_call_id: "call_1", content: '{"content":"data"}' },
@@ -153,7 +176,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages; this test pins
+    // the FULL list, so the expectation gains the system entry (nothing below
+    // it changed shape).
     expect(body.messages).toEqual([
+      { role: "system", content: "s" },
       { role: "assistant", content: "planned", tool_calls: [{ id: "call_1", type: "function", function: { name: "read", arguments: '{"path":"a.txt"}' } }] },
       { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "tool says hi" }, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG}` } }] },
     ])
@@ -175,8 +202,11 @@ describe("M14 openai-compatible wire", () => {
     }
     const [, init] = fetchMock.mock.calls[0]!
     const body = JSON.parse(init.body as string) as { messages: { role: string; content: unknown }[] }
-    expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
-    expect(body.messages[1]).toEqual({ role: "user", content: "plain" })
+    // M72 Ⅰ: `systemPrompt: "s"` now leads the wire messages, so the two
+    // message assertions shift by one and the head is pinned explicitly.
+    expect(body.messages[0]).toEqual({ role: "system", content: "s" })
+    expect(body.messages[1]).toEqual({ role: "user", content: [{ type: "text", text: "look" }, { type: "text", text: "[image omitted: model is text-only; base64:iVBORw0K]" }] })
+    expect(body.messages[2]).toEqual({ role: "user", content: "plain" })
   })
 })
 

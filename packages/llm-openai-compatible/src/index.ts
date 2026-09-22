@@ -97,7 +97,16 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       const messages = config.inputModalities?.includes("image") ?? false ? request.messages : projectImagesForTextModel(request.messages)
       const body = {
         model: config.model,
-        messages: messages.map(toWireMessage),
+        // M72 Ⅰ: the system prompt is the first MESSAGE. The old code sent no
+        // system content at all — chat/completions has no top-level `system`
+        // FIELD, but the role IS the mapping, and dropping it meant every
+        // request to a compatible gateway ran without its system prompt.
+        // Blank → no message: same rule as llm-gemini/llm-bedrock, and an
+        // empty system turn is pure overhead.
+        messages: [
+          ...(request.systemPrompt.trim() !== "" ? [{ role: "system", content: request.systemPrompt }] : []),
+          ...messages.map(toWireMessage),
+        ],
         tools: request.tools.map((t) => ({
           type: "function",
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
