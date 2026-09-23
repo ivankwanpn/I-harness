@@ -1,6 +1,7 @@
-import { deriveMessagesUpTo, type Session, type SessionEvent } from "@i-harness/core-session"
+import { deriveMessagesUpTo, type Session } from "@i-harness/core-session"
 import type { LLMMessage } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
+import { walkOffToolEvents } from "./region.ts"
 
 /** Split a region into token-bounded slices of the region's OWN messages.
  *
@@ -18,51 +19,62 @@ import { estimateContent } from "@i-harness/token-meter"
  * A piece whose SINGLE block exceeds the budget is emitted alone and over
  * budget: there is nothing to split further, and the caller's fail-soft path
  * already covers the case where even that does not fit.
+ *
+ * M75 fix round (R2): the block unit is a TURN. A cut candidate is the position
+ * immediately before a `turn/start` (or, for a session carrying no `turn/start`
+ * at all, before a `user/message`), then walked off tool events by the SAME rule
+ * the two existing boundary sites use (`walkOffToolEvents`) — so each piece
+ * reads on its own. An earlier draft cut per tool call and measured pieces of
+ * `assistant(toolCalls) + tool` with no user message at all (review finding I2).
+ *
+ * M75 fix round (R3): the walk discards and restarts across a fold
+ * discontinuity — see the loop below.
  */
 export function sliceRegion(session: Session, shadowedSeqs: number[], budgetTokens: number): LLMMessage[][] {
-  // The region's events, in LOG order — the caller's list names the member seqs
-  // (it skips compaction markers), but only the log orders them.
   const inRegion = new Set(shadowedSeqs)
-  const events: { ev: SessionEvent; seq: number }[] = []
-  for (const ev of session.events) {
-    const seq = ev.seq
-    if (seq !== undefined && inRegion.has(seq)) events.push({ ev, seq })
-  }
-  if (events.length === 0) return []
+  const events = session.events
+  const seqOf = (i: number): number => events[i]!.seq ?? i
+  const isToolEvent = (i: number): boolean => events[i]!.type === "tool/call" || events[i]!.type === "tool/result"
 
-  // A `tool/call` whose `tool/result` still lies AHEAD in the region is what
-  // makes a cut illegal (cut between the two and the piece starts with an
-  // orphan). A call with no result anywhere in the region — an aborted turn
-  // leaves one — pins nothing: its result can never appear, so it must not
-  // freeze the boundary walk for the rest of the region.
-  const resolvedAhead = new Set<string>()
-  const resultsAfter = new Set<string>()
-  for (let i = events.length - 1; i >= 0; i--) {
-    const { ev } = events[i]!
-    if (ev.type === "tool/result") resultsAfter.add(ev.callId)
-    else if (ev.type === "tool/call" && resultsAfter.has(ev.callId)) resolvedAhead.add(ev.callId)
+  // The region's first and last events bound the walk, so the pieces tile
+  // exactly the fold the single-call path replays — `deriveMessagesUpTo` over
+  // the region's last seq (see `compactOnce`'s prefix).
+  let first = -1
+  let last = -1
+  for (let i = 0; i < events.length; i++) {
+    const seq = events[i]!.seq
+    if (seq === undefined || !inRegion.has(seq)) continue
+    if (first < 0) first = i
+    last = i
+  }
+  if (first < 0) return []
+
+  // Cut candidates: the position immediately before a `turn/start` (the unit a
+  // piece reads on its own), or before a `user/message` when the session has no
+  // `turn/start` anywhere. The walk-off starts one event BEFORE the candidate:
+  // a `turn/start` can land inside an open tool block (an aborted turn) and a
+  // mid-block `user/message` reminder is a real shape in this tree, so the cut
+  // moves back to just after the first non-tool event and the whole tool run
+  // goes to the new piece.
+  const cutEvent = events.some((e) => e.type === "turn/start") ? "turn/start" : "user/message"
+  const bounds: number[] = [first]
+  for (let i = first + 1; i <= last; i++) {
+    const ev = events[i]!
+    if (ev.type !== cutEvent) continue
+    if (ev.seq === undefined || !inRegion.has(ev.seq)) continue
+    const j = walkOffToolEvents(session, i - 1)
+    // A walk that bottoms out on a tool event means the run reaches index 0:
+    // there is then no boundary inside the run to cut at.
+    if (isToolEvent(j)) continue
+    const boundary = j + 1
+    if (boundary > bounds[bounds.length - 1]! && boundary <= last) bounds.push(boundary)
   }
 
-  // Walk the region's BLOCKS: a `turn/start` opens one, and a `tool/call` opens
-  // one when no earlier call is still waiting for a result that lies ahead.
-  // Every other event extends the block it is in, so a tool block keeps each
-  // call together with its result (in-between events included) and a block ends
-  // exactly where the next one begins.
+  // Each block ends where the next one begins; the final block ends at the
+  // region's last event, which is what makes the pieces tile that fold.
   const blockEnds: number[] = []
-  const awaiting = new Set<string>()
-  let blockEnd: number | undefined
-  for (const { ev, seq } of events) {
-    if (awaiting.size === 0 && (ev.type === "turn/start" || ev.type === "tool/call")) {
-      if (blockEnd !== undefined) blockEnds.push(blockEnd)
-    }
-    blockEnd = seq
-    if (ev.type === "tool/call") {
-      if (resolvedAhead.has(ev.callId)) awaiting.add(ev.callId)
-    } else if (ev.type === "tool/result") {
-      awaiting.delete(ev.callId)
-    }
-  }
-  if (blockEnd !== undefined) blockEnds.push(blockEnd)
+  for (let k = 0; k + 1 < bounds.length; k++) blockEnds.push(seqOf(bounds[k + 1]! - 1))
+  blockEnds.push(seqOf(last))
 
   // Price each block as the fold's TAIL beyond the previous block's fold (the
   // projection is never re-implemented), then close a slice before any block
@@ -74,6 +86,21 @@ export function sliceRegion(session: Session, shadowedSeqs: number[], budgetToke
   let prefixLen = 0
   for (const end of blockEnds) {
     const fold = deriveMessagesUpTo(session, end)
+    // R3: `deriveMessagesUpTo` is NOT monotone in `maxSeq` — a rewrite marker
+    // (`compaction/summary`, `compaction/reset`, `rewind/point`) inside the
+    // region elides its seqs as soon as the fold crosses it, so the fold
+    // SHRINKS. What has been accumulated describes a projection that is no
+    // longer the one the single call would send: discard it and restart the
+    // walk here, so the pieces tile `deriveMessagesUpTo(session, last)` — the
+    // required invariant, because that fold is what the single-call path
+    // replays. The discarded messages are exactly the ones the projection no
+    // longer shows.
+    if (fold.length < prefixLen) {
+      slices.length = 0
+      current = []
+      currentTokens = 0
+      prefixLen = 0
+    }
     const block = fold.slice(prefixLen)
     prefixLen = fold.length
     if (block.length === 0) continue
