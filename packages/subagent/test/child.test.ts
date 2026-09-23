@@ -509,15 +509,26 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
       const seedLines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("inherited seed"))
       expect(seedLines).toHaveLength(1)
       // …and the line says the CONSEQUENCE, not just the number: what the child
-      // will do about it (summarise), and what happens when it cannot — the
-      // pass fails soft and the ladder's reset is what rescues the turn, with
-      // the inherited context DROPPED (the outcome the M74 strict case
-      // measures: a `compaction/reset` whose `removedSeqs` carry the head, and
-      // no summary). Naming only "fails soft" would overstate it: the turn
-      // itself is rescued.
+      // will do about it (summarise), and what the ladder then does when it
+      // cannot — the pass fails soft, and the reset rescues the turn by
+      // DROPPING the inherited context WHEN the log has events beyond the
+      // retained tail (the outcome the M74 strict case measures: a
+      // `compaction/reset` whose `removedSeqs` carry the head, and no
+      // summary); when there are none, the turn fails closed — and THIS fixture
+      // IS that branch, as measured above (`error`, no `compaction/reset`).
+      // Naming only "fails soft" would leave the rescue, and its condition,
+      // unsaid.
       expect(seedLines[0]).toContain("summar")
       expect(seedLines[0]).toMatch(/indivisible|fails soft/)
       expect(seedLines[0]).toMatch(/reset/)
+      // …and the three above are presence-only, so the conditional clause — the
+      // thing two fix rounds put into this message — needs its own pin: they
+      // stay green if the message reverts to the unconditional wording, so long
+      // as the literal "reset" survives. MEASURED (final review fix wave):
+      // deleting the clause reddens this pin and nothing else in the file.
+      expect(seedLines[0]).toContain(
+        "when the log has events beyond the retained tail, and the turn fails closed when it does not",
+      )
     } finally {
       warn.mockRestore()
     }
