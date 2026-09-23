@@ -21,6 +21,12 @@ export type TelemetryEventType =
   // round-trip, so the count is the denominator: a run with no event here is a
   // run whose provider stopped on its own, never "we did not look".
   | "provider/truncated"
+  // M77: the provider REFUSED to produce content for that round-trip (the
+  // seam's `end.refused`, set by each adapter's own refusal literal). Same
+  // discipline as the row above: one event per refused round-trip, so the count
+  // is the denominator — a run with no event here is a run whose provider never
+  // refused. Independent of `provider/truncated`: one round-trip can be both.
+  | "provider/refused"
   | "token/usage"
   | "retry/start"
   | "error"

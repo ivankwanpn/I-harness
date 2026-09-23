@@ -210,6 +210,16 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       // "max_tokens"`) — set in `handleMember` below, read once at the ending.
       // Absent stays absent: only `true` writes the field.
       let truncated = false
+      // M77: the same `stopReason` carries this wire's refusal literal,
+      // `guardrail_intervened` (a guardrail stopped the exchange) — which
+      // arrives as an ordinary HTTP 200 stream, so before M77 the seam reported
+      // an empty SUCCESS. A separate variable from `truncated`: the two are
+      // independent and neither is the other's `else`. Sibling stop reasons this
+      // unit does NOT treat as refusals (measured in the AWS SDK's own
+      // `StopReason` enum in this tree's node_modules, unread here on purpose):
+      // `content_filtered`, `malformed_model_output`, `malformed_tool_use`,
+      // `model_context_window_exceeded` — recorded as a residual, not guessed at.
+      let refused = false
       // Soft-walk the SDK's discriminated member union: every member key is
       // declared as `?: never` on its siblings, so TS's `in` narrowing cannot
       // split the union — runtime key checks behave like the wire shape.
@@ -279,6 +289,9 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         // here instead of surfacing it; the arm below now maps it onto the
         // seam's own `usage` event (`{ type: "usage"; usage: LLMUsage }`).
         if (m.messageStop?.stopReason === "max_tokens") truncated = true
+        // M77: the refusal on the very same field — a sibling test, never the
+        // `else` of the truncation above.
+        if (m.messageStop?.stopReason === "guardrail_intervened") refused = true
         // M72 Ⅲ: `metadata` carries the round-trip's usage snapshot — typed
         // here since the beginning and never read. Same two rules as every
         // other adapter: finite numbers only, and nothing recognisable ⇒ no
@@ -317,7 +330,9 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         yield { type: "error", error: await describeTransportError("bedrock", resolveBedrockRegion(config.region, process.env), err, { remediation: "none" }) }
         return
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: each bit is written on its own (a response can be both), and both
+      // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }
