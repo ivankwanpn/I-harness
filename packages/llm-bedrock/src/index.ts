@@ -7,8 +7,8 @@ import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamC
  *
  * Returns `undefined` when the object carries no recognisable number, so the
  * caller emits NO event rather than an empty one: a fabricated `0` would read
- * as a measurement nobody made, and the wire omits the cache counts on a
- * response that used no cache. Fields are copied verbatim and never derived —
+ * as a measurement nobody made, and the SDK's `TokenUsage` declares the two
+ * cache counts optional. Fields are copied verbatim and never derived —
  * `totalTokens` is the wire's own sum of the two counts, not a new measurement,
  * so it is not mapped (`LLMUsage` has no home for it). The two cache counts take
  * the names anthropic's cache read/creation counts take. The field list is
