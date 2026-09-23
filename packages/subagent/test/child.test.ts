@@ -438,23 +438,41 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
         jobs: f.jobs, table: f.table, agents: f.agents,
       })
       // The whole spawn lifetime, not just the moment `spawnChild` returned: a
-      // build that warned once per step would be caught here too. (The child's
-      // own outcome is deliberately NOT asserted: this fixture's seed is one
-      // indivisible block AND only four events long, so the ladder's reset has
-      // nothing it may trim and the child fails closed — the pre-existing
-      // behaviour the case "a child past its window FAILS CLOSED" pins, and no
-      // part of what this warn does. The warn must not change any of it, and
-      // this case's job is the LINE.)
+      // build that warned once per step would be caught here too.
+      //
+      // The child's own outcome is deliberately NOT asserted, and that is a
+      // MEASURED decision rather than a shrug: on this fixture the job ends
+      // `error` under BOTH orders (logged with the new order, and again with
+      // the resolver moved back down for the mutation proof), so pinning it
+      // here would add a brittleness surface to a case about the LINE without
+      // discriminating anything. The mechanism, read off the constants: the
+      // permissive mock's 10-char reply is under the summariser's 500-char
+      // `minSummaryChars` floor (`compaction/src/config.ts:118`), so the
+      // summary chain fails; the ladder's reset keeps the last 20 events
+      // (`core-agent/src/index.ts:206`) and this child's log is 7 — the four
+      // seed events plus its own turn/start, user/message and step/start, with
+      // nothing appended after the ladder throws — so `resetWindowOnce` has
+      // nothing removable: it returns without even appending its marker, and
+      // `checkBudget` at 0.9·window still overflows. MEASURED on this fixture
+      // (a temporary log): the job ends `error`, and its 7-event log carries no
+      // `compaction/reset` marker and no `compaction/summary` marker. The M74
+      // strict case (reset) and the M75 case (summary) own those two outcomes on
+      // fixtures built for them; this case's subject is the warn.
       for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
         await new Promise((r) => setTimeout(r, 20))
       }
       const seedLines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("inherited seed"))
       expect(seedLines).toHaveLength(1)
       // …and the line says the CONSEQUENCE, not just the number: what the child
-      // will do about it (summarise), and what happens when it cannot (one
-      // indivisible block ⇒ that turn fails soft).
+      // will do about it (summarise), and what happens when it cannot — the
+      // pass fails soft and the ladder's reset is what rescues the turn, with
+      // the inherited context DROPPED (the outcome the M74 strict case
+      // measures: a `compaction/reset` whose `removedSeqs` carry the head, and
+      // no summary). Naming only "fails soft" would overstate it: the turn
+      // itself is rescued.
       expect(seedLines[0]).toContain("summar")
       expect(seedLines[0]).toMatch(/indivisible|fails soft/)
+      expect(seedLines[0]).toMatch(/reset/)
     } finally {
       warn.mockRestore()
     }
