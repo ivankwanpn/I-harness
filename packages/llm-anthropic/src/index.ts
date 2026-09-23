@@ -215,11 +215,11 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           // M77: and this one is deliberately NOT the bit. The Messages API
           // states the INPUT did not fit, and the seam already owns that
           // vocabulary — `RetryableErrorCode`'s `CONTEXT_WINDOW_EXCEEDED`,
-          // classified by `retryErrorCode` off an error's `code` field and
-          // deliberately absent from `DEFAULT_RETRYABLE_CODES` (a retry cannot
-          // shrink an over-window request). So the code goes on that same
-          // field, in this adapter's existing `${label}: ${detail}` error
-          // shape, and the event is terminal — no `end`, no bit, and the
+          // classified by the seam's retry classifier off an error's `code`
+          // field and deliberately absent from the default retryable set (a
+          // retry cannot shrink an over-window request). So the code goes on
+          // that same field, in this adapter's existing `${label}: ${detail}`
+          // error shape, and the event is terminal — no `end`, no bit, and the
           // consumer learns "the provider said the window is too small"
           // instead of seeing a silent empty success.
           if (stop === "model_context_window_exceeded") {
