@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -1043,5 +1043,129 @@ describe("the child's request carries the resolved budget", () => {
     expect(f.jobs.read(jobId).status).toBe("completed")
     // …and the model really was asked to summarise (the child's own engine)
     expect(requests.length).toBeGreaterThan(1)
+    // The summarizer's call is a byte-prefix of the child's own request — that is
+    // what requestShape buys, and core-agent builds it from THIS child's deps.
+    // (The legacy text form would carry systemPrompt: "".)
+    const summarizerReq = requests.find((r) => {
+      const last = r.messages.at(-1)
+      return typeof last?.content === "string" && last.content.includes("summar")
+    })
+    expect(summarizerReq?.systemPrompt).toBe(composeSubagentPrompt(f.roles.get("general")!.systemPrompt))
+  }, 15_000)
+
+  // ── M74 Task 3: the child's own summary vs. the one it inherited ─────────
+  //
+  // The brief PREDICTED that the child's own compaction would shadow the
+  // `compaction/summary` it inherited from its parent, because `retainTokens: 0`
+  // starts the region at the head. MEASURED at this revision: the region does
+  // start at the head — but it does NOT cover that marker, and cannot. A
+  // compaction marker is never itself shadowable (`region.ts`'s
+  // `isCompactionMarker`, the skip at `:22` for the empty-retention arm and
+  // `:53` for the tail arm — the engine's documented invariant
+  // "壓縮標記…永不 shadow"), while `deriveMessages` renders every marker that is
+  // not inside some shadow set as a `user` message (core-session:561-563). So
+  // the child's region runs 0..15, 17, 18, 19 and STOPS at the inherited marker
+  // (seq 16): MEASURED, the derived surface is exactly `user:
+  // PARENT-SUMMARY-SENTINEL…` | `user: CHILD-SUMMARY-SENTINEL…` |
+  // `assistant: child done` (427 tokens) — both summaries, the stale one
+  // included. Nothing in this package can change that — it is the engine's
+  // region rule (or the child's seed), i.e. production code — so it is reported
+  // as a FINDING for this task.
+  // The requirement itself is pinned below, verbatim, as an EXPECTED FAILURE
+  // (`it.fails`), which keeps the suite green while the gap is real; the case
+  // just above it is the green half (the part of the prediction that holds).
+  //
+  // The fixture: a parent that compacted — its marker shadows its OLDEST turn's
+  // messages, `shadowedSeqs: [1, 2]`, and leaves the later turns visible, the
+  // shape a non-zero retention budget produces — and then kept working before
+  // spawning. `forkTurns: "all"` seeds that whole log, marker included, and the
+  // seed alone is over the child's gate: MEASURED at its first step boundary,
+  // `activeTokens` 3397 + the child's `overheadTokens` 256 = 3653 charged
+  // against a 1600 gate (0.8 × 2000) and an 1800 budget (0.9 × 2000). (The
+  // brief appends the marker after ONE parent turn; measured, that log charges
+  // the child only 217 + 256 = 473, well under the same gate — the child never
+  // compacts, its own summary never appears, and the case would have measured
+  // nothing at all. The extra unshadowed turns are what cross the gate, and they
+  // are the realistic shape: a parent that compacted and kept going. Every brief
+  // value is otherwise untouched.)
+  async function spawnFromCompactedParent() {
+    const f = spawnFixture()
+    const PARENT_SUMMARY = "PARENT-SUMMARY-SENTINEL " + "old ".repeat(200)
+    append(f.parentSession, { type: "turn/start" })
+    append(f.parentSession, { type: "user/message", text: "q " + "filler ".repeat(300) })
+    append(f.parentSession, { type: "assistant/message", text: "a " + "filler ".repeat(300) })
+    append(f.parentSession, { type: "turn/end" })
+    // three more parent turns AFTER the compacted one — these are NOT shadowed
+    // by the parent's marker, so they (and not the marker's own region) are what
+    // the child's surface is priced on
+    for (let i = 0; i < 3; i++) {
+      append(f.parentSession, { type: "turn/start" })
+      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(300) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(300) })
+      append(f.parentSession, { type: "turn/end" })
+    }
+    // (`version: 1` is dropped from the brief's snippet: `SessionEvent`'s
+    // `compaction/summary` carries `text`/`shadowedSeqs` only — the shape the
+    // engine appends — and tsc rejects the extra property.)
+    append(f.parentSession, { type: "compaction/summary", text: PARENT_SUMMARY, shadowedSeqs: [1, 2] })
+    const CHILD_SUMMARY = "CHILD-SUMMARY-SENTINEL " + "new ".repeat(200)
+    const client: ModelClient = {
+      async *stream(request) {
+        const last = request.messages.at(-1)
+        const isSummary = typeof last?.content === "string" && last.content.includes("summar")
+        yield { type: "text/chunk", text: isSummary ? CHILD_SUMMARY : "child done" }
+        yield { type: "end" }
+      },
+    }
+    const { path, jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 2_000,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(f.jobs.read(jobId).status).toBe("completed")
+    return { f, path }
+  }
+
+  /** The green half of the prediction: the child DOES compact the log it
+   * inherited, and its region runs from the head of the SEED (not just over the
+   * child's own turn). MEASURED: `shadowedSeqs` = [0..15, 17, 18, 19] — every
+   * non-marker event below the marker, all four inherited turns included.
+   * Killed by the brief's named mutation (a child `retainTokens` big enough to
+   * keep the tail: the region empties, nothing compacts, and this fails). */
+  it("M74: a child whose parent had compacted compacts from the HEAD of its inherited log", async () => {
+    const { f, path } = await spawnFromCompactedParent()
+    const childSession = f.table.get(path)!.session
+    const marker = childSession.events.filter((e) => e.type === "compaction/summary").at(-1)!
+    // 0 is the inherited log's very first event; 5 and 13 are user messages of
+    // inherited turns the parent's own marker did NOT hide (see the fixture).
+    expect(marker.shadowedSeqs).toEqual(expect.arrayContaining([0, 5, 13]))
+    // …and the summary the model reads is this child's own text
+    const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
+    expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
+  }, 15_000)
+
+  // KNOWN UNMET REQUIREMENT — the assertion below is Task 3's, verbatim, and it
+  // does NOT hold at this revision (see the finding above `spawnFromCompactedParent`):
+  // the inherited `compaction/summary` is a marker, markers are never shadowable,
+  // so the child's own summary cannot cover it and the surface shows both. Not
+  // weakened into a green form on purpose: the FIX is a production decision
+  // (make the region cover a superseded summary, or keep the parent's marker out
+  // of the seed), and this case must flip — `it.fails` reports "expected to fail
+  // but passed" — the moment it lands, which is the signal to drop the `.fails`.
+  it.fails("M74: a compacted child's surface shows ONE summary — the inherited one is shadowed", async () => {
+    const { f, path } = await spawnFromCompactedParent()
+    const childSession = f.table.get(path)!.session
+    const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
+    // the child's own summary is on the surface…
+    expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
+    // …and the one it inherited is NOT — two summaries would mean the model is
+    // reading a description of the parent's history next to its own.
+    expect(surface).not.toContain("PARENT-SUMMARY-SENTINEL")
   }, 15_000)
 })
