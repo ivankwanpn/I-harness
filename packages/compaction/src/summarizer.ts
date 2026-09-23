@@ -219,7 +219,15 @@ export async function summarizeWithModel(
           maxOutputTokens: clampOutputCap(
             limits.maxOutputTokens,
             limits.contextWindow,
-            estimateContent(request.messages) + (limits.overheadTokens ?? 0),
+            // The overhead is charged ONLY when the request really carries the
+            // pair it stands for. On the legacy text path (`prefix` undefined)
+            // the request has neither system prompt nor tools, so charging it
+            // over-prices the input — and when the charge alone fills the
+            // window, `hardRoom < 1` trips clampOutputCap's "the input already
+            // fills the window" arm and the RAW cap leaves (this task's defect,
+            // surviving on that route: reachable with a configured
+            // `summarizationModel`, or an engine built without `requestShape`).
+            estimateContent(request.messages) + (prefix === undefined ? 0 : (limits.overheadTokens ?? 0)),
           ),
         }
     let out = ""

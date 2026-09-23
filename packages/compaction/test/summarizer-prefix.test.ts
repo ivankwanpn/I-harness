@@ -156,6 +156,12 @@ describe("M73: the summarizer request carries a clamped cap", () => {
   // already fills it with exactly this pair), and the assertion below states
   // the rule without knowing the margin: the promised room can never exceed
   // what the window leaves after the input AND the host-known overhead.
+  //
+  // DISCRIMINATION IS ARITHMETIC (fix round 2, Minor 2): an upper bound can
+  // only separate "overhead charged" from "not charged" while the overhead
+  // (8 000) EXCEEDS llm-seam's `OUTPUT_CAP_SAFETY_MARGIN` (4 096) — below that
+  // the uncharged run would promise less room, not more, and this case would
+  // stay green with the term deleted. Lower 8_000 only with that in mind.
   it("charges the host-known overhead the session's own clamp charges", async () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
@@ -172,5 +178,38 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     const input = estimateContent(req.messages)
     expect(input).toBeGreaterThan(0) // the recomputation is of a real request
     expect(req.maxOutputTokens).toBeLessThanOrEqual(12_000 - input - 8_000)
+  })
+
+  // Fix round 2 (Minor 1). The LEGACY text path — no `requestShape`, so
+  // `prefix === undefined` and the request is one user message with NO system
+  // prompt and NO tools. The host-known overhead stands for exactly that pair,
+  // so charging it here prices a cost the request does not have: with
+  // `overheadTokens === contextWindow`, the charge ALONE drives `hardRoom`
+  // below 1 for every possible input, `clampOutputCap` takes its "the input
+  // already fills the window" arm, and the RAW cap goes out — this task's
+  // defect, alive on the one route a configured `summarizationModel` (or any
+  // engine built without a shape) takes.
+  //
+  // Numbers: window 8 000, overhead 8 000 ⇒ with the bug `hardRoom` is
+  // `−<input>` for ANY input (deterministic, fixture-independent); with the
+  // fix the real input alone decides and it is 2 330 tokens (measured: one
+  // 9 303-char directive, the region embedded), leaving `8 000 − 2 330 − 4 096`
+  // ⇒ 1 574. Clamped (1 574) versus untouched (50 000) is the observable.
+  it("does NOT charge the overhead on the legacy text path, where the request carries no prompt or tools", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
+      // NO requestShape → prefix undefined → the legacy single-message form
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    expect(req.messages).toHaveLength(1)
+    expect(req.systemPrompt).toBe("")
+    expect(req.tools).toEqual([])
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(50_000)
   })
 })
