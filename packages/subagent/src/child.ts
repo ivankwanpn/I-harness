@@ -359,6 +359,15 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // budget ladder cannot even fire without one). Both come from the same
     // place the main session's do.
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    // The window costs the child its first two ladder layers, on purpose: a
+    // spawn passes no `compact` deps, so core-agent builds no compactor and
+    // enforceBudget's `if (compactor)` / `if (compactor && resetAllowed)` arms
+    // are unreachable — past `contextWindow * reserveRatio` the child FAILS
+    // CLOSED with `prompt_too_long` instead of sending the over-window request
+    // a windowless child used to send. That is the milestone's deliberate
+    // trade (the provider's 400 is not a better failure), and the parent reads
+    // it off the job it spawned. Pinned by "a child past its window FAILS
+    // CLOSED" in test/child.test.ts.
     ...(contextWindow !== undefined
       ? { budget: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),

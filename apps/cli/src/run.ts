@@ -42,10 +42,12 @@ const d = diagnosticsFor("mount")
 
 // M33 §5: the session-compact command handler — pure (testable) surface.
 // v0 error semantics: busy text while the executor lane is running (the
-// manual compact is only supposed to run on the idle lane), the
-// "No compactable history yet." text when nothing was compacted, and a JSON
-// echo { compacted, shadowedSeqs, summary? } otherwise. `instructions` are
-// forwarded to the summarizer ("User instructions" section).
+// manual compact is only supposed to run on the idle lane), the M73
+// summarizer-failure sentence when the pass FAILED (a rejected summary is not
+// an empty region and must not read as "nothing to do"), the
+// "No compactable history yet." text when there was genuinely nothing to
+// compact, and a JSON echo { compacted, shadowedSeqs, summary? } otherwise.
+// `instructions` are forwarded to the summarizer ("User instructions" section).
 /**
  * The command names this file registers on the assembly's context, in ONE place.
  *
@@ -420,6 +422,15 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   }
 
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined
+  // M72 Ⅱ / M73: the session model's resolved pair, read where the binding
+  // resolves (the mount try below) and consumed TWICE — the assembly build,
+  // which fans them out to the agent, the compaction engine and every spawn
+  // arm, and the post-run auto-title request, which session-title builds and
+  // clamps. Function-scoped because those two consumers sit in different
+  // blocks; neither value is ever defaulted (undefined = "no cap resolved",
+  // which every consumer keeps ABSENT).
+  let contextWindow: number | undefined
+  let maxOutputTokens: number | undefined
   crashSession = activeId
   // M3: the abort path. `sdk` and `acp` already had one (`teardown()` wired to
   // SIGINT/SIGTERM); `run` did not, so an interrupt mid-turn skipped the
@@ -518,11 +529,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       if (state.status !== "ready") throw new Error(state.reason)
       providerBinding = state.binding
     }
-    const contextWindow = providerBinding?.contextWindow
+    contextWindow = providerBinding?.contextWindow
     // M72 Ⅱ: the same binding's resolved output cap. Handed on verbatim —
     // undefined stays undefined, because "no cap resolved" is a fact the
     // request has to keep (nothing here defaults it; core-agent clamps it).
-    const maxOutputTokens = providerBinding?.maxOutputTokens
+    maxOutputTokens = providerBinding?.maxOutputTokens
     // The window is handed to the assembly as `contextWindow` either way; it is
     // the assembly that feeds it INTO the compaction config. Merging it here as
     // well was a second copy of that logic — and the copy was wrong: when no
@@ -827,6 +838,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // mirror only when a session id is known).
     await maybeAutoTitle({
       session, model: assembly.model,
+      // M73 (fix wave, I3): the title request is built by session-title and runs
+      // on the session's model, so it gets the session model's resolved pair —
+      // the same two numbers the binding above produced, read at call time
+      // (absent stays absent: a test-mock run resolves no binding at all).
+      ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
     })
     if (opts.coordinator) await opts.coordinator.close()

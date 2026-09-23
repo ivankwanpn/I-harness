@@ -9,6 +9,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/llm-seam": "workspace:*",
     "@i-harness/llm-mock": "workspace:*",
-    "@i-harness/session-persistence": "workspace:*"
+    "@i-harness/session-persistence": "workspace:*",
+    "@i-harness/token-meter": "workspace:*"
   }
 }
