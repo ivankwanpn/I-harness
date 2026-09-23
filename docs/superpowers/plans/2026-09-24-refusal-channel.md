@@ -4,7 +4,7 @@
 
 **Goal:** 今天模型拒絕與成功無法分辨：五家轉接器把 `content_filter`／`SAFETY`／`RECITATION`／`refusal`／`guardrail_intervened` 一律變成裸 `end` ⇒ `core-agent` 把空的 assistant 訊息寫進日誌、turn 正常結束、CLI 靜默、exit 0。本階段給它一條通道：seam 的 `end` 加一個**語意**位元 `refused?: true`（與 `truncated` 對稱），五家在**自己的** wire 上認字面，三個消費者與 `truncated` 逐點對稱；anthropic 的 `model_context_window_exceeded` 走**既有**的 `CONTEXT_WINDOW_EXCEEDED` 錯誤碼。
 
-**Architecture:** 複製 `truncated` 的形狀（5 生產者 → 1 位元 → 3 讀者 → 1 耐久欄位 → 1 telemetry → CLI stderr），**不新增聯集成員**（`core-agent` 的 defaultless `switch` 會靜默丟掉它；重試包會**轉發但不判斷**它——`llm-seam:233` 的 `yield ev` 是 catch-all），**不把 wire 詞彙帶進 seam**（M72 Ⅱ 的約束）。
+**Architecture:** 複製 `truncated` 的形狀（5 生產者 → 1 位元 → 3 讀者 → 1 耐久欄位 → 1 telemetry → CLI stderr），**不新增聯集成員**（`core-agent` 的 defaultless `switch` 會靜默丟掉它；重試包會**轉發但不判斷**它——`createRetryingClient` 的尾端 `yield ev` 是 catch-all），**不把 wire 詞彙帶進 seam**（M72 Ⅱ 的約束）。**引 `llm-seam` 用符號名不用行號**（那個檔案的行號在本階段兩次位移）。
 
 **Tech Stack:** TypeScript ESM · pnpm workspaces · vitest
 
