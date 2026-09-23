@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { estimateContent } from "@i-harness/token-meter"
 import { ANTHROPIC_MAX_TOKENS_FALLBACK, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
-import { createCompactionEngine } from "../src/index.ts"
+import { createCompactionEngine, selectShadowableRange } from "../src/index.ts"
 
 // M5 / D2. The summarizer reads the WHOLE shadowed region — at compaction that is
 // roughly 80% of the context window, the single largest read in a session. Today
@@ -284,6 +284,49 @@ function strictModel(contextWindow: number, overheadTokens = 0): { model: ModelC
   }
 }
 
+// ── M75 Task 3: the chain, the ONE marker, and the atomicity ────────────────
+//
+// A model that answers every call with a DIFFERENT text, because
+// `capturingModel` above answers every call with the same constant — that one
+// cannot tell "piece k is anchored on what piece k−1 produced" from "every
+// piece was anchored on the same thing".
+//
+// The texts are 540–660 chars, and that is MEASURED, not decorative: the M34 ⑦c
+// quality floor (default `minSummaryChars` 500) is enforced on the LAST piece,
+// so the brief's literal 9-char "PIECE-ONE" / "PIECE-TWO" / "PIECE-THREE" make
+// piece 12 degenerate and the WHOLE pass fail soft — measured on this fixture
+// at window 1 000: 13 calls, `summarizer output below minSummaryChars (11 <
+// 500)`, `{compacted: false, reason: "summarizer-failed"}`, 0 compaction events.
+// That is red for a CORRECT implementation, so the chaining assertion the
+// ruling asks for would never be reached. Repetition rather than padding keeps
+// both ends of every text free of whitespace: the engine trims each accepted
+// output (`out.trim()`), so a text with a trailing space would travel into the
+// next request one byte shorter and `toContain` would miss it.
+const pieceText = (label: string): string => label.repeat(60)
+
+const PIECE_TEXTS = [pieceText("PIECE-ONE"), pieceText("PIECE-TWO"), pieceText("PIECE-THREE")]
+
+function sequencedModel(texts: string[]): { model: ModelClient; requests: LLMRequest[] } {
+  const requests: LLMRequest[] = []
+  let call = 0
+  return {
+    requests,
+    model: {
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        // Past the end of `texts` every call repeats the LAST one — the
+        // chain's own anchor ceiling is what the pass budgets for, not the
+        // fixture's list length.
+        yield { type: "text/chunk", text: texts[Math.min(call++, texts.length - 1)]! }
+        yield { type: "end" }
+      },
+    },
+  }
+}
+
+const summariesOf = (m: LLMRequest): string =>
+  m.messages.map((x) => (typeof x.content === "string" ? x.content : "")).join("\n")
+
 // DEVIATION FROM THE BRIEF'S LITERAL WINDOW, and it is measured, not preferred:
 // the brief's over-window case used `contextWindow: 400`. The DIRECTIVE alone —
 // the 1 780-char prompt template this file's M73 case above already measured —
@@ -371,4 +414,145 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     expect(result.summary).toBeDefined()
     expect(requests.length).toBeGreaterThan(1)
   })
+
+  // ── the integrity cases (Task 3) ─────────────────────────────────────────
+  //
+  // WINDOW, MEASURED. The brief's `contextWindow: 400` is unpassable by ANY
+  // implementation — the directive ALONE prices at 449 tokens, so even a piece
+  // carrying no region is rejected there (the comment above the strict mock
+  // records the same measurement) — and every case below would be red by
+  // construction. 1 000 is the window the cases above already use, and at it
+  // the piece path genuinely ENGAGES: measured on this fixture, `sliceRegion`
+  // yields 12 pieces (175 ×10 + 196 ×2 tokens), the pass makes 12 model calls
+  // (624, 794, 824 ×7, 845 ×2 tokens), every cap the clamp grants is
+  // `1 000 − input` (so every request prices at exactly `input + max_tokens
+  // === 1 000` — legal on the wire), and the pass appends exactly ONE
+  // `compaction/summary`. Every assertion of `requests.length > 1` below is
+  // therefore a measurement of 12, not a hope.
+  it("M75: the chained pieces each receive the RUNNING summary", async () => {
+    const { model, requests } = sequencedModel(PIECE_TEXTS)
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    const s = toolSession()
+    const result = await engine.compact(s)
+
+    // Non-vacuity guard: a pass that died mid-chain satisfies every assertion
+    // below over the calls it DID make, so "the chain is anchored" would be
+    // pinned by a test that never saw the chain finish.
+    expect(result.compacted).toBe(true)
+    expect(requests.length).toBeGreaterThan(1)
+    // piece 1 has no anchor; piece k>1 carries what piece k−1 produced
+    expect(summariesOf(requests[0]!)).not.toContain("<previous-summary>")
+    for (let k = 1; k < requests.length; k++) {
+      expect(summariesOf(requests[k]!)).toContain("<previous-summary>")
+      // Ruling 3(a): the property is "request k carries what request k−1
+      // produced". The brief's `k === 1 ? "PIECE-ONE" : "PIECE-TWO"` holds only
+      // while the pass makes ≤ 3 pieces, and this window makes 12 — it would be
+      // red for a correct implementation.
+      expect(summariesOf(requests[k]!)).toContain(PIECE_TEXTS[Math.min(k - 1, PIECE_TEXTS.length - 1)]!)
+    }
+  }, 30_000)
+
+  it("M75: the pass appends exactly ONE summary marker, shadowing the WHOLE region", async () => {
+    const { model } = sequencedModel(PIECE_TEXTS)
+    const s = toolSession()
+    await createCompactionEngine({
+      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE, maxOutputTokens: 50_000,
+    }).compact(s)
+
+    const markers = s.events.filter((e) => e.type === "compaction/summary")
+    expect(markers).toHaveLength(1)
+    // the WHOLE region, exactly what the single-call path would have named.
+    // `selectShadowableRange` is the same function `compactOnce` used to pick
+    // the region, so re-running it after the pass is a real check — and it is
+    // only valid because it SKIPS every compaction marker (`region.ts`:
+    // `isCompactionMarker`): the `start`/`summary`/`end` triple this pass just
+    // appended is invisible to it, so before and after yield the same list.
+    expect((markers[0] as { shadowedSeqs: number[] }).shadowedSeqs).toEqual(selectShadowableRange(s, 0))
+  }, 30_000)
+
+  it("M75: no marker appears mid-pass", async () => {
+    const s = toolSession()
+    const counts: number[] = []
+    const base = sequencedModel(PIECE_TEXTS)
+    const model: ModelClient = {
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        // every call observes the log BEFORE the pass has appended anything
+        counts.push(s.events.filter((e) => e.type.startsWith("compaction/")).length)
+        yield* base.model.stream(request)
+      },
+    }
+    const result = await createCompactionEngine({
+      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE, maxOutputTokens: 50_000,
+    }).compact(s)
+
+    // Non-vacuity guard: a pass that failed soft appends nothing either, so
+    // "no marker mid-pass" would be green while proving nothing. The pass must
+    // have run to completion for the zero below to mean anything.
+    expect(result.compacted).toBe(true)
+    expect(counts.length).toBeGreaterThan(1)
+    expect(counts.every((n) => n === 0)).toBe(true)
+  }, 30_000)
+
+  it("M75: a failure in a middle piece is still atomic — nothing appended, reason says so", async () => {
+    const s = toolSession()
+    let call = 0
+    const model: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        call += 1
+        if (call === 2) yield { type: "error", error: new Error("piece two exploded") }
+        else { yield { type: "text/chunk", text: "PIECE-" + call }; yield { type: "end" } }
+      },
+    }
+    const result = await createCompactionEngine({
+      model, config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE, maxOutputTokens: 50_000,
+    }).compact(s)
+
+    expect(result.compacted).toBe(false)
+    expect(result.reason).toBe("summarizer-failed")
+    expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+  }, 30_000)
+
+  // Ruling 12: the ORDINARY case with the gate OPEN — cap present, request
+  // fits. The byte-identity case above runs WITHOUT `maxOutputTokens`, so its
+  // gate is closed by the cap condition and it pins only the "no cap ⇒ today's
+  // path" escape hatch: at that window the piece budget is window-derived
+  // (~999 116) while the region prices at 2 142, so an ALWAYS-SLICE mutant still
+  // degenerates to ONE byte-identical piece and nothing reddens.
+  //
+  // Here all entry conditions hold and the piece budget is FINER than the
+  // region — measured at 2 600: budget `2 600 − allowance 684 − maxTokens 200
+  // = 1 716` < the region's 2 142 tokens, so `sliceRegion` returns 2 pieces
+  // (1 575 + 567 tokens) — while the single request still fits, by the clamp's
+  // OWN arithmetic: `2 600 − 2 591 = 9 >= 1`, the condition under which
+  // `clampOutputCap` does not take its "input already fills the window" arm, so
+  // the single call carries a legal cap (measured: 9) instead of the raw
+  // 50 000. That is what makes this case the one the unconditional-slice mutant
+  // cannot pass.
+  it("M75: with the cap present and the request fitting, the pass stays ONE byte-identical prefix call", async () => {
+    const s = toolSession()
+    // Captured BEFORE the pass — the idiom the case above records the reason
+    // for: `deriveMessages(s)` read after it is the summary message, not the
+    // fold this assertion is about.
+    const fold = deriveMessages(s)
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 2_600, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(s)
+
+    expect(requests).toHaveLength(1)
+    // the prefix property, byte for byte
+    expect(requests[0]!.messages.slice(0, -1)).toEqual(fold)
+  }, 30_000)
 })
