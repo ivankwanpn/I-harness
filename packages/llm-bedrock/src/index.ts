@@ -1,6 +1,33 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
+
+/**
+ * M72 Ⅲ: the wire's usage snapshot, under the seam's names.
+ *
+ * Returns `undefined` when the object carries no recognisable number, so the
+ * caller emits NO event rather than an empty one: a fabricated `0` would read
+ * as a measurement nobody made, and the wire omits the cache counts on a
+ * response that used no cache. Fields are copied verbatim and never derived —
+ * `totalTokens` is the wire's own sum of the two counts, not a new measurement,
+ * so it is not mapped (`LLMUsage` has no home for it). The two cache counts take
+ * the names anthropic's cache read/creation counts take. The field list is
+ * MEASURED from the installed SDK's `TokenUsage`, not assumed.
+ */
+function mapUsage(raw: unknown): LLMUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined
+  const src = raw as Record<string, unknown>
+  const out: LLMUsage = {}
+  const take = (from: string, to: keyof LLMUsage): void => {
+    const v = src[from]
+    if (typeof v === "number" && Number.isFinite(v)) out[to] = v
+  }
+  take("inputTokens", "inputTokens")
+  take("outputTokens", "outputTokens")
+  take("cacheReadInputTokens", "cacheReadTokens")
+  take("cacheWriteInputTokens", "cacheCreationTokens")
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 export interface BedrockConfig {
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
@@ -247,12 +274,17 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         // the stream ended, and `stopReason` is the truncation literal the
         // seam's `end` bit takes. It carries no other stream content (it
         // terminates the stream → `end` below); `messageStart` carries none at
-        // all. metadata carries the usage snapshot (inputTokens/outputTokens/
-        // totalTokens) — the seam's LLMStreamEvent vocabulary DOES have a
-        // `usage` event (`{ type: "usage"; usage: LLMUsage }`, emitted by
-        // llm-anthropic), but THIS adapter does not map the snapshot onto it,
-        // so the wire position is documented here rather than surfaced.
+        // all. `metadata` carries the usage snapshot (the Converse
+        // `TokenUsage`) — until M72 Ⅲ this adapter documented that wire position
+        // here instead of surfacing it; the arm below now maps it onto the
+        // seam's own `usage` event (`{ type: "usage"; usage: LLMUsage }`).
         if (m.messageStop?.stopReason === "max_tokens") truncated = true
+        // M72 Ⅲ: `metadata` carries the round-trip's usage snapshot — typed
+        // here since the beginning and never read. Same two rules as every
+        // other adapter: finite numbers only, and nothing recognisable ⇒ no
+        // event at all.
+        const usage = mapUsage(m.metadata?.usage)
+        if (usage !== undefined) return [{ type: "usage", usage }]
         const exceptions = [
           m.internalServerException, m.modelStreamErrorException, m.serviceUnavailableException,
           m.throttlingException, m.validationException,

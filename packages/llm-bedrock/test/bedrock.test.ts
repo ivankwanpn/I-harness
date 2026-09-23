@@ -156,7 +156,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     expect(events).toEqual(["error:bedrock stream failed: boom"])
   })
 
-  it("ignores the metadata/usage member (no usage event in the seam vocabulary)", async () => {
+  it("M72 Ⅲ: maps the metadata/usage member onto the seam's usage event", async () => {
     const { fake } = fakeRuntime([
       { metadata: { usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 }, metrics: { latencyMs: 10 } } },
       { messageStop: { stopReason: "end_turn" } },
@@ -166,8 +166,87 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
       if (ev.type === "end") events.push("end")
       if (ev.type === "text/chunk") events.push(`t:${ev.text}`)
+      if (ev.type === "usage") events.push(`u:${ev.usage.inputTokens}/${ev.usage.outputTokens}`)
+    }
+    expect(events).toEqual(["u:5/3", "end"])
+  })
+
+  it("M72 Ⅲ: a metadata member without a recognisable number emits no usage event", async () => {
+    const { fake } = fakeRuntime([
+      { metadata: { metrics: { latencyMs: 10 } } },
+      { messageStop: { stopReason: "end_turn" } },
+    ])
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: string[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "end") events.push("end")
+      if (ev.type === "usage") events.push(`u:${ev.usage.inputTokens}/${ev.usage.outputTokens}`)
     }
     expect(events).toEqual(["end"])
+  })
+
+  // The OTHER exit of the "no recognisable number ⇒ undefined" rule. The test
+  // above never reaches the mapper's tail — its fixture carries no `usage` at
+  // all, so it exits at the non-object guard. THIS is the fixture that reaches
+  // the tail with an empty result, which is what makes the rule's second exit
+  // load-bearing: an always-returning tail would emit `{ type: "usage", usage: {} }`
+  // — an event that reads as a measurement nobody made, precisely what the
+  // seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
+    const { fake } = fakeRuntime([
+      { metadata: { usage: {} } },
+      { messageStop: { stopReason: "end_turn" } },
+    ])
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: string[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "end") events.push("end")
+      if (ev.type === "usage") events.push(`u:${ev.usage.inputTokens}/${ev.usage.outputTokens}`)
+    }
+    expect(events).toEqual(["end"])
+  })
+
+  // Iron law ① — the mapper takes only `typeof v === "number" &&
+  // Number.isFinite(v)`. A STRING that merely spells a count ("5") is not a
+  // number the provider measured; coercing it would write an unvalidated value
+  // straight into `LLMUsage` — the "number nobody made" this phase exists to
+  // forbid. Every other fixture in this file hands the mapper either a real
+  // number or nothing at all, so this is the one that pins the guard: it is the
+  // fixture a coercion regression has to break.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    const { fake } = fakeRuntime([
+      { metadata: { usage: { inputTokens: "5" } } },
+      { messageStop: { stopReason: "end_turn" } },
+    ])
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: string[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
+      if (ev.type === "end") events.push("end")
+      if (ev.type === "usage") events.push(`u:${ev.usage.inputTokens}/${ev.usage.outputTokens}`)
+    }
+    expect(events).toEqual(["end"])
+  })
+
+  // Measured, not assumed: the installed @aws-sdk/client-bedrock-runtime's
+  // `TokenUsage` (dist-types/models/models_0.d.ts) declares inputTokens,
+  // outputTokens, totalTokens, cacheReadInputTokens, cacheWriteInputTokens and
+  // cacheDetails — so the two cache counts are mapped too, onto the same seam
+  // names anthropic's cache_read/creation_input_tokens take. `totalTokens` has
+  // no home in `LLMUsage` (it is the wire's own sum of the two counts, not a
+  // new measurement) and is deliberately NOT mapped.
+  it("M72 Ⅲ: the cache counts the Converse TokenUsage declares are mapped; totalTokens is not", async () => {
+    const { fake } = fakeRuntime([
+      { metadata: { usage: { inputTokens: 5, outputTokens: 3, totalTokens: 8, cacheReadInputTokens: 7, cacheWriteInputTokens: 2 } } },
+      { messageStop: { stopReason: "end_turn" } },
+    ])
+    const client = createBedrockClient({ model: "m" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) events.push(ev)
+    const usage = events.filter((e) => e.type === "usage")
+    expect(usage).toEqual([
+      { type: "usage", usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 7, cacheCreationTokens: 2 } },
+    ])
+    expect("totalTokens" in usage[0]!.usage).toBe(false)
   })
 })
 
