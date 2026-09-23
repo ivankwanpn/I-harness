@@ -50,7 +50,7 @@
 
 `AssemblyOptions.contextWindow`／`maxOutputTokens`（`assembly.ts:211`／`:217`）在 `registerSubagent`（`:1057-1083`）的呼叫點**就已經在 scope 裡** ⇒ 依序加可選欄位穿過 `registerSubagent → SubagentToolDeps → SpawnOptions`，再在 `child.ts` 的 inherit 分支用它。
 
-**guardian 是特例**：`guard-approval/src/guardian/reviewer.ts:149` 用 `deps.model ?? deps.parentModel` ⇒ 設定了自己的模型時，窗口與 cap 要來自**它自己的**解析，不是 session 的。
+**guardian 是特例，而且本設計對它的答案是「不傳」**：`guard-approval/src/guardian/reviewer.ts:149` 是 `deps.model ?? deps.parentModel`，而 `deps.model` 是 host 交給 `registerGuardian` 的一個**裸 `ModelClient`**（`assembly.ts:1129`）——那個站點**沒有任何 binding 可以解析**，所以「配置了模型的 guardian」的窗口與 cap **在結構上不可知**。⇒ 依「缺席即缺席」，**只在繼承臂傳**（`deps.model === undefined` 時才把 session 的數字往下給）；配置臂不傳，並列為殘餘（要修就得讓 host 連它的 binding 一起交進來）。**傳一個不是它的數字比不傳更糟**——那會讓預算階梯與夾取用一個錯的窗口去判斷。
 
 ### 1.4 窗口進來了 ⇒ 階梯第三層變成可達（**刻意的**）
 
