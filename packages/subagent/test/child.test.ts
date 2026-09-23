@@ -1055,40 +1055,49 @@ describe("the child's request carries the resolved budget", () => {
 
   // ── M74 Task 3: the child's own summary vs. the one it inherited ─────────
   //
-  // The brief PREDICTED that the child's own compaction would shadow the
-  // `compaction/summary` it inherited from its parent, because `retainTokens: 0`
-  // starts the region at the head. MEASURED at this revision: the region does
-  // start at the head — but it does NOT cover that marker, and cannot. A
-  // compaction marker is never itself shadowable (`region.ts`'s
-  // `isCompactionMarker`, the skip at `:22` for the empty-retention arm and
-  // `:53` for the tail arm — the engine's documented invariant
-  // "壓縮標記…永不 shadow"), while `deriveMessages` renders every marker that is
-  // not inside some shadow set as a `user` message (core-session:561-563). So
-  // the child's region runs 0..15, 17, 18, 19 and STOPS at the inherited marker
-  // (seq 16): MEASURED, the derived surface is exactly `user:
-  // PARENT-SUMMARY-SENTINEL…` | `user: CHILD-SUMMARY-SENTINEL…` |
-  // `assistant: child done` (427 tokens) — both summaries, the stale one
-  // included. No test-side change can alter that: the fix is production code —
-  // the engine's region rule (compaction) or the seed the child is handed
-  // (`fork.ts`) — so it is reported as a FINDING for this task, not patched in
-  // a test.
-  // The requirement itself is pinned below, verbatim, as an EXPECTED FAILURE
-  // (`it.fails`), which keeps the suite green while the gap is real; the case
-  // just above it is the green half (the part of the prediction that holds).
+  // Two facts, measured on this tree:
+  //   (1) the child DOES compact the log it inherited — its region starts at the
+  //       head of the SEED (case below), and
+  //   (2) the summary it inherited STAYS on the surface next to its own (case
+  //       after that), because a `compaction/summary` marker is never itself
+  //       shadowable: `region.ts`'s `isCompactionMarker` skip guards the
+  //       empty-retention arm (`:22`) and the tail arm (`:53`).
   //
-  // The fixture: a parent that compacted — its marker shadows its OLDEST turn's
-  // messages, `shadowedSeqs: [1, 2]`, and leaves the later turns visible, the
-  // shape a non-zero retention budget produces — and then kept working before
-  // spawning. `forkTurns: "all"` seeds that whole log, marker included, and the
-  // seed alone is over the child's gate: MEASURED at its first step boundary,
-  // `activeTokens` 3397 + the child's `overheadTokens` 256 = 3653 charged
-  // against a 1600 gate (0.8 × 2000) and an 1800 budget (0.9 × 2000). (The
-  // brief appends the marker after ONE parent turn; measured, that log charges
-  // the child only 217 + 256 = 473, well under the same gate — the child never
-  // compacts, its own summary never appears, and the case would have measured
-  // nothing at all. The extra unshadowed turns are what cross the gate, and they
-  // are the realistic shape: a parent that compacted and kept going. Every brief
-  // value is otherwise untouched.)
+  // (2) is deliberate and it is the ENGINE's, not this milestone's. The engine's
+  // own suite pins it as the region contract — "shadowedSeqs = events below the
+  // retention budget, excluding compaction markers" / "the compaction/summary
+  // marker is never shadowed" (packages/compaction/test/compaction.test.ts:80-88)
+  // and "retainTokens 0 shadows everything except compaction markers" (:90-97) —
+  // and the MAIN session behaves the same after its second compaction, since the
+  // rule is session-agnostic. M33 chose that on purpose: the update is
+  // PROMPT-only, "the anchored semantics are prompt-only; the `compaction/summary`
+  // event shape is unchanged (each round still appends its own summary event)"
+  // (compaction/src/index.ts:164-166). Task 3's brief predicted the opposite
+  // ("retainTokens: 0 … ⇒ should cover it") and filed it as a property that must
+  // hold; measured, it does not hold — for a child or for any other session.
+  // That requirement was the spec's own error: §1.3 of
+  // `docs/superpowers/specs/2026-09-23-child-budget-compaction-design.md` was
+  // corrected in place to state the real behaviour, and what this file pins is
+  // CONSISTENCY WITH THE ENGINE.
+  //
+  // One path could still hide the inherited marker: the budget ladder's RESET
+  // layer — `resetWindowOnce` records `removedSeqs` with NO marker filter — so
+  // the case pins that no `compaction/reset` ran and that the summary path is
+  // what produced this surface.
+  //
+  // The fixture: a parent whose oldest turn was compacted — the marker, appended
+  // LAST at the log's tail, shadows that turn's two messages
+  // (`shadowedSeqs: [1, 2]`, the shape a non-zero retention budget produces) —
+  // and which kept working; `forkTurns: "all"` seeds the whole log, marker
+  // included, and the seed alone is over the child's gate: MEASURED at its first
+  // step boundary, `activeTokens` 3397 + the child's `overheadTokens` 256 = 3653
+  // charged against a 1600 gate (0.8 × 2000) and an 1800 budget (0.9 × 2000).
+  // (The brief appends the marker after ONE parent turn; measured, that log
+  // charges the child only 217 + 256 = 473, well under the same gate — the child
+  // never compacts, its own summary never appears, and the case would have
+  // measured nothing at all. The extra unshadowed turns are what cross the gate,
+  // and they are the realistic shape: a parent that compacted and kept going.
+  // Every brief value is otherwise untouched.)
   async function spawnFromCompactedParent() {
     const f = spawnFixture()
     const PARENT_SUMMARY = "PARENT-SUMMARY-SENTINEL " + "old ".repeat(200)
@@ -1096,9 +1105,12 @@ describe("the child's request carries the resolved budget", () => {
     append(f.parentSession, { type: "user/message", text: "q " + "filler ".repeat(300) })
     append(f.parentSession, { type: "assistant/message", text: "a " + "filler ".repeat(300) })
     append(f.parentSession, { type: "turn/end" })
-    // three more parent turns AFTER the compacted one — these are NOT shadowed
-    // by the parent's marker, so they (and not the marker's own region) are what
-    // the child's surface is priced on
+    // three more parent turns, appended BEFORE the marker below — log order is
+    // turn, then marker, and the marker's position is immaterial for an `all`
+    // seed (the note at the top of this file, `:48-54`, records the step-boundary
+    // position that matters only when a window is SLICED). The parent's marker
+    // does NOT shadow these, so they are what the child's inherited surface is
+    // priced on.
     for (let i = 0; i < 3; i++) {
       append(f.parentSession, { type: "turn/start" })
       append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(300) })
@@ -1130,10 +1142,10 @@ describe("the child's request carries the resolved budget", () => {
       await new Promise((r) => setTimeout(r, 20))
     }
     expect(f.jobs.read(jobId).status).toBe("completed")
-    return { f, path }
+    return { f, path, PARENT_SUMMARY, CHILD_SUMMARY }
   }
 
-  /** The green half of the prediction: the child DOES compact the log it
+  /** The first measured fact, pinned: the child DOES compact the log it
    * inherited, and its region runs from the head of the SEED (not just over the
    * child's own turn). MEASURED: `shadowedSeqs` = [0..15, 17, 18, 19] — every
    * non-marker event below the marker, all four inherited turns included.
@@ -1151,22 +1163,33 @@ describe("the child's request carries the resolved budget", () => {
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
   }, 15_000)
 
-  // KNOWN UNMET REQUIREMENT — the assertion below is Task 3's, verbatim, and it
-  // does NOT hold at this revision (see the finding above `spawnFromCompactedParent`):
-  // the inherited `compaction/summary` is a marker, markers are never shadowable,
-  // so the child's own summary cannot cover it and the surface shows both. Not
-  // weakened into a green form on purpose: the FIX is a production decision
-  // (make the region cover a superseded summary, or keep the parent's marker out
-  // of the seed), and this case must flip — `it.fails` reports "expected to fail
-  // but passed" — the moment it lands, which is the signal to drop the `.fails`.
-  it.fails("M74: a compacted child's surface shows ONE summary — the inherited one is shadowed", async () => {
-    const { f, path } = await spawnFromCompactedParent()
+  /** The second measured fact, pinned: the inherited summary is NOT hidden by
+   * the child's own — the surface carries both, in log order, and nothing else.
+   * Deliberate engine behaviour (see the header comment), consistent with the
+   * MAIN session after its second compaction, so a change here would be a
+   * change to every session's surface, not a child-only tweak.
+   * KILLED BY (measured, fix round 1): dropping the marker skip at
+   * `packages/compaction/src/region.ts:22` — the inherited marker joins the
+   * region, its `user` message leaves the surface, and this case's first
+   * expected element disappears. */
+  it("M74: a compacted child shows BOTH summaries — a later summary never hides an earlier one", async () => {
+    const { f, path, PARENT_SUMMARY, CHILD_SUMMARY } = await spawnFromCompactedParent()
     const childSession = f.table.get(path)!.session
-    const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
-    // the child's own summary is on the surface…
-    expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
-    // …and the one it inherited is NOT — two summaries would mean the model is
-    // reading a description of the parent's history next to its own.
-    expect(surface).not.toContain("PARENT-SUMMARY-SENTINEL")
+    // the summary path produced this surface, not the ladder's reset layer —
+    // the one in-tree mechanism that CAN hide a marker (its `removedSeqs` has no
+    // marker filter); if a reset ever ran, the claim below would need re-taking
+    expect(childSession.events.some((e) => e.type === "compaction/reset")).toBe(false)
+    // …and the surface is EXACTLY this: the inherited summary, the child's own,
+    // the child's reply — in that order, with no raw inherited text left over
+    // (the child's region covered the whole inherited log: the other case).
+    // `CHILD_SUMMARY.trim()`: the summarizer accepts `out.trim()`
+    // (summarizer.ts), so the fixture sentinel's trailing space is gone from the
+    // logged text. It clears `minSummaryChars` (500) and the default `maxTokens`
+    // (1024 → 4096 chars) does not slice it, so trimming is the only change.
+    expect(deriveMessages(childSession)).toEqual([
+      { role: "user", content: PARENT_SUMMARY },
+      { role: "user", content: CHILD_SUMMARY.trim() },
+      { role: "assistant", content: "child done" },
+    ])
   }, 15_000)
 })
