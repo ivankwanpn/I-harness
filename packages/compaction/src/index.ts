@@ -338,9 +338,17 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   // M5/D2: the retained tail must not start inside a tool block — the shared
   // rule lives in `walkOffToolEvents` (this site used to inline the loop; so did
   // selectShadowableRange). It walks the cut BACKWARDS (retaining more, never
-  // less) until it rests on an event that is neither half of a call/result pair.
-  // Without it, safety depends on retainLast modulo the events per turn:
-  // measured, 4 of the first 25 values produce an orphaned result.
+  // less) until it rests on a cut that keeps every result's call with it.
+  // M76: that rule is EXACT now (it asks the result side, so M70's
+  // `tool/dispatch` between a call and its result can no longer end the walk
+  // early). Measured on an 8-turn read session in the shipped order
+  // (call → dispatch → result, 72 events), `retainLast` 1..25: 6 values orphan
+  // with no walk at all ([4,5,13,14,22,23]) and STILL 6 under the pre-M76
+  // heuristic — the walk was inert — while the exact rule leaves 0. The same
+  // fixture over 200 sampled `retainTokens` budgets (10..2000 step 10):
+  // 115 orphan with no walk, 115 under the heuristic, 0 with the exact rule.
+  // The reading that stood here ("4 of the first 25") was measured before M70
+  // wrote a dispatch into every tool run.
   const cut = walkOffToolEvents(session, Math.max(0, session.events.length - retainLast))
   const keepSeqs = new Set(
     session.events.slice(cut).map((e) => e.seq).filter((s): s is number => s !== undefined),
