@@ -56,19 +56,24 @@
     const push = (type: string, extra: Record<string, unknown> = {}) =>
       events.push({ type, seq: events.length, ...extra } as SessionEvent)
     push("turn/start"); push("user/message", { text: "a" }); push("assistant/message", { text: "A" }); push("turn/end")
-    // the parent compacted at its head: this summary shadows the four events above
+    push("turn/start"); push("user/message", { text: "b" })
+    // The parent compacted AT A STEP BOUNDARY — i.e. INSIDE the turn, which is the
+    // only place compaction ever runs (`core-agent:283-285`). Putting the marker
+    // BEFORE the turn's `turn/start` would place it outside any `turn/start`-
+    // anchored slice and the case would be unsatisfiable. (The plan's first draft
+    // did exactly that; a implementer measured it red before AND after.)
     push("compaction/summary", { version: 1, text: "S", shadowedSeqs: [0, 1, 2, 3] })
-    push("turn/start"); push("user/message", { text: "b" }); push("assistant/message", { text: "B" }); push("turn/end")
+    push("assistant/message", { text: "B" }); push("turn/end")
 
     const seed = forkTurns(events, 1) // the last turn — the slice starts at index 4
 
     // the marker rides along (it is not a cut), but the four events it named are
     // NOT in this child: those references have no target and are dropped.
-    expect(seed[0]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [] })
+    expect(seed[2]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [] })
     // every event is renumbered into the child's coordinates (seq === index)
     expect(seed.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4])
     expect(seed.map((e) => e.type)).toEqual([
-      "compaction/summary", "turn/start", "user/message", "assistant/message", "turn/end",
+      "turn/start", "user/message", "compaction/summary", "assistant/message", "turn/end",
     ])
   })
 
@@ -84,6 +89,9 @@
 
     expect(seed[4]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [0, 1] })
   })
+```
+
+> **落地的版本比上面多一條**（任務複審的 Minor 1）：**切片內、而且被引用的事件也在切片內**的案例——一個連續的 shadow 範圍 `[0..5]`，其中 0..3 離開子代理、4/5 以子代理索引 0/1 到達。沒有它，`renumbered.set(event.seq, event.seq)`（鍵對、值用父 seq）能存活整個套件，而那正是本任務要關的缺陷的另一半。上面那條的標題也依複審的 Minor 3 改成了「…when the whole log is retained」（原本的名字許諾得比 fixture 測到的多）。
 ```
 
 - [ ] **Step 2: 跑它，看到紅**
