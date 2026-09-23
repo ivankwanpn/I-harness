@@ -167,6 +167,13 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     // subagent package must not read one into existence.
     ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
     ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+    // M73: the session's numbers ride the SAME chain one hop further. The host
+    // shape (RoleModelHost) reaches registerSubagent with them, and stopping
+    // here would leave the tool arm — the main spawn path — empty-handed: the
+    // deps object is what createSubagentTools reads, so a value not copied
+    // onto it does not exist for the tool. Absent stays absent.
+    ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+    ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
     tasks,
     // M24b (spec §3.3): thread the optional workflow executor through so the
     // job_* tools see the third layer. Omitted when the host didn't pass one —

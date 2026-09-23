@@ -41,6 +41,12 @@ export interface GuardianReviewDeps {
    * fires and the reviewer silently inherits the parent's client. */
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
   allowSubagentModelSelection?: boolean
+  /** M73: the SESSION's own model's numbers (assembly's AssemblyOptions),
+   * forwarded to `spawnChild` on the INHERITED arm only — see the gate at the
+   * spawn below, which is deliberate and not symmetric with the two fields
+   * above. Absent → no key written. */
+  contextWindow?: SpawnOptions["contextWindow"]
+  maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   parentModel: ModelClient
   /** Dedicated reviewer model (defaults to the parent model). */
   model?: ModelClient
@@ -164,6 +170,13 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     // OFF, never "enabled by omission".
     ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
     ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
+    // M73: the session's numbers are the numbers of THE SESSION'S MODEL. When a
+    // guardian model is configured, this child runs on a different endpoint
+    // whose window we do not know here — passing the session's would be a
+    // wrong number, which is worse than an absent one. So: inherited arms get
+    // them, configured ones stay absent (and are recorded as a residual).
+    ...(deps.model === undefined && deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+    ...(deps.model === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
     jobs: deps.subagents.jobs,
     table: deps.subagents.table,
     agents: deps.subagents.agents,
