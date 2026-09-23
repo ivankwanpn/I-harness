@@ -353,10 +353,14 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // would close the feature's primary use case, a child spawned FROM a large
   // session. What the reader cannot see today is the WASTE and the RISK: the
   // child's first request cannot be built without a summarising pass, and an
-  // inherited context that is one indivisible block makes that pass fail soft —
-  // the ladder's reset is what rescues the turn, by DROPPING the context (the
-  // M74 strict case's measured outcome, and design §4.4's residual, whose real
-  // fix is a cap at the block's SOURCE).
+  // inherited context that is one indivisible block makes that pass fail soft.
+  // After that the ladder's reset is the whole rescue — it drops the context,
+  // and only when the log has events beyond the retained tail: with nothing
+  // removable it returns `reset: false` (`compaction/src/index.ts:361`) and the
+  // ladder fails closed instead. The M74 strict case's six tail turns are that
+  // condition (its measured outcome); design §4.4's residual — the indivisible
+  // block the chunker cannot split, whose real fix is a cap at the block's
+  // SOURCE — is the half this warn can only make visible.
   //
   // The condition is measured, not guessed: `childSession` holds nothing but
   // the seed here (the agent does not exist yet), so this is the seed's own
@@ -374,21 +378,29 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // (`token-meter/src/budget.ts:14`). This line compares the seed's own
   // projection against the FULL window, so it is strictly NARROWER than either:
   // the band `[0.8·window − overhead, window)` is silent here — a known,
-  // deliberate narrowing, not an oversight. That band is the healthy case: the
-  // summariser's single request still fits the window there (roughly
-  // `seed + directive + overhead < window`; the M75 case prices its own
-  // directive at 449 tokens), so one call settles it and no piece path is
-  // needed. What this line marks instead is the HARD bound — the seed ALONE
-  // crossing the window — which is where the piece path becomes necessary and
-  // where an indivisible seed ends in the reset (the M74 strict case's
-  // measured outcome).
+  // deliberate narrowing, not an oversight. MOST of that band is the healthy
+  // case: the summariser's single request still fits the window (roughly
+  // `seed + directive + overhead < window` — with the M75 case's measured
+  // 449-token directive and this role's 256-token overhead, the seed has to
+  // stay under `window − 705`). The band's TOP SLIVER does not fit — the
+  // summariser's own request is over the window there, which is what M75's
+  // chained pieces are for — and at small windows the WHOLE band is at or above
+  // that fit bound, because the band's floor `0.8·window − overhead` overtakes
+  // the fit bound `window − directive − overhead` below `window = 5 × directive`
+  // (the overhead cancels; at this file's 2 000-token test window it is 1 344
+  // against 1 295). None of that moves the line, whose subject is the HARD
+  // bound — the seed ALONE crossing the window, where the piece path becomes
+  // necessary and where an indivisible seed has nothing left but the reset
+  // (with a tail beyond it — the M74 strict case) or the fail-closed throw
+  // (without one — this file's own warn fixture).
   if (contextWindow !== undefined) {
     const seedTokens = estimateContent(deriveMessages(childSession))
     if (seedTokens >= contextWindow) {
       d.warn(
         `[subagent] the inherited seed prices at ${seedTokens} tokens against a ${contextWindow}-token window: ` +
           `the child summarises its inherited context in pieces before its first request, and if that context ` +
-          `is one indivisible block the summariser fails soft and the reset rescues the turn by dropping it`,
+          `is one indivisible block the summariser fails soft — the reset then rescues the turn by dropping it ` +
+          `when the log has events beyond the retained tail, and the turn fails closed when it does not`,
       )
     }
   }
