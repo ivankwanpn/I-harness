@@ -248,9 +248,10 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         // seam's `end` bit takes. It carries no other stream content (it
         // terminates the stream → `end` below); `messageStart` carries none at
         // all. metadata carries the usage snapshot (inputTokens/outputTokens/
-        // totalTokens) — the seam's LLMStreamEvent vocabulary has NO usage
-        // event (same gap as llm-anthropic / llm-gemini), so the wire position
-        // is documented here.
+        // totalTokens) — the seam's LLMStreamEvent vocabulary DOES have a
+        // `usage` event (`{ type: "usage"; usage: LLMUsage }`, emitted by
+        // llm-anthropic), but THIS adapter does not map the snapshot onto it,
+        // so the wire position is documented here rather than surfaced.
         if (m.messageStop?.stopReason === "max_tokens") truncated = true
         const exceptions = [
           m.internalServerException, m.modelStreamErrorException, m.serviceUnavailableException,

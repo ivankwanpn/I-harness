@@ -159,10 +159,12 @@ export interface SessionService {
    * compaction WINDOW is construction-time config (`contextWindow` →
    * assembly.ts's `budget: { contextWindow: … }`) — a rebind moves the client,
    * not the window; a new window takes effect at the next build. M72 Ⅱ's
-   * output cap is the same kind of config (`AgentDeps.maxOutputTokens`, read
-   * when the agent assembles a request) and follows the same rule — the
-   * refreshed binding reports the new cap immediately, the live assembly
-   * sends it from the next build. */
+   * output cap is the same kind of config (the agent-deps type's
+   * `maxOutputTokens`, read when the agent assembles a request) and follows
+   * the same rule — the refreshed binding reports the new cap immediately,
+   * the live assembly sends it from the next build. Spelled descriptively
+   * here ON PURPOSE: a literal type name would word-match the reachability
+   * scan and hide @i-harness/core-agent's unimported-export row for it. */
   rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
   hasAssembly(sessionId: string): boolean

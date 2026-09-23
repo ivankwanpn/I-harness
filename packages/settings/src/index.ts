@@ -65,7 +65,11 @@ export interface SettingsModel {
   /** Maximum OUTPUT tokens — the model's output-length cap (M32 T1/FIX: same
    * semantics as the provider catalog's `maxOutputTokens` card field; the M31
    * G1 mapping of this value onto `maxContextWindow` is removed). A per-model
-   * override in the unified resolution chain; never a request default. */
+   * override in the unified resolution chain — and since M72 Ⅱ the FIRST
+   * source of the request's output cap (spec §1.1), so NOT display-only: the
+   * resolved value travels down the chain into the request, where core-agent
+   * clamps it against the context window (`clampOutputCap` in llm-seam,
+   * applied at `packages/core-agent/src/index.ts`) before it is sent. */
   maxTokens?: number
   /** The WIRE PROTOCOL for this model, overriding the route's. One endpoint can
    * serve different models on different protocols (the gateway case), and the
