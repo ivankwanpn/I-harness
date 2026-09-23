@@ -1021,6 +1021,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../workflow
