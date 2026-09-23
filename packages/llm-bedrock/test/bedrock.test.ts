@@ -550,3 +550,22 @@ describe("M72 Ⅱ: the truncation bit (bedrock)", () => {
     expect(events.at(-1)).not.toHaveProperty("truncated")
   })
 })
+
+// M77. Converse's refusal literal is `guardrail_intervened`: a guardrail stopped
+// the exchange, which arrives as a normal HTTP 200 stream with the reason on
+// `messageStop` — the sibling of `max_tokens` in the SDK's own `StopReason`
+// enum. Sibling literals this unit does NOT recognise (measured in the installed
+// SDK types, recorded as residual rather than guessed): `content_filtered`,
+// `malformed_model_output`, `malformed_tool_use`, `model_context_window_exceeded`.
+describe("M77: the refusal bit (bedrock)", () => {
+  it("M77: messageStop stopReason guardrail_intervened reaches the seam as refused", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { text: "x" } } },
+      { messageStop: { stopReason: "guardrail_intervened" } },
+    ])
+    const client = createBedrockClient({ model: "claude-x" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+})

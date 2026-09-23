@@ -486,13 +486,22 @@ describe("M72 Ⅱ: the truncation bit (openai)", () => {
     expect(events.at(-1)).toEqual({ type: "end", truncated: true })
   })
 
+  // M77: THIS is the one existing assertion the refusal channel changes, and it
+  // is deliberately named. Until M77 it pinned the very contract the milestone
+  // removes — `content_filter` ending as a bare `end`, i.e. "a refusal is an
+  // empty success" — so this test was asserting the defect: the seam reported
+  // success, core-agent logged an empty assistant message, and the turn ended
+  // normally. The fixture is UNCHANGED (the same wire event every reader
+  // produces); only the expectation moved onto the bit the seam now carries.
+  // `truncated` stays asserted absent: the two bits are independent, and this
+  // reason is a refusal rather than a truncation.
   it("M72 Ⅱ: response.incomplete for content_filter is NOT a truncation (it is a refusal)", async () => {
     const sse = `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } })}\n\n`
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
     const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
-    expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
     expect(events.at(-1)).not.toHaveProperty("truncated")
   })
 

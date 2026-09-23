@@ -190,6 +190,14 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       // — set in `handleChunk` below, read once at the ending. Absent stays
       // absent: only `true` writes the field.
       let truncated = false
+      // M77: this wire has TWO refusal carriers and neither was read: a
+      // candidate's `finishReason` of `SAFETY` or `RECITATION` (the model's
+      // own answer was blocked), and `promptFeedback.blockReason` on the chunk
+      // (the REQUEST was blocked — there `candidates` may be absent entirely,
+      // so the candidate read below cannot see it at all). A separate variable
+      // from `truncated`: the two are independent and neither is the other's
+      // `else`. Only `true` is ever written.
+      let refused = false
       // Function-call accumulation (Gemini streams a functionCall as several
       // chunks: the first carries the name, the rest carry args objects that
       // may be partial — the docs' canonical accumulation is to store the
@@ -250,7 +258,25 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const events: LLMStreamEvent[] = []
         const candidates = event.candidates as { content?: { parts?: { text?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
-        if ((candidates?.[0] as { finishReason?: string } | undefined)?.finishReason === "MAX_TOKENS") truncated = true
+        const finishReason = (candidates?.[0] as { finishReason?: string } | undefined)?.finishReason
+        if (finishReason === "MAX_TOKENS") truncated = true
+        // M77: the two content refusals this milestone recognises — `SAFETY` (a
+        // safety filter fired on the answer) and `RECITATION` (the answer
+        // reproduced known material). Every other reason writes nothing:
+        // `MAX_TOKENS` above is the truncation bit, and `STOP` is pinned as a
+        // clean ending by the M72 Ⅱ control test in this package.
+        if (finishReason === "SAFETY" || finishReason === "RECITATION") refused = true
+        // M77: the INPUT-side block. It rides `promptFeedback.blockReason`, and
+        // on that chunk `candidates` is absent entirely — a chunk that may be
+        // the whole stream — so the candidate read above sees nothing and this
+        // is the only place the refusal is visible. The recognised literal is
+        // "the field arrived carrying a string"; no allow-list of values is
+        // invented here. RESIDUAL, not measured in this tree (no vendor SDK to
+        // read): a wire that sent a marker value for "nothing was blocked"
+        // would read as a refusal, and no in-tree evidence settles whether it
+        // can.
+        const blockReason = (event.promptFeedback as { blockReason?: unknown } | undefined)?.blockReason
+        if (typeof blockReason === "string") refused = true
         const parts = candidates?.[0]?.content?.parts ?? []
         for (const part of parts) {
           if (part.functionCall !== undefined) {
@@ -297,7 +323,9 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: each bit is written on its own (a response can be both), and both
+      // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }

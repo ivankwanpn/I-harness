@@ -418,6 +418,27 @@ describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
   })
 })
 
+// M77. Chat Completions' refusal literal is the sibling of `length` it shares a
+// field with: `finish_reason: "content_filter"`. The wire still answers HTTP 200
+// with no content, so until this unit the seam reported an empty SUCCESS —
+// core-agent wrote an empty assistant message and the turn ended normally.
+// The fixture is the truncation bit's own frame, with only the reason changed.
+describe("M77: the refusal bit (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M77: finish_reason content_filter reaches the seam as refused", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "content_filter" }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // `toEqual` is exact: a clean `end` and a `truncated` field both fail here.
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+})
+
 // M72 Ⅲ. The read loop and the residual flush used to carry two copies of the
 // frame-parsing rules, and the copies had drifted: R12 fixed a rule in the
 // SECOND copy, while the flush still never accumulated tool-call fragments.
