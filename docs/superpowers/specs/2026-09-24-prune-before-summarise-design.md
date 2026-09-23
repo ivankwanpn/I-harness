@@ -22,11 +22,15 @@
 
 ## 1. 設計
 
-### 1.1 ①把 prune 標記移到 prefix **之前**
+### 1.1 ①**更正：移標記沒有用——真正的因是 prefix fold 的 seq 濾網**
 
-**在 `:132` 規劃完、`:160` 建 prefix 之前**附加 `compaction/prune`，其餘逐字不變（`renderShadowed` 仍然拿到它規劃的那份 records；prune-only 那條路不變；summary 的三個標記不變）。
+**執行期的量測推翻了本節原本的設計（我的錯），正確的診斷如下。** `deriveMessagesUpTo(session, maxSeq)` 的實作是 `deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })`（`core-session/index.ts:455-457`），而 `append` **永遠把最高 seq 給新事件** ⇒ **prune 標記永遠落在區域最後一個 shadowed seq 之後** ⇒ 那個被截斷的 fold **看不到它**。實測：`lastShadowed` 104／109、標記 seq **110**；`deriveMessages`（主路徑）看得到取代文字，`deriveMessagesUpTo` 看不到。**⇒ 沒有任何附加位置能修好它**（本節原本要求「移到 prefix 之前」——量測證明那麼做仍然紅兩條案例）。
 
-**為什麼是「移標記」而不是「讓 `deriveMessagesUpTo` 收 substitutes」**：後者等於**第二份投影**（fold 自己套一次取代）⇒ 與日誌驅動的那一份會漂移，而「一條規則只落一處」是這棵樹的既有紀律。移標記讓**唯一那份投影**自然看到它。
+**真正的修法是一行**：讓 `deriveMessagesUpTo` 的 seq 濾網**對 `compaction/prune` 標記破例**（它必須被 prefix fold 看見）。**為什麼這樣是對的，不只是可行**：prune 標記是**內容尋址**的——`derivePruneSubstitutes` 的 map 以**工具呼叫**為 key，取代文字是**那份舊工具輸出**的性質，不是「決定要 prune 的那一刻」的性質 ⇒ 套用到**任何** fold 都正確（prefix 裡的舊工具輸出就是主路徑取代的那一份）。**而對照組是必要的**：`compaction/summary` 與 `compaction/reset` 是**時間尋址**的（它們的 `shadowedSeqs`／`removedSeqs` **指名一段區域**）⇒ **它們必須繼續服從 seq 濾網**。
+
+**這同時修掉一個本 spec 沒有指名的缺陷**：標記在切點之外時，摘要器的 fold 帶著**原始**工具輸出，而主路徑的 fold 帶著**取代文字** ⇒ 摘要器的請求**不是主請求的 leading slice** ⇒ **M5/D2 的 byte-prefix 性質（那段 replay 存在的理由）也是壞的**。既有的 prefix 測試看不到它，因為它的 fixture 沒有 prune 標記 ⇒ **要有一條專門的測試**（而它比 token 數字更有價值）。
+
+**為什麼不是「讓 `deriveMessagesUpTo` 收 substitutes」**：那是**第二份投影**（fold 自己套一次取代）⇒ 與日誌驅動的那一份會漂移；破例讓**唯一那份投影**自然看到它。
 
 **代價（明說）**：**摘要失敗時，prune 已經附加、而且不會被撤銷**（日誌是 append-only）。今天的行為是「失敗 ⇒ 什麼都沒附加」。**這個改變是刻意的**：
 - prune 是**安全**的（它只是把舊工具輸出換成一段取代文字），而且 **prune-only 那條路本來就會單獨附加它**；
@@ -46,11 +50,14 @@
 ## 2. 驗收（每一條都要**紅先 ＋ 變異證明**）
 
 1. **摘要器的 prefix 是 prune 過的**：一個舊工具輸出會被 `planPrune` 命中的 session，在**不**走 prune-only 的設定下跑 `compact()` ⇒ 斷言摘要請求的 messages 裡**有取代文字、沒有原始輸出**。紅先＝今天就帶著原始輸出。
+   - **執行期更正**：這一條**不是**靠移標記通過的（見 §1.1）——它靠的是 `deriveMessagesUpTo` 的破例。**兩條案例在「只移標記」的版本下仍然紅**，那個量測是本階段最重要的讀數。
 2. **prune-only 那條路不變**：既有的 prune-only 案例全綠（它本來就單獨附加標記）。
 3. **失敗仍然保留 prune**（新的刻意行為）：讓摘要器 throw ⇒ 斷言 `compaction/prune` **在**、`compaction/summary` **不在**、`reason` 仍是 `"summarizer-failed"`。
 4. **沒被命中的 session 逐位元組不變**：`pruneRecords.length === 0` 時，請求與標記與今天完全相同。
 5. **與 M75/M76 的閘互動**：一個「原本剛好放不下、prune 之後放得下」的區域 ⇒ **單一呼叫**而不是切塊（那是這個修法的**紅利**，要有一條測試說得出它）。
-6. `pnpm verify:all` 五步全綠、`--gate` **不新增列**（不新增 export）。
+6. **【執行期新增】M5/D2 的 byte-prefix 性質在有 prune 標記時仍然成立**：標記的 seq 在切點之外 ⇒ 摘要器的請求 messages 是 `deriveMessages(session)`（主 fold）的 **leading slice**，而且共享位置上**是取代文字、不是原始輸出**。**這一條比 token 數字更有價值**（它是那段 replay 存在的理由），而它今天**紅**。
+7. **時間尋址的標記不受破例影響**：`compaction/summary`／`compaction/reset` **仍然服從 seq 濾網**（要有一條測試；破例只給 prune）。
+8. `pnpm verify:all` 五步全綠、`--gate` **不新增列**（不新增 export）。
 
 ## 3. 刻意不做（YAGNI）
 

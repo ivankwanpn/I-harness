@@ -23,9 +23,10 @@
 
 ### Task 1: 把 prune 標記移到 prefix 之前
 
-**Files:**
-- Modify: `packages/compaction/src/index.ts`（`compactOnce`：`planPrune` 之後、建 `prefix` 之前附加標記；移除原本在 summary 之後的那一次）
-- Test: `packages/compaction/test/prune.test.ts`（既有檔，加案例）
+**Files:**（**執行期更正：真正的修法在 `core-session`，不是「移標記」——見 spec §1.1**）
+- Modify: `packages/core-session/src/index.ts`（`deriveMessagesUpTo` 的 seq 濾網**對 `compaction/prune` 破例**＋ docstring 寫明例外與理由）
+- Modify: `packages/compaction/src/index.ts`（標記仍移到 prefix 之前——那個改動本身**不足以**修好，但它是「失敗時 prune 留著」這條刻意行為的來源，而且讓附加處與摘要處的順序讀得懂）
+- Test: `packages/compaction/test/prune.test.ts`（既有檔，加案例）＋ `packages/core-session/test/`（prefix 性質）
 
 **Interfaces:**
 - Consumes: 既有的 `planPrune`／`PruneRecord`／`derivePruneSubstitutes`（`core-session` 的前置掃描）
@@ -45,11 +46,13 @@
 Run: `pnpm --filter @i-harness/compaction test`
 Expected: 第 1、2、4 條紅（量出來各自紅在哪裡並記錄）；第 3 條綠先。
 
-- [ ] **Step 3: 實作**
+- [ ] **Step 3: 實作**（**兩處，第二處才是有效的**）
 
-在 `:132` 的 `planPrune` 之後、`:160` 建 `prefix` 之前：`if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })`；**刪掉**原本 `:218` 的那一次。**其餘逐字不變**（`renderShadowed` 仍然收到它規劃的那份 records；prune-only 那條路不動；summary 的三個標記不動）。
+**(a) `packages/core-session/src/index.ts` 的 `deriveMessagesUpTo`**：seq 濾網對 **`compaction/prune`** 破例（它必須被 prefix fold 看見）。註解寫明**為什麼它安全而 summary／reset 不安全**：prune 是**內容尋址**的（map 以工具呼叫為 key，取代文字是**那份舊輸出**的性質）⇒ 套到任何 fold 都對；`summary`／`reset` 是**時間尋址**的（它們的 seq 清單**指名一段區域**）⇒ **必須繼續服從**。docstring 也要改（它現在承諾「as of a PREFIX」，例外要寫出來，否則下一個人會讀成 bug）。
 
-在**發射 `failure` telemetry 的那一行旁邊**寫明：摘要失敗時 prune 已經附加、且不會撤銷，理由是 §1.1 的三條（prune 安全、對下一次是淨賺、階梯會重試），並指向釘住它的那條測試。也在附加處註解為什麼它在這裡而不是在摘要之後（prefix 是從日誌折的）。
+**(b) `packages/compaction/src/index.ts`**：標記仍移到 `:132` 的 `planPrune` 之後、`:160` 建 `prefix` 之前，**刪掉**原本 `:218` 的那一次。**其餘逐字不變**（`renderShadowed` 仍然收到它規劃的那份 records；prune-only 那條路不動；summary 的三個標記不動）。
+
+在**發射 `failure` telemetry 的那一行旁邊**寫明：摘要失敗時 prune 已經附加、且不會撤銷，理由是 spec §1.1 的三條（prune 安全、對下一次是淨賺、階梯會重試），並指向釘住它的那條測試。
 
 - [ ] **Step 4: 跑它，看到綠**
 
