@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
+import { estimateContent } from "@i-harness/token-meter"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { createCompactionEngine } from "../src/index.ts"
 
@@ -145,5 +146,31 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     })
     await engine.compact(toolSession())
     expect("maxOutputTokens" in requests[0]!).toBe(false)
+  })
+
+  // Fix round 1 (finding 3). The message list the clamp can see is NOT the
+  // whole input: the request also carries the prefix's system prompt and tool
+  // schemas, which the session log does not. Pricing the messages alone makes
+  // `window − input − margin` too generous — the overrun the clamp exists to
+  // prevent. `CompactionConfig.overheadTokens` is that charge (the assembly
+  // already fills it with exactly this pair), and the assertion below states
+  // the rule without knowing the margin: the promised room can never exceed
+  // what the window leaves after the input AND the host-known overhead.
+  it("charges the host-known overhead the session's own clamp charges", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 12_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    // Recomputed from the very messages the clamp priced, with the same public
+    // meter — so nothing here assumes llm-seam's unexported margin.
+    const input = estimateContent(req.messages)
+    expect(input).toBeGreaterThan(0) // the recomputation is of a real request
+    expect(req.maxOutputTokens).toBeLessThanOrEqual(12_000 - input - 8_000)
   })
 })
