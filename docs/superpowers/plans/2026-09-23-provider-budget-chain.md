@@ -405,6 +405,7 @@ git commit -m "fix(subagent): a rebuilt child keeps its budget and its composed 
 **Files:**
 - Modify: `packages/session-executor/src/assembly.ts`（`RoleModelResolution` `:100-103`；`registerSubagent` `:1057-1083`；`registerGuardian` `:1113-1138`；`mountAgentTeams` `:1144`+）
 - Modify: **`packages/subagent/src/index.ts`**（`registerSubagent` 的 `subagentDeps` `:160-180`——**第四個 hop**：那兩個欄位經 `RoleModelHost` 進了 `RegisterSubagentOptions`，但這個 deps 物件沒有把它們往下傳，少了這一步 inherit 臂在 CLI 路上**什麼都收不到**。這一步是 T1 的複審發現的，原本的計畫漏了它。）
+- Modify: **`packages/subagent/src/tools.ts`**（`spawn_agent` 工具對 `spawnChild` 的呼叫 `:150-190`——**第五個 hop**：它轉送 `parentModel`／`resolveModel`／兩個開關，卻沒有這兩個數字 ⇒ 走**工具**（最主要的那條路）spawn 出來的子代理，inherit 臂兩者皆無。T2 的複審指名了這一跳。）
 - Modify: `packages/guard-approval/src/guardian/reviewer.ts`（`GuardianReviewDeps` `:24-`；`spawnChild` `:151-172`）
 - Modify: `packages/agent-team/src/scheduler.ts`（`TeamDeps` `:71-`；`spawnChild` `:196-216`）
 - Test: `packages/session-executor/test/assembly.test.ts`
@@ -510,6 +511,17 @@ Expected: 紅（`maxOutputTokens` 是 `undefined`）。
 ```
 
 少了這一步，`registerSubagent` 收回來的 `SubagentToolDeps` 沒有那兩個值 ⇒ 工具臂的 spawn 走 inherit 時**兩者皆無**（T1 的複審指名了這一跳）。
+
+`packages/subagent/src/tools.ts`：
+
+4c. **`spawn_agent` 的 `spawnChild` 呼叫（`:150-190`）**——那兩個值到了 `SubagentToolDeps` 之後，**這一步才是真的把它們交給 spawn**；在那之前它是空手的。照同一個慣例，接在 `allowSubagentModelSelection: deps.allowSubagentModelSelection` 之後：
+
+```ts
+        ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+```
+
+（T2 的複審警告：只接 `index.ts` 那一跳的話，「兩個路徑的優先序一致」會成立，而**實際的預算兩邊都是空的**——優先序對、數字沒有，是最難看出來的那種錯。）
 
 `agent-team/src/scheduler.ts`：
 
