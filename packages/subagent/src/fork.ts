@@ -15,8 +15,10 @@ import { remapSeedEvent } from "@i-harness/session-persistence"
 export function forkTurns(events: SessionEvent[], n: number): SessionEvent[] {
   const seed = sliceTurns(events, n)
   // Every return path goes through the remap, including the untouched ones: for
-  // a whole-log seed it is the identity, and making it unconditional is what
-  // keeps the contract ("the output is in child coordinates") true for all of them.
+  // a POSITIONAL whole-log seed (seq === index, what `append` writes) it is the
+  // identity, and making it unconditional is what keeps the contract ("the output
+  // is in child coordinates") true for all of them — a non-positional log (M51,
+  // `repair.test.ts:289-302`: seqs [0, 20]) legitimately re-indexes instead.
   const renumbered = new Map<number, number>()
   for (const [index, event] of seed.entries()) {
     if (event.seq !== undefined) renumbered.set(event.seq, index)
