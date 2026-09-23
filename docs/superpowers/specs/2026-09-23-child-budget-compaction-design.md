@@ -39,7 +39,7 @@
 
 **用同一份實作，而那件事已經量過**：`session-persistence/src/fork.ts` 的 `remapSeedEvent`（`:164-174`）**正是**這個函式——簽名 `(event, index, renumbered: ReadonlyMap<number, number>)`，它把事件重編號到子 session 的座標、重映射 `compaction/summary` 的 `shadowedSeqs`／`compaction/reset` 的 `removedSeqs`／`session/title` 的 `messageSeqs`，而**指向已被切掉區域的引用會消失**（`:165-169` 的 `flatMap`）——那正是 `forkTurns: N` 需要的事。
 
-**它未匯出**（`:164` 是 `function`，不是 `export function`）⇒ 本階段要**匯出它**（連同從 `session-persistence` 的 index 轉出，因為 subagent 走 package root），這**不是新能力、是新能見度**：它已經有第二個消費者（`completedTurnPrefix` 在 `:158` 用它），而本階段給它第三個。**不要在 subagent 再寫一份**——本專案的「一條規則只落一處」在 M73 已經吃過一次同類的裁決（M73-P1）。
+**它未匯出**（`:164` 是 `function`，不是 `export function`）⇒ 本階段要**匯出它**（連同從 `session-persistence` 的 index 轉出，因為 subagent 走 package root），這**不是新能力、是新能見度**：它原本有**一個**呼叫者（`completedTurnPrefix` 在 `:158` 用它），而本階段給它**第二個**。**不要在 subagent 再寫一份**——本專案的「一條規則只落一處」在 M73 已經吃過一次同類的裁決（M73-P1）。（原文寫「第二個…第三個」，是控制器數錯；實作與複審都指出是第二個。）
 
 `forkTurns` 因此變成：切片 → 建 `renumbered`（父 seq → 子 index）→ `map(remapSeedEvent)`。**契約的改變要寫明**：它的輸出從「父事件的逐字切片」變成「**子代理座標下的**種子」——這是它的呼叫者（`child.ts:289`／`:294`）本來就需要、而今天沒有拿到的東西。
 
@@ -75,6 +75,10 @@
 
 `"all"` 讓子代理的第一個請求就是父的整份逐字稿——那是**產品決定**（它決定子代理「看得到什麼」），不在本單位。本單位只保證：**不管種子多大，子代理撐得住**（§1.3）。
 
+> **終審量到那句話的真正機制，並在本節就地更正**：種子大到子代理的 surface **超過窗口**時，**摘要器自己的請求也會超窗**（它從 `deriveMessagesUpTo(session, lastShadowed)` 建輸入——對第一次壓縮而言就是**整份繼承來的 surface**，再加上指示、system prompt 與 tool schemas；`clampOutputCap` 在輸入就佔滿窗口時**原值回傳**）⇒ 真 provider 拒絕它 ⇒ 壓縮 fail-soft ⇒ 階梯第 2 層的 **reset** 接手（保留最後 20 個事件）⇒ **子代理確實繼續，但它是「丟掉繼承來的 context、沒有摘要」，不是「被摘要過」**。用**會拒收超窗請求的 mock client** 量到的讀數（`child.test.ts` 的新案例）：2 次摘要請求被拒（`input 3792 + max_tokens 4242 > context 2000`）、唯一被服務的是主要那條（原始 4_242 被夾成 1697）、`compaction/reset` 移除 seq 0..10、**沒有任何 `compaction/summary`**。
+>
+> ⇒ 所以「撐得住」是真的，但**救援者是 reset 不是摘要**。那條邊界（surface > 視窗）在**主要 session 也是同樣的引擎性質**，差別是主要 session 只在 0.8w–0.9w 之間壓縮（輸入放得下），而**子代理的 seed 在任何檢查之前就貼上去了** ⇒ 它的第一個 step 邊界可以任意超窗。
+
 ### 1.5 那條 inbox 游標的邊角，刻意寫下來
 
 `compaction/reset` 會讓一則 inbox 訊息對模型不可見、卻仍算已消費（§0 最後一列）。**本單位不改它**，理由是：那是 `resetWindow` 語意的一部分，而 `resetWindow` 只在第 1 層壓縮之後仍超預算時才跑；把它改成「不 shadow inbox 事件」會讓壓縮在最有需要的時候失效。⇒ 列為殘餘，不是缺陷。
@@ -83,7 +87,7 @@
 
 `child.test.ts:877-909` 斷言 `parentClient.requests` 是**空的**。有了 compactor，引擎會在 `enforceBudget` **之前**跑 `maybeCompact`（`core-agent:285` 先於 `:290`）⇒ 會有一次**摘要器**請求。
 
-改成斷言**它要斷言的事**：仍然是 fail-closed（`prompt_too_long`），而**唯一**發生的請求是**摘要器那一次**（不是那條超窗的主要請求）。**不放寬**：它從「零個請求」變成「一個請求、而且可證明是摘要器的」——後者更精確。它的註解（`:877-885`）同步改成真的事實。
+改成斷言**它要斷言的事**：仍然是 fail-closed（`prompt_too_long`），而**主要那條超窗請求一條都沒出去**。**不放寬**：它從「零個請求」變成「零條**主要**請求 ＋ 一個至少一次的摘要器請求」——後者更精確。（**量到的數字**：那條 fixture 實際上會看到 **4** 次摘要器呼叫，因為它的 mock 回覆低於 500 字的 floor ⇒ 自動那條與 `enforceBudget` 那條各重試一次；落地的標題因此說「the summarizer runs」，而**斷言**只斷言「有摘要器請求 ＋ 沒有主要請求」，不是次數。）它的註解同步改成真的事實。
 
 ## 2. 驗收（每一條都要**紅先 ＋ 變異證明**：把修法拿掉 ⇒ 對應測試紅）
 
@@ -93,7 +97,7 @@
 4. **與引擎一致的 anchored 摘要行為**：壓縮過的子代理，它衍生的 surface 上**兩份摘要都在**（繼承的與它自己的）——與主要 session 第二次壓縮之後相同，且那條案例的殺手是把 `region.ts:22` 的標記跳過拿掉（見 §1.3 的更正）。
 5. **重建的路徑也一樣**：`resume_agent` 重建出來的子代理同樣有 compactor（形狀與 spawn 一致）。
 6. **缺席即缺席**：沒有解析出窗口 ⇒ deps 裡**沒有** `compact` 鍵（不得注入預設）。
-7. **M73 的 fail-closed 契約不被放寬**：那條測試改成「一個請求、且它是摘要器的」。
+7. **M73 的 fail-closed 契約不被放寬**：那條測試改成「**零條主要請求**、且有摘要器請求」——它比原本的「零個請求」**更精確**（後者對一個根本沒有 compactor 的子代理也成立）。
 8. `pnpm verify:all` 五步全綠、`--gate` 不得新增 row。
 
 ## 3. 刻意不做（YAGNI）
@@ -116,7 +120,10 @@
 - **子代理的 telemetry**（§3 第一條）。
 - **子代理的 `modelPolicies`／catalog**（§3 第二條）。
 - **`forkTurns` 的預設值**（§3 第三條）。
-- **`forkTurns` 在**非耐久**臂的 seq 混用**：非耐久臂用 `events.push` 播種（保留**父的** seq），而之後的 `append` 重新編號——那份混用不會被任何耐久讀者看到，但它是同一個函式家族的另一個未爆彈。**本單位不動它**，記下來。
+- ~~**`forkTurns` 在非耐久臂的 seq 混用**~~ ⇒ **已由本階段的重映射順帶關掉**：無條件重映射讓那個臂推進去的事件也是 `seq === index`（終審確認）。原句保留劃掉，因為它曾被列為殘餘，而**現在的狀態是不成立**。
+- **`rewind/point` 的 `anchorSeq` 沒有被重映射，也沒有被丟掉**（`remapSeedEvent` 的 fallthrough 只改 `seq`，`session-persistence/src/fork.ts:179`）。**終審量到方向**：`forkTurns: N` 時它是**少藏**（子代理會看到父的 surface 藏起來的一部分），**不是**無聲丟掉內容 ⇒ 比本階段修掉的那個缺陷輕，而且**早於本階段**。孿生的 session-fork 路徑用**丟掉** rewind 標記來解（`session-persistence/src/fork.ts:115-120`）——**兩條路徑因此不一致**。誰下次動 `forkTurns` 就順手裁定它，並注意 `"all"` 那條路（在那裡標記目前是**正確**重現父的隱藏範圍）。
+- **已存在的子代理 log 沒有遷移路徑**：本階段的修法只作用在**新 fork 出來的種子**；一個 M74 之前寫下的 `child-<uuid>.jsonl` 仍帶著父座標的標記引用，升級之後仍會投影錯。要修得回寫那些 log 的標記。
+- **超窗的摘要化**（§1.4 的量測）：當 surface 超過視窗時，「壓縮」實際上是 **reset**——繼承來的 context 被丟掉而不是被摘要。**候選修法**是分段摘要、或在 spawn 時就修剪／警告種子；那是一個產品決定，值得自己一個單位。
 
 ## 6. 取樣與自創
 
