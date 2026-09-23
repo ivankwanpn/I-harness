@@ -5,7 +5,7 @@ import {
   type ProviderAuthResolver,
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
-import type { ModelClient, ReasoningEffort } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import {
   buildModelClient,
   defaultProviderRegistry,
@@ -179,6 +179,9 @@ interface ProviderView {
   /** M72 Ⅱ: the ROUTE's chosen output-cap field name (user config wins over
    * the template; absent → the adapter's own default). */
   maxTokensField?: SettingsMaxTokensField
+  /** M72 Ⅲ: the ROUTE's usage ask (user config wins over the template; absent
+   * → the adapter's own default, which is ON). */
+  usageInStream?: boolean
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -660,7 +663,17 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       // thrown away one line after being computed. Both numbers travel: the
       // window is what the host compacts against, the cap is what the request
       // must actually carry.
+      // M72 Ⅲ: Anthropic's Messages API REQUIRES `max_tokens`, so its fallback
+      // must be resolved HERE — where the protocol is known — or the value the
+      // adapter invents never meets core-agent's clamp (the phase-Ⅱ record's
+      // I1: `input 100K + 128000 > 200K` was a 400 on exactly the request that
+      // ran because the context was nearly full). With nothing resolved above,
+      // this is the value the chain supplies; it travels like any other cap.
+      // `profile.protocol` is the ADAPTER spelling (adapterProtocol maps
+      // openai-completions → openai-compatible and passes the rest through), so
+      // an anthropic route reads exactly as declared.
       const maxOutputTokens = effective?.maxOutputTokens
+        ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
 
       try {
         const client = buildClient(profile, modelId)
@@ -738,6 +751,12 @@ function providerView(
     ...(user?.maxTokensField !== undefined
       ? { maxTokensField: user.maxTokensField }
       : template?.maxTokensField !== undefined ? { maxTokensField: template.maxTokensField } : {}),
+    // M72 Ⅲ: the usage ask — same user-wins-over-template rule, and the same
+    // reason the arm is written out: `false` and "absent" must stay
+    // distinguishable, since absent hands the decision to the adapter (ON).
+    ...(user?.usageInStream !== undefined
+      ? { usageInStream: user.usageInStream }
+      : template?.usageInStream !== undefined ? { usageInStream: template.usageInStream } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
@@ -787,6 +806,9 @@ function runtimeProfile(
     // M72 Ⅱ: route-level only (there is no per-model override of the wire's
     // field name — one endpoint spells a field one way).
     ...(view.maxTokensField !== undefined ? { maxTokensField: view.maxTokensField } : {}),
+    // M72 Ⅲ: route-level only, for the same reason — one endpoint asks for
+    // usage one way.
+    ...(view.usageInStream !== undefined ? { usageInStream: view.usageInStream } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }

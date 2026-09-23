@@ -74,13 +74,25 @@ describe("llm-gemini protocol", () => {
     const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: string[] = []
     let args: unknown
+    let usage: unknown
     for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
       if (ev.type === "text/chunk") events.push(`t:${ev.text}`)
       if (ev.type === "tool_call") { events.push(`c:${ev.call.name}`); args = ev.call.args }
+      if (ev.type === "usage") { events.push("usage"); usage = ev.usage }
       if (ev.type === "end") events.push("end")
     }
-    expect(events).toEqual(["t:hel", "t:lo", "c:write", "end"])
+    // M72 Ⅲ: this list used to end at "c:write","end" — BEFORE this phase the
+    // fixture's `usageMetadata` was deliberately asserted as NOT mapped (the
+    // adapter documented the wire position instead of surfacing it); the phase
+    // maps it, so the list GAINS an element. Nothing already here was relaxed.
+    // The position is measured, not guessed: the tool calls are flushed after
+    // the chunk loop, so `usage` lands BEFORE "c:write".
+    expect(events).toEqual(["t:hel", "t:lo", "usage", "c:write", "end"])
     expect(args).toEqual({ path: "a.txt", text: "data" })
+    // The fixture carries only promptTokenCount/candidatesTokenCount: the
+    // element above pins the position, this pins that the field the wire did
+    // NOT send stays absent — never a fabricated `cacheReadTokens: 0`.
+    expect(usage).toEqual({ inputTokens: 2, outputTokens: 5 })
   })
 
   it("merges partial-args objects (canonical Google docs accumulation) and accepts a complete inline args object", async () => {
@@ -422,5 +434,76 @@ describe("M72 Ⅱ: the truncation bit (gemini)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end" })
     expect(events.at(-1)).not.toHaveProperty("truncated")
+  })
+})
+
+// M72 Ⅲ. Gemini reports the round-trip's token counts as `usageMetadata` on the
+// LAST chunk, before `end` — `handleChunk` read only `candidates[0].content.parts`
+// and documented the wire position instead of surfacing it. The mapping rules are
+// the seam's (M5 T2), unchanged: finite numbers only, and no recognisable number
+// at all means NO event — a fabricated `0` would read as a measurement nobody
+// made.
+describe("M72 Ⅲ: usageMetadata on the gemini wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: the last chunk's usageMetadata reaches the seam", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: 2, candidatesTokenCount: 5, cachedContentTokenCount: 1 } },
+    ])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([
+      { type: "usage", usage: { inputTokens: 2, outputTokens: 5, cacheReadTokens: 1 } },
+    ])
+  })
+
+  it("M72 Ⅲ: a chunk without usageMetadata emits no usage event", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }] },
+    ])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // The OTHER exit of the "no recognisable number ⇒ undefined" rule. The test
+  // above never reaches the mapper's tail — its fixture sends no `usageMetadata`
+  // at all, so it exits at the non-object guard. THIS is the fixture that
+  // reaches the tail with an empty result, which is what makes the rule's second
+  // exit load-bearing: an always-returning tail would emit
+  // `{ type: "usage", usage: {} }` — an event that reads as a measurement nobody
+  // made, precisely what the seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usageMetadata object with no recognisable number emits no usage event", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: {} },
+    ])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Iron law ① — the mapper takes only `typeof v === "number" &&
+  // Number.isFinite(v)`. A STRING that merely spells a count ("2") is not a
+  // number the provider measured; coercing it would write an unvalidated value
+  // straight into `LLMUsage` — the "number nobody made" this phase exists to
+  // forbid. Every other fixture in this file hands the mapper either a real
+  // number or nothing at all, so this is the one that pins the guard: it is the
+  // fixture a coercion regression has to break.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "STOP" }], usageMetadata: { promptTokenCount: "2" } },
+    ])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
   })
 })

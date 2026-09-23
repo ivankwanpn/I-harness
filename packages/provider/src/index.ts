@@ -48,6 +48,13 @@ export interface ProviderProfile {
    * owns a single fixed spelling (llm-openai: `max_output_tokens`,
    * llm-anthropic: required `max_tokens`). */
   maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /** M72 Ⅲ: whether THIS route's `openai-compatible` requests ask the gateway
+   * for usage (`stream_options.include_usage`). Absent = the adapter's own
+   * default, which is ON (a routing default, not a capability probe); `false` =
+   * the route's gateway rejects the key, and then NOTHING is sent. Read by the
+   * openai-compatible adapter only — it is the one protocol of the five that
+   * reports usage solely on request. */
+  usageInStream?: boolean
   contextWindow?: number                // M15: default window (tokens) for this provider
   maxContextWindow?: number             // M15: absolute ceiling; budget-enforcement hook (no enforcement in M15)
   modelContexts?: Record<string, ProviderModelContext> // M15: per-model overrides
@@ -891,7 +898,7 @@ function buildClient(profile: ProviderProfile, model: string, extra?: Record<str
     case "openai-responses":
       return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":
       return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "gemini":
@@ -928,6 +935,9 @@ export interface WireClientConfig {
   /** M72 Ⅱ: the route's chosen output-cap field name (openai-compatible only;
    * absent → the adapter's `max_tokens` default). */
   maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /** M72 Ⅲ: the route's usage ask (openai-compatible only; absent → the
+   * adapter's default, ON). */
+  usageInStream?: boolean
   /** M59: literal extra request headers merged into every request. */
   headers?: Record<string, string>
 }

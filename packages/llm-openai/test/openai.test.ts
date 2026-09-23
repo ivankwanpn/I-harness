@@ -506,3 +506,85 @@ describe("M72 Ⅱ: the truncation bit (openai)", () => {
     expect(events.at(-1)).not.toHaveProperty("truncated")
   })
 })
+
+// M72 Ⅲ. The Responses wire reports this round-trip's usage on the
+// `response.completed` event (`response.usage`) and nowhere else — the arm used
+// to drop the whole payload. The Anthropic adapter's rules carry over verbatim:
+// finite numbers only, and no recognisable number at all means NO event (a
+// fabricated `0` would read as a measurement nobody made).
+describe("M72 Ⅲ: response.completed's usage (openai)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: response.completed's usage reaches the seam", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({
+      type: "response.completed",
+      response: { usage: { input_tokens: 25, output_tokens: 7, input_tokens_details: { cached_tokens: 19 } } },
+    })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([
+      { type: "usage", usage: { inputTokens: 25, outputTokens: 7, cacheReadTokens: 19 } },
+    ])
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  it("M72 Ⅲ: a completed response with NO usage emits no usage event", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { output: [] } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  it("M72 Ⅲ: only the numbers the wire actually sent are mapped", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: 25 } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    const usage = events.find((e) => e.type === "usage") as { usage: Record<string, unknown> } | undefined
+    expect(usage?.usage).toEqual({ inputTokens: 25 })
+    expect("outputTokens" in (usage?.usage ?? {})).toBe(false)
+    expect("cacheReadTokens" in (usage?.usage ?? {})).toBe(false)
+  })
+
+  // Fix round 1: the OTHER exit of the "no recognisable number ⇒ undefined"
+  // rule. Test 2 above never reaches `mapUsage`'s tail — its fixture sends no
+  // `usage` at all, so it exits at the non-object guard. THIS is the fixture
+  // that reaches the tail with an empty result, which is what makes the rule's
+  // second exit load-bearing: an always-returning tail would emit
+  // `{ type: "usage", usage: {} }` — an event that reads as a measurement
+  // nobody made, precisely what the seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { usage: {} } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Fix round 2: iron law ① — the mapper takes only
+  // `typeof v === "number" && Number.isFinite(v)`. A STRING that merely spells a
+  // count ("25") is not a number the provider measured; coercing it would write
+  // an unvalidated value straight into `LLMUsage` — the "number nobody made"
+  // this phase exists to forbid. Every other fixture in this file hands `take`
+  // either a real number or nothing at all, so this is the one that pins the
+  // guard: it is the fixture a coercion regression has to break.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: "25" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})
