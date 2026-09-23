@@ -261,9 +261,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         }
         // usageMetadata (promptTokenCount / candidatesTokenCount /
         // totalTokenCount) arrives on the LAST chunk — before `end`. The
-        // LLMStreamEvent vocabulary carries NO usage event (same gap as
-        // llm-anthropic's message_usage), so the wire position is documented
-        // here and not surfaced (a future usage seam slot).
+        // LLMStreamEvent vocabulary DOES have a `usage` event
+        // (`{ type: "usage"; usage: LLMUsage }`, emitted by llm-anthropic),
+        // but THIS adapter does not map usageMetadata onto it, so the wire
+        // position is documented here rather than surfaced.
         return events
       }
       try {
