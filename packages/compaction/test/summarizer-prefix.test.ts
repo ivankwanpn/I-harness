@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
+import { estimateContent } from "@i-harness/token-meter"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
 import { createCompactionEngine } from "../src/index.ts"
 
@@ -99,5 +100,145 @@ describe("summarizer request shape (M5 D2)", () => {
     expect(req.tools).toEqual([])
     expect(req.messages).toHaveLength(1)
     expect(req.messages[0]!.role).toBe("user")
+  })
+})
+
+// ── M73: the summarizer's own request carries a budget ──────────────────────
+// This request is built by compaction, not by the session's agent, so it never
+// met the clamp. On an anthropic route that made it exactly the dangerous one:
+// no cap on the request ⇒ the adapter's own 128k fallback, unclamped, on the
+// call that runs BECAUSE the context is nearly full.
+//
+// DEVIATION FROM THE BRIEF'S LITERAL WINDOW, and it is measured, not preferred:
+// the brief's first case used `contextWindow: 1_000`. This fixture's summarizer
+// request (36 replayed messages + the 1 780-char directive) prices at 2 591
+// tokens, and `clampOutputCap` returns the value UNTOUCHED when the estimated
+// input alone fills the window (llm-seam:462-463 — clamping to 1 there would
+// turn an overflow into a silent truncation). At 1 000 the clamp therefore
+// cannot shrink anything and the assertion below is unpassable by ANY
+// implementation of this task; 8 000 leaves room for 2 591 + the margin, so the
+// number that comes back can only have come out of the clamp. Same cap, same
+// assertion, only the window moves.
+describe("M73: the summarizer request carries a clamped cap", () => {
+  it("hands the resolved cap to the request, clamped against the window", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    // 8k window vs a 2 591-token request ⇒ the clamp must have shrunk it; without
+    // the window on this path clampOutputCap returns the value untouched.
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(50_000)
+  })
+
+  it("with no resolved cap the request carries NO key (absent stays absent)", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+    })
+    await engine.compact(toolSession())
+    expect("maxOutputTokens" in requests[0]!).toBe(false)
+  })
+
+  // Fix round 1 (finding 3). The message list the clamp can see is NOT the
+  // whole input: the request also carries the prefix's system prompt and tool
+  // schemas, which the session log does not. Pricing the messages alone makes
+  // `window − input − margin` too generous — the overrun the clamp exists to
+  // prevent. `CompactionConfig.overheadTokens` is that charge (the assembly
+  // already fills it with exactly this pair), and the assertion below states
+  // the rule without knowing the margin: the promised room can never exceed
+  // what the window leaves after the input AND the host-known overhead.
+  //
+  // DISCRIMINATION IS ARITHMETIC (fix round 2, Minor 2): an upper bound can
+  // only separate "overhead charged" from "not charged" while the overhead
+  // (8 000) EXCEEDS llm-seam's `OUTPUT_CAP_SAFETY_MARGIN` (4 096) — below that
+  // the uncharged run would promise less room, not more, and this case would
+  // stay green with the term deleted. Lower 8_000 only with that in mind.
+  it("charges the host-known overhead the session's own clamp charges", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 12_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    // Recomputed from the very messages the clamp priced, with the same public
+    // meter — so nothing here assumes llm-seam's unexported margin.
+    const input = estimateContent(req.messages)
+    expect(input).toBeGreaterThan(0) // the recomputation is of a real request
+    expect(req.maxOutputTokens).toBeLessThanOrEqual(12_000 - input - 8_000)
+  })
+
+  // Fix wave (I2). `config.summarizationModel ?? deps.model` sends the summary
+  // to a DIFFERENT endpoint, but `deps.maxOutputTokens` is the SESSION model's
+  // resolved cap — a number resolved for a model that is not the one receiving
+  // this request. Spreading it anyway is the hazard this branch refused at the
+  // guardian's spawn (reviewer.ts: the session's numbers "would be a wrong
+  // number, which is worse than an absent one"), and `config.summarizationModel`
+  // is that spawn's named twin — so the two arms answer the same way. The gate
+  // is the one the SHAPE one screen up already uses.
+  it("a CONFIGURED summarization model's request carries NO cap", async () => {
+    const { model, requests } = capturingModel()
+    const { model: configured, requests: configuredRequests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200, summarizationModel: configured },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    // The configured endpoint is the one that served the summary (asserted first
+    // so a broken routing choice cannot make the absence below vacuous).
+    expect(configuredRequests).toHaveLength(1)
+    expect(requests).toHaveLength(0)
+    // 缺席即缺席 — the session's cap belongs to the session's model. On the
+    // legacy text path the clamp WOULD shrink 50 000 to a real number (the case
+    // below measures the same fixture), so a present key here is the bug.
+    expect("maxOutputTokens" in configuredRequests[0]!).toBe(false)
+  })
+
+  // Fix round 2 (Minor 1). The LEGACY text path — no `requestShape`, so
+  // `prefix === undefined` and the request is one user message with NO system
+  // prompt and NO tools. The host-known overhead stands for exactly that pair,
+  // so charging it here prices a cost the request does not have: with
+  // `overheadTokens === contextWindow`, the charge ALONE drives `hardRoom`
+  // below 1 for every possible input, `clampOutputCap` takes its "the input
+  // already fills the window" arm, and the RAW cap goes out — this task's
+  // defect, alive on the one route a configured `summarizationModel` (or any
+  // engine built without a shape) takes.
+  //
+  // Numbers: window 8 000, overhead 8 000 ⇒ with the bug `hardRoom` is
+  // `−<input>` for ANY input (deterministic, fixture-independent); with the
+  // fix the real input alone decides and it is 2 330 tokens (measured: one
+  // 9 303-char directive, the region embedded), leaving `8 000 − 2 330 − 4 096`
+  // ⇒ 1 574. Clamped (1 574) versus untouched (50 000) is the observable.
+  it("does NOT charge the overhead on the legacy text path, where the request carries no prompt or tools", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200, overheadTokens: 8_000 },
+      // NO requestShape → prefix undefined → the legacy single-message form
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    expect(req.messages).toHaveLength(1)
+    expect(req.systemPrompt).toBe("")
+    expect(req.tools).toEqual([])
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(50_000)
   })
 })

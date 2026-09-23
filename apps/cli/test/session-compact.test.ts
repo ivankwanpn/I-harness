@@ -50,6 +50,15 @@ describe("session-compact command (M33 §5)", () => {
     expect(await handleSessionCompactCommand(d, "{}")).toBe("No compactable history yet.")
   })
 
+  it("M73: a summarizer failure does not read as 'nothing to compact'", async () => {
+    const d = deps({
+      compactNow: async (): Promise<CompactionResult> => ({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }),
+    })
+    const out = await handleSessionCompactCommand(d, "{}")
+    expect(out).not.toBe("No compactable history yet.")
+    expect(out).toContain("summar")
+  })
+
   it("rejects a non-string instructions payload", async () => {
     const d = deps()
     await expect(handleSessionCompactCommand(d, JSON.stringify({ instructions: 42 }))).rejects.toThrow(/instructions/)

@@ -186,6 +186,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     ? createCompactionEngine({
         model: deps.model,
         config: deps.compact,
+        // M73: compaction builds and sends its OWN model request, so it never
+        // met the clamp the session's requests go through — on an anthropic
+        // route that left the adapter's 128k fallback unclamped on the call
+        // that runs BECAUSE the context is nearly full. The resolved cap is
+        // handed down here; the engine clamps it against the window it
+        // resolved (compaction's own `contextWindow`, above).
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         requestShape: () => ({
           systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
           tools: deps.tools.schemas(),

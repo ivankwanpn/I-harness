@@ -90,7 +90,8 @@ describe("compaction analytics (M34 ⑦b)", () => {
     const { telemetry, events } = spyTelemetry()
     const engine = createCompactionEngine({ model: failing, config: { contextWindow: 1000, thresholdRatio: 0.5 }, telemetry })
     const result = await engine.maybeCompact(s)
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [] })
+    // M73: the summarizer-failure arm names its reason (the shape stays pinned).
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
     expect(events).toHaveLength(1)
     expect(events[0]!.data.reason).toBe("auto")
     expect(events[0]!.data.outcome).toBe("failure")

@@ -147,7 +147,8 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
     const s = smallSession()
     const engine = createCompactionEngine({ model: short, config })
     const result = await engine.compact(s)
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [] })
+    // M73: the summarizer-failure arm names its reason (the shape stays pinned).
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
     expect(calls.n).toBe(2) // one retry, then fail-soft
     expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
   })

@@ -53,6 +53,13 @@ export interface TeamSubagentDeps {
    * declared one. One teammate, two models, no surface saying so. */
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
   allowSubagentModelSelection?: boolean
+  /** M73: the session's own model's numbers, mirrored from SpawnOptions the way
+   * the two fields above are. A teammate with no declared model runs on the
+   * session's model, so its requests are clamped and measured against the same
+   * window and cap — the roster's spawn and the spawn_agent tool must not
+   * disagree about what the same session's budget is. Absent → no key written. */
+  contextWindow?: SpawnOptions["contextWindow"]
+  maxOutputTokens?: SpawnOptions["maxOutputTokens"]
   // M8 durable child sessions: coordinator + parent session id. When present,
   // spawned teammates get durable child-<uuid> sessions (lineage header) and
   // their inbox appends go through the write-behind mirror. WITHOUT it the
@@ -209,6 +216,10 @@ export async function mountAgentTeams(
         // switch is OFF, never "enabled by omission".
         ...(sub.roleSelectionFor !== undefined ? { roleSelectionFor: sub.roleSelectionFor } : {}),
         ...(sub.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: sub.allowSubagentModelSelection } : {}),
+        // M73: same two options, same rule — the teammate's window and cap come
+        // from the session the roster belongs to, and an absent one writes no key.
+        ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),
+        ...(sub.maxOutputTokens !== undefined ? { maxOutputTokens: sub.maxOutputTokens } : {}),
         jobs: sub.jobs,
         table: sub.table,
         agents: sub.agents,

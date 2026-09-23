@@ -33,6 +33,16 @@ export interface CompactionResult {
   // model surface / summarizer input now carries substitutes). A prune-only
   // pass also reports `compacted:true` (pressure resolved without an LLM call).
   pruned?: boolean
+  /** M73: WHY a pass that did not compact did not. `compacted:false` has EIGHT
+   * producers at this revision — compactOnce's no-shadowable-region arm and
+   * its summarizer failure, maybeCompact's five gates (pressure, sticky,
+   * re-fire, hysteresis, breaker), and resetWindow's `reset: false` — and
+   * before this field they were indistinguishable to every consumer: the CLI
+   * reported the summarizer's failure as "nothing to compact". Only the
+   * summarizer failure names a reason, because it is the only arm that can be
+   * a real FAILURE; the other seven mean "nothing to do" and stay absent
+   * (pre-M73 behavior, unchanged). */
+  reason?: "summarizer-failed"
 }
 
 export interface CompactionEngine {
@@ -67,6 +77,12 @@ export function createCompactionEngine(deps: {
    * price for it. Absent → the legacy text form, unchanged: without the shape
    * the bytes cannot match, so there is no reuse to lose. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
+  /** M73: the model's resolved output cap, handed down from core-agent's deps
+   * — the layer that resolved it. Absent → the summarizer's request
+   * carries no cap (pre-M73 behavior). NOT `config.maxTokens`, which stays the
+   * post-hoc character slice of the accepted summary — see summarizeWithModel's
+   * `limits` note. */
+  maxOutputTokens?: number
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
@@ -156,7 +172,26 @@ export function createCompactionEngine(deps: {
     // the analytics event even when the pass throws (degenerate retry).
     const attemptsTracker = { count: 0 }
     try {
-      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix)
+      // M73: the 9th argument is the request's OWN budget — both halves spread
+      // conditionally, so "absent" stays absent at every hop (a default here
+      // would be a number nobody chose). `config.maxTokens` keeps its position
+      // as the 3rd argument: it is still only the post-hoc character slice.
+      // The CAP follows the SHAPE's gate (`summarizationModel === undefined`
+      // above): a configured summarization model is a different endpoint, so
+      // `deps.maxOutputTokens` — the session model's resolved cap — was never
+      // resolved for the one receiving this request. The guardian's twin says
+      // what to do with it (reviewer.ts: "a wrong number … is worse than an
+      // absent one").
+      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix, {
+        ...(config.summarizationModel === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+        // The host-known charge the session log does not carry — the SAME one
+        // the session's own clamp adds to its input price (core-agent:
+        // `estimateContent(messages) + overheadTokens`). The summarizer's
+        // request carries the system prompt and tool schemas too. Resolved
+        // (default 0), so it is passed as a value, not as a spread.
+        overheadTokens: config.overheadTokens,
+      })
       summary = result.text
       attempts = attemptsTracker.count
     } catch (err) {
@@ -168,7 +203,7 @@ export function createCompactionEngine(deps: {
       // one space — the single template below is that same byte sequence.
       d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${err instanceof Error ? err.message : String(err)}`)
       emit("failure", { attempts: attemptsTracker.count })
-      return { compacted: false, shadowedSeqs: [] }
+      return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
