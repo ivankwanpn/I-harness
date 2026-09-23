@@ -280,7 +280,7 @@ describe("forkSession", () => {
   // remaps it through the SAME map. From HERE it never mattered — the session
   // fork DROPS every rewind marker before the remap (:150-152) — but the pass has
   // a second consumer that keeps the marker: the subagent's `forkTurns`
-  // (packages/subagent/src/fork.ts:30-42), which seeds a child with the last N
+  // (packages/subagent/src/fork.ts:38-50), which seeds a child with the last N
   // turn blocks renumbered into its own coordinates. A carried-over parent anchor
   // names an unrelated child event there, so `rewindCuts` resolves a subset
   // window — or none at all once the stale anchor lands at or past the marker —
@@ -374,5 +374,52 @@ describe("forkSession", () => {
     const shown2 = deriveMessages(childLog2).map((message) => JSON.stringify(message.content)).join(" ")
     expect(shown2).toContain("turn 4 user")
     expect(shown2).not.toContain("turn 3 user")
+  })
+
+  // M76 ②: the `?? 0` fallback answers ONE miss — an anchor whose own event is
+  // not in the seed, because the slice begins INSIDE the window the marker
+  // opened — and before this case it answered a second one too: a marker with no
+  // numeric `anchorSeq` at all. That is different input with its own rule, not
+  // the same miss: `rewindCuts` refuses such a marker outright
+  // (`core-session/src/index.ts:281`, "unsealed events are NEVER hidden" — the
+  // rule that exists BECAUSE resumed logs bypass append-time validation, `:280`),
+  // so a `0` minted by the fallback would turn a marker the projection declines
+  // to act on into a LIVE window `[0, marker)` that hides the child's whole
+  // prefix — silent over-hiding, in the maximal-hiding direction, on input the
+  // source log itself keeps inert. The fix is one conditional: only a NUMERIC
+  // anchor rides the map; anything else is carried through untouched and the
+  // malformed-marker rule keeps deciding.
+  it("M76: a rewind marker without a numeric anchorSeq stays inert — it contributes no window", () => {
+    const seed = createSession()
+    append(seed, { type: "turn/start" })
+    append(seed, { type: "user/message", text: "visible one" })
+    append(seed, { type: "turn/end" })
+    // Persisted-malformed, the way a file can carry it: the anchor never made it
+    // into the line, and resume does not re-run append's validation.
+    seed.events.push(JSON.parse(
+      '{"type":"rewind/point","version":1,"targetTurn":1,"mode":"all","fileOps":[],"seq":3}',
+    ) as SessionEvent)
+    append(seed, { type: "turn/start" })
+    append(seed, { type: "user/message", text: "visible two" })
+    append(seed, { type: "turn/end" })
+    // the source's own surface first: that marker already contributes nothing
+    expect(rewindCuts(seed)).toEqual([])
+    const renumbered = new Map<number, number>()
+    for (const [index, event] of seed.events.entries()) {
+      if (event.seq !== undefined) renumbered.set(event.seq, index)
+    }
+    const child = createSession()
+    child.events.push(...seed.events.map((event, index) => remapSeedEvent(event, index, renumbered)))
+    type RewindPoint = Extract<SessionEvent, { type: "rewind/point" }>
+    const marker = child.events.find((event): event is RewindPoint => event.type === "rewind/point")!
+    // the pass did NOT cover for the file: no number was invented for the anchor…
+    expect(typeof marker.anchorSeq).not.toBe("number")
+    // …so `rewindCuts` applies to the child the same rule it applied to the
+    // source, and this marker contributes no window there either
+    expect(rewindCuts(child)).toEqual([])
+    // and the prefix the source could still show stays on the child's surface
+    const shown = deriveMessages(child).map((message) => JSON.stringify(message.content)).join(" ")
+    expect(shown).toContain("visible one")
+    expect(shown).toContain("visible two")
   })
 })
