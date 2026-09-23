@@ -43,22 +43,25 @@ export interface LLMUsage {
  *    The seam learns "the provider refused", never which filter said so.
  * 2. A FIELD on the existing `end` member, NOT a new union member: neither
  *    consumer of this union is exhaustive, and neither would READ a new member
- *    as an ending. core-agent's `switch` drops it in silence — no `default`,
- *    no exhaustive assert, its own words at
- *    `packages/core-agent/src/index.ts:416-419` — so the ending is never
- *    learned, which is the exact failure this bit exists to remove. The retry
- *    wrapper (`createRetryingClient`) does not DROP a new member but does not
- *    recognize it either: only `text/chunk`/`reasoning`/`tool_call` count as
- *    output, `usage` is held aside, `end` is its one explicit return, and
- *    everything unmatched is forwarded by its trailing `yield ev` — so an
- *    attempt whose ending was a new member would reach the consumer undecided
- *    and be settled as a completion with no `end`. A field, by contrast, leaves
- *    every existing `=== true` reader working
- *    (`packages/core-agent/src/index.ts:431`).
- * 3. ABSENT STAYS ABSENT: only `true` is ever written, never `false` (the rule
- *    core-agent states for `truncated`, `packages/core-agent/src/index.ts:430`).
- *    `refused` and `truncated` are INDEPENDENT — a response can be both — so
- *    neither bit may be produced as the other's `else`.
+ *    as an ending. core-agent's model-stream `switch` drops it in silence — no
+ *    `default`, no exhaustiveness assert, its own words in the `case "usage"`
+ *    arm's comment (`packages/core-agent/src/index.ts`; cited by SYMBOL, not by
+ *    line: this unit's own edits moved those lines once already) — so the
+ *    ending is never learned, which is the exact failure this bit exists to
+ *    remove. The retry wrapper (`createRetryingClient`) does not DROP a new
+ *    member but does not recognize it either: only
+ *    `text/chunk`/`reasoning`/`tool_call` count as output, `usage` is held
+ *    aside, `end` is its one explicit return, and everything unmatched is
+ *    forwarded by its trailing `yield ev` — so an attempt whose ending was a new
+ *    member would reach the consumer undecided and be settled as a completion
+ *    with no `end`. A field, by contrast, leaves every existing `=== true`
+ *    reader working: core-agent's `if (ev.truncated === true)` in the same
+ *    `case "end"` arm reads the new bit without being touched.
+ * 3. ABSENT STAYS ABSENT: only `true` is ever written, never `false` — the rule
+ *    core-agent states for `truncated` in that `case "end"` arm's comment ("a
+ *    clean ending writes no field at all"). `refused` and `truncated` are
+ *    INDEPENDENT — a response can be both — so neither bit may be produced as
+ *    the other's `else`.
  */
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
