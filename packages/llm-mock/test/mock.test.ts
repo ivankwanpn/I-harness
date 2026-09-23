@@ -77,13 +77,20 @@ describe("llm-mock", () => {
   })
 
   // M77: the refusal bit, deliberately the same shape as M72 Ⅱ's `truncated`
-  // above. The mock makes NO wire judgement — each adapter owns its own literal
-  // (`content_filter`/`SAFETY`/`refusal`/`guardrail_intervened`); the mock only
-  // carries the seam's semantic bit, because a `MockStep` is the only way a
-  // consumer's refusal path can be driven end-to-end without a provider.
+  // above. The mock makes NO wire judgement — the five adapters own their own
+  // literals (openai/openai-compatible `content_filter`, gemini
+  // `SAFETY`/`RECITATION`, anthropic `refusal`, bedrock `guardrail_intervened`);
+  // the mock only carries the seam's semantic bit, because a `MockStep` is the
+  // only way a consumer's refusal path can be driven end-to-end without a
+  // provider.
   it("M77: a mock step can end refused, and an unset step stays absent", async () => {
+    // No `text` on purpose: a refusal is HTTP 200 with NO content, so the
+    // fixture has none and nothing may be invented on its behalf. An empty
+    // `text/chunk` would not be empty to a consumer — it counts as output to
+    // the retry wrapper's `produced`, and reads as an empty success in the log.
     const refused: LLMStreamEvent[] = []
-    for await (const ev of createMockClient([{ role: "assistant", text: "", refused: true }]).stream({} as LLMRequest)) refused.push(ev)
+    for await (const ev of createMockClient([{ role: "assistant", refused: true }]).stream({} as LLMRequest)) refused.push(ev)
+    expect(refused).toHaveLength(1)
     expect(refused.at(-1)).toEqual({ type: "end", refused: true })
 
     // The control half: an unset step yields the literal this file yielded
