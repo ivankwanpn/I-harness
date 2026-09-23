@@ -77,7 +77,7 @@
 
 > **終審量到那句話的真正機制，並在本節就地更正**：種子大到子代理的 surface **超過窗口**時，**摘要器自己的請求也會超窗**（它從 `deriveMessagesUpTo(session, lastShadowed)` 建輸入——對第一次壓縮而言就是**整份繼承來的 surface**，再加上指示、system prompt 與 tool schemas；`clampOutputCap` 在輸入就佔滿窗口時**原值回傳**）⇒ 真 provider 拒絕它 ⇒ 壓縮 fail-soft ⇒ 階梯第 2 層的 **reset** 接手（保留最後 20 個事件）⇒ **子代理確實繼續，但它是「丟掉繼承來的 context、沒有摘要」，不是「被摘要過」**。用**會拒收超窗請求的 mock client** 量到的讀數（`child.test.ts` 的新案例）：2 次摘要請求被拒（`input 3792 + max_tokens 4242 > context 2000`）、唯一被服務的是主要那條（原始 4_242 被夾成 1697）、`compaction/reset` 移除 seq 0..10、**沒有任何 `compaction/summary`**。
 >
-> ⇒ 所以「撐得住」是真的，但**救援者是 reset 不是摘要**。那條邊界（surface > 視窗）在**主要 session 也是同樣的引擎性質**，差別是主要 session 只在 0.8w–0.9w 之間壓縮（輸入放得下），而**子代理的 seed 在任何檢查之前就貼上去了** ⇒ 它的第一個 step 邊界可以任意超窗。
+> ⇒ 所以「撐得住」是真的，但**救援者是 reset 不是摘要**。那條邊界（surface > 視窗）在**主要 session 也是同樣的引擎性質**——`enforceBudget` 在**每一個** step 邊界都跑，不管 surface 超窗多少，所以一次大的 turn 就能讓主要 session 也走到同一條「摘要請求超窗 ⇒ fail-soft ⇒ reset」的路上。**差別在頻率而不是有無**：主要 session 一般落在 0.8w–0.9w（輸入放得下），而**子代理的 seed 在任何檢查之前就貼上去了** ⇒ 它的**第一個** step 邊界可以任意超窗。
 
 ### 1.5 那條 inbox 游標的邊角，刻意寫下來
 

@@ -1344,7 +1344,7 @@ describe("the child's request carries the resolved budget", () => {
   // TWICE over: nothing is written when there is no window, and a window that
   // did slip through as `undefined` could not build an engine at all.
   // NOT ITS ONLY CATCHER (measured, final review fix wave): that same edit
-  // reddens 18 of this file's 36 cases — this one's value is stating the
+  // reddens 18 of this file's 37 cases — this one's value is stating the
   // contract, not being the mutation's unique witness.
   it("M74: with no window there is no compactor — absent stays absent", async () => {
     const f = spawnFixture()
