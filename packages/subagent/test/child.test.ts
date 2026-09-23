@@ -69,7 +69,7 @@ describe("fork.ts", () => {
     ])
   })
 
-  it("M74: a marker whose region IS in the child keeps its references, in child coordinates", () => {
+  it("M74: a marker whose region IS in the child keeps its references when the whole log is retained", () => {
     const events: SessionEvent[] = []
     const push = (type: string, extra: Record<string, unknown> = {}) =>
       events.push({ type, seq: events.length, ...extra } as SessionEvent)
@@ -80,6 +80,31 @@ describe("fork.ts", () => {
     const seed = forkTurns(events, 2) // the whole log: nothing is dropped
 
     expect(seed[4]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [0, 1] })
+  })
+
+  // M74 (fix round 1): the two cases above cover the map's KEY side — case 1's
+  // references all find no target, case 2 is the identity path. Neither would
+  // notice a map whose keys are right and whose VALUES are the parent's seqs
+  // (`renumbered.set(event.seq, event.seq)`) — which re-creates the original bug
+  // for a shadow set that OVERLAPS the window. That is the realistic shape: the
+  // engine shadows a contiguous range from the head (compaction's
+  // `selectShadowableRange`), so a parent that compacted and then a
+  // `forkTurns: N` whose last N turns contain part of that range produces exactly
+  // this — some refs leave the child, some arrive and have to MOVE.
+  it("M74: a retained reference is shifted into the child's coordinates, not carried over", () => {
+    const events: SessionEvent[] = []
+    const push = (type: string, extra: Record<string, unknown> = {}) =>
+      events.push({ type, seq: events.length, ...extra } as SessionEvent)
+    push("turn/start"); push("user/message", { text: "a" }); push("assistant/message", { text: "A" }); push("turn/end")
+    push("turn/start"); push("user/message", { text: "b" })
+    push("compaction/summary", { version: 1, text: "S", shadowedSeqs: [0, 1, 2, 3, 4, 5] })
+    push("assistant/message", { text: "B" }); push("turn/end")
+
+    const seed = forkTurns(events, 1) // the last turn — the slice starts at index 4
+
+    // the parent's seqs 0..3 are not in this child and drop; its 4 and 5 ARE —
+    // `turn/start` and `user/message b` — and arrive as the child's 0 and 1.
+    expect(seed[2]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [0, 1] })
   })
 })
 
