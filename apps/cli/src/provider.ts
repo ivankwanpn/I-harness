@@ -198,7 +198,13 @@ export function renderProviderList(
       const numbers = card?.contextWindow !== undefined
         ? `${card.contextWindow}${card.maxOutputTokens !== undefined ? ` / ${card.maxOutputTokens}` : ""}`
         : "no card"
-      return `      ${model.id}  (${numbers})${aliases.length > 0 ? `  +${aliases.length} retired name(s): ${aliases.join(", ")}` : ""}`
+      // Same ruling as `models list`'s line (the two listings must not
+      // disagree about the same row): the card is the model's documented
+      // ceiling; this row's own cap — user-written or refresh-persisted — is
+      // what a request will actually carry. Absent → nothing printed (an unset
+      // switch is off).
+      const setCap = model.maxTokens !== undefined ? `  set: ${model.maxTokens}` : ""
+      return `      ${model.id}  (${numbers})${setCap}${aliases.length > 0 ? `  +${aliases.length} retired name(s): ${aliases.join(", ")}` : ""}`
     })
     // The next step depends on the route's OWN facts, because `models probe`
     // refuses in two states: no declared protocol (nothing to shape the

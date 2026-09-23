@@ -415,6 +415,28 @@ describe("provider protocol + models objects (Task 1)", () => {
     expect(normalizeSettings({ llm: { providers: { q: { baseURL: "https://x" } } } }).llm.providers.q?.inputModalities).toBeUndefined()
   })
 
+  it("M72 Ⅱ: maxTokensField is kept per route; junk degrades to absent; mutate enforces the pair", async () => {
+    // R2: a route field the normalizer does not KNOW is dropped silently — the
+    // setting would then read as written and never reach a request.
+    const kept = normalizeSettings({ llm: { providers: { gw: { maxTokensField: "max_completion_tokens" } } } }).llm.providers.gw
+    expect(kept).toEqual({ maxTokensField: "max_completion_tokens" })
+    // The closed pair is the two CHAT spellings. `max_output_tokens` is this
+    // tree's Responses spelling (`llm-openai`), not a chat-completions one, and
+    // a wrong name here is exactly the 400 the switch exists to avoid.
+    expect(normalizeSettings({ llm: { providers: { q: { maxTokensField: "max_output_tokens" } } } }).llm.providers.q).toBeUndefined()
+    expect(normalizeSettings({ llm: { providers: { q: { maxTokensField: 7 } } } }).llm.providers.q).toBeUndefined()
+
+    const { store, root } = await newStore()
+    await expect(
+      mutateSection("llm", [{ op: "set", path: ["providers", "gw", "maxTokensField"], value: "max_output_tokens" }], store),
+    ).rejects.toMatchObject({ code: "settings-section-validation" })
+    const v = await mutateSection("llm", [
+      { op: "set", path: ["providers", "gw", "maxTokensField"], value: "max_completion_tokens" },
+    ], store)
+    expect((v.user as AnyRecord).providers.gw).toEqual({ maxTokensField: "max_completion_tokens" })
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("protocol is a closed three-value enum at mutate: unknown value fails loud, valid accepted", async () => {
     const { store, root } = await newStore()
     await expect(

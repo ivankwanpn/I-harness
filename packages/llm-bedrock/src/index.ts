@@ -150,6 +150,12 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         ...(config.options !== undefined || reasoning !== undefined
           ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(reasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
           : {}),
+        // M72 Ⅱ: Converse accepts maxTokens ONLY inside inferenceConfig, which
+        // this adapter has never built (every option went to
+        // additionalModelRequestFields, which the wire does not read for it).
+        ...(request.maxOutputTokens !== undefined
+          ? { inferenceConfig: { maxTokens: request.maxOutputTokens } }
+          : {}),
       }
       // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
       // kill a parked Converse call, not wait for the first event.
@@ -173,6 +179,10 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       // deltas; the stop event completes the block, and the args are parsed
       // there (mirrors the llm-openai-compatible accumulation).
       const pendingToolUses = new Map<number, { id: string; name: string; buffer: string }>()
+      // M72 Ⅱ: the wire's own truncation literal (`messageStop.stopReason:
+      // "max_tokens"`) — set in `handleMember` below, read once at the ending.
+      // Absent stays absent: only `true` writes the field.
+      let truncated = false
       // Soft-walk the SDK's discriminated member union: every member key is
       // declared as `?: never` on its siblings, so TS's `in` narrowing cannot
       // split the union — runtime key checks behave like the wire shape.
@@ -233,11 +243,16 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
           }
           return []
         }
-        // messageStart/messageStop carry no stream content (messageStop
-        // terminates the stream → `end` below); metadata carries the usage
-        // snapshot (inputTokens/outputTokens/totalTokens) — the seam's
-        // LLMStreamEvent vocabulary has NO usage event (same gap as
-        // llm-anthropic / llm-gemini), so the wire position is documented here.
+        // M72 Ⅱ: `messageStop` IS read now — it is where this wire states WHY
+        // the stream ended, and `stopReason` is the truncation literal the
+        // seam's `end` bit takes. It carries no other stream content (it
+        // terminates the stream → `end` below); `messageStart` carries none at
+        // all. metadata carries the usage snapshot (inputTokens/outputTokens/
+        // totalTokens) — the seam's LLMStreamEvent vocabulary DOES have a
+        // `usage` event (`{ type: "usage"; usage: LLMUsage }`, emitted by
+        // llm-anthropic), but THIS adapter does not map the snapshot onto it,
+        // so the wire position is documented here rather than surfaced.
+        if (m.messageStop?.stopReason === "max_tokens") truncated = true
         const exceptions = [
           m.internalServerException, m.modelStreamErrorException, m.serviceUnavailableException,
           m.throttlingException, m.validationException,
@@ -270,7 +285,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         yield { type: "error", error: await describeTransportError("bedrock", resolveBedrockRegion(config.region, process.env), err, { remediation: "none" }) }
         return
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

@@ -432,3 +432,77 @@ describe("M72 Ⅰ in-stream provider failures (openai)", () => {
     expect((events[0] as { error: Error }).error.message).toContain("nested only")
   })
 })
+
+// M72 Ⅱ. The Responses wire spells the cap `max_output_tokens` and — unlike
+// Anthropic — has a default of its own, so an unresolved cap sends NOTHING:
+// inventing a number here would make every request a statement we cannot back.
+describe("M72 Ⅱ: the output cap on the openai wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap is top-level max_output_tokens", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_output_tokens).toBe(4096)
+    // the chat-completions spelling is NOT this wire's
+    expect(body.max_tokens).toBeUndefined()
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → neither spellings are sent", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("max_output_tokens" in body).toBe(false)
+    expect("max_tokens" in body).toBe(false)
+    await it.return?.()
+  })
+})
+
+// M72 Ⅱ. The Responses wire has no `finish_reason`: truncation arrives as a
+// whole event, `response.incomplete`, whose `incomplete_details.reason` says
+// WHY. Only `max_output_tokens` is truncation — `content_filter` is a REFUSAL,
+// so the bit keys on the reason value, never on the event name. Before this
+// task the event had no arm at all and fell into `return []`.
+describe("M72 Ⅱ: the truncation bit (openai)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: response.incomplete with reason max_output_tokens is a truncation", async () => {
+    const sse = `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: response.incomplete for content_filter is NOT a truncation (it is a refusal)", async () => {
+    const sse = `event: response.incomplete\ndata: ${JSON.stringify({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).not.toHaveProperty("truncated")
+  })
+
+  it("M72 Ⅱ: response.completed carries no truncated field", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed" })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).not.toHaveProperty("truncated")
+  })
+})

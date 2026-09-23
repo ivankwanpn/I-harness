@@ -12,6 +12,11 @@ export interface MockStep {
   /** M5 T2: what the provider reports for this round-trip. Unset → the mock
    * reports nothing, which is also a case worth testing (absent ≠ zero). */
   usage?: LLMUsage
+  /** M72 Ⅱ: this step ends at the output cap. Present ONLY as `true` (the
+   * seam's own discipline) — unset → the step ends cleanly, byte-identical to
+   * before this field existed. It exists because a `MockStep` is the ONLY way
+   * the CLI's run-level path can be driven end-to-end with a truncated ending. */
+  truncated?: true
 }
 
 export function createMockClient(script: MockStep[]): ModelClient {
@@ -34,7 +39,10 @@ export function createMockClient(script: MockStep[]): ModelClient {
         for (const call of step.toolCalls) yield { type: "tool_call", call }
       }
       if (step.text !== undefined) yield { type: "text/chunk", text: step.text }
-      yield { type: "end" }
+      // M72 Ⅱ: the step's own ending. Absent → the exact literals this file
+      // yielded before the field existed; `truncated: true` → the seam's
+      // truncated terminal, which is what a cap-hitting provider reports.
+      yield step.truncated === true ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

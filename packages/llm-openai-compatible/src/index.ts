@@ -9,6 +9,9 @@ export interface OpenAICompatibleConfig {
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
   inputModalities?: ("text" | "image")[]
+  /** M72 Ⅱ: which wire field carries the cap on THIS route. Default
+   * `max_tokens` (the compatible-gateway spelling). */
+  maxTokensField?: "max_tokens" | "max_completion_tokens"
   /** M59: literal extra request headers (gateway-required, e.g. OpenCode
    * Zen's x-opencode-session). The adapter's own headers win on collision. */
   headers?: Record<string, string>
@@ -119,6 +122,13 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: the field NAME is a per-route choice — `max_tokens` is what
+        // compatible gateways take, `max_completion_tokens` is what the newest
+        // OpenAI models demand. Explicit config, not a guess (Pi's
+        // maxTokensField solves the same problem by probing).
+        ...(request.maxOutputTokens !== undefined
+          ? { [config.maxTokensField ?? "max_tokens"]: request.maxOutputTokens }
+          : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -145,6 +155,10 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       const decoder = new TextDecoder()
       let buffer = ""
       let receivedDone = false
+      // M72 Ⅱ: the wire's own truncation literal (`finish_reason: "length"`) —
+      // set in the chunk loop below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       // tool call accumulation: index -> { id, name, argsBuffer }
       const pendingToolCalls = new Map<number, { id: string; name: string; argsBuffer: string }>()
 
@@ -196,6 +210,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
               const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
               for (const choice of choices) {
                 const delta = choice.delta ?? {}
+                if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
                 if (typeof delta.content === "string" && delta.content.length > 0) {
                   events.push({ type: "text/chunk", text: delta.content })
                 }
@@ -232,6 +247,10 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
             for (const choice of choices) {
               const delta = choice.delta ?? {}
+              // R12: the same rule as the main loop — a final frame that lost
+              // its trailing "\n\n" is parsed HERE, and the provider's failure
+              // channel must not depend on where the frame boundary fell.
+              if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
               if (typeof delta.content === "string" && delta.content.length > 0) events.push({ type: "text/chunk", text: delta.content })
             }
             if (yield* emit(events)) return
@@ -257,7 +276,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

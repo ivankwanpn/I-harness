@@ -3,6 +3,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
+import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
 import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
 
 function makeDeps(ctx: PluginContext) {
@@ -440,5 +441,112 @@ describe("M13 parallel tool calls", () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)
     expect(() => createAgent(ctx, { ...deps, systemPrompt: "p", maxParallelToolCalls: 2.5 })).toThrow(/maxParallelToolCalls/)
+  })
+})
+
+describe("M72 II: the request's output cap", () => {
+  it("M72 Ⅱ: the request carries the cap", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    // A window far larger than anything this test sends → nothing to clamp
+    // against, so the value is the one that went in. (The arithmetic itself is
+    // pinned exactly by Task 1's seam tests; this pins the WIRING.)
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 1_000_000 } })
+    await agent.run("hi")
+    expect(seen[0]!.maxOutputTokens).toBe(8_000)
+  })
+
+  it("M72 Ⅱ: the cap is clamped down when the window is nearly full", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "end" }
+      },
+    }
+    // 10,000 − (estimated input + overhead) − 4096 < 8,000 for any non-empty
+    // prompt → strictly less, and still a positive number.
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, maxOutputTokens: 8_000, budget: { contextWindow: 10_000 } })
+    await agent.run("hi")
+    expect(seen[0]!.maxOutputTokens).toBeLessThan(8_000)
+    expect(seen[0]!.maxOutputTokens).toBeGreaterThan(0)
+  })
+
+  it("M72 Ⅱ: no cap resolved → the field is ABSENT, not 8000 and not 0", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const seen: { maxOutputTokens?: number }[] = []
+    deps.model = {
+      async *stream(request: { maxOutputTokens?: number }) {
+        seen.push({ ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}) })
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1 })
+    await agent.run("hi")
+    expect("maxOutputTokens" in seen[0]!).toBe(false)
+  })
+})
+
+describe("M72 II: a truncated ending reaches the durable log and telemetry", () => {
+  // The sink shape is provider-usage.test.ts's: a spy that records every event,
+  // so the assertions read the HOST stream rather than the switch.
+  function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
+    const events: TelemetryEvent[] = []
+    const telemetry: Telemetry = {
+      emit: (ev) => {
+        events.push(ev)
+      },
+      close: () => {},
+    }
+    return { telemetry, events }
+  }
+
+  it("M72 Ⅱ: a truncated step is written durably and reported as telemetry", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "partial" }
+        yield { type: "end", truncated: true }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
+    // The same fact on the host's independent stream. `toEqual` is deliberate:
+    // the payload is exactly the step it happened on — a `step` field that were
+    // summed elsewhere would read as a measurement it is not.
+    const reports = emitted.filter((e) => e.type === "provider/truncated")
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.data).toEqual({ step: 1 })
+  })
+
+  it("M72 Ⅱ: a clean step writes no truncated field", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("truncated")
+    // Absent stays absent on the host stream too — never a `false` report.
+    expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(0)
   })
 })

@@ -123,6 +123,9 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: a request-level cap, so it lands after config.options (the
+        // same precedence rule the reasoning line above documents).
+        ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -149,6 +152,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       const decoder = new TextDecoder()
       let buffer = ""
       let receivedDone = false
+      // M72 Ⅱ: the Responses wire's own truncation literal lives in
+      // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
+      // below, read once at the ending. Absent stays absent: only `true` writes
+      // the field.
+      let truncated = false
       const pendingCalls = new Map<string, { name: string; argsBuffer: string }>()
       const yieldedInline = new Set<string>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
@@ -198,6 +206,14 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (t === "response.reasoning_summary_text.delta") {
           return [{ type: "reasoning", text: (event as { text: string }).text }]
         }
+        // M72 Ⅱ: the Responses stream's truncation ending. `response.incomplete`
+        // also fires for `content_filter` — a REFUSAL, not a truncation — so the
+        // bit keys on the REASON, never on the event name.
+        if (t === "response.incomplete") {
+          const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
+          if (reason === "max_output_tokens") truncated = true
+          return []
+        }
         if (t === "response.completed") return []
         if (t === "[DONE]") {
           receivedDone = true
@@ -206,8 +222,8 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
         // and can also send a bare `error` event. Both used to fall through to the
         // empty default, so a failed response was indistinguishable from an empty
-        // one. `response.incomplete` is deliberately NOT handled here — that is
-        // truncation, i.e. phase Ⅱ's `truncated` bit.
+        // one. `response.incomplete` is NOT handled here and is NOT a failure:
+        // it has its own arm above (M72 Ⅱ's truncation bit).
         //
         // The two shapes carry their fields differently, so this arm reads both:
         // `response.failed` nests them under `response.error.{code,message}`,
@@ -272,7 +288,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

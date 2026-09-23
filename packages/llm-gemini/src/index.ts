@@ -145,6 +145,21 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: the parent object does not exist today — Gemini takes the cap
+        // at generationConfig.maxOutputTokens, and the parent is optional on the
+        // wire, so when there is no cap we do not build it at all. A route that
+        // already configures generation parameters through
+        // `options.generationConfig` keeps them: only the cap key is ours.
+        ...(request.maxOutputTokens !== undefined
+          ? {
+              generationConfig: {
+                ...(typeof config.options?.generationConfig === "object" && config.options.generationConfig !== null
+                  ? (config.options.generationConfig as Record<string, unknown>)
+                  : {}),
+                maxOutputTokens: request.maxOutputTokens,
+              },
+            }
+          : {}),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -171,6 +186,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      // M72 Ⅱ: the wire's own truncation literal (`finishReason: "MAX_TOKENS"`)
+      // — set in `handleChunk` below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       // Function-call accumulation (Gemini streams a functionCall as several
       // chunks: the first carries the name, the rest carry args objects that
       // may be partial — the docs' canonical accumulation is to store the
@@ -231,6 +250,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const events: LLMStreamEvent[] = []
         const candidates = event.candidates as { content?: { parts?: { text?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
+        if ((candidates?.[0] as { finishReason?: string } | undefined)?.finishReason === "MAX_TOKENS") truncated = true
         const parts = candidates?.[0]?.content?.parts ?? []
         for (const part of parts) {
           if (part.functionCall !== undefined) {
@@ -241,9 +261,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         }
         // usageMetadata (promptTokenCount / candidatesTokenCount /
         // totalTokenCount) arrives on the LAST chunk — before `end`. The
-        // LLMStreamEvent vocabulary carries NO usage event (same gap as
-        // llm-anthropic's message_usage), so the wire position is documented
-        // here and not surfaced (a future usage seam slot).
+        // LLMStreamEvent vocabulary DOES have a `usage` event
+        // (`{ type: "usage"; usage: LLMUsage }`, emitted by llm-anthropic),
+        // but THIS adapter does not map usageMetadata onto it, so the wire
+        // position is documented here rather than surfaced.
         return events
       }
       try {
@@ -274,7 +295,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }

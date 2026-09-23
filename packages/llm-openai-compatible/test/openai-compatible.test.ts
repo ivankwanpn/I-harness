@@ -331,3 +331,89 @@ describe("M32 reasoning effort (openai-family Chat Completions)", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅱ. Chat Completions has NO universal spelling: `max_tokens` is what the
+// compatible gateways this adapter exists for take, `max_completion_tokens` is
+// what the newest OpenAI models demand. The route decides (explicit config),
+// because a guess here is a 400 on exactly one of the two.
+describe("M72 Ⅱ: the output cap on the compatible wire", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: the cap goes on the default field name", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_tokens).toBe(4096)
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: a route can name its own field (new OpenAI models reject max_tokens)", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m", maxTokensField: "max_completion_tokens" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s", maxOutputTokens: 4096 } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.max_completion_tokens).toBe(4096)
+    expect(body.max_tokens).toBeUndefined()
+    await it.return?.()
+  })
+
+  it("M72 Ⅱ: no cap resolved → no cap field at all", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("max_tokens" in body).toBe(false)
+    expect("max_completion_tokens" in body).toBe(false)
+    await it.return?.()
+  })
+})
+
+// M72 Ⅱ. Chat Completions' own literal is `finish_reason: "length"` — the
+// truncation bit the seam's `end` gained (Task 1). A stream that ends with any
+// other reason (or with no reason at all) keeps today's byte-exact `end`.
+describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅱ: finish_reason length reaches the seam as truncated", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+
+  it("M72 Ⅱ: a clean ending carries NO truncated field", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).not.toHaveProperty("truncated")
+  })
+
+  // R12: the SAME frame shape as above, but with no trailing "\n\n" — so the
+  // main loop parses nothing and the RESIDUAL FLUSH is what reads the frame.
+  // A provider's observable failure channel must not depend on where the frame
+  // boundary fell, so the flush must apply the same finish_reason rule.
+  it("M72 Ⅱ: a final frame with no trailing blank line still reports its truncation", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
+  })
+})

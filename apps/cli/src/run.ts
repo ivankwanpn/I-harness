@@ -224,6 +224,14 @@ export interface HeadlessResult {
    * failure (M3's diagnose-ability). Absent when the caller supplied no id and
    * none was generated. */
   sessionId?: string
+  /** M72 Ⅱ: a `step/end` in this run's LAST turn is truncated, i.e. the
+   * provider stopped at the output cap. Exactly the predicate — NOT a claim
+   * that `finalText` is the incomplete thing: the truncated step is not
+   * necessarily the turn's last one, so a complete final answer can coexist
+   * with this bit. Present only as `true` — a clean run carries no field at
+   * all (a caller must be able to tell "ended on its own" from "we never
+   * looked"). Read from the session log's `step/end`. */
+  truncated?: boolean
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -504,6 +512,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       providerBinding = state.binding
     }
     const contextWindow = providerBinding?.contextWindow
+    // M72 Ⅱ: the same binding's resolved output cap. Handed on verbatim —
+    // undefined stays undefined, because "no cap resolved" is a fact the
+    // request has to keep (nothing here defaults it; core-agent clamps it).
+    const maxOutputTokens = providerBinding?.maxOutputTokens
     // The window is handed to the assembly as `contextWindow` either way; it is
     // the assembly that feeds it INTO the compaction config. Merging it here as
     // well was a second copy of that logic — and the copy was wrong: when no
@@ -622,6 +634,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           ? { reasoningEffort: providerBinding.reasoningEffort }
           : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       resolveRoleModel: roleModelResolverFor(runtimeNow),
       // The role-model gate, from whoever supplied the run (the CLI's main()
       // reads it from the settings store). Omitted when the caller passed
@@ -781,6 +794,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     await executor.drain()
     const derived = deriveMessages(session).at(-1)
     const finalText = typeof derived?.content === "string" ? derived.content : ""
+    // M72 Ⅱ: the run's ending, read from the DURABLE log rather than from a
+    // flag threaded down the call chain — the record the answer's reader opens
+    // and this line are then the same fact by construction. Scoped to the last
+    // turn: an earlier turn's truncation is not this run's ending (a fresh turn
+    // after it can have ended cleanly).
+    // `Math.max(…, 0)`: `lastIndexOf` answers −1 when the log carries no
+    // `turn/start` at all, and `slice(-1)` would then inspect only the final
+    // event — a silent false negative. 0 keeps the whole log in view, which is
+    // the correct scope when there is no turn boundary to scope to.
+    const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
+    const truncated = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.truncated === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -827,9 +851,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       const continuity = m.prefix.requests === 0 ? "" : `${m.prefix.broke}/${m.prefix.observed}`
       console.error(`[metrics] ${events}${tokens === "" ? "" : `  tokens: ${tokens}`}${reported === "" ? "" : `  reported: ${reported}`}${prefix === "" ? "" : `  prefix(rewritten/total): ${prefix}`}${continuity === "" ? "" : `  prefix(broke/observed): ${continuity}`}${tools === "" ? "" : `  tools(ok/total): ${tools}`}`)
     }
+    // M72 Ⅱ: the truncation the operator has to know about, on STDERR for the
+    // reason the summary above is: stdout carries ONLY the telemetry's NDJSON
+    // frames and the final text. Printed unconditionally (not only when
+    // telemetry was asked for) — an incomplete answer is not an opt-in fact.
+    // The wording claims exactly what the predicate above knows: a `step/end`
+    // in this turn is truncated — NOT that `finalText` is the truncated thing
+    // (the truncation can be on a step whose output the turn did not end with).
+    if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that

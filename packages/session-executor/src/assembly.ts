@@ -209,6 +209,12 @@ export interface AssemblyOptions {
    * supplied by the composition (e.g. web.ts via resolveModelContext). Absent →
    * get_context_remaining is NOT registered (fail-closed). */
   contextWindow?: number
+  /** M72 Ⅱ: the resolved output cap for this session's model (the binding's
+   * `maxOutputTokens`). Moved VERBATIM — nothing here defaults or clamps it;
+   * the single clamp lives where the request is assembled (core-agent), which
+   * is the layer holding the window and the input estimate together. Absent →
+   * the request carries no cap (the adapter's own default applies). */
+  maxOutputTokens?: number
   /** M26-D2: durable task completion → parent session input admission. Wire to
    * the host's input tier (run.ts builds the default over its executor lane);
    * absent → notification rows stay pending (fail-closed, no silent drop). */
@@ -1236,6 +1242,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.contextWindow !== undefined && overheadEstimate !== undefined
         ? { budget: { contextWindow: opts.contextWindow, overheadTokens: overheadEstimate } }
         : {}),
+      // M72 Ⅱ: the output cap travels beside the budget it belongs to, verbatim
+      // (the clamp is the agent's, at request assembly).
+      ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       // M70: the checkpoint the tool scheduler awaits between the `tool/dispatch`

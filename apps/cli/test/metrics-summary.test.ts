@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { runHeadless } from "../src/run.ts"
+import { main } from "../src/index.ts"
 
 // M3's metrics registry, WIRED. The reachability gate is the reason this test
 // exists at all: `createMetricsSink` landed with no production consumer and the
@@ -105,5 +107,97 @@ describe("runHeadless — the metrics summary", () => {
     // The denominator is printed even when it is zero: `0/0` says out loud that
     // nothing was compared, where a bare `0` would read as a measurement.
     expect(summary).toMatch(/prefix\(broke\/observed\): 0\/0/)
+  }, 30_000)
+
+  // M72 II: the run-level end of the truncation chain. The seam bit (Task 6)
+  // and the durable field are separate hops; this is the one that proves the
+  // VALUE arrives at the host's `run` — and it is the only end-to-end proof,
+  // since the three middle hops have no unit test of their own.
+  it("M72 Ⅱ: a truncated run says so on STDERR and on the result", async () => {
+    const result = await runHeadless("say hi", {
+      workspace: root,
+      mockScript: [{ role: "assistant", text: "partial", truncated: true }],
+    })
+    expect(result.truncated).toBe(true)
+    expect(errors.some((line) => line.includes("[truncated]"))).toBe(true)
+  }, 30_000)
+
+  it("M72 Ⅱ: a clean run neither says it nor sets the field", async () => {
+    const result = await runHeadless("say hi", { workspace: root, mockScript: [{ role: "assistant", text: "hi" }] })
+    expect(result.truncated).toBeUndefined()
+    expect(errors.some((line) => line.includes("[truncated]"))).toBe(false)
+  }, 30_000)
+
+  // M72 Ⅱ / R14: ONE print, not two. The count is asserted END-TO-END, through
+  // `main()`'s run branch — the only level where both print sites were
+  // reachable at once (run.ts's and index.ts's), which is exactly the
+  // duplication R14 removed. A runHeadless-only test could never have seen it:
+  // that function has always printed once.
+  //
+  // The fixture is cli.test.ts's shape — a local SSE server plus an
+  // IH_CONFIG_DIR whose `llm.defaultModel` points at it — so the round-trip
+  // really crosses the adapter (`finish_reason: "length"` is what Task 6 taught
+  // llm-openai-compatible to read) instead of a mock client.
+  it("M72 Ⅱ: a truncated run through the real CLI says it EXACTLY once", async () => {
+    const home = mkdtempSync(join(tmpdir(), "i-harness-truncated-"))
+    const server = createServer((req, res) => {
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.end([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "partial" } }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n\n"))
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (address === null || typeof address === "string") throw new Error("truncation fixture failed to listen")
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: {
+        providers: {
+          fixture: {
+            protocol: "openai-completions",
+            baseURL: `http://127.0.0.1:${address.port}`,
+            apiKeyEnv: "M72_TRUNCATED_FIXTURE_API_KEY",
+            models: [{ id: "fixture-model" }],
+          },
+        },
+        defaultModel: { provider: "fixture", model: "fixture-model" },
+      },
+    }), "utf8")
+    writeFileSync(join(home, "credentials.json"), JSON.stringify({ refs: { M72_TRUNCATED_FIXTURE_API_KEY: "fixture-key" } }), "utf8")
+    const previousConfigDir = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = home
+    const out = vi.spyOn(console, "log").mockImplementation(() => {}) // the final text is not this test's subject
+    try {
+      const code = await main(["node", "i-harness", "run", "say hi"])
+      expect(code).toBe(0)
+      // The assertion R14 buys: one line, whatever route the host took.
+      expect(errors.filter((line) => line.includes("[truncated]"))).toHaveLength(1)
+    } finally {
+      out.mockRestore()
+      if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR
+      else process.env.IH_CONFIG_DIR = previousConfigDir
+      await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  // R14 confirmation (ii), measured rather than argued: with telemetry ON the
+  // summary line itself carries the new event row — the sink counts whatever
+  // arrives by type, so a cap-hitting round-trip is visible there too.
+  it("M72 Ⅱ: the metrics summary counts the cap-hitting round-trip", async () => {
+    await runHeadless("say hi", {
+      workspace: root,
+      telemetry: "jsonl",
+      mockScript: [{ role: "assistant", text: "partial", truncated: true }],
+    })
+    const summary = errors.find((line) => line.includes("[metrics]"))
+    expect(summary).toBeDefined()
+    expect(summary).toMatch(/provider\/truncated=1/)
   }, 30_000)
 })
