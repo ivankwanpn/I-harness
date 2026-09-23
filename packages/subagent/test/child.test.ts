@@ -785,6 +785,61 @@ describe("the child's request carries the resolved budget", () => {
     await settled(f.jobs, jobId)
 
     // 缺席即缺席 — a spawned default here would be a number nobody chose.
+    // This assertion's kill site is NOT in child.ts: the request key is gated by
+    // core-agent's own `deps.maxOutputTokens !== undefined` spread
+    // (packages/core-agent/src/index.ts:304-312), so an unconditional write at
+    // the spawn lands as `undefined` and that guard drops it — redden it THERE.
     expect("maxOutputTokens" in parentClient.requests[0]!).toBe(false)
+  }, 10_000)
+
+  it("an inheriting child's SMALL window clamps the SESSION's larger cap", async () => {
+    const f = spawnFixture()
+    const parentClient = recordingClient("parent")
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,        // no role model → the inherit arm
+      parentModel: parentClient, resolveModel: noRoleModel,
+      contextWindow: 1_000, maxOutputTokens: 4_242,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    // The case above cannot see the inherit arm's WINDOW: 200k leaves the clamp a
+    // no-op, so deleting `let contextWindow = opts.contextWindow` changes nothing
+    // there. Here the window is small enough that the clamp MUST bite (the cap
+    // lands in the window's remaining room, below both 4_242 and 1_000) — this is
+    // the case that reddens iff the inherit arm stopped reading the host window.
+    const req = parentClient.requests[0]!
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(4_242)
+  }, 10_000)
+
+  it("a DECLARED binding with no numbers is not 'helped' by the session's", async () => {
+    const f = spawnFixture()
+    const roleClient = recordingClient("from the role's model")
+    const resolveModel = async () => ({
+      status: "ready" as const,
+      binding: { client: roleClient, providerId: "gw", modelId: "big", label: "role" },
+    })
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      contextWindow: 200_000, maxOutputTokens: 4_242,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    // The declared arm's numbers WIN — including when the binding carries none:
+    // the session's 200k/4_242 belong to the PARENT's model, and a declared model
+    // that resolved none of its own must not silently run under another model's
+    // budget. The window has no request key of its own (it acts only through the
+    // clamp) and there is no cap here to clamp, so the absence of the cap key is
+    // where this precedence is observable: `?? opts.*` in the declared arm puts
+    // the key back and reddens exactly this case.
+    expect("maxOutputTokens" in roleClient.requests[0]!).toBe(false)
   }, 10_000)
 })
