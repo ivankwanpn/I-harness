@@ -107,6 +107,51 @@ describe("fork.ts", () => {
     // `turn/start` and `user/message b` — and arrive as the child's 0 and 1.
     expect(seed[2]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [0, 1] })
   })
+
+  // M76 ③: the one reference the pass above left out. `anchorSeq` names a seq the
+  // same way `shadowedSeqs` does — it is the first seq of the region the marker
+  // hides — so it rides the same map. Carrying the PARENT's coordinate into this
+  // child names an unrelated event: `rewindCuts` then resolves a subset window
+  // (or drops it outright once the stale anchor lands at or past the marker), and
+  // the region the rewind hid comes back onto the child's surface.
+  it("M76: a seeded rewind/point's anchorSeq is remapped into the child's coordinates", () => {
+    type RewindPoint = Extract<SessionEvent, { type: "rewind/point" }>
+    const isMarker = (event: SessionEvent): event is RewindPoint => event.type === "rewind/point"
+    const events: SessionEvent[] = []
+    const push = (type: string, extra: Record<string, unknown> = {}) =>
+      events.push({ type, seq: events.length, ...extra } as SessionEvent)
+    push("turn/start"); push("user/message", { text: "turn 1 user" }); push("assistant/message", { text: "turn 1 answer" }); push("turn/end")
+    push("turn/start"); push("user/message", { text: "turn 2 user" }); push("assistant/message", { text: "turn 2 answer" }); push("turn/end")
+    push("turn/start"); push("user/message", { text: "turn 3 user" }); push("assistant/message", { text: "turn 3 answer" }); push("turn/end")
+    push("rewind/point", { version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [] })
+    push("turn/start"); push("user/message", { text: "turn 4 user" }); push("assistant/message", { text: "turn 4 answer" }); push("turn/end")
+
+    // the last three turn blocks — the slice starts at turn 2's turn/start
+    // (parent seq 4), so EVERY index moves
+    const seed = forkTurns(events, 3)
+
+    const parentMarker = events.find(isMarker)!
+    const marker = seed.find(isMarker)!
+    const anchor = events.find((event) => event.seq === parentMarker.anchorSeq)!
+    // walk the pointers: the child's anchorSeq must name the event the parent's
+    // named, whatever index that is here (a literal would be the slice's artefact)
+    expect(marker.anchorSeq).not.toBe(parentMarker.anchorSeq)
+    const childAnchor = seed.find((event) => event.seq === marker.anchorSeq)!
+    expect(childAnchor.type).toBe(anchor.type)
+    expect((childAnchor as { text?: string }).text).toBe((anchor as { text?: string }).text)
+    // the marker's own seq still names the marker itself
+    expect(seed.find((event) => event.seq === marker.seq)).toBe(marker)
+
+    // and its window is LIVE in the child: the region the rewind hid — here the
+    // rewound turn 2 and the turn that followed it — is off the child's surface,
+    // while the turn appended after the marker is on it
+    const child = createSession()
+    child.events.push(...seed)
+    const shown = deriveMessages(child).map((message) => JSON.stringify(message.content)).join(" ")
+    expect(shown).toContain("turn 4 user")
+    expect(shown).not.toContain("turn 2 user")
+    expect(shown).not.toContain("turn 3 user")
+  })
 })
 
 describe("spawnChild", () => {
