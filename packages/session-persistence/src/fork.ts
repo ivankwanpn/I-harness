@@ -161,7 +161,13 @@ export function completedTurnPrefix(
 // M54 A3: renumber one seed event into the child's coordinates, remapping the
 // seq references the projection consumes. A reference into a dropped (hidden)
 // region has no child-side target and is dropped with it.
-function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
+//
+// M74: this is no longer private to the session fork — the subagent's
+// `forkTurns` (packages/subagent/src/fork.ts) applies the SAME pass to a
+// `forkTurns: N` seed, so its contract "the output is in the child's
+// coordinates, references without a child-side target are gone" has a second
+// consumer and has to hold for both.
+export function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
   const remap = (seqs: number[] | undefined): number[] =>
     (seqs ?? []).flatMap((seq) => {
       const mapped = renumbered.get(seq)
