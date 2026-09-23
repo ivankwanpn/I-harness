@@ -96,11 +96,14 @@ export class ModelUnavailableError extends Error {
  * reads nothing but the status, the reason and the client. The ready arm also
  * admits `reasoningEffort`: the runtime resolves the selection's effort (and
  * refuses an invalid one), and the spawn hands it to `createAgent` instead of
- * dropping it at the boundary — the field is the runtime binding's own. */
+ * dropping it at the boundary — the field is the runtime binding's own. M73:
+ * the same reason admits the binding's `contextWindow`/`maxOutputTokens` — the
+ * host hands the two numbers through as it received them, and subagent's
+ * `RoleModelState` (this type's twin across the seam) widened the same way. */
 type RoleModelResolution =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number } }
 
 /** The selection a ROLE carries — what settings' `agents.roles.<name>` entry
  * holds, and what subagent's own `RoleModelSelection` is: named here so the
@@ -1064,6 +1067,15 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // switch is OFF, never "enabled by omission".
       ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
       ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+      // M73: the session's OWN model's numbers, on the same host shape as the
+      // resolver they belong with (RoleModelHost). An inheriting child runs on
+      // this very model, so its requests must be clamped and measured against
+      // the same window and cap — supplied here, defaulted nowhere. These ride
+      // the registration chain down to the spawn sites (index.ts's
+      // subagentDeps → tools.ts's spawn_agent), so the values are only ever as
+      // present as the host made them.
+      ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+      ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
       exec: execService,
       parentModel: model,
       parentSession: session,
@@ -1125,6 +1137,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // registerSubagent chain above): THIS spawn site is role-carrying too.
         ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
         ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+        // M73: the same two numbers, with the same absent-stays-absent rule —
+        // but this site passes them WITHOUT judging whether they apply: the
+        // reviewer knows its own model precedence (`deps.model ??
+        // deps.parentModel`) and is the only place that can decide whether the
+        // session's numbers describe the model this review will run on. It
+        // passes them on the INHERITED arm alone.
+        ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+        ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
@@ -1155,6 +1175,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // options as the other spawn sites above.
           ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
           ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+          // M73: the session's numbers ride the same subagents branch as the
+          // role-model fields above (agent-team mirrors SpawnOptions field by
+          // field) — a teammate that inherits runs on the session's own model
+          // and must carry its window and cap.
+          ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+          ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }

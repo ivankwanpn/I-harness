@@ -162,6 +162,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         // before the task record is written). See child.ts for the rule.
         roleSelectionFor: deps.roleSelectionFor,
         allowSubagentModelSelection: deps.allowSubagentModelSelection,
+        // M73: the session's own window and cap, forwarded to the spawn. Without
+        // this hop the values reach SubagentToolDeps and stop — an inheriting
+        // child of THIS tool would carry neither while every type still checks,
+        // which is the failure mode hardest to see: the precedence is right and
+        // both numbers are empty. Absent stays absent (no key written).
+        ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         jobs: deps.jobs,
         table: deps.table,
         agents: deps.agents,
