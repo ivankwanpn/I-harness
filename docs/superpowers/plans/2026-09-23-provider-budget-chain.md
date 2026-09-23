@@ -833,7 +833,7 @@ Expected: 兩條新的紅（`reason` 是 `undefined`；CLI 回的是那句話）
 
 - [ ] **Step 4: 跑它，看到綠**
 
-Run: 兩個套件的 test ＋ typecheck。`:58` 與 `:48` 兩條既有的必須**原樣**綠。
+Run: 兩個套件的 test ＋ typecheck。**「必須原樣綠」指的是上面那張表的十二條對照**（走壓力閘、re-fire、sticky、reset、prune 的那些臂），以及 `summarizer-prefix.test.ts` 一族的既有案例。（原文此處誤把 `engine.test.ts:58` 列為必須原樣綠——**那一條正是碰撞 #1**，本任務就是要改它。以碰撞表為準。）
 
 - [ ] **Step 5: 變異證明（兩條）**
 
