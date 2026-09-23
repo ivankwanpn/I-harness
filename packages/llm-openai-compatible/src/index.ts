@@ -201,6 +201,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       // set in handleFrame below, read once at the ending. Absent stays
       // absent: only `true` writes the field.
       let truncated = false
+      // M77: the refusal literal is the SIBLING of `length` on the same field,
+      // `finish_reason: "content_filter"` — HTTP 200 with no content, so before
+      // M77 the seam reported an empty SUCCESS and the turn ended as if the
+      // model had answered with nothing. Two variables rather than one: a
+      // response can be both, so neither bit may be the other's `else`.
+      let refused = false
       // tool call accumulation: index -> { id, name, argsBuffer }
       const pendingToolCalls = new Map<number, { id: string; name: string; argsBuffer: string }>()
 
@@ -248,7 +254,11 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           // too (via the residual flush), and the provider's failure channel
           // must not depend on where the frame boundary fell — one rule, both
           // callers.
-          if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
+          const finishReason = (choice as { finish_reason?: string }).finish_reason
+          if (finishReason === "length") truncated = true
+          // M77: `content_filter` is this wire's refusal, and it arrives on the
+          // very same field — hence the sibling test, never the `else` of it.
+          if (finishReason === "content_filter") refused = true
           // M72 Ⅲ: DeepSeek-family gateways stream the reasoning text on
           // `delta.reasoning_content` — a sibling of `content` that had ZERO
           // readers in this tree, so the whole trajectory was dropped. Pushed
@@ -339,7 +349,9 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       } finally {
         reader.releaseLock()
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: each bit is written on its own (a response can be both), and both
+      // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }

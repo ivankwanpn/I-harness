@@ -157,6 +157,14 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // below, read once at the ending. Absent stays absent: only `true` writes
       // the field.
       let truncated = false
+      // M77: the SAME field carries this wire's refusal literal,
+      // `content_filter`. Before M77 that reason was recognised by nothing: the
+      // stream ended HTTP 200 with no content, the seam reported an empty
+      // SUCCESS, and core-agent logged an empty assistant message for a turn
+      // the model had actually refused. Two variables rather than one: a
+      // response can be both truncated and refused, so neither bit may be
+      // produced as the other's `else`. Only `true` is ever written.
+      let refused = false
       const pendingCalls = new Map<string, { name: string; argsBuffer: string }>()
       const yieldedInline = new Set<string>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
@@ -208,10 +216,12 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         }
         // M72 Ⅱ: the Responses stream's truncation ending. `response.incomplete`
         // also fires for `content_filter` — a REFUSAL, not a truncation — so the
-        // bit keys on the REASON, never on the event name.
+        // bit keys on the REASON, never on the event name. M77: the refusal
+        // reason now sets its own bit, the sibling of the truncation above.
         if (t === "response.incomplete") {
           const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
           if (reason === "max_output_tokens") truncated = true
+          if (reason === "content_filter") refused = true
           return []
         }
         if (t === "response.completed") {
@@ -296,7 +306,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: the two bits are independent — each is written on its own, so a
+      // response that was both truncated and refused carries both. Both absent
+      // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }

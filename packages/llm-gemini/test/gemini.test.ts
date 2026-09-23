@@ -437,6 +437,46 @@ describe("M72 Ⅱ: the truncation bit (gemini)", () => {
   })
 })
 
+// M77. GenAI has TWO refusal carriers and this adapter read neither. (1) A
+// candidate's `finishReason` — `SAFETY` (a safety filter fired) and
+// `RECITATION` (the answer reproduced training data) are the two content
+// refusals; `MAX_TOKENS` above is the truncation and `STOP` a clean ending.
+// (2) `promptFeedback.blockReason` on the chunk, which is where a block on the
+// INPUT side arrives — and there `candidates` may be absent ENTIRELY, so the
+// candidate branch above never runs at all (`candidates?.[0]` of undefined).
+describe("M77: the refusal bit (gemini)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M77: finishReason SAFETY reaches the seam as refused", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "SAFETY" }] }])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  it("M77: finishReason RECITATION reaches the seam as refused", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ candidates: [{ content: { parts: [{ text: "x" }] }, finishReason: "RECITATION" }] }])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  // The input-side block: NO `candidates` key at all, so this fixture is the one
+  // a candidate-only implementation cannot see. It is also why the two carriers
+  // are recognised separately rather than one standing in for the other.
+  it("M77: promptFeedback.blockReason with no candidates at all is a refusal", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([{ promptFeedback: { blockReason: "SAFETY" } }])))
+    const client = createGeminiClient({ apiKey: "test-key", baseUrl: "https://api.example", model: "gemini-2.5-pro" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+})
+
 // M72 Ⅲ. Gemini reports the round-trip's token counts as `usageMetadata` on the
 // LAST chunk, before `end` — `handleChunk` read only `candidates[0].content.parts`
 // and documented the wire position instead of surfacing it. The mapping rules are
