@@ -287,12 +287,17 @@ export async function summarizeWithModel(
 
   // M75: the fallback gate. The single prefix-shaped request is the fast path —
   // it is a byte prefix of the session's last main request and the provider
-  // cache serves it. It stops being possible exactly when the region itself
-  // fills the window (clampOutputCap's arm C returns the raw cap; a strict
-  // provider rejects `input + max_tokens > context`). THEN — and only then —
-  // the pass summarises the region in pieces: pieces 2..N are cold reads (this
-  // tree sends no cache breakpoints), which is strictly better than today's
-  // outcome there: no summary at all and the context thrown away by a reset.
+  // cache serves it. It stops being possible exactly when the REQUEST fills the
+  // window — the region fold PLUS the directive PLUS the overhead the clamp
+  // charges (clampOutputCap's arm C returns the raw cap; a strict provider
+  // rejects `input + max_tokens > context`). The predicate below is that
+  // quantity and not the region alone, because the two are not the same
+  // question: a region that fits can still carry a request that does not, and
+  // that band is exactly where a region-priced gate would send the impossible
+  // call. THEN — and only then — the pass summarises the region in pieces:
+  // pieces 2..N are cold reads (this tree sends no cache breakpoints), which is
+  // strictly better than today's outcome there: no summary at all and the
+  // context thrown away by a reset.
   //
   // All four entry conditions are deliberately required: no cap or no window ⇒
   // the clamp never runs, so there is no "does not fit" question to answer and

@@ -563,6 +563,13 @@ function windowEnforcedClient(inner: ModelClient, contextWindow: number): ModelC
   }
 }
 
+/** Every string message of a request, joined — what a chained-piece case reads
+ * when it asks whether a request carried an anchor or a sentinel. The engine's
+ * own suite has the same helper; this file cannot import a test module, so it
+ * is written here in one line. */
+const summariesOf = (r: LLMRequest): string =>
+  r.messages.map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
+
 async function settled(jobs: ReturnType<typeof createJobRegistry>, jobId: string): Promise<void> {
   for (let i = 0; i < 200 && jobs.read(jobId).status !== "completed"; i++) {
     await new Promise((r) => setTimeout(r, 20))
@@ -1093,22 +1100,29 @@ describe("the child's request carries the resolved budget", () => {
 
   // M74 (final review, fix wave): the same regime as the case above, behind a
   // client that enforces the provider's own rule instead of answering anything.
-  // The difference is the whole answer for a child whose inherited surface
-  // FILLS the window. The summarizer builds its request from
+  // THIS fixture's inherited surface is ONE INDIVISIBLE BLOCK — a single
+  // ~3 750-token head turn — and that is what this case is scoped to: no piece
+  // can carry a block that size (the M75 design's §4.4 residual), so the reset
+  // below is the answer for THIS shape, not for a strict provider in general.
+  // M75's fallback DOES take the other half: a divisible over-window region is
+  // sliced and summarised ("an over-window child region that CAN be split", the
+  // case after this one, on identical numbers). What this case still measures is
+  // the undivided regime: the summarizer builds its request from
   // `deriveMessagesUpTo(session, lastShadowed)` — for a child's FIRST
   // compaction, the entire inherited surface — plus the directive, the system
-  // prompt and the tool schemas (compaction/index.ts), and it never shrinks
-  // that input; the cap it carries is `clampOutputCap`'s, which returns the RAW
-  // value exactly when the input already fills the window (llm-seam
-  // clampOutputCap, the `!(hardRoom >= 1)` arm). So that request reaches the
-  // wire over-window and a real provider rejects it (`input + max_tokens >
-  // context`). MEASURED here: 2 summarizer requests rejected (maybeCompact's
-  // pass and enforceBudget's layer 1), the summarizer fails SOFT, and the
-  // ladder's layer 2 rescues — `resetWindowOnce` keeps the last 20 events and
-  // the child CONTINUES with its inherited context DROPPED, not summarised.
-  // The permissive clients the other compaction cases use are what let that
-  // over-window request look harmless — they answer it, so the summary path is
-  // what those cases measure; this one is what a real provider yields instead.
+  // prompt and the tool schemas (compaction/index.ts); the cap it carries is
+  // `clampOutputCap`'s, which returns the RAW value exactly when the input
+  // already fills the window (llm-seam clampOutputCap, the `!(hardRoom >= 1)`
+  // arm). A block too large to be a piece reaches the wire over-window and a
+  // real provider rejects it (`input + max_tokens > context`). MEASURED here: 2
+  // summarizer requests rejected (maybeCompact's pass and enforceBudget's layer
+  // 1 — one per pass, since the chain stops at piece 1), the summarizer fails
+  // SOFT, and the ladder's layer 2 rescues — `resetWindowOnce` keeps the last 20
+  // events and the child CONTINUES with its inherited context DROPPED, not
+  // summarised. The permissive clients the other compaction cases use are what
+  // let that over-window request look harmless — they answer it, so the summary
+  // path is what those cases measure; this one is what a real provider yields
+  // for a region no piece can fit.
   it("M74: on a strict provider the child still completes — the rejected summarizer hands off to the reset", async () => {
     const f = spawnFixture()
     // The parent's head turn is what fills the window; the six small turns after
@@ -1171,6 +1185,121 @@ describe("the child's request carries the resolved budget", () => {
     const surface = deriveMessages(childSession).map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
     expect(surface).not.toContain("INHERITED-HEAD-SENTINEL")
     expect(surface).toContain("q5")
+  }, 15_000)
+
+  // M75 (spec §2.1's child half). The case above and this one are a PAIR: same
+  // window (2 000), same cap (4 242), same window-enforcing client, same role —
+  // ONE variable changes, the inherited surface's DIVISIBILITY. There the region
+  // is a single ~3 750-token head turn, so no piece can carry it whole (the
+  // design's §4.4 residual) and the reset is the answer; here it is twelve small
+  // parent turns, so the summarizer's fallback CAN slice it and the child keeps
+  // its context as a summary where the case above drops it. Holding every other
+  // number fixed is what makes the pair a measurement: the fixture alone decides
+  // which outcome is reachable.
+  //
+  // MEASURED on this fixture. The inherited seed prices at 2 647 tokens (the
+  // assertion below is that arithmetic, taken with the public meter), and with
+  // the child's own 7-token task message the fold is 2 654 — so the SINGLE
+  // request prices at 3 359 (fold + the 449-token directive + this role's 256
+  // overhead) and the wire rejects it. Measured, that is what a gate-less build
+  // sends: `input 3359 + max_tokens 4242 > context 2000`, TWICE (maybeCompact's
+  // pass and enforceBudget's layer 1), and the ladder's reset follows. With the
+  // gate the pass makes 13 calls — one per segment, because the piece budget
+  // `2 000 − allowance − maxTokens 1 024` lands below one turn — and each is
+  // priced at exactly the window by the clamp's own arithmetic (message prices
+  // 676 / 886 × 11 / 673, plus the 256 overhead, plus the clamped cap === 2 000),
+  // so the strict client rejected NOTHING where the case above had 2 rejections.
+  // The one request it would have rejected is never built.
+  it("M75: an over-window child region that CAN be split is summarised, not reset", async () => {
+    const f = spawnFixture()
+    // The head carries a sentinel for the two claims that distinguish
+    // "summarised" from "dropped": the summarizer must have READ it (its text
+    // rides a request the strict client SERVED), and the child's surface must
+    // not carry it afterwards (the summary replaced it — that is compaction).
+    const HEAD = "INHERITED-DIVISIBLE-SENTINEL "
+    for (let i = 0; i < 12; i++) {
+      append(f.parentSession, { type: "turn/start" })
+      append(f.parentSession, { type: "user/message", text: (i === 0 ? HEAD : "") + `q${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "turn/end" })
+    }
+    // The fixture's claim, priced with the public meter the engine prices with:
+    // the seed ALONE is over the window, so the region IS over-window and the
+    // gate has something real to decide. (The child's own task message is not in
+    // it — the fork seeds parent turns only — and only ever makes the region
+    // larger.)
+    expect(estimateContent(deriveMessages(f.parentSession))).toBeGreaterThan(2_000)
+    // ≥ 500 chars: the M34 ⑦c floor is enforced on the LAST piece, and a shorter
+    // answer would fail the whole chain (measured on the engine's own fixture in
+    // summarizer-prefix.test.ts).
+    const CHILD_SUMMARY = "M75-CHILD-SUMMARY-SENTINEL " + "condensed ".repeat(70)
+    const client = windowEnforcedClient({
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        const last = request.messages.at(-1)
+        const isSummary = typeof last?.content === "string" && last.content.includes("summar")
+        yield { type: "text/chunk", text: isSummary ? CHILD_SUMMARY : "child done" }
+        yield { type: "end" }
+      },
+    }, 2_000)
+    const { path, jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 2_000,
+      maxOutputTokens: 4_242,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    // the child finishes on its own task, not on a rescue
+    expect(f.jobs.read(jobId).status).toBe("completed")
+    expect(f.jobs.read(jobId).output).toBe("child done")
+
+    const childSession = f.table.get(path)!.session
+    // THE claim: a summary exists — the outcome the case above cannot reach on
+    // its fixture …
+    const marker = childSession.events.find((e) => e.type === "compaction/summary")
+    expect(marker).toBeDefined()
+    // … and the reset never ran: no `compaction/reset` marker at all
+    expect(childSession.events.some((e) => e.type === "compaction/reset")).toBe(false)
+    // the summary names the WHOLE inherited region, the head's two messages
+    // (seqs 1/2) included — the content a reset would have dropped unseen
+    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toEqual(expect.arrayContaining([1, 2]))
+    // MEASURED: 51 seqs — every non-marker event in the log (48 seed events,
+    // plus the child's own turn/start, user/message and step/start). Nothing of
+    // the inherited surface is left unaccounted for on the surface.
+    expect((marker as { shadowedSeqs: number[] }).shadowedSeqs).toHaveLength(51)
+
+    // the mechanism, request by request: the summarizer's calls are the ones
+    // whose last message is the directive, and there are several — the pieces
+    const summarizerRequests = client.served.filter((r) => {
+      const last = r.messages.at(-1)
+      return typeof last?.content === "string" && last.content.includes("summar")
+    })
+    expect(summarizerRequests.length).toBeGreaterThan(1)
+    // the inherited head was READ, not dropped: the sentinel rides an accepted
+    // request (piece 1 carries the head turn verbatim — the slice is of the
+    // region's own messages)
+    expect(summarizerRequests.some((r) => r.messages.some((m) => typeof m.content === "string" && m.content.includes("INHERITED-DIVISIBLE-SENTINEL")))).toBe(true)
+    // chained: piece 1 has no anchor, every piece after it carries the running
+    // summary (the chain's own contract, spec §1.3)
+    expect(summariesOf(summarizerRequests[0]!)).not.toContain("<previous-summary>")
+    for (let k = 1; k < summarizerRequests.length; k++) {
+      expect(summariesOf(summarizerRequests[k]!)).toContain("<previous-summary>")
+    }
+    // and NOTHING was rejected: on this fixture every request that left is
+    // legal on the window — the clamp prices each piece against its own input
+    // — where the case above had its summarizer calls rejected twice
+    expect(client.rejected).toHaveLength(0)
+
+    // the surface the child continues on: the summary, with the head gone into
+    // it rather than gone entirely
+    const surface = deriveMessages(childSession).map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
+    expect(surface).toContain("M75-CHILD-SUMMARY-SENTINEL")
+    expect(surface).not.toContain("INHERITED-DIVISIBLE-SENTINEL")
   }, 15_000)
 
   // ── M74 Task 3: the child's own summary vs. the one it inherited ─────────

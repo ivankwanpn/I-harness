@@ -380,14 +380,23 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // written — it already defaults true, and a knob that can only be turned off
     // would be a surface a child has no handle to use (`Agent.compact` is
     // reachable only through a SessionAssembly).
-    // M74 (final review): the regime this compactor CANNOT cover — when the
-    // child's surface exceeds the window, compaction cannot summarise it at all
-    // (the summarizer's own request is the whole inherited surface plus the
-    // directive, prompt and schemas, which it never shrinks, and
-    // `clampOutputCap` returns the raw cap exactly when the input already fills
-    // the window), so the ladder's reset rescues the turn and the inherited
-    // context is DROPPED, not summarised — pinned by "on a strict provider the
-    // child still completes" in test/child.test.ts.
+    // M74 (final review) / M75: when the child's surface exceeds the window,
+    // the summarizer's single request — the whole inherited surface plus the
+    // directive, prompt and schemas, with `clampOutputCap` returning the raw cap
+    // exactly when the input already fills the window — is one a strict
+    // provider rejects. M75 answers that with CHAINED PIECES: whenever the
+    // request cannot fit and the region can be sliced (the gate wants all four
+    // — a region, a request shape, a resolved cap, a window — and a child
+    // supplies each: the engine's own compact pass names the region, core-agent
+    // builds the shape, the role binding resolves the numbers), the summarizer
+    // summarises the region piece by piece and the child keeps its inherited
+    // context as a SUMMARY. What remains of the old regime is the
+    // region NO piece can fit — one indivisible block (design §4.4) — where the
+    // pass still fails soft and the ladder's reset still rescues the turn with
+    // the inherited context DROPPED. Pinned by "on a strict provider the child
+    // still completes" (the indivisible fixture) and "an over-window child
+    // region that CAN be split is summarised" (the divisible one) in
+    // test/child.test.ts.
     ...(contextWindow !== undefined
       ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
