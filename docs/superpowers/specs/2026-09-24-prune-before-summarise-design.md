@@ -24,7 +24,7 @@
 
 ### 1.1 ①**更正：移標記沒有用——真正的因是 prefix fold 的 seq 濾網**
 
-**執行期的量測推翻了本節原本的設計（我的錯），正確的診斷如下。** `deriveMessagesUpTo(session, maxSeq)` 的實作是 `deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })`（`core-session/index.ts:455-457`），而 `append` **永遠把最高 seq 給新事件** ⇒ **prune 標記永遠落在區域最後一個 shadowed seq 之後** ⇒ 那個被截斷的 fold **看不到它**。實測：`lastShadowed` 104／109、標記 seq **110**；`deriveMessages`（主路徑）看得到取代文字，`deriveMessagesUpTo` 看不到。**⇒ 沒有任何附加位置能修好它**（本節原本要求「移到 prefix 之前」——量測證明那麼做仍然紅兩條案例）。
+**執行期的量測推翻了本節原本的設計（我的錯），正確的診斷如下。** `deriveMessagesUpTo(session, maxSeq)` 的實作是 `deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })`（**`core-session/src/index.ts` 的 `deriveMessagesUpTo`**，本階段把它改成 `… || e.type === "compaction/prune"`；**引它用符號名，不用行號**——那個檔案的行號在本階段動過），而 `append` **永遠把最高 seq 給新事件** ⇒ **prune 標記永遠落在區域最後一個 shadowed seq 之後** ⇒ 那個被截斷的 fold **看不到它**。實測：`lastShadowed` 104／109、標記 seq **110**；`deriveMessages`（主路徑）看得到取代文字，`deriveMessagesUpTo` 看不到。**⇒ 沒有任何附加位置能修好它**（本節原本要求「移到 prefix 之前」——量測證明那麼做仍然紅兩條案例）。
 
 **真正的修法是一行**：讓 `deriveMessagesUpTo` 的 seq 濾網**對 `compaction/prune` 標記破例**（它必須被 prefix fold 看見）。**為什麼這樣是對的，不只是可行**：prune 標記是**內容尋址**的——`derivePruneSubstitutes` 的 map 以**工具呼叫**為 key，取代文字是**那份舊工具輸出**的性質，不是「決定要 prune 的那一刻」的性質 ⇒ 套用到**任何** fold 都正確（prefix 裡的舊工具輸出就是主路徑取代的那一份）。**而對照組是必要的**：`compaction/summary` 與 `compaction/reset` 是**時間尋址**的（它們的 `shadowedSeqs`／`removedSeqs` **指名一段區域**）⇒ **它們必須繼續服從 seq 濾網**。
 
