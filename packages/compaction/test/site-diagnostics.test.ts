@@ -74,7 +74,8 @@ it("the summarizer's fail-soft report is the ambient handle's, at phase turn / l
   const engine = createCompactionEngine({ model: failing, config })
   const result = await engine.compact(longSession())
 
-  expect(result).toEqual({ compacted: false, shadowedSeqs: [] })
+  // M73: the summarizer-failure arm names its reason (the shape stays pinned).
+  expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
   expect(lines).toHaveLength(1)
   expect(parsed(lines)[0]).toMatchObject({ phase: "turn", level: "warn", run: "r15" })
   expect(parsed(lines)[0]!.msg).toContain("compaction summarizer failed (fail-soft, retrying next step): model exploded")

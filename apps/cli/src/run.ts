@@ -99,7 +99,14 @@ export async function handleSessionCompactCommand(
     throw new TypeError("session-compact: instructions must be a string")
   }
   const result = await deps.compactNow(instructions)
-  if (!result.compacted) return "No compactable history yet."
+  if (!result.compacted) {
+    // M73: a summarizer failure used to answer with the same sentence as an
+    // empty region — a real failure reading as "there was nothing to do".
+    if (result.reason === "summarizer-failed") {
+      return "Compaction failed: the summarizer call did not succeed (see the session's warnings)."
+    }
+    return "No compactable history yet."
+  }
   return JSON.stringify({
     compacted: result.compacted,
     shadowedSeqs: result.shadowedSeqs,

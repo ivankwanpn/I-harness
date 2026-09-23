@@ -33,6 +33,12 @@ export interface CompactionResult {
   // model surface / summarizer input now carries substitutes). A prune-only
   // pass also reports `compacted:true` (pressure resolved without an LLM call).
   pruned?: boolean
+  /** M73: WHY a pass that did not compact did not. Today `compacted:false` has
+   * four producers (no shadowable region, a summarizer failure, and two engine
+   * early exits) and they were indistinguishable to every consumer — the CLI
+   * reported the summarizer's failure as "nothing to compact". Absent on the
+   * arms that carry no reason (they are pre-M73 behavior, unchanged). */
+  reason?: "summarizer-failed"
 }
 
 export interface CompactionEngine {
@@ -187,7 +193,7 @@ export function createCompactionEngine(deps: {
       // one space — the single template below is that same byte sequence.
       d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${err instanceof Error ? err.message : String(err)}`)
       emit("failure", { attempts: attemptsTracker.count })
-      return { compacted: false, shadowedSeqs: [] }
+      return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
