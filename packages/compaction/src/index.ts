@@ -138,6 +138,28 @@ export function createCompactionEngine(deps: {
         return { compacted: true, shadowedSeqs: [], pruned: true }
       }
     }
+    // M78 §1.1: the marker lands HERE — after the plan, BEFORE the summarizer's
+    // prefix is built — instead of only after the summary succeeded (the pre-M78
+    // site, further down this function). Same append, same event shape, one
+    // position earlier; the prune-only path above keeps its own append (it
+    // returns before any summary is attempted). Two consequences: a fold of the
+    // WHOLE log taken during the attempt (the success telemetry's `tokensAfter`,
+    // and anything else a host reads meanwhile) is pruned, and a FAILED attempt
+    // leaves the prune on the log — see the note at the `failure` emission.
+    //
+    // MEASURED CAVEAT — the M78 finding of 2026-09-24, recorded rather than
+    // smoothed over: this move does NOT by itself prune the summarizer's PREFIX.
+    // `deriveMessagesUpTo(session, lastShadowed)` folds the log filtered to
+    // `seq <= maxSeq` (`core-session/src/index.ts:455-457`), and `append` gives
+    // every new event the HIGHEST seq (`:353`) — so the marker can never be at or
+    // below the region's last shadowed seq and is dropped from that fold. Probe
+    // on this tree's own fixture (retainTokens 500 and 0 alike): lastShadowed
+    // 104 / 109 vs markerSeq 110; `deriveMessages` sees the substitute,
+    // `deriveMessagesUpTo` does not. Making the prefix pruned needs that
+    // truncation to keep `compaction/prune` markers as well — one line in
+    // core-session, measured green (105/105 here, 95/95 there) and deliberately
+    // NOT taken without the controller's ruling.
+    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     // R-B2: a CONFIGURED summarization model WINS over `deps.model` — deliberate,
     // not the silent exception this unit exists to remove. `deps.model` is the
@@ -212,10 +234,22 @@ export function createCompactionEngine(deps: {
       // and the first carries no `%` specifier, so `util.format` joined them with
       // one space — the single template below is that same byte sequence.
       d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${err instanceof Error ? err.message : String(err)}`)
+      // M78 §1.1 — the deliberate consequence of moving the marker: a FAILED
+      // summary now leaves the prune APPLIED (it was appended above, before the
+      // attempt) and nothing can undo it, because the log is append-only. That
+      // is a choice, for three reasons: prune is safe (it swaps an old tool
+      // output for a substitute, nothing more), it is a net win for the next
+      // attempt (the tokens are already saved), and the ladder's next rung
+      // retries anyway. The RESULT SHAPE does not follow it: `compacted:false`
+      // is what the breaker counts, and a failing summarizer must keep counting
+      // as a failure, or the breaker stops protecting the model from being
+      // hammered — so no `pruned` field, no `compacted:true`. (An odd
+      // combination, named rather than smoothed over: the log changed while the
+      // result says the pass failed.) Pinned by "M78: a summarizer failure
+      // leaves the prune APPLIED — the log is append-only" in test/prune.test.ts.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
-    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
