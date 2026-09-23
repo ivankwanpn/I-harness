@@ -96,14 +96,22 @@
 1. **不保證拒絕的「種類」可見**：seam 只有一個位元 ⇒ 使用者知道「被擋」，但**不知道**是安全過濾、版權、還是護欄。**代價明說**：要分辨就得把五家的詞彙帶進 seam，而那與 M72 Ⅱ 的約束衝突。若日後要種類，正確的做法是**再分一層語意類別**（例如 `refused: "content" | "policy"`），不是搬字面。
 2. **不保證每一家都真的送得出那個字面**（沒有真 provider 的請求被跑過；fixture 是 wire 文件形狀）。
 3. **不保證 CLI 之外的前端看得見**（今天的反應面只有 stderr 與 `result.refused`）。
+4. **不保證「非內容」的空結束也可見**（終審的 out-of-scope 讀數，**本階段只收內容／政策的拒絕**）：gemini 的其他停止原因（`MALFORMED_FUNCTION_CALL`、`MALFORMED_RESPONSE`、`UNEXPECTED_TOOL_CALL`、`TOO_MANY_TOOL_CALLS`、`NO_IMAGE`、`IMAGE_OTHER`、`ESCALATION`、`PUP_LIMITED_DISABLED`、`OTHER`、`FINISH_REASON_UNSPECIFIED`）**仍然以 HTTP 200 ＋ 空內容結束 ⇒ 仍然是靜默的空成功**——**與本階段要消滅的症狀同一類**。它們不是內容／政策的拒絕（見 §5 的原則），但**這個缺口是真的**，具名為後續單位。
+5. **不保證 anthropic 的 context 臂只是「出現」**（Task 3 的終審量到，**原文沒寫**）：`stop_reason: "model_context_window_exceeded"` 現在發一個**終止的 error** ⇒ `core-agent` 的 `case "error"` 會 throw ⇒ **這一輪整個失敗、CLI exit 1**，而 M77 之前同一個回應是「空成功、exit 0」。**這個改變是刻意的**（大聲失敗勝過靜默），但它是**使用者看得見的行為改變**，所以寫在這裡。
 
 ## 5. 殘餘（寫出來，不是藏起來）
 
+**原則（終審逼出來的，寫下來以免下次重新發明）**：**位元用在「提供者因為內容／政策而不產出」；能力或可用性的限制走錯誤通道**（anthropic 的 context 上限就是這樣處理的，用的是**既有**的碼）。**沒有現成碼的，就具名，不新造詞彙。**
+
 - **`EMPTY_RESPONSE` 沒有生產者**（`llm-seam:47`、`:93`；本階段不動）。
-- **拒絕之後的行為是產品決定**：重試？換模型？把拒絕回報給使用者、還是當成一次普通的空回合？（本階段只讓它**可見**。）
-- **`model_context_window_exceeded` 只到「出現」**：預算階梯沒有消費它（那是 M75 的地盤，且需要一條把「提供者說的」與「我們估的」對齊的設計）。
-- **其他家的對等字面未查**：bedrock 的 `guardrail_intervened` 已認，但**其他**停止原因（例如 bedrock 的其他 guardrail 形狀、gemini 的 `OTHER`）沒有逐一查證。
+- **拒絕之後的行為是產品決定**：重試？換模型？把拒絕回報給使用者、還是當成一次普通的空回合？（本階段只讓它**可見**。**未定案**：一個驅動 CLI 的腳本仍然**分不出**拒絕與成功，除非它去解析 stderr。）
+- **`model_context_window_exceeded` 到「出現」為止**（而且**會弄死整個 run**，見 §4.5）：預算階梯沒有消費它。
+- **gemini 的界線**：22 個停止原因裡，**6 個**（`SAFETY`／`RECITATION`／`PROHIBITED_CONTENT`／`BLOCKLIST`／`SPII`／`IMAGE_SAFETY`／`IMAGE_PROHIBITED_CONTENT`／`IMAGE_RECITATION` 這一組）被判為內容／政策 ⇒ 設位元；`OTHER`、`LANGUAGE`、`ESCALATION`、`PUP_LIMITED_DISABLED` 與各種 `MALFORMED_*`／影像原因**不設**（能力或語意不明 ⇒ 照上面的原則），**而它們仍然靜默**（§4.4）。**`LANGUAGE` 的排除有一個更正過的註解理由**：廠商說它是**回應側**的旗標（「因為用了不支援的語言而被標記」），不是請求側的約束——終審量到並更正了實作時寫錯的那句。
+- **`delta.refusal` 的伴隨形狀不可查**（兩個 OpenAI 文件站從這個環境都 403；**不影響正確性**——位元看的是欄位本身，不是 `finish_reason`）。
+- **`refusal: ""` 的邊界未測**：compat 的規則是「欄位是字串就設位元」，所以一個**總是**送空字串的 gateway 會把每一個回應都標成拒絕。廠商型別說 `null` 才是「沒有拒絕」，但沒有明文禁止 `""`，而測試也沒蓋。**保留現狀的理由**：空訊息的拒絕**仍然**是拒絕（拿 `length > 0` 會漏掉它），而 gateway 不守規範是**看得見**的問題、可以量了再處理。
+- **`llm-seam` 的 JSDoc 仍是「一家一個載體」的寫法**（gemini 只列 `SAFETY`/`RECITATION`、compat 只列 `content_filter`）：不假，但**已經不完整**（本階段自己加了載體）。下次動那個檔案時一起收。
 - **`truncated` 與 `refused` 可能同時**嗎？（一個回應既被截斷又被擋）本階段**不假設互斥**，兩個位元各自獨立寫。
+- **`response.completed` 的 `output[]` 故意不讀成第四個載體**（項事件總是先帶同一個部分）——**stated boundary，不是量測過的 wire**。
 
 ## 6. 取樣與自創
 
