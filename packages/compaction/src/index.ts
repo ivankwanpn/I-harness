@@ -169,6 +169,12 @@ export function createCompactionEngine(deps: {
       const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix, {
         ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
+        // The host-known charge the session log does not carry — the SAME one
+        // the session's own clamp adds to its input price (core-agent:
+        // `estimateContent(messages) + overheadTokens`). The summarizer's
+        // request carries the system prompt and tool schemas too. Resolved
+        // (default 0), so it is passed as a value, not as a spread.
+        overheadTokens: config.overheadTokens,
       })
       summary = result.text
       attempts = attemptsTracker.count

@@ -174,8 +174,10 @@ export async function summarizeWithModel(
   prefix?: { systemPrompt: string; tools: ToolSchema[]; messages: LLMMessage[] },
   /** M73: the request's OWN budget. `maxOutputTokens` is the model's resolved
    * cap (the chain's value, anthropic's required fallback included);
-   * `contextWindow` is what the engine resolved. Both optional — absent
-   * means the request carries no cap, exactly as before.
+   * `contextWindow` is what the engine resolved; `overheadTokens` is the
+   * host-known charge the session log does not carry (system prompt + tool
+   * schemas) that the clamp must add to the input it prices. All optional —
+   * absent means the request carries no cap, exactly as before.
    *
    * NOT `CompactionConfig.maxTokens`, which stays the 3rd argument and keeps
    * its meaning: a post-hoc CHARACTER slice of the accepted summary
@@ -184,7 +186,7 @@ export async function summarizeWithModel(
    * the truncated text still clears `minSummaryChars`, so the next round's
    * anchored summary would be built on the stump. This one is a token ceiling
    * on the request; the two are different quantities and different arguments. */
-  limits?: { maxOutputTokens?: number; contextWindow?: number },
+  limits?: { maxOutputTokens?: number; contextWindow?: number; overheadTokens?: number },
 ): Promise<{ text: string; attempts: number }> {
   let attempts = 0
   let lastLength = 0
@@ -202,6 +204,14 @@ export async function summarizeWithModel(
     // requests go through (llm-seam), applied HERE because this request is
     // built here and nowhere else. Absent cap ⇒ absent key: a default would be
     // a number nobody chose.
+    //
+    // The input is priced the way the session's own clamp prices it
+    // (core-agent: `estimateContent(messages) + overheadTokens`): this request
+    // really does carry `prefix.systemPrompt` and `prefix.tools`, which the
+    // session log does not, so charging the messages alone would under-price
+    // the input and make the room the clamp promises too generous — the exact
+    // overrun the clamp exists to prevent. `?? 0` for a caller that hands no
+    // overhead; the engine always resolves a number.
     const cappedRequest: LLMRequest = limits?.maxOutputTokens === undefined
       ? request
       : {
@@ -209,7 +219,7 @@ export async function summarizeWithModel(
           maxOutputTokens: clampOutputCap(
             limits.maxOutputTokens,
             limits.contextWindow,
-            estimateContent(request.messages),
+            estimateContent(request.messages) + (limits.overheadTokens ?? 0),
           ),
         }
     let out = ""
