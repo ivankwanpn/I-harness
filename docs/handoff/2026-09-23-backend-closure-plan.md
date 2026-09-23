@@ -27,7 +27,7 @@
 |---|---|---|---|
 | **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成並合併**（**PR #12 → `c4c78f41`**；`m76`；閘門 **3083／433** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
 | **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成**（`m77`；閘門 **3118／432** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
-| **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ☐ |
+| **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ✅ **完成**（`m78`；紀錄 `docs/handoff/2026-09-24-m78-prune-before-summarise.md`。**兩個部分**：標記移到 fold 之前＋`deriveMessagesUpTo` 的 seq 濾網對 prune 破例（後者才是有效的——控制器原本的設計被量測推翻）；checkpoint **接受**並記數字。**留下的兩件**：快取那一側未量、五處過期的快取簡寫） |
 | **M79** | **⑤覆蓋率補齊** ＋ 三件被指派進來的（見下） | M–L | ☐ |
 | **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | ☐ |
 
@@ -46,6 +46,8 @@
 1. **`telemetry/test/manifest.test.ts` 的執行期那一半是同義反覆**（M77 的 F1；`codes` 是從 manifest 建的 ⇒ 加了型別卻忘了 manifest 列**沒有任何東西守著**）。修法＝型別級的 `Missing extends never` 斷言（要動既有斷言 ⇒ 只能由允許動它的單位做）。
 2. **reachability 儀器的「註解盲點」**（**M77 與 M78 各觸發一次**：`retryErrorCode`、`derivePruneSubstitutes`；兩次都由對照實驗證明，兩次都只靠**改註解**繞過）。**病在儀器**：它的「這個 export 被用了嗎？」是**對 production 檔的文字比對**，所以任何**別套件**的註解提到那個名字都會讓一列真話消失——那是這棵樹唯一的未消費表面發現器裡的**偽陰性**。修法＝比對前**剝掉註解**（`//` 與 `/* */`），讓那個危害類別消失，而不是永遠靠人工繞。
 3. **`docs/CAPABILITIES-DETAIL.md:295` 說 telemetry 詞彙是「19 行」**而 manifest 已有 **23** 列（**第三次**遺漏：`provider/usage`、`provider/truncated`、`provider/refused`）。
+
+**2.45 一個 M78 留下的量測（候選，很小但會決定一個取捨）**：**摘要請求的快取那一側沒有量**。「先 prune 再折」（M78）讓摘要請求少了 **3 717 個 token**，代價是**它與「上次送出的主請求」在第一個被 prune 的輸出處分岔** ⇒ 從那裡起是全額而不是快取讀價。**量法**：一個**有快取的**轉接器上的 `cacheReadTokens`（`provider/call` 已經在報它）修前／修後各一次。**但這棵樹從未發過真 provider 的請求**（既有的殘餘）⇒ 這條要嘛等一個真讀數，要嘛明說接受。**紅利那一側已經量到且是壓倒性的**：超窗時 2 個請求 → 1（切塊路徑的冷讀遠貴於一次全額讀）。
 
 **2.5 一個 M77 量到的新缺口（候選單位，**不是**原本五個之一）**：**「非內容」的空結束仍然靜默。** M77 只收**內容／政策**的拒絕；gemini 的其他停止原因（`MALFORMED_FUNCTION_CALL`／`MALFORMED_RESPONSE`／`UNEXPECTED_TOOL_CALL`／`TOO_MANY_TOOL_CALLS`／`NO_IMAGE`／`IMAGE_OTHER`／`ESCALATION`／`PUP_LIMITED_DISABLED`／`OTHER`／`FINISH_REASON_UNSPECIFIED`）**仍然以 HTTP 200 ＋ 空內容結束 ⇒ 靜默的空成功**——**與 M77 要消滅的症狀同一類**。處置選項：**(a)** 把「有欄位但沒有內容」的一般情形也變成可見（一個 `provider/empty` 的 telemetry ＋ CLI 行，與 `truncated`/`refused` 同形狀——**這是最一般、最省的做法**）；**(b)** 逐家逐字面收（22 個原因，很細很貴）；**(c)** 明說接受。**控制器傾向 (a)**：它不判語意、只說「提供者送了一個空的成功」，而**那正是使用者看不到的那件事**。**留待 M79 之後或與 M80 一起判定。**
 
