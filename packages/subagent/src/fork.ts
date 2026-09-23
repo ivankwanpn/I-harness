@@ -13,20 +13,28 @@ import { remapSeedEvent } from "@i-harness/session-persistence"
  * received. `append` only rewrites an event's own `seq`, never the seqs it
  * NAMES — which is exactly why this pass has to exist here.
  *
- * ONE reference is OUT of that contract, explicitly: `rewind/point`'s
- * `anchorSeq`, which `remapSeedEvent`'s fallthrough leaves in the PARENT's
- * coordinates (it rewrites `seq` and nothing else). A seed carrying a rewind
- * marker therefore locates its cut window wrongly, and the error direction is
- * UNDER-hiding — the stale anchor is never below the child-side one, so the
- * window `rewindCuts` resolves is a subset of the correct one and part or all
- * of the rewound region can stay VISIBLE in the child (and when the anchor
+ * M76: `anchorSeq` WAS the one reference out of that contract — the fallthrough
+ * rewrote `seq` and left the anchor in the PARENT's coordinates, so a seed
+ * carrying a rewind marker located its cut window wrongly, and the error
+ * direction was UNDER-hiding: the stale anchor is never below the child-side one,
+ * the window `rewindCuts` resolves is a subset of the correct one, and part or
+ * all of the rewound region could stay VISIBLE in the child (when the anchor
  * lands at or past the marker's child-side seq, `rewindCuts` drops the window
- * entirely — `anchorSeq >= seq`). Milder than the silent content loss the
- * renumbering above closed, and pre-existing: the session fork shares the same
- * fallthrough but resolves this differently — it DROPS the rewind markers
- * (packages/session-persistence/src/fork.ts:115-120, filter at :150-151). Which
- * rule should hold for `forkTurns` is a decision for whoever next touches it,
- * not this branch. */
+ * entirely — `anchorSeq >= seq`). It is the same KIND of reference the three
+ * above are — it names a seq — so it now rides the same map. One boundary is
+ * worth naming: an anchor this seed never received (the slice begins INSIDE the
+ * window the marker opened, so nothing on this side can be its target) opens the
+ * window on the child's FIRST event — everything this child owns before the
+ * marker was hidden on the parent's surface, and a stale parent coordinate would
+ * instead name an unrelated event here.
+ *
+ * The session fork resolves the same marker the other way, and still does: it
+ * DROPS rewind markers (packages/session-persistence/src/fork.ts:115-120, filter
+ * at :150-151), because its child never had the rewound turns at all — copying a
+ * marker there would assert a window over a region that log does not contain.
+ * This path keeps it (the slice is a contiguous tail of the parent's log, so the
+ * events it hides can be in it), which is why the reference has to MOVE here
+ * rather than vanish. */
 export function forkTurns(events: SessionEvent[], n: number): SessionEvent[] {
   const seed = sliceTurns(events, n)
   // Every return path goes through the remap, including the untouched ones: for
