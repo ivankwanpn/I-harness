@@ -496,15 +496,22 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
       requestShape: () => SHAPE, maxOutputTokens: 50_000,
     }).compact(s)
 
-    // Non-vacuity guard: a pass that failed soft appends nothing either, so
-    // "no marker mid-pass" would be green while proving nothing. The pass must
-    // have run to completion for the zero below to mean anything.
+    // Non-vacuity guard: a pass that failed soft would leave the counts at 0
+    // too, so "no marker mid-pass" would be green while proving nothing. The pass
+    // must have run to completion for the zero below to mean anything.
+    //
+    // M78, named here so this guard is not read as the broader pre-M78 claim: "a
+    // failed pass appends nothing" no longer holds in general — a pass that
+    // PRUNED leaves its `compaction/prune` marker behind before the attempt
+    // (test/prune.test.ts pins that). THIS fixture has nothing over the prune
+    // threshold, so no prune marker is in play either way; what the zero below
+    // measures is the summary trio's atomicity.
     expect(result.compacted).toBe(true)
     expect(counts.length).toBeGreaterThan(1)
     expect(counts.every((n) => n === 0)).toBe(true)
   }, 30_000)
 
-  it("M75: a failure in a middle piece is still atomic — nothing appended, reason says so", async () => {
+  it("M75: a failure in a middle piece appends none of the summary trio — reason says so", async () => {
     const s = toolSession()
     let call = 0
     const model: ModelClient = {
@@ -521,7 +528,15 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
 
     expect(result.compacted).toBe(false)
     expect(result.reason).toBe("summarizer-failed")
-    expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+    // M78 NARROWED this claim, and the narrowing is the assertion: pre-M78 a
+    // failed pass appended nothing at all, while since the prune marker moved
+    // before the attempt a pass that PRUNED leaves it behind (§1.1, pinned by
+    // "a summarizer failure leaves the prune APPLIED — the log is append-only").
+    // This fixture has nothing over the prune threshold, so no prune marker can
+    // appear here — but the property this case must go on proving is the SUMMARY
+    // trio's atomicity: no `start` / `summary` / `end` on the failure path. A
+    // mutant that appends any of the three on failure reddens this line.
+    expect(s.events.some((e) => e.type === "compaction/start" || e.type === "compaction/summary" || e.type === "compaction/end")).toBe(false)
   }, 30_000)
 
   // Ruling 12: the ORDINARY case with the gate OPEN — cap present, request

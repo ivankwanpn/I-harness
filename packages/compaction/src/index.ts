@@ -70,12 +70,29 @@ export function createCompactionEngine(deps: {
   modelId?: string          // M15: the resolved model id for catalog lookup
   provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
   telemetry?: Telemetry     // M34 ⑦b: optional host stream (M25 convention — absent = zero events)
-  /** M5/D2: the shape the main loop sends, read AT COMPACT TIME so it matches
-   * the last request rather than whatever was true at construction. Present →
-   * the summarizer's call becomes a byte-prefix of the main request and the
-   * provider's cache serves the whole conversation instead of charging full
-   * price for it. Absent → the legacy text form, unchanged: without the shape
-   * the bytes cannot match, so there is no reuse to lose. */
+  /** M5/D2: the shape the main loop sends, read AT COMPACT TIME rather than
+   * whatever was true at construction. Present → the summarizer replays the
+   * region as REAL messages, so its request is a LEADING SLICE of the fold the
+   * main path would send at that moment, byte for byte up to the region's
+   * block-aligned cut. M78 holds that identity across a prune, and it is the
+   * POST-MARKER fold that the prefix matches: the `compaction/prune` marker is
+   * on the log before this fold is taken and the seq filter keeps it visible, so
+   * prefix and main fold substitute the same old tool output. The move ALONE
+   * would break exactly this — the marker lands past the region's cut, and the
+   * prefix shows the RAW output where the main fold shows the substitute.
+   * Absent → the legacy text form, unchanged: without the shape the bytes cannot
+   * match, so there is no reuse to lose.
+   *
+   * It is NOT a byte-prefix of the LAST SENT main request any more, and the
+   * cache side is a trade this unit did not measure — stated, not repaired.
+   * Pre-M78, at the moment of the pass, the replayed messages WERE
+   * byte-identical to that last request (the marker that changes the fold is
+   * appended only after the attempt), so the provider's automatic prefix cache
+   * could serve them at the cached-read price. Post-M78 the replayed prefix
+   * diverges from that cached content at the first newly-pruned output:
+   * everything after it is billed at the full rate, while the pruned bytes are
+   * not sent at all. Which side wins depends on the cache discount and on where
+   * the pruned output sits. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
   /** M73: the model's resolved output cap, handed down from core-agent's deps
    * — the layer that resolved it. Absent → the summarizer's request
@@ -260,9 +277,18 @@ export function createCompactionEngine(deps: {
       // `compaction/prune` marker (nothing dedupes against the markers already
       // on the log). That is content-idempotent — the substitute map derived
       // from the markers is last-wins per tool call id, so the projection is
-      // unchanged — and the number of repeats is bounded by the breaker.
-      // Deliberately left alone; a dedupe would be a second place that decides
-      // what a prune means.
+      // unchanged — and the number of repeats is bounded by the breaker on the
+      // AUTO path ONLY. The in-tree path that actually retries a failed
+      // summarizer is UNGATED instead: core-agent's `enforceBudget` layer 1 calls
+      // `compact()` at every step boundary while the surface is over budget, and
+      // `compact()` consults no gate — so each such retry re-appends. The cost a
+      // dedupe would buy down: every duplicate re-serialises the whole carve
+      // (4096 head + 1024 tail chars — measured on the big-output fixture in
+      // test/prune.test.ts, one record's marker JSON is 5 180 bytes), so a
+      // summarizer that keeps failing under budget pressure grows the durable log
+      // until the ladder's NEXT layer (the reset, or the fail-closed throw) ends
+      // the cycle — not the breaker. Deliberately left alone; a dedupe would be a
+      // second place that decides what a prune means.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }

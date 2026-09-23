@@ -255,9 +255,13 @@ const M78_CONFIG: CompactionConfig = { contextWindow: 20_000, thresholdRatio: 0.
 /** The M78 fixture: one OLD tool/result the prune plan hits (its stringified
  * output is far over the 8192-char threshold) sitting INSIDE the shadowed
  * region, then a long tail of small messages that keeps the region selectable
- * with the retention boundary behind the big result. Measured with a
- * `requestShape` (case 1): the raw prefix fold prices 15 390 tokens; the same
- * fold with the marker on the log prices 11 744 — the difference is the 3 717
+ * with the retention boundary behind the big result. FOLD and REQUEST are
+ * different quantities and are labelled: the request is the fold plus the
+ * 449-token summarizer directive. Measured with a `requestShape` (case 1), all
+ * four on this one fixture: the raw prefix FOLD prices 14 941 tokens and its
+ * REQUEST 15 390; with the marker on the log the pruned fold prices 11 224 and
+ * the pruned request 11 673. Fold-to-fold (14 941 → 11 224) and
+ * request-to-request (15 390 → 11 673) alike, the difference is the 3 717
  * tokens the prune planned to save and used to bill anyway. */
 function m78Session(outputChars = BIG) {
   const s = createSession()
@@ -295,14 +299,24 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
   })
 
   // The M5/D2 property ITSELF, with a prune marker in play — worth more than the
-  // token count, because this is what the region replay exists for: the
-  // summarizer's request must be a leading slice of the main request, byte for
-  // byte, so the provider's cache serves the whole conversation instead of
-  // charging full price. A marker the prefix fold cannot see breaks that identity
-  // at exactly the shared position — the main fold substitutes the old tool
-  // output, the prefix shows it RAW, and every later message misses the cache
-  // behind it. (The M5/D2 case in summarizer-prefix.test.ts cannot see this: its
-  // fixture has no prune markers.)
+  // token count, because this is the identity the region replay exists to keep:
+  // the summarizer's request must be a leading slice of the main fold taken at
+  // the SAME moment — the post-marker fold the main path would send next — byte
+  // for byte. A marker the prefix fold cannot see breaks that at exactly the
+  // shared position: the main fold substitutes the old tool output, the prefix
+  // shows it RAW, and the two disagree from there on. (The M5/D2 case in
+  // summarizer-prefix.test.ts cannot see this: its fixture has no prune markers.)
+  //
+  // What this is NOT, post-M78: a byte-prefix of the last SENT main request.
+  // Here the replayed bytes and that request diverge at the first newly-pruned
+  // output — the request that was actually sent carried the RAW output. Pre-M78
+  // they were byte-identical at this moment (the marker that changes the fold is
+  // appended only after the attempt), so the provider's automatic prefix cache
+  // could serve the replayed messages at the cached-read price; now everything
+  // past the divergence is billed at the full rate, while the pruned bytes are
+  // not sent at all. Which side wins depends on the cache discount and on where
+  // the pruned output sits, and M78 measured neither — a consequence of landing
+  // the marker before the fold, not a cache repair.
   //
   // The main fold is captured INSIDE the model call, so it is the one the main
   // path would send at THAT moment: the prune marker is on the log, the summary

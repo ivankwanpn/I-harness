@@ -22,7 +22,8 @@ import { estimateContent } from "@i-harness/token-meter"
  * is a candidate only while that set is empty. A `tool` message is normally
  * adjacent to the `assistant(toolCalls)` it belongs to, but the M14
  * tool-result-images shape puts a synthetic `user` message BETWEEN a block's
- * results (`core-session/src/index.ts:578-585`), so without this the cut would
+ * results (core-session's `deriveMessages`, the `tool/result` arm's
+ * `Array.isArray(images)` branch), so without this the cut would
  * leave a piece carrying `tool` with its call behind — the orphan the provider
  * rejects. The guard comes from the same fold the pieces come from, so it cannot
  * drift, and it is what aligns the PIECE boundaries: a cut it admits falls
