@@ -30,6 +30,57 @@ describe("fork.ts", () => {
     expect(last.some((e) => (e as { text?: string }).text === "b")).toBe(true)
     expect(last.some((e) => (e as { text?: string }).text === "a")).toBe(false)
   })
+
+  // M74: the slice used to be handed over VERBATIM, so a parent's compaction
+  // marker carried the PARENT's seq numbers into a log that starts at 0. With
+  // "all" the indices coincide and nothing shows; with N they name unrelated
+  // events — and a `compaction/summary`'s shadowedSeqs would hide the child's
+  // OWN turn, including the summary itself. The fix is the same remap the
+  // session-fork path has always done (session-persistence's remapSeedEvent).
+  it("M74: a parent's compaction marker is remapped into the child's coordinates", () => {
+    const events: SessionEvent[] = []
+    // `seq` is assigned by `append` in production (core-session:353) and the remap
+    // is a function of those numbers — so this unit test gives each event the same
+    // dense 0..n-1 the real log would carry.
+    const push = (type: string, extra: Record<string, unknown> = {}) =>
+      events.push({ type, seq: events.length, ...extra } as SessionEvent)
+    push("turn/start"); push("user/message", { text: "a" }); push("assistant/message", { text: "A" }); push("turn/end")
+    // The parent compacted while its second turn was in flight: this summary
+    // shadows the four events above. It sits AT a step boundary inside that turn
+    // — `maybeCompact` runs between steps, never between turns (core-agent:283-285)
+    // — which is also the only position from which a marker can be inside a
+    // `forkTurns` slice at all: a slice always BEGINS at a `turn/start`, so a
+    // marker emitted just before the window's first turn (the manual-compaction
+    // position) is not carried into the child.
+    push("turn/start"); push("user/message", { text: "b" })
+    push("compaction/summary", { version: 1, text: "S", shadowedSeqs: [0, 1, 2, 3] })
+    push("assistant/message", { text: "B" }); push("turn/end")
+
+    const seed = forkTurns(events, 1) // the last turn — the slice starts at index 4
+
+    // the marker rides along (it is not a cut), but the four events it named are
+    // NOT in this child: those references have no target and are dropped — left
+    // alone they would name THIS child's first four events and hide its own turn.
+    expect(seed[2]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [] })
+    // every event is renumbered into the child's coordinates (seq === index)
+    expect(seed.map((e) => e.seq)).toEqual([0, 1, 2, 3, 4])
+    expect(seed.map((e) => e.type)).toEqual([
+      "turn/start", "user/message", "compaction/summary", "assistant/message", "turn/end",
+    ])
+  })
+
+  it("M74: a marker whose region IS in the child keeps its references, in child coordinates", () => {
+    const events: SessionEvent[] = []
+    const push = (type: string, extra: Record<string, unknown> = {}) =>
+      events.push({ type, seq: events.length, ...extra } as SessionEvent)
+    push("turn/start"); push("user/message", { text: "a" }); push("assistant/message", { text: "A" }); push("turn/end")
+    push("compaction/summary", { version: 1, text: "S", shadowedSeqs: [0, 1] })
+    push("turn/start"); push("user/message", { text: "b" }); push("assistant/message", { text: "B" }); push("turn/end")
+
+    const seed = forkTurns(events, 2) // the whole log: nothing is dropped
+
+    expect(seed[4]).toMatchObject({ type: "compaction/summary", shadowedSeqs: [0, 1] })
+  })
 })
 
 describe("spawnChild", () => {

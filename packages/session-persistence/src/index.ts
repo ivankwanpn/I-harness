@@ -13,6 +13,7 @@ export { resolveSessionStoreRoot } from "./store-root.ts"
 export { repairTurnTail, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_ABORTED_RECOVERY_RESULT } from "./repair.ts"
 export {
   forkSession,
+  remapSeedEvent,
   type ForkSessionOptions,
 } from "./fork.ts"
 
