@@ -75,4 +75,31 @@ describe("llm-mock", () => {
     for await (const ev of createMockClient([{ role: "assistant", text: "partial", truncated: true }]).stream({} as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end", truncated: true })
   })
+
+  // M77: the refusal bit, deliberately the same shape as M72 Ⅱ's `truncated`
+  // above. The mock makes NO wire judgement — each adapter owns its own literal
+  // (`content_filter`/`SAFETY`/`refusal`/`guardrail_intervened`); the mock only
+  // carries the seam's semantic bit, because a `MockStep` is the only way a
+  // consumer's refusal path can be driven end-to-end without a provider.
+  it("M77: a mock step can end refused, and an unset step stays absent", async () => {
+    const refused: LLMStreamEvent[] = []
+    for await (const ev of createMockClient([{ role: "assistant", text: "", refused: true }]).stream({} as LLMRequest)) refused.push(ev)
+    expect(refused.at(-1)).toEqual({ type: "end", refused: true })
+
+    // The control half: an unset step yields the literal this file yielded
+    // before the field existed — absent stays absent, never `refused: false`.
+    const clean: LLMStreamEvent[] = []
+    for await (const ev of createMockClient([{ role: "assistant", text: "ok" }]).stream({} as LLMRequest)) clean.push(ev)
+    expect(clean.at(-1)).toEqual({ type: "end" })
+    expect(clean.at(-1)).not.toHaveProperty("refused")
+  })
+
+  // M77 design §5: the two bits are INDEPENDENT — a response can be both capped
+  // and refused — so neither may be written as the other's `else`. This is what
+  // forbids the nested-ternary shape `truncated ? A : B` from being extended.
+  it("M77: `refused` and `truncated` are independent bits", async () => {
+    const both: LLMStreamEvent[] = []
+    for await (const ev of createMockClient([{ role: "assistant", text: "partial", truncated: true, refused: true }]).stream({} as LLMRequest)) both.push(ev)
+    expect(both.at(-1)).toEqual({ type: "end", truncated: true, refused: true })
+  })
 })
