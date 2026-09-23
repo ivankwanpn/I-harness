@@ -1192,4 +1192,45 @@ describe("the child's request carries the resolved budget", () => {
       { role: "assistant", content: "child done" },
     ])
   }, 15_000)
+
+  // M74 Task 4: the NEGATIVE half of the child-compactor contract. The two
+  // cases above need a window; this one pins what happens without one — the
+  // child cannot compact, and nothing invents a window to let it. Both keys
+  // (`budget`, `compact`) are gated on the same `contextWindow !== undefined`,
+  // so the absence is single-sourced at both write sites (child.ts's spawn and
+  // tools.ts's rebuild).
+  // KILLED BY (measured): writing the key unconditionally at the spawn
+  // (`compact: { contextWindow: contextWindow!, … }`) — the spawn does not
+  // reach the assertions at all, it REJECTS: compaction's `resolveConfig` runs
+  // at engine construction (`createCompactionEngine` :90 → `resolveCompactSpec`
+  // :184 → `resolveConfig` config.ts:104) and throws `compaction: contextWindow
+  // must be a positive integer (got undefined)` out through `createAgent`
+  // (core-agent :186) and `spawnChild` (child.ts:346). So the gate is enforced
+  // TWICE over: nothing is written when there is no window, and a window that
+  // did slip through as `undefined` could not build an engine at all.
+  it("M74: with no window there is no compactor — absent stays absent", async () => {
+    const f = spawnFixture()
+    const requests: LLMRequest[] = []
+    const client: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "child done" }
+        yield { type: "end" }
+      },
+    }
+    const { path, jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: client, resolveModel: noRoleModel,
+      jobs: f.jobs, table: f.table, agents: f.agents, // no contextWindow, no maxOutputTokens
+    })
+    await settled(f.jobs, jobId)
+
+    // no window ⇒ no `budget` ⇒ the ladder never runs ⇒ no `compact` either:
+    // the child cannot compact, and nothing invents a window to let it.
+    const childSession = f.table.get(path)!.session
+    expect(childSession.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+    expect(requests).toHaveLength(1)
+  }, 10_000)
 })
