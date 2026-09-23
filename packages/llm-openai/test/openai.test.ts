@@ -516,6 +516,103 @@ describe("M72 Ⅱ: the truncation bit (openai)", () => {
   })
 })
 
+// M77 (fix wave). The Responses wire has a SECOND refusal shape, and this one is
+// not a stop reason at all: the refusal arrives as a CONTENT PART — openai-node's
+// `ResponseOutputRefusal`, `{ type: "refusal", refusal: string }` — so
+// `response.incomplete` never fires, no `output_text` part is ever filled, and
+// the stream ends `response.completed`. The adapter read none of it: HTTP 200,
+// no text, no bit, an empty assistant message and a silent CLI — the empty
+// SUCCESS M77 exists to remove, on the shape most OpenAI refusals take.
+//
+// The carriers are read separately and each is tested alone, because at this
+// layer none of them implies another: the part's OWN events
+// (`response.refusal.delta`/`.done`), the part nested under `part` in
+// `response.content_part.added`/`.done`, and the part in a finished item's
+// `content` array. The refusal's TEXT is deliberately never promoted into
+// assistant text (a parked product decision) — only the bit is set.
+describe("M77 (fix wave): the refusal content part (openai)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  const refusal = "I'm sorry, but I can't help with that."
+  const sseFrom = (frames: unknown[]): string => `${frames.map((f) => `data: ${JSON.stringify(f)}`).join("\n\n")}\n\ndata: [DONE]`
+
+  it("M77: a refusal-only Responses stream is a refusal, and its text is not assistant text", async () => {
+    // The refusal-only stream in full: the message item opens with an EMPTY
+    // content array, the refusal part is what fills it, and no `output_text`
+    // part is ever added — which is why the stop-reason branch above sees
+    // nothing.
+    const sse = sseFrom([
+      { type: "response.output_item.added", output_index: 0, item: { type: "message", id: "msg_1", status: "in_progress", role: "assistant", content: [] } },
+      { type: "response.content_part.added", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "refusal", refusal: "" } },
+      { type: "response.refusal.delta", item_id: "msg_1", output_index: 0, content_index: 0, delta: refusal },
+      { type: "response.refusal.done", item_id: "msg_1", output_index: 0, content_index: 0, refusal },
+      { type: "response.content_part.done", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "refusal", refusal } },
+      { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_1", status: "completed", role: "assistant", content: [{ type: "refusal", refusal }] } },
+      { type: "response.completed", response: { id: "resp_1", status: "completed", output: [{ type: "message", id: "msg_1", status: "completed", role: "assistant", content: [{ type: "refusal", refusal }] }] } },
+    ])
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+    expect(events.filter((e) => e.type === "text/chunk")).toEqual([])
+  })
+
+  it("M77: a bare response.refusal.delta is a refusal", async () => {
+    const sse = sseFrom([{ type: "response.refusal.delta", item_id: "msg_1", output_index: 0, content_index: 0, delta: refusal }])
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  it("M77: the refusal part under `part` (content_part events, no refusal-delta) is a refusal", async () => {
+    const sse = sseFrom([{ type: "response.content_part.added", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "refusal", refusal } }])
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  it("M77: the refusal part inside a finished item's content (no part events, no deltas) is a refusal", async () => {
+    // The same precedent the function-call arm already guards for: some
+    // Responses streams hand the finished item over inline instead of spelling
+    // it out chunk by chunk.
+    const sse = sseFrom([{ type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_1", status: "completed", role: "assistant", content: [{ type: "refusal", refusal }] } }])
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  // The control, and it is not decoration: `response.content_part.added` fires
+  // for EVERY streamed part, `output_text` included. A check that keyed on a
+  // part being PRESENT (rather than on its `type` being `"refusal"`) would mark
+  // every ordinary turn refused — a false claim of exactly the kind the
+  // milestone's "absent stays absent" rule exists to prevent.
+  it("M77: an ordinary output_text stream through content_part events carries no refused field", async () => {
+    const sse = sseFrom([
+      { type: "response.content_part.added", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "output_text", text: "" } },
+      { type: "response.output_text.delta", item_id: "msg_1", output_index: 0, content_index: 0, delta: "hello" },
+      { type: "response.content_part.done", item_id: "msg_1", output_index: 0, content_index: 0, part: { type: "output_text", text: "hello" } },
+      { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_1", status: "completed", role: "assistant", content: [{ type: "output_text", text: "hello" }] } },
+      { type: "response.completed", response: { id: "resp_1", status: "completed", output: [{ type: "message", id: "msg_1", status: "completed", role: "assistant", content: [{ type: "output_text", text: "hello" }] }] } },
+    ])
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // exact: `refused` AND `truncated` must both be absent here.
+    expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).not.toHaveProperty("refused")
+  })
+})
+
 // M72 Ⅲ. The Responses wire reports this round-trip's usage on the
 // `response.completed` event (`response.usage`) and nowhere else — the arm used
 // to drop the whole payload. The Anthropic adapter's rules carry over verbatim:
