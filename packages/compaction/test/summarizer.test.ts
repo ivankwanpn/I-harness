@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { append, createSession } from "@i-harness/core-session"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
-import { buildSummaryPrompt } from "../src/summarizer.ts"
+import { buildSummaryPrompt, summarizeWithModel } from "../src/summarizer.ts"
 import { createCompactionEngine, resolveConfig, type CompactionConfig } from "../src/index.ts"
 
 // Spy model that records the summarizer input. `summarizeWithModel` builds the
@@ -173,5 +173,37 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
     expect(() => resolveConfig({ contextWindow: 100, minSummaryChars: -1 })).toThrow(/minSummaryChars/)
     expect(resolveConfig({ contextWindow: 100 }).minSummaryChars).toBe(500)
     expect(resolveConfig({ contextWindow: 100, minSummaryChars: 1200 }).minSummaryChars).toBe(1200)
+  })
+})
+
+// M77: an empty summarizer output has TWO causes and the message may not merge
+// them. A provider refusal (HTTP 200, no content, `end.refused`) reaching the
+// engine's fail-soft arm was reported as "summarizer returned empty output" —
+// which blames the summariser for a decision the provider made. The message
+// names the refusal when the bit is there, and is byte-identical otherwise.
+describe("M77: a refused summary request", () => {
+  const refusingModel: ModelClient = {
+    async *stream(): AsyncIterable<LLMStreamEvent> {
+      yield { type: "end", refused: true }
+    },
+  }
+  const emptyCleanModel: ModelClient = {
+    async *stream(): AsyncIterable<LLMStreamEvent> {
+      yield { type: "end" }
+    },
+  }
+
+  it("names the refusal instead of blaming an empty output", async () => {
+    await expect(summarizeWithModel(refusingModel, "shadow text", 200)).rejects.toThrow(
+      "compaction: the provider refused to produce a summary",
+    )
+  })
+
+  it("a clean empty stream keeps the pre-M77 message BYTE FOR BYTE", async () => {
+    // The control: absent stays absent. A `refused`-shaped message on this path
+    // would be a false claim, and it is what this assertion exists to catch.
+    await expect(summarizeWithModel(emptyCleanModel, "shadow text", 200)).rejects.toThrow(
+      "compaction: summarizer returned empty output",
+    )
   })
 })

@@ -75,12 +75,21 @@ export async function suggestTitle(deps: {
         : {}),
     }
     let out = ""
+    // M77: the provider can decline to produce a title (HTTP 200, no content,
+    // `end.refused`) — a different fact from "the provider answered with
+    // nothing", which is what the message below used to say.
+    let refused = false
     for await (const ev of deps.model.stream(request)) {
       if (ev.type === "text/chunk") out += ev.text
       if (ev.type === "error") throw ev.error
+      if (ev.type === "end" && ev.refused === true) refused = true
     }
     const title = normalizeTitle(out)
-    if (title.length === 0) throw new Error("empty provider title")
+    // M77: absent stays absent — without the bit this message is byte-identical
+    // to pre-M77. NOTE: the throw is swallowed by this function's own catch two
+    // lines down, so the text is a message for a reader of the source (and for
+    // whatever catches it if that ever changes), not for an operator today.
+    if (title.length === 0) throw new Error(refused ? "provider refused to produce a title" : "empty provider title")
     return { title, source: "provider" }
   } catch {
     return { title: fallbackTitle(first, deps.maxWords), source: "fallback" }

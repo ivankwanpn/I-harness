@@ -263,13 +263,27 @@ export async function summarizeWithModel(
         ? request
         : { ...request, maxOutputTokens: clampOutputCap(limits.maxOutputTokens, limits.contextWindow, priceInput(request.messages)) }
       let out = ""
+      // M77: per-call, so a refusal cannot leak into the next round's message.
+      let refused = false
       for await (const ev of model.stream(cappedRequest)) {
         if (ev.type === "text/chunk") out += ev.text
         else if (ev.type === "error") throw ev.error
-        else if (ev.type === "end") break
+        else if (ev.type === "end") {
+          if (ev.refused === true) refused = true
+          break
+        }
       }
       const trimmed = out.trim()
-      if (trimmed.length === 0) throw new Error("compaction: summarizer returned empty output")
+      // M77: an empty output has two causes, and the message may not merge them.
+      // A provider REFUSAL (HTTP 200, no content, `end.refused`) reported as
+      // "summarizer returned empty output" blames this pass for a decision the
+      // provider made — the engine's fail-soft warn quotes this text verbatim.
+      // Absent stays absent: without the bit the message is byte-identical.
+      if (trimmed.length === 0) {
+        throw new Error(refused
+          ? "compaction: the provider refused to produce a summary"
+          : "compaction: summarizer returned empty output")
+      }
       lastLength = trimmed.length
       // M75 §1.5: the floor guards the text the SESSION ends up with, so it is
       // enforced only where this call's output IS that text — the single call,

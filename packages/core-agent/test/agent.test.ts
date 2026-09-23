@@ -550,3 +550,88 @@ describe("M72 II: a truncated ending reaches the durable log and telemetry", () 
     expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(0)
   })
 })
+
+// M77: the refusal chain's middle hop, point for point the shape of the M72 Ⅱ
+// block above — the same two places (durable log, host telemetry), the same
+// "absent stays absent" discipline, and the extra one this bit owns: the empty
+// assistant message is STILL appended, because the semantics live on the field
+// and not in the text (a reader of the log must be able to tell "the model said
+// nothing" from "the provider was blocked").
+describe("M77: a refused ending reaches the durable log and telemetry", () => {
+  // Same spy shape as the M72 Ⅱ block (duplicated rather than hoisted: the
+  // existing block is a template this task must not edit).
+  function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
+    const events: TelemetryEvent[] = []
+    const telemetry: Telemetry = {
+      emit: (ev) => {
+        events.push(ev)
+      },
+      close: () => {},
+    }
+    return { telemetry, events }
+  }
+
+  it("M77: a refused step is written durably and reported as telemetry", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    // Exactly the shape a provider refusal arrives in: HTTP 200, no content, a
+    // bare `end` that only the semantic bit distinguishes from a clean ending.
+    deps.model = {
+      async *stream() {
+        yield { type: "end", refused: true }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const result = await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
+    // The same fact on the host's independent stream. `toEqual` is deliberate
+    // (the M72 Ⅱ block's reason): the payload is exactly the step it happened
+    // on — a `step` field summed elsewhere would read as a measurement it is not.
+    const reports = emitted.filter((e) => e.type === "provider/refused")
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.data).toEqual({ step: 1 })
+    // The design choice this task must HONOUR, not re-litigate (spec §1.3): the
+    // empty assistant message is still appended, and it carries no text about
+    // the refusal. The durable field above is what distinguishes the two cases.
+    const messages = deps.session.events.filter((e) => e.type === "assistant/message")
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ text: "" })
+    expect(result.finalText).toBe("")
+  })
+
+  it("M77: a clean step writes no refused field", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("refused")
+    // Absent stays absent on the host stream too — never a `false` report.
+    expect(emitted.filter((e) => e.type === "provider/refused")).toHaveLength(0)
+  })
+
+  it("M77: refused and truncated are INDEPENDENT — a step can be both", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "cut off by the filter" }
+        yield { type: "end", truncated: true, refused: true }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    // Neither bit is the other's `else`: both land on the one `step/end`.
+    expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true, refused: true })
+    expect(emitted.filter((e) => e.type === "provider/truncated")).toHaveLength(1)
+    expect(emitted.filter((e) => e.type === "provider/refused")).toHaveLength(1)
+  })
+})
