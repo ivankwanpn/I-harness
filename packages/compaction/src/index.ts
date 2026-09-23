@@ -77,8 +77,8 @@ export function createCompactionEngine(deps: {
    * price for it. Absent → the legacy text form, unchanged: without the shape
    * the bytes cannot match, so there is no reuse to lose. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
-  /** M73: the model's resolved output cap, handed down from the layer that
-   * resolved it (core-agent's AgentDeps). Absent → the summarizer's request
+  /** M73: the model's resolved output cap, handed down from core-agent's deps
+   * — the layer that resolved it. Absent → the summarizer's request
    * carries no cap (pre-M73 behavior). NOT `config.maxTokens`, which stays the
    * post-hoc character slice of the accepted summary — see summarizeWithModel's
    * `limits` note. */
@@ -176,8 +176,14 @@ export function createCompactionEngine(deps: {
       // conditionally, so "absent" stays absent at every hop (a default here
       // would be a number nobody chose). `config.maxTokens` keeps its position
       // as the 3rd argument: it is still only the post-hoc character slice.
+      // The CAP follows the SHAPE's gate (`summarizationModel === undefined`
+      // above): a configured summarization model is a different endpoint, so
+      // `deps.maxOutputTokens` — the session model's resolved cap — was never
+      // resolved for the one receiving this request. The guardian's twin says
+      // what to do with it (reviewer.ts: "a wrong number … is worse than an
+      // absent one").
       const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix, {
-        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+        ...(config.summarizationModel === undefined && deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         // The host-known charge the session log does not carry — the SAME one
         // the session's own clamp adds to its input price (core-agent:
