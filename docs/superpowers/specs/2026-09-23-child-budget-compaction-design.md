@@ -57,11 +57,19 @@
 - **沒有任何新的穿線**：`requestShape` 由 core-agent 自己從子代理的 prompt／tools 建（§0 第 8 列）、`maxOutputTokens` 在 M73 已經傳了。
 - 這一條同時讓**階梯的第 1、2 層**對子代理活起來（那是 M73 刻意留給這個單位的洞）。
 
-### 1.3 seed 可壓——以及**兩份摘要**那條必須守住的性質
+### 1.3 seed 可壓——以及**兩份摘要**是**引擎既有的、刻意的**行為（本節就地更正）
 
 子代理的整份 log（含繼承來的 seed）都是它的 context ⇒ 它可以壓縮它。這是唯一能救「從一個接近窗口的父session spawn 出來」的版本。
 
-**必須守住的性質**：子代理的衍生 surface 上**永遠不會同時出現兩份摘要**。繼承的 `compaction/summary` 是一份普通的事件（`deriveMessages` 會渲染它），所以子代理的新 summary **必須把它 shadow 掉**——否則模型會同時看到兩份（一份描述父的歷史、一份描述子代理的）。這一條要有**測試**，而 region 的選擇是否自然涵蓋它**要量**（`retainTokens: 0` 的預設讓它應該涵蓋；量了才算）。
+> **本節原本要求「子代理的衍生 surface 上永遠不會同時出現兩份摘要」。那個要求是錯的，而且錯在控制器身上——它在 T3 被量測推翻，終審獨立複核。**
+>
+> **量到的事實**：子代理壓縮之後，surface 上是 `user: PARENT-SUMMARY… | user: CHILD-SUMMARY… | assistant: …`——**兩份**。原因：`selectShadowableRange`（`compaction/src/region.ts:20-25` 的空保留臂與 `:52-55` 的尾端臂）**兩條臂都跳過壓縮標記** ⇒ 新的 summary 蓋不掉舊的。
+>
+> **為什麼那不是缺陷**：那個機制**與 session 無關**——主要 session 第二次壓縮之後**也一樣**。而它是**刻意的、被引擎自己的測試釘住的**：`packages/compaction/test/compaction.test.ts:79-88`（「excluding compaction markers」／「the compaction/summary marker is never shadowed」）與 `:90-97`（`retainTokens 0 shadows everything except compaction markers`）；設計寫在程式碼裡——`compaction/src/index.ts:162-166`「the anchored semantics are **prompt-only**; the `compaction/summary` event shape is unchanged」；先例研究也記成這樣（`docs/research/2026-09-02-compact-fourway.md:54-55`：用 prompt 層的 `<previous-summary>` 錨定更新，**從來不是**從 surface 上移除）。
+>
+> ⇒ **本階段的設計決定因此是「與引擎一致」**：子代理與主要 session 有**同樣**的 anchored-summary 行為。T3 的那條案例改為斷言**這個真實的行為**（兩份摘要都在），而它的殺手是**把 `region.ts:22` 的標記跳過拿掉**——那正是「讓被取代的摘要可 shadow」（選項 (a)）的縮影，也就是**如果**哪天要改引擎、這條測試會紅。
+>
+> **仍然成立、而且不變的是**：子代理**可以**壓縮繼承來的歷史（上面第一句），以及它出生的那一刻會**帶著**父的摘要（那是它的 surface 的一部分，也是 anchored 更新的輸入）。
 
 ### 1.4 `forkTurns` 的**預設值**不動
 
@@ -82,7 +90,7 @@
 1. **`forkTurns: N` 帶著壓縮標記的父 log** ⇒ 子代理的標記引用落在**子代理座標**，而且**沒有任何內容無聲消失**（今天會）。
 2. **超壓的子代理壓縮後繼續**：一條真的超過壓力門檻的子代理 session，做出一次摘要器呼叫並**繼續跑完**，而不是 `prompt_too_long`。
 3. **子代理的摘要請求帶的是它自己的 prefix**：`systemPrompt`／`tools` 等於該子代理的 composed prompt 與工具 schemas。
-4. **不會有兩份摘要**：壓縮過的子代理，它衍生的 surface 上只有一份 `compaction/summary` 的內容。
+4. **與引擎一致的 anchored 摘要行為**：壓縮過的子代理，它衍生的 surface 上**兩份摘要都在**（繼承的與它自己的）——與主要 session 第二次壓縮之後相同，且那條案例的殺手是把 `region.ts:22` 的標記跳過拿掉（見 §1.3 的更正）。
 5. **重建的路徑也一樣**：`resume_agent` 重建出來的子代理同樣有 compactor（形狀與 spawn 一致）。
 6. **缺席即缺席**：沒有解析出窗口 ⇒ deps 裡**沒有** `compact` 鍵（不得注入預設）。
 7. **M73 的 fail-closed 契約不被放寬**：那條測試改成「一個請求、且它是摘要器的」。
