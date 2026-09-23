@@ -2,6 +2,10 @@
 
 **一句話**：讓 provider 請求的**預算**（輸出上限與 context 窗口）在**每一條**出口都成立——今天有兩條出口完全沒有它：**子代理的 agent deps**（兩個建構點）與 **compaction 的摘要請求**。
 
+> **本階段終審的更正（2026-09-23，固定於同一條分支）**：上面那句「**兩條**」是**錯的**——普查時漏了第三條：**auto-title 的請求**（`packages/session-title/src/index.ts` 的 `suggestTitle`，由 `apps/cli/src/run.ts` 的執行區塊呼叫；它走 `assembly.model` 這個裸的直通，不帶 cap 也不帶窗口，所以在 anthropic 上同樣會把未夾取的 128k fallback 送出去）。終審指出它，**並且它以與另外兩條相同的方式被修掉**（同一組 `clampOutputCap` ＋ `estimateContent`，值由 CLI 傳入）。⇒ 本階段的宣稱現在對**三條**出口都成立。這一條與它的修法寫在這裡而不是偷偷改掉，因為**錯誤的普查是這一輪自己的缺陷**（§0 的第一列就是關於被漏掉的東西）。
+>
+> 同一輪終審也抓到一條**與普查無關的真缺陷**：在**配置了 `summarizationModel`** 的路由上，摘要請求會拿到**session 模型的** cap（`config.summarizationModel ?? deps.model` ⇒ 請求打到別的端點）——這正是本設計在 guardian 上明文拒絕的事（「傳一個不是它的數字比不傳更糟」），而 `reviewer.ts` 自己把 `config.summarizationModel` 稱為 guardian 的**孿生兄弟**。已用一行閘修掉並補測試。
+
 **來源**：本樹自己的紀錄指名了這兩條（M72 階段 Ⅱ §5.5「值鏈的完整性只對主要 session 成立」、階段 Ⅲ §4.2「compaction 的候選修法」），加上 **2026-09-23 的兩份偵察**（兩個並行 subagent 逐檔讀樹，每一條斷言都帶 `path:line`）。
 
 **分級**：**L**（改變別人依賴的介面：`RoleModelState`／`RoleModelResolution` 的 ready arm、`SpawnOptions`／`SubagentToolDeps` 的新欄位，而 `AgentDeps.maxOutputTokens`／`AgentDeps.budget` 第一次有了子代理消費者）⇒ 完整 spec ＋ 計畫 ＋ 最終審查。
