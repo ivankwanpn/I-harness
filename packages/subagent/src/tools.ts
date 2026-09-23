@@ -691,6 +691,15 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     ...(contextWindow !== undefined
       ? { budget: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
+    // M74: the rebuilt child gets its OWN compactor too — same key, same source,
+    // same shape as the spawn site (child.ts). A compactor built only at the
+    // first spawn would vanish on every resume: the rebuilt agent is a fresh
+    // `createAgent`, and without this spread a child that was compacting before
+    // the restart falls back to the fail-closed throw at the next pressure
+    // boundary. Same two locals, nothing re-derived.
+    ...(contextWindow !== undefined
+      ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
+      : {}),
     ...(childCoordinator !== undefined && childSessionId !== undefined
       ? { flush: (): Promise<void> => childCoordinator.flush(childSessionId) }
       : {}),
