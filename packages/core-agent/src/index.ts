@@ -4,8 +4,8 @@ import type { Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
-import { assertMessagesFromLog } from "@i-harness/llm-seam"
-import { activeTokens, checkBudget } from "@i-harness/token-meter"
+import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
+import { activeTokens, checkBudget, estimateContent } from "@i-harness/token-meter"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export {
@@ -86,6 +86,9 @@ export interface AgentDeps {
   // translateReasoning in the llm-* adapters). Absent → the request never
   // carries the field (缺省不發 — the provider's own default applies).
   reasoningEffort?: ReasoningEffort
+  /** M72 Ⅱ: the resolved output cap for this session's model (undefined → the
+   * adapter sends none). Read at request assembly, clamped there. */
+  maxOutputTokens?: number
 }
 
 // M32: canonical ReasoningEffort lives in @i-harness/llm-seam (T2) — import
@@ -292,6 +295,21 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         messages,
         tools: deps.tools.schemas(),
         systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+        // M72 Ⅱ: the cap the host resolved for this model, CLAMPED here because
+        // this is the only place that holds all three inputs at once: the value
+        // (deps), the window (budgetCfg) and the input we are about to send.
+        // Estimated with the same meter the budget check uses, plus the same
+        // overhead it charges — so the clamp and the compaction ladder agree on
+        // what "the input" costs. Absent deps value → absent field.
+        ...(deps.maxOutputTokens !== undefined
+          ? {
+              maxOutputTokens: clampOutputCap(
+                deps.maxOutputTokens,
+                budgetCfg?.contextWindow,
+                estimateContent(messages) + (budgetCfg?.overheadTokens ?? 0),
+              ),
+            }
+          : {}),
         // M32 T3: verbatim effort passthrough (absent → the field is never set;
         // the adapter's translateReasoning owns the wire vocabulary).
         ...(deps.reasoningEffort !== undefined ? { reasoningEffort: deps.reasoningEffort } : {}),
@@ -359,6 +377,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // report carries only its own fields.
       const stepUsage: Record<string, number> = {}
       const batch: BatchCall[] = []
+      // M72 Ⅱ: this step's ending, decided by the provider's own terminal
+      // literal (Task 6) and carried to the durable log below. Per-STEP, so
+      // declared here rather than beside `steps`/`callSeq`: a truncated step
+      // must not mark the next one, and a clean ending writes no field at all.
+      let truncatedThisStep = false
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
         switch (ev.type) {
@@ -395,6 +418,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
+            // M72 Ⅱ. Recorded in TWO places on purpose: the durable log (what a
+            // reopen reads) and the host's telemetry (what an operator watches).
+            // Absent stays absent — a clean ending writes no field at all.
+            if (ev.truncated === true) {
+              truncatedThisStep = true
+              deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
+            }
             break
         }
       }
@@ -438,7 +468,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
       else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
 
-      append(deps.session, { type: "step/end" })
+      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}) })
 
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a

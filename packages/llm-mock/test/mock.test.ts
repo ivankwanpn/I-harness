@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createMockClient } from "../src/index.ts"
-import type { LLMRequest } from "@i-harness/llm-seam"
+import type { LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 
 describe("llm-mock", () => {
   it("replays one step per stream() call (turn-based)", async () => {
@@ -66,5 +66,13 @@ describe("llm-mock", () => {
       if (ev.type === "usage") none.push("usage")
     }
     expect(none).toEqual([])
+  })
+
+  // M72 II: the mock is the only way the CLI's run-level path can be driven
+  // end-to-end with a truncated ending, so it has to be able to replay one.
+  it("M72 Ⅱ: a mock step can end truncated", async () => {
+    const events: LLMStreamEvent[] = []
+    for await (const ev of createMockClient([{ role: "assistant", text: "partial", truncated: true }]).stream({} as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", truncated: true })
   })
 })

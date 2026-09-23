@@ -485,6 +485,11 @@ export async function main(argv: string[]): Promise<number> {
   try {
     return await runHeadless(task, opts).then((r) => {
       if (r.finalText) console.log(r.finalText)
+      // M72 Ⅱ / R14: NO `[truncated]` line here. `runHeadless` already prints it
+      // (the deeper surface — every host that runs a headless turn gets it, and
+      // a doubled line would read as two separate truncations). `r.truncated`
+      // stays public surface for hosts; this branch deliberately does not
+      // re-report it.
       // M3 diagnose-ability: a failed run used to print `r.error` — ONE bare line
       // naming no session and saying nothing about what survived. It now gets the
       // same report an unhandled crash gets, because it is the same question.

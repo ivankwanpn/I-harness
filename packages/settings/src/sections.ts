@@ -144,6 +144,12 @@ const providerConfigFields: Record<string, FieldSpec> = {
   headers: { type: "object", items: { type: "string" } },
   // M61: the route-level content types (a model entry may override).
   inputModalities: { type: "array", items: { type: "enum", enum: ["text", "image"] } },
+  // M72 Ⅱ: the wire field this route's openai-compatible requests carry the
+  // output cap on. A CLOSED pair — the two chat-completions spellings only
+  // (`max_output_tokens` belongs to the Responses wire, llm-openai's). Without
+  // this row the section API would not know the key and the normalizer would
+  // drop the value silently.
+  maxTokensField: { type: "enum", enum: ["max_tokens", "max_completion_tokens"] },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },
 }
 

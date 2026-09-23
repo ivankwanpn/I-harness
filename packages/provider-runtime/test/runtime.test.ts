@@ -265,6 +265,56 @@ describe("model resolution", () => {
     })
   })
 
+  it("M72 Ⅱ: the binding carries the resolved output cap, not just the window", async () => {
+    // readyFixture's settings-row shape (`{ id, contextWindow }`), with one row
+    // that also carries the user-written output cap.
+    const { runtime } = await fixture({
+      providers: {
+        deepseek: {
+          displayName: "Private DeepSeek",
+          baseURL: "https://gateway.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: [
+            { id: "session-model", contextWindow: 96_000, maxTokens: 1_234 },
+            { id: "default-model", contextWindow: 128_000 },
+          ],
+        },
+      },
+      defaultModel: { provider: "deepseek", model: "default-model" },
+      credentials: { DEEPSEEK_API_KEY: "fixture-key" },
+      registry(registry) {
+        registry.register({
+          name: "deepseek",
+          displayName: "DeepSeek",
+          protocol: "openai-compatible",
+          baseUrl: "https://api.deepseek.com",
+          apiKeyEnv: "DEEPSEEK_API_KEY",
+          models: ["static-model", "default-model"],
+          defaultModel: "default-model",
+          contextWindow: 64_000,
+        })
+      },
+    })
+
+    // The row that declares NO cap. This assertion checks only the keys it
+    // names, so on its own it does not pin the field's ABSENCE — that property
+    // belongs to the resolution shape (nothing resolves → nothing spread), and
+    // is stated in the M72 Ⅱ task report rather than asserted here.
+    await expect(runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { modelId: "default-model", contextWindow: 128_000 },
+    })
+    // The row that DOES declare one: the resolved cap must travel on the
+    // binding instead of being dropped one line after it was computed.
+    await expect(runtime.resolveModel({
+      sessionSelection: { provider: "deepseek", model: "session-model" },
+    })).resolves.toMatchObject({
+      status: "ready",
+      binding: { modelId: "session-model", maxOutputTokens: 1_234 },
+    })
+  })
+
   it("M59: provider headers reach the built client's profile", async () => {
     const f = await fixture({
       providers: {
@@ -333,6 +383,45 @@ describe("model resolution", () => {
     })
     await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
     expect(plain.builds[0]?.profile.inputModalities).toBeUndefined()
+  })
+
+  it("M72 Ⅱ: the route's maxTokensField survives settings → profile (absent stays absent)", async () => {
+    // The value has to cross TWO silent-drop sites to get here: the settings
+    // normalizer (normalizeProviderConfig keeps only fields it knows) and the
+    // providerView/runtimeProfile hand-off. Both are invisible in the adapter's
+    // own suite, which hands the factory a config directly.
+    const declared = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+          maxTokensField: "max_completion_tokens",
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(declared.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(declared.builds[0]?.profile.maxTokensField).toBe("max_completion_tokens")
+
+    // Undeclared → no field at all: the ADAPTER's own default names the wire
+    // field, so an injected default here would be a second place to be wrong.
+    const plain = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(plain.builds[0]?.profile.maxTokensField).toBeUndefined()
   })
 
   it("returns discriminated unconfigured and invalid states without building a client", async () => {
@@ -417,18 +506,21 @@ describe("model resolution", () => {
     })
     await expect(f.runtime.resolveModel({})).resolves.toMatchObject({
       status: "ready",
-      binding: { contextWindow: 1_048_576 },
+      binding: { contextWindow: 1_048_576, maxOutputTokens: 384_000 },
     })
-    // NOT asserted: the card's `maxOutputTokens`, because it does not reach the
-    // binding. Measured 2026-09-19 — `SessionModelBinding` has no such field and
-    // `resolveModel` takes only `.contextWindow` off `resolveEffectiveModelContext`,
-    // so the card parses it, validates it, threads it through the five-tier chain
-    // and then drops it. Nothing in production reads it (its only mentions are in
-    // this package's own loader and chain), which is the repo's familiar shape:
-    // a capability built to the last link with no consumer. Recorded in the
-    // design's open questions; NOT fixed here, because whether we should SEND
-    // `max_output_tokens` at all is a separate decision (Codex does not model it;
-    // Pi, DSH and Grok do).
+    // `maxOutputTokens` is asserted above because M72 Ⅱ changed the answer this
+    // comment used to carry. Measured 2026-09-19: the card parses the cap,
+    // validates it, threads it through the five-tier chain — and `resolveModel`
+    // took only `.contextWindow` off the resolution, so the cap was dropped one
+    // line after being computed and `SessionModelBinding` had no field for it.
+    // The comment recorded that as an open question and NOT fixed here, because
+    // whether to SEND `max_output_tokens` at all was a separate decision (Codex
+    // does not model it; Pi, DSH and Grok do) — M72 Ⅱ made that decision: the
+    // field exists, the cap travels to `AgentDeps`, and the request assembly
+    // (whose clamp lives where the window and the input estimate meet) is its
+    // first reader. This route is the CARD arm, the one the M72 Ⅱ case above
+    // does not cover (its rows resolve no card), which is why the number is
+    // pinned rather than noted.
   })
 
   it("with NO catalog declared, the route name IS the family — unchanged, and deliberately so", async () => {

@@ -247,6 +247,29 @@ describe("renderProviderList", () => {
     expect(out).toContain("DeepSeek API docs")
   })
 
+  it("shows the row's own output cap on a model line, and nothing when the row set none", () => {
+    // Same ruling as `models list` (the two listings must not disagree about
+    // the same row): the card is the model's documented ceiling; the row's own
+    // cap — user-written or refresh-persisted — is what a request will actually
+    // carry, so the two are said separately. Absent ⇒ nothing printed: an unset
+    // switch is OFF, not 0.
+    const out = renderProviderList(
+      [{
+        id: "deepseek1", displayName: "DeepSeek", protocol: "anthropic-messages",
+        configured: true, auth: { configured: true, writable: true },
+        models: [{ id: "deepseek-flash", maxTokens: 409_600 }, { id: "keep-me" }],
+        discovery: "available", cardFamily: "deepseek", catalog: "deepseek",
+      }],
+      { generatedAt: "2026-09-19", families: [{ family: "deepseek", source: "DeepSeek API docs" }] },
+    )
+
+    expect(out).toContain("      deepseek-flash  (1048576 / 384000)  set: 409600")
+    // The row that never set one: its whole line is pinned, so neither a
+    // `set: undefined` nor a defaulted 0 can pass as "shows the value".
+    const keepLine = out.split("\n").find((line) => line.includes("keep-me")) ?? ""
+    expect(keepLine).toBe("      keep-me  (no card)")
+  })
+
   it("says a route inherits its name when nothing was declared", () => {
     const out = renderProviderList(
       [{

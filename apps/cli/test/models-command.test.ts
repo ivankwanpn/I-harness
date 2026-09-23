@@ -284,6 +284,45 @@ describe("runModelsCommand", () => {
     expect(overCap.join("\n")).toContain("409600")
   })
 
+  it("the read shows the row's own output cap next to the card, and nothing once it is cleared", async () => {
+    // The two numbers are DIFFERENT facts, so the line says them separately:
+    // the card is the model's documented ceiling (384000 for deepseek-flash),
+    // this row's own cap is what a request will actually carry. This fixture
+    // writes that cap with `add --max-tokens`; a refresh persists the same
+    // field (provider-runtime's `mergeDiscoveredModels`). Before this it was
+    // projected away by `viewOf`, so the only place it existed was the
+    // settings file.
+    expect(await runModelsCommand(["models", "add", "gw", "deepseek-flash", "--max-tokens", "400k"])).toBe(0)
+
+    const list = async (): Promise<string> => {
+      const lines: string[] = []
+      const spy = vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => { lines.push(args.join(" ")) })
+      try {
+        expect(await runModelsCommand(["models", "list", "gw"])).toBe(0)
+      } finally {
+        spy.mockRestore()
+      }
+      return lines.join("\n")
+    }
+
+    const withCap = await list()
+    expect(withCap).toContain("  deepseek-flash  (1048576 / 384000)  set: 409600")
+    // An unset switch is OFF, not 0: the row that never set one prints no
+    // `set:` at all — its whole line is pinned so a `set: undefined` or a
+    // defaulted 0 cannot pass as "shows the value".
+    const keepLine = withCap.split("\n").find((line) => line.includes("keep-me")) ?? ""
+    expect(keepLine).toBe("  keep-me  (no card)")
+
+    // `--max-tokens auto` DELETES the key (the settings row tests above pin
+    // that); the claim here is about the READ of an absent value, so the same
+    // model is re-listed after the clear.
+    expect(await runModelsCommand(["models", "set", "gw", "deepseek-flash", "--max-tokens", "auto"])).toBe(0)
+    const cleared = await list()
+    const clearedLine = cleared.split("\n").find((line) => line.includes("deepseek-flash")) ?? ""
+    expect(clearedLine).toContain("(1048576 / 384000)")
+    expect(clearedLine).not.toContain("set:")
+  })
+
   it("set with no flags says there was nothing to change", async () => {
     await runModelsCommand(["models", "add", "gw", "deepseek-flash"])
     const lines: string[] = []

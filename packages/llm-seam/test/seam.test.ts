@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, describeTransportError } from "../src/index.ts"
+import { assertMessagesFromLog, clampOutputCap, describeTransportError } from "../src/index.ts"
 import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
@@ -122,5 +122,52 @@ describe("M72 Ⅰ describeTransportError remediation", () => {
     const original = new Error("AccessDeniedException: nope")
     expect((await describeTransportError("bedrock", "us-east-1", original, { remediation: "none" })).cause).toBe(original)
     expect((await describeTransportError("bedrock", "us-east-1", original)).cause).toBe(original)
+  })
+})
+
+describe("M72 Ⅱ: the output cap", () => {
+  it("leaves the value alone when no window is known", () => {
+    expect(clampOutputCap(8192, undefined, 100_000)).toBe(8192)
+  })
+
+  it("leaves the value alone when the window has room", () => {
+    expect(clampOutputCap(8192, 200_000, 1_000)).toBe(8192)
+  })
+
+  it("clamps to the room left after the estimated input and the safety margin", () => {
+    // 200000 - 190000 - 4096 = 5904
+    expect(clampOutputCap(65_536, 200_000, 190_000)).toBe(5904)
+  })
+
+  it("falls back to the hard room when the safety margin does not fit", () => {
+    // hardRoom = 200000 - 199000 = 1000 ≥ 1, so the clamp fires; the 4096
+    // margin does not fit, so the hard room is what we can still promise.
+    // 199000 + 1000 = 200000 exactly, i.e. LEGAL under the provider's rule;
+    // the previous expectation of 8192 was 199000 + 8192 > 200000, a 400.
+    expect(clampOutputCap(8192, 200_000, 199_000)).toBe(1000)
+  })
+
+  it("clamps the measured reachable case into the hard room", () => {
+    // The measured reachable case: the host's budget ladder is ok (its reserve
+    // allows 9000), but the request would carry input 6000 + cap 8000 against a
+    // 10000 window — a 400 on a strict provider. hardRoom = 4000.
+    expect(clampOutputCap(8_192, 10_000, 6_000)).toBe(4000)
+  })
+
+  it("returns the value unchanged when the estimated input alone fills the window", () => {
+    // hardRoom = 10000 - 10000 = 0 < 1 → the request cannot run at that size
+    // whichever cap it carries; clamping to 1 would dress a context overflow up
+    // as a truncation.
+    expect(clampOutputCap(8_192, 10_000, 10_000)).toBe(8192)
+  })
+
+  it("passes the value through untouched when the estimate is not finite", () => {
+    // A NaN estimate makes `hardRoom` NaN, so BOTH range comparisons are false:
+    // the old `if (hardRoom < 1) return value` arm did not fire and the function
+    // returned `Math.min(value, NaN)` = NaN — a value every adapter's
+    // `!== undefined` guard happily sends as `max_tokens: NaN`. The arm is
+    // therefore written as a POSITIVE test (`!(hardRoom >= 1)`) that no
+    // non-finite estimate can fall through.
+    expect(clampOutputCap(8192, 200_000, Number.NaN)).toBe(8192)
   })
 })

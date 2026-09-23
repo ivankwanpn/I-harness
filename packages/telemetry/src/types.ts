@@ -16,6 +16,11 @@ export type TelemetryEventType =
   // M5 T2: the provider's OWN usage report for one round-trip — a fact, kept
   // apart from `token/usage`, which carries our estimate of the same surface.
   | "provider/usage"
+  // M72 Ⅱ: that round-trip ended at the output cap (the seam's `end.truncated`,
+  // decided by each adapter's own terminal literal). One event per truncated
+  // round-trip, so the count is the denominator: a run with no event here is a
+  // run whose provider stopped on its own, never "we did not look".
+  | "provider/truncated"
   | "token/usage"
   | "retry/start"
   | "error"

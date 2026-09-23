@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -150,6 +150,13 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        // M72 Ⅱ: `max_tokens` is REQUIRED by the Messages API — the one wire
+        // where "send nothing" is not an option. The chain is request → route
+        // options → the named constant, so a route that already configured
+        // `options.max_tokens` keeps working and the constant is the last resort.
+        max_tokens:
+          request.maxOutputTokens ??
+          (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK),
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -175,6 +182,10 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
+      // M72 Ⅱ: the wire's own truncation literal (`stop_reason: "max_tokens"`)
+      // — set in `handleEvent` below, read once at the ending. Absent stays
+      // absent: only `true` writes the field.
+      let truncated = false
       const pendingToolUses = new Map<number, { name: string; argsBuffer: string }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
@@ -189,6 +200,8 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "message_delta") {
+          const stop = (event.delta as { stop_reason?: string } | undefined)?.stop_reason
+          if (stop === "max_tokens") truncated = true
           const usage = mapUsage(event.usage)
           return usage ? [{ type: "usage", usage }] : []
         }
@@ -285,7 +298,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield { type: "end" }
+      yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
 }
