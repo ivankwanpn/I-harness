@@ -1390,8 +1390,10 @@ describe("the child's request carries the resolved budget", () => {
     expect(client.served[0]!.maxOutputTokens).toBeLessThan(4_242) // the clamp DID bite on the request that left
     // …and the rescuer is the ladder's layer 2, not a summary: the reset marker
     // removed the inherited head (seqs 1/2 are its two big messages), and no
-    // `compaction/summary` was ever appended — the fail-soft pass appends
-    // nothing on failure.
+    // `compaction/summary` was ever appended. (M78: "the fail-soft pass appends
+    // nothing on failure" held before this unit; a failed pass now leaves its
+    // `compaction/prune` marker when it pruned — this fixture has no `tool/result`
+    // event at all, so nothing is prunable and no marker appears here.)
     const childSession = f.table.get(path)!.session
     const reset = childSession.events.find((e) => e.type === "compaction/reset")
     expect(reset).toBeDefined()

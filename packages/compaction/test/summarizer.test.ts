@@ -150,6 +150,12 @@ describe("summary degenerate floor (M34 ⑦c)", () => {
     // M73: the summarizer-failure arm names its reason (the shape stays pinned).
     expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
     expect(calls.n).toBe(2) // one retry, then fail-soft
+    // M78 exception, named: "a failed pass appends nothing" is no longer true in
+    // general — a pass that PRUNED leaves its `compaction/prune` marker behind
+    // (test/prune.test.ts pins it). `smallSession()` is five user messages with
+    // no tool/result at all, so nothing is prunable and the assertion below is
+    // the claim this fixture can still carry: this failure path appends no
+    // marker here. The assertion is deliberately left as wide as it was.
     expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
   })
 

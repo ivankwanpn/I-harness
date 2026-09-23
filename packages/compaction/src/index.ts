@@ -70,12 +70,29 @@ export function createCompactionEngine(deps: {
   modelId?: string          // M15: the resolved model id for catalog lookup
   provider?: string         // M34 ⑦a: the policy-key provider namespace ("provider/model")
   telemetry?: Telemetry     // M34 ⑦b: optional host stream (M25 convention — absent = zero events)
-  /** M5/D2: the shape the main loop sends, read AT COMPACT TIME so it matches
-   * the last request rather than whatever was true at construction. Present →
-   * the summarizer's call becomes a byte-prefix of the main request and the
-   * provider's cache serves the whole conversation instead of charging full
-   * price for it. Absent → the legacy text form, unchanged: without the shape
-   * the bytes cannot match, so there is no reuse to lose. */
+  /** M5/D2: the shape the main loop sends, read AT COMPACT TIME rather than
+   * whatever was true at construction. Present → the summarizer replays the
+   * region as REAL messages, so its request is a LEADING SLICE of the fold the
+   * main path would send at that moment, byte for byte up to the region's
+   * block-aligned cut. M78 holds that identity across a prune, and it is the
+   * POST-MARKER fold that the prefix matches: the `compaction/prune` marker is
+   * on the log before this fold is taken and the seq filter keeps it visible, so
+   * prefix and main fold substitute the same old tool output. The move ALONE
+   * would break exactly this — the marker lands past the region's cut, and the
+   * prefix shows the RAW output where the main fold shows the substitute.
+   * Absent → the legacy text form, unchanged: without the shape the bytes cannot
+   * match, so there is no reuse to lose.
+   *
+   * It is NOT a byte-prefix of the LAST SENT main request any more, and the
+   * cache side is a trade this unit did not measure — stated, not repaired.
+   * Pre-M78, at the moment of the pass, the replayed messages WERE
+   * byte-identical to that last request (the marker that changes the fold is
+   * appended only after the attempt), so the provider's automatic prefix cache
+   * could serve them at the cached-read price. Post-M78 the replayed prefix
+   * diverges from that cached content at the first newly-pruned output:
+   * everything after it is billed at the full rate, while the pruned bytes are
+   * not sent at all. Which side wins depends on the cache discount and on where
+   * the pruned output sits. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
   /** M73: the model's resolved output cap, handed down from core-agent's deps
    * — the layer that resolved it. Absent → the summarizer's request
@@ -138,6 +155,35 @@ export function createCompactionEngine(deps: {
         return { compacted: true, shadowedSeqs: [], pruned: true }
       }
     }
+    // M78 §1.1: the marker lands HERE — after the plan, BEFORE the summarizer's
+    // prefix is built — instead of only after the summary succeeded (the pre-M78
+    // site, further down this function). Same append, same event shape, one
+    // position earlier; the prune-only path above keeps its own append (it
+    // returns before any summary is attempted).
+    //
+    // What the MOVE itself changes, measured (2026-09-24): the prune is on the
+    // log from before the summarizer is called, so every whole-log read from that
+    // moment on sees it — the measured one is the FAILED pass's surface (pinned
+    // by the failure case below), and the prune stays there for good: see the
+    // note at the `failure` emission. The success telemetry's `tokensAfter` is
+    // NOT one of them: the deleted append already preceded that emit, which reads
+    // after the summary trio either way.
+    //
+    // It does NOT prune the summarizer's PREFIX — the M78 finding, recorded
+    // rather than smoothed over. `deriveMessagesUpTo(session, lastShadowed)`
+    // folds the log filtered to `seq <= maxSeq` (core-session, that function's
+    // filter), and `append` gives every new event the HIGHEST seq (core-session,
+    // `append`: `seq: session.events.length`) — so the marker can never be at or
+    // below the region's last shadowed seq and is dropped from that fold. Probe
+    // on this tree's own fixture (retainTokens 500 and 0 alike): lastShadowed
+    // 104 / 109 vs markerSeq 110; `deriveMessages` sees the substitute,
+    // `deriveMessagesUpTo` does not, and no placement of this append changes it.
+    // The prefix is pruned because that filter keeps `compaction/prune` markers
+    // regardless of `maxSeq` (the content-addressed exception there), so do NOT
+    // delete that disjunct as redundant: cases 1, 4 and 5 of "M78: the prune
+    // marker lands before the summarizer folds the log" (test/prune.test.ts) are
+    // red without it, and only it.
+    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     // R-B2: a CONFIGURED summarization model WINS over `deps.model` — deliberate,
     // not the silent exception this unit exists to remove. `deps.model` is the
@@ -212,10 +258,41 @@ export function createCompactionEngine(deps: {
       // and the first carries no `%` specifier, so `util.format` joined them with
       // one space — the single template below is that same byte sequence.
       d.warn(`[i-harness] compaction summarizer failed (fail-soft, retrying next step): ${err instanceof Error ? err.message : String(err)}`)
+      // M78 §1.1 — the deliberate consequence of moving the marker: a FAILED
+      // summary now leaves the prune APPLIED (it was appended above, before the
+      // attempt) and nothing can undo it, because the log is append-only. That
+      // is a choice, for three reasons: prune is safe (it swaps an old tool
+      // output for a substitute, nothing more), it is a net win for the next
+      // attempt (the tokens are already saved), and the ladder's next rung
+      // retries anyway. The RESULT SHAPE does not follow it: `compacted:false`
+      // is what the breaker counts, and a failing summarizer must keep counting
+      // as a failure, or the breaker stops protecting the model from being
+      // hammered — so no `pruned` field, no `compacted:true`. (An odd
+      // combination, named rather than smoothed over: the log changed while the
+      // result says the pass failed.) Pinned by "M78: a summarizer failure
+      // leaves the prune APPLIED — the log is append-only" in test/prune.test.ts.
+      //
+      // One more consequence of where the append sits, named rather than fixed:
+      // the ladder's next rung RE-PLANS the same records and appends a SECOND
+      // `compaction/prune` marker (nothing dedupes against the markers already
+      // on the log). That is content-idempotent — the substitute map derived
+      // from the markers is last-wins per tool call id, so the projection is
+      // unchanged — and the number of repeats is bounded by the breaker on the
+      // AUTO path ONLY. The in-tree path that actually retries a failed
+      // summarizer is UNGATED instead: core-agent's `enforceBudget` layer 1 calls
+      // `compact()` at every step boundary while the surface is over budget, and
+      // `compact()` consults no gate — so each such retry re-plans the same
+      // records and appends again (this path's only early exit is an empty
+      // region, above). The cost a dedupe would buy down: every duplicate
+      // re-serialises the whole carve (4096 head + 1024 tail chars — measured on
+      // the big-output fixture in test/prune.test.ts, one record's marker JSON is
+      // 5 180 bytes), so a summarizer that keeps failing under budget pressure
+      // grows the durable log until the ladder's NEXT layer (the reset, or the
+      // fail-closed throw) ends the cycle — not the breaker. Deliberately left
+      // alone; a dedupe would be a second place that decides what a prune means.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
-    if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     append(session, { type: "compaction/start" })
     append(session, { type: "compaction/summary", text: summary, shadowedSeqs })
     append(session, { type: "compaction/end" })
