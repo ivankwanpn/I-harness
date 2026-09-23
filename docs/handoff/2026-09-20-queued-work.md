@@ -930,6 +930,9 @@ M71 residuals pass（R14 ＋ Q8 的字面重讀 ＋ R15） ← ✅ `m71`（2026-
 
 ### 9.2 還沒做的 —— 依「現在能不能動」分三堆
 
+> **⚠️ 這一節自 2026-09-23 起已經落後（M72–M75 五個里程碑）⇒ 看 `docs/handoff/2026-09-23-backend-closure-plan.md`。** 那份文件是**現在的**「還沒做」清單，而且它量到**這一節僅存的兩條活項目都已經關掉了**：**C3**（`--max-tokens` 沒有消費者）—— `LLMRequest` 現在有 `maxOutputTokens`（`packages/llm-seam/src/index.ts:274`，M72 Ⅱ／M73）；**B4/T2-3**（`stream_options` 的請求形狀決定）—— 已決定並實作（`packages/llm-openai-compatible/src/index.ts:163`，M72 Ⅲ）。下面各格保留原樣（它們是當時的量測），**但不要拿它當待辦清單**。
+
+
 **A 堆 —— 可以現在動（無阻塞）**
 
 | # | 什麼 | 離「可以寫計畫」多遠 |
