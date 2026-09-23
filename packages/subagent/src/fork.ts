@@ -30,7 +30,7 @@ import { remapSeedEvent } from "@i-harness/session-persistence"
  *
  * The session fork resolves the same marker the other way, and still does: it
  * DROPS rewind markers (packages/session-persistence/src/fork.ts:115-120, filter
- * at :150-151), because its child never had the rewound turns at all — copying a
+ * at :150-152), because its child never had the rewound turns at all — copying a
  * marker there would assert a window over a region that log does not contain.
  * This path keeps it (the slice is a contiguous tail of the parent's log, so the
  * events it hides can be in it), which is why the reference has to MOVE here
