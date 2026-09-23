@@ -53,7 +53,16 @@ describe("M76: the walk-off rule is exact, not a heuristic", () => {
     append(s, { type: "user/message", text: "q2" })
     append(s, { type: "assistant/message", text: "a2" })
     append(s, { type: "turn/end" })
-    // the last events are safe: the never-resolved call projects to nothing at all
-    expect(walkOffToolEvents(s, s.events.length)).toBe(s.events.length)
+    // In-contract indices: production passes `0 <= index <= n - 1`
+    // (`index.ts:352` passes n - retainLast with retainLast >= 1; `region.ts:131`
+    // passes i <= n - 1), so these exercise the RULE, not the out-of-contract
+    // clamp. Both cuts are safe and must stay where they were asked to be: a cut
+    // keeps no `tool/result`, so the rule has nothing to relate the dangling call
+    // to. The dangling call IS on the projection (the fold buffers it and always
+    // flushes the buffer, so it surfaces as `assistant("", toolCalls)`), and no
+    // backwards cut can repair it — a call-side predicate drags every later cut
+    // back to the call's own index (2 here), which is what this case kills.
+    expect(walkOffToolEvents(s, s.events.length - 1)).toBe(s.events.length - 1)
+    expect(walkOffToolEvents(s, 5)).toBe(5)
   })
 })
