@@ -4,12 +4,13 @@ import { append, createSession, deriveMessages, type SessionEvent } from "@i-har
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
+import { estimateContent } from "@i-harness/token-meter"
 import { createAgentRegistry } from "@i-harness/core-agent"
 import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable } from "../src/agent-table.ts"
 import { forkTurns } from "../src/fork.ts"
-import { resolveRoleTools, spawnChild, type SpawnOptions } from "../src/child.ts"
+import { estimateChildOverhead, resolveRoleTools, spawnChild, type SpawnOptions } from "../src/child.ts"
 
 function makeTool(name: string): Tool {
   return { name, description: "", inputSchema: {}, execute: async () => ({}) }
@@ -529,6 +530,39 @@ function recordingClient(text: string): ModelClient & { requests: LLMRequest[] }
   }
 }
 
+/** A ModelClient that ENFORCES the provider's own sizing rule — `input +
+ * max_tokens <= contextWindow` — instead of accepting whatever request
+ * arrives, which is what every other client in this file does. That permissive
+ * habit is exactly why the compaction cases here could not see the
+ * over-window summarizer request; this client is what makes it visible.
+ *
+ * `input` is priced the way the harness prices its own requests: the messages
+ * through the meter, plus the SAME char-based charge the child's overhead
+ * estimate puts on its system prompt and tool schemas (child.ts's
+ * estimateChildOverhead). So this client's arithmetic and the clamp's agree —
+ * a request the clamp promised fits, fits here; one it declined to clamp does
+ * not. An absent cap is priced as 0 (the request reserves no output room).
+ * `served`/`rejected` record which requests got through and which the window
+ * stopped, so a case can assert the MECHANISM and not just the outcome. */
+function windowEnforcedClient(inner: ModelClient, contextWindow: number): ModelClient & { served: LLMRequest[]; rejected: LLMRequest[] } {
+  const served: LLMRequest[] = []
+  const rejected: LLMRequest[] = []
+  return {
+    served,
+    rejected,
+    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      const input = estimateContent(request.messages) + estimateChildOverhead(request.systemPrompt, request.tools)
+      const cap = request.maxOutputTokens ?? 0
+      if (input + cap > contextWindow) {
+        rejected.push(request)
+        throw new Error(`window-enforced client: input ${input} + max_tokens ${cap} > context ${contextWindow}`)
+      }
+      served.push(request)
+      yield* inner.stream(request)
+    },
+  }
+}
+
 async function settled(jobs: ReturnType<typeof createJobRegistry>, jobId: string): Promise<void> {
   for (let i = 0; i < 200 && jobs.read(jobId).status !== "completed"; i++) {
     await new Promise((r) => setTimeout(r, 20))
@@ -1004,12 +1038,16 @@ describe("the child's request carries the resolved budget", () => {
   // M74. Before this, a child past `window * 0.9` had exactly one ladder layer
   // left — the fail-closed throw — because no compactor was built. Now it has
   // one: the pass shadows the region and the turn CONTINUES.
+  // PERMISSIVE mock: this client answers any request it is handed, so this case
+  // documents the engine's behaviour given a TOLERANT provider — not what a
+  // strict one yields (the case after it measures that, on a window-enforcing
+  // client).
   it("M74: a child past its window COMPACTS and finishes", async () => {
     const f = spawnFixture()
     // A parent log big enough that the seed alone puts the child over the
     // pressure gate of the window below. Built with the real `append` (not a
     // raw push): it is what assigns `seq`, and the seed's coordinates depend on
-    // those numbers. (`append` 加進本檔第 3 行既有的 `@i-harness/core-session` import。)
+    // those numbers.
     for (let i = 0; i < 12; i++) {
       append(f.parentSession, { type: "turn/start" })
       append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
@@ -1051,6 +1089,88 @@ describe("the child's request carries the resolved budget", () => {
       return typeof last?.content === "string" && last.content.includes("summar")
     })
     expect(summarizerReq?.systemPrompt).toBe(composeSubagentPrompt(f.roles.get("general")!.systemPrompt))
+  }, 15_000)
+
+  // M74 (final review, fix wave): the same regime as the case above, behind a
+  // client that enforces the provider's own rule instead of answering anything.
+  // The difference is the whole answer for a child whose inherited surface
+  // FILLS the window. The summarizer builds its request from
+  // `deriveMessagesUpTo(session, lastShadowed)` — for a child's FIRST
+  // compaction, the entire inherited surface — plus the directive, the system
+  // prompt and the tool schemas (compaction/index.ts), and it never shrinks
+  // that input; the cap it carries is `clampOutputCap`'s, which returns the RAW
+  // value exactly when the input already fills the window (llm-seam
+  // clampOutputCap, the `!(hardRoom >= 1)` arm). So that request reaches the
+  // wire over-window and a real provider rejects it (`input + max_tokens >
+  // context`). MEASURED here: 2 summarizer requests rejected (maybeCompact's
+  // pass and enforceBudget's layer 1), the summarizer fails SOFT, and the
+  // ladder's layer 2 rescues — `resetWindowOnce` keeps the last 20 events and
+  // the child CONTINUES with its inherited context DROPPED, not summarised.
+  // The permissive clients the other compaction cases use are what let that
+  // over-window request look harmless — they answer it, so the summary path is
+  // what those cases measure; this one is what a real provider yields instead.
+  it("M74: on a strict provider the child still completes — the rejected summarizer hands off to the reset", async () => {
+    const f = spawnFixture()
+    // The parent's head turn is what fills the window; the six small turns after
+    // it are the tail the reset will keep. Both halves matter: without the head
+    // the child never compacts, and without a tail long enough that the last 20
+    // events are small, the reset would keep the surface over budget and the
+    // child would fail closed instead (that is the case above).
+    const HEAD = "INHERITED-HEAD-SENTINEL " + "big ".repeat(1500)
+    append(f.parentSession, { type: "turn/start" })
+    append(f.parentSession, { type: "user/message", text: HEAD })
+    append(f.parentSession, { type: "assistant/message", text: HEAD })
+    append(f.parentSession, { type: "turn/end" })
+    for (let i = 0; i < 6; i++) {
+      append(f.parentSession, { type: "turn/start" })
+      append(f.parentSession, { type: "user/message", text: `q${i}` })
+      append(f.parentSession, { type: "assistant/message", text: `a${i}` })
+      append(f.parentSession, { type: "turn/end" })
+    }
+    // MEASURED: the 28-event seed prices at 3080 active tokens + this role's
+    // 256 overhead = 3336 against a 1600 gate (0.8 × 2000) and an 1800 budget;
+    // the summarizer's own request prices at 3792, over the 2000 window by
+    // itself — the raw 4_242 cap the clamp leaves on it makes that worse.
+    const client = windowEnforcedClient(createMockClient([{ role: "assistant", text: "child done" }]), 2_000)
+    const { path, jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 2_000,
+      maxOutputTokens: 4_242,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    // the acceptance claim as it really is: a strict client does NOT turn this
+    // into a `prompt_too_long` — the child still finishes
+    expect(f.jobs.read(jobId).status).toBe("completed")
+    expect(f.jobs.read(jobId).output).toBe("child done")
+    // the mechanism, request by request: EVERY request the window stopped is a
+    // summarizer's (the directive rides the last message), and the ONE request
+    // that reached the model is the main one — 303 input + a clamped 1697 cap
+    // = the window exactly, and exactly one script step consumed.
+    expect(client.rejected.length).toBeGreaterThan(0)
+    expect(client.rejected.every((r) => typeof r.messages.at(-1)?.content === "string" && (r.messages.at(-1)!.content as string).includes("summar"))).toBe(true)
+    expect(client.served).toHaveLength(1)
+    expect(client.served[0]!.maxOutputTokens).toBeLessThan(4_242) // the clamp DID bite on the request that left
+    // …and the rescuer is the ladder's layer 2, not a summary: the reset marker
+    // removed the inherited head (seqs 1/2 are its two big messages), and no
+    // `compaction/summary` was ever appended — the fail-soft pass appends
+    // nothing on failure.
+    const childSession = f.table.get(path)!.session
+    const reset = childSession.events.find((e) => e.type === "compaction/reset")
+    expect(reset).toBeDefined()
+    expect((reset as { removedSeqs: number[] }).removedSeqs).toEqual(expect.arrayContaining([1, 2]))
+    expect(childSession.events.some((e) => e.type === "compaction/summary")).toBe(false)
+    // the inherited head is GONE from the child's surface and the retained tail
+    // is what it continues on: dropped, not summarised.
+    const surface = deriveMessages(childSession).map((m) => (typeof m.content === "string" ? m.content : "")).join("\n")
+    expect(surface).not.toContain("INHERITED-HEAD-SENTINEL")
+    expect(surface).toContain("q5")
   }, 15_000)
 
   // ── M74 Task 3: the child's own summary vs. the one it inherited ─────────
@@ -1148,16 +1268,27 @@ describe("the child's request carries the resolved budget", () => {
   /** The first measured fact, pinned: the child DOES compact the log it
    * inherited, and its region runs from the head of the SEED (not just over the
    * child's own turn). MEASURED: `shadowedSeqs` = [0..15, 17, 18, 19] — every
-   * non-marker event below the marker, all four inherited turns included.
+   * non-marker event below the marker, all four inherited turns included; 16
+   * (the inherited marker itself) is skipped, and 17-19 are the child's own
+   * turn/start, user/message and step/start — the region covers BOTH logs.
+   * The assertion below pins that EXACT array, not the `arrayContaining([0, 5,
+   * 13])` it used to carry: measured on this fixture, the full set is the
+   * fixture's real output, so the weaker form was only a subset of what the
+   * comment already claimed (final review, fix wave).
    * Killed by the brief's named mutation (a child `retainTokens` big enough to
-   * keep the tail: the region empties, nothing compacts, and this fails). */
+   * keep the tail: the region empties, nothing compacts, and this fails).
+   * PERMISSIVE mock: the fixture's client answers any request it is handed, so
+   * this case documents the engine's behaviour given a TOLERANT provider — not
+   * what a strict window-enforcing one yields (the strict-provider case above
+   * measures that). */
   it("M74: a child whose parent had compacted compacts from the HEAD of its inherited log", async () => {
     const { f, path } = await spawnFromCompactedParent()
     const childSession = f.table.get(path)!.session
     const marker = childSession.events.filter((e) => e.type === "compaction/summary").at(-1)!
     // 0 is the inherited log's very first event; 5 and 13 are user messages of
-    // inherited turns the parent's own marker did NOT hide (see the fixture).
-    expect(marker.shadowedSeqs).toEqual(expect.arrayContaining([0, 5, 13]))
+    // inherited turns the parent's own marker did NOT hide (see the fixture);
+    // 16 is the marker and is NOT in the set (region.ts skips markers).
+    expect(marker.shadowedSeqs).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19])
     // …and the summary the model reads is this child's own text
     const surface = deriveMessages(childSession).map((m) => typeof m.content === "string" ? m.content : "").join("\n")
     expect(surface).toContain("CHILD-SUMMARY-SENTINEL")
@@ -1171,7 +1302,11 @@ describe("the child's request carries the resolved budget", () => {
    * KILLED BY (measured, fix round 1): dropping the marker skip at
    * `packages/compaction/src/region.ts:22` — the inherited marker joins the
    * region, its `user` message leaves the surface, and this case's first
-   * expected element disappears. */
+   * expected element disappears.
+   * PERMISSIVE mock: the fixture's client answers any request it is handed, so
+   * this case documents the engine's behaviour given a TOLERANT provider — not
+   * what a strict window-enforcing one yields (the strict-provider case above
+   * measures that). */
   it("M74: a compacted child shows BOTH summaries — a later summary never hides an earlier one", async () => {
     const { f, path, PARENT_SUMMARY, CHILD_SUMMARY } = await spawnFromCompactedParent()
     const childSession = f.table.get(path)!.session
@@ -1208,6 +1343,9 @@ describe("the child's request carries the resolved budget", () => {
   // (core-agent :186) and `spawnChild` (child.ts:346). So the gate is enforced
   // TWICE over: nothing is written when there is no window, and a window that
   // did slip through as `undefined` could not build an engine at all.
+  // NOT ITS ONLY CATCHER (measured, final review fix wave): that same edit
+  // reddens 18 of this file's 36 cases — this one's value is stating the
+  // contract, not being the mutation's unique witness.
   it("M74: with no window there is no compactor — absent stays absent", async () => {
     const f = spawnFixture()
     const requests: LLMRequest[] = []
