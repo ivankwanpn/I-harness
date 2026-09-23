@@ -101,3 +101,49 @@ describe("summarizer request shape (M5 D2)", () => {
     expect(req.messages[0]!.role).toBe("user")
   })
 })
+
+// ── M73: the summarizer's own request carries a budget ──────────────────────
+// This request is built by compaction, not by the session's agent, so it never
+// met the clamp. On an anthropic route that made it exactly the dangerous one:
+// no cap on the request ⇒ the adapter's own 128k fallback, unclamped, on the
+// call that runs BECAUSE the context is nearly full.
+//
+// DEVIATION FROM THE BRIEF'S LITERAL WINDOW, and it is measured, not preferred:
+// the brief's first case used `contextWindow: 1_000`. This fixture's summarizer
+// request (36 replayed messages + the 1 780-char directive) prices at 2 591
+// tokens, and `clampOutputCap` returns the value UNTOUCHED when the estimated
+// input alone fills the window (llm-seam:462-463 — clamping to 1 there would
+// turn an overflow into a silent truncation). At 1 000 the clamp therefore
+// cannot shrink anything and the assertion below is unpassable by ANY
+// implementation of this task; 8 000 leaves room for 2 591 + the margin, so the
+// number that comes back can only have come out of the clamp. Same cap, same
+// assertion, only the window moves.
+describe("M73: the summarizer request carries a clamped cap", () => {
+  it("hands the resolved cap to the request, clamped against the window", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    const req = requests[0]!
+    // 8k window vs a 2 591-token request ⇒ the clamp must have shrunk it; without
+    // the window on this path clampOutputCap returns the value untouched.
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(50_000)
+  })
+
+  it("with no resolved cap the request carries NO key (absent stays absent)", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+    })
+    await engine.compact(toolSession())
+    expect("maxOutputTokens" in requests[0]!).toBe(false)
+  })
+})

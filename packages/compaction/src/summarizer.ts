@@ -1,4 +1,6 @@
+import { clampOutputCap } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient, ToolSchema } from "@i-harness/llm-seam"
+import { estimateContent } from "@i-harness/token-meter"
 import { approxTokens } from "./tokens.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
@@ -170,6 +172,19 @@ export async function summarizeWithModel(
   // conversation instead of charging full price for it. Absent → the legacy
   // single-message text form, unchanged.
   prefix?: { systemPrompt: string; tools: ToolSchema[]; messages: LLMMessage[] },
+  /** M73: the request's OWN budget. `maxOutputTokens` is the model's resolved
+   * cap (the chain's value, anthropic's required fallback included);
+   * `contextWindow` is what the engine resolved. Both optional — absent
+   * means the request carries no cap, exactly as before.
+   *
+   * NOT `CompactionConfig.maxTokens`, which stays the 3rd argument and keeps
+   * its meaning: a post-hoc CHARACTER slice of the accepted summary
+   * (`trimToTokens` = `slice(0, maxTokens * 4)`, ~4 096 chars at the default
+   * 1024). Wiring THAT to the wire would cut the summary off mid-sentence and
+   * the truncated text still clears `minSummaryChars`, so the next round's
+   * anchored summary would be built on the stump. This one is a token ceiling
+   * on the request; the two are different quantities and different arguments. */
+  limits?: { maxOutputTokens?: number; contextWindow?: number },
 ): Promise<{ text: string; attempts: number }> {
   let attempts = 0
   let lastLength = 0
@@ -182,8 +197,23 @@ export async function summarizeWithModel(
       prefix === undefined
         ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
         : { messages: [...prefix.messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
+    // M73: the cap this request carries, clamped against the window and the
+    // input we are about to send — the same `clampOutputCap` the session's own
+    // requests go through (llm-seam), applied HERE because this request is
+    // built here and nowhere else. Absent cap ⇒ absent key: a default would be
+    // a number nobody chose.
+    const cappedRequest: LLMRequest = limits?.maxOutputTokens === undefined
+      ? request
+      : {
+          ...request,
+          maxOutputTokens: clampOutputCap(
+            limits.maxOutputTokens,
+            limits.contextWindow,
+            estimateContent(request.messages),
+          ),
+        }
     let out = ""
-    for await (const ev of model.stream(request)) {
+    for await (const ev of model.stream(cappedRequest)) {
       if (ev.type === "text/chunk") out += ev.text
       else if (ev.type === "error") throw ev.error
       else if (ev.type === "end") break
