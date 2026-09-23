@@ -339,6 +339,50 @@ describe("ensureResidentAgent", () => {
     expect(req.maxOutputTokens!).toBeLessThan(4_242)
   }, 10_000)
 
+  // M74: the rebuild site needs its OWN witness. Measured: emptying the
+  // `compact` spread in src/tools.ts leaves every other case in this file green
+  // — the driven child simply fails closed instead of compacting, and nothing
+  // asserted which. A compactor that exists only at spawn is exactly the shape
+  // M73 named for the budget one spread above ("a budget that appears only on
+  // the first spawn would vanish on every resume"), and this path is the one
+  // resume_agent, the inbox sweep and teammate wake-ups all take.
+  it("M74: a rebuilt child past its window compacts and continues", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    // The restored child's own log — what it was doing before the process died.
+    // Built with the real `append`: it assigns `seq`, and both the shadow-range
+    // selection and the reset walk read those numbers.
+    for (let i = 0; i < 12; i++) {
+      append(entry.session, { type: "turn/start" })
+      append(entry.session, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
+      append(entry.session, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(entry.session, { type: "turn/end" })
+    }
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (the floor)
+    const requests: LLMRequest[] = []
+    const client: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        const last = request.messages.at(-1)
+        const isSummary = typeof last?.content === "string" && last.content.includes("summar")
+        yield { type: "text/chunk", text: isSummary ? SUMMARY : "rebuilt done" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = { ...deps, parentModel: client, contextWindow: 2_000 }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    // the drive CONTINUED — without a compactor this catch landed as
+    // `prompt_too_long: context budget exceeded (…)` on `entry.error`
+    expect(entry.error).toBeUndefined()
+    expect(entry.finalText).toBe("rebuilt done")
+    // …and it was the rebuilt child's OWN compactor that rescued it
+    expect(requests.length).toBeGreaterThan(1)
+  }, 15_000)
+
   // M73, the declared arm's window precedence in the OTHER direction: a binding
   // that carries a cap and NO window of its own. `clampOutputCap` returns the
   // value untouched when the window is undefined (llm-seam), so the binding's
