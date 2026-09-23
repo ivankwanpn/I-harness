@@ -39,12 +39,29 @@ function isCompactionMarker(ev: SessionEvent): boolean {
  * dispatch between a call and its result is retained or dropped with them.
  *
  * The condition asks the RESULT side, and that is load-bearing. A `tool/call`
- * that never receives a result (an aborted turn) does not exist on the
- * projection at all — `deriveMessages` drops the un-flushed pending call. A
- * call-side predicate ("is any call still open?") would judge every cut of such
- * a session unsafe, walk to 0, and leave `resetWindowOnce` with no
- * `removedSeqs` forever: the ladder's second layer degenerating to fail-closed.
- * The rule must agree with the projection, not with the intuition.
+ * that never receives a result (an aborted turn) IS on the projection: the
+ * fold buffers it (`packages/core-session/src/index.ts:564`) and always flushes
+ * the buffer (`:611`, plus the flush at the log's end, `:597`), so it surfaces
+ * as `assistant("", toolCalls)` carrying a `tool_use` no result answers —
+ * pinned at `packages/core-session/test/session.test.ts:24`, and its mirror is
+ * the M5/D2 contract's "dangling tool call"
+ * (`packages/compaction/test/engine.test.ts:329`). What such a call cannot be
+ * is REPAIRED BY A CUT: the walk only ever retains MORE, so once it has stepped
+ * over the call the dangling `tool_use` is kept for every cut still reachable,
+ * and the walk comes to rest on that call's own index — the earliest such
+ * call's, or 0 when one sits at the head of the log (measured: with the
+ * never-resolved call at index 2 of an 8-event log, a call-side walk rests on 2
+ * instead of the requested 7). A call-side predicate ("is any call still
+ * open?") therefore buys nothing and pays for it: the cut stops depending on
+ * `retainLast`, the knob it exists to serve, and in the head-of-log case
+ * `resetWindowOnce` finds no `removedSeqs` at all — the ladder's second layer,
+ * fail-closed. The rule asks only the side a backwards cut can repair.
+ *
+ * Named residual, not a solved case: nothing constrains an unresolved
+ * `tool/call`, so the rule will let a cut REST ON one — a retained tail may
+ * begin with a `tool_use` no result answers. That state is made by the aborted
+ * turn, never by the cut, and no cut can undo it; the walk does not pretend
+ * otherwise.
  *
  * The same asymmetry decides the one remaining case: a result whose call
  * appears NOWHERE earlier in the log (a malformed persisted log — append
@@ -122,12 +139,14 @@ export function selectShadowableRange(session: Session, retainTokens: number): n
     if (isCompactionMarker(ev)) continue
     tail += approxTokens(deriveSearchText(ev))
     if (tail >= retainTokens) {
-      // M5/D2: walk BACK off any tool event before cutting — `walkOffToolEvents`
-      // is that rule's ONE home (this site used to inline the loop; so did
-      // resetWindowOnce). Measured on a 12-turn tool session BEFORE the M76
-      // exact rule: 50/150/300/900 all orphan, while 500 lands on a `tool/call`
-      // and survives — by arithmetic, not by design. Those five orphan none
-      // under the exact rule.
+      // M5/D2: walk the cut BACK to a safe point before cutting —
+      // `walkOffToolEvents` is that rule's ONE home (this site used to inline a
+      // loop that stepped back over "any tool event"; so did resetWindowOnce).
+      // M76 made the rule exact: it asks the result side, and no longer reads
+      // which event the cut sits on. Measured on a 12-turn tool session BEFORE
+      // that: 50/150/300/900 all orphan at the budget's own landing, while 500
+      // lands on a `tool/call` and survives — by arithmetic, not by design.
+      // Those five orphan none under the exact rule.
       const j = walkOffToolEvents(session, i)
       firstRetainedSeq = session.events[j]!.seq ?? j
       break
