@@ -6,7 +6,7 @@ import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import { resolveCompactSpec, resolveContextWindow, type CompactionConfig, type ResolvedPruneConfig } from "./config.ts"
 import { activeTokens } from "./tokens.ts"
-import { selectShadowableRange } from "./region.ts"
+import { selectShadowableRange, walkOffToolEvents } from "./region.ts"
 import { summarizeWithModel } from "./summarizer.ts"
 
 // W6 T6: ONE module-scope handle for this file's one report, phase `turn`:
@@ -112,6 +112,11 @@ export function createCompactionEngine(deps: {
     // undefined token fields, never a TypeError out of compact().
     const startedAt = Date.now()
     const tokensBefore = safeActiveTokens(session)
+    // M75 §1.6: `attempts` counts MODEL CALLS, not passes. A pass that could
+    // not fit the single request now makes one call per chained piece (each
+    // with its own M34 retry), so the number is no longer comparable with
+    // pre-M75 readings of the same session — one pass still emits exactly ONE
+    // `compaction/attempt`, with `attempts` = every call it took.
     const emit = (outcome: "success" | "prune-only" | "failure" | "skipped", extra: Record<string, unknown> = {}) => {
       deps.telemetry?.emit({
         type: "compaction/attempt",
@@ -191,7 +196,12 @@ export function createCompactionEngine(deps: {
         // request carries the system prompt and tool schemas too. Resolved
         // (default 0), so it is passed as a value, not as a spread.
         overheadTokens: config.overheadTokens,
-      })
+      },
+      // M75: and the region itself, RAW — the summarizer slices it for itself
+      // when the single request cannot fit the window. Pre-slicing here would
+      // move the fit predicate to this side of the seam, where the clamp's own
+      // arithmetic (which prices the directive and the overhead too) is not.
+      { session, shadowedSeqs })
       summary = result.text
       attempts = attemptsTracker.count
     } catch (err) {
@@ -325,21 +335,13 @@ async function resetWindowOnce(session: Session, retainLast: number): Promise<Co
   if (!Number.isInteger(retainLast) || retainLast < 1) {
     throw new Error(`compaction: resetWindow retainLast must be a positive integer (got ${retainLast})`)
   }
-  // M5/D2: the retained tail must not start inside a tool block. deriveMessages
-  // folds assistant(toolCalls) together with its tool(result) messages, but a
-  // "last N events" cut is finer than that fold — a tail beginning at a
-  // `tool/result` keeps a result whose call was just shadowed, and llm-anthropic
-  // renders that as a leading tool_result block with no tool_use. So walk the
-  // cut BACKWARDS (retaining more, never less) until it rests on an event that is
-  // neither half of a call/result pair. Without this, safety depends on
-  // retainLast modulo the events per turn: measured, 4 of the first 25 values
-  // produce an orphaned result.
-  let cut = Math.max(0, session.events.length - retainLast)
-  while (cut > 0) {
-    const at = session.events[cut]!
-    if (at.type !== "tool/call" && at.type !== "tool/result") break
-    cut -= 1
-  }
+  // M5/D2: the retained tail must not start inside a tool block — the shared
+  // rule lives in `walkOffToolEvents` (this site used to inline the loop; so did
+  // selectShadowableRange). It walks the cut BACKWARDS (retaining more, never
+  // less) until it rests on an event that is neither half of a call/result pair.
+  // Without it, safety depends on retainLast modulo the events per turn:
+  // measured, 4 of the first 25 values produce an orphaned result.
+  const cut = walkOffToolEvents(session, Math.max(0, session.events.length - retainLast))
   const keepSeqs = new Set(
     session.events.slice(cut).map((e) => e.seq).filter((s): s is number => s !== undefined),
   )
