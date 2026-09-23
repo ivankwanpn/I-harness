@@ -160,4 +160,14 @@ describe("M72 Ⅱ: the output cap", () => {
     // as a truncation.
     expect(clampOutputCap(8_192, 10_000, 10_000)).toBe(8192)
   })
+
+  it("passes the value through untouched when the estimate is not finite", () => {
+    // A NaN estimate makes `hardRoom` NaN, so BOTH range comparisons are false:
+    // the old `if (hardRoom < 1) return value` arm did not fire and the function
+    // returned `Math.min(value, NaN)` = NaN — a value every adapter's
+    // `!== undefined` guard happily sends as `max_tokens: NaN`. The arm is
+    // therefore written as a POSITIVE test (`!(hardRoom >= 1)`) that no
+    // non-finite estimate can fall through.
+    expect(clampOutputCap(8192, 200_000, Number.NaN)).toBe(8192)
+  })
 })

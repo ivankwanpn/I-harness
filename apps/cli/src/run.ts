@@ -796,8 +796,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // and this line are then the same fact by construction. Scoped to the last
     // turn: an earlier turn's truncation is not this run's ending (a fresh turn
     // after it can have ended cleanly).
+    // `Math.max(…, 0)`: `lastIndexOf` answers −1 when the log carries no
+    // `turn/start` at all, and `slice(-1)` would then inspect only the final
+    // event — a silent false negative. 0 keeps the whole log in view, which is
+    // the correct scope when there is no turn boundary to scope to.
     const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
-    const truncated = session.events.slice(lastTurnStart).some((e) => e.type === "step/end" && e.truncated === true)
+    const truncated = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.truncated === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -848,7 +852,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // reason the summary above is: stdout carries ONLY the telemetry's NDJSON
     // frames and the final text. Printed unconditionally (not only when
     // telemetry was asked for) — an incomplete answer is not an opt-in fact.
-    if (truncated) console.error("[truncated] the provider stopped at the output cap; the answer is incomplete")
+    // The wording claims exactly what the predicate above knows: a `step/end`
+    // in this turn is truncated — NOT that `finalText` is the truncated thing
+    // (the truncation can be on a step whose output the turn did not end with).
+    if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
     emitSessionEnd(0)
     telemetry?.close()
     return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
