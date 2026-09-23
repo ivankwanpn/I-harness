@@ -248,6 +248,15 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           // must not depend on where the frame boundary fell — one rule, both
           // callers.
           if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
+          // M72 Ⅲ: DeepSeek-family gateways stream the reasoning text on
+          // `delta.reasoning_content` — a sibling of `content` that had ZERO
+          // readers in this tree, so the whole trajectory was dropped. Pushed
+          // BEFORE this frame's content: a model that both thinks and answers
+          // does so in that order.
+          const reasoningText = (delta as { reasoning_content?: unknown }).reasoning_content
+          if (typeof reasoningText === "string" && reasoningText.length > 0) {
+            events.push({ type: "reasoning", text: reasoningText })
+          }
           if (typeof delta.content === "string" && delta.content.length > 0) {
             events.push({ type: "text/chunk", text: delta.content })
           }

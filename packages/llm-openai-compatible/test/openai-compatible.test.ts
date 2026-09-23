@@ -547,3 +547,47 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
     expect(events.at(-1)).toEqual({ type: "end" })
   })
 })
+
+// M72 Ⅲ. DeepSeek-family gateways stream the reasoning text on a SIBLING of
+// `delta.content` — `delta.reasoning_content` — which had zero readers in this
+// tree, so an entire trajectory was silently dropped. The seam's
+// `{ type: "reasoning"; text }` variant already existed (llm-bedrock and
+// llm-anthropic produce it); these tests pin the missing PRODUCER. Within one
+// frame reasoning precedes content: a model that both thinks and answers does
+// so in that order.
+describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: delta.reasoning_content becomes a reasoning event", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing options" } }] })}\n\n` +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["reasoning", "text/chunk", "end"])
+    expect(events[0]).toEqual({ type: "reasoning", text: "weighing options" })
+  })
+
+  it("M72 Ⅲ: an empty reasoning_content emits nothing", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "reasoning")).toBe(false)
+  })
+
+  it("M72 Ⅲ: a boundary-less final frame's reasoning_content is not dropped", async () => {
+    // no trailing "\n\n" → the flush parses this frame; T4 unified the two
+    // paths, so this also pins that unification.
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "late thought" } }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "reasoning")).toEqual([{ type: "reasoning", text: "late thought" }])
+  })
+})
