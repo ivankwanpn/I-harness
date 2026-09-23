@@ -590,4 +590,23 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.filter((e) => e.type === "reasoning")).toEqual([{ type: "reasoning", text: "late thought" }])
   })
+
+  // The ordering rule, pinned. ONE frame carries BOTH fields — the case the
+  // three tests above cannot see, because they put reasoning and content in
+  // SEPARATE frames where frame order alone decides event order. A model that
+  // both thinks and answers emits them in that order, so the reasoning push
+  // must precede the content push inside the choice loop; moving it after
+  // flips this assertion.
+  it("M72 Ⅲ: a frame carrying both thinks before it answers (reasoning precedes content)", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing", content: "done" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events).toEqual([
+      { type: "reasoning", text: "weighing" },
+      { type: "text/chunk", text: "done" },
+      { type: "end" },
+    ])
+  })
 })
