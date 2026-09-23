@@ -64,8 +64,28 @@ describe("compaction engine", () => {
     const s = longSession()
     const engine = createCompactionEngine({ model: failing, config })
     const result = await engine.compact(s)
-    expect(result).toEqual({ compacted: false, shadowedSeqs: [] })
+    // M73: this arm now names its reason — the assertion stays COMPLETE (it
+    // still pins the whole shape), it just pins one field more.
+    expect(result).toEqual({ compacted: false, shadowedSeqs: [], reason: "summarizer-failed" })
     expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)
+  })
+
+  it("M73: a summarizer failure SAYS it was the summarizer", async () => {
+    const failing: ModelClient = {
+      async *stream(): AsyncIterable<LLMStreamEvent> {
+        yield { type: "error", error: new Error("model exploded") }
+      },
+    }
+    const s = longSession()
+    const engine = createCompactionEngine({ model: failing, config })
+    const result = await engine.compact(s)
+    expect(result.reason).toBe("summarizer-failed")
+
+    // The control: a `false` from a DIFFERENT arm carries no reason. Without
+    // this the assertion above could pass on a type that always writes one.
+    const noPressure = await createCompactionEngine({ model: mockModel("x"), config }).maybeCompact(createSession())
+    expect(noPressure.compacted).toBe(false)
+    expect(noPressure.reason).toBeUndefined()
   })
 
   it("empty summarizer output is fail-soft", async () => {
