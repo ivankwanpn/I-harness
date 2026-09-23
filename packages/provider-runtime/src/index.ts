@@ -5,7 +5,7 @@ import {
   type ProviderAuthResolver,
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
-import type { ModelClient, ReasoningEffort } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import {
   buildModelClient,
   defaultProviderRegistry,
@@ -663,7 +663,17 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       // thrown away one line after being computed. Both numbers travel: the
       // window is what the host compacts against, the cap is what the request
       // must actually carry.
+      // M72 Ⅲ: Anthropic's Messages API REQUIRES `max_tokens`, so its fallback
+      // must be resolved HERE — where the protocol is known — or the value the
+      // adapter invents never meets core-agent's clamp (the phase-Ⅱ record's
+      // I1: `input 100K + 128000 > 200K` was a 400 on exactly the request that
+      // ran because the context was nearly full). With nothing resolved above,
+      // this is the value the chain supplies; it travels like any other cap.
+      // `profile.protocol` is the ADAPTER spelling (adapterProtocol maps
+      // openai-completions → openai-compatible and passes the rest through), so
+      // an anthropic route reads exactly as declared.
       const maxOutputTokens = effective?.maxOutputTokens
+        ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
 
       try {
         const client = buildClient(profile, modelId)
