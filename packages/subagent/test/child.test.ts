@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, type SessionEvent } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -952,14 +952,16 @@ describe("the child's request carries the resolved budget", () => {
 
   // M73 (fix wave, M1). The window is what makes the budget ladder run at all —
   // and the ladder is where this milestone's most consequential side effect
-  // lives. A spawn hands core-agent NO `compact` deps, so no compactor is built,
-  // and without one the ladder's layers 1 and 2 are unreachable (`if (compactor)`
-  // / `if (compactor && resetAllowed)` in enforceBudget): past
-  // `contextWindow * reserveRatio` (0.9) the child has exactly ONE layer left —
-  // the fail-closed `prompt_too_long` throw. Before this milestone the windowless
-  // child sent the over-window request and let the provider answer it. The trade
-  // is deliberate and this is the case that pins it.
-  it("a child past its window FAILS CLOSED — no compactor, and no over-window request", async () => {
+  // lives. M74: the child now HAS a compactor, so the ladder's layers 1 and 2
+  // (`if (compactor)` / `if (compactor && resetAllowed)` in enforceBudget) are
+  // reachable — but that is exactly what makes the LAST layer worth pinning: a
+  // window this small (10 tokens) cannot be brought back under budget by either
+  // (the reset keeps a 20-event tail of a session whose every message is priced
+  // far above the whole window), so the child still FAILS CLOSED with
+  // `prompt_too_long` rather than sending an over-window request for the
+  // provider to reject. The trade this milestone inherits is unchanged: the
+  // provider's 400 is not a better failure.
+  it("a child past its window FAILS CLOSED — the summarizer runs, and no over-window request", async () => {
     const f = spawnFixture()
     const parentClient = recordingClient("parent")
     const { jobId } = await spawnChild({
@@ -980,7 +982,66 @@ describe("the child's request carries the resolved budget", () => {
     expect(f.jobs.read(jobId).status).toBe("error")
     expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
     // 而不是送出超窗請求 — the ladder runs at the step boundary BEFORE the model
-    // is called, so not one request left the process.
-    expect(parentClient.requests).toHaveLength(0)
+    // is called. M74: with a child compactor the summarizer runs first (measured
+    // here: 4 requests, two attempts from the auto pass and two from the
+    // enforceBudget pass — the mock's 6-char reply is below the 500-char
+    // minSummaryChars floor, so each pass retries once); what must never happen
+    // is the over-window MAIN request. (The summarizer's own request never
+    // carries the over-window messages.)
+    const mainRequests = parentClient.requests.filter((r) => {
+      const last = r.messages.at(-1)
+      return !(typeof last?.content === "string" && last.content.includes("summar"))
+    })
+    expect(mainRequests).toHaveLength(0)
+    // STRICTER than the count this replaces (`requests` toHaveLength(0)), which
+    // held only because no compactor existed: here something DID leave, and the
+    // zero above is now a claim about WHICH request it was. Reddens if the
+    // compactor is removed (measured: 0 requests), so the case still pins the
+    // compactor's participation and not merely the absence of traffic.
+    expect(parentClient.requests.length).toBeGreaterThan(0)
   }, 10_000)
+
+  // M74. Before this, a child past `window * 0.9` had exactly one ladder layer
+  // left — the fail-closed throw — because no compactor was built. Now it has
+  // one: the pass shadows the region and the turn CONTINUES.
+  it("M74: a child past its window COMPACTS and finishes", async () => {
+    const f = spawnFixture()
+    // A parent log big enough that the seed alone puts the child over the
+    // pressure gate of the window below. Built with the real `append` (not a
+    // raw push): it is what assigns `seq`, and the seed's coordinates depend on
+    // those numbers. (`append` 加進本檔第 3 行既有的 `@i-harness/core-session` import。)
+    for (let i = 0; i < 12; i++) {
+      append(f.parentSession, { type: "turn/start" })
+      append(f.parentSession, { type: "user/message", text: `q${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "assistant/message", text: `a${i} ` + "filler ".repeat(60) })
+      append(f.parentSession, { type: "turn/end" })
+    }
+    const SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (the floor)
+    const requests: LLMRequest[] = []
+    const client: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        const last = request.messages.at(-1)
+        const isSummary = typeof last?.content === "string" && last.content.includes("summar")
+        yield { type: "text/chunk", text: isSummary ? SUMMARY : "child done" }
+        yield { type: "end" }
+      },
+    }
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: client, resolveModel: noRoleModel,
+      contextWindow: 2_000, // the seed alone is over 0.8 × this
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+
+    // it FINISHED — the pre-M74 behaviour was a `prompt_too_long` error here
+    expect(f.jobs.read(jobId).status).toBe("completed")
+    // …and the model really was asked to summarise (the child's own engine)
+    expect(requests.length).toBeGreaterThan(1)
+  }, 15_000)
 })

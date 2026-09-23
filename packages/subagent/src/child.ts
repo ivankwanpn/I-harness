@@ -359,17 +359,29 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // budget ladder cannot even fire without one). Both come from the same
     // place the main session's do.
     ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-    // The window costs the child its first two ladder layers, on purpose: a
-    // spawn passes no `compact` deps, so core-agent builds no compactor and
-    // enforceBudget's `if (compactor)` / `if (compactor && resetAllowed)` arms
-    // are unreachable — past `contextWindow * reserveRatio` the child FAILS
-    // CLOSED with `prompt_too_long` instead of sending the over-window request
-    // a windowless child used to send. That is the milestone's deliberate
-    // trade (the provider's 400 is not a better failure), and the parent reads
-    // it off the job it spawned. Pinned by "a child past its window FAILS
-    // CLOSED" in test/child.test.ts.
+    // M73: the window the child's budget ladder measures with (the cap above is
+    // what the request carries; this is what it is clamped against). Before it,
+    // a windowless child sent the over-window request and let the provider
+    // answer it — a 400 the harness could not see coming. The ladder's LAST
+    // layer is still reachable (compaction + reset can both fail to bring the
+    // surface back), and it still fails closed: pinned by "a child past its
+    // window FAILS CLOSED" in test/child.test.ts.
     ...(contextWindow !== undefined
       ? { budget: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
+      : {}),
+    // M74: the child's OWN compactor. Without it the ladder's first two layers
+    // are unreachable (core-agent builds one only from `compact`) and a child
+    // past `window * 0.9` has exactly one layer left — the fail-closed throw.
+    // With it, the pass shadows the region and the turn continues; the 10%
+    // between the pressure gate (0.8) and the budget (0.9) is its head start.
+    // `requestShape` needs no wiring here: core-agent builds it from THIS
+    // child's systemPrompt and tools, so the summarizer's call is a byte-prefix
+    // of the child's own request (the provider cache serves it). `auto` is not
+    // written — it already defaults true, and a knob that can only be turned off
+    // would be a surface a child has no handle to use (`Agent.compact` is
+    // reachable only through a SessionAssembly).
+    ...(contextWindow !== undefined
+      ? { compact: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
       : {}),
     // M19 (Ruling 24): the child's durable session id is seeded onto every
     // prepared ToolExec so the agent-team scheduler can attribute the child's
