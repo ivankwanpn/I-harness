@@ -48,7 +48,7 @@ Expected: 第 1、2、4 條紅（量出來各自紅在哪裡並記錄）；第 3
 
 - [ ] **Step 3: 實作**（**兩處，第二處才是有效的**）
 
-**(a) `packages/core-session/src/index.ts` 的 `deriveMessagesUpTo`**：seq 濾網對 **`compaction/prune`** 破例（它必須被 prefix fold 看見）。註解寫明**為什麼它安全而 summary／reset 不安全**：prune 是**內容尋址**的（map 以工具呼叫為 key，取代文字是**那份舊輸出**的性質）⇒ 套到任何 fold 都對；`summary`／`reset` 是**時間尋址**的（它們的 seq 清單**指名一段區域**）⇒ **必須繼續服從**。docstring 也要改（它現在承諾「as of a PREFIX」，例外要寫出來，否則下一個人會讀成 bug）。
+**(a) `packages/core-session/src/index.ts` 的 `deriveMessagesUpTo`**：seq 濾網對 **`compaction/prune`** 破例（它必須被 prefix fold 看見）。註解寫明**為什麼它安全而 summary／reset 不安全**：prune 是**內容尋址**的（map 以工具呼叫為 key，取代文字是**那份舊輸出**的性質）⇒ 套到任何 fold 都對；`summary`／`reset` 是**時間尋址**的（它們的 seq 清單**指名一段區域**）⇒ **必須繼續服從**（**兩者都要有釘子**——只釘 summary 會讓「連 reset 也放行」的突變活下來）。docstring 也要改（它現在承諾「as of a PREFIX」，例外要寫出來，否則下一個人會讀成 bug）。**引這個檔案用符號名，不用行號**（本階段動過它）。
 
 **(b) `packages/compaction/src/index.ts`**：標記仍移到 `:132` 的 `planPrune` 之後、`:160` 建 `prefix` 之前，**刪掉**原本 `:218` 的那一次。**其餘逐字不變**（`renderShadowed` 仍然收到它規劃的那份 records；prune-only 那條路不動；summary 的三個標記不動）。
 
