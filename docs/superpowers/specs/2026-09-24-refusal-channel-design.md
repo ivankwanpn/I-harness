@@ -67,7 +67,8 @@
 ### 1.4 schema 與 telemetry
 
 - `core-session/src/index.ts:25` 的 `step/end` 加 `refused?: true`（與 `truncated?: true` 並列）。
-- `telemetry/src/types.ts:23` 的聯集加 `provider/refused`，`telemetry/src/manifest.ts` 加對應列——**`telemetry/test/manifest.test.ts:7-16` 會斷言兩者一致**，所以兩處必須同時改（那是它的用途）。
+- `telemetry/src/types.ts:23` 的聯集加 `provider/refused`，`telemetry/src/manifest.ts` 加對應列。
+  - **執行期更正（Task 3 量到，原文說「測試會斷言兩者一致，所以兩處必須同時改」是錯的）**：`telemetry/test/manifest.test.ts` 的**執行期那一半是同義反覆**——`codes` 是從 `TELEMETRY_EVENT_TYPES` 建的，而那份又**是** `TELEMETRY_MANIFEST.map((row) => row.code)` ⇒ `codes.has(row.code)` 對每一列都恆真，`const missing: Missing[] = []` 對任何 `Missing` 都合法。**唯一有牙的是反方向**（`satisfies readonly TelemetryEventCodeDoc[]` 的 TS2820）。⇒ **manifest 的列是「必須手動加、而且沒有東西守著」**，這正是本階段要手動加它的原因，也是它成為**殘餘**的原因：**修那個測試（改成 `Missing extends never` 的型別級斷言）要動一條既有斷言 ⇒ 指派給 M79（覆蓋率）**。
 - **`EMPTY_RESPONSE` 不動**：它的無生產者是既成事實，且**拒絕不該被重試**——把拒絕接到那個碼上會**引入**重試。記為殘餘（見 §5）。
 
 ## 2. 驗收（每一條都要**紅先 ＋ 變異證明**）

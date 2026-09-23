@@ -121,7 +121,7 @@ git commit -m "feat(providers): five wires recognise their own refusal literal, 
 **Files:**
 - Modify: `packages/core-agent/src/index.ts`（`refusedThisStep` ＋ telemetry ＋ 耐久的 `step/end`）
 - Modify: `packages/core-session/src/index.ts:25`（`step/end` 的欄位）
-- Modify: `packages/telemetry/src/types.ts:23`（事件型別聯集）＋ `packages/telemetry/src/manifest.ts:36`（對應列）
+- Modify: `packages/telemetry/src/types.ts:23`（事件型別聯集）＋ `packages/telemetry/src/manifest.ts:36`（對應列）——**列要手動加，`manifest.test.ts` 的執行期那一半是同義反覆、不守它**（Task 3 的 F1 量到的；反方向才有牙）
 - Modify: `apps/cli/src/run.ts`（讀 `step/end.refused` ⇒ stderr `[refused]` ＋ `result.refused`）
 - Modify: `packages/compaction/src/summarizer.ts:272`、`packages/session-title/src/index.ts:84`（訊息只在**看到拒絕**時改準）
 - Test: 各自的測試檔
