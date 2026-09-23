@@ -437,6 +437,28 @@ describe("provider protocol + models objects (Task 1)", () => {
     await rm(root, { recursive: true, force: true })
   })
 
+  it("M72 Ⅲ: usageInStream is kept per route as a boolean; junk degrades to absent", async () => {
+    // Same silent-drop site as maxTokensField above — a route field the
+    // normalizer does not KNOW never reaches a request. The value is `false`,
+    // which is exactly the one a truthiness-shaped check would drop.
+    const kept = normalizeSettings({ llm: { providers: { gw: { usageInStream: false } } } }).llm.providers.gw
+    expect(kept).toEqual({ usageInStream: false })
+    // A boolean field: a STRING that spells one is not one, and a number is not
+    // either. Both degrade to absent, which is the adapter's default (ON).
+    expect(normalizeSettings({ llm: { providers: { q: { usageInStream: "false" } } } }).llm.providers.q).toBeUndefined()
+    expect(normalizeSettings({ llm: { providers: { q: { usageInStream: 0 } } } }).llm.providers.q).toBeUndefined()
+
+    const { store, root } = await newStore()
+    await expect(
+      mutateSection("llm", [{ op: "set", path: ["providers", "gw", "usageInStream"], value: "false" }], store),
+    ).rejects.toMatchObject({ code: "settings-section-validation" })
+    const v = await mutateSection("llm", [
+      { op: "set", path: ["providers", "gw", "usageInStream"], value: false },
+    ], store)
+    expect((v.user as AnyRecord).providers.gw).toEqual({ usageInStream: false })
+    await rm(root, { recursive: true, force: true })
+  })
+
   it("protocol is a closed three-value enum at mutate: unknown value fails loud, valid accepted", async () => {
     const { store, root } = await newStore()
     await expect(

@@ -179,6 +179,9 @@ interface ProviderView {
   /** M72 Ⅱ: the ROUTE's chosen output-cap field name (user config wins over
    * the template; absent → the adapter's own default). */
   maxTokensField?: SettingsMaxTokensField
+  /** M72 Ⅲ: the ROUTE's usage ask (user config wins over the template; absent
+   * → the adapter's own default, which is ON). */
+  usageInStream?: boolean
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -738,6 +741,12 @@ function providerView(
     ...(user?.maxTokensField !== undefined
       ? { maxTokensField: user.maxTokensField }
       : template?.maxTokensField !== undefined ? { maxTokensField: template.maxTokensField } : {}),
+    // M72 Ⅲ: the usage ask — same user-wins-over-template rule, and the same
+    // reason the arm is written out: `false` and "absent" must stay
+    // distinguishable, since absent hands the decision to the adapter (ON).
+    ...(user?.usageInStream !== undefined
+      ? { usageInStream: user.usageInStream }
+      : template?.usageInStream !== undefined ? { usageInStream: template.usageInStream } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
@@ -787,6 +796,9 @@ function runtimeProfile(
     // M72 Ⅱ: route-level only (there is no per-model override of the wire's
     // field name — one endpoint spells a field one way).
     ...(view.maxTokensField !== undefined ? { maxTokensField: view.maxTokensField } : {}),
+    // M72 Ⅲ: route-level only, for the same reason — one endpoint asks for
+    // usage one way.
+    ...(view.usageInStream !== undefined ? { usageInStream: view.usageInStream } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }
