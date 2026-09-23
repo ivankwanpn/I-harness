@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { estimateContent } from "@i-harness/token-meter"
-import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type LLMRequest, type LLMStreamEvent, type ModelClient } from "@i-harness/llm-seam"
 import { createCompactionEngine } from "../src/index.ts"
 
 // M5 / D2. The summarizer reads the WHOLE shadowed region — at compaction that is
@@ -240,5 +240,135 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     expect(req.tools).toEqual([])
     expect(req.maxOutputTokens).toBeGreaterThan(0)
     expect(req.maxOutputTokens!).toBeLessThan(50_000)
+  })
+})
+
+// ── M75: the fallback — an over-window region is summarised in chained pieces ─
+//
+// Today, a region that does not fit the window makes the summarizer's single
+// request ILLEGAL on the wire (`input + max_tokens > context` is a validation
+// error, llm-seam:413, and it is not in the retryable set), the pass fails soft
+// and the budget ladder's second layer resets the window: the inherited context
+// is thrown away with NO summary. M75 gives that regime a path — the region is
+// sliced, every piece carries its own messages, and the pieces are chained
+// through the running summary — but ONLY there: when the single request fits,
+// the pass must stay byte-identical (the prefix/cache argument above).
+//
+// The mock below is a STRICT provider stand-in: it rejects exactly what a
+// provider rejects, so the case can tell "the pieces are legal where the single
+// call was not" from "everything was accepted anyway". `capturingModel` above
+// accepts everything, and a case built on it would pass even if every piece
+// were illegal on the wire.
+function strictModel(contextWindow: number, overheadTokens = 0): { model: ModelClient; requests: LLMRequest[] } {
+  const requests: LLMRequest[] = []
+  return {
+    requests,
+    model: {
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        // The provider's own rule, priced the way this tree prices a request:
+        // `estimateContent(messages) + overhead + max_tokens > context` is a
+        // validation error. A request with NO cap is the same violation on the
+        // anthropic route — its adapter substitutes ANTHROPIC_MAX_TOKENS_FALLBACK
+        // (llm-seam:435) — so "absent" is not a way to pass this mock either.
+        const cap = request.maxOutputTokens ?? ANTHROPIC_MAX_TOKENS_FALLBACK
+        const input = estimateContent(request.messages) + overheadTokens
+        if (input + cap > contextWindow) {
+          yield { type: "error", error: new Error(`context window exceeded: input ${input} + max_tokens ${cap} > ${contextWindow}`) }
+          return
+        }
+        yield { type: "text/chunk", text: SUMMARY }
+        yield { type: "end" }
+      },
+    },
+  }
+}
+
+// DEVIATION FROM THE BRIEF'S LITERAL WINDOW, and it is measured, not preferred:
+// the brief's over-window case used `contextWindow: 400`. The DIRECTIVE alone —
+// the 1 780-char prompt template this file's M73 case above already measured —
+// prices at 449 tokens, so a 400-token window rejects EVERY request any
+// implementation can send, including one whose piece carries no region at all.
+// With the strict mock the case would be red by construction and could not
+// distinguish the pieces from the single call — the one thing it exists to do.
+// Measured on this fixture: the single request prices at 2 591 tokens (region
+// 2 142 + directive 449), so any window ≤ 2 591 keeps the case's meaning ("the
+// single call cannot fit"), and 1 000 leaves room for every piece request this
+// implementation sends (widest measured: 838). Same assertions, same mock, only
+// the window moves.
+describe("M75: an over-window region is summarised in chained pieces", () => {
+  it("M75: a region that does NOT fit the window still gets a SUMMARY (not a reset)", async () => {
+    const { model, requests } = strictModel(1_000)
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 1_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    const s = toolSession() // the existing fixture: 12 read calls
+    const result = await engine.compact(s)
+
+    expect(result.compacted).toBe(true)
+    // a summary EXISTS — today this is the case that fails soft and resets
+    expect(result.summary).toBeDefined()
+    expect(s.events.some((e) => e.type === "compaction/summary")).toBe(true)
+    // …and it took MORE than one call (the pieces)
+    expect(requests.length).toBeGreaterThan(1)
+    // Every request the strict provider accepted was legal on this window, and
+    // each carried a cap the clamp could honour — the single call's arm-C cap
+    // (the caller's 50 000, returned UNTOUCHED) is exactly what is missing here.
+    for (const req of requests) {
+      expect(req.maxOutputTokens).toBeGreaterThan(0)
+      expect(req.maxOutputTokens!).toBeLessThan(50_000)
+    }
+  })
+
+  it("M75: a region that DOES fit keeps today's single, byte-identical prefix call", async () => {
+    const { model, requests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 1_000_000, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+    })
+    const s = toolSession()
+    // The main path's fold, captured BEFORE the pass — the idiom the M5/D2 case
+    // above uses. Reading it after would measure the wrong thing twice over:
+    // (1) `compact()` appends the summary marker, and `deriveMessages` then
+    // projects the region as one summary message (measured: 36 messages before,
+    // 1 after), so `deriveMessages(s)` is no longer the fold this test is
+    // about; (2) the summarizer's request is `[...region fold, directive]`
+    // (summarizer.ts:201), which is the second thing the assertion below must
+    // account for.
+    const fold = deriveMessages(s)
+    await engine.compact(s)
+    expect(requests).toHaveLength(1)
+    // The prefix property: everything but the appended directive is exactly the
+    // fold the main loop sends, byte for byte.
+    expect(requests[0]!.messages.slice(0, -1)).toEqual(fold)
+  })
+
+  // Ruling 2's crux, pinned: the predicate must price what the CLAMP prices —
+  // the region fold PLUS the directive PLUS the overhead — not the region
+  // alone. A region-only predicate leaves a band (the region under the window,
+  // the request over it) where the pass takes the single path straight into
+  // the provider rejection M75 exists to remove. Measured on this fixture: the
+  // region prices at 2 142 tokens, the single request at 2 591 (the directive
+  // is 449 of them). 2 560 sits in that band: a region-only predicate sends
+  // the single request here and the strict mock rejects it; pricing the
+  // request takes the piece path (2 pieces, 2 024 and 1 209 tokens, measured)
+  // and the summary happens.
+  it("M75: the predicate prices the REQUEST, not the region — the band where only the directive is over", async () => {
+    const { model, requests } = strictModel(2_560)
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 2_560, thresholdRatio: 0.5, maxTokens: 200 },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    const s = toolSession()
+    const result = await engine.compact(s)
+    expect(result.compacted).toBe(true)
+    expect(result.summary).toBeDefined()
+    expect(requests.length).toBeGreaterThan(1)
   })
 })
