@@ -11,18 +11,23 @@ function isCompactionMarker(ev: SessionEvent): boolean {
   return ev.type === "compaction/start" || ev.type === "compaction/end" || ev.type === "compaction/summary" || ev.type === "compaction/reset" || ev.type === "compaction/prune"
 }
 
-/** M75 (I3): the walk-off rule the compaction boundary sites SHARE (this file's
- * `selectShadowableRange`, `index.ts`'s `resetWindowOnce` and the slicer). Step
- * back over `tool/call`/`tool/result` events so a cut never lands inside an open
- * tool block: `deriveMessages` folds `assistant(toolCalls)` together with its
+/** M75 (I3): the walk-off rule the two compaction boundary sites SHARE (this
+ * file's `selectShadowableRange`, `index.ts`'s `resetWindowOnce`). Step back over
+ * `tool/call`/`tool/result` events so a cut never lands inside an open tool
+ * block: `deriveMessages` folds `assistant(toolCalls)` together with its
  * `tool(result)` messages, but a cut counting EVENTS can sit between the two,
  * keeping a result whose call was just shadowed — llm-anthropic renders that as
  * a tool_result block with no tool_use, and mid-block user messages (M52/L3
  * reminders) are the same hazard one event later.
  *
+ * The SLICER does not call this: it cuts in message space and carries the
+ * outstanding call ids itself (M75 ruling 11). The event-level walk was measured
+ * insufficient there — `tool/dispatch` always sits inside a tool run and ends the
+ * walk early, leaving the boundary ON the `tool/result`.
+ *
  * Returns the index of the first event at or before `index` that is not a tool
  * event; the walk stops at 0 whatever sits there (the same bounded walk both
- * existing callers had).
+ * callers had).
  */
 export function walkOffToolEvents(session: Session, index: number): number {
   let j = index
