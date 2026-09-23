@@ -90,10 +90,12 @@
 ## 5. 殘餘（寫出來，不是藏起來）
 
 - **既有的孤兒 `child-<uuid>` log 沒有遷移路徑**（M74 的殘餘延伸）。
+- **只有「解析器」那條路被關掉了——它之後的 throw 仍然會孤兒化**（終審的讀數，本階段**不改碼**）：`resolveRoleTools`（`child.ts:408-411`）跑在 `coordinator.create` **之後**，而 `child.register` 在工具名重複時會 throw（`core-tools/src/index.ts:259`）⇒ 一個宣告 `tools: ["read","read"]` 的角色仍會留下孤兒 log；`createAgent`／`jobs.registerJob` 的 throw 同理。**這早於本階段**（那個工具區塊本來就在種子臂下面），但 §1.2 的註解讀起來像「失敗的 spawn 不留東西」⇒ 具名在此。
 - **切不動的單一巨塊**（M75 §4.4）：種子側只到「warn ＋ 繼續」。
 - **`tool/dispatch` 的 `eventSeq`**：讀碼時看到它存在（`core-session:23`），本階段**不動**它，也不假設它的語意。
 - **`forkTurns` 的預設 `"all"`**：產品決定。
 - **M75 §5 的其餘殘餘**（prune／`attempts`／breaker／惰性路線）不在本單位。
+- **`NaN` 被當成數字**（終審的 out-of-scope 註記）：`typeof NaN === "number"` ⇒ 一個 `NaN` 的 anchor 仍會被鑄成 0。JSON 帶不了 `NaN`，且此行為**早於本階段**。
 
 ## 6. 取樣與自創
 
