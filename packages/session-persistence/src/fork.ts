@@ -194,8 +194,22 @@ export function remapSeedEvent(event: SessionEvent, index: number, renumbered: R
   // child's FIRST event. That is the parent's surface restricted to this log:
   // every event the child owns before the marker was hidden on the parent's,
   // whereas a stale coordinate would name an unrelated event (or be discarded).
+  //
+  // M76 final review: `?? 0` is the fallback for THAT miss only, and the numeric
+  // test below is what keeps it there. A marker with no numeric `anchorSeq` at
+  // all (a persisted line that lost the field — resume does not re-run append's
+  // validation) is different input with its own rule: `rewindCuts` refuses it
+  // outright (`core-session/src/index.ts:281`, "unsealed events are NEVER
+  // hidden"), so a `0` minted for it would answer that malformed input with a
+  // LIVE `[0, marker)` window hiding the child's whole prefix — silent
+  // over-hiding on the one input the projection elsewhere keeps inert. A
+  // non-numeric anchor is therefore carried through untouched and the
+  // malformed-marker rule keeps deciding.
   if (event.type === "rewind/point") {
-    return { ...event, seq: index, anchorSeq: renumbered.get(event.anchorSeq) ?? 0 }
+    const anchorSeq = typeof event.anchorSeq === "number"
+      ? renumbered.get(event.anchorSeq) ?? 0
+      : event.anchorSeq
+    return { ...event, seq: index, anchorSeq }
   }
   return { ...event, seq: index }
 }
