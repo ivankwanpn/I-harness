@@ -356,6 +356,149 @@ describe("spawnChild durable child sessions (M8)", () => {
   })
 })
 
+// ── M76 (design §1.2 + §1.3): the seed's bound ──────────────────────────────
+// Two changes, one order and one line of visibility. The ORDER: the declared
+// role's model resolves BEFORE the durable child session exists, so a spawn
+// whose binding is not ready leaves no orphan `child-<uuid>` log (the defect
+// this closes: `coordinator.create` + the seeded log used to run first, and the
+// throw left both behind with no dispose path anywhere). The LINE: a seed whose
+// own projection already prices at or over the window warns — because the child
+// will have to summarise its inherited context before its first request.
+// Neither half is a policy: the seed is not trimmed and the spawn is not
+// refused (design §1.3 — after M75 a divisible over-window seed IS summarised
+// by the child's own compactor, so trimming would drop, silently, what the
+// summary keeps; and refusing would close the feature's primary use case, a
+// child spawned FROM a large session).
+describe("M76: the seed's bound — the model resolves first, and an over-window seed is visible", () => {
+  it("a spawn whose binding does not resolve leaves NO durable child session behind", async () => {
+    const f = spawnFixture()
+    const coordinator = fakeCoordinator()
+    // Seed content that is real, so "nothing was written" is a claim about
+    // something that could have been. MEASURED against the old order (the
+    // resolver moved back below the seeding arm): `created` 1, `enqueued` 4 —
+    // one durable `child-<uuid>` session and its four seed events, left behind
+    // by the throw.
+    append(f.parentSession, { type: "turn/start" })
+    append(f.parentSession, { type: "user/message", text: "inherited question" })
+    append(f.parentSession, { type: "assistant/message", text: "inherited answer" })
+    append(f.parentSession, { type: "turn/end" })
+    const resolveModel = async () => ({ status: "invalid" as const, reason: 'Unknown provider "gw"' })
+
+    await expect(spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "small" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+      childSessions: { coordinator, parentSessionId: "sess-main" },
+    })).rejects.toThrow(/Unknown provider "gw"/) // the refusal's shape, unchanged
+
+    // THE observation point is the DURABLE side, and these two are the
+    // assertions that discriminate: `created` is what `coordinator.create`
+    // recorded (the `child-<uuid>` session itself) and `enqueued` is the
+    // write-behind the seed paste feeds. The two below them pin the rest of the
+    // claim — they read empty under BOTH orders, because the table and the job
+    // are registered after the resolver either way.
+    expect(coordinator.created).toHaveLength(0)
+    expect(coordinator.enqueued).toHaveLength(0)
+    expect(f.table.entries().size).toBe(0)
+    expect(f.jobs.listAll()).toHaveLength(0)
+  })
+
+  it("a seed that prices at or over the window warns once, naming what the child must do", async () => {
+    const f = spawnFixture()
+    // The M74 case's HEAD message, alone in one turn: one big user/assistant
+    // pair, so the inherited surface is over the window all by itself. (M74's
+    // six small tail turns are not needed here — the warn is priced and emitted
+    // at spawn time, before the child's ladder runs.) forkTurns defaults to
+    // "all", so the seed IS the whole parent log and the parent's own price is
+    // the seed's.
+    const HEAD = "INHERITED-HEAD-SENTINEL " + "big ".repeat(1500)
+    append(f.parentSession, { type: "turn/start" })
+    append(f.parentSession, { type: "user/message", text: HEAD })
+    append(f.parentSession, { type: "assistant/message", text: HEAD })
+    append(f.parentSession, { type: "turn/end" })
+    // The warn's condition, priced with the public meter the engine prices
+    // with — asserted rather than asserted-about, so the case cannot go green
+    // on a seed that quietly stopped being over-window. MEASURED: 3020 tokens
+    // (the two 6 024-char messages at 1 510 each — ceil(6 024 / 4) + the 4-token
+    // role overhead apiece), against the 2 000 this spawn hands the child.
+    const seedTokens = estimateContent(deriveMessages(f.parentSession))
+    expect(seedTokens).toBeGreaterThanOrEqual(2_000)
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const { jobId } = await spawnChild({
+        taskName: "helper", message: "do the thing", parentPath: "root",
+        parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+        role: f.roles.get("general")!,
+        parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
+        contextWindow: 2_000,
+        jobs: f.jobs, table: f.table, agents: f.agents,
+      })
+      // The whole spawn lifetime, not just the moment `spawnChild` returned: a
+      // build that warned once per step would be caught here too. (The child's
+      // own outcome is deliberately NOT asserted: this fixture's seed is one
+      // indivisible block AND only four events long, so the ladder's reset has
+      // nothing it may trim and the child fails closed — the pre-existing
+      // behaviour the case "a child past its window FAILS CLOSED" pins, and no
+      // part of what this warn does. The warn must not change any of it, and
+      // this case's job is the LINE.)
+      for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      const seedLines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("inherited seed"))
+      expect(seedLines).toHaveLength(1)
+      // …and the line says the CONSEQUENCE, not just the number: what the child
+      // will do about it (summarise), and what happens when it cannot (one
+      // indivisible block ⇒ that turn fails soft).
+      expect(seedLines[0]).toContain("summar")
+      expect(seedLines[0]).toMatch(/indivisible|fails soft/)
+    } finally {
+      warn.mockRestore()
+    }
+  }, 15_000)
+
+  it("a seed that fits the window warns about nothing — a silent spawn stays silent", async () => {
+    const f = spawnFixture()
+    append(f.parentSession, { type: "turn/start" })
+    append(f.parentSession, { type: "user/message", text: "small inherited question" })
+    append(f.parentSession, { type: "assistant/message", text: "small inherited answer" })
+    append(f.parentSession, { type: "turn/end" })
+    // MEASURED: 20 tokens — a 24-char and a 22-char message at ceil(len/4) + 4
+    // overhead each — so the warn's condition is FALSE here by two orders of
+    // magnitude, not by a rounding step.
+    const seedTokens = estimateContent(deriveMessages(f.parentSession))
+    expect(seedTokens).toBeLessThan(2_000)
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+    try {
+      const { jobId } = await spawnChild({
+        taskName: "helper", message: "do the thing", parentPath: "root",
+        parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+        role: f.roles.get("general")!,
+        parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
+        contextWindow: 2_000,
+        jobs: f.jobs, table: f.table, agents: f.agents,
+      })
+      for (let i = 0; i < 200 && f.jobs.read(jobId).status === "running"; i++) {
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      // The spy is LIVE — this spawn does warn about something else (the
+      // `general` role declares six tools and this fixture's registry mounts
+      // one; the same line `resolveRoleTools`'s own case pins). Without this,
+      // "no seed line" would also be what a dead spy reports.
+      expect(warn.mock.calls.length).toBeGreaterThan(0)
+      // …so the discriminator is the seed line's OWN text, not the call count.
+      const seedLines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("inherited seed"))
+      expect(seedLines).toHaveLength(0)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe("spawnChild onSettled seam (M26-D1)", () => {
   it("fires onSettled after a completed initial run with finalText", async () => {
     const ctx = createContext()
