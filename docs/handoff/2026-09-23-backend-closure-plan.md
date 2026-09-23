@@ -1,0 +1,75 @@
+# 後端收線計畫（M76–M80）
+
+> **這份文件的用途**：它是**唯一的「還沒做」清單**，而且**每個單位完成時就地更新**——目的是讓「上下文被壓縮之後進度不會丟」。要看「現在做到哪」，看 §1 的表；要看「為什麼是這些」，看 §2；要看「什麼叫做完」，看 §3；要看「什麼不是後端的事」，看 §4。
+
+**一句話**：後端的功能面已經被 M1–M75 鋪完，剩下的**不是新功能，是既有東西上**量到卻沒修的洞（其中兩個是真缺陷、兩個是成本、一批是覆蓋率），外加一份被五個里程碑追過的佇列文件。做完這五個單位，剩下的每一條都應該能歸類成「**等前端**」或「**產品決定**」——那時才叫收線。
+
+---
+
+## 0. 為什麼有這份文件（它取代什麼）
+
+`docs/handoff/2026-09-20-queued-work.md` §9.2（`:931-957`）是目前樹上唯一的「還沒做」清單，**它落後 M72–M75 五個里程碑**，而且**它僅存的兩條活項目都已經關掉了**：
+
+| 它說還沒做 | 現在的實況（2026-09-23 量） |
+|---|---|
+| **C3**「`--max-tokens` 沒有消費者；seam 的 `LLMRequest` 完全沒有 max-output 欄位 ⇒ 要動五個轉接器」 | 欄位**在**：`packages/llm-seam/src/index.ts:274` ⇒ **M72 Ⅱ／M73 關掉** |
+| **B4/T2-3**「`llm-openai-compatible` 要不要送 `stream_options`（請求形狀的改變）」 | 決定做了也實作了：`packages/llm-openai-compatible/src/index.ts:163`（`usageInStream ?? true`）；六個轉接器都發 usage 事件 ⇒ **M72 Ⅲ 關掉** |
+
+它的 A 堆是空的，而且 `Q1–Q8` 全部有答案（`:549-554`）⇒ **沒有任何東西卡在產品決定上**。所以本階段的工作**不在路線圖裡，在里程碑自己記下的殘餘裡**；這份文件把它們撈出來、排序、具名。
+
+另外兩份文件互相矛盾的地方（MCP 真 AS 測試、R-E11、live discovery、`CAPABILITIES-DETAIL` 的漂移）留給 **M80** 一次收，屆時以最新的量測為準。
+
+---
+
+## 1. 五個單位（**這張表就是進度**，每完成一個就地改）
+
+| 單位 | 內容 | 大小 | 狀態 |
+|---|---|---|---|
+| **M76** | **①走位守衛 ＋ ②種子邊界** | S–M | ☐ **進行中**（spec 已寫：`docs/superpowers/specs/2026-09-23-walkoff-and-seed-bound-design.md`） |
+| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ☐ |
+| **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ☐ |
+| **M79** | **⑤覆蓋率補齊**（driveable 的 diagnostics 站點＋四個沒有觀察者的 hop＋零站點的聯集成員） | M–L | ☐ |
+| **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | ☐ |
+
+**順序的理由**：M76 最小、量測最新鮮、而且它關掉的是「**註解宣稱有效、其實無效**」這個靜默類別；M80 必須最後（它要判斷全部）。
+
+---
+
+## 2. 兩個待拍板的決定（未定案 ⇒ 在對應單位的 spec 裡連代價一起寫出來）
+
+1. **②種子端的取捨**（M76）：種子超過子代理窗口時——**(a) 修剪**最舊的 turn（與 `forkTurns: N` 同一條規則，我建議）、**(b) fail-closed 拒 spawn**、**(c) 只警告**。**這是產品決定**：它決定子代理「看到什麼」。
+2. **M70 的 checkpoint 成本**（M78）：要不要為「每個開始的呼叫一次 durable 寫入」做 batch-level 改變（`runGroup` 先 append 全部標記再一次 flush）？M70 當時**刻意不做**（`m70:56` R16）。也可以**明說接受**並把數字寫進紀錄。
+
+---
+
+## 3. 什麼叫「後端打磨完成」（判準，寫在前面）
+
+M80 的收線稽核要逐條回答，**用讀數不用形容詞**：
+
+1. `pnpm verify:all` 在最終樹上 PASSED（suite／母體／typecheck／e2e／reachability 五個讀數）。
+2. **殘餘清單的每一條都被歸類**：①修掉了 ②是**等前端**（附來源）③是**產品決定**（附問題）④是**明說接受的成本**（附數字）。
+3. 沒有「註解宣稱有效、其實無效」這一類（M75 學到的：它是**靜默**的，所以只能靠量）。
+4. 路線圖的四份文件與 `queued-work.md` **不再互相矛盾**，且**都指向這份收線紀錄**。
+
+**達成了才說「可以進前端」。** 在那之前，任何「完成了」都是形容詞。
+
+---
+
+## 4. 明確**不是**後端的事（等前端／非目標，逐條附來源）
+
+- **五個零消費者套件**：`fs-watch`／`goal`／`jobs`／`workspace` 等前端；`schedule` 的缺口已由 W3 補上（`backend-backlog.md:88-103`）。
+- **`settings/*` 上 sdk 線**：Q7 的答案就是「**是，但先不要建**，等前端走到需要它的那一步」（`backend-backlog.md:206`、`queued-work.md:551`）。
+- **hooks 核准的 UI**：今天只有 CLI（`hooks list|approve|revoke`），前端要長自己的，共用 `<home>/hook-trust.json`（`backend-backlog.md:186`）。
+- **R-B4 git snapshot/undo 的 plan B**（plan A 已在 M58 落地）：等產品反饋（`roadmap-B-tools.md:18,87`、`m27-backlog.md:64`）。
+- **H-3 MCP 真 AS 測試**：需要一個真的授權伺服器（`m27-backlog.md:30`；與 `CAPABILITIES.md:51` 矛盾 ⇒ M80 收）。
+- **前端重建本體**（web／desktop）：Q6 說它是**使用者端專案**，跑在 sdk 線上（`roadmap-design.md:305`）。
+- **非目標（不要再撿）**：PTC／code-mode、workflow worker、provider registry、外掛執行、企業權限引擎、記憶子系統、M7 自我喚醒（`roadmap-design.md:267-278`、`CAPABILITIES.md:141`）。
+- **遠期觀望**：R-A10 記憶、R-A11 rollover、R-B10 執行策略、R-C8 分享/遠程、R-D5 外部進程子代理、R-D6 身分證明、R-E12 webhook、R-E13 匿名身分、macOS sandbox（`m27-backlog.md:50-56`、`CAPABILITIES.md:142`）。
+
+---
+
+## 5. 更新規則（防壓縮丟進度）
+
+- **每完成一個單位**：改 §1 那一列的狀態（☐ → ✅ ＋ 合併 commit ＋ PR 編號），並在 §2 劃掉已拍板的決定。
+- **每個單位自己的設計與驗收**在 `docs/superpowers/specs/` 與 `docs/superpowers/plans/`，**每個單位自己的交付紀錄**在 `docs/handoff/`——這份文件**只做索引與狀態**，不重複內容。
+- **新的殘餘**一律先寫進該單位的 spec §5，再由 M80 決定去留；**不直接塞進這張表**（否則它會變成第二個落後的 `queued-work.md`）。
