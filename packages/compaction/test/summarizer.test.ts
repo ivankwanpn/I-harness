@@ -202,8 +202,12 @@ describe("M77: a refused summary request", () => {
   it("a clean empty stream keeps the pre-M77 message BYTE FOR BYTE", async () => {
     // The control: absent stays absent. A `refused`-shaped message on this path
     // would be a false claim, and it is what this assertion exists to catch.
+    // ANCHORED (M77 fix wave): `toThrow("…")` is a SUBSTRING match, so the
+    // title's "BYTE FOR BYTE" was a claim the matcher did not make — a message
+    // that kept this prefix and appended anything at all still passed. The
+    // anchored form is the title's actual claim, and it can only be STRICTER.
     await expect(summarizeWithModel(emptyCleanModel, "shadow text", 200)).rejects.toThrow(
-      "compaction: summarizer returned empty output",
+      /^compaction: summarizer returned empty output$/,
     )
   })
 })

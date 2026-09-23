@@ -606,4 +606,22 @@ describe("M77: the refusal bit and the context cap (anthropic)", () => {
     expect(events.some((e) => (e as { refused?: true }).refused === true)).toBe(false)
     expect(events.at(-1)!.type).toBe("error")
   })
+
+  // M77 (fix wave). The context arm returned BEFORE `mapUsage` ran, so the very
+  // `message_delta` that carries the stop reason — and with it this
+  // round-trip's output count — had its usage dropped on the floor. Through the
+  // retry wrapper that is invisible (a held-aside `usage` is discarded when the
+  // attempt settles on an error), but an unwrapped client saw nil for a
+  // round-trip the provider had already priced. The error stays terminal, and
+  // the report rides AHEAD of it: the seam's `emit` stops at the first error
+  // event, so anything after it would never be seen at all.
+  it("M77: the context arm reports the message_delta's usage before it fails", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([{ type: "usage", usage: { outputTokens: 5 } }])
+    expect(events.at(-1)!.type).toBe("error")
+  })
 })
