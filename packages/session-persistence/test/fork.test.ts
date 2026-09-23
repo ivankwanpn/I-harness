@@ -2,11 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { describe, expect, it } from "vitest"
-import { append, createSession, rewindCuts, type SessionEvent } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, rewindCuts, type SessionEvent } from "@i-harness/core-session"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import {
   createSessionCoordinator,
   forkSession,
+  remapSeedEvent,
 } from "../src/index.ts"
 // Task 2A: `SessionForkUnavailableError` and `completedTurnPrefix` are no longer
 // exported through the package entry (their only outside consumer was this
@@ -273,5 +274,152 @@ describe("forkSession", () => {
       event.type === "rewind/point" ? { ...event, anchorSeq: 4 } : event)
     expect(completedTurnPrefix(atTurnStart, "source", undefined).map((event) => event.seq))
       .toEqual(prefix.map((event) => event.seq))
+  })
+
+  // M76 ③: `anchorSeq` names a seq like `shadowedSeqs` does, so the seed pass
+  // remaps it through the SAME map. From HERE it never mattered — the session
+  // fork DROPS every rewind marker before the remap (:150-152) — but the pass has
+  // a second consumer that keeps the marker: the subagent's `forkTurns`
+  // (packages/subagent/src/fork.ts:38-50), which seeds a child with the last N
+  // turn blocks renumbered into its own coordinates. A carried-over parent anchor
+  // names an unrelated child event there, so `rewindCuts` resolves a subset
+  // window — or none at all once the stale anchor lands at or past the marker —
+  // and the region the rewind hid comes back onto the child's surface.
+  //
+  // Input shaped like that caller's seed: the last three turn blocks (the slice
+  // starts at the turn/start on parent seq 4) plus the seq → index map it builds
+  // from the slice. The assertions read POINTERS — walk each seq to the event it
+  // names and compare those — never a literal index: `forkTurns: 3` moves every
+  // index, so a literal would be an artefact of the fixture.
+  it("M76: a seeded rewind marker's anchorSeq is remapped into the child's coordinates", () => {
+    type RewindPoint = Extract<SessionEvent, { type: "rewind/point" }>
+    const isMarker = (event: SessionEvent): event is RewindPoint => event.type === "rewind/point"
+    const atSeq = (events: readonly SessionEvent[], seq: number | undefined): SessionEvent | undefined =>
+      events.find((event) => event.seq === seq)
+    // What makes an event *that* event: the renumbering rewrites `seq`, so the
+    // child's copy is a different OBJECT and type + text are what crosses logs.
+    const identityOf = (event: SessionEvent | undefined): string =>
+      event === undefined ? "<none>" : `${event.type}${"text" in event ? `:${event.text ?? ""}` : ""}`
+
+    const parent = createSession()
+    append(parent, { type: "turn/start" })                                                             // 0
+    append(parent, { type: "user/message", text: "turn 1 user" })                                       // 1
+    append(parent, { type: "assistant/message", text: "turn 1 answer" })                                // 2
+    append(parent, { type: "turn/end" })                                                               // 3
+    append(parent, { type: "turn/start" })                                                             // 4 ← the forkTurns slice starts here
+    append(parent, { type: "user/message", text: "turn 2 user" })                                       // 5 ← ANCHOR
+    append(parent, { type: "assistant/message", text: "turn 2 answer" })                                // 6
+    append(parent, { type: "turn/end" })                                                               // 7
+    append(parent, { type: "turn/start" })                                                             // 8
+    append(parent, { type: "user/message", text: "turn 3 user" })                                       // 9
+    append(parent, { type: "assistant/message", text: "turn 3 answer" })                                // 10
+    append(parent, { type: "turn/end" })                                                               // 11
+    append(parent, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [] }) // 12 ← MARKER
+    append(parent, { type: "turn/start" })                                                             // 13
+    append(parent, { type: "user/message", text: "turn 4 user" })                                       // 14
+    append(parent, { type: "assistant/message", text: "turn 4 answer" })                                // 15
+    append(parent, { type: "turn/end" })                                                               // 16
+    // `append` numbers densely (seq === index): the parent's OWN surface hides
+    // the rewound turn 2 and the turn that followed it, and shows turn 4 again.
+    expect(rewindCuts(parent)).toEqual([{ cutFrom: 5, markerSeq: 12 }])
+
+    const remapSeedOf = (from: number): SessionEvent[] => {
+      const slice = parent.events.slice(from)
+      const renumbered = new Map<number, number>()
+      for (const [index, event] of slice.entries()) {
+        if (event.seq !== undefined) renumbered.set(event.seq, index)
+      }
+      return slice.map((event, index) => remapSeedEvent(event, index, renumbered))
+    }
+
+    const child = remapSeedOf(4)
+    const parentMarker = parent.events.find(isMarker)!
+    const marker = child.find(isMarker)!
+    const anchor = atSeq(parent.events, parentMarker.anchorSeq)!
+    // the slice moved every index (were they to coincide, this case would pass
+    // with no mapping at all), and the child's anchor names the SAME event
+    expect(marker.anchorSeq).not.toBe(parentMarker.anchorSeq)
+    expect(identityOf(atSeq(child, marker.anchorSeq))).toBe(identityOf(anchor))
+    // the marker's own seq still names the marker itself
+    expect(atSeq(child, marker.seq)).toBe(marker)
+    // the stale parent coordinate, read in the child, names a DIFFERENT event —
+    // which is what makes the identity check above able to fail
+    expect(identityOf(atSeq(child, parentMarker.anchorSeq))).not.toBe(identityOf(anchor))
+
+    const childLog = createSession()
+    childLog.events.push(...child)
+    const cuts = rewindCuts(childLog)
+    // the marker is a LIVE window in the child and opens at the anchor it points
+    // at: the content the parent's surface hides stays hidden here
+    expect(cuts).toHaveLength(1)
+    expect(identityOf(atSeq(child, cuts[0]!.cutFrom))).toBe(identityOf(anchor))
+    expect(identityOf(atSeq(child, cuts[0]!.markerSeq))).toBe(identityOf(marker))
+    const shown = deriveMessages(childLog).map((message) => JSON.stringify(message.content)).join(" ")
+    expect(shown).toContain("turn 4 user")
+    expect(shown).not.toContain("turn 2 user")
+    expect(shown).not.toContain("turn 2 answer")
+
+    // `forkTurns: 2` starts the slice INSIDE the window the marker opened — at
+    // turn 3's own turn/start (parent seq 8) — so the anchor event (parent 5) is
+    // NOT in the seed and has no child-side target. Everything this child owns
+    // before the marker was hidden on the parent's surface, so the window opens
+    // on the child's FIRST event rather than on a parent coordinate that names an
+    // unrelated child event.
+    const child2 = remapSeedOf(8)
+    const marker2 = child2.find(isMarker)!
+    expect(marker2.anchorSeq).toBe(child2[0]!.seq)
+    const childLog2 = createSession()
+    childLog2.events.push(...child2)
+    expect(rewindCuts(childLog2)).toEqual([{ cutFrom: child2[0]!.seq!, markerSeq: marker2.seq! }])
+    const shown2 = deriveMessages(childLog2).map((message) => JSON.stringify(message.content)).join(" ")
+    expect(shown2).toContain("turn 4 user")
+    expect(shown2).not.toContain("turn 3 user")
+  })
+
+  // M76 ②: the `?? 0` fallback answers ONE miss — an anchor whose own event is
+  // not in the seed, because the slice begins INSIDE the window the marker
+  // opened — and before this case it answered a second one too: a marker with no
+  // numeric `anchorSeq` at all. That is different input with its own rule, not
+  // the same miss: `rewindCuts` refuses such a marker outright
+  // (`core-session/src/index.ts:281`, "unsealed events are NEVER hidden" — the
+  // rule that exists BECAUSE resumed logs bypass append-time validation, `:280`),
+  // so a `0` minted by the fallback would turn a marker the projection declines
+  // to act on into a LIVE window `[0, marker)` that hides the child's whole
+  // prefix — silent over-hiding, in the maximal-hiding direction, on input the
+  // source log itself keeps inert. The fix is one conditional: only a NUMERIC
+  // anchor rides the map; anything else is carried through untouched and the
+  // malformed-marker rule keeps deciding.
+  it("M76: a rewind marker without a numeric anchorSeq stays inert — it contributes no window", () => {
+    const seed = createSession()
+    append(seed, { type: "turn/start" })
+    append(seed, { type: "user/message", text: "visible one" })
+    append(seed, { type: "turn/end" })
+    // Persisted-malformed, the way a file can carry it: the anchor never made it
+    // into the line, and resume does not re-run append's validation.
+    seed.events.push(JSON.parse(
+      '{"type":"rewind/point","version":1,"targetTurn":1,"mode":"all","fileOps":[],"seq":3}',
+    ) as SessionEvent)
+    append(seed, { type: "turn/start" })
+    append(seed, { type: "user/message", text: "visible two" })
+    append(seed, { type: "turn/end" })
+    // the source's own surface first: that marker already contributes nothing
+    expect(rewindCuts(seed)).toEqual([])
+    const renumbered = new Map<number, number>()
+    for (const [index, event] of seed.events.entries()) {
+      if (event.seq !== undefined) renumbered.set(event.seq, index)
+    }
+    const child = createSession()
+    child.events.push(...seed.events.map((event, index) => remapSeedEvent(event, index, renumbered)))
+    type RewindPoint = Extract<SessionEvent, { type: "rewind/point" }>
+    const marker = child.events.find((event): event is RewindPoint => event.type === "rewind/point")!
+    // the pass did NOT cover for the file: no number was invented for the anchor…
+    expect(typeof marker.anchorSeq).not.toBe("number")
+    // …so `rewindCuts` applies to the child the same rule it applied to the
+    // source, and this marker contributes no window there either
+    expect(rewindCuts(child)).toEqual([])
+    // and the prefix the source could still show stays on the child's surface
+    const shown = deriveMessages(child).map((message) => JSON.stringify(message.content)).join(" ")
+    expect(shown).toContain("visible one")
+    expect(shown).toContain("visible two")
   })
 })

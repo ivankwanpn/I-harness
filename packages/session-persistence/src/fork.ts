@@ -167,6 +167,10 @@ export function completedTurnPrefix(
 // `forkTurns: N` seed, so its contract "the output is in the child's
 // coordinates, references without a child-side target are gone" has a second
 // consumer and has to hold for both.
+//
+// M76: the fourth reference is `rewind/point`'s `anchorSeq`. Unlike the three
+// above it is a SCALAR, so a missing target has to land somewhere instead of
+// dropping (see the branch below for what it means and where it lands).
 export function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
   const remap = (seqs: number[] | undefined): number[] =>
     (seqs ?? []).flatMap((seq) => {
@@ -176,5 +180,36 @@ export function remapSeedEvent(event: SessionEvent, index: number, renumbered: R
   if (event.type === "compaction/summary") return { ...event, seq: index, shadowedSeqs: remap(event.shadowedSeqs) }
   if (event.type === "compaction/reset") return { ...event, seq: index, removedSeqs: remap(event.removedSeqs) }
   if (event.type === "session/title") return { ...event, seq: index, messageSeqs: remap(event.messageSeqs) }
+  // M76: `anchorSeq` names a seq the same way — it is the FIRST event the marker
+  // hides, and `rewindCuts` reads the window as [anchorSeq, the marker's own seq)
+  // — so it rides the SAME map. The session fork never noticed: it DROPS rewind
+  // markers before this pass (:150-152). The subagent's `forkTurns` keeps them,
+  // and there a carried-over PARENT coordinate names an unrelated child event:
+  // `rewindCuts` resolves a subset window — or none at all, once the stale anchor
+  // lands at or past the marker's child-side seq — and the region the rewind hid
+  // comes back onto the child's surface.
+  //
+  // An anchor this child never received (the seed begins INSIDE the window the
+  // marker opened, so no child-side target exists) opens the window on the
+  // child's FIRST event. That is the parent's surface restricted to this log:
+  // every event the child owns before the marker was hidden on the parent's,
+  // whereas a stale coordinate would name an unrelated event (or be discarded).
+  //
+  // M76 final review: `?? 0` is the fallback for THAT miss only, and the numeric
+  // test below is what keeps it there. A marker with no numeric `anchorSeq` at
+  // all (a persisted line that lost the field — resume does not re-run append's
+  // validation) is different input with its own rule: `rewindCuts` refuses it
+  // outright (`core-session/src/index.ts:281`, "unsealed events are NEVER
+  // hidden"), so a `0` minted for it would answer that malformed input with a
+  // LIVE `[0, marker)` window hiding the child's whole prefix — silent
+  // over-hiding on the one input the projection elsewhere keeps inert. A
+  // non-numeric anchor is therefore carried through untouched and the
+  // malformed-marker rule keeps deciding.
+  if (event.type === "rewind/point") {
+    const anchorSeq = typeof event.anchorSeq === "number"
+      ? renumbered.get(event.anchorSeq) ?? 0
+      : event.anchorSeq
+    return { ...event, seq: index, anchorSeq }
+  }
   return { ...event, seq: index }
 }
