@@ -74,6 +74,7 @@ prompt 自己就寫著「merge the conversation ABOVE into the previous summary�
 ## 2. 驗收（每一條都要**紅先 ＋ 變異證明**）
 
 1. **超窗的 session 真的被摘要**：一個 surface 超過窗口的 session（子代理與主要各一），在**會拒收超窗請求的 mock client** 下，**產生一份摘要**（有一個 `compaction/summary`），**不是** reset。（今天：`compaction/summary` 不存在。）
+   - **兩個一半都要釘住，而它們是不同的形狀**（執行期的終審抓到的）：主要的那一半在 `packages/compaction/test/summarizer-prefix.test.ts`；**子代理那一半**在 `packages/subagent/test/child.test.ts`——一個**可切**的繼承區域（12 個小 turn）配一個會拒收超窗請求的 client ⇒ 一份 `compaction/summary`、沒有 `compaction/reset`。**既有的**那條單一巨型區塊的子代理案例**保持斷言 reset**：它是一個切塊器動不了的區塊，那是 §4.4 的殘餘，不是缺陷。
 2. **普通情況不受影響**：surface 放得下時，**恰好一次**呼叫，而且那個請求與今天**逐位元組相同**（prefix 性質仍在）。
 3. **串連**：第 2..N 塊的請求帶著 running summary（`<previous-summary>` 的內容＝前一塊的結果）。
 4. **一個標記**：整個 pass 只有**一個** `compaction/summary`，`shadowedSeqs` 是**整個區域**；**中途沒有任何標記**出現在 log 裡。
@@ -95,6 +96,8 @@ prompt 自己就寫著「merge the conversation ABOVE into the previous summary�
 2. **不保證便宜**：第 2..N 塊是**冷**讀（§0）。目標 regime 今天是零，所以仍是改善，但它不是免費的。
 3. **不保證 breaker 的頻率不變**：一次 pass 有 N 個失敗機會（§1.6）。
 4. **不保證那條路一定走得完**：最後一塊仍可能放不下（切塊器以區塊為單位，而一個單一巨大的工具結果就是一個區塊）——那時仍然 fail-soft 回 reset，**與今天相同**。這一條要具名。
+5. **不保證每一條 session 都走得到**（執行期新增，因為它是**靜默**的）：這條 fallback 需要**四樣同時在**——`region`、`prefix`（request shape）、解析出來的 `maxOutputTokens`、以及 `contextWindow`（`summarizer.ts:302-313`）。因此**配置了 `summarizationModel`**、**引擎沒有 `requestShape`**、或**綁定解析不出 output cap**（`apps/cli/src/run.ts:536`）的路線，超窗時仍然是今天的 reset。這是**沿用 clamp 的前提**，不是本階段造的。
+6. **不保證 gate 會在真的大到爆的時候開**：閘問的是**估計值**（`estimateContent`），而估計是 ~4 字元／token 的密度常數。一個 CJK 為主的區域在真實 tokenizer 眼裡可以是 ~1 字元／token ⇒ **它可能遠超窗口，而估計說放得下**，fallback 因此不開。同樣沿用 clamp，不是本階段造的。
 
 ## 5. 殘餘（寫出來，不是藏起來）
 
@@ -104,6 +107,8 @@ prompt 自己就寫著「merge the conversation ABOVE into the previous summary�
 - **單一區塊就超窗**（§4.4）——切塊器救不了它，而真正的解法是那一塊的來源（工具結果的上限）。
 - **`attempts` 的語意改變**（§1.6）。
 - **breaker 分不出「不穩」與「太大」**（§1.6）。
+- **切塊的粒度由 session 的 user-message 結構決定**（執行期量到）：每一塊必須以 `user` 訊息開頭（provider 的規則），因此**一個 user turn 內的訊息不能再切**；一個孤立就超預算的塊仍然走呼叫端的 fail-soft。另外，若區域的 fold 因為先前的 rewrite 而隱掉了它的第一則 user 訊息，**第一塊就會以 `assistant` 開頭**——那與今天單一呼叫會送出的東西**逐位元組相同**；而**一個宣告了卻在 fold 裡從未解析的工具呼叫**會讓每個切點都被拒（§1.5 的守衛），那個尾巴於是變成一塊。
+- **一個既有的漏洞，本階段量到但沒有修**（終審的讀數，指名為獨立的後續單位）：`walkOffToolEvents` 的走位在**任何非工具事件**上停下，而 `tool/dispatch`（永遠落在一個工具執行裡面，`core-agent/src/execute-tool-calls.ts:249-253`）會讓它提前結束 ⇒ 兩個既有的呼叫點（`region.ts:67` 的 `selectShadowableRange`、`index.ts:344` 的 `resetWindowOnce`）仍會**孤兒化 `tool/result`**。量到的：日誌順序 `call → result` ⇒ 63 個切點裡 8 個孤兒、走位後 **0**；`call → dispatch → result`（**M70 之後的實際順序**）⇒ 71 個裡 **16** 個孤兒、走位後**還是 16**。逐點：`resetWindowOnce` 的 `retainLast` 1..25 有 6 個值孤兒化（`[4,5,13,14,22,23]`），`selectShadowableRange` 抽樣的 162 個預算裡有 48 個。**M70 的 dispatch 標記讓這個守衛靜默失效，而它的註解還宣稱有效。** 修法就是把切塊器已經在用的 message-space 規則套到那兩個點上（或讓走位也跳過 `tool/dispatch`／`step/*`），加一條掃描切點的測試。**不屬於本階段的合約。**
 
 ## 6. 取樣與自創
 
