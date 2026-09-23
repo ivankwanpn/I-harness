@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 // M73: the char/token constant the overhead estimate below is priced against —
-// the same one the session's own assembly prices its twin by.
-import { CHARS_PER_TOKEN } from "@i-harness/token-meter"
+// the same one the session's own assembly prices its twin by. M76 takes
+// `estimateContent` from the same meter: the seed's own projection is priced
+// with the meter the child's engine prices its surface with, one rule and one
+// unit for both sides of the comparison.
+import { CHARS_PER_TOKEN, estimateContent } from "@i-harness/token-meter"
 // Type-only: the selection's per-row protocol is the SAME closed set settings
 // validates (`SettingsProviderProtocol`) — a fourth copy of the five names would
 // be a fourth place to edit one enum. Erased at build time, no runtime edge.
@@ -249,8 +252,16 @@ export interface SpawnOptions extends RoleModelHost {
 }
 
 export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string }> {
-  // The model is decided (and gated) BEFORE anything is created: a refused
-  // spawn leaves no child session, no table entry and no job behind.
+  // The model is decided, gated AND RESOLVED before anything is created: both
+  // refusals — the gate here, the resolver in the block below — sit above every
+  // durable write, so a refused spawn leaves no child session, no table entry
+  // and no job behind.
+  //
+  // M76: the resolver used to be the LAST step, after `coordinator.create` had
+  // already written the durable `child-<uuid>` session and the seed had been
+  // pasted into it. A binding that was not ready therefore threw with an orphan
+  // log left behind — seeded, ownerless, and with no dispose path anywhere in
+  // this file. The sentence above was true only of the gate.
   const declared = declaredRoleModel(opts.role, opts)
   if (subagentModelSelectionGated(opts, declared)) throw subagentModelSelectionDisabled(opts.role.name)
 
@@ -269,39 +280,17 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // recurses down the delegation chain (a child of a depth-1 subagent is
   // depth 2) instead of hardcoding 1. A headerless (root) parent is depth 0.
   const childDepth = (opts.parentSession.header?.delegationDepth ?? 0) + 1
-  if (opts.childSessions) {
-    sessionId = `child-${randomUUID()}`
-    await opts.childSessions.coordinator.create({
-      sessionId,
-      parentSession: opts.childSessions.parentSessionId,
-      seedLength: seedEvents.length,
-      origin: "subagent",
-      // dsh: resolveChildDepth = delegationDepthOf(parent) + 1 — a child of a
-      // top-level (depth 0) session is depth 1.
-      delegationDepth: childDepth,
-    })
-    childSession = createSession((ev) => {
-      opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
-      if (ev.type === "turn/end") void opts.childSessions!.coordinator.flush(sessionId!).catch(() => {})
-    })
-    // Persist the seed through the mirror so the child log starts at seq 0
-    // with the inherited context (dsh: seed events live in the child log).
-    for (const ev of seedEvents) append(childSession, { ...ev })
-    // dsh parent+1 rule: same depth as the coordinator.create lineage above.
-    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
-  } else {
-    childSession = createSession()
-    for (const ev of seedEvents) childSession.events.push({ ...ev })
-  }
-
-  // child registry: register the role's allowed tools (resolved from the parent).
-  // A declared tool the host does not mount is reported, never dropped silently.
-  const childReg = createToolRegistry(childCtx)
-  resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
 
   // model: the declared selection (settings first, then the role's own) through
   // the host's resolver, else inherit the parent's client — which is what an
   // unconfigured harness does, and the ONLY case that inherits.
+  //
+  // M76 (design §1.2): this block sits HERE, between the gate above and the
+  // first durable write below, because it is the second thing that can refuse a
+  // spawn. A binding that does not resolve throws before `coordinator.create`
+  // exists to be called, so nothing durable is minted for it; resolving first
+  // also puts the window and the cap in scope before the seed is built, which
+  // is what lets the seed's own price be measured against them (below).
   let model = opts.parentModel
   // The binding's OTHER field rides along: the runtime resolves and validates a
   // selection's `reasoningEffort`, so a spawn that kept only the client would
@@ -329,6 +318,65 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     maxOutputTokens = state.binding.maxOutputTokens
     modelLabel = modelLabelOf(declared)
   }
+
+  if (opts.childSessions) {
+    sessionId = `child-${randomUUID()}`
+    await opts.childSessions.coordinator.create({
+      sessionId,
+      parentSession: opts.childSessions.parentSessionId,
+      seedLength: seedEvents.length,
+      origin: "subagent",
+      // dsh: resolveChildDepth = delegationDepthOf(parent) + 1 — a child of a
+      // top-level (depth 0) session is depth 1.
+      delegationDepth: childDepth,
+    })
+    childSession = createSession((ev) => {
+      opts.childSessions!.coordinator.enqueue(sessionId!, [ev])
+      if (ev.type === "turn/end") void opts.childSessions!.coordinator.flush(sessionId!).catch(() => {})
+    })
+    // Persist the seed through the mirror so the child log starts at seq 0
+    // with the inherited context (dsh: seed events live in the child log).
+    for (const ev of seedEvents) append(childSession, { ...ev })
+    // dsh parent+1 rule: same depth as the coordinator.create lineage above.
+    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
+  } else {
+    childSession = createSession()
+    for (const ev of seedEvents) childSession.events.push({ ...ev })
+  }
+
+  // M76 (design §1.3): a seed that already fills the window is VISIBLE, and
+  // that is all this is. The seed is not trimmed and a spawn is not refused for
+  // being oversized, both by ruling, not by omission: a divisible over-window
+  // seed is exactly what the child's own compactor summarises (M75's chained
+  // pieces), so trimming would silently discard what a summary keeps — strictly
+  // worse, and invisible to the child and to the user alike — while refusing
+  // would close the feature's primary use case, a child spawned FROM a large
+  // session. What the reader cannot see today is the WASTE and the RISK: the
+  // child's first request cannot be built without a summarising pass, and an
+  // inherited context that is one indivisible block fails soft for that turn
+  // (design §4.4's residual, whose real fix is a cap at the block's SOURCE).
+  //
+  // The condition is measured, not guessed: `childSession` holds nothing but
+  // the seed here (the agent does not exist yet), so this is the seed's own
+  // projection priced with `estimateContent(deriveMessages(...))` — the meter's
+  // own `activeTokens` expression, the same price the child's engine takes of
+  // its surface, against the window the child will be measured with. No window
+  // → nothing to compare → no line (absent stays absent, the M73 rule above).
+  if (contextWindow !== undefined) {
+    const seedTokens = estimateContent(deriveMessages(childSession))
+    if (seedTokens >= contextWindow) {
+      d.warn(
+        `[subagent] the inherited seed prices at ${seedTokens} tokens against a ${contextWindow}-token window: ` +
+          `the child summarises its inherited context in pieces before its first request, and if that context ` +
+          `is one indivisible block this turn fails soft`,
+      )
+    }
+  }
+
+  // child registry: register the role's allowed tools (resolved from the parent).
+  // A declared tool the host does not mount is reported, never dropped silently.
+  const childReg = createToolRegistry(childCtx)
+  resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
   // estimate below prices it.
