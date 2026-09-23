@@ -825,7 +825,7 @@ Expected: 兩條新的紅（`reason` 是 `undefined`；CLI 回的是那句話）
     // M73: a summarizer failure used to answer with the same sentence as an
     // empty region — a real failure reading as "there was nothing to do".
     if (result.reason === "summarizer-failed") {
-      return "Compaction failed: the summarizer call did not succeed (see the session's warnings)."
+      return "Compaction failed: the summarization did not succeed (see the session's warnings)."
     }
     return "No compactable history yet."
   }
