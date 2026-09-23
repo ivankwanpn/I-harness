@@ -41,6 +41,27 @@ describe("session-title", () => {
     await maybeAutoTitle({ session, model }) // second call: title exists → unchanged
     expect(session.events.filter((e) => e.type === "session/title")).toHaveLength(1)
   })
+
+  // M77: a REFUSED title request is still a fail-soft. The refusal path's own
+  // message is thrown inside `suggestTitle`'s try and swallowed by its own catch
+  // two lines later, so no caller and no test can observe its text — this
+  // assertion pins the BEHAVIOUR that must survive that message change (and that
+  // a future reader might be tempted to break by re-throwing): a refusal
+  // degrades to the deterministic fallback like every other provider failure,
+  // and never escapes as an error. It is a GUARD, deliberately green both before
+  // and after the change — there is no red-first form of it.
+  it("M77: a refused title request still degrades to the deterministic fallback", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "create a todo app" })
+    const refusingModel: ModelClient = {
+      async *stream() {
+        yield { type: "end", refused: true }
+      },
+    }
+    const suggested = await suggestTitle({ session, model: refusingModel })
+    expect(suggested.source).toBe("fallback")
+    expect(suggested.title.length).toBeGreaterThan(0)
+  })
 })
 
 // ── M73 (fix wave, I3): the title request carries its own budget ────────────
