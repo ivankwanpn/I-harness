@@ -417,3 +417,23 @@ describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
     expect(events.at(-1)).toEqual({ type: "end", truncated: true })
   })
 })
+
+// M72 Ⅲ. The read loop and the residual flush used to carry two copies of the
+// frame-parsing rules, and the copies had drifted: R12 fixed a rule in the
+// SECOND copy, while the flush still never accumulated tool-call fragments.
+// A tool call arriving ONLY in a boundary-less final frame was dropped.
+describe("M72 Ⅲ: one frame handler for both loops (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: a tool call that arrives ONLY in a boundary-less final frame is not dropped", async () => {
+    // no trailing "\n\n": the main loop parses nothing, the flush handles it
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"path":"a.txt"}' } }] } }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { name: "read", args: { path: "a.txt" } } }])
+  })
+})

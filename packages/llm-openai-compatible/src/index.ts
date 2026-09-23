@@ -156,7 +156,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       let buffer = ""
       let receivedDone = false
       // M72 Ⅱ: the wire's own truncation literal (`finish_reason: "length"`) —
-      // set in the chunk loop below, read once at the ending. Absent stays
+      // set in handleFrame below, read once at the ending. Absent stays
       // absent: only `true` writes the field.
       let truncated = false
       // tool call accumulation: index -> { id, name, argsBuffer }
@@ -191,6 +191,43 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         return false
       }
 
+      // M72 Ⅲ: ONE frame handler for both the read loop and the residual
+      // flush. R12 patched the second copy of a rule; the copies had already
+      // drifted (the flush never accumulated tool-call fragments, so a tool
+      // call arriving only in a boundary-less final frame was dropped). New
+      // wire rules land HERE, once.
+      const handleFrame = (event: Record<string, unknown>): { events: LLMStreamEvent[]; done: boolean } => {
+        if (event.type === "[DONE]") return { events: [], done: true }
+        const events: LLMStreamEvent[] = []
+        const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
+        for (const choice of choices) {
+          const delta = choice.delta ?? {}
+          // R12: a final frame that lost its trailing "\n\n" is parsed here
+          // too (via the residual flush), and the provider's failure channel
+          // must not depend on where the frame boundary fell — one rule, both
+          // callers.
+          if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            events.push({ type: "text/chunk", text: delta.content })
+          }
+          const toolCalls = (delta as { tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }).tool_calls
+          if (toolCalls) {
+            for (const tc of toolCalls) {
+              const idx = tc.index ?? 0
+              let pending = pendingToolCalls.get(idx)
+              if (!pending) {
+                pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? "", argsBuffer: "" }
+                pendingToolCalls.set(idx, pending)
+              }
+              if (tc.id) pending.id = tc.id
+              if (tc.function?.name) pending.name = tc.function.name
+              if (tc.function?.arguments) pending.argsBuffer += tc.function.arguments
+            }
+          }
+        }
+        return { events, done: false }
+      }
+
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -202,34 +239,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             if (receivedDone) break
             for (const event of parseSSE(chunk)) {
               if (receivedDone) break
-              if (event.type === "[DONE]") {
+              const frame = handleFrame(event)
+              if (frame.done) {
                 receivedDone = true
                 break
               }
-              const events: LLMStreamEvent[] = []
-              const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
-              for (const choice of choices) {
-                const delta = choice.delta ?? {}
-                if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
-                if (typeof delta.content === "string" && delta.content.length > 0) {
-                  events.push({ type: "text/chunk", text: delta.content })
-                }
-                const toolCalls = (delta as { tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }).tool_calls
-                if (toolCalls) {
-                  for (const tc of toolCalls) {
-                    const idx = tc.index ?? 0
-                    let pending = pendingToolCalls.get(idx)
-                    if (!pending) {
-                      pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? "", argsBuffer: "" }
-                      pendingToolCalls.set(idx, pending)
-                    }
-                    if (tc.id) pending.id = tc.id
-                    if (tc.function?.name) pending.name = tc.function.name
-                    if (tc.function?.arguments) pending.argsBuffer += tc.function.arguments
-                  }
-                }
-              }
-              if (yield* emit(events)) return
+              if (yield* emit(frame.events)) return
               if (yield* flushParsedToolCalls()) return
             }
           }
@@ -239,21 +254,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         if (buffer.trim() !== "") {
           for (const event of parseSSE(buffer)) {
             if (receivedDone) break
-            if (event.type === "[DONE]") {
+            const frame = handleFrame(event)
+            if (frame.done) {
               receivedDone = true
               break
             }
-            const events: LLMStreamEvent[] = []
-            const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
-            for (const choice of choices) {
-              const delta = choice.delta ?? {}
-              // R12: the same rule as the main loop — a final frame that lost
-              // its trailing "\n\n" is parsed HERE, and the provider's failure
-              // channel must not depend on where the frame boundary fell.
-              if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
-              if (typeof delta.content === "string" && delta.content.length > 0) events.push({ type: "text/chunk", text: delta.content })
-            }
-            if (yield* emit(events)) return
+            if (yield* emit(frame.events)) return
             if (yield* flushParsedToolCalls()) return
           }
         }
