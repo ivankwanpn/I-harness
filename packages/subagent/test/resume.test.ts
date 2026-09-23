@@ -265,6 +265,80 @@ describe("ensureResidentAgent", () => {
     expect(requests[0]!.systemPrompt).not.toBe(role.systemPrompt)
   }, 10_000)
 
+  // M73, the WINDOW half of the declared arm: the case above pairs a 200k window
+  // with a 4_242 cap, where the clamp is a no-op — so it can never see the
+  // window, and the cap lands verbatim with or without one. Here the binding's
+  // own window is small enough that the clamp MUST bite, so this is the case
+  // that reddens iff the declared arm stopped reading `state.binding.contextWindow`.
+  it("M73: the rebuilt child's SMALL resolved window clamps the binding's larger cap", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "big" }),
+      // The SESSION's window rides beside the binding's — a different model's,
+      // and large enough that using it here would leave the clamp a no-op. The
+      // binding's own 1_000 must win; `?? deps.contextWindow` in the declared
+      // arm would put the session's window under another model's cap.
+      contextWindow: 200_000,
+      resolveModel: async () => ({
+        status: "ready" as const,
+        binding: { client: roleClient, contextWindow: 1_000, maxOutputTokens: 4_242 },
+      }),
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    const req = requests[0]!
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(4_242)
+  }, 10_000)
+
+  // M73, the inherit arm's numbers — the rebuild twin of the spawn case
+  // `an inheriting child's SMALL window clamps the SESSION's larger cap`
+  // (child.test.ts). No declared selection ⇒ the rebuilt child runs on
+  // `deps.parentModel`, so the numbers are the session's own, handed in on the
+  // host shape (RoleModelHost). Same small-window/larger-cap pairing, for the
+  // same reason: the window has no request key of its own — it acts only through
+  // the clamp — so only an inequality can see it.
+  it("M73: an inheriting rebuild's SMALL window clamps the host's larger cap", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const parentClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps, parentModel: parentClient,
+      contextWindow: 1_000, maxOutputTokens: 4_242,
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    const req = requests[0]!
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(4_242)
+  }, 10_000)
+
   it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
     const { deps, table } = setup()
     const entry = restoredEntry("child-1", "general")
