@@ -25,7 +25,7 @@
 
 | 單位 | 內容 | 大小 | 狀態 |
 |---|---|---|---|
-| **M76** | **①走位守衛 ＋ ②種子邊界** | S–M | ☐ **進行中**（spec 已寫：`docs/superpowers/specs/2026-09-23-walkoff-and-seed-bound-design.md`） |
+| **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成**（`m76`；閘門 **3083／433** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
 | **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ☐ |
 | **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ☐ |
 | **M79** | **⑤覆蓋率補齊**（driveable 的 diagnostics 站點＋四個沒有觀察者的 hop＋零站點的聯集成員） | M–L | ☐ |
