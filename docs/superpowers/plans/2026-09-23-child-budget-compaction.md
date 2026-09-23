@@ -26,7 +26,7 @@
 ### Task 1: `forkTurns` 把壓縮標記重映射到子代理的座標（前置）
 
 **Files:**
-- Modify: `packages/session-persistence/src/fork.ts:164`（`function` → `export function`，並補一句它現在有第三個消費者）
+- Modify: `packages/session-persistence/src/fork.ts:164`（`function` → `export function`，並補一句它現在有**第二個**消費者——原本只有 `completedTurnPrefix` 一個）
 - Modify: `packages/session-persistence/src/index.ts:13-16`（把 `remapSeedEvent` 加進 `./fork.ts` 的 export 區塊）
 - Modify: `packages/subagent/src/fork.ts`（整支 12 行）
 - Test: `packages/subagent/test/child.test.ts`（`describe("fork.ts")`，`:23-33`）
@@ -106,7 +106,7 @@ Expected: 第 1 條紅——今天 `seed[0]` 的 `shadowedSeqs` 是 `[0,1,2,3]`�
 export function remapSeedEvent(event: SessionEvent, index: number, renumbered: ReadonlyMap<number, number>): SessionEvent {
 ```
 
-並把上面那段註解（`:161-163`）補一句：**它從 M74 起有第三個消費者**（原本是 `completedTurnPrefix`，現在加上 subagent 的 `forkTurns`）。
+並把上面那段註解（`:161-163`）補一句：**它從 M74 起有第二個消費者**（原本是 `completedTurnPrefix`，現在加上 subagent 的 `forkTurns`）。
 
 `packages/session-persistence/src/index.ts` 的出口區塊（`:13-16`）：
 
@@ -273,7 +273,7 @@ Expected: 紅——`status` 是 `"error"`（`prompt_too_long`），而且 `reque
 
 上游的 pre-flight 掃描發現：**這一改讓 `child.test.ts` 的「a child past its window FAILS CLOSED」變紅**，而原本讓它負責的是 Task 4 ⇒ **T2 的 commit 會是紅的**。所以那條斷言的重寫**搬進這一任務**（欄位本身的改動與讓它變紅的原因是同一件事）。
 
-它的斷言從「零個請求」改成「**一個請求、而且可證明是摘要器的**」——**更精確，不是放寬**：
+它的斷言從「零個請求」改成「**零條主要請求、且有摘要器請求**」——**更精確，不是放寬**（後者對一個根本沒有 compactor 的子代理也成立）：
 
 - 標題改成 `"a child past its window FAILS CLOSED — one summarizer call, and no over-window request"`
 - 註解（`:877-885`）改寫成真的事實（有了 compactor，失敗前會有**一次摘要器呼叫**；而**超窗的主要請求仍然一條都沒出去**）
