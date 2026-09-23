@@ -437,3 +437,113 @@ describe("M72 Ⅲ: one frame handler for both loops (openai-compatible)", () => 
     expect(events.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { name: "read", args: { path: "a.txt" } } }])
   })
 })
+
+// M72 Ⅲ. Of the five protocols this harness speaks, this is the ONLY one whose
+// wire reports usage solely ON REQUEST (`stream_options.include_usage`) — the
+// other four send it unasked. That makes the ask itself a REQUEST-SHAPE change:
+// a gateway that does not know the key can reject the whole call, which is why
+// the switch is per-route and not a property of the protocol. It is default ON
+// (the routing default, not a guess), and a route whose gateway rejects it says
+// `usageInStream: false` — and then NOTHING is sent, not `include_usage: false`.
+describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: the request asks for usage by default", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: a route that says its gateway rejects the key does NOT send it", async () => {
+    // "Off" is ABSENT, not `{ include_usage: false }`: a gateway that rejects
+    // the key rejects the key, whatever its value.
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m", usageInStream: false })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("stream_options" in body).toBe(false)
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: a route's raw options still override the ask", async () => {
+    // The key is written BEFORE `...(config.options ?? {})`, and that order is
+    // load-bearing: a route's own `options` is a MORE specific statement about
+    // ITS gateway than the adapter's default, so it must win. A key written
+    // after the spread would silently clobber a route's existing configuration
+    // — the clobber this repo has already been bitten by.
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({
+      apiKey: "k", baseUrl: "https://api.test", model: "m",
+      options: { stream_options: { include_usage: false } },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.stream_options).toEqual({ include_usage: false })
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: the trailing usage-only chunk reaches the seam", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 4, prompt_cache_hit_tokens: 7 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([
+      { type: "usage", usage: { inputTokens: 9, outputTokens: 4, cacheReadTokens: 7 } },
+    ])
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // The mapper's three exits, one fixture each. Every fixture above reaches only
+  // its happy path; these are the three a regression has to break.
+  it("M72 Ⅲ: a frame with no usage object at all emits no usage event", async () => {
+    // The non-object guard: an ordinary content frame carries no `usage` key.
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Iron law ②'s second exit. A fixture that sent no `usage` at all exits at the
+  // guard above; THIS one reaches the tail with an empty result, which is what
+  // makes the tail load-bearing: an always-returning mapper would emit
+  // `{ type: "usage", usage: {} }` — an event that reads as a measurement nobody
+  // made, exactly what the seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: {} })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Iron law ①: the mapper takes only `typeof v === "number" && Number.isFinite(v)`.
+  // A STRING that merely spells a count is not a number the provider measured;
+  // coercing it would write an unvalidated value straight into `LLMUsage` — the
+  // "number nobody made" this milestone exists to forbid.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: "9" } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})

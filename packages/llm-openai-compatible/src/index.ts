@@ -1,4 +1,30 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+
+/**
+ * M72 Ⅲ: the wire's usage, under the seam's names.
+ *
+ * Returns `undefined` when the object carries no recognisable number, so the
+ * caller emits NO event rather than an empty one. This wire delivers usage in
+ * one place only — the trailing chunk the `stream_options` ask buys, whose
+ * `choices` is empty and whose `usage` is the whole payload. A gateway reports
+ * only the counters it counted (`prompt_cache_hit_tokens` is a cache extension
+ * the others do not have), and a fabricated `0` for a counter nobody sent would
+ * read as a measurement of zero rather than as "not reported". Fields are copied
+ * verbatim and never derived.
+ */
+function mapUsage(raw: unknown): LLMUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined
+  const src = raw as Record<string, unknown>
+  const out: LLMUsage = {}
+  const take = (from: string, to: keyof LLMUsage): void => {
+    const v = src[from]
+    if (typeof v === "number" && Number.isFinite(v)) out[to] = v
+  }
+  take("prompt_tokens", "inputTokens")
+  take("completion_tokens", "outputTokens")
+  take("prompt_cache_hit_tokens", "cacheReadTokens")
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 export interface OpenAICompatibleConfig {
   apiKey: string
@@ -12,6 +38,13 @@ export interface OpenAICompatibleConfig {
   /** M72 Ⅱ: which wire field carries the cap on THIS route. Default
    * `max_tokens` (the compatible-gateway spelling). */
   maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /** M72 Ⅲ: whether this route's requests ASK for usage
+   * (`stream_options.include_usage`). Default `true` — this is the one protocol
+   * of the five that reports usage only on request, so no other wire needs the
+   * ask. `false` sends NOTHING (not `include_usage: false`): the switch exists
+   * for a gateway that rejects the KEY, and such a gateway rejects it whatever
+   * its value. A route-level capability flag — Pi's `supportsUsageInStreaming`. */
+  usageInStream?: boolean
   /** M59: literal extra request headers (gateway-required, e.g. OpenCode
    * Zen's x-opencode-session). The adapter's own headers win on collision. */
   headers?: Record<string, string>
@@ -119,6 +152,14 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
         })),
         stream: true,
+        // M72 Ⅲ: usage must be ASKED for on this wire (the other four report it
+        // unasked). Default ON — a routing flag, not a guess about capability;
+        // a gateway that rejects the key is switched off per route with
+        // `usageInStream: false` (Pi's supportsUsageInStreaming, explicit).
+        // Written BEFORE the route's raw `options` so the more specific
+        // statement still wins: an `options` key that collides must override
+        // this default, never be clobbered by it.
+        ...((config.usageInStream ?? true) ? { stream_options: { include_usage: true } } : {}),
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
@@ -225,6 +266,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             }
           }
         }
+        // M72 Ⅲ: the ask above buys a trailing usage-only chunk — `choices: []`
+        // with the round-trip's counters. It is the ONE carrier of usage on this
+        // wire, and it is handled here, at the single frame handler both loops
+        // share (Task 4), so the residual flush reports it identically.
+        const usage = mapUsage((event as { usage?: unknown }).usage)
+        if (usage !== undefined) events.push({ type: "usage", usage })
         return { events, done: false }
       }
 
