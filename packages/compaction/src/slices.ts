@@ -11,13 +11,26 @@ import { estimateContent } from "@i-harness/token-meter"
  *
  * M75 ruling 10: the walk is in MESSAGE space. The region's fold is computed
  * ONCE — the same fold the single-call path replays — and a cut may only fall on
- * a message whose role is `user`. Two properties follow by construction rather
- * than from a boundary rule: every piece after the first is a legal standalone
- * request (the provider requires a request's first message to have the `user`
- * role), and no cut can land inside an `assistant(toolCalls)` / `tool` pair —
- * those are adjacent in the fold — so no piece begins with an orphan `tool`
- * message. The FIRST piece starts at the fold's first message, whatever role
- * that is: that is the session's own shape, not the slicing's.
+ * a message whose role is `user`. Every piece after the first is therefore a
+ * legal standalone request (the provider requires a request's first message to
+ * have the `user` role). The FIRST piece starts at the fold's first message,
+ * whatever role that is: that is the session's own shape, not the slicing's.
+ *
+ * M75 ruling 11: a candidate must ALSO leave no tool call open. The same scan
+ * carries the outstanding call ids — an `assistant` message adds its
+ * `toolCalls`, a `tool` message removes its `toolCallId` — and a `user` message
+ * is a candidate only while that set is empty. A `tool` message is normally
+ * adjacent to the `assistant(toolCalls)` it belongs to, but the M14
+ * tool-result-images shape puts a synthetic `user` message BETWEEN a block's
+ * results (`core-session/src/index.ts:578-585`), so without this the cut would
+ * leave a piece carrying `tool` with its call behind — the orphan the provider
+ * rejects. The guard comes from the same fold the pieces come from, so it cannot
+ * drift, and it is what now provides the BLOCK-ALIGNED cut
+ * `deriveMessagesUpTo` requires (`core-session/src/index.ts:451-453`): the
+ * slicer no longer walks off tool events (that walk was measured insufficient
+ * here — `tool/dispatch` ends it early). Cost: a block still open at a candidate
+ * makes that candidate unavailable, so a piece can come out coarser than the
+ * budget alone would ask.
  *
  * A piece that contains no interior cut candidate (no user message beyond its
  * own first) cannot be split at all, so it is emitted whole and over budget; the
@@ -35,10 +48,17 @@ export function sliceRegion(session: Session, shadowedSeqs: number[], budgetToke
   if (whole.length === 0) return []
 
   // Cut candidates: the fold's user messages (index 0 excluded — a cut there
-  // makes no piece). In message space a cut can never sit inside a call/result
-  // pair, whatever the log's event shapes are.
+  // makes no piece) with NO tool call outstanding. The outstanding set is carried
+  // in this same scan, so the guard is computed from the very fold the pieces
+  // come from and cannot drift from the projection.
   const bounds: number[] = [0]
-  for (let i = 1; i < whole.length; i++) if (whole[i]!.role === "user") bounds.push(i)
+  const outstanding = new Set<string>()
+  for (let i = 0; i < whole.length; i++) {
+    const m = whole[i]!
+    if (i > 0 && m.role === "user" && outstanding.size === 0) bounds.push(i)
+    if (m.role === "assistant") for (const call of m.toolCalls ?? []) outstanding.add(call.id)
+    else if (m.role === "tool") outstanding.delete(m.toolCallId)
+  }
   bounds.push(whole.length)
 
   // Greedy accumulation over the segments between consecutive candidates: close

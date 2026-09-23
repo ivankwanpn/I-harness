@@ -54,6 +54,26 @@ function abortTailSession(): Session {
   return s
 }
 
+/** The M14 tool-result-images shape: a result carrying images projects a
+ * synthetic `user` message INSIDE the tool block
+ * (`core-session/src/index.ts:578-585`), so the fold reads
+ * `user, assistant(toolCalls[c1,c2]), tool(c1), user(synthetic), tool(c2)` and
+ * the only user-message candidate sits with `c2` still open. */
+function imageResultSession(): Session {
+  const s = createSession()
+  append(s, { type: "user/message", text: "q0 " + "filler ".repeat(120) })
+  append(s, { type: "tool/call", callId: "c1", name: "read", args: { path: "a.png" } })
+  append(s, { type: "tool/call", callId: "c2", name: "read", args: { path: "b.txt" } })
+  append(s, {
+    type: "tool/result",
+    callId: "c1",
+    name: "read",
+    output: { content: "img", images: [{ mediaType: "image/png", dataBase64: "aGk=" }] },
+  })
+  append(s, { type: "tool/result", callId: "c2", name: "read", output: { content: "body ".repeat(200) } })
+  return s
+}
+
 const allSeqs = (s: Session): number[] => s.events.map((e) => e.seq!).filter((n) => n !== undefined)
 
 const textOf = (slice: { content: unknown }[]): string =>
@@ -82,7 +102,7 @@ describe("sliceRegion", () => {
     expect(slices.flat()).toEqual(whole)
   })
 
-  it("M75: every slice is cut at a block boundary — no slice starts with an orphan tool result", () => {
+  it("M75: no slice contains an orphan tool result", () => {
     const s = toolSession(6)
     for (const slice of sliceRegion(s, allSeqs(s), 400)) {
       const first = slice[0]
@@ -105,6 +125,22 @@ describe("sliceRegion", () => {
       if (k > 0) expect(piece[0]!.role).toBe("user")
       expect(piece[0]!.role).not.toBe("tool")
     }
+  })
+
+  // M75 ruling 11: the M14 tool-result-images shape. The synthetic image message
+  // is a `user` message INSIDE an open tool block, so a cut there leaves the
+  // second piece carrying `tool(c2)` with its call left behind — the
+  // provider-rejected shape. The boundary the guard must NOT reject is the abort
+  // tail just below, where the block is COMPLETE at the candidate.
+  it("M75: the M14 tool-result-images shape — no piece carries an orphan tool result", () => {
+    const s = imageResultSession()
+    const whole = deriveMessagesUpTo(s, s.events.at(-1)!.seq!)
+    const pieces = sliceRegion(s, allSeqs(s), 400) // a budget that forces cuts
+    expect(pieces.flat()).toEqual(whole)
+    for (const piece of pieces) expect(orphans(piece)).toEqual([])
+    // the only candidate on the way sits with `c2` still open: the guard refuses
+    // it, so the whole block stays one piece
+    expect(pieces).toHaveLength(1)
   })
 
   // M75 ruling 10, Open 2: the abort-tail shape. The event-level walk stopped on
