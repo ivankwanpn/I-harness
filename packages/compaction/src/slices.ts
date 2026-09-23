@@ -25,12 +25,15 @@ import { estimateContent } from "@i-harness/token-meter"
  * results (`core-session/src/index.ts:578-585`), so without this the cut would
  * leave a piece carrying `tool` with its call behind — the orphan the provider
  * rejects. The guard comes from the same fold the pieces come from, so it cannot
- * drift, and it is what now provides the BLOCK-ALIGNED cut
- * `deriveMessagesUpTo` requires (`core-session/src/index.ts:451-453`): the
- * slicer no longer walks off tool events (that walk was measured insufficient
- * here — `tool/dispatch` ends it early). Cost: a block still open at a candidate
- * makes that candidate unavailable, so a piece can come out coarser than the
- * budget alone would ask.
+ * drift, and it is what aligns the PIECE boundaries: a cut it admits falls
+ * between folded blocks. That is a different requirement from the one
+ * `deriveMessagesUpTo` states for its own `maxSeq` (`core-session/src/index.ts:
+ * 451-453`) — this function makes that call ONCE, on the region's last shadowed
+ * seq, and the pieces are cut inside the fold it returned. (The slicer no longer
+ * walks off tool events: that walk was measured insufficient here —
+ * `tool/dispatch` ends it early.) Cost: a block still open at a candidate makes
+ * that candidate unavailable, so a piece can come out coarser than the budget
+ * alone would ask.
  *
  * A piece that contains no interior cut candidate (no user message beyond its
  * own first) cannot be split at all, so it is emitted whole and over budget; the

@@ -380,7 +380,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     // projects the region as one summary message (measured: 36 messages before,
     // 1 after), so `deriveMessages(s)` is no longer the fold this test is
     // about; (2) the summarizer's request is `[...region fold, directive]`
-    // (summarizer.ts:201), which is the second thing the assertion below must
+    // (summarizer.ts:252-255), which is the second thing the assertion below must
     // account for.
     const fold = deriveMessages(s)
     await engine.compact(s)
@@ -398,8 +398,12 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
   // region prices at 2 142 tokens, the single request at 2 591 (the directive
   // is 449 of them). 2 560 sits in that band: a region-only predicate sends
   // the single request here and the strict mock rejects it; pricing the
-  // request takes the piece path (2 pieces, 2 024 and 1 209 tokens, measured)
-  // and the summary happens.
+  // request takes the piece path and the summary happens. Measured there: the 2
+  // pieces price at 1 575 + 567 tokens — the region exactly, so the slicing
+  // loses none of it — while their REQUESTS price at 2 024 and 1 209: piece +
+  // the 449-token directive, the second adding the running summary it is
+  // anchored on. (Piece prices and request prices are different quantities;
+  // the requests are what must fit the window.)
   it("M75: the predicate prices the REQUEST, not the region — the band where only the directive is over", async () => {
     const { model, requests } = strictModel(2_560)
     const engine = createCompactionEngine({
@@ -528,14 +532,24 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
   // degenerates to ONE byte-identical piece and nothing reddens.
   //
   // Here all entry conditions hold and the piece budget is FINER than the
-  // region — measured at 2 600: budget `2 600 − allowance 684 − maxTokens 200
-  // = 1 716` < the region's 2 142 tokens, so `sliceRegion` returns 2 pieces
+  // region — measured at 2 800: budget `2 800 − allowance 684 − maxTokens 200
+  // = 1 916` < the region's 2 142 tokens, so `sliceRegion` returns 2 pieces
   // (1 575 + 567 tokens) — while the single request still fits, by the clamp's
-  // OWN arithmetic: `2 600 − 2 591 = 9 >= 1`, the condition under which
+  // OWN arithmetic: `2 800 − 2 591 = 209 >= 1`, the condition under which
   // `clampOutputCap` does not take its "input already fills the window" arm, so
-  // the single call carries a legal cap (measured: 9) instead of the raw
+  // the single call carries a legal cap (measured: 209) instead of the raw
   // 50 000. That is what makes this case the one the unconditional-slice mutant
   // cannot pass.
+  //
+  // THE WINDOW IS MID-BAND, and the band is [2 591, 3 025]: below the floor the
+  // single request no longer fits (the case stops being "the request fits" at
+  // all) and above the ceiling `window − 684 − 200` reaches the region's
+  // 2 142 so the slicing is no longer finer than the region and an
+  // always-slice mutant degenerates to one piece again. 2 800 leaves 209 tokens
+  // of room above the floor and 225 below the ceiling — a legitimate price
+  // drift (a directive that prices a few tokens cheaper, a fixture that prices
+  // a few more) cannot redden a correct implementation from here, where the
+  // brief's 2 600 sat 9 tokens above its own floor.
   it("M75: with the cap present and the request fitting, the pass stays ONE byte-identical prefix call", async () => {
     const s = toolSession()
     // Captured BEFORE the pass — the idiom the case above records the reason
@@ -545,7 +559,7 @@ describe("M75: an over-window region is summarised in chained pieces", () => {
     const { model, requests } = capturingModel()
     const engine = createCompactionEngine({
       model,
-      config: { contextWindow: 2_600, thresholdRatio: 0.5, maxTokens: 200 },
+      config: { contextWindow: 2_800, thresholdRatio: 0.5, maxTokens: 200 },
       requestShape: () => SHAPE,
       maxOutputTokens: 50_000,
     })
