@@ -570,4 +570,21 @@ describe("M72 Ⅲ: response.completed's usage (openai)", () => {
     expect(events.some((e) => e.type === "usage")).toBe(false)
     expect(events.at(-1)).toEqual({ type: "end" })
   })
+
+  // Fix round 2: iron law ① — the mapper takes only
+  // `typeof v === "number" && Number.isFinite(v)`. A STRING that merely spells a
+  // count ("25") is not a number the provider measured; coercing it would write
+  // an unvalidated value straight into `LLMUsage` — the "number nobody made"
+  // this phase exists to forbid. Every other fixture in this file hands `take`
+  // either a real number or nothing at all, so this is the one that pins the
+  // guard: it is the fixture a coercion regression has to break.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { usage: { input_tokens: "25" } } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
 })
