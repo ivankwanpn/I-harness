@@ -842,4 +842,32 @@ describe("the child's request carries the resolved budget", () => {
     // the key back and reddens exactly this case.
     expect("maxOutputTokens" in roleClient.requests[0]!).toBe(false)
   }, 10_000)
+
+  it("a DECLARED model with no window of its own is not measured against the session's", async () => {
+    const f = spawnFixture()
+    const roleClient = recordingClient("from the role's model")
+    const resolveModel = async () => ({
+      status: "ready" as const,
+      binding: { client: roleClient, providerId: "gw", modelId: "big", label: "role", maxOutputTokens: 50_000 },
+    })
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      contextWindow: 1_000,   // the SESSION's window — a different model's
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    // The declared model's own window is UNKNOWN (the binding resolved none),
+    // and unknown must not become "the session's": clamping a different model's
+    // cap against this session's 1k window would be worse than not clamping at
+    // all. clampOutputCap's no-window arm returns the value untouched, so the
+    // binding's cap reaches the wire VERBATIM — this assertion reddens iff the
+    // declared arm falls back to `opts.contextWindow` (the value would land in
+    // the 1k window's room instead).
+    expect(roleClient.requests[0]!.maxOutputTokens).toBe(50_000)
+  }, 10_000)
 })
