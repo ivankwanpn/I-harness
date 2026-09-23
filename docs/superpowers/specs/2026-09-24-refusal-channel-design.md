@@ -31,7 +31,8 @@
 ### 1.1 詞彙：`end` 加一個語意位元 `refused?: true`；context 超限走**既有**的錯誤碼
 
 - **`{ type: "end"; truncated?: true; refused?: true }`**——與 `truncated` 完全對稱：**缺席即缺席**（永遠不寫 `false`），而它是**語意**的（「提供者拒絕產生內容」），**不是** wire 詞彙（`content_filter`／`SAFETY`／`refusal`／`guardrail_intervened` **都不進 seam**，M72 Ⅱ 的約束不破）。
-  - **為什麼不新增一個聯集成員**：`core-agent` 的 `switch` 沒有 `default`、也沒有 exhaustive assert ⇒ 新成員會被**靜默丟掉**；而重試包的 `if/else if` 只認 `text/chunk`／`error`／`end`（`llm-seam:204`）⇒ 也會丟掉。加欄位則**既有讀者的 `=== true` 檢查自然繼續工作**（`core-agent:431`、`run.ts:825` 的形狀）。
+  - **為什麼不新增一個聯集成員**：`core-agent` 的 `switch` 沒有 `default`、也沒有 exhaustive assert ⇒ 新成員會被**靜默丟掉**（`core-agent:416-419` 自己這麼說——**這半條是量到的**）。而重試包**不是**「丟掉」它——它的 `yield ev`（`llm-seam:233`）是**catch-all，會把它原樣轉發**；它認得的是 `text/chunk`／`reasoning`／`tool_call`（設 `produced`，`:215`）、`usage`（`:216`）與終止的 `error`／`end`（`:228`）⇒ 新成員會**未經判斷**地到達消費者（`produced` 永遠不設），然後死在 `core-agent` 那個 defaultless 的 switch 上。加欄位則**既有讀者的 `=== true` 檢查自然繼續工作**（`core-agent:431`、`run.ts:825` 的形狀）。
+    - **執行期更正（Task 1 的複審推翻了原文的重試包那半）**：原文說重試包「也會丟掉」——**假的**；真相是**轉發但不判斷**。裁決的結論不變（用欄位），理由是上面修正過的那一條。
   - **為什麼不是 `error` 事件**：拒絕**不是**傳輸失敗——HTTP 200、串流正常結束。把它變成 error 會讓它進重試分類，而重試一個內容過濾是**徒勞**的（同樣的輸入 ⇒ 同樣的拒絕）。
 - **`model_context_window_exceeded`（anthropic 的 `stop_reason`）走另一條**：它不是拒絕，是**輸入側**的訊號，而 seam **已經有**那個碼（`CONTEXT_WINDOW_EXCEEDED`，已分類、**不在**預設重試清單）。⇒ anthropic 的這一臂**發出一個帶該碼的 `error` 事件**（`code` 是 `retryErrorCode()` 讀的同一個欄位，`llm-seam:132-149`），**不新增第二套詞彙**。這一條同時是 M75 的補強：M75 靠**估計**判斷超窗，而這裡是**提供者自己說的**。
   - **不做**：不把它接進預算階梯（那是另一個單位）；本階段只讓它**出現**（不再靜默）。
@@ -81,7 +82,7 @@
 
 ## 3. 刻意不做（YAGNI）
 
-- **不新增聯集成員**（會被兩個 defaultless 的消費者靜默丟掉，§1.1）。
+- **不新增聯集成員**（`core-agent` 的 defaultless `switch` 會靜默丟掉它，重試包會**轉發但不判斷**它，§1.1）。
 - **不把 wire 詞彙帶進 seam**（M72 Ⅱ 的約束）：`refused` 是語意位元，五家的字面留在五家。
 - **不把拒絕接到 `EMPTY_RESPONSE`**（會引入重試）。
 - **不把 `model_context_window_exceeded` 接進預算階梯**（M75 的地盤，且需要自己的 spec）。
