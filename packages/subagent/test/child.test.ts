@@ -1068,9 +1068,10 @@ describe("the child's request carries the resolved budget", () => {
   // (seq 16): MEASURED, the derived surface is exactly `user:
   // PARENT-SUMMARY-SENTINEL…` | `user: CHILD-SUMMARY-SENTINEL…` |
   // `assistant: child done` (427 tokens) — both summaries, the stale one
-  // included. Nothing in this package can change that — it is the engine's
-  // region rule (or the child's seed), i.e. production code — so it is reported
-  // as a FINDING for this task.
+  // included. No test-side change can alter that: the fix is production code —
+  // the engine's region rule (compaction) or the seed the child is handed
+  // (`fork.ts`) — so it is reported as a FINDING for this task, not patched in
+  // a test.
   // The requirement itself is pinned below, verbatim, as an EXPECTED FAILURE
   // (`it.fails`), which keeps the suite green while the gap is real; the case
   // just above it is the green half (the part of the prediction that holds).
