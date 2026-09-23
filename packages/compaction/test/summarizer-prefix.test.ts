@@ -180,6 +180,35 @@ describe("M73: the summarizer request carries a clamped cap", () => {
     expect(req.maxOutputTokens).toBeLessThanOrEqual(12_000 - input - 8_000)
   })
 
+  // Fix wave (I2). `config.summarizationModel ?? deps.model` sends the summary
+  // to a DIFFERENT endpoint, but `deps.maxOutputTokens` is the SESSION model's
+  // resolved cap — a number resolved for a model that is not the one receiving
+  // this request. Spreading it anyway is the hazard this branch refused at the
+  // guardian's spawn (reviewer.ts: the session's numbers "would be a wrong
+  // number, which is worse than an absent one"), and `config.summarizationModel`
+  // is that spawn's named twin — so the two arms answer the same way. The gate
+  // is the one the SHAPE one screen up already uses.
+  it("a CONFIGURED summarization model's request carries NO cap", async () => {
+    const { model, requests } = capturingModel()
+    const { model: configured, requests: configuredRequests } = capturingModel()
+    const engine = createCompactionEngine({
+      model,
+      config: { contextWindow: 8_000, thresholdRatio: 0.5, maxTokens: 200, summarizationModel: configured },
+      requestShape: () => SHAPE,
+      maxOutputTokens: 50_000,
+    })
+    await engine.compact(toolSession())
+
+    // The configured endpoint is the one that served the summary (asserted first
+    // so a broken routing choice cannot make the absence below vacuous).
+    expect(configuredRequests).toHaveLength(1)
+    expect(requests).toHaveLength(0)
+    // 缺席即缺席 — the session's cap belongs to the session's model. On the
+    // legacy text path the clamp WOULD shrink 50 000 to a real number (the case
+    // below measures the same fixture), so a present key here is the bug.
+    expect("maxOutputTokens" in configuredRequests[0]!).toBe(false)
+  })
+
   // Fix round 2 (Minor 1). The LEGACY text path — no `requestShape`, so
   // `prefix === undefined` and the request is one user message with NO system
   // prompt and NO tools. The host-known overhead stands for exactly that pair,
