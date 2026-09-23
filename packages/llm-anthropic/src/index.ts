@@ -1,4 +1,4 @@
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -186,6 +186,13 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       // — set in `handleEvent` below, read once at the ending. Absent stays
       // absent: only `true` writes the field.
       let truncated = false
+      // M77: `stop_reason: "refusal"` — the model declined to produce content.
+      // Its sibling `stop_reason: "model_context_window_exceeded"` is NOT a
+      // refusal (it is an input-side signal) and does not set this: that arm
+      // yields the seam's existing `CONTEXT_WINDOW_EXCEEDED` error code
+      // instead. A separate variable from `truncated` because the two are
+      // independent — neither is the other's `else`. Only `true` is written.
+      let refused = false
       const pendingToolUses = new Map<number, { name: string; argsBuffer: string }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
@@ -202,7 +209,33 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         if (t === "message_delta") {
           const stop = (event.delta as { stop_reason?: string } | undefined)?.stop_reason
           if (stop === "max_tokens") truncated = true
+          // M77: the model refused. HTTP 200 with no content, so before M77
+          // the seam reported an empty SUCCESS for a turn the model declined.
+          if (stop === "refusal") refused = true
+          // M77: and this one is deliberately NOT the bit. The Messages API
+          // states the INPUT did not fit, and the seam already owns that
+          // vocabulary — `RetryableErrorCode`'s `CONTEXT_WINDOW_EXCEEDED`,
+          // classified by the seam's retry classifier off an error's `code`
+          // field and deliberately absent from the default retryable set (a
+          // retry cannot shrink an over-window request). So the code goes on
+          // that same field, in this adapter's existing `${label}: ${detail}`
+          // error shape, and the event is terminal — no `end`, no bit, and the
+          // consumer learns "the provider said the window is too small"
+          // instead of seeing a silent empty success.
+          // M77 (fix wave): mapped BEFORE the context arm's early return. That
+          // arm used to return first, and this same `message_delta` is the one
+          // that carries the round-trip's output count — so the number was
+          // dropped for a round-trip the provider had already priced. The
+          // retry wrapper hides it (a held-aside `usage` is discarded when the
+          // attempt settles on an error); an unwrapped client saw nil. The
+          // error is still terminal, and the report rides AHEAD of it: `emit`
+          // stops at the first error event, so anything after it is never seen.
           const usage = mapUsage(event.usage)
+          if (stop === "model_context_window_exceeded") {
+            const error = new Error(`stop_reason: ${stop}`) as Error & { code?: RetryableErrorCode }
+            error.code = "CONTEXT_WINDOW_EXCEEDED"
+            return usage ? [{ type: "usage", usage }, { type: "error", error }] : [{ type: "error", error }]
+          }
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "content_block_start") {
@@ -298,7 +331,9 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: each bit is written on its own (a response can be both), and both
+      // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }

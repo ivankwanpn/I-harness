@@ -128,6 +128,47 @@ describe("runHeadless — the metrics summary", () => {
     expect(errors.some((line) => line.includes("[truncated]"))).toBe(false)
   }, 30_000)
 
+  // M77: the run-level end of the REFUSAL chain, point for point the shape of
+  // the pair above. The seam bit and the durable `step/end.refused` are separate
+  // hops; this is the one that proves the VALUE arrives at the host's `run` —
+  // and it is the only end-to-end proof for the mock route, since the hops
+  // between have no unit test of their own.
+  it("M77: a refused run says so on STDERR and on the result", async () => {
+    const result = await runHeadless("say hi", {
+      workspace: root,
+      // The refusal's own shape at the seam: a bare `end` carrying the bit and
+      // no text at all (HTTP 200, no content).
+      mockScript: [{ role: "assistant", refused: true }],
+    })
+    expect(result.refused).toBe(true)
+    expect(errors.some((line) => line.includes("[refused]"))).toBe(true)
+  }, 30_000)
+
+  it("M77: a clean run neither says it nor sets the field", async () => {
+    const result = await runHeadless("say hi", { workspace: root, mockScript: [{ role: "assistant", text: "hi" }] })
+    expect(result.refused).toBeUndefined()
+    expect(errors.some((line) => line.includes("[refused]"))).toBe(false)
+  }, 30_000)
+
+  // M77: the two bits are INDEPENDENT at this surface too — a step that was
+  // capped AND refused must be reported as both, which is what rules out the
+  // tempting `else if` between the two print sites. The ORDER is pinned with it
+  // (the choice this task made): the existing `[truncated]` line keeps its place
+  // and `[refused]` follows it, so neither line is the other's `else` in the
+  // source's order either.
+  it("M77: a step that is BOTH capped and refused reports both, [truncated] first", async () => {
+    const result = await runHeadless("say hi", {
+      workspace: root,
+      mockScript: [{ role: "assistant", text: "cut off", truncated: true, refused: true }],
+    })
+    expect(result.truncated).toBe(true)
+    expect(result.refused).toBe(true)
+    const lines = errors.filter((line) => line.includes("[truncated]") || line.includes("[refused]"))
+    expect(lines).toHaveLength(2)
+    expect(lines[0]!.includes("[truncated]")).toBe(true)
+    expect(lines[1]!.includes("[refused]")).toBe(true)
+  }, 30_000)
+
   // M72 Ⅱ / R14: ONE print, not two. The count is asserted END-TO-END, through
   // `main()`'s run branch — the only level where both print sites were
   // reachable at once (run.ts's and index.ts's), which is exactly the
@@ -178,6 +219,61 @@ describe("runHeadless — the metrics summary", () => {
       expect(code).toBe(0)
       // The assertion R14 buys: one line, whatever route the host took.
       expect(errors.filter((line) => line.includes("[truncated]"))).toHaveLength(1)
+    } finally {
+      out.mockRestore()
+      if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR
+      else process.env.IH_CONFIG_DIR = previousConfigDir
+      await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  // M77: the refusal chain's end-to-end proof through the REAL CLI, mirroring
+  // the truncated case above point for point — a local SSE server speaking the
+  // openai-completions wire, so the round-trip really crosses the adapter
+  // (`finish_reason: "content_filter"` is the literal Task 2 taught it to read)
+  // instead of a mock client. The count is the assertion, for R14's reason: the
+  // line is printed by `runHeadless` and `main`'s branch must not re-report it.
+  it("M77: a refused run through the real CLI says it EXACTLY once", async () => {
+    const home = mkdtempSync(join(tmpdir(), "i-harness-refused-"))
+    const server = createServer((req, res) => {
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.end([
+        `data: ${JSON.stringify({ choices: [{ delta: { content: "partial" } }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "content_filter" }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n\n"))
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (address === null || typeof address === "string") throw new Error("refusal fixture failed to listen")
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: {
+        providers: {
+          fixture: {
+            protocol: "openai-completions",
+            baseURL: `http://127.0.0.1:${address.port}`,
+            apiKeyEnv: "M77_REFUSED_FIXTURE_API_KEY",
+            models: [{ id: "fixture-model" }],
+          },
+        },
+        defaultModel: { provider: "fixture", model: "fixture-model" },
+      },
+    }), "utf8")
+    writeFileSync(join(home, "credentials.json"), JSON.stringify({ refs: { M77_REFUSED_FIXTURE_API_KEY: "fixture-key" } }), "utf8")
+    const previousConfigDir = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = home
+    const out = vi.spyOn(console, "log").mockImplementation(() => {}) // the final text is not this test's subject
+    try {
+      const code = await main(["node", "i-harness", "run", "say hi"])
+      expect(code).toBe(0)
+      // The assertion R14 buys: one line, whatever route the host took.
+      expect(errors.filter((line) => line.includes("[refused]"))).toHaveLength(1)
     } finally {
       out.mockRestore()
       if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR

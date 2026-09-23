@@ -157,10 +157,42 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // below, read once at the ending. Absent stays absent: only `true` writes
       // the field.
       let truncated = false
+      // M77: the SAME field carries this wire's refusal literal,
+      // `content_filter`. Before M77 that reason was recognised by nothing: the
+      // stream ended HTTP 200 with no content, the seam reported an empty
+      // SUCCESS, and core-agent logged an empty assistant message for a turn
+      // the model had actually refused. Two variables rather than one: a
+      // response can be both truncated and refused, so neither bit may be
+      // produced as the other's `else`. Only `true` is ever written.
+      let refused = false
       const pendingCalls = new Map<string, { name: string; argsBuffer: string }>()
       const yieldedInline = new Set<string>()
+      // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
+      // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
+      // string }`) rather than a stop reason, so `response.incomplete` never
+      // fires and the stream ends `response.completed` with no text at all.
+      // Three carriers are read, because at this layer none implies another:
+      // the part's own events (`response.refusal.delta`/`.done`), the part
+      // under `part` (`response.content_part.added`/`.done`) and the part in a
+      // finished item's `content` (`response.output_item.added`/`.done` — the
+      // same inline-item shape the function-call arm below already guards for).
+      // The check keys on the part's `type`, never on a part being present:
+      // EVERY streamed part arrives through these events, `output_text`
+      // included, so "a part is here" would mark every ordinary turn refused.
+      // The refusal's TEXT is deliberately NOT promoted into assistant text (a
+      // parked product decision); only the bit is set.
+      const refusalParts = (parts: unknown): boolean =>
+        Array.isArray(parts) && parts.some((p) => (p as { type?: string } | undefined)?.type === "refusal")
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
+        if (
+          t === "response.refusal.delta" ||
+          t === "response.refusal.done" ||
+          (event.part as { type?: string } | undefined)?.type === "refusal" ||
+          refusalParts((event.item as { content?: unknown } | undefined)?.content)
+        ) {
+          refused = true
+        }
         if (t === "response.output_text.delta") {
           return [{ type: "text/chunk", text: (event as { delta: string }).delta }]
         }
@@ -208,10 +240,12 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         }
         // M72 Ⅱ: the Responses stream's truncation ending. `response.incomplete`
         // also fires for `content_filter` — a REFUSAL, not a truncation — so the
-        // bit keys on the REASON, never on the event name.
+        // bit keys on the REASON, never on the event name. M77: the refusal
+        // reason now sets its own bit, the sibling of the truncation above.
         if (t === "response.incomplete") {
           const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
           if (reason === "max_output_tokens") truncated = true
+          if (reason === "content_filter") refused = true
           return []
         }
         if (t === "response.completed") {
@@ -231,7 +265,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // and can also send a bare `error` event. Both used to fall through to the
         // empty default, so a failed response was indistinguishable from an empty
         // one. `response.incomplete` is NOT handled here and is NOT a failure:
-        // it has its own arm above (M72 Ⅱ's truncation bit).
+        // it has its own arm above, which now carries BOTH bits (M72 Ⅱ's
+        // truncation bit and M77's refusal bit), and M77's content-part refusal
+        // is read at the top of this handler — so no refusal shape lands in this
+        // arm.
         //
         // The two shapes carry their fields differently, so this arm reads both:
         // `response.failed` nests them under `response.error.{code,message}`,
@@ -296,7 +333,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       } finally {
         reader.releaseLock()
       }
-      yield truncated ? { type: "end", truncated: true } : { type: "end" }
+      // M77: the two bits are independent — each is written on its own, so a
+      // response that was both truncated and refused carries both. Both absent
+      // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
     },
   }
 }

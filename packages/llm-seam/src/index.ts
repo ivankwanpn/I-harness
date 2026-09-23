@@ -27,12 +27,48 @@ export interface LLMUsage {
   cacheCreationTokens?: number
 }
 
+/**
+ * M77: a provider REFUSAL gets a bit here, deliberately the same shape as
+ * M72 Ⅱ's `truncated` on the same member. The five adapters all report a
+ * refusal as HTTP 200 with no content — openai's and openai-compatible's
+ * `content_filter`, gemini's `SAFETY` / `RECITATION`, anthropic's
+ * `stop_reason: "refusal"`, bedrock's `guardrail_intervened` — so without this
+ * bit the seam reports an empty SUCCESS: core-agent logs an empty assistant
+ * message, the turn ends normally and the CLI prints nothing. Three properties
+ * are the design, not decoration:
+ *
+ * 1. SEMANTIC, not wire vocabulary: those literals stay in the five adapters
+ *    and never enter this union — M72 Ⅱ's explicit constraint
+ *    (`docs/superpowers/plans/2026-09-23-provider-boundary-phase-2.md:22`).
+ *    The seam learns "the provider refused", never which filter said so.
+ * 2. A FIELD on the existing `end` member, NOT a new union member: neither
+ *    consumer of this union is exhaustive, and neither would READ a new member
+ *    as an ending. core-agent's model-stream `switch` drops it in silence — no
+ *    `default`, no exhaustiveness assert, its own words in the `case "usage"`
+ *    arm's comment (`packages/core-agent/src/index.ts`; cited by SYMBOL, not by
+ *    line: this unit's own edits moved those lines once already) — so the
+ *    ending is never learned, which is the exact failure this bit exists to
+ *    remove. The retry wrapper (`createRetryingClient`) does not DROP a new
+ *    member but does not recognize it either: only
+ *    `text/chunk`/`reasoning`/`tool_call` count as output, `usage` is held
+ *    aside, `end` is its one explicit return, and everything unmatched is
+ *    forwarded by its trailing `yield ev` — so an attempt whose ending was a new
+ *    member would reach the consumer undecided and be settled as a completion
+ *    with no `end`. A field, by contrast, leaves every existing `=== true`
+ *    reader working: core-agent's `if (ev.truncated === true)` in the same
+ *    `case "end"` arm reads the new bit without being touched.
+ * 3. ABSENT STAYS ABSENT: only `true` is ever written, never `false` — the rule
+ *    core-agent states for `truncated` in that `case "end"` arm's comment ("a
+ *    clean ending writes no field at all"). `refused` and `truncated` are
+ *    INDEPENDENT — a response can be both — so neither bit may be produced as
+ *    the other's `else`.
+ */
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
   | { type: "reasoning"; text: string }
   | { type: "tool_call"; call: { name: string; args: unknown } }
   | { type: "usage"; usage: LLMUsage }
-  | { type: "end"; truncated?: true }
+  | { type: "end"; truncated?: true; refused?: true }
   | { type: "error"; error: Error }
 
 // LLMMessage is owned by core-session (it is the audit seam for the session

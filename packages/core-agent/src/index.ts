@@ -389,6 +389,18 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // declared here rather than beside `steps`/`callSeq`: a truncated step
       // must not mark the next one, and a clean ending writes no field at all.
       let truncatedThisStep = false
+      // M77: the sibling bit, same shape and same discipline — the seam's `end`
+      // carries `refused` when the provider declined to produce content. The
+      // wire literals stay in the adapters, and they are NOT one-per-wire: the
+      // `content_filter` reason is read on both openai wires (as an
+      // `incomplete_details.reason` on one, a `finish_reason` on the other), the
+      // compatible wire ALSO reads the delta's own `refusal` field, gemini reads
+      // its whole set of content-block `finishReason`s plus
+      // `promptFeedback.blockReason`, and anthropic and bedrock read one stop
+      // reason each. INDEPENDENT of `truncated` — a response can be capped AND
+      // refused — so neither bit is the other's `else`, and a clean ending
+      // writes no field at all.
+      let refusedThisStep = false
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
         switch (ev.type) {
@@ -425,12 +437,17 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
-            // M72 Ⅱ. Recorded in TWO places on purpose: the durable log (what a
-            // reopen reads) and the host's telemetry (what an operator watches).
-            // Absent stays absent — a clean ending writes no field at all.
+            // M72 Ⅱ / M77. Recorded in TWO places on purpose: the durable log
+            // (what a reopen reads) and the host's telemetry (what an operator
+            // watches). Absent stays absent — a clean ending writes no field at
+            // all, and neither bit is ever written as `false`.
             if (ev.truncated === true) {
               truncatedThisStep = true
               deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
+            }
+            if (ev.refused === true) {
+              refusedThisStep = true
+              deps.telemetry?.emit({ type: "provider/refused", ts: Date.now(), data: { step: steps } })
             }
             break
         }
@@ -472,10 +489,17 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         })
       }
 
+      // M77: a REFUSED step still appends this message, and its text stays `""`.
+      // The choice is deliberate and is the spec's (§1.3): the log must carry
+      // SOMETHING for the step either way, and putting the semantics in the text
+      // would make them unreadable to a program — "the model said nothing" and
+      // "the model was blocked" would stay indistinguishable on the one surface
+      // a reopen reads. The bit lives on `step/end.refused` below; the text is
+      // the model's output and there was none.
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
       else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
 
-      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}) })
+      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}) })
 
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a

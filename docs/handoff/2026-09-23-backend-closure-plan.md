@@ -25,8 +25,8 @@
 
 | 單位 | 內容 | 大小 | 狀態 |
 |---|---|---|---|
-| **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成**（`m76`；閘門 **3083／433** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
-| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ☐ |
+| **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成並合併**（**PR #12 → `c4c78f41`**；`m76`；閘門 **3083／433** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
+| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成**（`m77`；閘門 **3118／432** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
 | **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ☐ |
 | **M79** | **⑤覆蓋率補齊**（driveable 的 diagnostics 站點＋四個沒有觀察者的 hop＋零站點的聯集成員） | M–L | ☐ |
 | **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | ☐ |
@@ -41,6 +41,8 @@
    - **(b) fail-closed 是錯的**：從一個大 session 生一個子代理是這個功能的**主要用例**——拒絕 spawn 會把主用例關掉。
    - **(a) 修剪是錯的，而且 M75 讓它錯得更清楚**：切得動的超窗種子現在會**被子代理自己串連摘要**（保留資訊），而修剪**無聲丟掉資訊** ⇒ 嚴格更差。**這推翻了控制器先前對 (a) 的傾向**——那個傾向寫在 M75 之前。
    - **(c) 先前行為不變 ＋ 一行 warn**，條件是**種子的投影價格 ≥ 視窗**（那正是子代理必須先摘要一輪的情形），訊息要說出後果。詳見 spec §1.3。
+**2.5 一個 M77 量到的新缺口（候選單位，**不是**原本五個之一）**：**「非內容」的空結束仍然靜默。** M77 只收**內容／政策**的拒絕；gemini 的其他停止原因（`MALFORMED_FUNCTION_CALL`／`MALFORMED_RESPONSE`／`UNEXPECTED_TOOL_CALL`／`TOO_MANY_TOOL_CALLS`／`NO_IMAGE`／`IMAGE_OTHER`／`ESCALATION`／`PUP_LIMITED_DISABLED`／`OTHER`／`FINISH_REASON_UNSPECIFIED`）**仍然以 HTTP 200 ＋ 空內容結束 ⇒ 靜默的空成功**——**與 M77 要消滅的症狀同一類**。處置選項：**(a)** 把「有欄位但沒有內容」的一般情形也變成可見（一個 `provider/empty` 的 telemetry ＋ CLI 行，與 `truncated`/`refused` 同形狀——**這是最一般、最省的做法**）；**(b)** 逐家逐字面收（22 個原因，很細很貴）；**(c)** 明說接受。**控制器傾向 (a)**：它不判語意、只說「提供者送了一個空的成功」，而**那正是使用者看不到的那件事**。**留待 M79 之後或與 M80 一起判定。**
+
 2. **M70 的 checkpoint 成本（M78）：明說接受，把數字寫進紀錄；不做 batch-level。**
    - **「先 append 全部標記再一次 flush」會弄壞它要買的東西**：checkpoint 的用途是「**在呼叫的執行體跑之前**留下可修復的紀錄」（Q8 的 `outcome-unknown`）。合成一次 flush ⇒ 一個已經跑過的呼叫可能在崩潰後被記成「未派送」——**那正是 M70 要消滅的不安全方向**。
    - 真正乾淨的變體是**平行預檢**（N 個標記一起送、全部落地才開始跑任何執行體）——它**保住**不變式。但量到的代價是延遲（10 個並行呼叫 62ms vs 16ms）而**使用者感覺不到** ⇒ 現在不值得動。**若儲存變成遠端（每次寫入是一次往返）再回來做**，那時它會從「不可見的延遲」變成「真的 I/O」。**記為具名候選。**

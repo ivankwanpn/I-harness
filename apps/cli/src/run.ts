@@ -241,6 +241,12 @@ export interface HeadlessResult {
    * all (a caller must be able to tell "ended on its own" from "we never
    * looked"). Read from the session log's `step/end`. */
   truncated?: boolean
+  /** M77: a `step/end` in this run's LAST turn was REFUSED — the provider
+   * declined to produce content (HTTP 200 with nothing in it). Exactly the
+   * predicate, read from the session log the same way `truncated` is, and
+   * independent of it: both may be set on one run. Present only as `true` — a
+   * clean run carries no field at all. */
+  refused?: boolean
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -823,6 +829,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // the correct scope when there is no turn boundary to scope to.
     const lastTurnStart = session.events.map((e) => e.type).lastIndexOf("turn/start")
     const truncated = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.truncated === true)
+    // M77: the sibling ending, read the same way and to the same scope — the
+    // durable `step/end.refused` in the LAST turn. A separate predicate, not an
+    // `else`: a step can be capped AND refused, and the two then coexist.
+    const refused = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.refused === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -883,9 +893,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // in this turn is truncated — NOT that `finalText` is the truncated thing
     // (the truncation can be on a step whose output the turn did not end with).
     if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
+    // M77: the refusal, printed for the same reason and on the same surface,
+    // with the same care about what the predicate knows — a `step/end` in this
+    // turn was refused, NOT a claim about `finalText` (which can be empty here
+    // for a different reason, or non-empty from an earlier step). The choice of
+    // ORDER when BOTH bits are set: this line follows the one above, so a step
+    // that was capped and refused reads as `[truncated]` then `[refused]` —
+    // neither line is the other's `else`, and the order is the source's.
+    if (refused) console.error("[refused] the provider refused to produce content; a step in this turn was blocked")
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that

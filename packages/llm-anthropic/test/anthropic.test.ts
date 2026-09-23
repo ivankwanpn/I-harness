@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { createAnthropicClient, translateReasoning } from "../src/index.ts"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, retryErrorCode, type LLMRequest, type LLMStreamEvent } from "@i-harness/llm-seam"
 
 describe("llm-anthropic protocol", () => {
   it("translates LLMRequest to the Anthropic Messages request body", async () => {
@@ -557,5 +557,71 @@ describe("M72 Ⅱ: the truncation bit (anthropic)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end" })
     expect(events.at(-1)).not.toHaveProperty("truncated")
+  })
+})
+
+// M77. Two stop_reasons that used to fall into the same silent path as
+// `end_turn`, and they do NOT get the same treatment:
+//
+// - `refusal` IS a refusal (the model declined to produce content) → the
+//   semantic bit on `end`, like the other four wires.
+// - `model_context_window_exceeded` is NOT a refusal: it is an INPUT-side
+//   signal, and the seam already has its vocabulary — `RetryableErrorCode`'s
+//   `CONTEXT_WINDOW_EXCEEDED`, classified by `retryErrorCode` and deliberately
+//   absent from `DEFAULT_RETRYABLE_CODES` (a retry cannot fix an over-window
+//   request). So this arm yields an ERROR event carrying that code on the field
+//   `retryErrorCode` reads, and writes no bit at all. A second vocabulary here
+//   is exactly what the milestone forbids.
+describe("M77: the refusal bit and the context cap (anthropic)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M77: stop_reason refusal reaches the seam as refused", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", refused: true })
+  })
+
+  it("M77: stop_reason model_context_window_exceeded is an error with the seam's own code, not a refusal", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    // The classification IS the contract — the seam's existing code, read back
+    // through the seam's own classifier rather than compared to a literal a
+    // second vocabulary could disagree with.
+    const failure = events.find((e) => e.type === "error") as { error: Error } | undefined
+    expect(failure).toBeDefined()
+    expect(retryErrorCode(failure!.error)).toBe("CONTEXT_WINDOW_EXCEEDED")
+    // …and it rides the FIELD `retryErrorCode` reads first, so the code is
+    // structural rather than a coincidence of the message's spelling.
+    expect((failure!.error as Error & { code?: string }).code).toBe("CONTEXT_WINDOW_EXCEEDED")
+    // NOT the refusal bit: the input side overflowing says nothing about the
+    // model declining, and an `error` is terminal — there is no `end` at all.
+    expect(events.some((e) => (e as { refused?: true }).refused === true)).toBe(false)
+    expect(events.at(-1)!.type).toBe("error")
+  })
+
+  // M77 (fix wave). The context arm returned BEFORE `mapUsage` ran, so the very
+  // `message_delta` that carries the stop reason — and with it this
+  // round-trip's output count — had its usage dropped on the floor. Through the
+  // retry wrapper that is invisible (a held-aside `usage` is discarded when the
+  // attempt settles on an error), but an unwrapped client saw nil for a
+  // round-trip the provider had already priced. The error stays terminal, and
+  // the report rides AHEAD of it: the seam's `emit` stops at the first error
+  // event, so anything after it would never be seen at all.
+  it("M77: the context arm reports the message_delta's usage before it fails", async () => {
+    const sse = `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" }, usage: { output_tokens: 5 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "claude-x" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([{ type: "usage", usage: { outputTokens: 5 } }])
+    expect(events.at(-1)!.type).toBe("error")
   })
 })
