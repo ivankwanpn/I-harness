@@ -14,7 +14,7 @@
 
 - **紅先測試 ＋ 變異證明**：每一條修法都要先看到紅；實作後**把修法拿掉一次**、確認**具名的那條**測試變紅、再用 Edit 工具還原（**絕不**用 `git checkout --`），並以 `sha256sum` 確認位元組還原。
   - **突變是預測**：本計畫寫「拿掉哪一條規則 ⇒ 哪一條測試必須紅」。**哪一行字面編輯能達到那個效果，由你量測決定並記錄**——M72／M73 兩個階段裡，計畫的字面突變預測錯了**十三次**。若你找不到能讓它紅的突變，**那是發現，回報它**，不要換一條測試來遷就。
-- **既有測試只在「它刻意斷言的正是這次要改的契約」時才改**，而且要**具名說明**、不得放鬆。本計畫預期**只有一條**：`packages/subagent/test/child.test.ts` 的「a child past its window FAILS CLOSED」（Task 4）。**若你跑出來紅的不是那一條，回報它**——錯的清單比沒有清單更糟。
+- **既有測試只在「它刻意斷言的正是這次要改的契約」時才改**，而且要**具名說明**、不得放鬆。本計畫預期**只有一條**：`packages/subagent/test/child.test.ts` 的「a child past its window FAILS CLOSED」——而它由 **Task 2** 改（上游 pre-flight 掃描搬過去的：讓它變紅的就是 Task 2）。**若你跑出來紅的不是那一條，回報它**——錯的清單比沒有清單更糟。
 - **缺席即缺席**：沒有窗口就不寫 `compact` 鍵——**不得注入預設**。
 - **提交訊息不加任何 attribution trailer**；**不 amend**；blobs LF；檔案用 Write/Edit 工具寫。
 - **每個任務只跑自己套件的測試與 typecheck**；`pnpm verify:all` **整支分支只跑一次**（收尾任務）。
@@ -262,20 +262,44 @@ Expected: 紅——`status` 是 `"error"`（`prompt_too_long`），而且 `reque
 
 `packages/subagent/src/tools.ts`：在 rebuild 的 `budget` spread（`:691-693`）之後加**同形**的一段（含一句「與 spawn 同形、同源——只出現在第一次 spawn 的 compactor 會在每次 resume 時消失」）。
 
-- [ ] **Step 4: 跑它，看到綠**
+- [ ] **Step 4: 把被這一改撞到的那一條既有斷言改成更精確的說法（**本計畫唯一預期要改的既有斷言**）**
+
+上游的 pre-flight 掃描發現：**這一改讓 `child.test.ts` 的「a child past its window FAILS CLOSED」變紅**，而原本讓它負責的是 Task 4 ⇒ **T2 的 commit 會是紅的**。所以那條斷言的重寫**搬進這一任務**（欄位本身的改動與讓它變紅的原因是同一件事）。
+
+它的斷言從「零個請求」改成「**一個請求、而且可證明是摘要器的**」——**更精確，不是放寬**：
+
+- 標題改成 `"a child past its window FAILS CLOSED — one summarizer call, and no over-window request"`
+- 註解（`:877-885`）改寫成真的事實（有了 compactor，失敗前會有**一次摘要器呼叫**；而**超窗的主要請求仍然一條都沒出去**）
+- 斷言（`:904-908`）改成：
+
+```ts
+    expect(f.jobs.read(jobId).status).toBe("error")
+    expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
+    // 而不是送出超窗請求 — the ladder runs at the step boundary BEFORE the model
+    // is called. M74: with a child compactor the FIRST thing that happens is a
+    // summarizer call; what must never happen is the over-window MAIN request.
+    // (The summarizer's own request never carries the over-window messages.)
+    const mainRequests = parentClient.requests.filter((r) => {
+      const last = r.messages.at(-1)
+      return !(typeof last?.content === "string" && last.content.includes("summar"))
+    })
+    expect(mainRequests).toHaveLength(0)
+```
+
+- [ ] **Step 5: 跑它，看到綠**
 
 Run: `pnpm --filter @i-harness/subagent test`、該套件 typecheck。
-Expected: 新的綠。**既有的案例**——除了 Task 4 要處理的那一條——都必須**原樣**綠；特別是 `resume.test.ts` 一族（它們的 fixture 很小，不該觸發壓縮；**若有一條因為多了一次摘要請求而紅，回報它**，那代表門檻比預期低）。
+Expected: **整個套件全綠**（這一任務的 commit 不留下任何紅）。特別是 `resume.test.ts` 一族（它們的 fixture 很小，不該觸發壓縮；**若有一條因為多了一次摘要請求而紅，回報它**，那代表門檻比預期低）。
 
-- [ ] **Step 5: 變異證明**
+- [ ] **Step 6: 變異證明**
 
 拿掉 `child.ts` 的 `compact` spread（只拿掉 spawn 那一個）⇒ 新測試必須紅（回到 `prompt_too_long`）。還原並 `sha256sum`。
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add packages/subagent/src/child.ts packages/subagent/src/tools.ts packages/subagent/test/child.test.ts
-git commit -m "feat(subagent): a child gets its own compactor, from the values M73 already resolved (M74)"
+git commit -m "feat(subagent): a child gets its own compactor, and the fail-closed case says what it asserts (M74)"
 ```
 
 ---
@@ -374,43 +398,20 @@ git commit -m "test(subagent): a compacted child shows one summary, and its summ
 
 ---
 
-### Task 4: M73 的 fail-closed 契約改成更精確的說法 ＋ 缺席即缺席
+### Task 4: 缺席即缺席——沒有窗口就沒有 compactor
 
 **Files:**
-- Modify: `packages/subagent/test/child.test.ts:877-909`（**本計畫唯一預期要改的既有斷言**）
-- Test: 同檔
+- Test: `packages/subagent/test/child.test.ts`（**只加測試**）
 
 **Interfaces:**
 - Consumes: Task 2 的 `compact` 鍵
-- Produces: 行為——超窗的子代理仍然 fail-closed，但「沒有請求出去」變成「只有摘要器那一次」
+- Produces: 行為——沒有解析出窗口時，子代理**不能**壓縮，而沒有人替它發明一個窗口
 
-**實況（量測）**：那一條今天斷言 `expect(parentClient.requests).toHaveLength(0)`（`:908`），而它的註解（`:877-885`）說「a spawn hands core-agent NO `compact` deps, so no compactor is built」。M74 讓兩者都變成假的：有了 compactor，引擎會在 `enforceBudget` **之前**跑 `maybeCompact`（`core-agent:285` 先於 `:290`），於是**摘要器**會發一次請求。
+**實況（量測）**：`compact` 的窗口是必填，而 `resolveConfig` 在非正數時**建構就拋**（`compaction/src/config.ts:103-105`）⇒ 兩個站點都必須**只在窗口存在時**才寫那個鍵（M73 對 `budget` 的同一條紀律）。
 
-- [ ] **Step 1: 改寫那條測試（具名：這是刻意的收緊，不是放寬）**
+> **上游的 pre-flight 掃描把「改寫 M73 那條 fail-closed 斷言」搬進了 Task 2**（因為讓它變紅的就是 Task 2 的改動——一個紅的 commit 不是可交付的單位）。這一任務因此只剩負向契約那一半。
 
-- 標題：`"a child past its window FAILS CLOSED — one summarizer call, and no over-window request"`
-- 註解（`:877-885`）改寫成真的事實：**有了 compactor，失敗前會有一次摘要器呼叫**（那正是 M74 要的），而**超窗的主要請求仍然一條都沒出去**。
-- 斷言改成：
-
-```ts
-    expect(f.jobs.read(jobId).status).toBe("error")
-    expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
-    // 而不是送出超窗請求 — the ladder runs at the step boundary BEFORE the model
-    // is called. M74: with a child compactor the FIRST thing that happens is a
-    // summarizer call; what must never happen is the over-window MAIN request.
-    // (The summarizer's own request never carries the over-window messages.)
-    const mainRequests = parentClient.requests.filter((r) => {
-      const last = r.messages.at(-1)
-      return !(typeof last?.content === "string" && last.content.includes("summar"))
-    })
-    expect(mainRequests).toHaveLength(0)
-```
-
-- [ ] **Step 2: 跑它，看到綠**
-
-Run: `pnpm --filter @i-harness/subagent test`。**其餘全部案例都必須原樣綠。**
-
-- [ ] **Step 3: 加「缺席即缺席」那一條**
+- [ ] **Step 1: 寫那一條**
 
 ```ts
   it("M74: with no window there is no compactor — absent stays absent", async () => {
@@ -440,13 +441,15 @@ Run: `pnpm --filter @i-harness/subagent test`。**其餘全部案例都必須原
   }, 10_000)
 ```
 
-- [ ] **Step 4: 跑它，看到綠；變異：讓 `compact` 無條件寫入（沒有窗口時也寫）⇒ 建構會拋（`config.ts:103-105` 驗窗口）——**記錄你實際量到的紅**。
+- [ ] **Step 2: 跑它，看到綠**（`pnpm --filter @i-harness/subagent test`）
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: 變異：讓 `compact` 無條件寫入（沒有窗口時也寫）⇒ 建構會拋（`config.ts:103-105` 驗窗口）——**記錄你實際量到的紅**，還原並 `sha256sum`。
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add packages/subagent/test/child.test.ts
-git commit -m "test(subagent): the fail-closed case says what it actually asserts, and absence stays absent (M74)"
+git commit -m "test(subagent): no window means no compactor, and nothing invents one (M74)"
 ```
 
 ---
@@ -474,8 +477,8 @@ Expected: 五步全綠（母體 67）。**注意 reachability 的列數**：本�
 3. **摘要請求帶子代理自己的 prefix**（Task 3 第 4 步）。
 4. **不會有兩份摘要**（Task 3 第 1 條）。
 5. **重建的路徑也一樣**（Task 2 第 3 步的兩個站點；`resume.test.ts` 既有案例原樣綠）。
-6. **缺席即缺席**（Task 4 第 3 步）。
-7. **M73 的 fail-closed 契約不放寬**（Task 4 第 1 步）。
+6. **缺席即缺席**（Task 4）。
+7. **M73 的 fail-closed 契約不放寬**（Task 2 第 4 步）。
 8. `pnpm verify:all` 五步全綠、`--gate` 無新增 row（Task 5）。
 
 **每一條都要有對應的變異證明**（把修法拿掉 ⇒ 該條紅）。
