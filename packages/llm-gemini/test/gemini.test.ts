@@ -421,5 +421,6 @@ describe("M72 Ⅱ: the truncation bit (gemini)", () => {
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end" })
+    expect(events.at(-1)).not.toHaveProperty("truncated")
   })
 })
