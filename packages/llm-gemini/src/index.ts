@@ -260,11 +260,11 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           }
         }
         // M72 Ⅲ: `usageMetadata` rides the LAST chunk — mapped here instead of
-        // only documented. (The comment this replaces said the seam had no usage
-        // event; M72 Ⅱ corrected that sentence, this maps it.) The wire's
-        // spelling is promptTokenCount → inputTokens, candidatesTokenCount →
-        // outputTokens, cachedContentTokenCount → cacheReadTokens; anything else
-        // the wire sends has no seam name and is not invented one.
+        // only documented. (The sentence this replaces said THIS adapter does not
+        // map `usageMetadata` onto the seam's `usage` event; this maps it.) The
+        // wire's spelling is promptTokenCount → inputTokens, candidatesTokenCount
+        // → outputTokens, cachedContentTokenCount → cacheReadTokens; anything
+        // else the wire sends has no seam name and is not invented one.
         const usage = mapUsage(event.usageMetadata)
         if (usage !== undefined) events.push({ type: "usage", usage })
         return events

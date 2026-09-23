@@ -4,13 +4,14 @@ import { describeTransportError, projectImagesForTextModel, SSEParseError, type 
  * M72 Ⅲ: the wire's usage, under the seam's names.
  *
  * Returns `undefined` when the object carries no recognisable number, so the
- * caller emits NO event rather than an empty one. This wire delivers usage in
- * one place only — the trailing chunk the `stream_options` ask buys, whose
- * `choices` is empty and whose `usage` is the whole payload. A gateway reports
- * only the counters it counted (`prompt_cache_hit_tokens` is a cache extension
- * the others do not have), and a fabricated `0` for a counter nobody sent would
- * read as a measurement of zero rather than as "not reported". Fields are copied
- * verbatim and never derived.
+ * caller emits NO event rather than an empty one. The documented shape delivers
+ * usage on the trailing `choices: []` chunk the `stream_options` ask buys, and
+ * `handleFrame` reads `usage` on every frame, so a gateway that reports it
+ * elsewhere is still covered. A gateway reports only the counters it counted
+ * (`prompt_cache_hit_tokens` is a cache extension the others do not have), and
+ * a fabricated `0` for a counter nobody sent would read as a measurement of
+ * zero rather than as "not reported". Fields are copied verbatim and never
+ * derived.
  */
 function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
