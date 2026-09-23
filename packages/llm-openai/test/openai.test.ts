@@ -553,4 +553,21 @@ describe("M72 Ⅲ: response.completed's usage (openai)", () => {
     expect("outputTokens" in (usage?.usage ?? {})).toBe(false)
     expect("cacheReadTokens" in (usage?.usage ?? {})).toBe(false)
   })
+
+  // Fix round 1: the OTHER exit of the "no recognisable number ⇒ undefined"
+  // rule. Test 2 above never reaches `mapUsage`'s tail — its fixture sends no
+  // `usage` at all, so it exits at the non-object guard. THIS is the fixture
+  // that reaches the tail with an empty result, which is what makes the rule's
+  // second exit load-bearing: an always-returning tail would emit
+  // `{ type: "usage", usage: {} }` — an event that reads as a measurement
+  // nobody made, precisely what the seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
+    const sse = `event: response.completed\ndata: ${JSON.stringify({ type: "response.completed", response: { usage: {} } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
 })
