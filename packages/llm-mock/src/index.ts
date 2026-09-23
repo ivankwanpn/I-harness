@@ -17,6 +17,15 @@ export interface MockStep {
    * before this field existed. It exists because a `MockStep` is the ONLY way
    * the CLI's run-level path can be driven end-to-end with a truncated ending. */
   truncated?: true
+  /** M77: the provider REFUSED to produce content. Same discipline as
+   * `truncated` above — present ONLY as `true`, unset → a clean ending,
+   * byte-identical to before this field existed — and the two bits are
+   * INDEPENDENT: a step may be capped AND refused. The mock makes NO wire
+   * judgement; each adapter owns its own refusal literal (`content_filter` /
+   * `SAFETY` / `refusal` / `guardrail_intervened`). It exists because a
+   * `MockStep` is the only way a consumer's refusal path can be driven
+   * end-to-end without a provider. */
+  refused?: true
 }
 
 export function createMockClient(script: MockStep[]): ModelClient {
@@ -39,10 +48,15 @@ export function createMockClient(script: MockStep[]): ModelClient {
         for (const call of step.toolCalls) yield { type: "tool_call", call }
       }
       if (step.text !== undefined) yield { type: "text/chunk", text: step.text }
-      // M72 Ⅱ: the step's own ending. Absent → the exact literals this file
-      // yielded before the field existed; `truncated: true` → the seam's
-      // truncated terminal, which is what a cap-hitting provider reports.
-      yield step.truncated === true ? { type: "end", truncated: true } : { type: "end" }
+      // M72 Ⅱ / M77: the step's own ending. Each bit is written ONLY when its
+      // field is `true` (absent stays absent — never `false`), and the two are
+      // independent: a capped step may also be refused, so neither may be the
+      // other's `else`. Neither set → the exact literal this file yielded
+      // before either field existed.
+      const end: Extract<LLMStreamEvent, { type: "end" }> = { type: "end" }
+      if (step.truncated === true) end.truncated = true
+      if (step.refused === true) end.refused = true
+      yield end
     },
   }
 }
