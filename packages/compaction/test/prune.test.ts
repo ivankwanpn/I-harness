@@ -182,10 +182,23 @@ describe("compaction/prune marker in region selection", () => {
 // in full — and counted against M75/M76's fit gate, where they could push a
 // region that would fit into the piece path.
 //
-// The fix is a MOVE, not a rewrite: append the marker between `planPrune` and
-// the prefix construction; delete the later append. The prune-only path, which
-// appends its own marker and returns before any summary is attempted, is not
-// touched — its cases above are the control group.
+// The fix is a MOVE plus ONE line in core-session, and the second part is not
+// redundant — the measurements below are why. `append` hands every new event the
+// HIGHEST seq (core-session, `append`), and the prefix is folded only up to the
+// region's last shadowed seq (`deriveMessagesUpTo`), so the marker always sits
+// past that cut: with the move ALONE, cases 1, 4 and 5 here are red — measured
+// at both append sites (the pre-M78 one and the moved one), and structural
+// besides, since no placement of this append can put the marker at or below the
+// cut. What the MOVE itself delivers is the failure-keeps-prune behaviour (case
+// 2), and a pruned fold for anything that folds the whole log while the summary
+// is in flight. The prefix is pruned because `deriveMessagesUpTo` keeps
+// `compaction/prune` markers regardless of `maxSeq` — the content-addressed
+// exception — so deleting that disjunct as "redundant" reddens cases 1, 4 and 5
+// (measured: with the marker back at the pre-M78 site and the disjunct in place,
+// all four of cases 1, 2, 4 and 5 go red — neither half works alone).
+//
+// The prune-only path, which appends its own marker and returns before any
+// summary is attempted, is not touched — its cases above are the control group.
 const M78_SHAPE = { systemPrompt: "SYS", tools: [{ name: "read", description: "d", inputSchema: {} }] as never[] }
 const M78_SUMMARY = "## Primary Request and Intent\n- " + "work ".repeat(120) // ≥ 500 chars (M34 ⑦c floor)
 
@@ -389,8 +402,11 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
   //   region fold, raw      120 422   ← the region ALONE is over the window
   //   request, raw          120 871   ← fold + the 449-token directive
   //   request, pruned        16 255   ← fold 15 806 + the same directive
-  //   requests seen: 2 before the fix (pieces of 110 835 and 10 678 tokens),
-  //                  1 after it.
+  //   requests seen: 2 while the fold cannot see the marker (pieces of 110 835
+  //                  and 10 678 tokens) — the pre-M78 state AND the move-only
+  //                  state alike — and 1 once it can. Both parts are needed: the
+  //                  move alone leaves 2, the disjunct alone changes nothing
+  //                  (there is no marker on the log at prefix time without it).
   // A single turn could not show this: its fold is INDIVISIBLE, so the slicer
   // emits it whole and over budget. The 12 turns are what make the piece path
   // the gate's doing rather than an artifact of an unsplittable region.
@@ -427,9 +443,12 @@ describe("M78: the prune marker lands before the summarizer folds the log", () =
     })
     const result = await engine.compact(s)
 
-    // today: 2 requests (the region is sliced); after the move: exactly ONE —
-    // the pruned prefix request, which the strict model accepts because
-    // input + cap now fit where the raw fold's did not.
+    // with the marker invisible to the fold: 2 requests (the region is sliced);
+    // once the fold keeps the marker: exactly ONE — the pruned prefix request,
+    // which the strict model accepts because input + cap now fit where the raw
+    // fold's did not. "Once the fold keeps the marker" takes BOTH parts (the
+    // moved append and the core-session disjunct), which is what makes this case
+    // the dividend rather than a restatement of case 1.
     expect(requests).toHaveLength(1)
     expect(result.compacted).toBe(true)
     expect(result.summary).toBeDefined()

@@ -76,14 +76,19 @@ describe("compaction/prune shadow projection", () => {
   // applies it even when the marker's seq sits PAST the cut. That is what keeps
   // the summarizer's prefix fold showing the substitute the main fold shows (a
   // pass appends its marker at the end of the log, always past the region's last
-  // shadowed seq). The exception is deliberately narrow, and both halves below
-  // are the same fixture: a `compaction/summary` marker is TIME-SCOPED — its
-  // `shadowedSeqs` name a region of the log — so it keeps obeying the cut and a
-  // fold as of an earlier prefix is not rewritten by a later compaction.
+  // shadowed seq). The exception is deliberately narrow, and BOTH time-scoped
+  // markers are the same fixture: `compaction/summary` and `compaction/reset`
+  // name a region of the log (`shadowedSeqs` / `removedSeqs`), so they keep
+  // obeying the cut — a fold as of an earlier prefix is not rewritten by a later
+  // compaction's decision.
   //
-  // Measured (M78): widening the filter to every `compaction/*` marker leaves the
-  // whole compaction and core-session suites green — THIS case is what reddens
-  // (no summary text in the fold, and seq 0 still visible).
+  // Measured (M78), both variants against these two suites: widening the filter
+  // to every `compaction/*` marker left the whole compaction AND core-session
+  // suites green (this case reddens once it carries a summary marker), and the
+  // narrower `|| e.type === "compaction/reset"` survived with the summary-only
+  // fixture — which is why the reset marker below exists. Each half now has its
+  // own observable: the summary half by its text, the reset half (and the
+  // summary's shadowing) by seq 0 staying on the surface.
   it("M78: the content-addressed prune directive crosses the cut; the time-scoped markers do not", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "a" }) // seq 0
@@ -92,15 +97,17 @@ describe("compaction/prune shadow projection", () => {
     append(s, { type: "tool/result", callId: "c1", name: "shell", output: { out: "x".repeat(9000) } }) // seq 2 — the cut
     append(s, { type: "compaction/prune", version: 1, pruned: [{ callId: "c1", head: text.slice(0, 4096), tail: text.slice(-1024), removedBytes: text.length - 4096 - 1024 }] }) // seq 3 — past it
     append(s, { type: "compaction/summary", text: "SUM", shadowedSeqs: [0] }) // seq 4 — past it too
+    append(s, { type: "compaction/reset", removedSeqs: [0] }) // seq 5 — and so is the other time-scoped marker
 
     const fold = deriveMessagesUpTo(s, 2)
     // (1) the prune directive applies: the substitute, byte for byte
     const tool = fold.find((m) => m.role === "tool")
     expect(tool).toBeDefined()
     expect(tool!.content).toBe(`${text.slice(0, 4096)}\n…(pruned ${text.length - 4096 - 1024} bytes)…\n${text.slice(-1024)}`)
-    // (2) the summary marker does NOT: its text is absent and its shadowed seq
-    // is still on the surface
+    // (2) the time-scoped markers do NOT: the summary's text is absent …
     expect(fold.map((m) => m.content)).not.toContain("SUM")
+    // … and seq 0 is still on the surface — the observable BOTH halves share,
+    // since each names seq 0 in its own field (shadowedSeqs / removedSeqs)
     expect(fold[0]).toEqual({ role: "user", content: "a" })
   })
 })

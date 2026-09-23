@@ -142,23 +142,30 @@ export function createCompactionEngine(deps: {
     // prefix is built — instead of only after the summary succeeded (the pre-M78
     // site, further down this function). Same append, same event shape, one
     // position earlier; the prune-only path above keeps its own append (it
-    // returns before any summary is attempted). Two consequences: a fold of the
-    // WHOLE log taken during the attempt (the success telemetry's `tokensAfter`,
-    // and anything else a host reads meanwhile) is pruned, and a FAILED attempt
-    // leaves the prune on the log — see the note at the `failure` emission.
+    // returns before any summary is attempted).
     //
-    // MEASURED CAVEAT — the M78 finding of 2026-09-24, recorded rather than
-    // smoothed over: this move does NOT by itself prune the summarizer's PREFIX.
-    // `deriveMessagesUpTo(session, lastShadowed)` folds the log filtered to
-    // `seq <= maxSeq` (`core-session/src/index.ts:455-457`), and `append` gives
-    // every new event the HIGHEST seq (`:353`) — so the marker can never be at or
+    // What the MOVE itself changes, measured (2026-09-24): the prune is on the
+    // log from before the summarizer is called, so every whole-log read from that
+    // moment on sees it — the measured one is the FAILED pass's surface (pinned
+    // by the failure case below), and the prune stays there for good: see the
+    // note at the `failure` emission. The success telemetry's `tokensAfter` is
+    // NOT one of them: the deleted append already preceded that emit, which reads
+    // after the summary trio either way.
+    //
+    // It does NOT prune the summarizer's PREFIX — the M78 finding, recorded
+    // rather than smoothed over. `deriveMessagesUpTo(session, lastShadowed)`
+    // folds the log filtered to `seq <= maxSeq` (core-session, that function's
+    // filter), and `append` gives every new event the HIGHEST seq (core-session,
+    // `append`: `seq: session.events.length`) — so the marker can never be at or
     // below the region's last shadowed seq and is dropped from that fold. Probe
     // on this tree's own fixture (retainTokens 500 and 0 alike): lastShadowed
     // 104 / 109 vs markerSeq 110; `deriveMessages` sees the substitute,
-    // `deriveMessagesUpTo` does not. Making the prefix pruned needs that
-    // truncation to keep `compaction/prune` markers as well — one line in
-    // core-session, measured green (105/105 here, 95/95 there) and deliberately
-    // NOT taken without the controller's ruling.
+    // `deriveMessagesUpTo` does not, and no placement of this append changes it.
+    // The prefix is pruned because that filter keeps `compaction/prune` markers
+    // regardless of `maxSeq` (the content-addressed exception there), so do NOT
+    // delete that disjunct as redundant: cases 1, 4 and 5 of "M78: the prune
+    // marker lands before the summarizer folds the log" (test/prune.test.ts) are
+    // red without it, and only it.
     if (pruneRecords.length > 0) append(session, { type: "compaction/prune", version: 1, pruned: pruneRecords })
     const replayText = renderShadowed(session, shadowedSeqs, pruneRecords)
     // R-B2: a CONFIGURED summarization model WINS over `deps.model` — deliberate,
@@ -247,6 +254,14 @@ export function createCompactionEngine(deps: {
       // combination, named rather than smoothed over: the log changed while the
       // result says the pass failed.) Pinned by "M78: a summarizer failure
       // leaves the prune APPLIED — the log is append-only" in test/prune.test.ts.
+      //
+      // One more consequence of where the append sits, named rather than fixed:
+      // the ladder's next rung RE-PLANS the same records and appends a SECOND
+      // `compaction/prune` marker (nothing dedupes against the markers already
+      // on the log). That is content-idempotent — `derivePruneSubstitutes` is
+      // last-wins per callId, so the projection is unchanged — and the number of
+      // repeats is bounded by the breaker. Deliberately left alone; a dedupe
+      // would be a second place that decides what a prune means.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
