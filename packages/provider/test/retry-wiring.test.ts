@@ -90,3 +90,26 @@ describe("M72 Ⅱ: the route's cap field name reaches the wire", () => {
     await it.return?.()
   })
 })
+
+// M72 Ⅲ: same wiring probe for the usage ask — the adapter's own suite hands
+// the factory a config directly, so only this drives the shipped profile →
+// factory → body chain. The route is switched OFF here because that is the
+// direction a broken chain would hide: a dropped `usageInStream: false` falls
+// back to the adapter's default, which SENDS.
+describe("M72 Ⅲ: the route's usage ask reaches the wire", () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it("M72 Ⅲ: a route whose gateway rejects the key does not send it", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = buildModelClient({
+      name: "gw", displayName: "GW", protocol: "openai-compatible",
+      apiKey: "k", baseUrl: "https://gw.test", usageInStream: false,
+    }, "m")
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("stream_options" in body).toBe(false)
+    await it.return?.()
+  })
+})

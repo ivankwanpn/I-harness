@@ -1,4 +1,31 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+
+/**
+ * M72 Ⅲ: the wire's usage, under the seam's names.
+ *
+ * Returns `undefined` when the object carries no recognisable number, so the
+ * caller emits NO event rather than an empty one. The documented shape delivers
+ * usage on the trailing `choices: []` chunk the `stream_options` ask buys, and
+ * `handleFrame` reads `usage` on every frame, so a gateway that reports it
+ * elsewhere is still covered. A gateway reports only the counters it counted
+ * (`prompt_cache_hit_tokens` is a cache extension the others do not have), and
+ * a fabricated `0` for a counter nobody sent would read as a measurement of
+ * zero rather than as "not reported". Fields are copied verbatim and never
+ * derived.
+ */
+function mapUsage(raw: unknown): LLMUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined
+  const src = raw as Record<string, unknown>
+  const out: LLMUsage = {}
+  const take = (from: string, to: keyof LLMUsage): void => {
+    const v = src[from]
+    if (typeof v === "number" && Number.isFinite(v)) out[to] = v
+  }
+  take("prompt_tokens", "inputTokens")
+  take("completion_tokens", "outputTokens")
+  take("prompt_cache_hit_tokens", "cacheReadTokens")
+  return Object.keys(out).length > 0 ? out : undefined
+}
 
 export interface OpenAICompatibleConfig {
   apiKey: string
@@ -12,6 +39,13 @@ export interface OpenAICompatibleConfig {
   /** M72 Ⅱ: which wire field carries the cap on THIS route. Default
    * `max_tokens` (the compatible-gateway spelling). */
   maxTokensField?: "max_tokens" | "max_completion_tokens"
+  /** M72 Ⅲ: whether this route's requests ASK for usage
+   * (`stream_options.include_usage`). Default `true` — this is the one protocol
+   * of the five that reports usage only on request, so no other wire needs the
+   * ask. `false` sends NOTHING (not `include_usage: false`): the switch exists
+   * for a gateway that rejects the KEY, and such a gateway rejects it whatever
+   * its value. A route-level capability flag — Pi's `supportsUsageInStreaming`. */
+  usageInStream?: boolean
   /** M59: literal extra request headers (gateway-required, e.g. OpenCode
    * Zen's x-opencode-session). The adapter's own headers win on collision. */
   headers?: Record<string, string>
@@ -119,6 +153,14 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           function: { name: t.name, description: t.description, parameters: t.inputSchema },
         })),
         stream: true,
+        // M72 Ⅲ: usage must be ASKED for on this wire (the other four report it
+        // unasked). Default ON — a routing flag, not a guess about capability;
+        // a gateway that rejects the key is switched off per route with
+        // `usageInStream: false` (Pi's supportsUsageInStreaming, explicit).
+        // Written BEFORE the route's raw `options` so the more specific
+        // statement still wins: an `options` key that collides must override
+        // this default, never be clobbered by it.
+        ...((config.usageInStream ?? true) ? { stream_options: { include_usage: true } } : {}),
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
@@ -156,7 +198,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       let buffer = ""
       let receivedDone = false
       // M72 Ⅱ: the wire's own truncation literal (`finish_reason: "length"`) —
-      // set in the chunk loop below, read once at the ending. Absent stays
+      // set in handleFrame below, read once at the ending. Absent stays
       // absent: only `true` writes the field.
       let truncated = false
       // tool call accumulation: index -> { id, name, argsBuffer }
@@ -191,6 +233,58 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         return false
       }
 
+      // M72 Ⅲ: ONE frame handler for both the read loop and the residual
+      // flush. R12 patched the second copy of a rule; the copies had already
+      // drifted (the flush never accumulated tool-call fragments, so a tool
+      // call arriving only in a boundary-less final frame was dropped). New
+      // wire rules land HERE, once.
+      const handleFrame = (event: Record<string, unknown>): { events: LLMStreamEvent[]; done: boolean } => {
+        if (event.type === "[DONE]") return { events: [], done: true }
+        const events: LLMStreamEvent[] = []
+        const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
+        for (const choice of choices) {
+          const delta = choice.delta ?? {}
+          // R12: a final frame that lost its trailing "\n\n" is parsed here
+          // too (via the residual flush), and the provider's failure channel
+          // must not depend on where the frame boundary fell — one rule, both
+          // callers.
+          if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
+          // M72 Ⅲ: DeepSeek-family gateways stream the reasoning text on
+          // `delta.reasoning_content` — a sibling of `content` that had ZERO
+          // readers in this tree, so the whole trajectory was dropped. Pushed
+          // BEFORE this frame's content: a model that both thinks and answers
+          // does so in that order.
+          const reasoningText = (delta as { reasoning_content?: unknown }).reasoning_content
+          if (typeof reasoningText === "string" && reasoningText.length > 0) {
+            events.push({ type: "reasoning", text: reasoningText })
+          }
+          if (typeof delta.content === "string" && delta.content.length > 0) {
+            events.push({ type: "text/chunk", text: delta.content })
+          }
+          const toolCalls = (delta as { tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }).tool_calls
+          if (toolCalls) {
+            for (const tc of toolCalls) {
+              const idx = tc.index ?? 0
+              let pending = pendingToolCalls.get(idx)
+              if (!pending) {
+                pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? "", argsBuffer: "" }
+                pendingToolCalls.set(idx, pending)
+              }
+              if (tc.id) pending.id = tc.id
+              if (tc.function?.name) pending.name = tc.function.name
+              if (tc.function?.arguments) pending.argsBuffer += tc.function.arguments
+            }
+          }
+        }
+        // M72 Ⅲ: the ask above buys a trailing usage-only chunk — `choices: []`
+        // with the round-trip's counters. It is the ONE carrier of usage on this
+        // wire, and it is handled here, at the single frame handler both loops
+        // share (Task 4), so the residual flush reports it identically.
+        const usage = mapUsage((event as { usage?: unknown }).usage)
+        if (usage !== undefined) events.push({ type: "usage", usage })
+        return { events, done: false }
+      }
+
       try {
         while (true) {
           const { done, value } = await reader.read()
@@ -202,34 +296,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             if (receivedDone) break
             for (const event of parseSSE(chunk)) {
               if (receivedDone) break
-              if (event.type === "[DONE]") {
+              const frame = handleFrame(event)
+              if (frame.done) {
                 receivedDone = true
                 break
               }
-              const events: LLMStreamEvent[] = []
-              const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
-              for (const choice of choices) {
-                const delta = choice.delta ?? {}
-                if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
-                if (typeof delta.content === "string" && delta.content.length > 0) {
-                  events.push({ type: "text/chunk", text: delta.content })
-                }
-                const toolCalls = (delta as { tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }).tool_calls
-                if (toolCalls) {
-                  for (const tc of toolCalls) {
-                    const idx = tc.index ?? 0
-                    let pending = pendingToolCalls.get(idx)
-                    if (!pending) {
-                      pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? "", argsBuffer: "" }
-                      pendingToolCalls.set(idx, pending)
-                    }
-                    if (tc.id) pending.id = tc.id
-                    if (tc.function?.name) pending.name = tc.function.name
-                    if (tc.function?.arguments) pending.argsBuffer += tc.function.arguments
-                  }
-                }
-              }
-              if (yield* emit(events)) return
+              if (yield* emit(frame.events)) return
               if (yield* flushParsedToolCalls()) return
             }
           }
@@ -239,21 +311,12 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         if (buffer.trim() !== "") {
           for (const event of parseSSE(buffer)) {
             if (receivedDone) break
-            if (event.type === "[DONE]") {
+            const frame = handleFrame(event)
+            if (frame.done) {
               receivedDone = true
               break
             }
-            const events: LLMStreamEvent[] = []
-            const choices = (event as { choices?: { delta?: Record<string, unknown> }[] }).choices ?? []
-            for (const choice of choices) {
-              const delta = choice.delta ?? {}
-              // R12: the same rule as the main loop — a final frame that lost
-              // its trailing "\n\n" is parsed HERE, and the provider's failure
-              // channel must not depend on where the frame boundary fell.
-              if ((choice as { finish_reason?: string }).finish_reason === "length") truncated = true
-              if (typeof delta.content === "string" && delta.content.length > 0) events.push({ type: "text/chunk", text: delta.content })
-            }
-            if (yield* emit(events)) return
+            if (yield* emit(frame.events)) return
             if (yield* flushParsedToolCalls()) return
           }
         }

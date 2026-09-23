@@ -163,6 +163,14 @@ export interface SettingsProviderConfig {
    * says `max_completion_tokens` here. Read by that one protocol — the other
    * wires each have a single fixed spelling. */
   maxTokensField?: SettingsMaxTokensField
+  /** M72 Ⅲ: whether this route's `openai-compatible` requests ask the gateway
+   * for usage (`stream_options.include_usage`). Absent = the adapter's own
+   * default, which is ON — `false` is the per-route escape for a gateway that
+   * rejects the KEY, and it sends nothing rather than `include_usage: false`.
+   * A boolean, so `false` is a declaration and not an absence: the normalizer
+   * keeps it only as a real boolean, and never fills a default here (the
+   * resolved ask belongs to the adapter, not to the stored document). */
+  usageInStream?: boolean
 }
 
 /** The section-level default model (resolution chain in Task 5:
@@ -513,6 +521,11 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   const modalities = normalizeInputModalities(raw.inputModalities)
   if (modalities !== undefined) out.inputModalities = modalities
   if (isMaxTokensField(raw.maxTokensField)) out.maxTokensField = raw.maxTokensField
+  // M72 Ⅲ: a real boolean only. `false` IS the declaration (the route asking
+  // us not to send the key), so this must not be a truthiness test, and absent
+  // must stay absent — the ADAPTER's default decides, and a filled-in default
+  // here would be a second place to be wrong.
+  if (typeof raw.usageInStream === "boolean") out.usageInStream = raw.usageInStream
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out

@@ -5,9 +5,9 @@ import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesFor
  *
  * Returns `undefined` when the object carries no recognisable number, so the
  * caller emits NO event rather than an empty one. That distinction is the whole
- * point: Anthropic omits the cache fields on responses that used no cache, and
- * a fabricated `cacheReadTokens: 0` would read as a measurement of zero rather
- * than as "not reported". Fields are copied verbatim and never derived — the
+ * point: the cache fields are optional on the wire, and a fabricated
+ * `cacheReadTokens: 0` would read as a measurement of zero rather than as
+ * "not reported". Fields are copied verbatim and never derived — the
  * API's `input_tokens` does NOT include the cache counts, so summing them here
  * would invent a number the provider never stated.
  */

@@ -150,6 +150,12 @@ const providerConfigFields: Record<string, FieldSpec> = {
   // this row the section API would not know the key and the normalizer would
   // drop the value silently.
   maxTokensField: { type: "enum", enum: ["max_tokens", "max_completion_tokens"] },
+  // M72 Ⅲ: the per-route usage ask for openai-compatible routes (default ON;
+  // `false` is the escape for a gateway that rejects `stream_options`). Without
+  // this row the section API would not know the key and the normalizer would
+  // drop the value silently. The FIRST boolean row in this map — the lattice's
+  // FieldType/compliance arms already carry "boolean", so no other change.
+  usageInStream: { type: "boolean" },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },
 }
 

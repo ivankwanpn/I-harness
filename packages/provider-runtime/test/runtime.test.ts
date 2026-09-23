@@ -10,7 +10,7 @@ import {
   type ProviderAuthResolver,
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
-import type { ModelClient } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, type ModelClient } from "@i-harness/llm-seam"
 import {  buildModelClient,
   createProviderRegistry,
   type ProbeRequest,
@@ -422,6 +422,106 @@ describe("model resolution", () => {
     })
     await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
     expect(plain.builds[0]?.profile.maxTokensField).toBeUndefined()
+  })
+
+  it("M72 Ⅲ: the route's usageInStream survives settings → profile (absent stays absent)", async () => {
+    // Same two silent-drop sites as maxTokensField's test above: the settings
+    // normalizer (normalizeProviderConfig keeps only fields it knows) and the
+    // providerView/runtimeProfile hand-off. Both are invisible in the adapter's
+    // own suite, which hands the factory a config directly.
+    const declared = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+          usageInStream: false,
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(declared.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(declared.builds[0]?.profile.usageInStream).toBe(false)
+
+    // Undeclared → no field at all: the ADAPTER's own default (ON) decides, so
+    // an injected default here would be a second place to be wrong.
+    const plain = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.test",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    expect(plain.builds[0]?.profile.usageInStream).toBeUndefined()
+  })
+
+  it("M72 Ⅲ: an anthropic route with nothing resolved carries the protocol-required fallback", async () => {
+    // Anthropic's Messages API REQUIRES `max_tokens`, and the adapter's own
+    // ANTHROPIC_MAX_TOKENS_FALLBACK is chosen INSIDE the adapter — where no
+    // context window is known — so the number it invents never meets
+    // core-agent's clamp (the phase-Ⅱ record's I1: `input 100K + 128000 > 200K`
+    // was a 400 on exactly the request that ran because the context was nearly
+    // full). Resolved HERE, where the protocol is known, it travels as an
+    // ordinary `maxOutputTokens` and is clamped like every other value.
+    //
+    // "Nothing resolved" is the fixture's property, not an accident: the route
+    // name is no catalog family, so no card answers, and the row declares no
+    // `maxTokens` — exactly the state in which the adapter used to be the only
+    // thing that noticed the field was missing.
+    const { runtime } = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "anthropic-messages",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "claude-x" }],
+        },
+      },
+      defaultModel: { provider: "gw", model: "claude-x" },
+      credentials: { GW_KEY: "k" },
+    })
+    await expect(runtime.resolveModel({})).resolves.toMatchObject({
+      status: "ready",
+      binding: { modelId: "claude-x", maxOutputTokens: ANTHROPIC_MAX_TOKENS_FALLBACK },
+    })
+  })
+
+  it("M72 Ⅲ: a non-anthropic route with nothing resolved carries NO cap", async () => {
+    // The same shape declared as `openai-completions`, which reaches the
+    // assembly site as the ADAPTER spelling `openai-compatible` (adapterProtocol)
+    // — that translation is what makes this case more than a restatement of the
+    // one above. A cap here would be one nobody asked for: an openai-compatible
+    // endpoint's default completion length is the endpoint's business, and the
+    // adapter is already the last word for any endpoint that never meets this
+    // resolution (the constant's remaining job — see the llm-anthropic case).
+    // This is the case mutation (b) — dropping the protocol test — reddens.
+    const { runtime } = await fixture({
+      providers: {
+        gw: {
+          baseURL: "https://gw.example",
+          protocol: "openai-completions",
+          apiKeyEnv: "GW_KEY",
+          models: [{ id: "m" }],
+        },
+      },
+      defaultModel: { provider: "gw", model: "m" },
+      credentials: { GW_KEY: "k" },
+    })
+    const state = await runtime.resolveModel({})
+    expect(state.status).toBe("ready")
+    // `not.toHaveProperty` rather than a `toMatchObject` that simply omits the
+    // key: ABSENCE is the property being pinned, and toMatchObject checks only
+    // the keys it names.
+    expect(state.status === "ready" ? state.binding.modelId : undefined).toBe("m")
+    expect(state.status === "ready" ? state.binding : {}).not.toHaveProperty("maxOutputTokens")
   })
 
   it("returns discriminated unconfigured and invalid states without building a client", async () => {

@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -214,7 +214,15 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           if (reason === "max_output_tokens") truncated = true
           return []
         }
-        if (t === "response.completed") return []
+        if (t === "response.completed") {
+          // M72 Ⅲ: the Responses API reports this round-trip's usage HERE and
+          // nowhere else — the arm used to drop the payload on the floor. The
+          // rules are llm-anthropic's `mapUsage`: finite numbers only, and no
+          // recognisable number at all means NO event (a fabricated 0 would read
+          // as a measurement nobody made).
+          const usage = mapUsage((event.response as { usage?: unknown } | undefined)?.usage)
+          return usage !== undefined ? [{ type: "usage", usage }] : []
+        }
         if (t === "[DONE]") {
           receivedDone = true
           return []
@@ -291,4 +299,21 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
+}
+
+/** M72 Ⅲ: the Responses shape → the seam's `LLMUsage`. Field names differ from
+ * message-start's, so the mapper lives per wire (the seam owns the vocabulary,
+ * each adapter owns its spelling). */
+function mapUsage(raw: unknown): LLMUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined
+  const r = raw as Record<string, unknown>
+  const details = (r.input_tokens_details ?? {}) as Record<string, unknown>
+  const out: LLMUsage = {}
+  const take = (from: unknown, to: keyof LLMUsage): void => {
+    if (typeof from === "number" && Number.isFinite(from)) out[to] = from
+  }
+  take(r.input_tokens, "inputTokens")
+  take(r.output_tokens, "outputTokens")
+  take(details.cached_tokens, "cacheReadTokens")
+  return Object.keys(out).length > 0 ? out : undefined
 }

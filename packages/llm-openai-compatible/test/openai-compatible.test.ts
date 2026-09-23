@@ -417,3 +417,196 @@ describe("M72 Ⅱ: the truncation bit (openai-compatible)", () => {
     expect(events.at(-1)).toEqual({ type: "end", truncated: true })
   })
 })
+
+// M72 Ⅲ. The read loop and the residual flush used to carry two copies of the
+// frame-parsing rules, and the copies had drifted: R12 fixed a rule in the
+// SECOND copy, while the flush still never accumulated tool-call fragments.
+// A tool call arriving ONLY in a boundary-less final frame was dropped.
+describe("M72 Ⅲ: one frame handler for both loops (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: a tool call that arrives ONLY in a boundary-less final frame is not dropped", async () => {
+    // no trailing "\n\n": the main loop parses nothing, the flush handles it
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: "c1", function: { name: "read", arguments: '{"path":"a.txt"}' } }] } }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { name: "read", args: { path: "a.txt" } } }])
+  })
+})
+
+// M72 Ⅲ. Of the five protocols this harness speaks, this is the ONLY one whose
+// wire reports usage solely ON REQUEST (`stream_options.include_usage`) — the
+// other four send it unasked. That makes the ask itself a REQUEST-SHAPE change:
+// a gateway that does not know the key can reject the whole call, which is why
+// the switch is per-route and not a property of the protocol. It is default ON
+// (the routing default, not a guess), and a route whose gateway rejects it says
+// `usageInStream: false` — and then NOTHING is sent, not `include_usage: false`.
+describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: the request asks for usage by default", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.stream_options).toEqual({ include_usage: true })
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: a route that says its gateway rejects the key does NOT send it", async () => {
+    // "Off" is ABSENT, not `{ include_usage: false }`: a gateway that rejects
+    // the key rejects the key, whatever its value.
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m", usageInStream: false })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect("stream_options" in body).toBe(false)
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: a route's raw options still override the ask", async () => {
+    // The key is written BEFORE `...(config.options ?? {})`, and that order is
+    // load-bearing: a route's own `options` is a MORE specific statement about
+    // ITS gateway than the adapter's default, so it must win. A key written
+    // after the spread would silently clobber a route's existing configuration
+    // — the clobber this repo has already been bitten by.
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({
+      apiKey: "k", baseUrl: "https://api.test", model: "m",
+      options: { stream_options: { include_usage: false } },
+    })
+    const it = client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)[Symbol.asyncIterator]()
+    await it.next()
+    const body = JSON.parse(fetchMock.mock.calls[0]![1].body as string)
+    expect(body.stream_options).toEqual({ include_usage: false })
+    await it.return?.()
+  })
+
+  it("M72 Ⅲ: the trailing usage-only chunk reaches the seam", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 9, completion_tokens: 4, prompt_cache_hit_tokens: 7 } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "usage")).toEqual([
+      { type: "usage", usage: { inputTokens: 9, outputTokens: 4, cacheReadTokens: 7 } },
+    ])
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // The mapper's three exits, one fixture each. Every fixture above reaches only
+  // its happy path; these are the three a regression has to break.
+  it("M72 Ⅲ: a frame with no usage object at all emits no usage event", async () => {
+    // The non-object guard: an ordinary content frame carries no `usage` key.
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Iron law ②'s second exit. A fixture that sent no `usage` at all exits at the
+  // guard above; THIS one reaches the tail with an empty result, which is what
+  // makes the tail load-bearing: an always-returning mapper would emit
+  // `{ type: "usage", usage: {} }` — an event that reads as a measurement nobody
+  // made, exactly what the seam's absent-is-not-zero contract forbids.
+  it("M72 Ⅲ: a usage object with no recognisable number emits no usage event", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: {} })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+
+  // Iron law ①: the mapper takes only `typeof v === "number" && Number.isFinite(v)`.
+  // A STRING that merely spells a count is not a number the provider measured;
+  // coercing it would write an unvalidated value straight into `LLMUsage` — the
+  // "number nobody made" this milestone exists to forbid.
+  it("M72 Ⅲ: a token count the wire sent as a string is not taken", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: "9" } })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "usage")).toBe(false)
+    expect(events.at(-1)).toEqual({ type: "end" })
+  })
+})
+
+// M72 Ⅲ. DeepSeek-family gateways stream the reasoning text on a SIBLING of
+// `delta.content` — `delta.reasoning_content` — which had zero readers in this
+// tree, so an entire trajectory was silently dropped. The seam's
+// `{ type: "reasoning"; text }` variant already existed (llm-bedrock and
+// llm-anthropic produce it); these tests pin the missing PRODUCER. Within one
+// frame reasoning precedes content: a model that both thinks and answers does
+// so in that order.
+describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatible)", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it("M72 Ⅲ: delta.reasoning_content becomes a reasoning event", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing options" } }] })}\n\n` +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.map((e) => e.type)).toEqual(["reasoning", "text/chunk", "end"])
+    expect(events[0]).toEqual({ type: "reasoning", text: "weighing options" })
+  })
+
+  it("M72 Ⅲ: an empty reasoning_content emits nothing", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.some((e) => e.type === "reasoning")).toBe(false)
+  })
+
+  it("M72 Ⅲ: a boundary-less final frame's reasoning_content is not dropped", async () => {
+    // no trailing "\n\n" → the flush parses this frame; T4 unified the two
+    // paths, so this also pins that unification.
+    const body = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "late thought" } }] })}`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events.filter((e) => e.type === "reasoning")).toEqual([{ type: "reasoning", text: "late thought" }])
+  })
+
+  // The ordering rule, pinned. ONE frame carries BOTH fields — the case the
+  // three tests above cannot see, because they put reasoning and content in
+  // SEPARATE frames where frame order alone decides event order. A model that
+  // both thinks and answers emits them in that order, so the reasoning push
+  // must precede the content push inside the choice loop; moving it after
+  // flips this assertion.
+  it("M72 Ⅲ: a frame carrying both thinks before it answers (reasoning precedes content)", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "weighing", content: "done" } }] })}\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } })))
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
+    expect(events).toEqual([
+      { type: "reasoning", text: "weighing" },
+      { type: "text/chunk", text: "done" },
+      { type: "end" },
+    ])
+  })
+})
