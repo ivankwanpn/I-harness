@@ -1,7 +1,9 @@
 import { clampOutputCap } from "@i-harness/llm-seam"
 import type { LLMMessage, LLMRequest, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
+import type { Session } from "@i-harness/core-session"
 import { approxTokens } from "./tokens.ts"
+import { sliceRegion } from "./slices.ts"
 
 // M33 §1.1 (⑥): imperative cheatwords. Used ONLY as a conservative flag —
 // a shadow line containing one is copied into the Sensitive Instructions
@@ -158,6 +160,15 @@ function trimToTokens(text: string, maxTokens: number): string {
  * maxTokens truncation happens AFTER the floor check, on the accepted output.
  * `attempts` reports how many model calls the pass took (the engine feeds it
  * into the compaction/attempt analytics event).
+ *
+ * M75: when the single prefix-shaped request CANNOT FIT the window, and the
+ * caller hands the region in, the pass summarises that region in chained
+ * pieces instead of sending the one impossible request — the one a strict
+ * provider rejects with a NON-retryable validation error, whose fail-soft arm
+ * is the reset that throws the inherited context away. The fit predicate and
+ * the piece loop live HERE, beside the clamp they must agree with: both
+ * evaluate `priceInput` below, so the two can never drift. No cap, no window,
+ * no prefix or no region ⇒ the single path, byte for byte as before.
  */
 export async function summarizeWithModel(
   model: ModelClient,
@@ -187,63 +198,157 @@ export async function summarizeWithModel(
    * anchored summary would be built on the stump. This one is a token ceiling
    * on the request; the two are different quantities and different arguments. */
   limits?: { maxOutputTokens?: number; contextWindow?: number; overheadTokens?: number },
+  /** M75: the region this call is summarising — the session and the seqs the
+   * caller would have shadowed, handed in RAW and un-sliced. The decision to
+   * slice is taken here, by the very expression the clamp below is fed, so the
+   * predicate can never drift from the clamp's own arithmetic: a caller-side
+   * `priceInput(prefix.messages)` would leave out the directive and the
+   * overhead the clamp charges, and the band where the region alone fits but
+   * the request does not would keep taking the single-call path into a
+   * provider rejection. Read only when `prefix` and both `limits` numbers are
+   * present; otherwise the single path runs, byte for byte unchanged. */
+  region?: { session: Session; shadowedSeqs: number[] },
 ): Promise<{ text: string; attempts: number }> {
   let attempts = 0
-  let lastLength = 0
   const attemptsTrackerOut = attemptsTracker ?? { count: 0 }
-  for (let round = 0; round < 2; round++) {
-    attempts += 1
-    attemptsTrackerOut.count += 1
-    const directive = buildSummaryPrompt(replayText, previousSummary, instructions, { embedText: prefix === undefined })
-    const request: LLMRequest =
-      prefix === undefined
-        ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
-        : { messages: [...prefix.messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
-    // M73: the cap this request carries, clamped against the window and the
-    // input we are about to send — the same `clampOutputCap` the session's own
-    // requests go through (llm-seam), applied HERE because this request is
-    // built here and nowhere else. Absent cap ⇒ absent key: a default would be
-    // a number nobody chose.
-    //
-    // The input is priced the way the session's own clamp prices it
-    // (core-agent: `estimateContent(messages) + overheadTokens`): this request
-    // really does carry `prefix.systemPrompt` and `prefix.tools`, which the
-    // session log does not, so charging the messages alone would under-price
-    // the input and make the room the clamp promises too generous — the exact
-    // overrun the clamp exists to prevent. `?? 0` for a caller that hands no
-    // overhead; the engine always resolves a number.
-    const cappedRequest: LLMRequest = limits?.maxOutputTokens === undefined
-      ? request
-      : {
-          ...request,
-          maxOutputTokens: clampOutputCap(
-            limits.maxOutputTokens,
-            limits.contextWindow,
-            // The overhead is charged ONLY when the request really carries the
-            // pair it stands for. On the legacy text path (`prefix` undefined)
-            // the request has neither system prompt nor tools, so charging it
-            // over-prices the input — and when the charge alone fills the
-            // window, `hardRoom < 1` trips clampOutputCap's "the input already
-            // fills the window" arm and the RAW cap leaves (this task's defect,
-            // surviving on that route: reachable with a configured
-            // `summarizationModel`, or an engine built without `requestShape`).
-            estimateContent(request.messages) + (prefix === undefined ? 0 : (limits.overheadTokens ?? 0)),
-          ),
-        }
-    let out = ""
-    for await (const ev of model.stream(cappedRequest)) {
-      if (ev.type === "text/chunk") out += ev.text
-      else if (ev.type === "error") throw ev.error
-      else if (ev.type === "end") break
+
+  // M75: the ONE input-price arithmetic — what the cap is clamped against
+  // (M73) and what decides "the single request cannot fit" (M75). They are the
+  // same quantity by construction: `clampOutputCap` returns the cap UNTOUCHED
+  // exactly when `contextWindow − this` is not `>= 1` (llm-seam:462-463), which
+  // is exactly when a strict provider rejects `input + max_tokens > context`
+  // (a validation error, and NOT in the retryable set).
+  //
+  // The price is the way the session's own clamp prices it (core-agent:
+  // `estimateContent(messages) + overheadTokens`): this request really does
+  // carry `prefix.systemPrompt` and `prefix.tools`, which the session log does
+  // not, so charging the messages alone would under-price the input and make
+  // the room the clamp promises too generous — the exact overrun the clamp
+  // exists to prevent. `?? 0` for a caller that hands no overhead; the engine
+  // always resolves a number.
+  //
+  // The overhead is charged ONLY when the request really carries the pair it
+  // stands for. On the legacy text path (`prefix` undefined) the request has
+  // neither system prompt nor tools, so charging it over-prices the input — and
+  // when the charge alone fills the window, `hardRoom < 1` trips the clamp's
+  // "the input already fills the window" arm and the RAW cap leaves (that
+  // defect survives on that route: reachable with a configured
+  // `summarizationModel`, or an engine built without `requestShape`).
+  const priceInput = (messages: LLMMessage[]): number =>
+    estimateContent(messages) + (prefix === undefined ? 0 : (limits?.overheadTokens ?? 0))
+
+  /** One model call, with the M34 ⑦c retry guard. `messages` is the
+   * conversation this request carries: [] on the legacy text path (the
+   * directive embeds the replay text instead), the region fold on the single
+   * prefix call, one piece on the chained path. `previous` anchors this call's
+   * directive; `enforceFloor` is the quality floor — see the M75 §1.5 note at
+   * the check. */
+  const callModel = async (messages: LLMMessage[], previous: string | undefined, enforceFloor: boolean): Promise<string> => {
+    let lastLength = 0
+    for (let round = 0; round < 2; round++) {
+      attempts += 1
+      attemptsTrackerOut.count += 1
+      const directive = buildSummaryPrompt(replayText, previous, instructions, { embedText: prefix === undefined })
+      const request: LLMRequest =
+        prefix === undefined
+          ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
+          : { messages: [...messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
+      // M73: the cap this request carries, clamped against the window and the
+      // input we are about to send — the same `clampOutputCap` the session's
+      // own requests go through (llm-seam), applied HERE because this request
+      // is built here and nowhere else. Absent cap ⇒ absent key: a default
+      // would be a number nobody chose. The input is priced by the SAME
+      // `priceInput` the M75 fit predicate uses (see its note above).
+      const cappedRequest: LLMRequest = limits?.maxOutputTokens === undefined
+        ? request
+        : { ...request, maxOutputTokens: clampOutputCap(limits.maxOutputTokens, limits.contextWindow, priceInput(request.messages)) }
+      let out = ""
+      for await (const ev of model.stream(cappedRequest)) {
+        if (ev.type === "text/chunk") out += ev.text
+        else if (ev.type === "error") throw ev.error
+        else if (ev.type === "end") break
+      }
+      const trimmed = out.trim()
+      if (trimmed.length === 0) throw new Error("compaction: summarizer returned empty output")
+      lastLength = trimmed.length
+      // M75 §1.5: the floor guards the text the SESSION ends up with, so it is
+      // enforced only where this call's output IS that text — the single call,
+      // or the LAST piece of a chain. Per-piece enforcement would be wrong: a
+      // legitimate intermediate merge can be short (that piece had little to
+      // fold in), and failing it would throw away a chain that was working.
+      // BLIND SPOT, named: a chain that is muddled in the middle but long
+      // enough at the end is not caught — the same blind spot today's single
+      // call has when it lands just above the floor.
+      if (enforceFloor && trimmed.length < minSummaryChars) continue // degenerate → one retry
+      return approxTokens(trimmed) > maxTokens ? trimToTokens(trimmed, maxTokens) : trimmed
     }
-    const trimmed = out.trim()
-    if (trimmed.length === 0) throw new Error("compaction: summarizer returned empty output")
-    lastLength = trimmed.length
-    if (trimmed.length < minSummaryChars) continue // degenerate → one retry
-    return {
-      text: approxTokens(trimmed) > maxTokens ? trimToTokens(trimmed, maxTokens) : trimmed,
-      attempts,
+    throw new Error(`compaction: summarizer output below minSummaryChars (${lastLength} < ${minSummaryChars})`)
+  }
+
+  // M75: the fallback gate. The single prefix-shaped request is the fast path —
+  // it is a byte prefix of the session's last main request and the provider
+  // cache serves it. It stops being possible exactly when the region itself
+  // fills the window (clampOutputCap's arm C returns the raw cap; a strict
+  // provider rejects `input + max_tokens > context`). THEN — and only then —
+  // the pass summarises the region in pieces: pieces 2..N are cold reads (this
+  // tree sends no cache breakpoints), which is strictly better than today's
+  // outcome there: no summary at all and the context thrown away by a reset.
+  //
+  // All four entry conditions are deliberately required: no cap or no window ⇒
+  // the clamp never runs, so there is no "does not fit" question to answer and
+  // the single path stays byte-identical (as do the callers that never had a
+  // budget); no prefix ⇒ the request is the legacy text form, which carries no
+  // piece messages; no region ⇒ nothing to slice.
+  if (
+    region !== undefined &&
+    prefix !== undefined &&
+    limits !== undefined &&
+    limits.maxOutputTokens !== undefined &&
+    limits.contextWindow !== undefined
+  ) {
+    const contextWindow = limits.contextWindow
+    const singleDirective = buildSummaryPrompt(replayText, previousSummary, instructions, { embedText: false })
+    // The single request's own price — the SAME expression the clamp is fed,
+    // region fold PLUS directive PLUS overhead, priced as one request.
+    const singlePrice = priceInput([...prefix.messages, { role: "user", content: singleDirective }])
+    if (!(contextWindow - singlePrice >= 1)) {
+      // The per-piece budget: the window minus everything a piece request
+      // carries BESIDES the piece — the overhead, the directive priced in its
+      // WORST case, and one output allowance. The directive's worst case is the
+      // chain's own anchor ceiling: a running summary is `maxTokens * 4` chars
+      // at most (`trimToTokens` caps the accepted text there), and never
+      // shorter than the caller's existing anchor. The output allowance is
+      // `maxTokens` — the size the accepted summary is capped to, and therefore
+      // also the bound just used. Measured, 12-turn fixture, window 1 000,
+      // maxTokens 200, no overhead: directive allowance 684, budget 116 → 12
+      // pieces of one turn each (175/196 tokens), every piece request 624..838
+      // tokens — all of them legal on that window, where the single call priced
+      // 2 591. A piece with no interior cut is emitted over budget by
+      // `sliceRegion`'s own contract; if even that does not fit, the call
+      // throws and the caller's fail-soft arm answers exactly as it does today.
+      const runningChars = Math.max(previousSummary?.length ?? 0, maxTokens * 4)
+      const allowance = priceInput([
+        { role: "user", content: buildSummaryPrompt(replayText, "x".repeat(runningChars), instructions, { embedText: false }) },
+      ])
+      const pieces = sliceRegion(region.session, region.shadowedSeqs, Math.max(1, contextWindow - allowance - maxTokens))
+      if (pieces.length > 0) {
+        // Chained: piece k>1 receives what piece k-1 produced as its anchor —
+        // "merge the conversation ABOVE into the previous summary" is what the
+        // prompt already asks for. The running text lives in MEMORY only:
+        // nothing is appended mid-pass; the caller appends the ONE
+        // `compaction/summary` for the whole region once this returns, and a
+        // throw here leaves the log untouched (fail-soft upstream).
+        let running = previousSummary
+        let text = ""
+        for (let k = 0; k < pieces.length; k++) {
+          text = await callModel(pieces[k]!, running, k === pieces.length - 1)
+          running = text
+        }
+        return { text, attempts }
+      }
+      // An empty region: nothing to slice and nothing to summarise — fall
+      // through to the single call, which fails exactly as it does today.
     }
   }
-  throw new Error(`compaction: summarizer output below minSummaryChars (${lastLength} < ${minSummaryChars})`)
+  return { text: await callModel(prefix === undefined ? [] : prefix.messages, previousSummary, true), attempts }
 }

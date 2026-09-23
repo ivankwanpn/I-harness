@@ -112,6 +112,11 @@ export function createCompactionEngine(deps: {
     // undefined token fields, never a TypeError out of compact().
     const startedAt = Date.now()
     const tokensBefore = safeActiveTokens(session)
+    // M75 §1.6: `attempts` counts MODEL CALLS, not passes. A pass that could
+    // not fit the single request now makes one call per chained piece (each
+    // with its own M34 retry), so the number is no longer comparable with
+    // pre-M75 readings of the same session — one pass still emits exactly ONE
+    // `compaction/attempt`, with `attempts` = every call it took.
     const emit = (outcome: "success" | "prune-only" | "failure" | "skipped", extra: Record<string, unknown> = {}) => {
       deps.telemetry?.emit({
         type: "compaction/attempt",
@@ -191,7 +196,12 @@ export function createCompactionEngine(deps: {
         // request carries the system prompt and tool schemas too. Resolved
         // (default 0), so it is passed as a value, not as a spread.
         overheadTokens: config.overheadTokens,
-      })
+      },
+      // M75: and the region itself, RAW — the summarizer slices it for itself
+      // when the single request cannot fit the window. Pre-slicing here would
+      // move the fit predicate to this side of the seam, where the clamp's own
+      // arithmetic (which prices the directive and the overhead too) is not.
+      { session, shadowedSeqs })
       summary = result.text
       attempts = attemptsTracker.count
     } catch (err) {
