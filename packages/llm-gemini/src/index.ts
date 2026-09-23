@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -259,12 +259,14 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
             events.push({ type: "text/chunk", text: part.text })
           }
         }
-        // usageMetadata (promptTokenCount / candidatesTokenCount /
-        // totalTokenCount) arrives on the LAST chunk — before `end`. The
-        // LLMStreamEvent vocabulary DOES have a `usage` event
-        // (`{ type: "usage"; usage: LLMUsage }`, emitted by llm-anthropic),
-        // but THIS adapter does not map usageMetadata onto it, so the wire
-        // position is documented here rather than surfaced.
+        // M72 Ⅲ: `usageMetadata` rides the LAST chunk — mapped here instead of
+        // only documented. (The comment this replaces said the seam had no usage
+        // event; M72 Ⅱ corrected that sentence, this maps it.) The wire's
+        // spelling is promptTokenCount → inputTokens, candidatesTokenCount →
+        // outputTokens, cachedContentTokenCount → cacheReadTokens; anything else
+        // the wire sends has no seam name and is not invented one.
+        const usage = mapUsage(event.usageMetadata)
+        if (usage !== undefined) events.push({ type: "usage", usage })
         return events
       }
       try {
@@ -298,4 +300,21 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       yield truncated ? { type: "end", truncated: true } : { type: "end" }
     },
   }
+}
+
+/** M72 Ⅲ: Gemini's `usageMetadata` → the seam's `LLMUsage` (finite numbers
+ * only; nothing recognisable ⇒ no event, never a fabricated zero). The seam
+ * owns the vocabulary, each wire owns its spelling — hence a mapper per
+ * adapter, next to the fields it spells. */
+function mapUsage(raw: unknown): LLMUsage | undefined {
+  if (raw === null || typeof raw !== "object") return undefined
+  const r = raw as Record<string, unknown>
+  const out: LLMUsage = {}
+  const take = (from: unknown, to: keyof LLMUsage): void => {
+    if (typeof from === "number" && Number.isFinite(from)) out[to] = from
+  }
+  take(r.promptTokenCount, "inputTokens")
+  take(r.candidatesTokenCount, "outputTokens")
+  take(r.cachedContentTokenCount, "cacheReadTokens")
+  return Object.keys(out).length > 0 ? out : undefined
 }
