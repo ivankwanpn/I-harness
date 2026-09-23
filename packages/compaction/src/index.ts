@@ -33,11 +33,15 @@ export interface CompactionResult {
   // model surface / summarizer input now carries substitutes). A prune-only
   // pass also reports `compacted:true` (pressure resolved without an LLM call).
   pruned?: boolean
-  /** M73: WHY a pass that did not compact did not. Today `compacted:false` has
-   * four producers (no shadowable region, a summarizer failure, and two engine
-   * early exits) and they were indistinguishable to every consumer — the CLI
-   * reported the summarizer's failure as "nothing to compact". Absent on the
-   * arms that carry no reason (they are pre-M73 behavior, unchanged). */
+  /** M73: WHY a pass that did not compact did not. `compacted:false` has EIGHT
+   * producers at this revision — compactOnce's no-shadowable-region arm and
+   * its summarizer failure, maybeCompact's five gates (pressure, sticky,
+   * re-fire, hysteresis, breaker), and resetWindow's `reset: false` — and
+   * before this field they were indistinguishable to every consumer: the CLI
+   * reported the summarizer's failure as "nothing to compact". Only the
+   * summarizer failure names a reason, because it is the only arm that can be
+   * a real FAILURE; the other seven mean "nothing to do" and stay absent
+   * (pre-M73 behavior, unchanged). */
   reason?: "summarizer-failed"
 }
 
