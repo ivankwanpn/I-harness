@@ -258,10 +258,11 @@ export function createCompactionEngine(deps: {
       // One more consequence of where the append sits, named rather than fixed:
       // the ladder's next rung RE-PLANS the same records and appends a SECOND
       // `compaction/prune` marker (nothing dedupes against the markers already
-      // on the log). That is content-idempotent — `derivePruneSubstitutes` is
-      // last-wins per callId, so the projection is unchanged — and the number of
-      // repeats is bounded by the breaker. Deliberately left alone; a dedupe
-      // would be a second place that decides what a prune means.
+      // on the log). That is content-idempotent — the substitute map derived
+      // from the markers is last-wins per tool call id, so the projection is
+      // unchanged — and the number of repeats is bounded by the breaker.
+      // Deliberately left alone; a dedupe would be a second place that decides
+      // what a prune means.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
