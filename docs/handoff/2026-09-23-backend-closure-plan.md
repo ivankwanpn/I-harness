@@ -26,7 +26,7 @@
 | 單位 | 內容 | 大小 | 狀態 |
 |---|---|---|---|
 | **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成並合併**（**PR #12 → `c4c78f41`**；`m76`；閘門 **3083／433** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
-| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ☐ **進行中**（`m77`；spec `docs/superpowers/specs/2026-09-24-refusal-channel-design.md`、計畫 `docs/superpowers/plans/2026-09-24-refusal-channel.md`；設計＝`end` 加語意位元 `refused?: true`（複製 `truncated`）、context 超限走**既有**的 `CONTEXT_WINDOW_EXCEEDED` 碼） |
+| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成**（`m77`；閘門 **3118／432** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
 | **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ☐ |
 | **M79** | **⑤覆蓋率補齊**（driveable 的 diagnostics 站點＋四個沒有觀察者的 hop＋零站點的聯集成員） | M–L | ☐ |
 | **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | ☐ |
