@@ -4,6 +4,9 @@ import { append, createSession } from "@i-harness/core-session"
 import { createToolRegistry, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type AgentRegistry, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
+// M73: the char/token constant the overhead estimate below is priced against —
+// the same one the session's own assembly prices its twin by.
+import { CHARS_PER_TOKEN } from "@i-harness/token-meter"
 // Type-only: the selection's per-row protocol is the SAME closed set settings
 // validates (`SettingsProviderProtocol`) — a fourth copy of the five names would
 // be a fourth place to edit one enum. Erased at build time, no runtime edge.
@@ -48,6 +51,24 @@ the role prompt above) remain higher priority than this contract.`
  * prompt). The role prompt always leads; the contract follows. */
 export function composeSubagentPrompt(roleSystemPrompt: string): string {
   return `${roleSystemPrompt}\n\n${SUBAGENT_PROMPT_CONTRACT}`
+}
+
+/**
+ * M73 (ruling M73-P1): the child's prompt-and-schemas overhead, priced the way
+ * the session's own assembly prices the same pair (`estimateAssemblyOverhead`,
+ * assembly.ts): the charge the child's log never carries but the model sees on
+ * every request. ONE definition because BOTH arms of the budget chain need it —
+ * `spawnChild` below charges it so the child's request is clamped against a
+ * realistic input, and the rebuilt child (`tools.ts`'s `ensureResidentAgent`)
+ * imports it so a resumed child does not silently lose the charge the first one
+ * had. Two copies of one rule are two places to drift.
+ *
+ * Module-local by ruling: it is exported for its sibling module in this
+ * package, NOT through the package entry (`index.ts` names its exports and does
+ * not re-export this one).
+ */
+export function estimateChildOverhead(systemPrompt: string, schemas: unknown): number {
+  return Math.ceil(systemPrompt.length / CHARS_PER_TOKEN) + Math.ceil(JSON.stringify(schemas).length / CHARS_PER_TOKEN)
 }
 
 /**
@@ -115,6 +136,15 @@ export interface RoleModelHost {
    * host that never wired it has not enabled the feature. Off, a declared
    * selection is refused (`subagentModelSelectionGated`) rather than run. */
   allowSubagentModelSelection?: boolean
+  /** M73: the SESSION's own model's numbers — what an INHERITING child runs
+   * under (no declared role model). They ride this host shape for the same
+   * reason `roleSelectionFor` does: every spawn arm (the subagent tool, the
+   * team scheduler, the guardian) already carries it, so the values reach
+   * `spawnChild` without a second parameter path. NOT the numbers of a role's
+   * DECLARED model — that binding resolves at spawn and carries its own
+   * (RoleModelState's ready arm below). Absent → no key is written. */
+  contextWindow?: number
+  maxOutputTokens?: number
 }
 
 /** The role's model for THIS spawn, in order: the HOST's declared
@@ -175,11 +205,18 @@ export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleM
  * state's `client` and `reasoningEffort` are read here. provider-runtime's own
  * answer satisfies it as it stands (the field names and the three arms match) —
  * kept local because this package does not depend on provider-runtime, the same
- * reason session-executor declares its own binding result type. */
+ * reason session-executor declares its own binding result type.
+ *
+ * M73 widened the ready arm with the binding's `contextWindow`/`maxOutputTokens`
+ * (provider-runtime already emits them — `resolveModel`'s ready arm spreads
+ * both when they resolve). They were REACHING this spawn at runtime and being
+ * dropped HERE, by the type and the one read site: an undeclared field cannot
+ * be read without a cast, so the child kept the client and silently ran
+ * unbounded. Absent stays absent — both are optional and neither is defaulted. */
 export type RoleModelState =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort } }
+  | { status: "ready"; binding: { client: ModelClient; reasoningEffort?: ReasoningEffort; contextWindow?: number; maxOutputTokens?: number } }
 
 export interface SpawnOptions extends RoleModelHost {
   taskName: string
@@ -271,6 +308,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // run the right model at the adapter default — the setting doing nothing,
   // invisibly. Absent stays absent (provider default).
   let reasoningEffort: ReasoningEffort | undefined
+  // M73: the numbers the request is CLAMPED against and the ladder MEASURES
+  // with. The declared arm reads them off the binding it just resolved; the
+  // inherit arm takes the session's, handed in on the host shape.
+  let contextWindow = opts.contextWindow
+  let maxOutputTokens = opts.maxOutputTokens
   // What the child ran on, RECORDED at spawn (Task 6) — the projection reads
   // this record instead of re-deriving the precedence, which it cannot do (the
   // settings getter is not on its source) and should not do (a running child's
@@ -283,8 +325,22 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     }
     model = state.binding.client
     reasoningEffort = state.binding.reasoningEffort
+    contextWindow = state.binding.contextWindow
+    maxOutputTokens = state.binding.maxOutputTokens
     modelLabel = modelLabelOf(declared)
   }
+
+  // M73: the prompt is composed ONCE — the agent gets it, and the overhead
+  // estimate below prices it.
+  const childPrompt = composeSubagentPrompt(opts.role.systemPrompt)
+  // The charge the child's log never carries but the model sees on every
+  // request: its composed prompt and its tool schemas' JSON — priced the way the
+  // session's own assembly prices the same pair (assembly.ts's
+  // estimateAssemblyOverhead), against the char/token constant token-meter owns.
+  // Absent window → absent overhead: `budget` needs a window anyway.
+  const overheadTokens = contextWindow === undefined
+    ? undefined
+    : estimateChildOverhead(childPrompt, childReg.schemas())
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
@@ -294,9 +350,27 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
     // delegation/changed-files+test reporting/result delivery). Human and
     // project instructions remain higher priority (the contract says so).
-    systemPrompt: composeSubagentPrompt(opts.role.systemPrompt),
+    systemPrompt: childPrompt,
     signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    // M73: the budget this child's requests carry. Before this, a child ran
+    // unbounded — no cap (per-provider max_tokens absent, so on anthropic the
+    // adapter's own unclamped fallback went to the wire) and no window (the
+    // budget ladder cannot even fire without one). Both come from the same
+    // place the main session's do.
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    // The window costs the child its first two ladder layers, on purpose: a
+    // spawn passes no `compact` deps, so core-agent builds no compactor and
+    // enforceBudget's `if (compactor)` / `if (compactor && resetAllowed)` arms
+    // are unreachable — past `contextWindow * reserveRatio` the child FAILS
+    // CLOSED with `prompt_too_long` instead of sending the over-window request
+    // a windowless child used to send. That is the milestone's deliberate
+    // trade (the provider's 400 is not a better failure), and the parent reads
+    // it off the job it spawned. Pinned by "a child past its window FAILS
+    // CLOSED" in test/child.test.ts.
+    ...(contextWindow !== undefined
+      ? { budget: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
+      : {}),
     // M19 (Ruling 24): the child's durable session id is seeded onto every
     // prepared ToolExec so the agent-team scheduler can attribute the child's
     // tool calls to its team member (the roster maps sessionId → member).

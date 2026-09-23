@@ -1389,3 +1389,185 @@ describe("createSessionAssembly — resolveRoleModel", () => {
     expect(toolErrorOf(events, "spawn_agent")).toMatch(/saw gw:from-settings/)
   }, 30_000)
 })
+
+// ── M73: the session's budget reaches the subagents it spawns ───────────────
+
+// M73: the recording twin of spawnBlockingModel above — same routing (the
+// child's turn is recognised by its authored message; the child run's first
+// stream call races the parent's continuation, so ordering cannot be relied
+// on), and every request the CHILD makes is kept. The blocked twin cannot be
+// reused for this: it answers the child only after a gate the test releases
+// and records nothing, so it cannot say what the child actually sent.
+function spawnRecordingModel(): { model: ModelClient; childRequests: LLMRequest[] } {
+  const childRequests: LLMRequest[] = []
+  let spawned = false
+  const model: ModelClient = {
+    async *stream(request: LLMRequest) {
+      const last = request.messages.at(-1)
+      const isChild = last?.role === "user" && typeof last.content === "string" && last.content.includes("inspect code")
+      if (isChild) {
+        childRequests.push(request)
+        yield { type: "text/chunk", text: "child ok" }
+        yield { type: "end" }
+        return
+      }
+      if (!spawned) {
+        spawned = true
+        yield { type: "tool_call", call: { name: "spawn_agent", args: { message: "inspect code", task_name: "helper" } } }
+        yield { type: "end" }
+        return
+      }
+      yield { type: "text/chunk", text: "spawned" }
+      yield { type: "end" }
+    },
+  }
+  return { model, childRequests }
+}
+
+// The guardian arm's client: one recorder over two roles, routed by the
+// request's OWN systemPrompt — the reviewer's carries the guardian policy (the
+// reviewer role's systemPrompt, guard-approval), the parent's does not. So one
+// client can serve the parent's approval-seeking turn AND the review it
+// triggers, and every request is kept, which is what lets a case say WHICH
+// request carried the numbers.
+function guardianArmModel(parentScript: MockStep[]): ModelClient & { requests: LLMRequest[] } {
+  const requests: LLMRequest[] = []
+  const parentCassette = createMockClient(parentScript)
+  return {
+    requests,
+    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      requests.push(request)
+      if (request.systemPrompt?.includes("You are the approval guardian.")) {
+        yield { type: "text/chunk", text: '{"outcome":"deny","rationale":"the reviewer denied it","risk_level":"moderate"}' }
+        yield { type: "end" }
+        return
+      }
+      yield* parentCassette.stream(request)
+    },
+  }
+}
+
+describe("createSessionAssembly — the session's budget reaches its children (M73)", () => {
+  it("a spawned child's requests carry the session's window and cap", async () => {
+    const { model, childRequests } = spawnRecordingModel()
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      approveAll: true,
+      model,
+      contextWindow: 200_000,
+      maxOutputTokens: 4_242,
+    })
+    try {
+      await assembly.agent.run("spawn a helper")
+      await waitFor(() => childRequests.length > 0)
+      // 200k window vs a small request ⇒ the session's own value, verbatim.
+      expect(childRequests[0]!.maxOutputTokens).toBe(4_242)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  // The WINDOW half, observed through the clamp it feeds: `LLMRequest` has no
+  // window field, and with a window wide enough the clamp returns the cap
+  // verbatim (llm-seam's clampOutputCap: no window ⇒ untouched; room to spare ⇒
+  // untouched). A cap LARGER than the window is the one shape that cannot pass
+  // through unclamped: the value below can only have come out of the session's
+  // window reaching this child, so it moves the moment the window hop breaks.
+  it("a spawned child's cap is CLAMPED against the session's window", async () => {
+    const { model, childRequests } = spawnRecordingModel()
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      approveAll: true,
+      model,
+      contextWindow: 8_000,
+      maxOutputTokens: 100_000,
+    })
+    try {
+      await assembly.agent.run("spawn a helper")
+      await waitFor(() => childRequests.length > 0)
+      // `toBeLessThan` also reddens on `undefined`: both a missing cap and a
+      // missing window leave 100_000 (or nothing) here, never a smaller number.
+      expect(childRequests[0]!.maxOutputTokens).toBeLessThan(100_000)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  /** The parent turn both guardian cases share: step 1 is the outside-workspace
+   * `write` — the approval classifier's `ask` branch, which is what consults
+   * the guardian. Step 2 exists only so a broken guardian wiring still has a
+   * parseable reply instead of an exhausted cassette; the shipped path never
+   * reaches it (the review denies the write first). */
+  function guardianParentScript(dir: string): MockStep[] {
+    return [
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
+      { role: "assistant", text: "the write went through" },
+    ]
+  }
+
+  // The guardian is deliberately INHERIT-ONLY (a spec decision, not an
+  // oversight): `deps.model ?? deps.parentModel` (reviewer.ts), and a
+  // configured guardian model arrives as a bare ModelClient with no binding to
+  // read a window from. The two cases below pin both arms of that gate.
+  it("the guardian's INHERITED reviewer carries the session's numbers", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-guardian-budget-"))
+    const client = guardianArmModel(guardianParentScript(dir))
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: client,
+      contextWindow: 200_000,
+      maxOutputTokens: 4_242,
+      guardian: {}, // no `model` → the reviewer inherits the session's
+    })
+    try {
+      // The outcome is captured, not asserted: under a broken wiring the write
+      // goes through — the boundary line below is what must hold either way.
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      const reviewed = client.requests.filter((r) => r.systemPrompt.includes("You are the approval guardian."))
+      expect(reviewed).toHaveLength(1)
+      // The inheriting reviewer runs on the session's OWN model, so its
+      // requests are clamped and measured against the same numbers.
+      expect(reviewed[0]!.maxOutputTokens).toBe(4_242)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  it("a CONFIGURED guardian model gets NO window or cap from the session (the deliberate asymmetry)", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-guardian-configured-budget-"))
+    const parent = guardianArmModel(guardianParentScript(dir))
+    const configured = guardianArmModel([]) // serves the review only
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: parent,
+      contextWindow: 200_000,
+      maxOutputTokens: 4_242,
+      guardian: { model: configured },
+    })
+    try {
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      // The session's numbers were LIVE in this assembly — the parent's own
+      // request carries the cap — so the absence below is the gate, not a
+      // number that never existed.
+      expect(parent.requests[0]!.maxOutputTokens).toBe(4_242)
+      const reviewed = configured.requests.filter((r) => r.systemPrompt.includes("You are the approval guardian."))
+      expect(reviewed).toHaveLength(1)
+      // A configured guardian model is a DIFFERENT endpoint whose window this
+      // assembly does not know: the session's would be a wrong number, which is
+      // worse than an absent one.
+      expect(reviewed[0]!.maxOutputTokens).toBeUndefined()
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})

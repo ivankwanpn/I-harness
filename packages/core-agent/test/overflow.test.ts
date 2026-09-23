@@ -309,3 +309,50 @@ describe("the summarizer inherits the main request's shape (M5/D2)", () => {
     }
   })
 })
+
+// M73 fix round 1 (finding 2): core-agent is the hop that hands the RESOLVED
+// cap to the compaction engine (the `createCompactionEngine` call in
+// `src/index.ts`). Nothing else witnesses it — the compaction package's own
+// cases build the engine directly, so they pin the engine's half and not the
+// forwarding that feeds it, and deleting that single spread restores this
+// milestone's defect (the summarizer's request leaving with no cap at all,
+// hence anthropic's 128k fallback unclamped) on the only route production
+// takes — through `createAgent`.
+describe("the compaction engine gets the agent's resolved cap (M73)", () => {
+  it("the summarizer's own request carries it, clamped against the window", async () => {
+    const session = createSession()
+    for (let i = 0; i < 3; i++) append(session, { type: "user/message", text: "x".repeat(200) })
+    const requests: Array<{ maxOutputTokens?: number }> = []
+    const model = {
+      async *stream(req: { maxOutputTokens?: number }) {
+        requests.push({ maxOutputTokens: req.maxOutputTokens })
+        yield { type: "text/chunk", text: "answer" } as never
+        yield { type: "end" } as never
+      },
+    }
+    const agent = createAgent(ctx, {
+      session,
+      tools: createEmptyRegistry(),
+      model,
+      systemPrompt: "SYS-PROMPT",
+      maxTurns: 10,
+      // The session's resolved cap (M72 Ⅱ's chain value) …
+      maxOutputTokens: 50_000,
+      // … with a window small enough that the clamp MUST shrink it: llm-seam's
+      // `clampOutputCap` returns the value untouched when the window is missing
+      // or when the input leaves room, so a cap LARGER than the window is the
+      // one shape that can only have come out of the clamp.
+      compact: { contextWindow: 8_000, maxTokens: 16, minSummaryChars: 1 },
+    } as never)
+    // The MANUAL path: `compact()` summarizes unconditionally (no threshold
+    // gate) and makes exactly ONE model call — the summarizer's. So the single
+    // recorded request is identifiable without guessing.
+    const result = await agent.compact!()
+    expect(result.compacted).toBe(true)
+    expect(requests).toHaveLength(1)
+    // `toBeLessThan` also reddens on `undefined`: a cap that never reached the
+    // engine leaves no key at all, never a smaller number.
+    expect(requests[0]!.maxOutputTokens).toBeGreaterThan(0)
+    expect(requests[0]!.maxOutputTokens!).toBeLessThan(50_000)
+  })
+})

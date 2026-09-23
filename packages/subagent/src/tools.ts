@@ -16,7 +16,7 @@ import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable, ChildAgentEntry } from "./agent-table.ts"
 import { runningElapsedMs } from "./agent-table.ts"
 import type { RoleRegistry } from "./roles.ts"
-import { declaredRoleModel, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
+import { composeSubagentPrompt, declaredRoleModel, estimateChildOverhead, modelLabelOf, resolveRoleTools, spawnChild, subagentModelSelectionDisabled, subagentModelSelectionGated, type RoleModelHost, type RoleModelSelection, type RoleModelState } from "./child.ts"
 import { TaskIdentityConflictError, type TaskIdentity, type TaskOutcome, type TaskRecord, type TaskRegistry } from "./task-protocol.ts"
 
 // W6 T6: ONE module-scope handle for this file's one report; the phase is
@@ -162,6 +162,13 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         // before the task record is written). See child.ts for the rule.
         roleSelectionFor: deps.roleSelectionFor,
         allowSubagentModelSelection: deps.allowSubagentModelSelection,
+        // M73: the session's own window and cap, forwarded to the spawn. Without
+        // this hop the values reach SubagentToolDeps and stop — an inheriting
+        // child of THIS tool would carry neither while every type still checks,
+        // which is the failure mode hardest to see: the precedence is right and
+        // both numbers are empty. Absent stays absent (no key written).
+        ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
         jobs: deps.jobs,
         table: deps.table,
         agents: deps.agents,
@@ -627,11 +634,18 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // same model at the adapter default.
   let model = deps.parentModel
   let reasoningEffort: ReasoningEffort | undefined
+  // M73: the same two numbers spawnChild carries, from the same two sources —
+  // a rebuild is a spawn with a restored log, and a budget that appeared only
+  // on the first one would vanish on every resume.
+  let contextWindow = deps.contextWindow
+  let maxOutputTokens = deps.maxOutputTokens
   if (declared !== undefined) {
     const state = await deps.resolveModel(declared)
     if (state.status !== "ready") return false
     model = state.binding.client
     reasoningEffort = state.binding.reasoningEffort
+    contextWindow = state.binding.contextWindow
+    maxOutputTokens = state.binding.maxOutputTokens
   }
   // The label records what the child runs on NOW, and a rebuild can move it
   // EITHER way: a settings entry added while the toggle is on moves an
@@ -653,11 +667,30 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // mirrored those appends in the first place.
   const childCoordinator = deps.childSessions?.coordinator
   const childSessionId = entry.sessionId
+  // M73 defect #2: this call used `role.systemPrompt` where spawn uses the
+  // COMPOSED prompt — so a rebuilt child silently lost SUBAGENT_PROMPT_CONTRACT
+  // (scope / delegation / result-delivery), which child.ts's own comment says
+  // rides "every child agent". Same composer, same place, one call site each.
+  const childPrompt = composeSubagentPrompt(role.systemPrompt)
+  // M73: the charge the child's log never carries but the model sees on every
+  // request — priced by child.ts's ONE definition (imported, not copied: two
+  // copies of that rule are two places to drift). Absent window → absent
+  // overhead: `budget` needs a window anyway.
+  const overheadTokens = contextWindow === undefined
+    ? undefined
+    : estimateChildOverhead(childPrompt, childReg.schemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     session: entry.session, tools: childReg, model,
-    systemPrompt: role.systemPrompt, signal: controller.signal,
+    systemPrompt: childPrompt, signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    // M73: the cap and the window the rebuilt child's requests carry, from the
+    // same two sources the model decision above read. Absent stays absent — a
+    // rebuild that invents a number would be one nobody chose.
+    ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+    ...(contextWindow !== undefined
+      ? { budget: { contextWindow, ...(overheadTokens !== undefined ? { overheadTokens } : {}) } }
+      : {}),
     ...(childCoordinator !== undefined && childSessionId !== undefined
       ? { flush: (): Promise<void> => childCoordinator.flush(childSessionId) }
       : {}),
