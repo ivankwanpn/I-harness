@@ -265,7 +265,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // and can also send a bare `error` event. Both used to fall through to the
         // empty default, so a failed response was indistinguishable from an empty
         // one. `response.incomplete` is NOT handled here and is NOT a failure:
-        // it has its own arm above (M72 Ⅱ's truncation bit).
+        // it has its own arm above, which now carries BOTH bits (M72 Ⅱ's
+        // truncation bit and M77's refusal bit), and M77's content-part refusal
+        // is read at the top of this handler — so no refusal shape lands in this
+        // arm.
         //
         // The two shapes carry their fields differently, so this arm reads both:
         // `response.failed` nests them under `response.error.{code,message}`,

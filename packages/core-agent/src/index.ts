@@ -390,11 +390,16 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // must not mark the next one, and a clean ending writes no field at all.
       let truncatedThisStep = false
       // M77: the sibling bit, same shape and same discipline — the seam's `end`
-      // carries `refused` when the provider declined to produce content (five
-      // adapters, five literals: `content_filter`, `SAFETY`/`RECITATION`,
-      // `refusal`, `guardrail_intervened`). INDEPENDENT of `truncated` — a
-      // response can be capped AND refused — so neither bit is the other's
-      // `else`, and a clean ending writes no field at all.
+      // carries `refused` when the provider declined to produce content. The
+      // wire literals stay in the adapters, and they are NOT one-per-wire: the
+      // `content_filter` reason is read on both openai wires (as an
+      // `incomplete_details.reason` on one, a `finish_reason` on the other), the
+      // compatible wire ALSO reads the delta's own `refusal` field, gemini reads
+      // its whole set of content-block `finishReason`s plus
+      // `promptFeedback.blockReason`, and anthropic and bedrock read one stop
+      // reason each. INDEPENDENT of `truncated` — a response can be capped AND
+      // refused — so neither bit is the other's `else`, and a clean ending
+      // writes no field at all.
       let refusedThisStep = false
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
