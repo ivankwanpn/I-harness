@@ -1468,6 +1468,33 @@ describe("createSessionAssembly — the session's budget reaches its children (M
     }
   }, 30_000)
 
+  // The WINDOW half, observed through the clamp it feeds: `LLMRequest` has no
+  // window field, and with a window wide enough the clamp returns the cap
+  // verbatim (llm-seam's clampOutputCap: no window ⇒ untouched; room to spare ⇒
+  // untouched). A cap LARGER than the window is the one shape that cannot pass
+  // through unclamped: the value below can only have come out of the session's
+  // window reaching this child, so it moves the moment the window hop breaks.
+  it("a spawned child's cap is CLAMPED against the session's window", async () => {
+    const { model, childRequests } = spawnRecordingModel()
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      sessionId: "s1",
+      approveAll: true,
+      model,
+      contextWindow: 8_000,
+      maxOutputTokens: 100_000,
+    })
+    try {
+      await assembly.agent.run("spawn a helper")
+      await waitFor(() => childRequests.length > 0)
+      // `toBeLessThan` also reddens on `undefined`: both a missing cap and a
+      // missing window leave 100_000 (or nothing) here, never a smaller number.
+      expect(childRequests[0]!.maxOutputTokens).toBeLessThan(100_000)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
   /** The parent turn both guardian cases share: step 1 is the outside-workspace
    * `write` — the approval classifier's `ask` branch, which is what consults
    * the guardian. Step 2 exists only so a broken guardian wiring still has a
