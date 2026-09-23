@@ -224,10 +224,13 @@ export interface HeadlessResult {
    * failure (M3's diagnose-ability). Absent when the caller supplied no id and
    * none was generated. */
   sessionId?: string
-  /** M72 Ⅱ: the provider stopped at the output cap on this run's last turn, so
-   * `finalText` is an INCOMPLETE answer. Present only as `true` — a clean run
-   * carries no field at all (a caller must be able to tell "ended on its own"
-   * from "we never looked"). Read from the session log's `step/end`. */
+  /** M72 Ⅱ: a `step/end` in this run's LAST turn is truncated, i.e. the
+   * provider stopped at the output cap. Exactly the predicate — NOT a claim
+   * that `finalText` is the incomplete thing: the truncated step is not
+   * necessarily the turn's last one, so a complete final answer can coexist
+   * with this bit. Present only as `true` — a clean run carries no field at
+   * all (a caller must be able to tell "ended on its own" from "we never
+   * looked"). Read from the session log's `step/end`. */
   truncated?: boolean
 }
 
