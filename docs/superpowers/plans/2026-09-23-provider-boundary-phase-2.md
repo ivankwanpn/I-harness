@@ -984,7 +984,7 @@ Run: `pnpm --filter @i-harness/core-agent test`、`--filter @i-harness/telemetry
 並在 `:828` 的 stderr 摘要旁（**不在 stdout**——stdout 只放 telemetry 的 NDJSON 與最終文字）印一行：
 
 ```ts
-    if (truncated) console.error("[truncated] the provider stopped at the output cap; the answer is incomplete")
+    if (truncated) console.error("[truncated] the provider stopped at the output cap; a step in this turn is incomplete")
 ```
 
 `HeadlessResult` 回傳時帶上 `...(truncated ? { truncated: true } : {})`；`apps/cli/src/index.ts:487` 之後同樣把該行印到 stderr（若該處已有 run 結果的處理點）。
