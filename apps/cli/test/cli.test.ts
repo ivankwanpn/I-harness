@@ -500,7 +500,11 @@ describe("CLI main + entry guard", () => {
     const res = await runNode(["--import", "tsx", entry, "run", "hello"], repoRoot)
     expect(res.status, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`).toBe(0)
     expect(res.stdout).toContain("ok")
-  })
+    // M72 (load flake): this spawns `node --import tsx` for real; measured at
+    // 5031ms under the full gate's parallel load (see the retry test below for
+    // the startup measurements), i.e. past vitest's 5s default. Same budget the
+    // file's other process-spawning tests already declare.
+  }, 30_000)
 
   it("parseModel applies per-provider defaultModel for bare provider specs", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
@@ -1380,16 +1384,21 @@ describe("headless CLI M12 retry + retention", () => {
     // Deterministic: the command touches a guard file on the FIRST run and sleeps
     // (so it times out), then runs fast on later invocations.
     const flag = join(dir, "attempt")
-    const command = `node -e "const fs=require('fs');const f='${flag.replace(/\\/g, "/")}';if(!fs.existsSync(f)){fs.writeFileSync(f,'1');setTimeout(()=>{},5000)}"`
     const shell = resolveShell().name
-    const shellTimeoutMs = shell === "pwsh" ? 1500 : 300
+    // M72 (load flake): `shellTimeoutMs` is BOTH the deadline for the sleeping
+    // first attempt AND the budget the successful retry must fit inside. The old
+    // 1500/300 was sized on an idle machine; measured under the full gate's
+    // 67-package parallel load, process startup alone costs bash 103-292ms,
+    // pwsh 775-1025ms, and pwsh+node up to 2981ms — so the retry kept timing out
+    // and the assertion below read "TOOL_TIMEOUT". The budgets now carry that
+    // margin (bash ~10x, pwsh ~2.7x on the worst sample); the sleeping first
+    // attempt is derived from them, so it can never be shorter than the deadline.
+    const shellTimeoutMs = shell === "pwsh" ? 8000 : 3000
+    const command = `node -e "const fs=require('fs');const f='${flag.replace(/\\/g, "/")}';if(!fs.existsSync(f)){fs.writeFileSync(f,'1');setTimeout(()=>{},${shellTimeoutMs + 4000})}"`
     const retry: RetryConfig = { maxRetries: 1, initialDelayMs: 1, maxDelayMs: 5 }
     const result = await runHeadless("retry", {
       workspace: dir,
       approveAll: true,
-      // PowerShell adds another process before node and routinely needs more
-      // than 300ms to start on Windows. The first attempt still sleeps for 5s,
-      // while the retry has enough budget to prove that it exits normally.
       shellTimeoutMs,
       // Same reliance as the M10a case above: an INERT pair, so the first
       // attempt really does time out (a promotion would hand back a job id and
@@ -1413,7 +1422,9 @@ describe("headless CLI M12 retry + retention", () => {
     expect(existsSync(flag)).toBe(true)
     expect(resultEvent!.output.code).toBeUndefined()
     expect(resultEvent!.output.stdout ?? "").not.toContain("timed out")
-  })
+    // M72 (load flake): the run now spends `shellTimeoutMs` on the first attempt
+    // by design, so vitest's 5s default is not a budget this test can fit in.
+  }, 60_000)
 
   it("shellRetention caps verbose shell output with the truncated marker", async () => {
     const retention: ShellRetentionOptions = { maxBytes: 100 }
