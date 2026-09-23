@@ -451,9 +451,39 @@ export function deriveProjectionRewrite(session: Session): ProjectionRewrite {
  * Correct only when the cut is block-aligned — a boundary inside a tool block
  * would project a different message list here than the main path sends. The
  * compaction module guarantees that by walking its boundary off tool events.
+ *
+ * M78 — the `compaction/prune` exception, stated here so it is not read as a
+ * bug: a prune marker is CONTENT-ADDRESSED, not time-scoped.
+ * `derivePruneSubstitutes` keys its map by tool call id, and the substitute is a
+ * property of that OLD TOOL OUTPUT — the same bytes at whatever moment the fold
+ * is taken — so applying the map to ANY fold is exactly right. That is what
+ * keeps this function's output a leading slice of `deriveMessages`: with the
+ * marker invisible, the prefix showed the RAW output where the main fold shows
+ * the substitute, and the divergence sat at exactly the shared position the
+ * region replay exists to preserve (measured, M78; pinned by "the request stays
+ * a LEADING SLICE of the main fold across a prune marker").
+ *
+ * WHERE the marker sits past the cut is structural, not incidental: a pass plans
+ * the prune BEFORE it folds, appends its marker to the END of the log (`append`
+ * hands out `events.length` as the seq), and then cuts the fold at the region's
+ * last shadowed seq — so a plain `seq <= maxSeq` filter hides exactly the
+ * directive the fold needs. No placement of the append can avoid it (measured,
+ * M78: lastShadowed 104/109 vs markerSeq 110 on the compaction fixture; no
+ * mutation of the append site fixed it).
+ *
+ * The exception is deliberately NARROW: `compaction/summary` and
+ * `compaction/reset` markers ARE time-scoped — their `shadowedSeqs` /
+ * `removedSeqs` name a region of the log — so they keep obeying the seq filter;
+ * a fold as of an earlier prefix must not be rewritten by a LATER compaction's
+ * decision.
  */
 export function deriveMessagesUpTo(session: Session, maxSeq: number): LLMMessage[] {
-  return deriveMessages({ ...session, events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq) })
+  return deriveMessages({
+    ...session,
+    // M78: the content-addressed directive is kept wherever its marker sits (see
+    // the docstring) — not a general "markers ignore maxSeq" rule.
+    events: session.events.filter((e) => e.seq === undefined || e.seq <= maxSeq || e.type === "compaction/prune"),
+  })
 }
 
 export function deriveMessages(session: Session): LLMMessage[] {
