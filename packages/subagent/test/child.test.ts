@@ -433,13 +433,14 @@ describe("resolveRoleTools", () => {
   })
 })
 
-/** Two describes share these: the effort test (below) and the budget test
- * (M73). The body is UNCHANGED from where it was declared inside the effort
- * describe — a move, not a second copy. (`recordingModel` at :330 is an
- * earlier twin with a different shape; this task does not touch it.) */
 /** A ModelClient that RECORDS every LLMRequest it is asked to serve; the
  * mock client does not, and the request is the only surface where "the child
- * runs at effort X" is a fact rather than a claim. */
+ * runs at effort X" is a fact rather than a claim.
+ *
+ * Two describes share it: the effort test (below) and the budget test (M73).
+ * The body is UNCHANGED from where it was declared inside the effort describe —
+ * a move, not a second copy. (`recordingModel` at :330 is an earlier twin with a
+ * different shape; this task does not touch it.) */
 function recordingClient(text: string): ModelClient & { requests: LLMRequest[] } {
   const requests: LLMRequest[] = []
   return {
@@ -786,9 +787,11 @@ describe("the child's request carries the resolved budget", () => {
 
     // 缺席即缺席 — a spawned default here would be a number nobody chose.
     // This assertion's kill site is NOT in child.ts: the request key is gated by
-    // core-agent's own `deps.maxOutputTokens !== undefined` spread
-    // (packages/core-agent/src/index.ts:304-312), so an unconditional write at
-    // the spawn lands as `undefined` and that guard drops it — redden it THERE.
+    // core-agent's own spread in `createAgent`'s request assembly — the
+    // `...(deps.maxOutputTokens !== undefined ? … : {})` on the per-step
+    // `LLMRequest` (cited by symbol: the line numbers this used to carry rotted
+    // in the same branch) — so an unconditional write at the spawn lands as
+    // `undefined` and that guard drops it. Redden it THERE.
     expect("maxOutputTokens" in parentClient.requests[0]!).toBe(false)
   }, 10_000)
 
@@ -869,5 +872,39 @@ describe("the child's request carries the resolved budget", () => {
     // declared arm falls back to `opts.contextWindow` (the value would land in
     // the 1k window's room instead).
     expect(roleClient.requests[0]!.maxOutputTokens).toBe(50_000)
+  }, 10_000)
+
+  // M73 (fix wave, M1). The window is what makes the budget ladder run at all —
+  // and the ladder is where this milestone's most consequential side effect
+  // lives. A spawn hands core-agent NO `compact` deps, so no compactor is built,
+  // and without one the ladder's layers 1 and 2 are unreachable (`if (compactor)`
+  // / `if (compactor && resetAllowed)` in enforceBudget): past
+  // `contextWindow * reserveRatio` (0.9) the child has exactly ONE layer left —
+  // the fail-closed `prompt_too_long` throw. Before this milestone the windowless
+  // child sent the over-window request and let the provider answer it. The trade
+  // is deliberate and this is the case that pins it.
+  it("a child past its window FAILS CLOSED — no compactor, and no over-window request", async () => {
+    const f = spawnFixture()
+    const parentClient = recordingClient("parent")
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: parentClient, resolveModel: noRoleModel,
+      contextWindow: 10, // the child's own prompt + tool schemas alone exceed 0.9 × 10
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    // The parent's surfaces are where the failure is read: the initial run's
+    // rejection moves the job to `error` with the cause on its output (the
+    // `maxTurns exceeded`-style precedent), and the table entry keeps the child
+    // alive for followups carrying the same message.
+    for (let i = 0; i < 200 && f.jobs.read(jobId).status !== "error"; i++) {
+      await new Promise((r) => setTimeout(r, 20))
+    }
+    expect(f.jobs.read(jobId).status).toBe("error")
+    expect(f.jobs.read(jobId).output).toMatch(/prompt_too_long/)
+    // 而不是送出超窗請求 — the ladder runs at the step boundary BEFORE the model
+    // is called, so not one request left the process.
+    expect(parentClient.requests).toHaveLength(0)
   }, 10_000)
 })
