@@ -54,7 +54,7 @@ describe("M76: the walk-off rule is exact, not a heuristic", () => {
     append(s, { type: "assistant/message", text: "a2" })
     append(s, { type: "turn/end" })
     // In-contract indices: production passes `0 <= index <= n - 1`
-    // (`index.ts:352` passes n - retainLast with retainLast >= 1; `region.ts:131`
+    // (`index.ts:352` passes n - retainLast with retainLast >= 1; `region.ts:150`
     // passes i <= n - 1), so these exercise the RULE, not the out-of-contract
     // clamp. Both cuts are safe and must stay where they were asked to be: a cut
     // keeps no `tool/result`, so the rule has nothing to relate the dangling call
@@ -64,5 +64,20 @@ describe("M76: the walk-off rule is exact, not a heuristic", () => {
     // back to the call's own index (2 here), which is what this case kills.
     expect(walkOffToolEvents(s, s.events.length - 1)).toBe(s.events.length - 1)
     expect(walkOffToolEvents(s, 5)).toBe(5)
+  })
+
+  // M76 (final review): MAXIMALITY. Case 1 pins "no accepted cut orphans" and
+  // case 2 pins "an unresolved call does not collapse the walk", but a rule that
+  // consistently OVER-retains — e.g. one that always steps back to the enclosing
+  // `step/start` — satisfies both: it keeps every call (so nothing is orphaned)
+  // and it never collapses to 0. Only an exact expected index catches that, so
+  // this case pins the rule's actual landing: the cut is asked for ON the
+  // `tool/result` at index 5, whose call sits at 3 with M70's `tool/dispatch` at
+  // 4 BETWEEN them, and the largest safe cut at or below the request is the
+  // call's own index — 3, not the `step/start` at 2 and not the `turn/start`
+  // at 0, either of which would be "safe" and would lose a step of context.
+  it("M76: the walk lands EXACTLY on the call's index, not merely somewhere safe", () => {
+    const s = dispatchSession(6)
+    expect(walkOffToolEvents(s, 5)).toBe(3)
   })
 })
