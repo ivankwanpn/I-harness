@@ -2,7 +2,7 @@
 
 **一句話**：M74 量到的那個 regime——**surface 超過窗口時「壓縮」其實是 reset**（摘要器自己的請求也超窗 ⇒ provider 拒收 ⇒ fail-soft ⇒ 階梯第 2 層把繼承來的 context 丟掉）——本階段給它一條路：**單一請求放不下時，把區域切成幾塊、串連地摘要**，於是摘要真的發生。
 
-- **分支**：`m75`（`2fb2cc17` → `f79132bd`，**7 個 commit**；合併尚未進行）
+- **分支**：`m75`（`2fb2cc17` → `b0de13c0`，**9 個 commit**；`git rev-list --count 2fb2cc17..HEAD` 量得。合併尚未進行）
 - **spec（權威）**：`docs/superpowers/specs/2026-09-23-over-window-summarization-design.md`（`0438b933`；執行期新增 §2.1 的兩半釘法、§4 兩條、§5 兩條）
 - **計畫**：`docs/superpowers/plans/2026-09-23-over-window-summarization.md`（同一 commit）
 - **執行**：subagent-driven development——4 個任務 → 逐任務複審 → **Task 1 三次 fix round** → 終審（opus，7 commits）→ **單一 fix wave** → 限定複審 → 控制器寫紀錄
