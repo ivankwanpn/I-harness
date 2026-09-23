@@ -222,12 +222,20 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           // error shape, and the event is terminal — no `end`, no bit, and the
           // consumer learns "the provider said the window is too small"
           // instead of seeing a silent empty success.
+          // M77 (fix wave): mapped BEFORE the context arm's early return. That
+          // arm used to return first, and this same `message_delta` is the one
+          // that carries the round-trip's output count — so the number was
+          // dropped for a round-trip the provider had already priced. The
+          // retry wrapper hides it (a held-aside `usage` is discarded when the
+          // attempt settles on an error); an unwrapped client saw nil. The
+          // error is still terminal, and the report rides AHEAD of it: `emit`
+          // stops at the first error event, so anything after it is never seen.
+          const usage = mapUsage(event.usage)
           if (stop === "model_context_window_exceeded") {
             const error = new Error(`stop_reason: ${stop}`) as Error & { code?: RetryableErrorCode }
             error.code = "CONTEXT_WINDOW_EXCEEDED"
-            return [{ type: "error", error }]
+            return usage ? [{ type: "usage", usage }, { type: "error", error }] : [{ type: "error", error }]
           }
-          const usage = mapUsage(event.usage)
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "content_block_start") {
