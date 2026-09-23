@@ -21,8 +21,9 @@ export interface MockStep {
    * `truncated` above — present ONLY as `true`, unset → a clean ending,
    * byte-identical to before this field existed — and the two bits are
    * INDEPENDENT: a step may be capped AND refused. The mock makes NO wire
-   * judgement; each adapter owns its own refusal literal (`content_filter` /
-   * `SAFETY` / `refusal` / `guardrail_intervened`). It exists because a
+   * judgement; the five adapters own their own refusal literals (openai and
+   * openai-compatible `content_filter`, gemini `SAFETY` / `RECITATION`,
+   * anthropic `refusal`, bedrock `guardrail_intervened`). It exists because a
    * `MockStep` is the only way a consumer's refusal path can be driven
    * end-to-end without a provider. */
   refused?: true
