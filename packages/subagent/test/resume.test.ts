@@ -20,6 +20,7 @@ import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable, type ChildAgentEntry } from "../src/agent-table.ts"
 import { createSubagentTools, driveFollowups, ensureResidentAgent, sweepPendingInbox, type SubagentToolDeps } from "../src/tools.ts"
+import { composeSubagentPrompt } from "../src/child.ts"
 import { registerSubagent } from "../src/index.ts"
 import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
@@ -199,6 +200,69 @@ describe("ensureResidentAgent", () => {
 
     expect(requests).toHaveLength(1)
     expect(requests[0]!.reasoningEffort).toBe("high")
+  }, 10_000)
+
+  // M73: the same two numbers spawnChild carries, on the rebuild path — a
+  // budget that appears only on the first spawn would vanish on every resume.
+  it("M73: the rebuilt child's requests carry the resolved window and cap", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "big" }),
+      resolveModel: async () => ({
+        status: "ready" as const,
+        binding: { client: roleClient, contextWindow: 200_000, maxOutputTokens: 4_242 },
+      }),
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    // 200k window vs a small request ⇒ the clamp is a no-op and the resolved
+    // value lands verbatim.
+    expect(requests[0]!.maxOutputTokens).toBe(4_242)
+  }, 10_000)
+
+  // M73 defect #2 at the same site: the rebuild passed `role.systemPrompt` where
+  // spawn passes the COMPOSED prompt, so a resumed child silently lost
+  // SUBAGENT_PROMPT_CONTRACT. The request is the surface where that is a fact.
+  it("M73: the rebuilt child's system prompt is the COMPOSED one", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    // No declared selection ⇒ the inherit arm, which runs on `parentModel` —
+    // the recording client stands in for it.
+    const rebuilt: SubagentToolDeps = { ...deps, parentModel: roleClient }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    const role = deps.roles.get("general")!
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.systemPrompt).toBe(composeSubagentPrompt(role.systemPrompt))
+    // …and the contract is what makes the difference: the composed prompt is
+    // NOT the bare role prompt, so this can never pass by both being equal.
+    expect(requests[0]!.systemPrompt).not.toBe(role.systemPrompt)
   }, 10_000)
 
   it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
