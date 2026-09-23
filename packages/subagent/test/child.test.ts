@@ -433,6 +433,32 @@ describe("resolveRoleTools", () => {
   })
 })
 
+/** Two describes share these: the effort test (below) and the budget test
+ * (M73). The body is UNCHANGED from where it was declared inside the effort
+ * describe — a move, not a second copy. (`recordingModel` at :330 is an
+ * earlier twin with a different shape; this task does not touch it.) */
+/** A ModelClient that RECORDS every LLMRequest it is asked to serve; the
+ * mock client does not, and the request is the only surface where "the child
+ * runs at effort X" is a fact rather than a claim. */
+function recordingClient(text: string): ModelClient & { requests: LLMRequest[] } {
+  const requests: LLMRequest[] = []
+  return {
+    requests,
+    async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      requests.push(request)
+      yield { type: "text/chunk", text }
+      yield { type: "end" }
+    },
+  }
+}
+
+async function settled(jobs: ReturnType<typeof createJobRegistry>, jobId: string): Promise<void> {
+  for (let i = 0; i < 200 && jobs.read(jobId).status !== "completed"; i++) {
+    await new Promise((r) => setTimeout(r, 20))
+  }
+  expect(jobs.read(jobId).status).toBe("completed")
+}
+
 /** Module scope (not a describe-local): the role-model cases and the
  * settings/toggle cases below spawn through the SAME fixture. */
 function spawnFixture() {
@@ -645,28 +671,6 @@ describe("the role's model: settings beats the role, and the toggle gates both",
 // the defect class this section exists to end, so the child's own LLMRequest is
 // what gets asserted, not the resolver's return value.
 describe("the role's resolved reasoningEffort reaches the child", () => {
-  /** A ModelClient that RECORDS every LLMRequest it is asked to serve; the
-   * mock client does not, and the request is the only surface where "the child
-   * runs at effort X" is a fact rather than a claim. */
-  function recordingClient(text: string): ModelClient & { requests: LLMRequest[] } {
-    const requests: LLMRequest[] = []
-    return {
-      requests,
-      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
-        requests.push(request)
-        yield { type: "text/chunk", text }
-        yield { type: "end" }
-      },
-    }
-  }
-
-  async function settled(jobs: ReturnType<typeof createJobRegistry>, jobId: string): Promise<void> {
-    for (let i = 0; i < 200 && jobs.read(jobId).status !== "completed"; i++) {
-      await new Promise((r) => setTimeout(r, 20))
-    }
-    expect(jobs.read(jobId).status).toBe("completed")
-  }
-
   it("copies a resolved effort onto the child's request", async () => {
     const f = spawnFixture()
     const roleClient = recordingClient("from the role's model")
@@ -709,5 +713,78 @@ describe("the role's resolved reasoningEffort reaches the child", () => {
 
     expect(roleClient.requests).toHaveLength(1)
     expect(roleClient.requests[0]).not.toHaveProperty("reasoningEffort")
+  }, 10_000)
+})
+
+// ── the child's request carries the SESSION's budget, not just its model ─────
+// provider-runtime's binding already carries `contextWindow`/`maxOutputTokens`;
+// the spawn kept the client and the effort and dropped those two, so every child
+// ran unbounded — a request with no cap is one nothing can clamp (on anthropic
+// the adapter's own 128k fallback, unclamped, is what reaches the wire) and a
+// request with no window is one the budget ladder cannot even measure. The
+// REQUEST is the surface where "the child carries its budget" is a fact.
+describe("the child's request carries the resolved budget", () => {
+  it("a declared role's binding hands its window and cap to the child", async () => {
+    const f = spawnFixture()
+    const roleClient = recordingClient("from the role's model")
+    const resolveModel = async () => ({
+      status: "ready" as const,
+      binding: {
+        client: roleClient, providerId: "gw", modelId: "big", label: "role",
+        contextWindow: 9_000, maxOutputTokens: 50_000,
+      },
+    })
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: { ...f.roles.get("general")!, model: { provider: "gw", model: "big" } },
+      parentModel: f.parentModel, resolveModel,
+      allowSubagentModelSelection: true,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    const req = roleClient.requests[0]!
+    // 9k window, 50k cap ⇒ the clamp MUST have shrunk it. This is the assertion
+    // that fails if the WINDOW was dropped: clampOutputCap returns the value
+    // untouched when the window is undefined (llm-seam), so a cap-only fix
+    // would sail through an equality assertion on 50_000 and leave the 400
+    // this unit exists to close.
+    expect(req.maxOutputTokens).toBeGreaterThan(0)
+    expect(req.maxOutputTokens!).toBeLessThan(50_000)
+  }, 10_000)
+
+  it("an inheriting child gets the SESSION's numbers", async () => {
+    const f = spawnFixture()
+    const parentClient = recordingClient("parent")
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,        // no role model → the inherit arm
+      parentModel: parentClient, resolveModel: noRoleModel,
+      contextWindow: 200_000, maxOutputTokens: 4_242,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    // 200k window vs a small request ⇒ the clamp is a no-op and the value is
+    // the session's own, verbatim.
+    expect(parentClient.requests[0]!.maxOutputTokens).toBe(4_242)
+  }, 10_000)
+
+  it("neither source has one → the child's request carries NEITHER key", async () => {
+    const f = spawnFixture()
+    const parentClient = recordingClient("parent")
+    const { jobId } = await spawnChild({
+      taskName: "helper", message: "do the thing", parentPath: "root",
+      parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
+      role: f.roles.get("general")!,
+      parentModel: parentClient, resolveModel: noRoleModel,
+      jobs: f.jobs, table: f.table, agents: f.agents,
+    })
+    await settled(f.jobs, jobId)
+
+    // 缺席即缺席 — a spawned default here would be a number nobody chose.
+    expect("maxOutputTokens" in parentClient.requests[0]!).toBe(false)
   }, 10_000)
 })
