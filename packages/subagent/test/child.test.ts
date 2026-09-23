@@ -449,7 +449,7 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
       // permissive mock's 10-char reply is under the summariser's 500-char
       // `minSummaryChars` floor (`compaction/src/config.ts:118`), so the
       // summary chain fails; the ladder's reset keeps the last 20 events
-      // (`core-agent/src/index.ts:206`) and this child's log is 7 — the four
+      // (`core-agent/src/index.ts:207`) and this child's log is 7 — the four
       // seed events plus its own turn/start, user/message and step/start, with
       // nothing appended after the ladder throws — so `resetWindowOnce` has
       // nothing removable: it returns without even appending its marker, and
