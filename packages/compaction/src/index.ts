@@ -281,14 +281,15 @@ export function createCompactionEngine(deps: {
       // AUTO path ONLY. The in-tree path that actually retries a failed
       // summarizer is UNGATED instead: core-agent's `enforceBudget` layer 1 calls
       // `compact()` at every step boundary while the surface is over budget, and
-      // `compact()` consults no gate — so each such retry re-appends. The cost a
-      // dedupe would buy down: every duplicate re-serialises the whole carve
-      // (4096 head + 1024 tail chars — measured on the big-output fixture in
-      // test/prune.test.ts, one record's marker JSON is 5 180 bytes), so a
-      // summarizer that keeps failing under budget pressure grows the durable log
-      // until the ladder's NEXT layer (the reset, or the fail-closed throw) ends
-      // the cycle — not the breaker. Deliberately left alone; a dedupe would be a
-      // second place that decides what a prune means.
+      // `compact()` consults no gate — so each such retry re-plans the same
+      // records and appends again (this path's only early exit is an empty
+      // region, above). The cost a dedupe would buy down: every duplicate
+      // re-serialises the whole carve (4096 head + 1024 tail chars — measured on
+      // the big-output fixture in test/prune.test.ts, one record's marker JSON is
+      // 5 180 bytes), so a summarizer that keeps failing under budget pressure
+      // grows the durable log until the ladder's NEXT layer (the reset, or the
+      // fail-closed throw) ends the cycle — not the breaker. Deliberately left
+      // alone; a dedupe would be a second place that decides what a prune means.
       emit("failure", { attempts: attemptsTracker.count })
       return { compacted: false, shadowedSeqs: [], reason: "summarizer-failed" }
     }
