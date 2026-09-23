@@ -67,6 +67,12 @@ export function createCompactionEngine(deps: {
    * price for it. Absent → the legacy text form, unchanged: without the shape
    * the bytes cannot match, so there is no reuse to lose. */
   requestShape?: () => { systemPrompt: string; tools: ToolSchema[] }
+  /** M73: the model's resolved output cap, handed down from the layer that
+   * resolved it (core-agent's AgentDeps). Absent → the summarizer's request
+   * carries no cap (pre-M73 behavior). NOT `config.maxTokens`, which stays the
+   * post-hoc character slice of the accepted summary — see summarizeWithModel's
+   * `limits` note. */
+  maxOutputTokens?: number
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
@@ -156,7 +162,14 @@ export function createCompactionEngine(deps: {
     // the analytics event even when the pass throws (degenerate retry).
     const attemptsTracker = { count: 0 }
     try {
-      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix)
+      // M73: the 9th argument is the request's OWN budget — both halves spread
+      // conditionally, so "absent" stays absent at every hop (a default here
+      // would be a number nobody chose). `config.maxTokens` keeps its position
+      // as the 3rd argument: it is still only the post-hoc character slice.
+      const result = await summarizeWithModel(model, replayText, config.maxTokens, previousSummary, instructions, config.minSummaryChars, attemptsTracker, prefix, {
+        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+        ...(contextWindow !== undefined ? { contextWindow } : {}),
+      })
       summary = result.text
       attempts = attemptsTracker.count
     } catch (err) {
