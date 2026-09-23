@@ -339,6 +339,45 @@ describe("ensureResidentAgent", () => {
     expect(req.maxOutputTokens!).toBeLessThan(4_242)
   }, 10_000)
 
+  // M73, the declared arm's window precedence in the OTHER direction: a binding
+  // that carries a cap and NO window of its own. `clampOutputCap` returns the
+  // value untouched when the window is undefined (llm-seam), so the binding's
+  // 50_000 must reach the request VERBATIM — while a fall-back to the session's
+  // 1_000 would clamp it into the 1k window's room instead. The session's window
+  // belongs to the PARENT's model; putting another model's cap under it is the
+  // hazard `?? deps.contextWindow` introduces. The spawn twin is `a DECLARED
+  // model with no window of its own is not measured against the session's`
+  // (child.test.ts).
+  it("M73: a rebuilt DECLARED model with no window of its own is not measured against the session's", async () => {
+    const { deps, table } = setup()
+    const entry = restoredEntry("child-1", "general")
+    append(entry.session, { type: "subagent/inbox", messageId: "in-1", message: "wake after resume" })
+    table.add(entry.path, entry)
+    const requests: LLMRequest[] = []
+    const roleClient: ModelClient = {
+      async *stream(request) {
+        requests.push(request)
+        yield { type: "text/chunk", text: "rebuilt" }
+        yield { type: "end" }
+      },
+    }
+    const rebuilt: SubagentToolDeps = {
+      ...deps,
+      allowSubagentModelSelection: true,
+      roleSelectionFor: () => ({ provider: "gw", model: "big" }),
+      contextWindow: 1_000,   // the SESSION's window — a different model's
+      resolveModel: async () => ({
+        status: "ready" as const,
+        binding: { client: roleClient, maxOutputTokens: 50_000 },
+      }),
+    }
+
+    await driveFollowups({ ...rebuilt, rebuild: (e) => ensureResidentAgent(rebuilt, e) }, entry, "child-1")
+
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.maxOutputTokens).toBe(50_000)
+  }, 10_000)
+
   it("a rebuild that no longer resolves anything CLEARS the label (the child inherits again)", async () => {
     const { deps, table } = setup()
     const entry = restoredEntry("child-1", "general")
