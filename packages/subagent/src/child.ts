@@ -353,22 +353,42 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // would close the feature's primary use case, a child spawned FROM a large
   // session. What the reader cannot see today is the WASTE and the RISK: the
   // child's first request cannot be built without a summarising pass, and an
-  // inherited context that is one indivisible block fails soft for that turn
-  // (design §4.4's residual, whose real fix is a cap at the block's SOURCE).
+  // inherited context that is one indivisible block makes that pass fail soft —
+  // the ladder's reset is what rescues the turn, by DROPPING the context (the
+  // M74 strict case's measured outcome, and design §4.4's residual, whose real
+  // fix is a cap at the block's SOURCE).
   //
   // The condition is measured, not guessed: `childSession` holds nothing but
   // the seed here (the agent does not exist yet), so this is the seed's own
   // projection priced with `estimateContent(deriveMessages(...))` — the meter's
-  // own `activeTokens` expression, the same price the child's engine takes of
-  // its surface, against the window the child will be measured with. No window
-  // → nothing to compare → no line (absent stays absent, the M73 rule above).
+  // own `activeTokens` expression, the one the engine prices with too. No
+  // window → nothing to compare → no line (absent stays absent, the M73 rule
+  // above).
+  //
+  // The BOUNDARY is deliberately NOT the engine's, and the difference is the
+  // point. The child's compactor fires at the pressure gate
+  // `activeTokens + overheadTokens >= window × thresholdRatio` — 0.8 by default
+  // (`compaction/src/index.ts:230`, `compaction/src/config.ts:106`; the child
+  // never overrides it — no `thresholdRatio` is passed anywhere in this
+  // package) — and the hard budget is `window × reserveRatio` = 0.9
+  // (`token-meter/src/budget.ts:14`). This line compares the seed's own
+  // projection against the FULL window, so it is strictly NARROWER than either:
+  // the band `[0.8·window − overhead, window)` is silent here — a known,
+  // deliberate narrowing, not an oversight. That band is the healthy case: the
+  // summariser's single request still fits the window there (roughly
+  // `seed + directive + overhead < window`; the M75 case prices its own
+  // directive at 449 tokens), so one call settles it and no piece path is
+  // needed. What this line marks instead is the HARD bound — the seed ALONE
+  // crossing the window — which is where the piece path becomes necessary and
+  // where an indivisible seed ends in the reset (the M74 strict case's
+  // measured outcome).
   if (contextWindow !== undefined) {
     const seedTokens = estimateContent(deriveMessages(childSession))
     if (seedTokens >= contextWindow) {
       d.warn(
         `[subagent] the inherited seed prices at ${seedTokens} tokens against a ${contextWindow}-token window: ` +
           `the child summarises its inherited context in pieces before its first request, and if that context ` +
-          `is one indivisible block this turn fails soft`,
+          `is one indivisible block the summariser fails soft and the reset rescues the turn by dropping it`,
       )
     }
   }
