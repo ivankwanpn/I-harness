@@ -40,8 +40,9 @@ function isCompactionMarker(ev: SessionEvent): boolean {
  *
  * The condition asks the RESULT side, and that is load-bearing. A `tool/call`
  * that never receives a result (an aborted turn) IS on the projection: the
- * fold buffers it (`packages/core-session/src/index.ts:564`) and always flushes
- * the buffer (`:611`, plus the flush at the log's end, `:597`), so it surfaces
+ * fold buffers it (core-session's `deriveMessages`, the `tool/call` arm pushing
+ * into `pendingCalls`) and always flushes the buffer (`flushToolBlock`, from
+ * that fold's `step/end` arm and once more at the log's end), so it surfaces
  * as `assistant("", toolCalls)` carrying a `tool_use` no result answers —
  * pinned at `packages/core-session/test/session.test.ts:24`, and its mirror is
  * the M5/D2 contract's "dangling tool call"

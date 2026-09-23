@@ -55,8 +55,9 @@ function abortTailSession(): Session {
 }
 
 /** The M14 tool-result-images shape: a result carrying images projects a
- * synthetic `user` message INSIDE the tool block
- * (`core-session/src/index.ts:578-585`), so the fold reads
+ * synthetic `user` message INSIDE the tool block (core-session's
+ * `deriveMessages`, the `tool/result` arm's `Array.isArray(images)` branch), so
+ * the fold reads
  * `user, assistant(toolCalls[c1,c2]), tool(c1), user(synthetic), tool(c2)` and
  * the only user-message candidate sits with `c2` still open. */
 function imageResultSession(): Session {
