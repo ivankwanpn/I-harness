@@ -404,6 +404,7 @@ git commit -m "fix(subagent): a rebuilt child keeps its budget and its composed 
 
 **Files:**
 - Modify: `packages/session-executor/src/assembly.ts`（`RoleModelResolution` `:100-103`；`registerSubagent` `:1057-1083`；`registerGuardian` `:1113-1138`；`mountAgentTeams` `:1144`+）
+- Modify: **`packages/subagent/src/index.ts`**（`registerSubagent` 的 `subagentDeps` `:160-180`——**第四個 hop**：那兩個欄位經 `RoleModelHost` 進了 `RegisterSubagentOptions`，但這個 deps 物件沒有把它們往下傳，少了這一步 inherit 臂在 CLI 路上**什麼都收不到**。這一步是 T1 的複審發現的，原本的計畫漏了它。）
 - Modify: `packages/guard-approval/src/guardian/reviewer.ts`（`GuardianReviewDeps` `:24-`；`spawnChild` `:151-172`）
 - Modify: `packages/agent-team/src/scheduler.ts`（`TeamDeps` `:71-`；`spawnChild` `:196-216`）
 - Test: `packages/session-executor/test/assembly.test.ts`
@@ -498,6 +499,17 @@ Expected: 紅（`maxOutputTokens` 是 `undefined`）。
 
 3. **`registerGuardian`（`:1113-1138`）**——同樣兩個 spread。**但語意不同**：guardian 的 `parentModel` 是 `deps.model ?? deps.parentModel`（`reviewer.ts:149`），所以**設定了自己的模型時，session 的數字不是它的**——見下一步。
 4. **`mountAgentTeams`（`:1144`）**——同樣兩個 spread。
+
+`packages/subagent/src/index.ts`：
+
+4b. **`subagentDeps`（`:160-180`）**——兩個欄位要**再往下傳一層**（`RegisterSubagentOptions` → `SubagentToolDeps`），沿用同一個慣例：
+
+```ts
+    ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
+    ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+```
+
+少了這一步，`registerSubagent` 收回來的 `SubagentToolDeps` 沒有那兩個值 ⇒ 工具臂的 spawn 走 inherit 時**兩者皆無**（T1 的複審指名了這一跳）。
 
 `agent-team/src/scheduler.ts`：
 
