@@ -56,29 +56,29 @@
 
 ### 1.2 組裝點：誰掛了哪些工具（packages/session-executor/src/assembly.ts）
 
-唯一組裝實現 `createSessionAssembly`（assembly.ts:161-470）。順序與條件：
+唯一組裝實現 `createSessionAssembly`（assembly.ts:405）。順序與條件：
 
 | 階段 | 掛載 | 條件 | 出處 |
 |---|---|---|---|
-| 1 | terminal 六工具 + process 三工具 | 永遠 | :168 |
-| 2 | shell：bash/pwsh（timeout 預設 120_000、retention 預設 64_000 headTail、sandboxPolicy 透傳） | 永遠 | :169, :192-197 |
-| 3 | webfetch（+websearch 僅當 provider 已註冊） | 永遠 | :199 |
-| 4 | fs 五工具：read/write/edit/apply_patch/list_dir | 永遠 | :200 |
-| 5 | approval 三層 policy | 永遠 | :201 |
-| 6 | 輸出 spill 守衛（最外）/ retry / timeout / repeat 守衛 | spill/retry 條件、後兩者永遠 | :206-209 |
-| 7 | ask_user_input | 永遠（無 provider → NO_PROVIDER fail-closed） | :219 |
-| 8 | tool_search | 永遠 | :221 |
-| 9 | skill_search + skill_get | 永遠 | :222 |
-| 10 | glob + grep（均 deferred） | 永遠 | :227 |
-| 11 | session_search + lineage | 有 sessionQuery | :228-231 |
-| 12 | get_context_remaining | 有 contextWindow（fail-closed） | :250 |
-| 13 | MCP 工具（掛載期 sync） | 有 mcp 配置 | :282-284 |
-| 14 | LSP：lsp + lsp_diagnostics（每 server 一對） | 有 lsp 配置 | :298-300 |
-| 15 | workflow_run + workflow_list | 永遠 | :301 |
-| 16 | subagent 13 工具 | 永遠 | :303-321 |
-| 17 | guardian 審查子代理（自身為 agent 而非工具） | 有 guardian 配置 | :322-345 |
-| 18 | agent-team 10 工具（替換同名 subagent 工具） | 有 team 配置 | :349-368 |
-| 19 | exit_plan_mode | planMode | :414 |
+| 1 | terminal 六工具 + process 三工具 | 永遠 | `registerTerminal`（:610） |
+| 2 | shell：bash/pwsh（timeout 預設 120_000、retention 預設 64_000 headTail、sandboxPolicy 透傳） | 永遠 | `registerShell`（:627-637） |
+| 3 | webfetch（+websearch 僅當 provider 已註冊） | 永遠 | `registerWeb`（:639） |
+| 4 | fs 五工具：read/write/edit/apply_patch/list_dir | 永遠 | `createFsTools`（:757） |
+| 5 | approval 三層 policy | 永遠 | `createApprovalPolicy`（:758） |
+| 6 | 輸出 spill 守衛（最外）/ retry / timeout / repeat 守衛 | spill/retry 條件、後兩者永遠 | `createOutputSpillGuard`／`createRetryGuard`／`createTimeoutGuard`／`createRepeatToolGuard`（:763-766） |
+| 7 | ask_user_input | 永遠（無 provider → NO_PROVIDER fail-closed） | `registerAskUserInput`（:776） |
+| 8 | tool_search | 永遠 | `registerToolSearch`（:778） |
+| 9 | skill_search + skill_get | 永遠 | `registerSkills`（:779） |
+| 10 | glob + grep（均 deferred） | 永遠 | `createFsSearchTools`（:784） |
+| 11 | session_search + lineage | 有 sessionQuery | `createSessionQueryTools`（:786） |
+| 12 | get_context_remaining | 有 contextWindow（fail-closed） | `registerContextRemaining`（:828） |
+| 13 | MCP 工具（掛載期 sync） | 有 mcp 配置 | `mountMcpClient`（:999） |
+| 14 | LSP：lsp + lsp_diagnostics（每 server 一對） | 有 lsp 配置 | `mountLspClient`（:1048） |
+| 15 | workflow_run + workflow_list | 永遠 | `registerWorkflow`（:1050） |
+| 16 | subagent 13 工具 | 永遠 | `registerSubagent`（:1060） |
+| 17 | guardian 審查子代理（自身為 agent 而非工具） | 有 guardian 配置 | `registerGuardian`（:1125） |
+| 18 | agent-team 10 工具（替換同名 subagent 工具） | 有 team 配置 | `mountAgentTeams`（:1164） |
+| 19 | exit_plan_mode | planMode | `ensurePlanModeTool`（:1310） |
 
 **▶ M80 更正（原句量到為假）**：`todo_write`（packages/todo）與 `read_image`（packages/attachment；「read-image 系」這串出自 `docs/roadmap/2026-08-31-roadmap-B-tools.md:7`——概覽 `docs/CAPABILITIES.md` 對 `read-image` 是 0 命中）**均已掛載**——`session-executor/src/assembly.ts:833`（`createTodoTool`）／`:834`（`createReadImageTool`），M40 落地，imports 於同檔 `:21`／`:22`。本行原文斷言兩者都沒有掛載點（且稱「整份 assembly 沒有 createTodoTool / 任何 image 讀取工具」）——那是**量到為假**的宣稱。事件投影仍在（`deriveTodoList` 取最後一筆 `todo/write`，`packages/todo/src/index.ts:67`），但**它沒有生產消費者**——`git grep deriveTodoList -- 'apps/**' 'packages/**'` 在今天與 M65 前（`4ea5b5d^`）都只回該包與它的測試。原文「TUI todo 面板讀的是事件投影」不假，可是面板讀的**不是它**：TUI 自己把 `todo/write` 映成 todo 列（`packages/tui/src/backend/embedded.ts:274` → `views/todo-pane.ts`，隨該包於 M65 刪除）。現行 CLI 組合的 agent **可以**呼叫 `todo_write`。見 §11。
 
@@ -203,7 +203,7 @@
 - blocked/direct 政策：`config.blockedTools` 根本不註冊；`config.directTools` 非空時**其餘全部 deferred**（bridge.ts:51-53, 86-87）；未知清單項目僅 warn 不 fail-close（:77-79）。
 - 資源工具：`list_mcp_resources__<server>`、`read_mcp_resource__<server>`（server*/uri*）、`list_mcp_resource_templates__<server>`（resources.ts:9-51）。
 - 傳輸：stdio / streamable-http（OAuth provider 掛載於 http 變體，transport.ts）；重連 supervisor（paged 換代 + 斷開 unregister、`mcp/server-status` sink）；serverName 全進程唯一保留（scheduler.ts:39-51）；`failOnStartupError:false` → 掛空並 warn（scheduler.ts:78-82）。
-- **OAuth 2.1 全流**（oauth.ts）：`generateCodeVerifier()` = 32 隨機位元組 → 43 字元 base64url；`challengeFor` = S256（sha256+base64url，RFC 7636 §4.2，:8-17）；provider 內部持久化鍵 `tokens|client|verifier|state|pending-url`（:20，經注入的 McpTokenStore——記憶體預設 / coordinator 文件 `mcp-oauth:<k>` 經 assembly 接線，assembly.ts:261-271）；discovery（`/.well-known/oauth-authorization-server`）→ dynamic client registration（`/register`，RFC 7591 蛇形 metadata、`token_endpoint_auth_method:"none"`，:64-74）→ redirect 回調（oauth-callback.ts，授權完成前無 redirectUrl/code → 回調超時 → McpOAuthError fail-closed，oauth.ts:41）；**真 AS 整合測試**：`test/oauth-real-as.test.ts`（MCP OAuth real-AS integration (H-3)——自建 well-known/授權端點，:274 起）+ `test/oauth-integration.test.ts`；SDK 連接層掛 `authProvider`（transport.ts:24-26）；streamable-http 401 → redirect → UnauthorizedError 由 SDK 流負擔。
+- **OAuth 2.1 全流**（oauth.ts）：`generateCodeVerifier()` = 32 隨機位元組 → 43 字元 base64url；`challengeFor` = S256（sha256+base64url，RFC 7636 §4.2，:29）；provider 內部持久化鍵 `OAuthStoreKey` = `tokens|tokens-expiry|client|verifier|state|pending-url|discovery`（:37，經注入的 McpTokenStore——記憶體預設 / coordinator 文件 `mcp-oauth:<k>` 經 assembly 接線，assembly.ts:948）；discovery（`/.well-known/oauth-authorization-server`）→ dynamic client registration（`/register`，RFC 7591 蛇形 metadata、`token_endpoint_auth_method:"none"`，`clientMetadata` :91-99）→ redirect 回調（oauth-callback.ts，授權完成前無 redirectUrl/code → 回調超時 → `McpOAuthError` fail-closed，`waitForCallback` :74）；**真 AS 整合測試**：`test/oauth-real-as.test.ts`（MCP OAuth real-AS integration (H-3)——自建 well-known/授權端點，`startRealAs` :122 起）+ `test/oauth-integration.test.ts`；SDK 連接層掛 `authProvider`（transport.ts:25）；streamable-http 401 → redirect → UnauthorizedError 由 SDK 流負擔。
 - `mcp/server-status` telemetry 由 assembly 開關上鉤（assembly.ts:272-274）。
 
 ### 1.4 工具→實現檔案對照（疑難排查向）
@@ -254,7 +254,7 @@
 
 ### 2.1 SessionEvent union（packages/core-session/src/index.ts:5-152）——**37 種事件型別**
 
-> 度量：相異 `type` 字面 = 37，成員行（`| { type: …`）= 37（`grep -c '^    | { type: "'`），兩者一致——`種`＝相異型別。**下表仍列 34 項**（編號 1–34 未動）：其後新增的 `tool/dispatch`／`rewind/point`／`operator/run-end` 三行尚未入表。
+> 度量：相異 `type` 字面 = 37，成員行（`| { type: …`）= 37（`grep -c '^    | { type: "'`），兩者一致——`種`＝相異型別。**下表列 37 項**：編號 1–34 為原表（未動），35–37 為 M80 補入的 `tool/dispatch`／`rewind/point`／`operator/run-end`。
 
 | # | 型別 | 欄位（除通用 seq?） | 模型可見 | 檢索文本 |
 |---|---|---|---|---|
@@ -285,10 +285,13 @@
 | 30-31 | subagent/start / end | version:1, taskId/agentPath/role/description(+parentSessionId) / outcome(completed/error/cancelled/recovery-required)+resultText?/error? | ✗ | 描述字 + path / resultText |
 | 32 | reasoning | text* | ✗（思維軌跡，mux reasoning 流帶出） | "" |
 | 33-34 | command/run / command/done | commandId, name, args?, source:{kind:"user"} / kind:success/error, text? | ✗ | "" |
+| 35 | tool/dispatch | callId*, eventSeq?（所屬 tool/call 的 durable seq） | ✗ | "" |
+| 36 | rewind/point | version:1, targetTurn, anchorSeq, mode:all/files/conversation, fileOps:[{path, op:restore/delete}] | ✗（marker；`rewindCuts` 令 [anchorSeq, seq) 退出模型面） | "" |
+| 37 | operator/run-end | version:1, runId, exitCode, durationMs, phase:cli/config/run/turn/sdk/session/mount/shutdown, error? | ✗ | "" |
 
 通用：所有 append 賦 `seq=session.events.length`（index.ts:260）；整 union 掛 `& {ignorable?:true}`（:117）；未知型別無 ignorable → 載入 fail-closed（session-persistence/index.ts:339-347）。
 
-**事件生產者對照**（誰 append 什麼——疑難排查向）：turn/step/user/assistant/tool 家族 → core-agent 循環；`compaction/*` → compaction 引擎；`sandbox/mode` → **`session-executor/src/assembly.ts:354`（建構期；M1 Phase B Task 1 `34c746e6`）**（2026-09-15 **兩次**更正：本行原寫「sandbox-policy（session-mode.ts）」——它只**讀**；其後我改成「沒有生產者」，而那句在 Phase B 裝上第一個生產者之後也失效。**現在有生產者，但只在建構期記錄起始模式**，「session 中途被收緊」仍不可達——見 `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` §7 第 4 條與 `docs/handoff/2026-09-15-m1-phase-b-handoff.md`）；`todo/write` → todo 工具（**未掛載**）；`goal/change` → goal；`job/status` → subagent persist.ts（`jobStatusEvents:true` 才鏡像進 live session）；`schedule/change` → schedule 寫入面 + driver dispatch；`agent/input/*` → Inbox（admit/promote/cancel；claimAtStepBoundary 另寫 user/message）；`session/title` → session-title；`plan/mode` → plan-mode（進入時另行 append user/message proposal）；`subagent/start|end` → spawn_agent / settle；`reasoning` → llm 層（C-region port）；`command/run|done` → apps/cli web.ts `appendCommandEvents`（:274-280）；`team/*` → agent-team 事務層；`subagent/inbox` → send/followup 工具。
+**事件生產者對照**（誰 append 什麼——疑難排查向）：turn/step/user/assistant/tool 家族 → core-agent 循環；`compaction/*` → compaction 引擎；`sandbox/mode` → **`session-executor/src/assembly.ts:583`（建構期；M1 Phase B Task 1 `34c746e6`）**（2026-09-15 **兩次**更正：本行原寫「sandbox-policy（session-mode.ts）」——它只**讀**；其後我改成「沒有生產者」，而那句在 Phase B 裝上第一個生產者之後也失效。**現在有生產者，但只在建構期記錄起始模式**，「session 中途被收緊」仍不可達——見 `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` §7 第 4 條與 `docs/handoff/2026-09-15-m1-phase-b-handoff.md`）；`todo/write` → todo 工具（**已掛載**：`createTodoTool`，`session-executor/src/assembly.ts:833`；append 於 `packages/todo/src/index.ts:56`）；`goal/change` → goal；`job/status` → subagent persist.ts（`jobStatusEvents:true` 才鏡像進 live session）；`schedule/change` → schedule 寫入面 + driver dispatch；`agent/input/*` → Inbox（admit/promote/cancel；claimAtStepBoundary 另寫 user/message）；`session/title` → session-title；`plan/mode` → plan-mode（進入時另行 append user/message proposal）；`subagent/start|end` → spawn_agent / settle；`reasoning` → llm 層（C-region port）；`command/run|done` → **今天沒有生產者**（型別與 `registerEventType` 仍在：`core-session/src/index.ts:125-126`、`session-persistence/src/index.ts:221-222`；唯一的寫入者 `appendCommandEvents` 隨 `apps/cli/src/web.ts` 於 M65 刪除——`git grep appendCommandEvents -- 'apps/**' 'packages/**'` 零命中（`git ls-files apps/cli/src/web.ts` = 0，M80 重量），今天僅存的 append 在測試（`core-session/test/events.test.ts:8-9`））；`team/*` → agent-team 事務層；`subagent/inbox` → send/followup 工具。
 
 `deriveMessages`（:306-393）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（:398-436）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（:268-299）。
 
@@ -304,7 +307,7 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 - **goal**：goal/change 6 ops（create/edit/pause/resume/complete/clear）；phase active/paused/complete；無 blocked phase/無強制 maxGoalRounds（core-session :127-149）；折疊 = 最新快照 last-wins、clear 墓碑（goal/src/index.ts:108-149）；mutation 拒絕規則（goal/src/index.ts:186-266）：CAS = ref.id+revision 須等於現值（→ `goal-stale-ref`）；`create` 於非 complete 相 → `goal-exists`（:203-207）；`pause` 僅 active、`resume` 僅 paused、`complete` 僅 active|paused；每快照 op 結果 revision+1；clear 墓碑 ref = 現值 revision+1（:255-263）；錯誤碼 `goal-invalid|goal-exists|goal-none|goal-stale-ref|goal-invalid-transition`（:48-54）。
 - **jobs**：job/status 快照（foldJobs 按 jobId last-wins，jobs/src/index.ts:121-131）；kill outcome `"cancellation-requested"|"already-finished"`（:42）。
-- **schedule**：schedule/change（create/delete/dispatch）；記錄三形：`after{afterSeconds}`（正整數、嚴格未來）、`at{scheduledAt RFC3339 帶 Z 或數值偏移}`、`every{everySeconds ≥300}`（產出錨 = 創建時刻）；`MIN_EVERY_INTERVAL_SECONDS=300`（schedule/src/index.ts:20）；**一次性 dispatch 移除記錄且不得帶 acceptedAt；every dispatch 必帶 acceptedAt 且以 resolveEveryOccurrence 前移排程**（:378-401）；dispatch 事件**先入 log 再 onDue**（durable 接受在前，防重複觸發，driver.ts:99-109 —— **⚠ 更正（2026-09-21，`m66`）：`onDue` 接縫已退役**：引擎現在把整筆 `ScheduleDelivery` 交給宿主的 `deliver`（`schedule/src/driver.ts:73-76`，行號 2026-09-21 `grep -n` 實測），**引擎不寫日誌**；宿主 = assembly 的**排程掛載**（`session-executor/src/assembly.ts:815-855`），以 canonical `append()` ＋ `inbox.admit()` ＋ `await coordinator.flush()` 把 `[dispatch, admitted]` 落成**同一個 durable batch**（spec §3.4 的更正讀法）；且 **flush 失敗不是拒收**——記憶體已接受、批次保留重試，`deliveryErrors` 是 durability 報告，見 spec §3.4 的補記）；重啟 re-drive 免費（首 tick 於 start + 預設 30s 輪詢，driver.ts:7-9, 50, 73）；`renderReminderFraming` = `[SCHEDULE REMINDER]` + 不可信提醒腳註 + JSON 逸位 `schedule_id_json/occurrence_at/reminder_prompt_json`（:416-424）；**✎ LocalAtInput（IANA 時區）與直接提示注入未遷移**——僅 UTC 瞬間。
+- **schedule**：schedule/change（create/delete/dispatch）；記錄三形：`after{afterSeconds}`（正整數、嚴格未來）、`at{scheduledAt RFC3339 帶 Z 或數值偏移}`、`every{everySeconds ≥300}`（產出錨 = 創建時刻）；`MIN_EVERY_INTERVAL_SECONDS=300`（schedule/src/index.ts:20）；**一次性 dispatch 移除記錄且不得帶 acceptedAt；every dispatch 必帶 acceptedAt 且以 resolveEveryOccurrence 前移排程**（:378-401）；dispatch 事件**先入 log 再 onDue**（durable 接受在前，防重複觸發 —— **⚠ 更正（2026-09-21，`m66`）：`onDue` 接縫已退役**：引擎現在把整筆 `ScheduleDelivery` 交給宿主的 `deliver`（`schedule/src/driver.ts:77`，M80 重量），**引擎不寫日誌**；宿主 = assembly 的**排程掛載**（`session-executor/src/assembly.ts:847-876`），以 canonical `append()` ＋ `inbox.admit()` ＋ `await coordinator.flush()` 把 `[dispatch, admitted]` 落成**同一個 durable batch**（spec §3.4 的更正讀法）；且 **flush 失敗不是拒收**——記憶體已接受、批次保留重試，`deliveryErrors` 是 durability 報告，見 spec §3.4 的補記）；重啟 re-drive 免費（首 tick 於 start + 預設 30s 輪詢，driver.ts:80, 117, 188）；`renderReminderFraming` = `[SCHEDULE REMINDER]` + 不可信提醒腳註 + JSON 逸位 `schedule_id_json/occurrence_at/reminder_prompt_json`（:502-512）；**✎ LocalAtInput（IANA 時區）與直接提示注入未遷移**——僅 UTC 瞬間。
 - ~~**feedback**~~ ⚠️ **已刪除（2026-09-17）**：`@i-harness/feedback` 套件（訊息 like/dislike + per-item CAS）已從樹上移除。**它的原始碼自己記載了理由**——*"the only consumer of feedback persistence is the SPA over the web host's HTTP routes — there is no embedder seam to compose"*——而那個 SPA 與 web host 已於 M65 移除。沒有任何生產或測試程式碼引用它；刪除後也確認**沒有留下孤兒事件型別或事件註冊**（`core-session` 的事件聯集與 `registerEventType` 皆無殘留）。本節其餘條目不受影響。
 - **crash 修復鏈**（見 §8.2）。
 
@@ -331,7 +334,7 @@ session/start, session/end, session/request, session/queued, session/error, turn
 
 ### 3.3 上下文窗口解析鏈（統一、每 session、每 assembly）
 
-`sessionContextWindow`（apps/cli/src/web.ts:288-298）：**userModel（settings `llm.providers.<route>.models[i].contextWindow`）> profile.modelContexts[modelId] > profile.contextWindow > model-catalog.json CARD.contextWindow > undefined**（provider/src/index.ts:138-154 `resolveEffectiveModelContext`）。per-session（meta.modelSelection → provider:model）；undefined → `get_context_remaining` 不註冊（fail-closed）、無 budget、無 compact 窗口覆寫（assembly.ts:393-407）。檔案卡片欄位：`{contextWindow?, maxOutputTokens?}`（檔案在 packages/provider/src/model-catalog.json，只含 deepseek/gemini/bedrock seed 卡，loadModelCatalog 於載入即驗證正整數，provider:66-98）。
+`contextWindowFor`（`session-executor/src/service.ts:112`；原引 `apps/cli/src/web.ts:288-298` 的 `sessionContextWindow`——該檔隨 web-host 於 M65 刪除）：**userModel（settings `llm.providers.<route>.models[i].contextWindow`）> profile.modelContexts[modelId] > profile.contextWindow > model-catalog.json CARD.contextWindow > undefined**（`resolveEffectiveModelContext`，provider/src/index.ts:311）。per-session（meta.modelSelection → provider:model）；undefined → `get_context_remaining` 不註冊（fail-closed）、無 budget、無 compact 窗口覆寫（assembly.ts:828、:1243-1269）。檔案卡片欄位：`{contextWindow?, maxOutputTokens?}`（檔案在 packages/provider/src/model-catalog.json，只含 deepseek/gemini/bedrock seed 卡，`loadModelCatalog`（provider:161）於載入即驗證正整數（:207-211））。
 
 ### 3.4 壓縮引擎（packages/compaction）
 
@@ -482,10 +485,10 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 ## 六、生態 / 配置
 
 - **settings 分層**（packages/settings/src/index.ts:345-349, 857-878）：global = `~/.i-harness/settings.json`（`$IH_CONFIG_DIR` 覆蓋）、workspace = `<workspace>/.i-harness/settings.json`、project = `<cwd>/settings.json`（順位 0<1<2；缺失層跳過；合併 = 原始文件深合併 low→high、陣列/純量替換、整併一次）；寫入目標 = 最高優先既有源（:784-790）。
-- **熱更 = 輪詢非 fs-watch**：`watchSettings` 以 `mtimeMs:size` 快照、預設 `intervalMs=500`、首 tick 僅快照、計時器 unref（index.ts:886-930）；`settings/changed` telemetry 碼**已宣告但無生產 emitter**（只有 `LayeredSettingsStore.onChange` 對應物，index.ts:830-845）。
+- **熱更 = 輪詢非 fs-watch**：`watchSettings` 以 `mtimeMs:size` 快照、預設 `intervalMs=500`、首 tick 僅快照、計時器 unref（index.ts:1441）；`settings/changed` telemetry 碼**已宣告但無生產 emitter**（只有 `LayeredSettingsStore.onChange` 對應物，index.ts:1231）。
 - **註釋保持 leaf patch**：手作 `patchJsonDocumentKeepingComments`（index.ts:614-670）——整行註解（`//`/`#`/`/* */`/`*`）/空白行剝除解析、每「多餘」行錨定到下一結構行；規範版面時註解重發於錨點前、非規範文件退化為首尾塊保留；不可解析 → `SettingsPatchError` **寫入前 throw**（fail-closed）。
 - **節協定**（sections.ts）：`SectionName = "llm"|"onboarding"`（:21）；`SectionOp {op:"set"|"unset", path[], value?}`（:65-67）；FieldSpec 角色 `value|secret|credential-ref`——describe 時 secret → `"***"`、credential-ref 保留 ref 名（:209-273）；`mutateSection(name, ops, store, expectedRevision?)`：**revision 檢查先於 op 校驗**（不符 → `SettingsConflictError{expected,actual}`，:534-545）、未知欄位/型別/enum → `SettingsValidationError`（:312-364）、內容未變 → 不寫不升版（:508-510）；revision 計數器 `_revision`（0 = 從未改，getSectionRevision :355-362；跨進程最後 rename 勝出——接受：:454-458）。
-- `SETTINGS_DEFAULTS` 鍵（index.ts:135-163）：`sandboxMode:"workspace-write"`、`model:""`、`language:"zh"`、`theme:"system"`、`fontSize:14`、`transcriptMode:"normal"`、`busyEnter:"interrupt"`、`searchBackend:"jsonl"`、`plugins:{agentLoop:true,bash:true,webSearch:false,subagentModel:false}`、`llm:{providers:{}, defaultModel:{provider:"",model:""}}`、`onboarding:{welcomeNoticeVersion:""}`。
+- `SETTINGS_DEFAULTS` 鍵（index.ts:315-359）：`sandboxMode:"workspace-write"`、`compaction:{auto:true}`、`model:""`、`language:"zh"`、`fontSize:14`、`searchBackend:"jsonl"`、`plugins:{agentLoop:true,bash:true,webSearch:false,subagentModel:false}`、`agents:{roles:{}}`、`llm:{providers:{}, defaultModel:{provider:"",model:""}}`、`onboarding:{welcomeNoticeVersion:""}`、`tui:{prefs:{compact:false,guardian:false,dashboard:{order:[]},statusLine:{mode:"builtin",items:[…]}}}`。
 - `resolveProviderProtocol`（sections.ts:194-201）：user?.protocol（合法者）> `SEEDED_PROTOCOLS[route]`——**鏈就到此為止：兩者皆無 = 無協議（沒有 DEFAULT），回傳 `undefined`**；呼叫端（送出路徑 `resolveModel`、探測路徑 `probeModels`）據此拒絕並給出可操作訊息（`provider "<id>" declares no protocol … set one with: i-harness provider set <id> --protocol …`；原 DEFAULT="openai-completions" 已移除，見 protocol-selection 設計 §2）。一條未宣告協議的路由仍可解析：鏈是 **selection > 模型行 > 路由**，只有三者皆無才拒絕。`PROVIDER_PROTOCOLS = [openai-completions, openai-responses, anthropic-messages, gemini, bedrock]`（:110，此引用仍準確）；**SEEDED_PROTOCOLS = {}（M31 空）**（:181）。
 - **credentials**（packages/credentials/src/index.ts:88-140）：refs = env 名（`^[A-Za-z_][A-Za-z0-9_]*$`，env 變數名即 ref）；**describe 不回值**（{configured, source:"env"|"file", writable}，:96-106）；**shadowed 拒絕**——env 非空值已提供的 ref 寫檔 → CredentialShadowedError("credential-rejected")、unset 同治（:65-71, 154-160）；`resolve` 鏈 env > file（僅 builder 使用，:123-127）；寫入 = tmp+rename 原子（0600 + 最佳努力 chmod）；損壞/缺失文件退化為空 + warn 永不 throw。
 - **workspace registry**（packages/workspace/src/index.ts:66-67）：`workspace-registry` 文件（jsonl doc sidecar、`{formatVersion:1, workspaces:[], archivedSessionIds?}`）；變更串行於單一 promise 鏈（:195-201）；`archiveSession` = registry 全域集合（冪等、未知 session→`WorkspaceUnknownSessionError("session-not-found")`）、`unarchiveSession` = 刻意延伸（冪等移除）；`create` 依路徑冪等；檔案瀏覽器上限 maxEntries 500 / maxDepth 8 / maxVisited 3000 / skip node_modules,.git,.i-harness,dist（files.ts:65-77）；**symlink 整根跳過**（files.ts:129）、根缺失 throw（大聲）、碼位確定性排序。
@@ -682,13 +685,13 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 15. JSONL torn tail + repair（session-persistence-jsonl/src/index.ts:30-48, 67-87）
 16. session-query app_id 0x49485155（session-query/src/file-backed.ts:35）
 17. provider probe 10s / 候選路徑（provider/src/index.ts:254-261）
-18. 四張 reasoning 譯表（llm-*/src:44-47/32-35/51-60/25-36/85-97）
+18. 五張 reasoning 譯表（`translateReasoning`：llm-openai:65-68／llm-openai-compatible:90-93／llm-anthropic:98-107／llm-gemini:46-57／llm-bedrock:112-124）
 19. 沙箱 gateway（sandbox/src/index.ts:39-58）＋ bwrap probe（sandbox-local/src/index.ts:100-110）
-20. wcwidth 表 + U+2501 軌跡（wcwidth/index.ts:1-32；git 9e68f3b）
-21. DEC 2026 發射條件（tui-core/src/render/index.ts:115-117）
-22. agent 佈局 scrollback ≥5 / 退化（tui/src/views/agent.ts:163-167, 239）
-23. braille 7.5fps（tui/src/views/turn-status.ts:50-54）
-24. HUD 門控（tui/src/app/loop.ts:160-163）
+20. wcwidth 表 + U+2501 軌跡——**已隨 TUI 刪除（M65，2026-09-17）**：原引用 `wcwidth/index.ts:1-32` 無所指——該表在 `packages/tui-core/src/wcwidth/index.ts`（`git ls-tree -r 4ea5b5d^` 可見；`git ls-files packages/tui-core` = 0，M80 重量）；修正 commit `9e68f3b`（U+2501 = width 1）仍在歷史
+21. DEC 2026 發射條件——**已隨 TUI 刪除（M65，2026-09-17）**：`packages/tui-core/src/render/index.ts:115-117` 隨整包刪除（`git ls-files packages/tui-core` = 0；M80 重量），原引用無所指
+22. agent 佈局 scrollback ≥5 / 退化——**同上（M65）**：`packages/tui/src/views/agent.ts:163-167, 239` 隨整包刪除（`git ls-files packages/tui` = 0；M80 重量），原引用無所指
+23. braille 7.5fps——**同上（M65）**：`packages/tui/src/views/turn-status.ts:50-54` 隨整包刪除（`git ls-files packages/tui` = 0；M80 重量）
+24. HUD 門控——**同上（M65）**：`packages/tui/src/app/loop.ts:160-163` 隨整包刪除（`git ls-files packages/tui` = 0；M80 重量）
 25. guardian 常數（guard-approval/src/guardian/breaker.ts:3-4; reviewer.ts:16-17）
 26. credentials shadowed 拒絕（credentials/src/index.ts:64-70, 88-140）
 27. workspace 上限（workspace/src/files.ts:68-77）
