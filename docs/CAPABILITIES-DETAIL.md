@@ -293,7 +293,7 @@
 
 **事件生產者對照**（誰 append 什麼——疑難排查向）：turn/step/user/assistant/tool 家族 → core-agent 循環；`compaction/*` → compaction 引擎；`sandbox/mode` → **`session-executor/src/assembly.ts:583`（建構期；M1 Phase B Task 1 `34c746e6`）**（2026-09-15 **兩次**更正：本行原寫「sandbox-policy（session-mode.ts）」——它只**讀**；其後我改成「沒有生產者」，而那句在 Phase B 裝上第一個生產者之後也失效。**現在有生產者，但只在建構期記錄起始模式**，「session 中途被收緊」仍不可達——見 `docs/superpowers/specs/2026-09-14-backend-permission-sandbox-design.md` §7 第 4 條與 `docs/handoff/2026-09-15-m1-phase-b-handoff.md`）；`todo/write` → todo 工具（**已掛載**：`createTodoTool`，`session-executor/src/assembly.ts:833`；append 於 `packages/todo/src/index.ts:56`）；`goal/change` → goal；`job/status` → subagent persist.ts（`jobStatusEvents:true` 才鏡像進 live session）；`schedule/change` → schedule 寫入面 + driver dispatch；`agent/input/*` → Inbox（admit/promote/cancel；claimAtStepBoundary 另寫 user/message）；`session/title` → session-title；`plan/mode` → plan-mode（進入時另行 append user/message proposal）；`subagent/start|end` → spawn_agent / settle；`reasoning` → llm 層（C-region port）；`command/run|done` → **今天沒有生產者**（型別與 `registerEventType` 仍在：`core-session/src/index.ts:125-126`、`session-persistence/src/index.ts:221-222`；唯一的寫入者 `appendCommandEvents` 隨 `apps/cli/src/web.ts` 於 M65 刪除——`git grep appendCommandEvents -- 'apps/**' 'packages/**'` 零命中（`git ls-files apps/cli/src/web.ts` = 0，M80 重量），今天僅存的 append 在測試（`core-session/test/events.test.ts:8-9`））；`team/*` → agent-team 事務層；`subagent/inbox` → send/followup 工具。
 
-`deriveMessages`（`packages/core-session/src/index.ts:489`；**▶ 2026-09-24 更正：原引的 `:306-393` 是漂掉的行號——引符號不引行號**）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（同檔 `:662`）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（:268-299）。
+`deriveMessages`（`packages/core-session/src/index.ts:489`；**▶ 2026-09-24 更正：原引的 `:306-393` 是漂掉的行號——引符號不引行號**）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（同檔 `:662`）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（`MAX_IMAGES_PER_MESSAGE` ＝ 20，`packages/core-session/src/index.ts:362`；`MAX_IMAGE_BYTES_PER_MESSAGE` ＝ 200 MiB，同檔 `:363` —— **▶ 2026-09-24 更正：原引的 `:268-299` 是漂掉的行號**）。
 
 ### 2.2 Telemetry 事件集（packages/telemetry）——manifest 24 碼（manifest.ts:16-53）
 
@@ -629,7 +629,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 | 工具面列 todo 於工具清單 | **不再是差異（M80 重量）**：`todo_write` 已掛載——`createTodoTool` 於 `session-executor/src/assembly.ts:833`（M40）；CLI 組合中 agent 拿得到。原右欄「assembly 未掛載」量到為假 |
 | shell「timeout/retention/spill」屬工具 | 皆 host 層選項；工具 schema 只 `command/background`（無 comment） |
 | LSP「六面」 | 六面路由於**單一 `lsp` 工具**（operation enum）+ 僅 2 工具入註冊表 |
-| 「40+ 路由」 | ~53 HTTP + 7 WS endpoint（§4.1 表） |
+| 「40+ 路由」 | **已隨 M65 刪除（0）**——`packages/web-host` 整包已刪（`git ls-files packages/web-host` = 0）：原量測的 ~53 HTTP（其中 24 條靜態）＋ **WS mux 7 endpoint**（/api/mux）全不存在。**▶ 2026-09-24 更正：本列原寫「~53 HTTP + 7 WS endpoint（§4.1 表）」，量到為假**；本表 §4.1 的那一列早已改成 0 |
 | guardian「審查子代理 + 嚴格 JSON + fail-closed + 斷路器」 | 精化：90s、窗口 10、deny 3、verdict 3 欄含 risk_level、breaker 只記 model verdict |
 | 「fancy/legacy glyph、SGR minifier」 | SGR 無位元組閾值（純狀態 diff）；DEC 2026 是實作非「concern」 |
 | 「PTY harness……byte-budget」 | 精化：writes 模式用於 resize 案例（ConPTY 注入重放）；時間窗僅 smoke |
@@ -640,7 +640,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 1. **`read_image` 存在且已掛載**（M80 重量；原條目為假）——`packages/attachment/src/read-image.ts:30`（`createReadImageTool`，工具名 `:33`，png/jpeg/gif/webp → ImageInput inline），掛於 `session-executor/src/assembly.ts:834`（M40）；原條目說「全倉無 read_image 工具、無套件」量到為假。
 2. **`todo_write` 已掛載**（M80 重量；原條目「未掛載」為假）——`packages/todo/src/index.ts:33`（工具名），`createTodoTool` 掛於 `session-executor/src/assembly.ts:833`（M40）；原句「`createSessionAssembly`（assembly.ts）未註冊」量到為假。事件投影仍在（`deriveTodoList`，`packages/todo/src/index.ts:67`），但**它沒有生產消費者**——`git grep deriveTodoList -- 'apps/**' 'packages/**'` 只回該包與它的測試。已刪的 TUI 面板讀的**不是它**：TUI 自己把 `todo/write` 映成 todo 列（`packages/tui/src/backend/embedded.ts:274`，隨該包於 M65 刪除）。
 3. **無 `comment` 工具參數**——shell 工具 schema 僅 `command`/`background`；無 timeout/retention 參數欄（host 層選項）。
-4. **web-host 路由**～53 條（概覽「40+」大致對，但以本表為準）；MCP 資源工具三檔（`list_mcp_resources__<s>`/`read_mcp_resource__<s>`/`list_mcp_resource_templates__<s>`）概覽未列。
+4. **web-host 路由：已隨 M65 刪除（0 條）**——`git ls-files packages/web-host` = 0，原量測的 ~53 條（含 24 條靜態）＋ 7 個 WS mux endpoint 全不存在（**▶ 2026-09-24 更正：本項原寫「～53 條（概覽『40+』大致對，但以本表為準）」**）；MCP 資源工具三檔（`list_mcp_resources__<s>`/`read_mcp_resource__<s>`/`list_mcp_resource_templates__<s>`）概覽未列。
 5. **SGR mouse 只做 1006**（無 1106）；**probe 無 DA1/DASR 查詢**（僅被動 DA2）；DEC 2026 有實作（非「concern」）。
 6. **tui-contracts 路徑**：`packages/tui/src/contracts.ts`（不是 packages/tui/contracts.ts）。
 7. **TUI「16-row 佈局」語意**：實際是堆疊式（status/tasks/todo/scrollback≥5/btw/queue/turn/prompt/shortcuts），退化閾值為 `cols<2colsPad+6‖rows<2rowsPad+4`（agent.ts:163）——註解的「rows≤16 collapse」與代碼不符（代碼屬實）。
