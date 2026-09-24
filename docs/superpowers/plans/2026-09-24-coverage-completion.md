@@ -29,7 +29,7 @@
 - 只讀：`packages/telemetry/src/{manifest.ts,types.ts}`
 
 **Interfaces:**
-- Consumes: `TELEMETRY_EVENT_TYPES`／`TELEMETRY_MANIFEST`／`TelemetryEventType`（既有）
+- Consumes: `TELEMETRY_MANIFEST`／`TelemetryEventType`（既有）——**執行期更正**：`TELEMETRY_EVENT_TYPES` 不再被讀（拿掉執行期迴圈後 `noUnusedLocals` 會 TS6133 ⇒ import 修剪掉它；見 `230fd44`）
 - Produces: 無（測試內部）
 
 - [ ] **Step 1: 先重現缺陷（今天的樹上，突變不會紅）**
