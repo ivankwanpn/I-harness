@@ -146,11 +146,12 @@ grep -c '^  | "' packages/telemetry/src/types.ts          # 23
 - [ ] **Step 3: 驗收（機械）**
 
 ```bash
-grep -n "19\|20" docs/CAPABILITIES-DETAIL.md | grep -i "telemetry\|manifest"   # 零命中
-# 列舉的那一行以「內容」定位（不要信行號）：它含 `provider/error, provider/usage`
-# 或（修前）`provider/error, token/usage`——先把那行抓出來再數逗號：
-grep -n "provider/error," docs/CAPABILITIES-DETAIL.md
-grep "provider/error," docs/CAPABILITIES-DETAIL.md | grep -o ',' | wc -l       # 22 ⇒ +1 = 23 個名字
+# 執行期更正（2026-09-24，見 `45bd37e` 的報告）：粗 grep 有假命中——`19`／`20` 也會坐在無關
+# 引用／數字裡（`config.ts:112-119`、`summarizer.ts:19-31`、`install.ts:189-199`、`20MB`…），
+# 修前 `:328`／`:345`／`:490`／`:649` 都命中 ⇒ 驗收只認**列數宣稱**，不是任何含 19/20 的行。
+# 最強的形狀是**逐字比對母體**：把列舉的名字（以 `, ` 切）與 manifest 的 `{ code: }` 列做
+# **順序敏感**的 diff ⇒ 必須完全相同（23／23）。
+# 逗號數：整行有 24 個（同行 `{ts,type,data}` 貢獻 2）⇒ 只數**列舉**（列舉內 22 ⇒ 23 個名字）。
 ```
 
 - [ ] **Step 4: Commit**
