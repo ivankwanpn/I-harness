@@ -23,6 +23,9 @@ import type { DiagnosticPhase } from "../src/index.ts"
 it("DiagnosticPhase is exactly the eight measured phases — no extra, none missing", () => {
   type MeasuredPhases = "cli" | "config" | "run" | "turn" | "sdk" | "session" | "mount" | "shutdown"
   // both directions: a member added on either side is a compile error here.
+  // This pin works only because the checked type is an ALIASED CONCRETE type
+  // rather than a naked type parameter: a generic `IsNever<T>`-style helper
+  // would distribute over `never` and make this passing case unassignable.
   type NoExtra = Exclude<DiagnosticPhase, MeasuredPhases>
   type NoMissing = Exclude<MeasuredPhases, DiagnosticPhase>
   const exactA: NoExtra extends never ? true : false = true
