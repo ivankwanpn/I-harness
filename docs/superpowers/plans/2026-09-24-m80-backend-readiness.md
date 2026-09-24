@@ -113,7 +113,7 @@ git commit -m "docs(queued-work): §9.2 stops being a five-milestone-old todo li
 ### Task 3: `CAPABILITIES-DETAIL.md` 的宣稱 ＋ `CAPABILITIES.md` ＋ `contracts.md`
 
 **Files:**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動**：`:3`、`:21`、`:22`、`:24`、`:25`、`:31`、`:83`、`:118`、`:215`、`:255`、`:293`、`:295`、`:508`、`:535`、`:617`、`:623`、`:624`、`:635`、`:636`、`:659`、`:674`）
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動**：`:3`、`:21`、`:22`、`:24`、`:25`、`:31`、`:83`、`:118`、`:215`、`:255`、`:293`、`:295`、`:508`、`:535`、`:617`、`:623`、`:624`、`:635`、`:636`、`:659`、`:674`，以及 §12 的四條**帶宣稱**項（items **6／12／13／30**））
 - Modify: `docs/CAPABILITIES.md`（**只准動**：`:3`、`:80`）
 - Modify: `docs/contracts.md`（**只准動**：`:20`、`:73`、`:119`、`:161`、`:194`、`:200`）
 
@@ -150,7 +150,7 @@ git commit -m "docs(capabilities): the false claims go — todo_write/read_image
 ### Task 4: `CAPABILITIES-DETAIL.md` 的**引用**（同檔、接在 Task 3 之後）
 
 **Files:**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items 6／12／13／20-24／30）
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items **20-24**（純引用））
 
 - [ ] **Step 1: 逐條重量（先量再改）**
 
