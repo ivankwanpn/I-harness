@@ -1,5 +1,14 @@
 # I-harness
 
+> **⚠️ This document is a dated snapshot: its content stops at M65's eve (2026-09-17).**
+> The TUI/web frontends it describes were **removed** in M65, and the backend was
+> **closed out** in M76–M80 (2026-09-24) — **verdict: the backend is done; the frontend era
+> is open**. The current entry points are the Chinese [`README.md`](README.md) and the
+> readiness record [`docs/handoff/2026-09-24-m80-backend-readiness.md`](docs/handoff/2026-09-24-m80-backend-readiness.md)
+> (verdict §5, residuals §6; per-item classification in
+> [`docs/handoff/2026-09-24-m80-residual-audit.md`](docs/handoff/2026-09-24-m80-residual-audit.md)).
+> A full English rewrite is a named residual, not a silent gap.
+
 I-harness agent runtime — a TypeScript/ESM monorepo (pnpm workspace) that runs
 an agent end-to-end on Windows: real tools, persisted sessions, subagents and
 teams, sandboxed execution, MCP/LSP integration, skills, workflows, and a
