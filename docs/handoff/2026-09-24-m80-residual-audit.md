@@ -175,3 +175,217 @@ gh pr view 6 --json body      # M72Ⅱ PR 的「三件必須明說的事」
 ```
 
 本表引用的 **45 個 commit**（Tier-1 的關閉者 ＋ Tier-2 證據裡的關閉者）全部以 `git cat-file -t <sha>` 檢查，**每一個都回 `commit`**。
+
+---
+---
+
+# M80 殘餘稽核（Part 2：新半）— Tier-1／Tier-2 ＋ 六處矛盾 ＋ 兩個候選 ＋ §4 逐條重量
+
+**這是什麼**：Part 1（舊半）的續——**新半**（M76–M79 ＋ 收線計畫，共 **87 條**）的每一條具名殘餘沿鏈關閉或逐條歸類；六處紀錄／計畫矛盾（D1–D6）以**最新讀數**收掉；兩個候選（計畫 §2.45／§2.5）照 spec §1.4／§1.5 的**裁定**入表；計畫 §4「不是後端的事」**逐條重新量測**。判準與讀法同 Part 1（spec §1.3 的兩層）：**Tier-1**＝該條的每一個具名部分都被後續里程碑關掉（引用關閉它的紀錄＋commit）；**Tier-2**＝至少一個具名部分在 HEAD 仍開，落四鍵之一（①修掉了／②等前端／③產品決定／④明說接受的成本）或 `UNMEASURED`（只在該條整體量不到時用，並具名）。**無殘餘的裁定**（提案被拒、或裁決本身即處置）不另開桶：落 Tier-2、鍵 ④、在證據欄寫明「無殘餘」，與 Part 1 的 M72Ⅲ §4.13 同一處理。
+
+**輸入**：`.superpowers/sdd/2026-09-24-m80-backend-readiness/task-7-input-new-half.md`（spec 前的量測代理）。來源欄保留該清單的編號與行號（`M76 1（:89）`＝該節第 1 條、行號 `:89`），每一條**恰好出現一次**。**行號是那次量測的**：M79 紀錄今天整體 **+1**（M80 `00067ec` 在 `:6` 補了一行 ▶），M76／M77／M78 三份未位移——一律**以內容定位**。
+
+**來源標籤**（除計畫外全在 `docs/handoff/`）：
+
+| 標籤 | 檔案 | 輸入清單所引的位置（以內容定位） |
+|---|---|---|
+| M76 | `2026-09-24-m76-walkoff-and-seed-bound.md` | §4 `:75-83`、§5 `:89` 與 `:91` |
+| M77 | `2026-09-24-m77-refusal-channel.md` | §4 `:79-86`、§5 `:92` 與 `:94`、§6 `:102-103` |
+| M78 | `2026-09-24-m78-prune-before-summarise.md` | §4 `:54-59`、§5 `:65` 與 `:67` |
+| M79 | `2026-09-24-m79-coverage-completion.md` | §4（今天 `:57-67`）、§5（今天 `:73-81`） |
+| 計畫 | `2026-09-23-backend-closure-plan.md` | §2.4 `:46-48`、§2.45 `:50`、§2.5 `:52`、§2 `:40-56`、§4 `:75-82` |
+
+**量的時間**：2026-09-24，`m80` 分支 `a2a2bdd` 的樹（HEAD）。**沒有跑 `pnpm verify:all`**（Task 8）；唯一跑過的儀器是 `node scripts/audit/check-reachability.mjs`（**456 findings**，與 Part 1 同一讀數）。
+
+**計數**：**Tier-1 10 列｜Tier-2 69 列（`UNMEASURED` 0）＝ 79 條**（§C）＋ **§F 9 列**（覆蓋計畫 §4 的 8 條輸入項——第一條的兩個句子分開量）＝ **87 條**（＝ 18＋23＋12＋19＋15）。Tier-2 的鍵分佈：**① 0｜② 0｜③ 3｜④ 66**。
+
+**輸入提示的查核**（「⇒ Mxx 已收」是量測代理的推測，不是裁定）：清單共 **13 個**這種提示，**11 條成立、2 條半錯**：
+
+1. **成立（11）**：M77 8（⇒ M80 T1 `2f9147e`）、M77 17（⇒ M79 T3 `45bd37e`）、M77 18 與 22（⇒ M79 T1 `230fd44`）、M78 12（⇒ M79 T6 `cd188d7`／`6bd35c7`）、計畫 §2.4 三件（⇒ M79 全部交付）、計畫 §2.5（⇒ M80 T1）、計畫 §4 H-3（⇒ M80 T5 `00067ec`）、D2／D3／D5（⇒ M80 T5 已修，逐條見 §D）。
+2. **半錯（2）**——兩條都是「修了，但只修了一半，剩下一半照規則不改」：
+   - **M79 6**（`docs/` 其餘過期載體）：「⇒ M80 T5 已加指針」——**只加在兩個載體**（W6 紀錄 `:168`、reachability baseline §6.2 的 `mountPreset` 格）；**另兩個（2026-09-11 audit 的「20 rows」、2026-09-17 spec 的「是 20」）今天仍無指針**，而那是 M80 spec §1.1 的 **leave** 規則（`docs/audit/**` 與 `docs/superpowers/**` 是快照）。
+   - **D1**（計畫 §2.4 以待辦寫）：「⇒ M80 T5 已修 §2.4」——**三件裡只有第 3 件**（19→23）加了 ▶ 2026-09-24；第 1、2 件（manifest 牙齒、儀器剝註解）**仍是「修法＝…」的將來式**（見 §D D1）。
+3. **另外兩個提示不是「已收」型，是「量：今天還在嗎」型**（M78 2 的五處快取簡寫、M78 3 的 `engine.test.ts` 測試名稱）——**答案都是「還在」**，見那兩列。
+
+---
+
+## §C Tier-1：沿鏈關閉（10 條）
+
+| 來源 | 一句話 | 關閉者（紀錄＋commit） |
+|---|---|---|
+| M77 8（`:92`） | 「非內容」的空結束仍靜默（gemini 的其他十個停止原因 ⇒ 200 空成功）——已成為候選 §2.5 | **M80 T1** —— `2f9147e`（`provider/empty` telemetry ＋ 耐久 `step/end.empty` ＋ CLI `[empty]` ＋ `result.empty`；判定點 `packages/core-agent/src/index.ts:512-514`，述詞帶 `!truncatedThisStep && !refusedThisStep`）。裁定與交付見 §E。**具名殘餘（不在此條的範圍）**：A3（seam 層）不做 ⇒ `compaction`／`session-title` 自己的模型呼叫仍不在此位（spec §1.5 的 *代價*、§4.3） |
+| M77 17（`:94`） | `CAPABILITIES-DETAIL` 說「19 行」而 manifest 有 23 列（第三次遺漏，原記「M80 收」） | **M79 T3** —— `45bd37e`（「19 行」連同其他三處一律改 23 列）＋ **M80 T3** —— `0496421`（23 → **24**，補 M80 T1 的 `provider/empty`）。HEAD 親量：`docs/CAPABILITIES-DETAIL.md` §2.2 今天寫「manifest 24 碼（manifest.ts:16-53）」與「= 24 行」；`grep -n "19 行\|19碼\|19 碼" docs/CAPABILITIES-DETAIL.md` ＝ **0** |
+| M77 18（`:94`） | `manifest.test.ts` 的執行期那一半是同義反覆（指派 M79） | **M79 T1** —— `230fd44`。HEAD 親量：`packages/telemetry/test/manifest.test.ts:17` 的 `type Missing = Exclude<TelemetryEventType, (typeof TELEMETRY_MANIFEST)[number]["code"]>` ＋ `:25` 的 `Missing extends never ? true : false = true`（`:22-24` 說明為何必須是**具名具體型別**）；執行期的迴圈斷言已刪 |
+| M77 22（`:102`） | 「加了型別忘了列 = 沒有東西會紅」（至 M79 修 `manifest.test.ts`） | **M79 T1** —— `230fd44`。同一顆釘子（上一列）；M79 §2.1 的突變證明：舊樹上同一顆突變 **exit 0**、新樹上 `TS2322` 且全跑唯一錯誤 |
+| M78 12（`:59`） | R6：reachability 儀器的註解盲點升格 M79 | **M79 T6** —— `cd188d7`（class 1 的「用了嗎」改讀**剝掉註解**的文字、entry 先剝再塗白；432 → 456）＋ `6bd35c7`（fixture 與備忘的措辭）。HEAD 親量：`scripts/audit/check-reachability.mjs:529-536` 的 `blankLexical(text, keepStrings)` 就是那個共用狀態機；`:553` 起自陳「M79 Task 6 parameterised this function instead of forking it」 |
+| 計畫 1（§2.4 `:46`） | manifest 測試同義反覆（指派） | **M79 T1** —— `230fd44`（同 M77 18 那一列）。計畫 §2.4 第 3 件已加 ▶，這一件沒有——見 §D D1 |
+| 計畫 2（§2.4 `:47`） | 儀器註解盲點（指派；M77／M78 各觸發一次） | **M79 T6** —— `cd188d7` ＋ `6bd35c7`（同 M78 12 那一列） |
+| 計畫 3（§2.4 `:48`） | `CAPABILITIES-DETAIL:295` 的 19→23 | **M79 T3** `45bd37e` ＋ **M80 T3** `0496421`（同 M77 17 那一列）；那一件在計畫裡已帶 **▶ 2026-09-24** |
+| 計畫 5（§2.5 `:52`） | 「非內容」的空結束仍靜默（候選，控制器傾向 (a)） | **M80 T1** —— `2f9147e`（同 M77 8 那一列）。裁定「**做（A0）**」在 spec §1.5；交付與讀數見 §E。**具名殘餘**：A3 不做（spec §1.5 的 *代價*）＋「有欄位卻帶著不可累積 parts」的角落（spec §4.3） |
+| 計畫 6（§2 `:40-43`） | 種子端只警告（2026-09-23 裁定；M76 R1 落地） | **M76 §2.2** —— `d5d1144`（種子端 warn 的門檻與它自己的算術）＋ `c2e9e60`。HEAD 親量：條件是 `seedTokens >= contextWindow`（`packages/subagent/src/child.ts:399`），訊息說明後果（`:400-404`），**只警告不修剪** |
+
+---
+
+## §C-Tier-2：仍開者逐條四鍵（69 條；`UNMEASURED` 0 條）
+
+| 來源 | 一句話 | 鍵 | 證據（指令／讀數） |
+|---|---|---|---|
+| M76 1（`:89`） | `resolveRoleTools`（`child.ts:408-411`）跑在 `coordinator.create` 之後 ⇒ 工具名重複會 throw、仍留孤兒 log | ④ 明說接受的成本 | HEAD 親量：`coordinator.create` 在 `packages/subagent/src/child.ts:324`、`resolveRoleTools(...)` 在 **`:411`**（`createToolRegistry` `:410`）；`:260-264` 的 M76 註解自陳被移到前面的是**模型解析器**、不是工具解析器 ⇒ 這一條原樣。代價寫在 M76 §6 第 3 條（「具名殘餘，不是保證」） |
+| M76 2（`:89`） | `createAgent`／`jobs.registerJob` 同理；早於本階段 | ④ 明說接受的成本 | 同上：`createAgent` 在 `:426`、`jobs.registerJob` 在 `:501`，都在 `:324` 之後 ⇒ 這兩個 throw 仍會孤兒化；「早於本階段」是 M76 §5 的歸屬 |
+| M76 3（`:89`） | **既有的**孤兒 `child-<uuid>` log 沒有遷移路徑 | ④ 明說接受的成本 | 親量：`git grep -n "child-" -- packages/subagent/src` 只有 mint（`:323` 的 `` `child-${randomUUID()}` ``）與註解，**沒有任何遷移程式**。與 Part 1 的 **M74 §5.3** 同一條（該列已判 ④：修法只作用在新 fork 的種子） |
+| M76 4（`:89`） | 切不動的單一巨塊仍走 fail-soft（M75 §4.4） | ④ 明說接受的成本 | 機制同 Part 1 的 **M75 §5.3／§5.5** 兩列：閘在 `packages/compaction/src/summarizer.ts:320-326`（四條件同時在才切塊）；切不動的區仍回到 reset／fail-closed。M76 §4 R1 把「多花一輪摘要」與它並列為代價 |
+| M76 5（`:89`） | `forkTurns` 預設 `"all"` 是產品決定 | ③ 產品決定 | 問題：子代理「看得到什麼」——預設把父的整份逐字稿交給它。HEAD 親量：`packages/subagent/src/child.ts:274` `const turns = opts.forkTurns ?? "all"`（`:275` 的 `Infinity`）。同一條在 Part 1 已兩列（M73 §4.3、M74 §5.6，皆 ③） |
+| M76 6（`:89`） | `tool/dispatch` 的 `eventSeq` 不動 | ④ 明說接受的成本 | HEAD 親量：`packages/core-agent/src/index.ts:419` 取 `deps.session.events.length`、`:423` 進 batch；`packages/core-session/src/index.ts:23` 的 `tool/dispatch` 帶 `eventSeq?: number`（`:21-22` 說明它是 durable seq）。M76 未動 ⇒ 位移敏感的既有形狀留住 |
+| M76 7（`:89`） | `NaN` 的既成行為 | ④ 明說接受的成本 | HEAD 親量：`packages/session-persistence/src/fork.ts:209-211`——`typeof event.anchorSeq === "number"` 對 `NaN` **成立** ⇒ 走 `renumbered.get(NaN) ?? 0` 得 `0`；而 `packages/core-session/src/index.ts:281-282` 的 `rewindCuts` 只拒絕**非數字**。`NaN` 由 JSON 帶不進來（`JSON.parse` 不產 `NaN`）⇒ 今天的不可達是**輸入種類**保證的，不是守衛。M76 §4 R9 記「早於本階段」 |
+| M76 8（`:91`） | 註解稱懸空 call 投影成 `assistant("", toolCalls)`——帶旁白的步驟會把文字折進同一則 | ④ 明說接受的成本 | HEAD 親量：句子在 `packages/compaction/src/region.ts:46`（"so it surfaces as `assistant(\"\", toolCalls)` carrying a `tool_use` no result answers"）；`grep -n "prose" packages/compaction/src/region.ts` ＝ **0** ⇒ 那半仍沒寫。deferred minor（M76 §5 明說非阻塞） |
+| M76 9（`:91`） | `fork.test.ts:376` 只斷言 `"turn 3 user"` 缺席（`"turn 3 answer"` 是同一個隱藏窗裡的免費判別力） | ④ 明說接受的成本 | HEAD 親量：那個檔今天**不存在**（`ls packages/subagent/test/fork.test.ts` 無）；同一條測試在 `packages/subagent/test/child.test.ts:125`（push `"turn 3 user"` ＋ `"turn 3 answer"`）與 **`:153`**（只有 `expect(shown).not.toContain("turn 3 user")`）⇒ 免費判別力仍未取 |
+| M76 10（`:91`） | `src/fork.ts` 對 melded 標記的視窗描述比實際精確 | ④ 明說接受的成本 | 量到的：句子仍在 `packages/subagent/src/fork.ts:24-36`（「opens the window on the child's FIRST event…」），而窗是**併**出來的（`packages/core-session/src/index.ts:286` 的 `meldRewindCut(resolved, ev.anchorSeq, ev.seq)`）⇒ 一個標記的敘述讀起來像整個視窗。**只量到句子在**；「比實際精確」是 M76 複審的判斷，本表未重新推導（見 §G） |
+| M76 11（`:91`） | `child.test.ts` 的測試註解與原始碼訊息現在都是條件的 | ④ 明說接受的成本 | HEAD 親量：訊息自身帶條件子句（`packages/subagent/src/child.ts:400-404`「…and the turn fails closed when it does not」）；測試註解在 `packages/subagent/test/child.test.ts:519-526`——明說那三個 presence-only 斷言「stay green if the message reverts to the unconditional wording」⇒ 條件性是**寫下來**的代價，不是被守著的 |
+| M76 12（`:75`） | R1 cost：子代理多花一輪摘要；切不動的巨塊仍 fail-soft | ④ 明說接受的成本 | 代價原文在 M76 §4 R1；兩半都能在 HEAD 找到落點——warn 與「summarises its inherited context in pieces before its first request」（`packages/subagent/src/child.ts:400-404`）＋ fail-soft（本表 M76 4 那一列） |
+| M76 13（`:76`） | R2：平行預檢 ~46ms 等儲存變遠端（屬 M78，在那裡接受） | ④ 明說接受的成本 | 數字在計畫 §2 第 2 條（`docs/handoff/2026-09-23-backend-closure-plan.md:56`：**10 個並行呼叫 62ms vs 16ms** ⇒ 差 ~46ms；同一組數字在 M70 §2 的探針）＋ **M78 §4 R4** 再接受一次（本表 M78 11、計畫 7 兩列） |
+| M76 14（`:77`） | R3 cost：規則單側 ⇒ 走位可停在未解析的 `tool/call`（**具名盲點** `region.ts:60-64`） | ④ 明說接受的成本 | HEAD 親量：`packages/compaction/src/region.ts:61` 起就是那段「Named residual, not a solved case: nothing constrains an unresolved `tool/call`, so the rule will let a cut REST ON one」。**這是具名的盲點**，不是被藏起來的 |
+| M76 15（`:78`） | R4 cost：兩條孿生路徑仍不一致（只讓子代理那條正確） | ④ 明說接受的成本 | HEAD 親量：session fork **丟** `rewind/point`——`packages/session-persistence/src/fork.ts:149-152`（`event.type !== "rewind/point" && …`）；子代理的 `forkTurns` **留**它——`packages/subagent/src/fork.ts:32-37`（「This path keeps it…」）⇒ 兩套規矩今天並存，兩邊都寫了理由 |
+| M76 16（`:79`） | R5 cost：第一步就摘要的子代理不會產那行 warn（沉默帶 `[0.8W − overhead, W)`） | ④ 明說接受的成本 | HEAD 親量：門檻是 `seedTokens >= contextWindow`（`packages/subagent/src/child.ts:399`），而帶狀區的算術與 `window = 5 × directive` 的交界寫在 `:378-396`（「the band `[0.8·window − overhead, window)` is silent here — a known, deliberate narrowing」）⇒ 沉默帶**具名在註解** |
+| M76 17（`:80`） | R6 接受的偏差：單元案例與端到端案例分檔 | ④ 明說接受的成本 | HEAD 親量：單元案例在 `packages/session-persistence/test/fork.test.ts:294`（`anchorSeq` 的重映射，直接呼叫 `remapSeedEvent`），端到端在 `packages/subagent/test/child.test.ts`（直接呼叫 `forkTurns`）⇒ 兩檔；多一個檔是 R6 明說的偏差 |
+| M76 18（`:83`） | R9 out-of-scope：新測試手寫 `renumbered` 映射；`NaN` 仍被當數字 | ④ 明說接受的成本 | 前半親量：`packages/session-persistence/test/fork.test.ts:326-333` 的 `remapSeedOf` 自建 `Map` 再呼叫 `remapSeedEvent`（不走 `forkTurns`）；後半見本表 **M76 7** 那一列 |
+| M77 1（`:79`） | R1 cost：分不出拒絕的種類 | ④ 明說接受的成本 | HEAD 親量：seam 的形狀只有一個位元——`packages/llm-seam/src/index.ts:71` `{ type: "end"; truncated?: true; refused?: true }`；`:43` 自陳「The seam learns "the provider refused", never which filter said so」。要分辨得再分一層語意（M77 §5） |
+| M77 2（`:80`） | R2 cost：終止 error ⇒ 整個 run 失敗、exit 1（spec §4.5） | ④ 明說接受的成本 | HEAD 親量：`packages/llm-anthropic/src/index.ts:236` 把 context 臂鑄成 `error.code = "CONTEXT_WINDOW_EXCEEDED"`；那個碼**不在**預設重試清單裡（`packages/llm-seam/src/index.ts:129`）⇒ 終止。行為改變逐字寫在 spec §4.5（`docs/superpowers/specs/2026-09-24-refusal-channel-design.md:100`：**「這一輪整個失敗、CLI exit 1」**） |
+| M77 3（`:81`） | R3 cost：`EMPTY_RESPONSE` 死碼繼續死著 | ④ 明說接受的成本 | HEAD 親量：`git grep -n "EMPTY_RESPONSE" -- '*.ts'` ＝ **2 行**，都在 `packages/llm-seam/src/index.ts`（`:83` 型別成員、`:129` 預設重試清單）——**零生產者**（同本表 M77 11） |
+| M77 4（`:84`） | R6：位元只給內容／政策；能力／可用性走錯誤通道；沒現成碼就具名不新造 | ④ 明說接受的成本 | **無殘餘（裁定，是原則本身）**。HEAD 親量兩側都成立：內容側——`packages/llm-gemini/src/index.ts:121-127` 逐條排除非內容原因並說「claiming a refusal for them would be a false statement about what the model did」；可用性側——anthropic 的 context 臂**不設位元**、走 `CONTEXT_WINDOW_EXCEEDED`（`packages/llm-anthropic/src/index.ts:236`） |
+| M77 5（`:85`） | R7：compat 的 `refusal: ""` 保持現狀，量了再說 | ④ 明說接受的成本 | HEAD 親量：規則在 `packages/llm-openai-compatible/src/index.ts:288-289`——`const refusalText = (delta as { refusal?: unknown }).refusal`；`if (typeof refusalText === "string") refused = true`。理由（`""` 的拒絕仍是拒絕；拿 `length > 0` 會漏掉它）在 spec §5（`…-refusal-channel-design.md:111`）⇒ 邊界未測見本表 M77 13 |
+| M77 6（`:86`） | R8：每家一個獨立性測試被拒 | ④ 明說接受的成本 | **無殘餘（提案被拒）**。被拒的依據今天仍可量：compat 的請求 payload（`packages/llm-openai-compatible/src/index.ts:157-172`）**沒有 `n`**，所以「兩條 `choices` 的框」是發明的內容；M77 §4 R8 逐條說明 |
+| M77 7（`:92`） | 分不出拒絕的種類（§5 的重列） | ④ 明說接受的成本 | 與本表 **M77 1** 同一條（紀錄在 §4 R1 與 §5 各列一次）；證據同列 |
+| M77 9（`:92`） | 拒絕之後的行為是產品決定 | ③ 產品決定 | 問題：重試？換模型？（M77 §5；M77 §6 第 4 條：腳本仍分不出拒絕與成功，除非解析 stderr）。HEAD 親量：`packages/llm-openai/src/index.ts:182-183` 把拒絕的**文字**不提進 assistant text，且自陳「(a parked product decision)」；CLI 的 exit code 仍是常數 0（`apps/cli/src/run.ts:934`） |
+| M77 10（`:92`） | anthropic 的 context 臂會弄死整個 run | ④ 明說接受的成本 | 與本表 **M77 2** 同一條（§4 R2 與 §5 各列一次）：`packages/llm-anthropic/src/index.ts:189-236` 的臂 ＋ spec §4.5。刻意（大聲失敗勝過靜默），且是**使用者看得見**的行為改變 |
+| M77 11（`:92`） | `EMPTY_RESPONSE` 沒有生產者 | ④ 明說接受的成本 | 與本表 **M77 3** 同一條（兩列）；證據同列 |
+| M77 12（`:92`） | `delta.refusal` 的伴隨形狀不可查（兩個文件站 403） | ④ 明說接受的成本 | HEAD 親量：`packages/llm-openai-compatible/src/index.ts:276-286` 引的是 `Choice.Delta.refusal?: string \| null` 的**廠商文字**（「The refusal message generated by the model」），而 403 是量測環境的限制 ⇒ 位元看的是**欄位本身**、不是 `finish_reason`（spec §5），所以不影響正確性。**量不到的那半**見 §G |
+| M77 13（`:92`） | `refusal: ""` 的邊界未測 | ④ 明說接受的成本 | HEAD 親量：`git grep -n 'refusal: ""'` 在 `packages/llm-openai-compatible/**` ＝ **0**（唯一一處是 `packages/llm-openai/test/openai.test.ts:548` 的 **content-part**，屬 openai 那條 wire、鍵在 `type` 上）；compat 的 delta 載體本身**有**測試（`packages/llm-openai-compatible/test/openai-compatible.test.ts:449`）⇒ 未測的**正好是 `""` 這個邊界** |
+| M77 14（`:92`） | `llm-seam` 的 JSDoc 仍是「一家一個載體」的舊寫法 | ④ 明說接受的成本 | HEAD 親量：`packages/llm-seam/src/index.ts:31-36` 仍以「一家的停止原因字面」逐一列舉五家（"openai's and openai-compatible's `content_filter`, gemini's `SAFETY` / `RECITATION`, anthropic's `stop_reason: "refusal"`, bedrock's `guardrail_intervened`"），而 fix wave 的三個補丁（`282e81e`／`bf85c64`／`ccb9df0`）證明**三家另有內容側載體**（`git show --no-patch --format=%s` 逐條讀過）⇒ 清單的寫法未動（改的是引用形式） |
+| M77 15（`:92`） | `response.completed` 的 `output[]` 是陳述的邊界、不是量測過的 wire | ④ 明說接受的成本 | HEAD 親量：`packages/llm-openai/src/index.ts:170-181` 的三載體清單自陳「Three carriers are read, because at this layer none implies another」；全檔 `grep -n "response\.output"` 只有 `response.output_text.delta`（`:196`）與 `response.output_item.added`（`:199`）——**`response.completed` 的 `output[]` 沒有被讀**，`response.completed` 那臂只讀 `response.usage`（`:251-257`）⇒ 邊界是**陳述**的。**量不到的那半**見 §G |
+| M77 16（`:94`） | `spyTelemetry` 被複製一份 | ④ 明說接受的成本 | HEAD 親量：`grep -rn "function spyTelemetry" packages/*/test/*.ts \| wc -l` ＝ **7 個定義**、`grep -rln` ＝ **5 個檔**（`compaction/test/analytics.test.ts:10`、`core-agent/test/agent.test.ts:504`／`:563`／`:652`、`core-agent/test/projection-rewrite.test.ts:19`、`core-agent/test/provider-usage.test.ts:27`、`core-agent/test/telemetry.test.ts:13`）⇒ 「一份」的複製在計數上是**七份** |
+| M77 19（`:94`） | `session-title` 的訊息沒有呼叫端觀察得到（在 `try` 裡、`catch` 直接回退） | ④ 明說接受的成本 | HEAD 親量：`packages/session-title/src/index.ts:89-92`——throw 就在自家的 `try` 裡，`:93-95` 的 `catch { return { title: fallbackTitle(...), source: "fallback" } }` 直接吞掉；註解自陳「the text is a message for a reader of the source … not for an operator today」。呼叫端 `apps/cli/src/run.ts:863` 的 `await maybeAutoTitle` 沒有任何觀察者 |
+| M77 20（`:94`） | `llm-gemini` 的排除清單只列了 10 個（14 個裡） | ④ 明說接受的成本 | HEAD 親量：排除清單在 `packages/llm-gemini/src/index.ts:121-126`，具名 **10 個**（`LANGUAGE`／`OTHER`／`NO_IMAGE`／`IMAGE_OTHER`／`MALFORMED_RESPONSE`／`UNEXPECTED_TOOL_CALL`／`TOO_MANY_TOOL_CALLS`／`MISSING_THOUGHT_SIGNATURE`／`ESCALATION`／`PUP_LIMITED_DISABLED`；＋`STOP`／`MAX_TOKENS` 另句）；而**測試只釘 2 個**——`packages/llm-gemini/test/gemini.test.ts:504` 的 `it.each(["OTHER", "LANGUAGE"])` |
+| M77 21（`:94`） | `anthropic.test.ts` 的一句措辭 | ④ 明說接受的成本 | HEAD 親量：`packages/llm-anthropic/test/anthropic.test.ts:536`（"…every other stop_reason is a clean ending, and a clean ending must…"）——M77 之後`refusal` 不再是乾淨結束，所以「every other」變得不精確（spec §2 的同一條，`…-refusal-channel-design.md:24`） |
+| M77 23（`:103`） | exit code 仍是 0…那是產品決定（§5） | ③ 產品決定 | 問題：要不要讓腳本能分辨拒絕與成功（M77 §5／§6 第 4 條）。HEAD 親量：`apps/cli/src/run.ts:934` 的成功出口是 `exitCode: 0` 常數；`[refused]`／`[truncated]`／`[empty]` 三行只到 stderr（`:931` 的 `[empty]`） |
+| M78 1（`:65`） | 快取那一側沒有量（§1.1、closure §2.45） | ④ 明說接受的成本 | 裁定＝**明說接受**，觸發條件＝第一次有真 provider 的部署（spec §1.4）；受影響的落點自陳在同檔 **`packages/compaction/src/index.ts:86-96`**（「It is NOT a byte-prefix of the LAST SENT main request any more, and the cache side is a trade this unit did not measure — stated, not repaired」）。**量不到的那半**見 §G；處置見 §E |
+| M78 2（`:65`） | 五處過期的快取簡寫 | ④ 明說接受的成本 | HEAD 親量（**五處都還在**）：① `packages/compaction/src/index.ts:200-202`（"replay the region as REAL messages so this call is a byte-prefix of the last main request"）；② `packages/compaction/src/summarizer.ts:181-182` 與 `:303-305`（"it is a byte prefix of the session's last main request and the provider cache serves it"）；③ `packages/core-agent/src/index.ts:184-185`（"the call is a byte-prefix of the main request and the provider's cache serves it"）；④ `packages/core-session/src/index.ts:447-449`（**最糟**：就在 M78 自己那段例外說明（`:455` 起）上方幾行，互相矛盾）；⑤ `packages/session-executor/test/assembly.test.ts:249-251` |
+| M78 3（`:65`） | `engine.test.ts` 的測試名稱同類 | ④ 明說接受的成本 | HEAD 親量：`packages/compaction/test/engine.test.ts:58` 的名字仍是 `"summarizer failure is fail-soft: no events appended"`，`:71` 的斷言仍是 `expect(s.events.some((e) => e.type.startsWith("compaction/"))).toBe(false)`——而 M78 之後失敗的一輪**可以**附加 `compaction/prune`（`:266-273` 自己說「the log changed while the result says the pass failed」）；它在這個 fixture 綠只因為 `longSession()`（`:18-22`）只有 `user/message`、沒有可 prune 的東西。M78 的 `0336fe4` 動的是四個檔（`compaction/src/index.ts`／`test/prune.test.ts`／`core-session/src/index.ts`／`test/prune-event.test.ts`），**不含**此檔 |
+| M78 4（`:65`） | 重試會再附加一個標記（冪等 last-wins；手動 `compact()` 沒閘；去重省 ~5 180 bytes，不做） | ④ 明說接受的成本 | HEAD 親量：`packages/compaction/src/index.ts:277-289` 逐句（"the ladder's next rung RE-PLANS the same records and appends a SECOND `compaction/prune` marker (nothing dedupes…)"；`enforceBudget` 的 layer 1 每步呼叫無閘的 `compact()`；"one record's marker JSON is 5 180 bytes"；"Deliberately left alone"） |
+| M78 5（`:65`） | prune 只縮它能縮的（沒東西可 prune 的區域仍走 M75 切塊路徑） | ④ 明說接受的成本 | HEAD 親量：只有 `pruneRecords.length > 0` 才附加標記——`packages/compaction/src/index.ts:186`；而切塊的閘是四條件同時在（`packages/compaction/src/summarizer.ts:320-326`）⇒ 兩條路今天並存，代價是「區域沒東西可 prune 時沒有省」 |
+| M78 6（`:67`） | 改正後的註解有兩處措辭不精（`summarizationModel` 的閘沒提；「不再是 byte-prefix」讀起來無條件） | ④ 明說接受的成本 | HEAD 親量：`sed -n '84,97p' packages/compaction/src/index.ts \| grep -c "summarizationModel"` ＝ **0**（那一段沒提**那道閘**）；同一段的「It is NOT a byte-prefix of the LAST SENT main request any more」（`:86`）讀起來無條件，而分岔是 **prune 條件性的**（真閘在 `:202-203`） |
+| M78 7（`:67`） | `slices.ts`／`region.ts` 之外仍有幾個目前正確的行號引用 | ④ 明說接受的成本 | HEAD 親量：`grep -rn "\.ts:[0-9]" packages/compaction/src packages/compaction/test \| grep -v "/slices.ts\|/region.ts"` ⇒ **8 行**（例：`src/index.ts:627` 引 core-session 的 `src/index.ts:138/277`；`test/walkoff.test.ts:57` 引 `index.ts:352` 與 `region.ts:150`；`test/slices.test.ts:35`／`:38` 引 `core-agent` 的兩個位置）——「目前正確、但會腐」；`region.ts` 自己仍有 **4 條**（`:31`／`:47`／`:49`／`:73`）。本階段自己的規矩是引符號不引行號（M78 §6 第 1 條：「**引檔案用符號名**——本階段那個檔案的行號移了 30 行」） |
+| M78 8（`:54`） | R1 cost：把 `compacted:false` 讀成「什麼都沒附加」的消費者現在微妙地錯 | ④ 明說接受的成本 | HEAD 親量：代價被具名成「An odd combination, named rather than smoothed over」（`packages/compaction/src/index.ts:270-273`），並有釘子（同段指名 `test/prune.test.ts` 的案例「M78: a summarizer failure leaves the prune APPLIED」）。**一個活的例子就在樹上**：本表 M78 3 那一列的 `engine.test.ts:71` |
+| M78 9（`:55`） | R2 cost：一個 prefix fold 會套用屬於更晚時刻的重寫（時間尋址的釘子是警報） | ④ 明說接受的成本 | HEAD 親量：例外只給 prune（內容尋址）——`packages/core-session/src/index.ts:455-464`（"`derivePruneSubstitutes` keys its map by tool call id… applying the map to ANY fold is exactly right"）；警報的釘子有兩顆：`packages/core-session/test/prune-event.test.ts:92`（"the content-addressed prune directive crosses the cut; the time-scoped markers do not"）＋ 同檔 `:54-65` 的 shadow／reset 案例 |
+| M78 10（`:56`） | R3：取捨（快取 vs token），哪邊贏沒有量 ⇒ 候選量測（closure §2.45） | ④ 明說接受的成本 | 與本表 **M78 1** 同一條（紀錄在 §4 R3 與 §5 各列一次）；裁定與觸發條件見 §E |
+| M78 11（`:57`＋`:34`） | R4：平行預檢候選（條件：儲存變遠端） | ④ 明說接受的成本 | **具名候選**：數字在計畫 §2 第 2 條（62ms vs 16ms），機制是逐步呼叫的 checkpoint（`packages/core-agent/src/execute-tool-calls.ts:209` 的 `callEventSeq`／`:252` 的 `eventSeq`）；觸發條件逐字是「若儲存變成遠端（每次寫入是一次往返）再回來做」（計畫 §2 第 2 條末）。同一條在 M76 13／計畫 7 兩列 |
+| M79 1（`:72`） | 指名未覆蓋：`subagent/src/tools.ts:829`（量過驅不動）與 `child.ts:399`（只有 console 間諜） | ④ 明說接受的成本 | HEAD 親量：兩站今天**就在原行號**——`packages/subagent/src/tools.ts:829` 與 `packages/subagent/src/child.ts:399` 都是 `d.warn(`；覆蓋帳見 Part 1 的 M71 2 列（45 站／已覆蓋 15／未覆蓋 30），`packages/subagent/test/site-diagnostics.test.ts` 自己也把「`tools.ts` 的 session handle 不被覆蓋」寫成報告 |
+| M79 2（`:73`） | class 2/4/5 的註解危害：latent（零列移動），明說不修 | ④ 明說接受的成本 | HEAD 親量（機制）：class 2 的 producer 掃描讀**原文**——`scripts/audit/check-reachability.mjs:516-525`（`f.text.split(/\r?\n/)`，`isProducerLine` 只排除**行首**註解：`:505-509`）。spec §1.4 d2 是「只量不修」（`…-coverage-completion-design.md:88`）⇒ 危害類別**今天仍在**，只有 class 1 被 `cd188d7` 修掉 |
+| M79 3（`:74`） | core-session 內聯 union 的漂移檢查是單向的 | ④ 明說接受的成本 | HEAD 親量：內聯複本在 `packages/core-session/src/index.ts:151`（`phase: "cli" \| "config" \| "run" \| "turn" \| "sdk" \| "session" \| "mount" \| "shutdown"`＝八個字面）；雙向的釘子只蓋**套件自己的** union——`packages/diagnostics/test/phase-union.test.ts:25-32`（`NoExtra`／`NoMissing`）；該檔 `:11-14` 自己說內聯複本「a sync there is a disciplined edit rather than a compile error」。（Part 1 的 **M69 3** 是同一條） |
+| M79 4（`:75`） | 只被字串提到的 export 仍不會有列（刻意的取捨；`interaction#Command`） | ④ 明說接受的成本 | HEAD 親量：instrument 自己的 self-test 把這個取捨**釘住**——`scripts/audit/check-reachability.mjs:1109-1111`（名 `"class 1: a name only inside a STRING literal still retires the row (strings are not stripped)"`）；字串本身在 `packages/shell/src/index.ts:21`／`:479` 與 `packages/guard-approval/src/remember.ts:17` 的 `"-Command"`，而 `Command` 是 `packages/interaction/src/index.ts:76` 的 export ⇒ 它不會有列，是取捨不是漏洞（M79 §5） |
+| M79 5（`:76`） | stripper 的 regex-literal 極限：5 檔受影響＋反方向 4 檔（量到沒有列被藏住） | ④ 明說接受的成本 | HEAD 親量：5 檔名逐字在 `scripts/audit/check-reachability.mjs:553-557`（`task-board.ts`／`lsp/render.ts`／`plugin-registry/marketplaces.ts`／`rewind/path.ts`／`settings/index.ts`；「every span inside a regex source and none containing an export name」）⇒ 限制**今天仍在**；反方向的 4 檔只在紀錄（`m79-coverage-completion.md:77`），樹上沒有第二份（見 §G） |
+| M79 6（`:77`） | `docs/` 其餘過期載體（audit 的「20 rows」、baseline §6.2 的 `mountPreset`…）——歷史快照不改 | ④ 明說接受的成本 | **已處置的兩處**：W6 紀錄 `:167` 那條的正下方 `:168` 有 ▶（`00067ec`，M80 T5）；`docs/audit/2026-09-15-reachability-baseline.md` 的 §6.2 `mountPreset` 格有 ▶ 2026-09-24（**`packages/tui` 隨 M65 刪除 ⇒ 抑制失效 ⇒ 成為 live finding，重測於 `1ac091e`**）。**按 leave 規則原樣的兩處**：`docs/audit/2026-09-11-ih-backend-inventory.md:3063`（「TELEMETRY_MANIFEST has 20 rows」；對該檔 `grep -c "▶"` ＝ **0**）與 `docs/superpowers/specs/2026-09-17-m3-measurement-foundation-design.md:77`（「是 20」）——兩者都在 M80 spec §1.1 的**快照／leave** 名下 ⇒ 假數字留在快照裡，是刻意的 |
+| M79 7（`:78`） | allowlist 的 note 說兩個資料檔是 CRLF、baseline 現在是 LF（may-ship） | ④ 明說接受的成本 | HEAD 親量（工作樹）：`scripts/audit/reachability-allowlist.json` **269/269 行帶 CR**（CRLF），`scripts/audit/reachability-baseline.json` **0/464 行帶 CR**（LF）；兩者的 **blob 皆 0 CR**（`git show HEAD:<f> \| tr -dc '\r' \| wc -c` ＝ 0）⇒ note 的 (2) LINE ENDINGS 那一段的主張**今天為假**（baseline 是 LF），而它的 `core.autocrlf=true` 附註仍對 |
+| M79 8（`:79`） | T5 的 `compact` 誘餌讓自動壓縮保持 enabled（脆弱點）；T5/T4 的 helper 重複 | ④ 明說接受的成本 | HEAD 親量：第三顆誘餌 `compact: { contextWindow: 4_000 }` 在 `packages/session-executor/test/assembly.test.ts:1592`，作者自己寫下「its presence does not disturb the fixtures (no compaction pass: the runs keep the review at exactly one request…)」（`:1593-1594`）⇒ 今天穩定**靠的是沒有壓縮 pass**，那正是脆弱點。helper 重複：`ls packages/*/test/site-diagnostics.test.ts \| wc -l` ＝ **11 檔**，11 檔都各自帶區域 helper（`grep -rl "installDiagnostics" packages/*/test/site-diagnostics.test.ts` ＝ 11） |
+| M79 9（`:80`） | T2 的 `Exclude<any, X>` = `any` 洞；T1/T2 的非分配性只寫在 fix wave 補的那一句 | ④ 明說接受的成本 | HEAD 親量：`git grep -n "Exclude<any" -- '*.ts'` ＝ **0**（今天沒有任何 `Exclude<any, …>`）；兩個斷言檔的 checked 側都是具名具體型別（`packages/diagnostics/test/phase-union.test.ts:25-27`、`packages/telemetry/test/manifest.test.ts:17`）⇒ 這是**模式層的威脅模型註記**（若哪天 checked 側是 `any`，`Exclude` 回 `any`、釘子靜默通過），不是活的殘餘。後半：那句非分配性警語由 fix wave **`5d080ef`** 補進兩個檔（`:26-28` 與 `:22-24`，`git show 5d080ef -- …/phase-union.test.ts` 親量） |
+| M79 10（`:56`） | R1 工作區＝分支就地（不建 worktree） | ④ 明說接受的成本 | **無殘餘（裁定）**：M79 紀錄的檔頭逐字記「`m79`（from `main` `5446d6bb`）」（`docs/handoff/2026-09-24-m79-coverage-completion.md:5`）；代價「無（分支即隔離）」。⚠ 輸入清單的行號比今天少 1（M80 `00067ec` 在紀錄 `:6` 補了 ▶） |
+| M79 11（`:57`） | R2 T1 的惰性 expect（keep-alive） | ④ 明說接受的成本 | HEAD 親量：`packages/telemetry/test/manifest.test.ts:25` 的 `const manifestIsExhaustive: Missing extends never ? true : false = true` ＋ **`:30`** 的 `expect(manifestIsExhaustive).toBe(true)`——那是 `noUnusedLocals` 的 keep-alive，承重的是型別註解（M79 §4 R2 逐字：讀者可能誤讀，註解已寫明） |
+| M79 12（`:58`） | R3 T4 的紅先＝拿掉觀察者 | ④ 明說接受的成本 | 樹上量得到的：五個站點的測試都在——`packages/{plugin-registry,hooks,sdk,core-plugin}/test/site-diagnostics.test.ts`（`ls packages/*/test/site-diagnostics.test.ts` ＝ 11 檔），關閉者 `c0d1ea1`。**裁決本身住在 ledger**（M79 §4 R3 自己說「裁決在 ledger，複審可見」）⇒ 見 §G |
+| M79 13（`:59`） | R4 小工具逐檔重複是 house style | ④ 明說接受的成本 | HEAD 親量：同本表 M79 8 那一列（11 檔各自的區域 helper）；代價「~10 行模板未來可能各自漂移」（M79 §4 R4） |
+| M79 14（`:60`） | R5 內聯 union 複本保留 | ④ 明說接受的成本 | 與本表 **M79 3** 同一件事的裁定面：`packages/core-session/src/index.ts:151` 的八個字面 ＋ 零依賴是既有設計 ⇒ 只同步字面（M79 §2.2 的 `a629acd` 逐字：「內聯複本**人手**同步」） |
+| M79 15（`:61`） | R6 接受兩個既有測試檔頭註解改動 | ④ 明說接受的成本 | HEAD 親量：那兩個檔頭今天各自列舉覆蓋範圍並說明為何存在——`packages/hooks/test/site-diagnostics.test.ts:1-8`（"WHY THIS FILE EXISTS…"）；代價原文是「失去『既有測試檔逐字未動』的保證」（M79 §4 R6），改動逐條具名 |
+| M79 16（`:62`） | R7 parked：`check-reachability.mjs:548-549` 對 class 3 的方向描述錯 | ④ 明說接受的成本 | HEAD 親量：`scripts/audit/check-reachability.mjs:548-549` 今天正是那段——「`codeOnly` (class 3) blanks string content by design, so a span lost there is a miss. `commentsBlanked` (class 1) KEEPS the strings…」（parked 的判讀：`unread-flag` 也是**鑄列**方向；本樹 0 實例） |
+| M79 17（`:63`） | R8 parked：`:555-556`「every span inside a regex source」只對觸發成立 | ④ 明說接受的成本 | HEAD 親量：`scripts/audit/check-reachability.mjs:555-556` 逐字仍在（塗白延伸到行尾、含 literal 之後的程式碼；實質句「零個 export 名」不受影響） |
+| M79 18（`:64`） | R9 parked：`assembly.test.ts:1585-1586` 的 compact 句 scope | ④ 明說接受的成本 | HEAD 親量：句子在今天的 `packages/session-executor/test/assembly.test.ts:1585-1586`（「while the `opts.compact?.contextWindow` form is what nothing above can see: the fixture passes the SAME window to both keys」）——它對 `:1606` 起的**這四個 fixture**成立，不是普遍宣稱（direct-child 的 M73 案例會紅） |
+| M79 19（`:66`） | 三條 parked 全屬核心類別，逐條具名不沉默 | ④ 明說接受的成本 | 紀錄層面的**處置本身**：`docs/handoff/2026-09-24-m79-coverage-completion.md:67` 逐字（「照 SDD 沒有第二輪 fix wave，故在此逐條具名，不沉默」）；三條的落點見本表 M79 16／17／18 |
+| 計畫 4（§2.45 `:50`） | 摘要請求的快取那一側沒有量（候選，待裁決） | ④ 明說接受的成本 | 裁定＝**明說接受**（spec §1.4，逐字「樹上沒有真 provider ⇒ 快取側量不到；紅利側已量到且壓倒性」）；觸發條件＝**第一次有真 provider 的部署**（量 `cacheReadTokens` 修前／修後）。三列同一條：本表 M78 1／M78 10；處置見 §E |
+| 計畫 7（§2 `:54-56`） | M70 checkpoint 接受；平行預檢具名候選（儲存變遠端） | ④ 明說接受的成本 | 接受面：M78 §4 R4 再確認一次；候選面見本表 M76 13／M78 11（同一個觸發條件）。計畫 §2 第 2 條今天逐字仍寫「若儲存變成遠端（每次寫入是一次往返）再回來做」 |
+
+---
+
+## §D 六處紀錄／計畫矛盾（D1–D6）— 以今天的事實收掉
+
+| # | 矛盾 | 今天的事實（量測） | 收法 |
+|---|---|---|---|
+| **D1** | §2.4 三件已交付，計畫本文仍以待辦寫 | **半修**：第 3 件（19→23）帶 **▶ 2026-09-24**（`docs/handoff/2026-09-23-backend-closure-plan.md:48`）；第 1、2 件（`:46`／`:47`）**仍是「修法＝…」的將來式**，沒有任何 ▶。交付的事實由 §1 的 M79 列承載（`:31` 逐字：「三件指派（manifest 牙齒／儀器註解盲點／19→23 列）**全部落地**」）＋ 本表 §C Tier-1 的三列 | 以 §1（進度表）＋ §C 的三列為準；§2.4 第 1、2 件保持原文（那是**指派語**、不是假宣稱）。查核：輸入提示「⇒ M80 T5 已修 §2.4」**半錯**，見上 |
+| **D2** | 計畫 M78 列「留下的兩件」vs record §5 五條 | **已修**：計畫 `:30` 今天寫「**留下的五條**（record §5 的殘餘逐條）」，並把五條逐一列名（快取那一側未量、五處過期的快取簡寫、`engine.test.ts` 的測試名稱、重試會再附加一個標記、prune 只縮它能縮的）⇒ 與 M78 §5 的五條**逐條對上** | 以計畫那一列為準（數量與內容都對上了）；五條各自的處置在本表 M78 1–5 |
+| **D3** | `CAPABILITIES-DETAIL` 列數項被兩份文件再路由去 M80，實已由 M79 收 | **已修**：① 計畫 §2.4 第 3 件帶 ▶（19→23 由 M79 `45bd37e`、23→24 由 M80 T3）；② M77 紀錄 `:94` 那句「（**第三次遺漏**，M80 收）」**仍是原文**，但**緊接在 `:96`** 就是 **▶ 已收線（M79）**，逐字說明「`45bd37e` 把『19 行』連同其他三處一律改成 23 列（早於預期的『M80 收』）」；③ 檔案本身今天寫 **24 碼／24 行**（`docs/CAPABILITIES-DETAIL.md` §2.2）；④ 逐字掃「M80 收」（`grep -rn "M80 收" docs/`）⇒ **再路由語只剩兩處**：M77 紀錄 `:94` 那句（**已在 `:96` 被 ▶ 收掉**）與計畫 §4 的 H-3 那句（`:79`，見 §F 第 12 列）；其餘兩個命中不是再路由——`2026-09-24-coverage-completion-design.md:126` 是 M79 spec 自己的 leave 清單、M77 `:96` 的命中是 ▶ 在引述「早於預期的『M80 收』」 | 已無第三份文件牴觸；保留的原文＋▶ 是樹規矩（**只加不刪**） |
+| **D4** | 計畫自稱「唯一還沒做清單」，但殘餘在各紀錄——**結構性、by design** | 兩句都逐字在：計畫 `:3` 自稱「它是**唯一的『還沒做』清單**」；計畫 §5 `:90` 自己的規則說「**新的殘餘**一律先寫進該單位的 spec §5，再由 M80 決定去留；**不直接塞進這張表**（否則它會變成第二個落後的 `queued-work.md`）」 | **by design**：計畫的「唯一」只對**里程碑狀態**成立（§1 那張表），**殘餘清單**的載體是各單位的 spec §5 與紀錄——本稽核的輸入因此從**紀錄組**來（本檔＋舊半檔），不是從計畫抄。**這是設計的兩份東西，不是矛盾**；不修（改任一句都會讓另一句更假） |
+| **D5** | M79 紀錄與計畫列的「合併尚未進行」 | **已收**：紀錄 `:5` 保留原文，`:6` 就是 **▶ 已合併（2026-09-24）：PR #15 → `bc45dce`**，並附 tree 相等的兩個證明（`git rev-parse m79^{tree}` ＝ `bc45dce^{tree}` ＝ `3f2bbabb…`；`git diff bc45dce m79 --stat` 空），末尾自陳「上面那句…只描述寫下時的那一刻」；計畫 `:31` 的 M79 列寫 **PR #15 → `bc45dce`** ＋ 閘門 3133／456 | 兩側都處理完（原文＋▶／狀態列），沒有第三份文件牴觸 |
+| **D6**（soft） | 計畫 §0「沒有任何東西卡在產品決定上」（僅指 queued-work Q1–Q8）vs 紀錄的兩個開放產品決定（`forkTurns` 預設；拒絕之後的行為） | 計畫 `:18` 的句子**沒有限定詞**，但它的主語在**同一句**裡——「它的 A 堆是空的，而且 `Q1–Q8` 全部有答案（`:549-554`）」⇒ **它是對 `queued-work.md` 說的**。而樹上的產品決定不只兩個：本表 ③ 三條（M76 5、M77 9、M77 23）＋ Part 1 的五條（M69 1、M72Ⅲ 116／117、M73 98、M74 99）＝ **8 條**（量的方式：逐列數兩張 Tier-2 表的 ③） | **措辭與範圍的問題**：句子對它的主語為真、對全樹為假。今天兩側都留著（計畫是**活文件**、這一輪沒有改它這一句）⇒ 判為**已足**（收線紀錄 §3 的判準 2 要的正是「③附問題」的逐條歸類，本表與 Part 1 都做了）。**建議**：readiness 紀錄引用它時**把主語一起引**（`queued-work` 的 A 堆與 Q1–Q8），不要單獨引「沒有任何東西卡在產品決定上」 |
+
+**D1–D6 的總讀數**（每列恰好一種）：**3 已修**（D2／D3／D5）＋ **1 半修**（D1——三件裡一件帶 ▶）＋ **1 by design**（D4，不修且不該修）＋ **1 措辭**（D6，兩側都留、以引用方式約束）＝ **6**。
+
+---
+
+## §E 兩個候選的處置
+
+### §2.45（計畫 `:50`）— **明說接受**，觸發條件＝第一次有真 provider 的部署
+
+- **裁定**（spec §1.4，`docs/superpowers/specs/2026-09-24-m80-backend-readiness-design.md:87`，逐字）：**「樹上沒有真 provider ⇒ 快取側量不到；紅利側已量到且壓倒性（超窗 2→1 請求）。觸發條件：第一次有真 provider 的部署（量 `cacheReadTokens` 修前／修後）。代價：若快取損失佔上風，『放得下』那側的帳單可能更貴。」**
+- **受影響的三條輸入項**：M78 1／M78 10／計畫 4（本表 §C-Tier-2 各一列，皆 ④）。
+- **紅利側的讀數（已量）**：超窗時 **2 個請求 → 1**（計畫 §2.45 `:50`；M78 紀錄 §3「紅利那一側仍是真的且壓倒性」）。
+- **成本側的讀數（已量）**：prune 讓摘要請求少了 **3 717 個 token**（計畫 §2.45 `:50`），代價是它與上次送出的主請求在第一個被 prune 的輸出處分岔 ⇒ 之後是全額。
+- **量不到的依據**：「樹上從未發過真 provider 的請求」——本表能加的讀數：`git grep -ln 'stubGlobal("fetch"'` ⇒ **24 個檔命中，扣掉 `docs/**` 的 12 個引文 ⇒ 12 個測試檔**；另一種引號形式 `git grep -ln "stubGlobal('fetch'"` ＝ **0**（不是漏了寫法）⇒ 樹上沒有任何測試打真網絡。`ANTHROPIC_API_KEY`／`OPENAI_API_KEY` 在 `apps/**`／`packages/**` 只出現為**測試裡的名字**（`packages/provider/test/directory.test.ts:32`／`:53`／`:180`、`packages/settings/test/sections.test.ts:517`／`:540`），真正的值是執行期從 settings／env 解（`packages/provider-runtime/src/index.ts:266-267`）。這是**斷言式的既有事實**（Part 1 的 M72Ⅰ §7-6 列同樣處理），見 §G。
+- **觸發條件可執行**：`provider/call` 已在報 `cacheReadTokens`（M78 §6 第 3 條逐字：「先量 `cacheReadTokens`（`provider/call` 已經在報）」）⇒ 部署時修前／修後各一次即可結案。
+
+### §2.5（計畫 `:52`）— **做（A0）**，已由 M80 T1 交付
+
+- **裁定**（spec §1.5，`…-m80-backend-readiness-design.md:91`，逐字）：**「做（A0）」**——理由：與收線判準直接相關（**靜默空成功就是 M77 消滅的那一類**）；成本量到是 5＋2 檔；形狀與 M77 逐點對稱。*代價*：**A3 的覆蓋不做**（具名殘餘）。
+- **交付**：**M80 T1 —— `2f9147e`**（`feat(core-agent,core-session,telemetry,cli): a non-content empty success stops being silent — provider/empty, step/end.empty, [empty] (M80)`）。`git show --stat` 親量：**7 檔 ＝ 5 src ＋ 2 測試檔**（`apps/cli/src/run.ts`、`packages/core-agent/src/index.ts`、`packages/core-session/src/index.ts`、`packages/telemetry/src/manifest.ts`、`packages/telemetry/src/types.ts`；`packages/core-agent/test/agent.test.ts`、`apps/cli/test/metrics-summary.test.ts`）——與 spec §0.5 量到的「A0 ＝ 5 src ＋ 2 測試檔」**逐檔相同**。
+- **HEAD 讀數（四條通道都在）**：① 判定點 `packages/core-agent/src/index.ts:512-514`（`stepText === "" && toolCallsThisStep === 0 && !truncatedThisStep && !refusedThisStep`）⇒ `:513` 發 `provider/empty`；② 耐久位 `:516` 的 `step/end.empty`（型別註解在 `packages/core-session/src/index.ts:25`，逐字寫出「Excluded by construction from a step that was `truncated` or `refused`… a step whose only output was a tool call is NOT empty」）；③ manifest **24 列**（`:44` 的 `provider/empty` 列）；④ CLI `[empty]`（`apps/cli/src/run.ts:931`）＋ `result.empty`（`:934` 的 `...(empty ? { empty: true } : {})`）。
+- **六個案例的形狀都在**（spec §2 第 3 條）：`packages/core-agent/test/agent.test.ts` 4 條（`:663` 空步寫耐久位＋telemetry／`:692` 乾淨步不寫／`:709` `refused` 或 `truncated` 不雙報／`:743` 只有 tool call **不是** empty）＋ `apps/cli/test/metrics-summary.test.ts` 3 條（`:305` 空 run 說在 stderr 與 result／`:316` 乾淨 run 兩者都不／`:329` 真 CLI **exactly-once**）。
+- **代價與具名殘餘**（照裁定入表）：**A3（seam 層）不做** ⇒ `compaction`／`session-title` 自己的模型呼叫不在這個位（spec §1.5）＋「有欄位卻帶著不可累積 parts」的角落仍未覆蓋（spec §4.3，逐字「**不保證 §2.5 之後沒有靜默空成功**」）。**兩者都不在輸入清單的新半條目裡** ⇒ 由本節承接，不另開列。
+
+---
+
+## §F 計畫 §4「不是後端的事」逐條重驗（8 條輸入項；第 1 條的兩個句子分開量 ⇒ 9 列）
+
+| 輸入（計畫 §4） | 一句話 | 仍是事實？ | 量測（指令／讀數） |
+|---|---|---|---|
+| 8a（`:75`） | 五個零消費者套件：`fs-watch`／`goal`／`jobs`／`workspace` 等前端 | **是** | 逐套件掃生產面（`git grep -ln "@i-harness/<pkg>" -- 'packages/*/src' 'apps/*/src'` 扣掉自己）：`fs-watch`／`goal`／`jobs`／`workspace` **零命中**；處置逐條在 `docs/handoff/2026-09-18-backend-backlog.md` §2.1（列表逐字：等前端／前端／前端／前端）。對照組仍在同一節（`core-session` 48／`session-persistence` 18） |
+| 8b（`:75`） | `schedule` 的缺口已由 W3 補上 | **是（歸因寬鬆）** | `@i-harness/schedule` 今天**有**生產消費者：`packages/session-executor/src/assembly.ts`（工具 `createScheduleTools` 與 driver 的掛載，backlog §2.1 的 ▶ 逐字給行號）。歸因：**W3 交的是 spec**（`docs/handoff/2026-09-20-queued-work.md` §4／`:895`，owner 2026-09-20 核准），**接線是 M66 的六個任務**（`742bc96f`／`700e81b9`／`b0d29271`／`3ee94dcd`／`a7a84a7a`／`a4d07e63`，皆 `git cat-file -t` ＝ commit）⇒ 「已補上」為真、把兩者併成「W3」寬鬆 |
+| 9（`:76`） | `settings/*` 上 sdk 線：Q7「是，但先不要建」 | **是** | 答案逐字在兩處：`docs/handoff/2026-09-18-backend-backlog.md:206`（「**✅ 2026-09-22 owner 裁定：是（走 (a)），但現在不建** —— 觸發條件是前端做到需要設定面」）與 `docs/handoff/2026-09-20-queued-work.md:551`（同句＋「不要在它上面蓋東西」）。樹上的對照量測：`grep -n "settings" packages/sdk/src/server.ts` ⇒ 唯一一處是 `:861` 的「wire contract, **not the settings resolver**」⇒ sdk 線上**沒有** settings 面 |
+| 10（`:77`） | hooks 核准的 UI：今天只有 CLI | **是** | `apps/cli/src/hooks.ts:47`（`subcommand: "list" \| "approve" \| "revoke" \| "help"`）與 `:63` 的用法行；共用的 store 是 `<home>/hook-trust.json`（`packages/hooks/src/trust.ts:61-66`）。`git ls-files \| grep -c "packages/tui\|apps/tui\|packages/web-host"` ＝ **0**（M65 已刪）⇒ 除 CLI 外**沒有任何面** |
+| 11（`:78`） | R-B4 git snapshot/undo 的 plan B：等產品反饋 | **是** | 三處逐字都在：`docs/roadmap/2026-08-31-roadmap-B-tools.md:18`（R-B4 列「中長期」）與 `:87`（「**後補 \| 待 UI 產品反饋定 undo 形狀（M27+）**」）、`docs/roadmap/2026-08-31-m27-backlog.md:64`（「R-B4 \| M27+ \| git 快照/undo——唯一 L 級，隨產品反饋定」）；plan A 已落地（M58）的註在 `docs/CAPABILITIES.md:142` |
+| 12（`:79`） | H-3 MCP 真 AS：與 `CAPABILITIES.md:51` 矛盾（⇒ M80 收） | **不再是「不是後端的事」——已收（本條改歸「已交付」）** | M80 T5（`00067ec`）已修狀態列：`docs/roadmap/2026-08-31-m27-backlog.md:30`（「**✅ 已落地（M28，2026-09-01，`44db372`）** —— 自建真 AS 的契約測試…」）與 `:75`（「✅ 已完成（M28）」）；`docs/CAPABILITIES.md:51` 的「真 AS 測試」**為真、不動**（測試在 `packages/mcp-client/test/oauth-real-as.test.ts`）。ⓘ **計畫 §4 的那一行今天仍以「⇒ M80 收」結尾**（`docs/handoff/2026-09-23-backend-closure-plan.md:79`）——該工作已完成，這是一句**尚未更新的收工語**（與 D1 同一個形狀、同一個載體）⇒ 分類：**已交付**，不是「不是後端的事」 |
+| 13（`:80`） | 前端重建本體（web／desktop）：使用者端專案（Q6） | **是** | Q6 那一列逐字在 `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md:305`（「『重建前端』是一個**客戶端專案**，不是後端專案 —— 後端的責任是讓那條 wire 值得被蓋在上面」）；樹上今天**沒有**任何前端套件（同上第 10 列的量測：tui／web-host 皆 0 檔）⇒ 這一條的形狀在 M65 之後更乾淨（唯一的契約是 sdk 的 wire） |
+| 14（`:81`） | 非目標（PTC／code-mode、workflow worker、provider registry、外掛執行、企業權限引擎、記憶子系統、M7 自我喚醒） | **是** | 清單逐條在 `docs/CAPABILITIES.md:141`（「**不做**：PTC/run_code、workflow worker、provider 註冊表化、插件執行」）與 `docs/superpowers/specs/2026-09-15-backend-polish-roadmap-design.md` §4「明確不做」（`:269-278`：權限規則引擎／企業治理層／plugin VM 與 code-mode／T6 記憶子系統（✅ 2026-09-22 裁定不做）…）。抽查（樹上沒有主體）：`git grep -rln "run_code\|codeMode\|code-mode" -- 'packages/*/src' 'apps/*/src'` ＝ **0**；`git grep -rln "eval(\|vm\."` 生產面 ＝ **0**；`git grep -rn "worker" -- packages/workflow/src` ＝ **0** |
+| 15（`:82`） | 遠期觀望（R-A10、R-A11、R-B10、R-C8、R-D5、R-D6、R-E12、R-E13、macOS sandbox） | **是** | 清單逐條在 `docs/roadmap/2026-08-31-m27-backlog.md:50-56`（遠期觀望清單四行）與 `docs/CAPABILITIES.md:142`（遠期／觀望）；R-A10 另在 `docs/roadmap/2026-08-31-roadmap-A-core.md:24`／`:69`（「遠期候選」）。抽查（樹上沒有主體）：`packages/sandbox-local/src/index.ts` 只有 `win32`（`:33`／`:52`）與 `linux`（`:58`）兩個分支 ⇒ **macOS 沙箱沒有後端** |
+
+**§F 的總讀數**：**8 條為真、1 條已不再是「不是後端的事」**（H-3，分類改成「已交付」——它是本次唯一一條**不必再等任何東西**的）。逐條都附了指令與讀數；沒有把已收的那條硬留在清單裡。
+
+---
+
+## §G 誠實註（兩條量不到 ＋ 一條指針狀態）
+
+1. **量不到：真 provider 的那一側（快取、wire 形狀）。** §2.45 的快取側量不到（裁定為「明說接受」，見 §E），以及三條 wire 主張——M77 12（`delta.refusal` 的伴隨形狀，文件站 403）、M77 15（`response.completed` 的 `output[]` 是陳述的邊界）、M77 13（`refusal: ""` 的邊界未測）。**本表能做的只有把邊界具名＋把「今天不影響正確性」的理由找出來**（各列已做），**不假裝量過**。「樹上從未發過真 provider 的請求」本身是一個斷言式的既有事實（Part 1 的 M72Ⅰ §7-6 同樣處理）：本表加上的是 **12 個 stub-`fetch` 測試檔**（＋單引號形式 0）與「`apiKeyEnv` 在樹上只是名字」兩個側面讀數，**不是證明**。
+2. **量不到：住在 gitignored ledger 的那半。** M79 §4 R3 的紅先裁決（「T4 的紅先＝拿掉觀察者」）**只住在 ledger**（`.superpowers/**`，gitignored）——M79 紀錄自己說「裁決在 ledger，複審可見」，而**樹上沒有第二份**。本表引的是紀錄的轉述＋樹上的痕跡（五個站點的測試存在、關閉者 `c0d1ea1`），**沒有讀 ledger、也不假裝讀過**。同類：M79 5 那一列的「反方向 4 檔」量測，載體只有紀錄（instrument 的註解只列 5 檔那一半）。
+3. **指針狀態（不是殘餘，但讀者會撞到）：兩份紀錄的 ▶ 指向一份還沒寫的檔。** `docs/handoff/2026-09-24-m80-backend-readiness.md` **今天不存在**（`ls docs/handoff \| grep readiness` ＝ 0），而 `docs/handoff/2026-09-24-m77-refusal-channel.md:96` 與 `docs/handoff/2026-09-24-m79-coverage-completion.md:6` 都以它為「收線判讀的家」。它是本里程碑後面那個單位的交付物 ⇒ 現在是**待交付**，不是壞指針；本稽核（Part 1＋Part 2）就是它的輸入。
+
+---
+
+## 附：本 Part 用到的載重讀數（可重跑）
+
+```bash
+node scripts/audit/check-reachability.mjs | head -1     # reachability: 553 ts files, 456 finding(s)
+grep -c "^  {" packages/telemetry/src/manifest.ts       # 24（M80 T1 補 provider/empty 之後）
+sed -n '505,516p' packages/core-agent/src/index.ts      # 空成功的判定點與 provider/empty
+git grep -n "EMPTY_RESPONSE" -- '*.ts'                  # 2 行，都在 llm-seam（零生產者）
+grep -rn "function spyTelemetry" packages/*/test/*.ts | wc -l          # 7（5 檔）
+git grep -n "Exclude<any" -- '*.ts'                     # 0
+grep -rn "\.ts:[0-9]" packages/compaction/src/region.ts | wc -l        # 4（同包扣掉 slices.ts／region.ts 後剩 8）
+grep -rn "\.ts:[0-9]" packages/compaction/src packages/compaction/test | grep -v "/slices.ts\|/region.ts" | wc -l   # 8
+ls packages/*/test/site-diagnostics.test.ts | wc -l     # 11（T4/T5 的 helper 逐檔各一份）
+printf '%s\n' "$(tr -dc '\r' < scripts/audit/reachability-allowlist.json | wc -c)"; printf '%s\n' "$(tr -dc '\r' < scripts/audit/reachability-baseline.json | wc -c)"  # 269 / 0（工作樹）
+git show HEAD:scripts/audit/reachability-baseline.json | tr -dc '\r' | wc -c   # 0（blob）
+for p in fs-watch goal jobs workspace schedule; do git grep -ln "@i-harness/$p" -- 'packages/*/src/**' 'apps/*/src/**' | grep -v "^packages/$p/"; done   # 前四個 0 命中、schedule 命中 assembly.ts
+git ls-files | grep -c "packages/tui\|apps/tui\|packages/web-host\|apps/cli/src/web.ts"   # 0
+git grep -rln "run_code\|codeMode\|code-mode" -- 'packages/*/src' 'apps/*/src'            # 0
+grep -n "darwin" packages/sandbox-local/src/index.ts                                     # 0（只有 win32/linux）
+grep -c "▶" docs/audit/2026-09-11-ih-backend-inventory.md                                # 0（20 rows 那條按 leave 原樣）
+git grep -ln 'stubGlobal("fetch"' | grep -vc "^docs/"   # 12 個測試檔（命中 24，扣掉 12 個 docs 引文）
+git grep -ln "stubGlobal('fetch'" | wc -l               # 0（沒有另一種引號形式）
+sed -n '57,67p' docs/handoff/2026-09-24-m79-coverage-completion.md   # 九條裁決（今天的行號＝輸入清單 +1）
+```
+
+本 Part 引用的 **26 個 commit** 全部以 `git cat-file -t <sha>` 檢查，**每一個都回 `commit`**（清單＝本 Part 正文出現的每一個 sha，逐條抽出後去重；括號是它在本 Part 的角色）：`2f9147e`（M80 T1）、`45bd37e`／`0496421`（19→23、23→24）、`230fd44`（manifest 牙齒）、`cd188d7`／`6bd35c7`（儀器剝註解）、`00067ec`（M80 T5 的指針與 H-3）、`d5d1144`／`c2e9e60`（種子端 warn）、`282e81e`／`bf85c64`／`ccb9df0`（M77 的三個內容側載體）、`5d080ef`（非分配性那句）、`c0d1ea1`（M79 T4 五站）、`a629acd`（兩個零生產者成員）、`0336fe4`（M78 的 prune 移動）、`1ac091e`（`mountPreset` 的 dated 重測）、`44db372`（M28 的自建 AS）、`bc45dce`／`5446d6bb`（M79／M78 的合併點）、`742bc96f`／`700e81b9`／`b0d29271`／`3ee94dcd`／`a7a84a7a`／`a4d07e63`（M66 的六個任務）。**另外兩個 hex 不是 commit 清單的一部分**：`a2a2bdd`（量測時的 HEAD）與 `3f2bbabb…`（M79 宣告的 tree hash，引紀錄原文）。
