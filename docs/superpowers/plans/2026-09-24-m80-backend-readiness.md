@@ -174,6 +174,7 @@ git commit -m "docs(capabilities): the citations point at the symbols again — 
 ### Task 5: 其餘活文件與 dated 指針
 
 **Files:**
+- Modify: `docs/handoff/2026-09-20-queued-work.md`（**追加 allowlist（執行期更正——Task 2 的量測抓到它們在同檔的舊 allowlist 之外）**：`:64` 的 §1 W6 列、`:917` 的 §9.1 M3 列〔同一個「107 ＝ 94」過期讀數〕、以及 §1 那句因 §9.2 的 A2 被刪而變假的話〔「本列與 §9.2 的 A2 是舊檔名唯二的 tracked 引用」〕）
 - Modify: `docs/handoff/2026-09-18-backend-backlog.md`（**只准動** spec §0.2B 的 11 行）
 - Modify: `docs/roadmap/2026-08-31-roadmap-E-platform.md`（**只准動** `:26`／`:57`／`:85`）
 - Modify: `docs/roadmap/2026-08-31-m27-backlog.md`（**只准動** `:30`／`:73`／`:75`）
