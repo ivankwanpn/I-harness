@@ -93,6 +93,8 @@ M76 的教訓是「註解宣稱有效、其實無效」。M77 把它推得更遠
 
 **Deferred minors（8 條）**：`core-agent` 的註解曾把映射寫成 1:1（fix wave 已收）；`compaction` 的 `BYTE FOR BYTE`（fix wave 已錨定）；`spyTelemetry` 被複製一份；`CAPABILITIES-DETAIL.md` 說「19 行」而 manifest 有 23 列（**第三次遺漏**，M80 收）；**`manifest.test.ts` 的同義反覆**（指派 M79）；`session-title` 的訊息**沒有呼叫端觀察得到**（在 `try` 裡、`catch` 直接回退）；`llm-gemini` 的排除清單只列了 10 個（14 個裡）；`anthropic.test.ts` 的一句措辭。
 
+**▶ 已收線（M79，2026-09-24）：`CAPABILITIES-DETAIL.md` 的 telemetry 詞彙數已改成 manifest 的列數** —— `45bd37e` 把「19 行」連同其他三處一律改成 **23 列**（早於預期的「M80 收」）；M80 的 T3 再把 23 → **24**（M80 T1 新增的 `provider/empty`）。**本條 deferred minor 關閉；上面的殘餘清單不在這次收線的範圍內**（收線判讀在 `docs/handoff/2026-09-24-m80-backend-readiness.md`，M80）。
+
 ---
 
 ## 6. 給下一個動這條鏈的人

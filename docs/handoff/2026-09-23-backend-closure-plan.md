@@ -8,7 +8,7 @@
 
 ## 0. 為什麼有這份文件（它取代什麼）
 
-`docs/handoff/2026-09-20-queued-work.md` §9.2（`:931-957`）是目前樹上唯一的「還沒做」清單，**它落後 M72–M75 五個里程碑**，而且**它僅存的兩條活項目都已經關掉了**：
+`docs/handoff/2026-09-20-queued-work.md` §9.2（`:931-945`）曾是樹上唯一的「還沒做」清單 —— **▶ 2026-09-24（M80 T2）：它已收成短節、不再是一份待辦，並指向本文件**；而它落後 M72–M75 五個里程碑，**它僅存的兩條活項目都已經關掉了**：
 
 | 它說還沒做 | 現在的實況（2026-09-23 量） |
 |---|---|
@@ -17,7 +17,7 @@
 
 它的 A 堆是空的，而且 `Q1–Q8` 全部有答案（`:549-554`）⇒ **沒有任何東西卡在產品決定上**。所以本階段的工作**不在路線圖裡，在里程碑自己記下的殘餘裡**；這份文件把它們撈出來、排序、具名。
 
-另外兩份文件互相矛盾的地方（MCP 真 AS 測試、R-E11、live discovery、`CAPABILITIES-DETAIL` 的漂移）留給 **M80** 一次收，屆時以最新的量測為準。
+另外兩份文件互相矛盾的地方（MCP 真 AS 測試、R-E11、live discovery、`CAPABILITIES-DETAIL` 的漂移）留給 **M80** 一次收，屆時以最新的量測為準。**▶ 2026-09-24 結果：四處都以最新量測解掉** —— H-3 以 M28 的**自建** AS 契約為準（`docs/superpowers/specs/2026-08-31-m28-design.md:84`；`CAPABILITIES.md:51` 的「真 AS 測試」因此為真、不動）；R-E11 以 M30 的用戶拍板為準（`docs/roadmap/2026-08-31-roadmap-E-platform.md:85`）；live discovery **已落地且有 CLI**（同檔 `:26`／`:57`／`:85` 已由 M80 T5 改寫成「已落地」）；`CAPABILITIES-DETAIL` 的漂移由 M79（`45bd37e` 等）＋ M80 的 T3／T4 收。
 
 ---
 
@@ -26,8 +26,8 @@
 | 單位 | 內容 | 大小 | 狀態 |
 |---|---|---|---|
 | **M76** | **①走位守衛 ＋ ②種子邊界**（＋`anchorSeq`） | S–M | ✅ **完成並合併**（**PR #12 → `c4c78f41`**；`m76`；閘門 **3083／433** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m76-walkoff-and-seed-bound.md`。三個任務＋Task 1 一輪、Task 2 兩輪 fix round＋單一 fix wave；終審的 57 433 例窮舉證明走位規則**精確**） |
-| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成**（`m77`；閘門 **3118／432** `gate PASS`；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
-| **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ✅ **完成並合併**（**PR #14 → `5446d6bb`**；`m78`；閘門 **3124／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m78-prune-before-summarise.md`。**兩個部分**：標記移到 fold 之前＋`deriveMessagesUpTo` 的 seq 濾網對 prune 破例（後者才是有效的——控制器原本的設計被量測推翻）；checkpoint **接受**並記數字。**留下的兩件**：快取那一側未量、五處過期的快取簡寫） |
+| **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成並合併**（**PR #13 → `bb266229`**；`m77`；閘門 **3118／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
+| **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ✅ **完成並合併**（**PR #14 → `5446d6bb`**；`m78`；閘門 **3124／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m78-prune-before-summarise.md`。**兩個部分**：標記移到 fold 之前＋`deriveMessagesUpTo` 的 seq 濾網對 prune 破例（後者才是有效的——控制器原本的設計被量測推翻）；checkpoint **接受**並記數字。**留下的五條**（record §5 的殘餘逐條）：快取那一側未量、五處過期的快取簡寫、`engine.test.ts` 的測試名稱、重試會再附加一個標記、prune 只縮它能縮的） |
 | **M79** | **⑤覆蓋率補齊** ＋ 三件被指派進來的（見下） | M–L | ✅ **完成並合併**（**PR #15 → `bc45dce`**，合併後 tree 與分支尖端相同；`m79`；閘門 **3133／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m79-coverage-completion.md`。**六個任務＋單一 fix wave**；量測更改了設計：`telemetry`／`acp` **零生產者** ⇒ **移除**；儀器剝註解後 **432 → 456（＋24／−0，逐條具名）**；三件指派（manifest 牙齒／儀器註解盲點／19→23 列）全部落地） |
 | **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | 🔄 **進行中**（`m80`，from `bc45dce`；spec 前的量測中：四處矛盾、全樹過期宣稱、殘餘清單） |
 
@@ -45,7 +45,7 @@
 
 1. **`telemetry/test/manifest.test.ts` 的執行期那一半是同義反覆**（M77 的 F1；`codes` 是從 manifest 建的 ⇒ 加了型別卻忘了 manifest 列**沒有任何東西守著**）。修法＝型別級的 `Missing extends never` 斷言（要動既有斷言 ⇒ 只能由允許動它的單位做）。
 2. **reachability 儀器的「註解盲點」**（**M77 與 M78 各觸發一次**：`retryErrorCode`、`derivePruneSubstitutes`；兩次都由對照實驗證明，兩次都只靠**改註解**繞過）。**病在儀器**：它的「這個 export 被用了嗎？」是**對 production 檔的文字比對**，所以任何**別套件**的註解提到那個名字都會讓一列真話消失——那是這棵樹唯一的未消費表面發現器裡的**偽陰性**。修法＝比對前**剝掉註解**（`//` 與 `/* */`），讓那個危害類別消失，而不是永遠靠人工繞。
-3. **`docs/CAPABILITIES-DETAIL.md:295` 說 telemetry 詞彙是「19 行」**而 manifest 已有 **23** 列（**第三次**遺漏：`provider/usage`、`provider/truncated`、`provider/refused`）。
+3. **`docs/CAPABILITIES-DETAIL.md:295` 說 telemetry 詞彙是「19 行」**而 manifest 已有 **23** 列（**第三次**遺漏：`provider/usage`、`provider/truncated`、`provider/refused`）。**▶ 2026-09-24：已收 —— 19→23 由 M79 改掉（`45bd37e`，2026-09-24），23→24 由 M80 T3 改掉**（manifest 今天 `grep -c "^  {" packages/telemetry/src/manifest.ts` ＝ **24**，補上 M80 T1 的 `provider/empty`）。
 
 **2.45 一個 M78 留下的量測（候選，很小但會決定一個取捨）**：**摘要請求的快取那一側沒有量**。「先 prune 再折」（M78）讓摘要請求少了 **3 717 個 token**，代價是**它與「上次送出的主請求」在第一個被 prune 的輸出處分岔** ⇒ 從那裡起是全額而不是快取讀價。**量法**：一個**有快取的**轉接器上的 `cacheReadTokens`（`provider/call` 已經在報它）修前／修後各一次。**但這棵樹從未發過真 provider 的請求**（既有的殘餘）⇒ 這條要嘛等一個真讀數，要嘛明說接受。**紅利那一側已經量到且是壓倒性的**：超窗時 2 個請求 → 1（切塊路徑的冷讀遠貴於一次全額讀）。
 
