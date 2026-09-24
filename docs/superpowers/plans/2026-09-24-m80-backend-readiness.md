@@ -184,7 +184,7 @@ git commit -m "docs(capabilities): the citations point at the symbols again — 
 - Modify: `docs/handoff/2026-09-24-m79-coverage-completion.md`（**只加**標頭一行 dated 指針：已合併 PR #15 → `bc45dce`）
 - Modify: `docs/handoff/HANDOFF.md`（**只加** `:16` 後一行 dated 指針）
 - Modify: `docs/audit/2026-09-15-reachability-baseline.md`（**只加** `:858` 後一行指針 → §9.4）——**這是唯一准動的 audit 檔，且只加一行**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**執行期更正（Task 3 複審抓到）**：`＋ §11 的子標題與 banner`〔post-edit `:619`／`:621`：「✎ 與概覽不同（不存在或未掛載）」在 Task 3 之後已無宣稱支撐它〕——以內容定位）
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**執行期更正 ①（Task 3 複審抓到）**：`＋ §11 的子標題與 banner`〔post-edit `:619`／`:621`：「✎ 與概覽不同（不存在或未掛載）」在 Task 3 之後已無宣稱支撐它〕；**執行期更正 ②（Task 4 的量測抓到）**：`＋ §1.3 的 assembly.ts:272-274`〔今 `:958-960`〕、`＋ §3.4 的 assembly.ts:157-159`〔實為 `AssemblyOptions` 欄位；估價器在 `:351-359`／`:1224-1269`〕、`＋ §2.4 goal 的 core-session :127-149`——三處引用漂移，**以符號定位**）
 
 **Interfaces:**
 - Consumes: spec §0.2B／F／G／H／I 的實測與 §1.2 的四處矛盾解法
