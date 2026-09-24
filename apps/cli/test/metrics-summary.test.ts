@@ -296,4 +296,82 @@ describe("runHeadless — the metrics summary", () => {
     expect(summary).toBeDefined()
     expect(summary).toMatch(/provider\/truncated=1/)
   }, 30_000)
+
+  // M80: the run-level end of the EMPTY-success chain, point for point the
+  // shape of the truncated/refused pairs above. The durable `step/end.empty`
+  // and the telemetry code are separate hops; this is the one that proves the
+  // VALUE arrives at the host's `run` — and the only end-to-end proof for the
+  // mock route, since the hops between have no unit test of their own.
+  it("M80: an empty run says so on STDERR and on the result", async () => {
+    const result = await runHeadless("say hi", {
+      workspace: root,
+      // The empty success's own shape at the seam: a bare `end` and nothing
+      // else (HTTP 200, no content).
+      mockScript: [{ role: "assistant" }],
+    })
+    expect(result.empty).toBe(true)
+    expect(errors.some((line) => line.includes("[empty]"))).toBe(true)
+  }, 30_000)
+
+  it("M80: a clean run neither says it nor sets the field", async () => {
+    const result = await runHeadless("say hi", { workspace: root, mockScript: [{ role: "assistant", text: "hi" }] })
+    expect(result.empty).toBeUndefined()
+    expect(errors.some((line) => line.includes("[empty]"))).toBe(false)
+  }, 30_000)
+
+  // M80: the empty-success chain's end-to-end proof through the REAL CLI,
+  // mirroring the two fixtures above point for point — a local SSE server
+  // speaking the openai-completions wire, so the round-trip really crosses the
+  // adapter (`finish_reason: "stop"` with no content frames at all is what an
+  // empty success looks like on that wire) instead of a mock client. The count
+  // is the assertion, for R14's reason: the line is printed by `runHeadless`
+  // and `main`'s branch must not re-report it.
+  it("M80: an empty run through the real CLI says it EXACTLY once", async () => {
+    const home = mkdtempSync(join(tmpdir(), "i-harness-empty-"))
+    const server = createServer((req, res) => {
+      if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
+        res.writeHead(404).end()
+        return
+      }
+      res.writeHead(200, { "content-type": "text/event-stream" })
+      res.end([
+        `data: ${JSON.stringify({ choices: [{ delta: {} }] })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}`,
+        "data: [DONE]",
+        "",
+      ].join("\n\n"))
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (address === null || typeof address === "string") throw new Error("empty fixture failed to listen")
+    writeFileSync(join(home, "settings.json"), JSON.stringify({
+      llm: {
+        providers: {
+          fixture: {
+            protocol: "openai-completions",
+            baseURL: `http://127.0.0.1:${address.port}`,
+            apiKeyEnv: "M80_EMPTY_FIXTURE_API_KEY",
+            models: [{ id: "fixture-model" }],
+          },
+        },
+        defaultModel: { provider: "fixture", model: "fixture-model" },
+      },
+    }), "utf8")
+    writeFileSync(join(home, "credentials.json"), JSON.stringify({ refs: { M80_EMPTY_FIXTURE_API_KEY: "fixture-key" } }), "utf8")
+    const previousConfigDir = process.env.IH_CONFIG_DIR
+    process.env.IH_CONFIG_DIR = home
+    const out = vi.spyOn(console, "log").mockImplementation(() => {}) // the final text is not this test's subject
+    try {
+      const code = await main(["node", "i-harness", "run", "say hi"])
+      expect(code).toBe(0)
+      // The assertion R14 buys: one line, whatever route the host took.
+      expect(errors.filter((line) => line.includes("[empty]"))).toHaveLength(1)
+    } finally {
+      out.mockRestore()
+      if (previousConfigDir === undefined) delete process.env.IH_CONFIG_DIR
+      else process.env.IH_CONFIG_DIR = previousConfigDir
+      await new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()) })
+      rmSync(home, { recursive: true, force: true })
+    }
+  }, 30_000)
 })

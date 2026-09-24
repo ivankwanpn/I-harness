@@ -635,3 +635,127 @@ describe("M77: a refused ending reaches the durable log and telemetry", () => {
     expect(emitted.filter((e) => e.type === "provider/refused")).toHaveLength(1)
   })
 })
+
+// M80: the THIRD ending the seam can deliver with no content at all — an
+// ordinary empty success (HTTP 200, an empty assistant message, a bare `end`:
+// the ten non-content gemini stop reasons such as `OTHER`, `MALFORMED_*` and
+// `ESCALATION` land here), which used to be indistinguishable from silence on
+// every surface. Same two places as the M72 Ⅱ/M77 blocks above (durable log,
+// host telemetry), the same "absent stays absent" discipline, and one addition
+// those blocks did not need: the predicate carries `!truncatedThisStep &&
+// !refusedThisStep`, because a capped or refused step is ALSO text-less with no
+// tool calls — reporting it as empty as well would double-report the more
+// specific fact, and M77 pinned that the two bits are independent.
+describe("M80: a non-content empty success reaches the durable log and telemetry", () => {
+  // Same spy shape as the two blocks above (duplicated rather than hoisted:
+  // those blocks are templates this task must not edit).
+  function spyTelemetry(): { telemetry: Telemetry; events: TelemetryEvent[] } {
+    const events: TelemetryEvent[] = []
+    const telemetry: Telemetry = {
+      emit: (ev) => {
+        events.push(ev)
+      },
+      close: () => {},
+    }
+    return { telemetry, events }
+  }
+
+  it("M80: an empty step is written durably and reported as telemetry", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    // Exactly the shape a non-content success arrives in: no content, no tool
+    // call, a bare `end` that only silence distinguishes from a clean ending.
+    deps.model = {
+      async *stream() {
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    const result = await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).toMatchObject({ empty: true })
+    // The same fact on the host's independent stream. `toEqual` is deliberate
+    // (the M72 Ⅱ/M77 blocks' reason): the payload is exactly the step it
+    // happened on — a `step` field summed elsewhere would read as a measurement
+    // it is not.
+    const reports = emitted.filter((e) => e.type === "provider/empty")
+    expect(reports).toHaveLength(1)
+    expect(reports[0]!.data).toEqual({ step: 1 })
+    // The empty assistant message is still appended, exactly as before — the
+    // bit lives on the durable field, not in the text.
+    const messages = deps.session.events.filter((e) => e.type === "assistant/message")
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ text: "" })
+    expect(result.finalText).toBe("")
+  })
+
+  it("M80: a clean step writes no empty field", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = {
+      async *stream() {
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      },
+    }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 1, telemetry })
+    await agent.run("hi")
+    expect(deps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
+    // Absent stays absent on the host stream too — never a `false` report.
+    expect(emitted.filter((e) => e.type === "provider/empty")).toHaveLength(0)
+  })
+
+  it("M80: a REFUSED or TRUNCATED step is not also reported as empty", async () => {
+    // The same text-less, tool-call-less shape as the EMPTY case above, so only
+    // the more specific bit may be written — this is the predicate's
+    // `!truncatedThisStep && !refusedThisStep`, and it is what keeps M77's
+    // independence pinned rather than re-litigated.
+    const refused = createContext()
+    const refusedDeps = makeDeps(refused)
+    const refusedSpy = spyTelemetry()
+    refusedDeps.model = {
+      async *stream() {
+        yield { type: "end", refused: true }
+      },
+    }
+    const refusedAgent = createAgent(refused, { ...refusedDeps, systemPrompt: "p", maxTurns: 1, telemetry: refusedSpy.telemetry })
+    await refusedAgent.run("hi")
+    expect(refusedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ refused: true })
+    expect(refusedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
+    expect(refusedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
+
+    const truncated = createContext()
+    const truncatedDeps = makeDeps(truncated)
+    const truncatedSpy = spyTelemetry()
+    truncatedDeps.model = {
+      async *stream() {
+        yield { type: "end", truncated: true }
+      },
+    }
+    const truncatedAgent = createAgent(truncated, { ...truncatedDeps, systemPrompt: "p", maxTurns: 1, telemetry: truncatedSpy.telemetry })
+    await truncatedAgent.run("hi")
+    expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).toMatchObject({ truncated: true })
+    expect(truncatedDeps.session.events.find((e) => e.type === "step/end")).not.toHaveProperty("empty")
+    expect(truncatedSpy.events.filter((e) => e.type === "provider/empty")).toHaveLength(0)
+  })
+
+  it("M80: a step whose only output is a tool call is NOT empty", async () => {
+    // The new counterpart M77 had no reason to write, and the predicate's
+    // tooth: "no text" is not the same fact as "no content". A tool call is
+    // content — it is a request for work, and the model's next step follows it.
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    const { telemetry, events: emitted } = spyTelemetry()
+    deps.model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: { path: "a.txt" } }] },
+      { role: "assistant", text: "done" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", maxTurns: 2, telemetry })
+    await agent.run("hi")
+    const ends = deps.session.events.filter((e) => e.type === "step/end")
+    expect(ends).toHaveLength(2)
+    expect(ends[0]).not.toHaveProperty("empty")
+    expect(emitted.filter((e) => e.type === "provider/empty")).toHaveLength(0)
+  })
+})

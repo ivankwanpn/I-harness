@@ -27,6 +27,14 @@ export type TelemetryEventType =
   // is the denominator — a run with no event here is a run whose provider never
   // refused. Independent of `provider/truncated`: one round-trip can be both.
   | "provider/refused"
+  // M80: the round-trip SUCCEEDED and carried no answer text and no tool call
+  // (the ten non-content gemini stop reasons land here). Same
+  // discipline as the two codes above: one event per empty round-trip, so the
+  // count is the denominator — a run with no event here is a run whose
+  // round-trips all carried something, or were reported through one of the two
+  // codes above. Excluded by construction from a round-trip that was truncated
+  // or refused: those have their own, more specific event.
+  | "provider/empty"
   | "token/usage"
   | "retry/start"
   | "error"

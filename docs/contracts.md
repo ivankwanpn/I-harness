@@ -17,7 +17,7 @@
 | `session-cancel` | `{ "inputId": string }` | 取消指定待處理輸入；回 `executor.cancel(inputId)` 結果 | 執行器運行中 |
 | `session-pending` | （無） | 列出待處理輸入：`{ "inputId", "text", "delivery" }[]` | 執行器運行中 |
 
-> 註：這些命令由 CLI 的 `run` 路徑在 assembly 上註冊（`apps/cli/src/run.ts`）；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理。
+> 註：這些命令由 CLI 的 `run` 路徑在 assembly 上註冊（`apps/cli/src/run.ts:769-820`，`session-send`…`session-pending` ＋ `session-compact` 共 7 條）；restore 的 pending 輸入在恢復時以 FIFO 先於新任務排出。**原文的「宿主（web-host）經 `CommandBridge.run(sessionId, line)` 代理」自 M65（2026-09-17）起是死引用**：`packages/web-host` 已刪（`git ls-files packages/web-host` = 0）、`CommandBridge` 對 `apps/**`＋`packages/**` 零命中（M80 重量）——今天命令面的宿主只有 CLI `run`。
 
 ## 工具面（B 區，M26-B）
 
@@ -70,7 +70,7 @@
 
 ## 事件/遙測（telemetry）
 
-宿主訂閱 `session/event` 等事件流（M25 sink 接口；web-host 的 live mux 亦承接）。事件碼 13+ 位，詳見 `packages/web-host` 與 `packages/telemetry`。命令/工具面事件（`command/run`、`command/done`）追加到 session live log，模型不可見。
+宿主訂閱 `session/event` 等事件流（M25 sink 接口）。事件碼 **24 位**，詳見 `packages/telemetry`（manifest：`telemetry/src/manifest.ts:16-53`）。**原文的「web-host 的 live mux 亦承接」與 `packages/web-host` 指針自 M65（2026-09-17）起是死引用**（`git ls-files packages/web-host` = 0；M80 重量）。命令/工具面事件（`command/run`、`command/done`）**今天沒有生產者**——型別與 `registerEventType` 仍在（`core-session/src/index.ts:125-126`；`session-persistence/src/index.ts:221-222`），但唯一的寫入者 `appendCommandEvents` 隨 `apps/cli/src/web.ts` 於 M65 刪除，現存 append 只在測試裡（`core-session/test/events.test.ts:8-9`）；模型不可見這一點不變。
 
 ## SDK（`@i-harness/sdk` NDJSON JSON-RPC — Wire Contract v0）
 
@@ -116,7 +116,7 @@
 
 **`session/history` 語意**：server 以 `service.liveSession(sessionId)` 解析（in-process live log——session/prompt 同一 session 源之 assembly log；seq 為 0-based 追加位置，故 walk = slice `[afterSeq, nextSeq)`）。
 
-**`session/list` 組態**：apps/cli 的 `sdk` 命令在 `--session-dir` 給定時以 **coordinator 面** 注入 listing（`coordinator.list()` + `profile()` 逐行 header 讀，web-host 鏡像）；profile 敗行仍呈 `{ id }` 行（誠實行）並 loud 於 stderr；未給 `--session-dir` → 無源 → `listingUnavailable: true`。
+**`session/list` 組態**：apps/cli 的 `sdk` 命令在 `--session-dir` 給定時以 **coordinator 面** 注入 listing——今天的實作是 `listStoredSessions`（`apps/cli/src/sessions.ts:77`，與 `i-harness sessions` 共用同一份；接線於 `apps/cli/src/index.ts:768-783`）；**原文的「`coordinator.list()` + `profile()` 逐行 header 讀，web-host 鏡像」已過期**（那份鏡像隨 `packages/web-host` 於 M65 刪除；`git ls-files packages/web-host` = 0）。profile 敗行仍呈 `{ id }` 行（誠實行）並 loud 於 stderr；未給 `--session-dir` → 無源 → `listingUnavailable: true`。
 
 **`SessionListEntry`**：`{ id, title?, updatedAt?, turnCount?, contextUsed?, contextTotal? }`——`title` 以外均為**可選**（header-only profile 只給 `id`/`title`；`updatedAt`/`turnCount`/context 需要完整 log 讀，不在 v1 源面承諾）。消費端須容忍缺省字段。
 
@@ -158,7 +158,7 @@
 
 ## 版本 / 健康
 
-`GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`；version 源 = `apps/cli` package.json 常量（M27-H-1 注入）。
+`GET /api/health`（web-host）→ `{ "healthy": true, "version": string }`——**此路由自 M65（2026-09-17）起不存在**：`packages/web-host` 已刪（`git ls-files packages/web-host` = 0），`git grep api/health -- 'apps/**' 'packages/**'` 只剩一處註解（`apps/cli/src/version.ts:3`），**沒有任何端點實作**（M80 重量）。**仍活著的是 version 源**：`CLI_VERSION` ＝ `apps/cli` package.json 常量（`apps/cli/src/version.ts:23`，`i-harness --version` 於 `apps/cli/src/index.ts:190` 印它）；它自己的註解記著這條搬遷——「M65 T1: moved here verbatim from src/web.ts」（`:10-12`）。
 
 ## ACP wire（R-C7，M28）
 
@@ -191,12 +191,12 @@
 
 - **持久化唯一權威**：JSONL。`--session-backend` 旗標已移除；傳入即 fail-loud 拒絕（見上）。鎖（fs-lock）、`profile` / `updateMeta`、文檔側車不受影響。
 
-- **搜索面語意（D1 一致性模型替換）**：`session_search` / `lineage`（及 web `/api/sessions/search`、`/lineage`）不再吃「與持久化**同事務、永不偏離**」的 SQLite FTS，而由**文件級 file-backed 索引**承載（`reconcile-on-search`）：
+- **搜索面語意（D1 一致性模型替換）**：`session_search` / `lineage`（**原文括號裡的 web `/api/sessions/search`、`/lineage` 兩條路由已隨 `packages/web-host` 於 M65 刪除**——`git ls-files packages/web-host` = 0；搜索面今天只有工具那條）不再吃「與持久化**同事務、永不偏離**」的 SQLite FTS，而由**文件級 file-backed 索引**承載（`reconcile-on-search`）：
   - 每次搜索前對帳 `storeRoot`（目錄掃 + 首行 header + stat revision）；僅對**變更的 session** 全量 decode 重建，未變者以 revision 指紋跳過。
   - **搜索永不舊於自身 reconcile**——比「永不偏離」更強：過期數據絕不呈現（對異步寫入者也成立）。
   - 對帳 / 讀取失敗 → `SESSION_QUERY_OBSERVE_FAILED`，**不回退舊行**（fail-closed）。
   - 索引文件 schema 版本不符 / 外來 DB（`application_id != 0x49485155`）→ `SESSION_QUERY_INDEX_FOREIGN`，拒絕不碰。
 
-- **搜索默認態（D3）**：`--session-dir`（storeRoot 已知）→ 搜索工具**出廠可用**（`first-search` 語意：首次搜索建索引，進程內持久）；無 `--session-dir` → 不掛載（與舊語意一致，web 對無 seam 的請求仍 `409 search_not_enabled`）。
+- **搜索默認態（D3）**：`--session-dir`（storeRoot 已知）→ 搜索工具**出廠可用**（`first-search` 語意：首次搜索建索引，進程內持久）；無 `--session-dir` → 不掛載（與舊語意一致）。**原文「web 對無 seam 的請求仍 `409 search_not_enabled`」自 M65（2026-09-17）起是死引用**——那個 409 的載體是 `packages/web-host`（已刪，`git ls-files` = 0），今天沒有 HTTP 請求面可以回它（M80 重量）。
 
 - **`searchBackend` 設置語意（D2，降級）**：`settings.searchBackend` 字符串保留（`"jsonl"` = 搜索索引開啟，默認），不再對應任何多後端旗標；舊值 `"sqlite"` **相容讀取為開啟**；未知值（如 `"postgres"`）歸屬默認 `"jsonl"`。
