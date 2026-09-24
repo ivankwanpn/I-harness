@@ -150,7 +150,7 @@ git commit -m "docs(capabilities): the false claims go — todo_write/read_image
 ### Task 4: `CAPABILITIES-DETAIL.md` 的**引用**（同檔、接在 Task 3 之後）
 
 **Files:**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items **20-24**（純引用）——**執行期更正（Task 3 的量測抓到）**：`＋ §12 item 18`〔「四張 reasoning 譯表」→ **5**〕、`＋ §2.1 的表格本體補上三個成員列`〔`tool/dispatch`／`rewind/point`／`operator/run-end`〕、`＋ :289 的兩個假宣稱`〔`todo/write → 未掛載` 與 `command/run|done → web.ts appendCommandEvents`——兩者今天都為假〕）
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items **20-24**（純引用）——**執行期更正（Task 3 的量測抓到；行號是 `22871bd` 樹上的、Task 3 之後多為 +2，一律以內容定位）**：`＋ §12 item 18`〔「四張 reasoning 譯表」→ **5**；post-edit `:685`〕、`＋ §2.1 的表格本體補上三個成員列`〔`tool/dispatch`／`rewind/point`／`operator/run-end`〕、`＋ :289 的兩個假宣稱`〔post-edit `:291`：`todo/write → 未掛載` 與 `command/run|done → web.ts appendCommandEvents`——兩者今天都為假〕）
 
 - [ ] **Step 1: 逐條重量（先量再改）**
 
@@ -184,6 +184,7 @@ git commit -m "docs(capabilities): the citations point at the symbols again — 
 - Modify: `docs/handoff/2026-09-24-m79-coverage-completion.md`（**只加**標頭一行 dated 指針：已合併 PR #15 → `bc45dce`）
 - Modify: `docs/handoff/HANDOFF.md`（**只加** `:16` 後一行 dated 指針）
 - Modify: `docs/audit/2026-09-15-reachability-baseline.md`（**只加** `:858` 後一行指針 → §9.4）——**這是唯一准動的 audit 檔，且只加一行**
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**執行期更正（Task 3 複審抓到）**：`＋ §11 的子標題與 banner`〔post-edit `:619`／`:621`：「✎ 與概覽不同（不存在或未掛載）」在 Task 3 之後已無宣稱支撐它〕——以內容定位）
 
 **Interfaces:**
 - Consumes: spec §0.2B／F／G／H／I 的實測與 §1.2 的四處矛盾解法
