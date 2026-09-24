@@ -6,6 +6,8 @@
 >
 > **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 >
+> **▶ 2026-09-24（M80）：本文件的活宣稱已對齊當前樹**（66 包、telemetry **24** 碼、live discovery 已落地並有 CLI…）；**後端收線的判決與逐條殘餘在 [`docs/handoff/2026-09-24-m80-backend-readiness.md`](handoff/2026-09-24-m80-backend-readiness.md)**（逐條分類：`handoff/2026-09-24-m80-residual-audit.md`）。
+>
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
 >
 > M37a（tui）增量：grok 1:1 agent 屏——scrollback 引擎（Fenwick virtual_y/O(dirty) 增量、verb-group 折疊、regex 搜索、選區、sticky）、視圖（狀態欄 chips/TurnStatus spinner/PromptWidget chrome/ShortcutsBar）、keymap 主組、**embedded SessionService 橋**（16ms batch + seq 游標回放）、`apps/tui`（mock 首映）；PTY case-011（live streaming + **byte-budget 零字節證明**）/ case-014（流中 resize 不變量）。後端零改動。

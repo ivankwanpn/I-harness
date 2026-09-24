@@ -29,7 +29,7 @@
 | **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成並合併**（**PR #13 → `bb266229`**；`m77`；閘門 **3118／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
 | **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ✅ **完成並合併**（**PR #14 → `5446d6bb`**；`m78`；閘門 **3124／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m78-prune-before-summarise.md`。**兩個部分**：標記移到 fold 之前＋`deriveMessagesUpTo` 的 seq 濾網對 prune 破例（後者才是有效的——控制器原本的設計被量測推翻）；checkpoint **接受**並記數字。**留下的五條**（record §5 的殘餘逐條）：快取那一側未量、五處過期的快取簡寫、`engine.test.ts` 的測試名稱、重試會再附加一個標記、prune 只縮它能縮的） |
 | **M79** | **⑤覆蓋率補齊** ＋ 三件被指派進來的（見下） | M–L | ✅ **完成並合併**（**PR #15 → `bc45dce`**，合併後 tree 與分支尖端相同；`m79`；閘門 **3133／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m79-coverage-completion.md`。**六個任務＋單一 fix wave**；量測更改了設計：`telemetry`／`acp` **零生產者** ⇒ **移除**；儀器剝註解後 **432 → 456（＋24／−0，逐條具名）**；三件指派（manifest 牙齒／儀器註解盲點／19→23 列）全部落地） |
-| **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S | 🔄 **進行中**（`m80`，from `bc45dce`；spec 前的量測中：四處矛盾、全樹過期宣稱、殘餘清單） |
+| **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S–M | ✅ **完成**（`m80`，from `bc45dce`；閘門 **3140／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m80-backend-readiness.md`——**即後端就緒紀錄**：判決＝**打磨完成、可以進前端**；稽核表 `docs/handoff/2026-09-24-m80-residual-audit.md` 歸類 **200 條**（Tier-1 30／Tier-2 162：①1｜③8｜④151｜UNMEASURED 2）；§2.5 的靜默空成功已關（`provider/empty` 四表面，`2f9147e`）。**合併尚未進行**） |
 
 **順序的理由**：M76 最小、量測最新鮮、而且它關掉的是「**註解宣稱有效、其實無效**」這個靜默類別；M80 必須最後（它要判斷全部）。
 
@@ -43,8 +43,8 @@
    - **(c) 先前行為不變 ＋ 一行 warn**，條件是**種子的投影價格 ≥ 視窗**（那正是子代理必須先摘要一輪的情形），訊息要說出後果。詳見 spec §1.3。
 **2.4 M79 的三件「被指派進來」的事**（各自有量測，來自 M77／M78 的執行期）：
 
-1. **`telemetry/test/manifest.test.ts` 的執行期那一半是同義反覆**（M77 的 F1；`codes` 是從 manifest 建的 ⇒ 加了型別卻忘了 manifest 列**沒有任何東西守著**）。修法＝型別級的 `Missing extends never` 斷言（要動既有斷言 ⇒ 只能由允許動它的單位做）。
-2. **reachability 儀器的「註解盲點」**（**M77 與 M78 各觸發一次**：`retryErrorCode`、`derivePruneSubstitutes`；兩次都由對照實驗證明，兩次都只靠**改註解**繞過）。**病在儀器**：它的「這個 export 被用了嗎？」是**對 production 檔的文字比對**，所以任何**別套件**的註解提到那個名字都會讓一列真話消失——那是這棵樹唯一的未消費表面發現器裡的**偽陰性**。修法＝比對前**剝掉註解**（`//` 與 `/* */`），讓那個危害類別消失，而不是永遠靠人工繞。
+1. **`telemetry/test/manifest.test.ts` 的執行期那一半是同義反覆**（M77 的 F1；`codes` 是從 manifest 建的 ⇒ 加了型別卻忘了 manifest 列**沒有任何東西守著**）。修法＝型別級的 `Missing extends never` 斷言（要動既有斷言 ⇒ 只能由允許動它的單位做）。**▶ 2026-09-24：已收（M79 T1，`230fd44`）**——`Missing extends never ? true : false = true`，突變在該行紅（M79 紀錄 §2.1）。
+2. **reachability 儀器的「註解盲點」**（**M77 與 M78 各觸發一次**：`retryErrorCode`、`derivePruneSubstitutes`；兩次都由對照實驗證明，兩次都只靠**改註解**繞過）。**病在儀器**：它的「這個 export 被用了嗎？」是**對 production 檔的文字比對**，所以任何**別套件**的註解提到那個名字都會讓一列真話消失——那是這棵樹唯一的未消費表面發現器裡的**偽陰性**。修法＝比對前**剝掉註解**（`//` 與 `/* */`），讓那個危害類別消失，而不是永遠靠人工繞。**▶ 2026-09-24：已收（M79 T6，`cd188d7`＋`6bd35c7`）**——class 1 改讀剝註解的文字（字串內容保留，防偽陽性），self-test 38/38，**432 → 456**（＋24／−0，逐條具名）。
 3. **`docs/CAPABILITIES-DETAIL.md:295` 說 telemetry 詞彙是「19 行」**而 manifest 已有 **23** 列（**第三次**遺漏：`provider/usage`、`provider/truncated`、`provider/refused`）。**▶ 2026-09-24：已收 —— 19→23 由 M79 改掉（`45bd37e`，2026-09-24），23→24 由 M80 T3 改掉**（manifest 今天 `grep -c "^  {" packages/telemetry/src/manifest.ts` ＝ **24**，補上 M80 T1 的 `provider/empty`）。
 
 **2.45 一個 M78 留下的量測（候選，很小但會決定一個取捨）**：**摘要請求的快取那一側沒有量**。「先 prune 再折」（M78）讓摘要請求少了 **3 717 個 token**，代價是**它與「上次送出的主請求」在第一個被 prune 的輸出處分岔** ⇒ 從那裡起是全額而不是快取讀價。**量法**：一個**有快取的**轉接器上的 `cacheReadTokens`（`provider/call` 已經在報它）修前／修後各一次。**但這棵樹從未發過真 provider 的請求**（既有的殘餘）⇒ 這條要嘛等一個真讀數，要嘛明說接受。**紅利那一側已經量到且是壓倒性的**：超窗時 2 個請求 → 1（切塊路徑的冷讀遠貴於一次全額讀）。
@@ -76,7 +76,7 @@ M80 的收線稽核要逐條回答，**用讀數不用形容詞**：
 - **`settings/*` 上 sdk 線**：Q7 的答案就是「**是，但先不要建**，等前端走到需要它的那一步」（`backend-backlog.md:206`、`queued-work.md:551`）。
 - **hooks 核准的 UI**：今天只有 CLI（`hooks list|approve|revoke`），前端要長自己的，共用 `<home>/hook-trust.json`（`backend-backlog.md:186`）。
 - **R-B4 git snapshot/undo 的 plan B**（plan A 已在 M58 落地）：等產品反饋（`roadmap-B-tools.md:18,87`、`m27-backlog.md:64`）。
-- **H-3 MCP 真 AS 測試**：需要一個真的授權伺服器（`m27-backlog.md:30`；與 `CAPABILITIES.md:51` 矛盾 ⇒ M80 收）。
+- **H-3 MCP 真 AS 測試**：需要一個真的授權伺服器（`m27-backlog.md:30`；與 `CAPABILITIES.md:51` 矛盾 ⇒ M80 收）。**▶ 2026-09-24：已解**——M28 交付的是**自建** AS（`docs/superpowers/specs/2026-08-31-m28-design.md:84` 的定義句：「真 AS **契約**而非真外部 AS」），`CAPABILITIES.md:51` 因此為真、不動；`m27-backlog:30`／`:75` 的「後補」已改寫（M80 T5）。
 - **前端重建本體**（web／desktop）：Q6 說它是**使用者端專案**，跑在 sdk 線上（`roadmap-design.md:305`）。
 - **非目標（不要再撿）**：PTC／code-mode、workflow worker、provider registry、外掛執行、企業權限引擎、記憶子系統、M7 自我喚醒（`roadmap-design.md:267-278`、`CAPABILITIES.md:141`）。
 - **遠期觀望**：R-A10 記憶、R-A11 rollover、R-B10 執行策略、R-C8 分享/遠程、R-D5 外部進程子代理、R-D6 身分證明、R-E12 webhook、R-E13 匿名身分、macOS sandbox（`m27-backlog.md:50-56`、`CAPABILITIES.md:142`）。

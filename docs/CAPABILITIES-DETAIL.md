@@ -6,6 +6,8 @@
 >
 > **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
 >
+> **▶ 2026-09-24（M80）：本文件的活宣稱已對齊當前樹**（SessionEvent **37**、sdk **19** 方法、telemetry **24** 碼、HTTP 路由 **0**、「未掛載」家族已更正…）；**後端收線的判決與逐條殘餘在 [`docs/handoff/2026-09-24-m80-backend-readiness.md`](handoff/2026-09-24-m80-backend-readiness.md)**（逐條分類：`handoff/2026-09-24-m80-residual-audit.md`）。
+>
 > 驗證原則：不憑記憶。腳本層驗證見 §12（抽查清單 + 抽查方法）。
 
 **導航**：§一 工具註冊表（schema 級）｜§二 事件詞彙｜§三 引擎/機制｜§四 服務面（host/sdk/acp）｜§五 子代理/團隊｜§六 生態/配置｜§七 模型面｜§八 持久化｜§九 沙箱/安全｜§十 TUI 層（**已移除**）｜§十一 已知缺口與差異｜§十二 驗證記錄。
