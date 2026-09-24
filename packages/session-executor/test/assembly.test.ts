@@ -1571,3 +1571,212 @@ describe("createSessionAssembly — the session's budget reaches its children (M
     }
   }, 30_000)
 })
+
+// ── M79 T5: the four "window half" hops, observed where the window lands ─────
+// M73 §4.5's named residual: four hops forward `contextWindow` correctly today
+// — `assembly.ts:1146` (the guardian's inherited arm), `assembly.ts:1182` (the
+// team branch), `agent-team/src/scheduler.ts:221`, and the arm the first two
+// feed, `guard-approval/src/guardian/reviewer.ts:178` — but no test asserted the
+// window at any of them, so feeding the SIBLING KEY (`opts.maxOutputTokens`, or
+// `opts.compact?.contextWindow`) where the window belongs type-checks, and the
+// two forms are not equally invisible (MEASURED, not assumed): the M73 cap
+// assertion at `:1536` catches the `opts.maxOutputTokens` form (the window gets
+// the cap's value, 4_242, which clamps that cap to 3619, so the assertion reads
+// 3619 and not 4_242), while the `opts.compact?.contextWindow` form is what
+// nothing above can see: the fixture passes the SAME window to both keys
+// (`:144-145`). Hence the DECOY PAIR in
+// every fixture below: `contextWindow: 8_000` sits beside
+// `maxOutputTokens: 100_000`, and each assertion reads the number the WINDOW
+// half carried, so a swap MOVES it. The two fixtures whose sites can also swap
+// to `opts.compact?.contextWindow` carry a THIRD, again distinct decoy
+// (`compact: { contextWindow: 4_000 }`) — MEASURED live, not decorative: with
+// it in place that swap reads 4_000 at the assertion (`expected 4000 to be
+// 8000`) instead of an absent key, and its presence does not disturb the
+// fixtures (no compaction pass: the runs keep the review at exactly one request
+// and the cassette order intact). The 8_000-vs-4_000 mismatch is the decoy's
+// point, not a copy/paste slip — the assembly's own fixtures pass the SAME
+// window to both (`:144-145`), which is exactly why those cannot see this swap.
+//
+// The observation is the child's own budget: `subagent/src/child.ts:449-451`
+// writes `budget: { contextWindow, … }` into the deps of the child's
+// `createAgent`, which this file's mock already records (`agentCalls`, :31-41)
+// — no new seam, no new export. Which child is which is decided by the prompt
+// its ROLE authored, the file's existing identifier (`:864` teammate, `:1532`
+// reviewer), never by call order.
+describe("createSessionAssembly — the four window-half hops (M79 T5)", () => {
+  const REVIEWER_PROMPT = "You are the approval guardian."
+  const TEAMMATE_PROMPT = "You are a teammate in an agent team."
+
+  /** One recorded deps' prompt as text. The MAIN agent is handed the assembly's
+   * `systemPromptNow` FUNCTION; every child site hands a string (child.ts:433),
+   * so the two arms are both live in this file. */
+  function recordedPrompt(deps: AgentDeps & AgentConfig): string {
+    return typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt
+  }
+
+  /** The children this case spawned whose role prompt carries `fragment` — the
+   * file's prompt-based identification, read off the recorded deps instead of
+   * the wire. `agentCalls` accumulates for the whole FILE, so each case clears
+   * it first (the precedent at :141): both of these prompts are already on
+   * record from the M73 cases above, and a stale entry would fail `toHaveLength`. */
+  function childrenWith(fragment: string): (AgentDeps & AgentConfig)[] {
+    return agentCalls.deps.filter((deps) => recordedPrompt(deps).includes(fragment))
+  }
+
+  /** The parent turn the two guardian cases share — the M73 block's
+   * `guardianParentScript` (:1503) restated, because that helper is scoped to
+   * its own block, whose fixtures this block must not disturb. Step 1 is the
+   * outside-workspace `write` whose approval `ask` consults the guardian; step 2
+   * exists only so a broken wiring still has a parseable reply instead of an
+   * exhausted cassette (the shipped path never reaches it — the review denies
+   * the write first). */
+  function guardianParentScript(dir: string): MockStep[] {
+    return [
+      { role: "assistant", toolCalls: [{ name: "write", args: { path: join(dir, "..", "outside.txt"), text: "x" } }] },
+      { role: "assistant", text: "the write went through" },
+    ]
+  }
+
+  /** The team case's client: holder 5c's cassette (:838-842) with this file's
+   * recorder around it (`capturingModel`, :468) — the two existing pieces
+   * joined, because the spawn is driven by a TOOL CALL and the teammate's turn
+   * races the lead's continuation for the next script step (the reason no
+   * assertion below depends on WHO got which step). */
+  function teamLeadModel(): ModelClient & { requests: LLMRequest[] } {
+    const requests: LLMRequest[] = []
+    const cassette = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "spawn_teammate", args: { name: "helper", description: "d", prompt: "do the work" } }] },
+      { role: "assistant", text: "teammate finished" },
+      { role: "assistant", text: "lead finished" },
+    ])
+    return {
+      requests,
+      async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+        requests.push(request)
+        yield* cassette.stream(request)
+      },
+    }
+  }
+
+  // hop 1 (`assembly.ts:1146`) + hop 4 (`reviewer.ts:178`, the gate's TRUE arm):
+  // one number enters at the assembly and leaves at the reviewer's child.
+  it("hop 1+4: the INHERITED reviewer's budget carries the session's WINDOW, not its cap", async () => {
+    agentCalls.deps.length = 0
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-window-hop1-"))
+    const client = guardianArmModel(guardianParentScript(dir))
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: client,
+      contextWindow: 8_000,
+      maxOutputTokens: 100_000,
+      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      guardian: {}, // no `model` → the reviewer inherits → the gate's TRUE arm
+    })
+    try {
+      // Captured, not asserted (the M73 guardian cases' reason): under a broken
+      // wiring the write goes through, and the assertion below is what must hold
+      // either way.
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      const reviewed = childrenWith(REVIEWER_PROMPT)
+      expect(reviewed).toHaveLength(1)
+      // The decoy set, one line apart each: the CAP is 100_000, the WINDOW
+      // 8_000, the compact window 4_000. A swap at the site —
+      // `opts.maxOutputTokens`, or `opts.compact?.contextWindow` — puts a
+      // different number here and reds. At the M73 fixtures' 200 000 window
+      // this assertion could not tell the two keys apart at all.
+      expect(reviewed[0]!.budget?.contextWindow).toBe(8_000)
+      // Secondary, the wire half: the cap the reviewer's OWN request carries is
+      // that 100_000 clamped against the window, so the request is a second
+      // witness that the window reached this child (with no window it would be
+      // 100_000 verbatim, which is what the M73 cap assertion sees).
+      const reviewRequests = client.requests.filter((r) => r.systemPrompt.includes(REVIEWER_PROMPT))
+      expect(reviewRequests).toHaveLength(1)
+      expect(reviewRequests[0]!.maxOutputTokens).toBeLessThan(100_000)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  // The same two hops' GATE (`reviewer.ts:178`'s `deps.model === undefined`,
+  // FALSE arm): a configured guardian model runs on another endpoint, so this
+  // assembly's window — a number that describes a DIFFERENT model — must not be
+  // substituted for it.
+  it("hop 1+4 gate: a CONFIGURED guardian model gets NO window — the session's 200 000 is not passed on", async () => {
+    agentCalls.deps.length = 0
+    const dir = mkdtempSync(join(tmpdir(), "ih-assembly-window-hop1-gate-"))
+    const parent = guardianArmModel(guardianParentScript(dir))
+    const configured = guardianArmModel([]) // serves the review only
+    const assembly = await createSessionAssembly({
+      workspace: dir,
+      model: parent,
+      contextWindow: 200_000,
+      maxOutputTokens: 4_242,
+      guardian: { model: configured },
+    })
+    try {
+      const outcome = assembly.agent.run("write the file").then(
+        () => "resolved",
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      )
+      await outcome
+      // The session's numbers were LIVE in this assembly — the parent's own
+      // request carries the raw cap (no clamp at 200 000) — so the absence read
+      // below is the GATE, not a number that never existed.
+      expect(parent.requests[0]!.maxOutputTokens).toBe(4_242)
+      const reviewed = childrenWith(REVIEWER_PROMPT)
+      expect(reviewed).toHaveLength(1)
+      // MEASURED before it was written (this case was first run with a
+      // deliberately wrong expectation and the runner reported the actual):
+      // `undefined` — and not merely an absent field, the whole `budget` key is
+      // gone, because reviewer.ts:178 drops the window for a configured model
+      // and child.ts:449 writes `budget` only from a present window. Dropping
+      // that `deps.model === undefined &&` guard feeds 200_000 here — another
+      // endpoint's number, which is exactly what this asserts is absent.
+      expect(reviewed[0]!.budget?.contextWindow).toBeUndefined()
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+
+  // hop 2 (`assembly.ts:1182`) + hop 3 (`agent-team/src/scheduler.ts:221`).
+  it("hop 2+3: a TEAMMATE's budget carries the session's WINDOW, not its cap", async () => {
+    agentCalls.deps.length = 0
+    const coordinator = memoryCoordinator()
+    const model = teamLeadModel()
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(),
+      model,
+      approveAll: true,
+      team: {},
+      contextWindow: 8_000,
+      maxOutputTokens: 100_000,
+      compact: { contextWindow: 4_000 }, // the third decoy (see the block header)
+      // The team's spawn path REQUIRES durable child sessions (roster.ts), which
+      // the assembly wires only when BOTH are present — holder 5c's shape (:854).
+      sessionId: "lead-1",
+      coordinator,
+    })
+    try {
+      await assembly.agent.run("use the team")
+      await waitFor(() => childrenWith(TEAMMATE_PROMPT).length > 0)
+      const teammates = childrenWith(TEAMMATE_PROMPT)
+      expect(teammates).toHaveLength(1)
+      // The decoy set again: a swap at EITHER hop (the assembly's literal, or
+      // the scheduler's) makes this read 100_000, and one to the compact
+      // config's window reads 4_000.
+      expect(teammates[0]!.budget?.contextWindow).toBe(8_000)
+      // …and the observed child is one that really RAN: its own request carries
+      // the cap clamped against that window (100_000 reaches the wire verbatim
+      // only where the window is wide enough for it).
+      await waitFor(() => model.requests.some((r) => r.systemPrompt.includes(TEAMMATE_PROMPT)))
+      const teammateRequests = model.requests.filter((r) => r.systemPrompt.includes(TEAMMATE_PROMPT))
+      expect(teammateRequests[0]!.maxOutputTokens).toBeLessThan(100_000)
+    } finally {
+      await assembly.dispose()
+    }
+  }, 30_000)
+})

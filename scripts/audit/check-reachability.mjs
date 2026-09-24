@@ -49,9 +49,12 @@ function buildFixture() {
   }
 
   // class 1: `Wired` is imported by non-test code, `Orphan` is not.
-  // The FIRST line is M2 Task 4's half of the false-negative fixture: the only
-  // mention of `BetaThing` anywhere in this FIXTURE is that COMMENT, in another
-  // package, and it is enough to suppress `@i-harness/beta#BetaThing`.
+  // The FIRST line is M2 Task 4's half of the comment fixture, and M79 Task 6
+  // reversed its meaning. The only mention of `BetaThing` anywhere in this
+  // FIXTURE is that COMMENT, in another package -- and it USED to be enough to
+  // suppress `@i-harness/beta#BetaThing`, because the word test ran over raw
+  // file text. Since the fix the comment is stripped before that test, so the
+  // row appears and the case that pins it asserts the row.
   put("packages/alpha/src/index.ts", [
     "// BetaThing is mentioned only here, in a comment.",
     "export function Wired() { return 1 }",
@@ -81,12 +84,12 @@ function buildFixture() {
     "",
   ].join("\n"))
 
-  // --- Added by M2 Task 4, for the cross-package false-negative case below.
+  // --- Added by M2 Task 4, for the cross-package case below.
   // A `beta` ENTRY is what class 1 needs before it can report anything for that
   // package at all; the fixture had none, because `beta` existed only for the
-  // class-2 files above. The second half of this fixture -- a COMMENT in
-  // another package that merely NAMES the export -- is what suppresses the row,
-  // and it is added beside the case that measures it.
+  // class-2 files above. The second half -- a COMMENT in another package that
+  // merely NAMES the export -- is what the case below measures; M79 Task 6
+  // turned that case around, so the comment is now what the row SURVIVES.
   put("packages/beta/src/index.ts", "export type BetaThing = string\n")
 
   // class 3: `--yes` is parsed into flags and never read; `--model` is read.
@@ -154,6 +157,37 @@ function buildFixture() {
     'export { type CatalogShadowed } from "./models.ts"',
     "",
   ].join("\n"))
+
+  // --- Added by M79 Task 6, for the comment-stripping fix (spec §1.4 d2).
+  // (i) A comment in the ENTRY ITSELF. `EntryCommentOnly` is declared in
+  // `impl.ts` and re-exported by the entry, and the comment is the only mention
+  // OUTSIDE both of those -- so the raw-text word test read that comment as a
+  // consumer and retired the package's row. This element pins the ENTRY half of
+  // the fix: dropping comment-stripping from the `entryText` path ALONE reddens
+  // the case below, while the cross-package element (`BetaThing`, in
+  // `packages/alpha/src/index.ts`) stays green -- that one rides the per-file
+  // path, so the two elements fail on DIFFERENT mutations.
+  put("packages/zeta/src/impl.ts", "export function EntryCommentOnly() { return 1 }\n")
+  put("packages/zeta/src/index.ts", [
+    "// EntryCommentOnly is named only here, in a comment in the entry.",
+    'export { EntryCommentOnly } from "./impl.ts"',
+    "",
+  ].join("\n"))
+  // (ii) The over-stripping GUARD, added with the case that pins it: a mention
+  // inside a STRING LITERAL must still retire the row. Class 1 keeps string
+  // contents on purpose -- an export consumed through `import *` plus a string
+  // key is really consumed, so blanking strings would invent rows -- and
+  // `OnlyInAString` appears nowhere but that literal in `keys.ts`. Reusing
+  // `codeOnly` here, which blanks strings too, reports it and reddens the case.
+  // `RealOrphan` is the case's positive control: the expectation is an exact
+  // set, so a scanner that never looked at this package would leave it empty
+  // and fail rather than pass on an absence.
+  put("packages/psi/src/index.ts", [
+    "export function OnlyInAString() { return 1 }",
+    "export function RealOrphan() { return 2 }",
+    "",
+  ].join("\n"))
+  put("packages/psi/src/keys.ts", 'export const KEY = "OnlyInAString"\n')
 
   // class 4: `plan-mode` appears in the capability union but is never pushed.
   // Added by M1's fix wave (I2): the union file is a real module, so it also
@@ -378,6 +412,17 @@ function withoutReExportStatements(text) {
  *  point is scanned too, minus its re-export statements: those name everything
  *  the package re-exports without using any of it.
  *
+ *  The word test reads COMMENT-STRIPPED text (`commentsBlanked`), for the entry
+ *  as well as for every other production file -- the entry's copy is stripped
+ *  BEFORE its re-export statements are blanked, so the two mention-only shapes
+ *  compose. Until M79 Task 6 it read the raw file, comments included, and a
+ *  comment that merely NAMED an export therefore retired that package's row: a
+ *  false negative, measured twice on this tree (M77 and M78, both times the
+ *  comment was reworded rather than the reader fixed). STRING LITERALS ARE
+ *  KEPT, deliberately: an export consumed through `import *` plus a string key
+ *  is really consumed, so blanking strings would manufacture rows, which is the
+ *  worse direction of error.
+ *
  *  Two structural blind spots are LEFT IN PLACE deliberately. M1's ruling R-L
  *  recorded the second and refused to fix the scanner mid-flight, because either
  *  fix moves the row set, the digest and the published precision sample; M2
@@ -410,13 +455,21 @@ function withoutReExportStatements(text) {
 function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
+  // ONE strip per production file for the whole scan, not one per question: the
+  // same text is asked about once per (entry, name) pair -- 66 entries on this
+  // tree, each with its export list (measured 2026-09-24) -- and stripping
+  // inside the loop is what would blow up.
+  const commentFree = new Map(prod.map((f) => [f.rel, commentsBlanked(f.text)]))
   const findings = []
   for (const entry of prod.filter((f) => /^packages\/[^/]+\/src\/index\.ts$/.test(f.rel))) {
     const pkg = "@i-harness/" + entry.rel.split("/")[1]
-    const entryText = withoutReExportStatements(entry.text)
+    // Strip comments FIRST, blank the re-export statements SECOND. The order is
+    // the fix: the old `entryText` was raw text minus its re-export statements,
+    // so every comment in the entry stayed alive as a mention.
+    const entryText = withoutReExportStatements(commentFree.get(entry.rel))
     for (const [name, origins] of exportedNamesDeep(entry, byRel)) {
       const word = new RegExp(`\\b${name.replace(/[$]/g, "\\$")}\\b`)
-      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.rel === entry.rel ? entryText : f.text))
+      const used = prod.some((f) => !origins.has(f.rel) && word.test(f.rel === entry.rel ? entryText : commentFree.get(f.rel)))
       if (!used) findings.push({ kind: "unused-export", subject: `${pkg}#${name}`, evidence: entry.rel })
     }
   }
@@ -475,13 +528,33 @@ function scanProducerlessEvents(files) {
 // ------------------------------------------------ class 3: flag never read
 const FLAG_CASE = /case\s+"(--[a-z0-9-]+)"\s*:\s*flags\.([A-Za-z_$][\w$]*)\s*=/g
 
-/** `text` with its string literals and comments blanked -- spaces, never
- *  deletion, and newlines kept, so blanking can neither join two tokens nor
- *  destroy line structure. A `--yes` named in a `--help` usage string, in a
- *  header comment or in block-comment prose is a mention, not a read of
- *  `flags.yes`. What it does not model: a `/` pair inside a regex literal starts
- *  a comment, and a whole template literal is blanked including its `${...}`. */
-function codeOnly(text) {
+/** The ONE lexical state machine both text readers below share. It walks `text`
+ *  character by character, tracking whether it is inside a string literal, a
+ *  block comment or a line comment. Blanked spans are always spaces -- nothing
+ *  is ever deleted -- and a newline passes through untouched, so a blanked span
+ *  can neither join two tokens into one word nor destroy line structure.
+ *
+ *  `keepStrings` is the whole of the difference between the two callers: it
+ *  decides whether a string literal's CONTENT is evidence or noise. Everything
+ *  else -- comment handling, escapes, the newline rule -- is one implementation
+ *  rather than two, so neither mode can drift from the other.
+ *
+ *  What it does not model, inherited unchanged by BOTH modes (M79 Task 6
+ *  parameterised this function instead of forking it, so the limits are the same
+ *  limits): a `/` pair inside a regex literal starts a comment, a quote inside
+ *  one opens a string, and a template literal is one string, so its `${...}` is
+ *  treated as string content in one mode and blanked in the other. A `//` inside
+ *  a regex literal therefore blanks the rest of ITS line in both modes, but the
+ *  two modes do not pay the same price for it. `codeOnly` (class 3) blanks
+ *  string content by design, so a span lost there is a miss. `commentsBlanked`
+ *  (class 1) KEEPS the strings, so what it blanks instead is REAL CODE: a
+ *  mention that may be a use disappears, which turns the loss into an INVENTED
+ *  row -- the worse of the two errors this file names elsewhere. Measured on
+ *  this tree 2026-09-24: 5 files blank such a span (`task-board.ts`,
+ *  `lsp/render.ts`, `plugin-registry/marketplaces.ts`, `rewind/path.ts`,
+ *  `settings/index.ts`), every span inside a regex source and none containing an
+ *  export name, so the direction is real and the consequence, today, is none. */
+function blankLexical(text, keepStrings) {
   let out = ""
   let quote = null
   let block = false
@@ -495,9 +568,9 @@ function codeOnly(text) {
       continue
     }
     if (quote !== null) {
-      if (c === "\\") { out += "  "; i++; continue }
+      if (c === "\\") { out += keepStrings ? c + (d ?? "") : "  "; i++; continue }
       if (c === quote) quote = null
-      out += " "
+      out += keepStrings ? c : " "
       continue
     }
     if (c === "/" && d === "*") { block = true; out += "  "; i++; continue }
@@ -506,10 +579,31 @@ function codeOnly(text) {
       if (i < text.length) out += "\n"
       continue
     }
-    if (c === '"' || c === "'" || c === "`") { quote = c; out += " "; continue }
+    if (c === '"' || c === "'" || c === "`") { quote = c; out += keepStrings ? c : " "; continue }
     out += c
   }
   return out
+}
+
+/** `text` with its string literals AND comments blanked. A `--yes` named in a
+ *  `--help` usage string, in a header comment or in block-comment prose is a
+ *  mention, not a read of `flags.yes`. Class 3's reader, and byte-for-byte the
+ *  function it always was: the shared machine is called with `keepStrings`
+ *  false. */
+function codeOnly(text) {
+  return blankLexical(text, false)
+}
+
+/** `text` with its COMMENTS blanked and its string literals KEPT -- class 1's
+ *  reader. A name mentioned only in a comment must not count as a consumer of an
+ *  export, or a documented false negative retires that package's row; a name
+ *  mentioned inside a string literal MUST count, because an export consumed
+ *  through `import *` plus a string key is really consumed, and blanking strings
+ *  would manufacture rows -- the worse of the two errors. The cost, stated: an
+ *  export that NOTHING consumes but a stray string names keeps its row hidden,
+ *  and the same goes for the machine's regex-literal limit above. */
+function commentsBlanked(text) {
+  return blankLexical(text, true)
 }
 
 /** A flag is "read" when an occurrence of its field name SURVIVES the two shapes
@@ -958,38 +1052,68 @@ SELF_TEST_CASES.push({
   run(root) { return scanUnconsultedSettings(indexTree(root)).map((f) => f.subject) },
 })
 
-// The cross-package false negative, PINNED rather than fixed. Class 1's `used`
-// test runs a word regex over the RAW file text (`scanUnusedExports`, the `used`
-// line) -- comments included -- so a comment that merely NAMES an export counts
-// as a consumer and suppresses that package's row. The direction is a false
-// NEGATIVE: a real orphan reads as reachable.
+// The cross-package comment, TURNED AROUND by M79 Task 6 rather than deleted.
+// Class 1's `used` test USED to run its word regex over the RAW file text
+// (`scanUnusedExports`, the `used` line) -- comments included -- so a comment
+// that merely NAMED an export counted as a consumer and suppressed that
+// package's row. The direction was a false NEGATIVE: a real orphan read as
+// reachable. The test now reads comment-stripped text and keeps strings, so the
+// row appears and this case asserts it.
 //
 // The fixture's `beta` entry AND the comment-only mention in
 // `packages/alpha/src/index.ts` were ADDED by M2 Task 4 for this case. Neither
-// half is decoration, and the second is load-bearing: with the entry present and
-// no mention anywhere, the scanner emits `@i-harness/beta#BetaThing` and this
-// case fails (measured, red-first, before the comment was added).
+// half is decoration: with the entry present and no mention anywhere, the
+// scanner emits `@i-harness/beta#BetaThing` (measured, red-first, before the
+// comment was added), which is what the assertion now expects.
 //
-// This is not hypothetical in the real tree. §6.2 of the baseline document
-// (`docs/audit/2026-09-15-reachability-baseline.md §6.2 — line 841 as of the
-// 2026-09-16 revision`; the stable anchor is the section, and the line is a dated
-// secondary because this document is edited) records that row as a REAL
-// finding -- `packages/preset/src/index.ts:30` declares and exports `mountPreset` and
-// no production file calls it -- while the scanner emits no
-// `@i-harness/preset#mountPreset` row at all (measured: the package's only row
-// is `#ToolProvider`), because the sole production mention is the COMMENT at
-// `packages/tui/src/views/light-personas.ts:2`. The inherited list records the
-// same collision a second time (`CreateProviderRuntimeOptions` suppressed its own
-// package's row during Task 4; M1 Phase B handoff §6). So the gate's silence
-// about a name is NOT proof that the name is reachable -- which is the
-// over-claim this case exists to prevent.
+// The real-tree instance this case was written from has moved on, and saying so
+// is the point. §6.2 of the baseline document
+// (`docs/audit/2026-09-15-reachability-baseline.md §6.2`, the stable anchor)
+// recorded `@i-harness/preset#mountPreset` as a REAL finding that the scanner
+// could not emit, because its sole production mention was a COMMENT at
+// `packages/tui/src/views/light-personas.ts:2`. That file was deleted with the
+// TUI (M65), so as of the 2026-09-24 measurement the row has been in the row set
+// on BOTH sides of this fix -- the old collision is history, not the fixture.
+// What the fix did move here, measured 2026-09-24: 432 rows to 456, 24 rows
+// appearing, every one of them a name whose only production mentions outside its
+// declaring module were comments (by the reader's construction it can only be
+// that or the entry's own re-export statement; each of the 24 was checked
+// against the tree by hand and the list is in the M79 record). Two further
+// mentions of the same bug class fired during M77 and M78 (`retryErrorCode`,
+// `derivePruneSubstitutes`) and were dodged by REWORDING the comment -- which is
+// why the hazard class, not the comments, is what this fix removed.
+//
+// The lesson the case still carries: the gate's silence about a name was never
+// proof that the name is reachable, and after this fix it still is not -- a name
+// mentioned in a STRING, or used only inside its own declaring module, retires
+// its row by design.
 SELF_TEST_CASES.push({
-  name: "class 1: a COMMENT naming a type suppresses the row (documented false negative)",
-  expect: [],
+  name: "class 1: a COMMENT naming a type no longer suppresses the row (M79 fixed the documented false negative)",
+  expect: ["@i-harness/beta#BetaThing"],
   run(root) {
     return scanUnusedExports(indexTree(root))
       .map((f) => f.subject)
       .filter((s) => s.startsWith("@i-harness/beta#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: a COMMENT in an entry file no longer retires that entry's own row",
+  expect: ["@i-harness/zeta#EntryCommentOnly"],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/zeta#"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "class 1: a name only inside a STRING literal still retires the row (strings are not stripped)",
+  expect: ["@i-harness/psi#RealOrphan"],
+  run(root) {
+    return scanUnusedExports(indexTree(root))
+      .map((f) => f.subject)
+      .filter((s) => s.startsWith("@i-harness/psi#"))
   },
 })
 
