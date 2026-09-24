@@ -80,7 +80,7 @@
 | 18 | agent-team 10 工具（替換同名 subagent 工具） | 有 team 配置 | :349-368 |
 | 19 | exit_plan_mode | planMode | :414 |
 
-**▶ M80 更正（原句量到為假）**：`todo_write`（packages/todo）與 `read_image`（packages/attachment，概覽稱「read-image 系」）**均已掛載**——`session-executor/src/assembly.ts:833`（`createTodoTool`）／`:834`（`createReadImageTool`），M40 落地，imports 於同檔 `:21`／`:22`。本行原文斷言兩者都沒有掛載點（且稱「整份 assembly 沒有 createTodoTool / 任何 image 讀取工具」）——那是**量到為假**的宣稱。事件投影仍在（`deriveTodoList` 取最後一筆 `todo/write`，`packages/todo/src/index.ts:67`）——它原先是已於 M65 刪除的 TUI todo 面板的資料源（見文首範圍變更註記）；現行 CLI 組合的 agent **可以**呼叫 `todo_write`。見 §11。
+**▶ M80 更正（原句量到為假）**：`todo_write`（packages/todo）與 `read_image`（packages/attachment；「read-image 系」這串出自 `docs/roadmap/2026-08-31-roadmap-B-tools.md:7`——概覽 `docs/CAPABILITIES.md` 對 `read-image` 是 0 命中）**均已掛載**——`session-executor/src/assembly.ts:833`（`createTodoTool`）／`:834`（`createReadImageTool`），M40 落地，imports 於同檔 `:21`／`:22`。本行原文斷言兩者都沒有掛載點（且稱「整份 assembly 沒有 createTodoTool / 任何 image 讀取工具」）——那是**量到為假**的宣稱。事件投影仍在（`deriveTodoList` 取最後一筆 `todo/write`，`packages/todo/src/index.ts:67`），但**它沒有生產消費者**——`git grep deriveTodoList -- 'apps/**' 'packages/**'` 在今天與 M65 前（`4ea5b5d^`）都只回該包與它的測試。原文「TUI todo 面板讀的是事件投影」不假，可是面板讀的**不是它**：TUI 自己把 `todo/write` 映成 todo 列（`packages/tui/src/backend/embedded.ts:274` → `views/todo-pane.ts`，隨該包於 M65 刪除）。現行 CLI 組合的 agent **可以**呼叫 `todo_write`。見 §11。
 
 ### 1.3 工具總表（名稱 / 參數 / 行為 / 曝光 / 唯讀）
 
@@ -635,7 +635,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 | 「session picker/welcome」 | 資料源 = `listSessionsFromStore`（raw jsonl、turn/start 計數、mtime） |
 
 1. **`read_image` 存在且已掛載**（M80 重量；原條目為假）——`packages/attachment/src/read-image.ts:30`（`createReadImageTool`，工具名 `:33`，png/jpeg/gif/webp → ImageInput inline），掛於 `session-executor/src/assembly.ts:834`（M40）；原條目說「全倉無 read_image 工具、無套件」量到為假。
-2. **`todo_write` 已掛載**（M80 重量；原條目「未掛載」為假）——`packages/todo/src/index.ts:33`（工具名），`createTodoTool` 掛於 `session-executor/src/assembly.ts:833`（M40）；原句「`createSessionAssembly`（assembly.ts）未註冊」量到為假。事件投影仍在（`deriveTodoList`，`packages/todo/src/index.ts:67`）——它原先是已於 M65 刪除的 TUI todo 面板的資料源。
+2. **`todo_write` 已掛載**（M80 重量；原條目「未掛載」為假）——`packages/todo/src/index.ts:33`（工具名），`createTodoTool` 掛於 `session-executor/src/assembly.ts:833`（M40）；原句「`createSessionAssembly`（assembly.ts）未註冊」量到為假。事件投影仍在（`deriveTodoList`，`packages/todo/src/index.ts:67`），但**它沒有生產消費者**——`git grep deriveTodoList -- 'apps/**' 'packages/**'` 只回該包與它的測試。已刪的 TUI 面板讀的**不是它**：TUI 自己把 `todo/write` 映成 todo 列（`packages/tui/src/backend/embedded.ts:274`，隨該包於 M65 刪除）。
 3. **無 `comment` 工具參數**——shell 工具 schema 僅 `command`/`background`；無 timeout/retention 參數欄（host 層選項）。
 4. **web-host 路由**～53 條（概覽「40+」大致對，但以本表為準）；MCP 資源工具三檔（`list_mcp_resources__<s>`/`read_mcp_resource__<s>`/`list_mcp_resource_templates__<s>`）概覽未列。
 5. **SGR mouse 只做 1006**（無 1106）；**probe 無 DA1/DASR 查詢**（僅被動 DA2）；DEC 2026 有實作（非「concern」）。
