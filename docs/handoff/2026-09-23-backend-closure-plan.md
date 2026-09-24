@@ -4,6 +4,8 @@
 
 **一句話**：後端的功能面已經被 M1–M75 鋪完，剩下的**不是新功能，是既有東西上**量到卻沒修的洞（其中兩個是真缺陷、兩個是成本、一批是覆蓋率），外加一份被五個里程碑追過的佇列文件。做完這五個單位，剩下的每一條都應該能歸類成「**等前端**」或「**產品決定**」——那時才叫收線。
 
+> **✅ 2026-09-24：五個單位全部完成並合併（M76–M80）。判決＝後端打磨完成、可以進前端** —— 就緒紀錄 `docs/handoff/2026-09-24-m80-backend-readiness.md`（§5 判決／§6 殘餘）、逐條分類 `docs/handoff/2026-09-24-m80-residual-audit.md`（200 條：Tier-1 30 關閉；Tier-2 162＝①1｜③8｜④151｜UNMEASURED 2）。
+
 ---
 
 ## 0. 為什麼有這份文件（它取代什麼）
@@ -29,7 +31,7 @@
 | **M77** | **③拒絕要有通道**（`content_filter`／`SAFETY`／`RECITATION`／`refusal`／`model_context_window_exceeded` 今天都讀成「200 空成功」） | M | ✅ **完成並合併**（**PR #13 → `bb266229`**；`m77`；閘門 **3118／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m77-refusal-channel.md`。三個任務＋Task 1 一輪 fix round＋單一 fix wave；**終審發現只認「停止原因」的字面不夠——三家有內容側載體，補上後標題才成真**） |
 | **M78** | **④兩個成本缺陷**（prune-before-summarise；M70 的 per-call checkpoint） | S–M | ✅ **完成並合併**（**PR #14 → `5446d6bb`**；`m78`；閘門 **3124／432** `gate PASS`，合併後 tree hash 與分支尖端相同；紀錄 `docs/handoff/2026-09-24-m78-prune-before-summarise.md`。**兩個部分**：標記移到 fold 之前＋`deriveMessagesUpTo` 的 seq 濾網對 prune 破例（後者才是有效的——控制器原本的設計被量測推翻）；checkpoint **接受**並記數字。**留下的五條**（record §5 的殘餘逐條）：快取那一側未量、五處過期的快取簡寫、`engine.test.ts` 的測試名稱、重試會再附加一個標記、prune 只縮它能縮的） |
 | **M79** | **⑤覆蓋率補齊** ＋ 三件被指派進來的（見下） | M–L | ✅ **完成並合併**（**PR #15 → `bc45dce`**，合併後 tree 與分支尖端相同；`m79`；閘門 **3133／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m79-coverage-completion.md`。**六個任務＋單一 fix wave**；量測更改了設計：`telemetry`／`acp` **零生產者** ⇒ **移除**；儀器剝註解後 **432 → 456（＋24／−0，逐條具名）**；三件指派（manifest 牙齒／儀器註解盲點／19→23 列）全部落地） |
-| **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S–M | ✅ **完成**（`m80`，from `bc45dce`；閘門 **3140／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m80-backend-readiness.md`——**即後端就緒紀錄**：判決＝**打磨完成、可以進前端**；稽核表 `docs/handoff/2026-09-24-m80-residual-audit.md` 歸類 **200 條**（Tier-1 30／Tier-2 162：①1｜③8｜④151｜UNMEASURED 2）；§2.5 的靜默空成功已關（`provider/empty` 四表面，`2f9147e`）。**合併尚未進行**） |
+| **M80** | **文件債 ＋ 後端收線稽核**（重寫 §9.2、解掉四處矛盾、寫「後端就緒紀錄」） | S–M | ✅ **完成並合併**（**PR #16 → `68b7f02`**，合併後 tree 與分支尖端相同；`m80`，from `bc45dce`；閘門 **3140／456** `gate PASS`（最終樹、單獨執行）；紀錄 `docs/handoff/2026-09-24-m80-backend-readiness.md`——**即後端就緒紀錄**：判決＝**打磨完成、可以進前端**；稽核表 `docs/handoff/2026-09-24-m80-residual-audit.md` 歸類 **200 條**（Tier-1 30／Tier-2 162：①1｜③8｜④151｜UNMEASURED 2）；§2.5 的靜默空成功已關（`provider/empty` 四表面，`2f9147e`）） |
 
 **順序的理由**：M76 最小、量測最新鮮、而且它關掉的是「**註解宣稱有效、其實無效**」這個靜默類別；M80 必須最後（它要判斷全部）。
 
