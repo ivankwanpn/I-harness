@@ -499,7 +499,20 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
       else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
 
-      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}) })
+      // M80: the THIRD ending, and the only one that carries no signal of its
+      // own — a non-content success (HTTP 200, no text, no tool call, a bare
+      // `end`: the ten non-content gemini stop reasons land here). Reported at
+      // the step boundary, where both halves of the predicate are known. The
+      // two bits above are EXCLUDED on purpose: a capped or refused step is
+      // also text-less with no tool calls, and it already has its own, more
+      // specific report — writing this one too would double-report it (M77
+      // pinned that neither bit is the other's `else`, and the same discipline
+      // holds on this side). A step whose only output was a tool call is NOT
+      // empty: the call is content, and the loop continues on it.
+      const emptyThisStep = stepText === "" && toolCallsThisStep === 0 && !truncatedThisStep && !refusedThisStep
+      if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: steps } })
+
+      append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
 
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a
