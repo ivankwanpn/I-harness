@@ -6,11 +6,15 @@
 // phase/level it declares — measured, flipping one site's `warn`→`error` turned 0
 // tests red. Only a package can drive its own site, so the net lives here.
 //
-// Covered: `src/index.ts:363` — the SEAM shape (`currentDiagnostics()` + an
-// explicit `console.warn` fallback in `defaultReport`), driven through the real
-// registry: another tree's config whose handler is not the user's policy yet is
-// reported ONCE (the case hooks.test.ts:187 drives with an injected `report`, so
-// the DEFAULT body is what had no coverage).
+// Covered, both from `src/`:
+//   - `index.ts:363` — the SEAM shape (`currentDiagnostics()` + an explicit
+//     `console.warn` fallback in `defaultReport`), driven through the real
+//     registry: another tree's config whose handler is not the user's policy yet is
+//     reported ONCE (the case hooks.test.ts:187 drives with an injected `report`, so
+//     the DEFAULT body is what had no coverage).
+//   - `trust.ts:87` — the AMBIENT-HANDLE shape (`const d = diagnosticsFor("config")`),
+//     driven by handing the trust store a file that exists but is not JSON
+//     (M79 Task 4).
 //
 // Discipline is COPIED from `packages/diagnostics/test/diagnostics.test.ts:47-55`
 // (the capture stream) and `:59-68` (the teardown): the ambient slot is MODULE
@@ -29,7 +33,7 @@ import {
   type Redactor,
 } from "@i-harness/diagnostics"
 import { createHookRegistry } from "../src/index.ts"
-import { sha256File } from "../src/trust.ts"
+import { createHookTrustStore, sha256File } from "../src/trust.ts"
 
 /** The identity redactor: these cases are about the ROUTING (phase/level), and
  *  the real scans are their own task. */
@@ -110,5 +114,28 @@ it("an ungranted declaration's report is the installed instance's, at phase moun
     expect(warn).not.toHaveBeenCalled()
   } finally {
     for (const dir of dirs) rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+it("the trust store's unreadable-store report is the ambient handle's, at phase config / level warn", () => {
+  const dir = mkdtempSync(join(tmpdir(), "i-harness-hooks-r15-"))
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    // A store that EXISTS but is not JSON: the arm the absent-file and
+    // well-shaped cases never reach. It approves nothing, and says so.
+    const storePath = join(dir, "approvals.json")
+    writeFileSync(storePath, "{not json", "utf8")
+    const { stream, lines } = captureStream()
+    installDiagnostics(createDiagnostics({ stream, runId: "r15", redactor: passthrough }))
+
+    const store = createHookTrustStore(storePath)
+
+    expect(store.list()).toEqual([]) // degrade-to-empty, never throw
+    expect(lines).toHaveLength(1)
+    expect(parsed(lines)[0]).toMatchObject({ phase: "config", level: "warn", run: "r15" })
+    expect(parsed(lines)[0]!.msg).toContain("is not valid JSON")
+    expect(warn).not.toHaveBeenCalled()
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

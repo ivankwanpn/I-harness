@@ -7,12 +7,14 @@
 // site's `warn`→`error` turned 0 tests red. Only a package can drive its own
 // site, so the net lives here.
 //
-// The two shapes this file covers, both from `src/`:
+// The three shapes this file covers, all from `src/`:
 //   - `state.ts:78` — the SEAM shape: `currentDiagnostics()` + an explicit
 //     `console.warn` fallback, driven by handing the loader a state document it
 //     must rebuild.
 //   - `agents.ts:112` — the AMBIENT-HANDLE shape (`const d = diagnosticsFor("mount")`),
 //     driven by handing the scan a `*.md` entry it cannot read.
+//   - `commands.ts:76` — the same AMBIENT-HANDLE shape, driven by handing the
+//     commands scan its own `*.md` entry it cannot read (M79 Task 4).
 //
 // Discipline is COPIED from `packages/diagnostics/test/diagnostics.test.ts:47-55`
 // (the capture stream) and `:59-68` (the teardown): the ambient slot is MODULE
@@ -30,6 +32,7 @@ import {
 } from "@i-harness/diagnostics"
 import { loadState, loadStateSync } from "../src/state.ts"
 import { describeAgents } from "../src/agents.ts"
+import { describeCommands } from "../src/commands.ts"
 
 /** The identity redactor: these cases are about the ROUTING (phase/level), and
  *  the real scans are their own task. */
@@ -126,6 +129,30 @@ it("describeAgents' unreadable-file skip is the ambient handle's, at phase mount
     expect(lines).toHaveLength(1)
     expect(parsed(lines)[0]).toMatchObject({ phase: "mount", level: "warn", run: "r15" })
     expect(parsed(lines)[0]!.msg).toContain("skipping unreadable agent file")
+    expect(parsed(lines)[0]!.msg).toContain("broken.md")
+    expect(warn).not.toHaveBeenCalled()
+  } finally {
+    cleanup()
+  }
+})
+
+it("describeCommands' unreadable-file skip is the ambient handle's, at phase mount / level warn", () => {
+  const { dir, cleanup } = workspace()
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {})
+  try {
+    writeFileSync(join(dir, "good.md"), "---\ndescription: Good\n---\nA body", "utf8")
+    // The SAME unreadable-entry fixture as the agents case above: a DIRECTORY
+    // named `*.md` — `readdirSync` lists it, `readFileSync` cannot read it.
+    mkdirSync(join(dir, "broken.md"), { recursive: true })
+    const { stream, lines } = captureStream()
+    installDiagnostics(createDiagnostics({ stream, runId: "r15", redactor: passthrough }))
+
+    const commands = describeCommands(dir)
+
+    expect(commands.map((c) => c.name)).toEqual(["good"]) // one bad file never costs the host every command
+    expect(lines).toHaveLength(1)
+    expect(parsed(lines)[0]).toMatchObject({ phase: "mount", level: "warn", run: "r15" })
+    expect(parsed(lines)[0]!.msg).toContain("skipping unreadable command file")
     expect(parsed(lines)[0]!.msg).toContain("broken.md")
     expect(warn).not.toHaveBeenCalled()
   } finally {
