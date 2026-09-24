@@ -20,16 +20,26 @@ export type Level = "debug" | "info" | "warn" | "error"
 /**
  * A CLOSED union, enumerated from the MEASURED seams rather than invented: the
  * 107 `console.warn/error` sites in 34 files (W6 plan §0.1), plus the entries
- * those sites belong to — `cli` (argv, flags, subcommand usage), `config`
- * (settings, install, trust), `run` and `turn` (the run loop and its turns),
- * `sdk` and `acp` (the two non-interactive hosts), `session` (persistence and
- * the session commands), `mount` (the mount seams: mcp, lsp, skills, plugins,
- * agents), `telemetry` (its own sink errors), `shutdown` (teardown).
+ * those sites belong to — `cli` (argv, flags, subcommand usage, and the ACP
+ * host's reports: it reports through this handle), `config` (settings, install,
+ * trust), `run` and `turn` (the run loop and its turns), `sdk` (the
+ * non-interactive host), `session` (persistence and the session commands),
+ * `mount` (the mount seams: mcp, lsp, skills, plugins, agents), `shutdown`
+ * (teardown).
  *
  * It is closed so that a phase typo is a compile error at the call site instead
  * of a fifth spelling of "mount" in a log nobody greps. Adding a member is
  * therefore a decision, and the commit that adds one says which seam it came
  * from (W6 plan §0.3).
+ *
+ * REMOVED 2026-09-24 (M79): `acp` and `telemetry`, each measured that day with
+ * ZERO producers — the ACP host reports through the `cli` handle listed above,
+ * and the telemetry sink's errors stay on the bare console calls they have
+ * always used (W6's named byte-untouched exception). The declaration was cut to
+ * match the measurement instead of the two names being wired, because wiring
+ * either would have changed production behaviour for a test's sake. Adding one
+ * back follows the protocol just above; the eight that remain are pinned by the
+ * type-level exactness assertion in this package's tests.
  */
 export type DiagnosticPhase =
   | "cli"
@@ -37,10 +47,8 @@ export type DiagnosticPhase =
   | "run"
   | "turn"
   | "sdk"
-  | "acp"
   | "session"
   | "mount"
-  | "telemetry"
   | "shutdown"
 
 /**
