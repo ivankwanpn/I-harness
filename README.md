@@ -254,8 +254,8 @@ apps/
 ## 致謝與許可
 
 - 工程細節藍本：**grok-build（xai-grok-pager）**——界面 1:1 複刻與工程屬性（配方/黑盒觀察記錄於 `docs/research/`）
-- 提供商/模型界面機制參考：**cc-custom**（`providers.json` v2 形狀；我們改為 refs 存儲）
-- 體系參考：**deepseek-harness（dsh）**（事件驅動/審計鏈）/ **codex**（編譯架構）/ **opencode / cc-switch**（模型發現候選鏈）
+- **體系藍本之一：codex（OpenAI Codex CLI）——特別致謝。** 我們研讀並實跑驗證它的工程屬性：編譯架構、thread/turn/item 模型與 rollout 持久化、app-server 的 JSON-RPC 設計（`docs/research/codex-research.md`）；MCP client 的設計取捨有它與 dsh 的逐項對照（`docs/research/2026-08-25-mcp-client-codex-vs-dsh.md`）；M34 的壓縮策略吸收了它與 dsh／grok 的做法（per-model `modelPolicies` + `compaction/attempt` telemetry——見 `docs/CAPABILITIES.md` §M34）。
+- 體系參考：**deepseek-harness（dsh）**（事件驅動/審計鏈）· **opencode / cc-switch**（模型發現候選鏈）
 - 本項目 MIT 許可——詳見 `LICENSE`。
 
 ---
