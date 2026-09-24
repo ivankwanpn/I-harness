@@ -150,7 +150,7 @@ git commit -m "docs(capabilities): the false claims go — todo_write/read_image
 ### Task 4: `CAPABILITIES-DETAIL.md` 的**引用**（同檔、接在 Task 3 之後）
 
 **Files:**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items **20-24**（純引用））
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**只准動引用**：§1.2 整張表的行號、§2 的 `path:line`（`:206`／`:289`／`:305`／`:332`／`:483`／`:486`）、§12 items **20-24**（純引用）——**執行期更正（Task 3 的量測抓到）**：`＋ §12 item 18`〔「四張 reasoning 譯表」→ **5**〕、`＋ §2.1 的表格本體補上三個成員列`〔`tool/dispatch`／`rewind/point`／`operator/run-end`〕、`＋ :289 的兩個假宣稱`〔`todo/write → 未掛載` 與 `command/run|done → web.ts appendCommandEvents`——兩者今天都為假〕）
 
 - [ ] **Step 1: 逐條重量（先量再改）**
 
