@@ -160,13 +160,13 @@ function buildFixture() {
 
   // --- Added by M79 Task 6, for the comment-stripping fix (spec §1.4 d2).
   // (i) A comment in the ENTRY ITSELF. `EntryCommentOnly` is declared in
-  // `impl.ts` and re-exported by the entry; the comment is the only mention of
-  // the name anywhere in the fixture, so the raw-text word test read that
-  // comment as a consumer and retired the package's row. This element pins the
-  // ENTRY half of the fix: dropping comment-stripping from the `entryText` path
-  // ALONE reddens the case below, while the cross-package element (`BetaThing`,
-  // in `packages/alpha/src/index.ts`) stays green -- that one rides the
-  // per-file path, so the two elements fail on DIFFERENT mutations.
+  // `impl.ts` and re-exported by the entry, and the comment is the only mention
+  // OUTSIDE both of those -- so the raw-text word test read that comment as a
+  // consumer and retired the package's row. This element pins the ENTRY half of
+  // the fix: dropping comment-stripping from the `entryText` path ALONE reddens
+  // the case below, while the cross-package element (`BetaThing`, in
+  // `packages/alpha/src/index.ts`) stays green -- that one rides the per-file
+  // path, so the two elements fail on DIFFERENT mutations.
   put("packages/zeta/src/impl.ts", "export function EntryCommentOnly() { return 1 }\n")
   put("packages/zeta/src/index.ts", [
     "// EntryCommentOnly is named only here, in a comment in the entry.",
@@ -456,9 +456,9 @@ function scanUnusedExports(files) {
   const prod = files.filter((f) => !f.test)
   const byRel = new Map(prod.map((f) => [f.rel, f]))
   // ONE strip per production file for the whole scan, not one per question: the
-  // same text is asked about once per (entry, name) pair -- 68 entries on this
-  // tree, each with its export list -- and stripping inside the loop is what
-  // would blow up.
+  // same text is asked about once per (entry, name) pair -- 66 entries on this
+  // tree, each with its export list (measured 2026-09-24) -- and stripping
+  // inside the loop is what would blow up.
   const commentFree = new Map(prod.map((f) => [f.rel, commentsBlanked(f.text)]))
   const findings = []
   for (const entry of prod.filter((f) => /^packages\/[^/]+\/src\/index\.ts$/.test(f.rel))) {
