@@ -20,6 +20,8 @@
 | What `m64` holds — **still the revision the figures below were measured at** | the **M62 sandbox milestone** (whose code state is `3e0e2536`) + **M1 Phase A/B** + **the 2026-09-15 review cycle** + **M2, the reachability gate** (§0.3) — at `a686d9e1`: **61** commits after `3e0e2536`, **115** after `origin/main` (and 2 behind it). The count rises by one per commit, so **re-run it** (§0.2's lesson) |
 | HEAD the **M2-era** figures below were measured at | **`a686d9e1`**; the M62/M1-era figures at `a5e4bb0e`. Every commit since moves HEAD again — **and M65 has moved it further still**, which is why §0.4 exists and why any `path:line` below may have rotated |
 
+> **▶ 2026-09-24：live branch 已是 `m80`**（本表的 `m65` 那一列是 2026-09-17 的狀態）；**當前的「還沒做」清單＝`docs/handoff/2026-09-23-backend-closure-plan.md`**（M76–M80 —— M76–M79 已合併，M80 進行中）；**這一輪的收線紀錄＝`docs/handoff/2026-09-24-m80-backend-readiness.md`**。
+
 **This document is not a snapshot of the tip; it is the orientation guide, and §5's baselines are the M62 baseline plus a tip section.** Two things follow, and the second is the one that bites:
 
 - The M62 work itself is unchanged: `git merge-base --is-ancestor 3e0e2536 HEAD` succeeds.

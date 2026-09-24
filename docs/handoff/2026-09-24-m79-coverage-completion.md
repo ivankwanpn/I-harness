@@ -3,6 +3,7 @@
 **一句話**：這一輪**不加功能**——把「行為已正確、但沒有觀察者／沒有牙齒」的指名位置補上，並修好一個**把註解當成使用**的儀器；儀器修好後**一次浮出 24 條被註解遮蔽的真發現**（reachability **432 → 456**），而 union 的 `telemetry`／`acp` 量到**零生產者** ⇒ **移除**而不是接線。
 
 - **分支**：`m79`（from `main` `5446d6bb`）。**執行段**：`d2c18c35`（spec＋計畫）＋ 六個任務 ＋ 控制器的三處就地更正（`c037fe0`、`887f741`、`b43a5da`）＋ fix wave（`5d080ef`）＋ 本紀錄。合併尚未進行。
+- **▶ 已合併（2026-09-24）：PR #15 → `bc45dce`** —— 合併後 tree 與分支尖端相同（`git rev-parse m79^{tree}` ＝ `bc45dce^{tree}` ＝ `3f2bbabb5ad641ffffeeb3b0262f8e753b6c4bc8`；`git diff bc45dce m79 --stat` 空），所以上面那句「合併尚未進行」只描述寫下時的那一刻。**M80 的收線紀錄：`docs/handoff/2026-09-24-m80-backend-readiness.md`。**
 - **spec（權威）**：`docs/superpowers/specs/2026-09-24-coverage-completion-design.md`
 - **計畫**：`docs/superpowers/plans/2026-09-24-coverage-completion.md`
 - **它屬於**：`docs/handoff/2026-09-23-backend-closure-plan.md` 的 **M79／M76–M80**
