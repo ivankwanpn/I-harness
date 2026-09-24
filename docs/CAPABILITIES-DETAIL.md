@@ -19,7 +19,7 @@
 | deferred（原生） | glob、grep（+MCP 當 directTools 非空） |
 | hidden | 機制存在、無生產使用者 |
 | SessionEvent | **34 種** |
-| Telemetry 碼 | **19**（manifest） |
+| Telemetry 碼 | **23**（manifest） |
 | Hook 事件 | **9**；handler 預設 1s 超時、輸出 64KiB |
 | HTTP 路由 | ~53（24 靜態）＋ **WS mux 7 endpoint**（/api/mux） |
 | sdk 方法 | initialize / session/prompt / session/status / shutdown；通知 session/event, session/status |
@@ -290,9 +290,9 @@
 
 `deriveMessages`（:306-393）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（:398-436）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（:268-299）。
 
-### 2.2 Telemetry 事件集（packages/telemetry）——manifest 19 碼（manifest.ts:16-37）
+### 2.2 Telemetry 事件集（packages/telemetry）——manifest 23 碼（manifest.ts:16-49）
 
-session/start, session/end, session/request, session/queued, session/error, turn/start, turn/end, tool/start, tool/end, tool/error, provider/call, provider/error, token/usage, retry/start, mcp/server-status, skill/selector-shadow, settings/changed, compaction/attempt, error, warn（= 19 行；`TELEMETRY_EVENT_TYPES`）。sink 多播隔離（emit 同步/異步錯誤 console.warn 不漏）；close() v0 no-op（telemetry.ts）。JSONL sink 每行 `{ts,type,data}`（jsonl.ts）。
+session/start, session/end, session/request, session/queued, session/error, turn/start, turn/end, tool/start, tool/end, tool/error, provider/call, provider/error, provider/usage, provider/truncated, provider/refused, token/usage, retry/start, mcp/server-status, skill/selector-shadow, settings/changed, compaction/attempt, error, warn（= 23 行；`TELEMETRY_EVENT_TYPES`）。sink 多播隔離（emit 同步/異步錯誤 console.warn 不漏）；close() v0 no-op（telemetry.ts）。JSONL sink 每行 `{ts,type,data}`（jsonl.ts）。
 
 ### 2.3 Hook 事件（packages/hooks/src/types.ts:9-19）——9 事件 + 契約
 
@@ -671,7 +671,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 6. SessionEvent 34 型別計數（core-session/src/index.ts:5-117）
 7. compaction 默認值與 sticky/breaker（compaction/src/config.ts:81-149, index.ts:190-217）
 8. token 計量常數（token-meter/src/estimate.ts:5-11）
-9. telemetry manifest 19（telemetry/src/manifest.ts:16-37）
+9. telemetry manifest 23（telemetry/src/manifest.ts:16-49）
 10. hooks 9 事件 + sha256 信任（hooks/src/types.ts:9-19, 98-109）
 11. sdk wire v0 凍結（sdk/src/protocol.ts:13-49）
 12. auth fence 常數（web-host/src/auth.ts:25, 40）

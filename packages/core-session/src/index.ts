@@ -148,7 +148,7 @@ export type SessionEvent =
     // check that the two sets stay equal. UI-plane: deriveMessages' default
     // branch keeps it model-invisible and deriveSearchText would return ""
     // (unindexed). Additive; format version stays 1.
-    | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "acp" | "session" | "mount" | "telemetry" | "shutdown"; error?: string; seq?: number }
+    | { type: "operator/run-end"; version: 1; runId: string; exitCode: number; durationMs: number; phase: "cli" | "config" | "run" | "turn" | "sdk" | "session" | "mount" | "shutdown"; error?: string; seq?: number }
   )
   & { ignorable?: true }
 
