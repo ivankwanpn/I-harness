@@ -247,6 +247,14 @@ export interface HeadlessResult {
    * independent of it: both may be set on one run. Present only as `true` — a
    * clean run carries no field at all. */
   refused?: boolean
+  /** M80: a `step/end` in this run's LAST turn produced NO content at all —
+   * the provider returned an empty success (HTTP 200, no text, no tool call).
+   * Exactly the predicate, read from the session log the same way `truncated`
+   * and `refused` are, and independent of them by construction: the judgment
+   * excludes a step that was capped or refused, because those are the more
+   * specific facts about the same step. Present only as `true` — a clean run
+   * carries no field at all. */
+  empty?: boolean
 }
 
 // Shape guard for the restored subagent-state document: a wrong-shape-but-valid
@@ -833,6 +841,14 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // durable `step/end.refused` in the LAST turn. A separate predicate, not an
     // `else`: a step can be capped AND refused, and the two then coexist.
     const refused = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.refused === true)
+    // M80: the same reading for the empty success — the durable `step/end.empty`
+    // in the LAST turn. A separate predicate rather than a chain over the two
+    // above: the core-agent's judgment already excludes a capped or refused step
+    // (those bits are the more specific fact about that step), so all three can
+    // be read independently, and a run whose ONLY such step was capped reports
+    // only that (a turn whose capped step carried tool calls continues, so a
+    // later empty step in the same turn still prints `[empty]`).
+    const empty = session.events.slice(Math.max(lastTurnStart, 0)).some((e) => e.type === "step/end" && e.empty === true)
     // Site ②: the success exit. Appended BEFORE the flush — this is the one
     // path that closes the coordinator only later (`maybeAutoTitle` runs in
     // between), so this append is what makes the record's own durability the
@@ -901,9 +917,23 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // that was capped and refused reads as `[truncated]` then `[refused]` —
     // neither line is the other's `else`, and the order is the source's.
     if (refused) console.error("[refused] the provider refused to produce content; a step in this turn was blocked")
+    // M80: the empty success, printed for the same reason and on the same
+    // surface. This is the one that used to be SILENT — every other surface
+    // (the durable bit, the telemetry code, `HeadlessResult.empty`) is read by
+    // a program, and an operator watching a terminal saw an empty answer with
+    // no explanation at all. The wording claims exactly what the predicate
+    // knows: a `step/end` in this turn carried no answer text and no tool call —
+    // NOT that `finalText` is empty (it can carry an earlier step's text), and not a
+    // claim about WHY (the provider's reason is its own; the ten non-content
+    // gemini stop reasons are the measured population). Printed last, after the
+    // other two: this bit cannot coexist with either of them ON THE SAME STEP
+    // (the core-agent's judgment excludes a capped or refused step), so this
+    // line never displaces one of the pair above — while those two can still
+    // print together, exactly as M77 pinned.
+    if (empty) console.error("[empty] the provider returned no answer text and no tool call; a step in this turn was empty")
     emitSessionEnd(0)
     telemetry?.close()
-    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
+    return { finalText, exitCode: 0, session, ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(empty ? { empty: true } : {}), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } catch (err) {
     emitSessionEnd(1)
     // Site ③: the run's own failure (a turn that threw, a durable flush that

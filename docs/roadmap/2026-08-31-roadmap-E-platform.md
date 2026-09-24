@@ -23,7 +23,7 @@
 | R-E8 | feedback | 文檔側車 + CAS 版本 | **分支（as-is）** | S | coordinator | 快速回收 |
 | R-E9 | schedule | 持久 schedule/change + 本地驅動器（min 300s、重啟後重驅動） | dsh | S | core-session | 可插空 |
 | R-E10 | config 深化 | 多層載入/熱更新/註釋保持 | dsh（settings-file） | M | R-E1 | 遠期（先用 E1） |
-| R-E11 | provider 廣度 | 更多協議（gemini/bedrock/…）+ variants + live discovery | opencode（35+）/ codex（bedrock） | M | provider | ~~遠期（M20 約束「不新增」→ 決策項）~~ **gemini/bedrock 已於 M30 落地（用戶拍板覆蓋 M20 不新增）；剩 variants/live discovery 遠期** |
+| R-E11 | provider 廣度 | 更多協議（gemini/bedrock/…）+ variants + live discovery | opencode（35+）/ codex（bedrock） | M | provider | **已落地：gemini/bedrock（M30；M20 約束「不新增」→ 決策項，已由用戶拍板覆蓋）＋ live discovery（▶ 2026-09-24 更正：原句把它列在未落地那一側，量到為假）** —— `probeModels`／`discoverModels`（`packages/provider-runtime/src/index.ts:463`／`:521`）、CLI `models probe`／`models refresh`（`apps/cli/src/models.ts:418`／`:432`）。**未做：variants 與 bedrock 的實測 probe（manual-only）** |
 | R-E12 | webhook | 驗簽 + 觸發 workspace session | dsh | M | R-E3、R-C1 | 遠期 |
 | R-E13 | 身份 | 匿名 UUID 檔案 | dsh | S | — | 遠期（無產品需求） |
 
@@ -54,13 +54,13 @@
 
 ### R-E11 provider 廣度（gemini/bedrock 已於 M30 落地）
 - M20 spec §1.2 全域約束：「**不新增 gemini/bedrock/內嵌模型**」——這是當年決策。opencode 35+ / codex bedrock 是改決策的信號但需明確同意；**列為決策項**：維持 3 協議 OR 擴 gemini/bedrock。
-- **M30（2026-09-02）**：用戶拍板覆蓋 M20「不新增」——gemini（原生 Google GenAI REST）與 bedrock（AWS Converse，新公開依賴 `@aws-sdk/client-bedrock-runtime`）已為 first-class provider（協議/regex 分派/settings/CLI 內建 profile/modelContexts 齊備）。剩餘遠期：variants 與 live discovery（bedrock probe 暫以靜態 catalog 兜底）。
+- **M30（2026-09-02）**：用戶拍板覆蓋 M20「不新增」——gemini（原生 Google GenAI REST）與 bedrock（AWS Converse，新公開依賴 `@aws-sdk/client-bedrock-runtime`）已為 first-class provider（協議/regex 分派/settings/CLI 內建 profile/modelContexts 齊備）。**▶ 2026-09-24 更正：原句把 variants 與 live discovery 一起寫成剩下的未來項，而後半量到為假 —— live discovery 已實作且有 CLI**：`probeModels`／`discoverModels`（`packages/provider-runtime/src/index.ts:463`／`:521`）→ CLI `models probe`（`apps/cli/src/models.ts:418`）／`models refresh`（`:432`）；**「用戶明確觸發的 probe」與 2026-09-02 的「不追自動合併」決策並存**（後者講的是運行期 adapter 註冊表／自動 model discovery）。**今天未做的只剩 variants 與 bedrock 的實測 probe**（後者的 discovery 是 `manual-only`：`apps/cli/src/models.ts:245-247`，`packages/provider-runtime/src/index.ts:246` 會拒絕），bedrock 仍以靜態 catalog 兜底。
 
 ## 4. 排序建議
 
 1. **回收組（直接收）**：R-E1 + R-E2 + R-E3 + R-E6 + R-E7 + R-E8（分支 as-is / 近乎 as-is）→ R-E4（含 1 函數補丁）
 2. R-E9（小）→ R-E5（中長期）
-3. R-E10、R-E11、R-E12、R-E13 遠期或決策項
+3. R-E10、R-E12、R-E13 遠期或決策項；**R-E11 已落地**（**▶ 2026-09-24 更正**：gemini/bedrock 已於 M30、模型探測亦已落地 —— 見 §2 的 R-E11 列；未做的只有 variants 與 bedrock 的 manual-only probe）
 
 ## 5. 依賴交叉
 
@@ -82,6 +82,6 @@
 | R-E8 | **M26 回收** | feedback：分支 as-is |
 | R-E9 | **M26（隨 E6）** | schedule：與 goal 同族，隨手補 |
 | R-E10 | 遠期 | config 深化（多層/熱更新）——先以 E1 為主 |
-| R-E11 | 已落地（M30） | provider 廣度（gemini/bedrock）——用戶拍板覆蓋 M20「不新增」；餘項（variants/live discovery）遠期。**追加決策（2026-09-02）**：不追 dsh 的運行期 adapter 註冊表 / model discovery / pi-ai 聚合——維持 static switch + 原生 first-class（現做法對 5 協議已夠；第 6 個協議時再議） |
+| R-E11 | 已落地（M30；live discovery 亦已落地） | provider 廣度（gemini/bedrock）——用戶拍板覆蓋 M20「不新增」；**▶ 2026-09-24 更正：live discovery 也已落地**（`probeModels`／`discoverModels`，`packages/provider-runtime/src/index.ts:463`／`:521`；CLI `models probe`／`models refresh`，`apps/cli/src/models.ts:418`／`:432`）——**未做的只剩 variants 與 bedrock 的實測 probe（manual-only）**。**追加決策（2026-09-02）**：不追 dsh 的運行期 adapter 註冊表 / model discovery / pi-ai 聚合——維持 static switch + 原生 first-class（現做法對 5 協議已夠；第 6 個協議時再議）；**它與上面的「用戶明確觸發的 probe」不是同一件事，兩者並存** |
 | R-E12 | 遠期 | webhook（產品面） |
 | R-E13 | 遠期 | 匿名身份（無產品需求） |

@@ -1,10 +1,12 @@
 # I-harness 能力盤點（2026-09-03，M32 → M34 全貌）
 
-> 65 包 + `apps/cli`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
+> 66 包 + `apps/cli`。M1–M25 後端完整（8/28）→ M26–M34 七輪擴展全部落地；每一輪經審計鏈（research → 取捨 → spec → plan → 執行 → 驗證 → 推送）。本文件是**當前能力全景**（以 m34 為準，M36 增量見下），里程碑歷史見 README §Development status。
 >
 > **⚠️ 範圍變更（M65，2026-09-17）：TUI 與 web 前端已移除。** `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts` 都已刪除——`git ls-files` 對前四個路徑各回 **0 個檔案**（工作目錄殘留的只有未追蹤的 `node_modules`，新 clone 沒有）。**下列區塊描述的東西已經不存在，一律以本註記為準**：**下方各條 TUI 增量註記（M36–M48）**、**§四 的 `web-host` 路由與宿主命令**、**§八 中引用 TUI 的實測記錄**、**§八¾ 的 Rewind UI**，以及 **§八¾½／§八¾¾／§八¾2 三節（Provider/模型 TUI 管理、TUI parity、鼠標五分面）**。產品立場是**後端必須在沒有界面附著時照常工作**、**前端應該純是前端**——**這是移除，不是廢棄**；重建是另一個里程碑（不在 M65 範圍內）。**裸啟動／未知子命令回到 M44 之前的行為**：用法印到 **stderr**、**exit 1**；宿主命令為 `run` / `sdk` / `acp` / `sessions`（無 `tui`、無 `web`）。
 >
 > **`packages/web` 沒有被移除，刪它會是個 bug**——它是 `web_search`／`web_fetch` **工具**包，仍掛在生產路徑 `packages/session-executor/src/assembly.ts:19`。被刪的前端是 `packages/web-host` 加 `apps/cli/src/web.ts`。移除的理由、留下的 wire 契約與完整記錄見 [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](handoff/2026-09-17-remove-tui-and-web-frontends.md)。
+>
+> **▶ 2026-09-24（M80）：本文件的活宣稱已對齊當前樹**（66 包、telemetry **24** 碼、live discovery 已落地並有 CLI…）；**後端收線的判決與逐條殘餘在 [`docs/handoff/2026-09-24-m80-backend-readiness.md`](handoff/2026-09-24-m80-backend-readiness.md)**（逐條分類：`handoff/2026-09-24-m80-residual-audit.md`）。
 >
 > M36（tui-core）增量：TUI 渲染層（cell 雙緩衝 diff + 零字節 idle、input 位元組解析、init/teardown 位元組序、能力探測、屏幕模式政策、GrokNight 主題量化）——**運行時 0 外部依賴**；PTY harness 首例（真終端零字節/字形完整性/resize 不變量）
 >
@@ -77,7 +79,7 @@
 
 ## 七、模型面（M30 + M31 + M32）
 - **五協議 first-class**：openai-responses / openai-compatible（含 DeepSeek）/ anthropic / gemini（原生）/ bedrock（Converse）+ mock
-- **模型卡**（`model-catalog.json`：`contextWindow`/`maxOutputTokens` + 解析鏈）＋ **live discovery**（probe → `probe-apply` adopt——draft-only、fingerprint 防競態、**零硬編碼目錄**）
+- **模型卡**（`model-catalog.json`：`contextWindow`/`maxOutputTokens` + 解析鏈）＋ **live discovery**（**已實作且在用**：`probeModels`（觸網、不寫入）／`discoverModels`（探測後合併）在 `packages/provider-runtime/src/index.ts`，CLI 面 = `i-harness models probe|refresh <route>`；`/api/llm/probe-apply` 那條 draft-only＋fingerprint 防競態的**傳輸面已隨 `packages/web-host` 刪除（M65）**；**零硬編碼目錄**）
 - **思考強度**：6 檔（off/low/medium/high/xhigh/max）× 四協議譯表（世代規則 adaptive/budget）；**缺省不發**；模型不支持 → 400 透傳
 - 立場：**不默認任何 provider**、static switch（不追 dsh 註冊表/discovery 自動合併）
 
