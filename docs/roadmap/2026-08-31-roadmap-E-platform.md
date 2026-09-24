@@ -60,7 +60,7 @@
 
 1. **回收組（直接收）**：R-E1 + R-E2 + R-E3 + R-E6 + R-E7 + R-E8（分支 as-is / 近乎 as-is）→ R-E4（含 1 函數補丁）
 2. R-E9（小）→ R-E5（中長期）
-3. R-E10、R-E11、R-E12、R-E13 遠期或決策項
+3. R-E10、R-E12、R-E13 遠期或決策項；**R-E11 已落地**（**▶ 2026-09-24 更正**：gemini/bedrock 已於 M30、模型探測亦已落地 —— 見 §2 的 R-E11 列；未做的只有 variants 與 bedrock 的 manual-only probe）
 
 ## 5. 依賴交叉
 
