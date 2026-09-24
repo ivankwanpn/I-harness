@@ -1,6 +1,6 @@
 # I-harness 能力盤點（詳細版）— CAPABILITIES-DETAIL
 
-> 本文是 `docs/CAPABILITIES.md` 的**逐項深挖**版本：同一組九大節骨架，但每一項都給出可從原始碼驗證的細節（工具 schema、事件欄位、常數、策略值、file:line 出處）。範圍 = `d:\I-harness-main`（65 包 + `apps/cli`）當前工作樹。所有斷言均從實際程式碼讀出；關鍵項附 `file:line`。✎ 標記 = 與上層概覽（CAPABILITIES.md）**不一致或概覽未載**的項目，見 §11 差異清單。
+> 本文是 `docs/CAPABILITIES.md` 的**逐項深挖**版本：同一組九大節骨架，但每一項都給出可從原始碼驗證的細節（工具 schema、事件欄位、常數、策略值、file:line 出處）。範圍 = `d:\I-harness-main`（66 包 + `apps/cli`）當前工作樹。所有斷言均從實際程式碼讀出；關鍵項附 `file:line`。✎ 標記 = 與上層概覽（CAPABILITIES.md）**不一致或概覽未載**的項目，見 §11 差異清單。
 >
 > **⚠️ 範圍變更（M65，2026-09-17）：TUI 與 web 前端已移除。** `apps/tui`、`packages/tui`、`packages/tui-core`、`packages/web-host` 與 `apps/cli/src/web.ts` 都已刪除——`git ls-files` 對前四個路徑各回 **0 個檔案**（工作目錄殘留的只有未追蹤的 `node_modules`，新 clone 沒有）。**本文是移除前那棵樹的快照**，因此下列區塊描述的東西已經不存在，一律以本註記為準：**§4.1 與 §4.4 的 `web-host` 路由與認證**、**§4.1b 的 `web`／`tui` 宿主命令**、**§4.3 的 `i-harness web` 一列**、**§10（已改寫成移除說明）**，以及 **§11 與 §12** 中引用 `tui`／`tui-core`／`web-host` 的項目。
 >
@@ -18,17 +18,17 @@
 | 組裝點掛載的工具（條件外） | 41 命名工具 + websearch/資源/lsp/mcp 依配置 ⇒ 約 45 起跳；subagent 模式 13 / team 模式 10 替換同名 4 |
 | deferred（原生） | glob、grep（+MCP 當 directTools 非空） |
 | hidden | 機制存在、無生產使用者 |
-| SessionEvent | **34 種** |
-| Telemetry 碼 | **23**（manifest） |
+| SessionEvent | **37 種**（相異 `type` 字面；成員行亦 37） |
+| Telemetry 碼 | **24**（manifest） |
 | Hook 事件 | **9**；handler 預設 1s 超時、輸出 64KiB |
-| HTTP 路由 | ~53（24 靜態）＋ **WS mux 7 endpoint**（/api/mux） |
-| sdk 方法 | initialize / session/prompt / session/status / shutdown；通知 session/event, session/status |
+| ~~HTTP 路由~~ ⚠️ **已移除（M65）** | **0**——`packages/web-host` 整包已刪（`git ls-files packages/web-host` = 0）：原量測 ~53 條（其中 24 條靜態）＋ **WS mux 7 endpoint**（/api/mux）隨之消失；存活的 `node:http` listener 只有 MCP OAuth 的 loopback 回調（`mcp-client/src/oauth-callback.ts:57`，預設 host `127.0.0.1` 於 `:18`）與測試夾具。見 §4.1 |
+| sdk 方法 | **19**（`packages/sdk/src/server.ts:378` 的 switch）：initialize / session/create / session/fork / session/model/state / session/model/set / session/status / session/queue / session/queue/cancel / session/tasks / session/tasks/cancel / session/cancel / session/history / session/list / session/dashboard / session/rewind/points / session/rewind/plan / session/rewind/execute / session/prompt / shutdown；通知 session/event, session/status |
 | ACP | 7 方法子集 + v0 autoApprove |
 | 壓縮 | thresholdRatio 0.8、retain 0→、maxTokens 1024、minSummaryChars 500、hysteresis 3、breaker 3、prune 8192/4096/1024、budget reserve 0.9、resetWindow 留 20 |
 | 工具守衛 | timeout（tool.timeoutMs）/ retry 2 次 / repeat [3,5,8] / spill 64KiB |
 | Guardian | 90s 審查、窗口 10、deny 3、reviewer tools:[] |
 | provider | 5 協議、probe 10s、retry 5 次/500ms/10s/0.1 jitter |
-| 推理 | 6 檔 × 4 譯表（anthropic legacy 2048/8192/16384） |
+| 推理 | 6 檔 × 5 譯表（anthropic legacy 2048/8192/16384） |
 | 沙箱 | 3 模式、bwrap/ACL 兩後端皆 readIsolation:false、lock 24-hex sha 路徑 |
 | ~~TUI~~ ⚠️ **已移除（M65）** | 50 RGB × 2 主題、30fps 主循環、7.5fps braille、16ms batch、500ms tail flush、minimal region ≤10/h、wcwidth 6+15 區間、ESC 64/OSC 512、probe 500ms、8MiB mux |
 | 檢索 | FTS5 app 0x49485155、limit 1..100（工具）/200 預設 500 上限（HTTP 分頁） |
@@ -80,7 +80,7 @@
 | 18 | agent-team 10 工具（替換同名 subagent 工具） | 有 team 配置 | :349-368 |
 | 19 | exit_plan_mode | planMode | :414 |
 
-**✎ 關鍵差異**：`todo_write`（packages/todo）與 `read-image`（概覽稱「read-image 系」）**均未被掛載**——整份 assembly 沒有 createTodoTool / 任何 image 讀取工具。TUI todo 面板讀的是事件投影（`todo/write` events），但 agent 在現行的 CLI/web 組合中**無法呼叫 todo_write**。見 §11。
+**▶ M80 更正（原句量到為假）**：`todo_write`（packages/todo）與 `read_image`（packages/attachment，概覽稱「read-image 系」）**均已掛載**——`session-executor/src/assembly.ts:833`（`createTodoTool`）／`:834`（`createReadImageTool`），M40 落地，imports 於同檔 `:21`／`:22`。本行原文斷言兩者都沒有掛載點（且稱「整份 assembly 沒有 createTodoTool / 任何 image 讀取工具」）——那是**量到為假**的宣稱。事件投影仍在（`deriveTodoList` 取最後一筆 `todo/write`，`packages/todo/src/index.ts:67`）——它原先是已於 M65 刪除的 TUI todo 面板的資料源（見文首範圍變更註記）；現行 CLI 組合的 agent **可以**呼叫 `todo_write`。見 §11。
 
 ### 1.3 工具總表（名稱 / 參數 / 行為 / 曝光 / 唯讀）
 
@@ -115,7 +115,7 @@
 | glob | `pattern*`, `path?` | `rg --files --glob <pattern> --sort=modified --no-ignore --hidden` + VCS 排除（.git/.svn/.hg/.bzr/.jj/.sl 雙態剪枝，:7, 61-67）；cwd 設為搜尋根；exit 1 = 正常空結果；**上限 100 條**（:88） |
 | grep | `pattern*`, `path?`, `include?` | `rg --json --regexp`；`--glob` 過濾；**上限 250 matches**（:137）；JSON 逐行解析（容錯略過 malformed） |
 
-**todo（packages/todo/src/index.ts）** — `todo_write`：whole-list 快照語義（每次呼叫**整表替換**，無合併 → 無競態，:1-5）；參數 `todos:[{content*,status*}*]`（status enum pending/in_progress/completed）；default：最多 1 個 in_progress（`allowParallelInProgress` 選項可增，:15-29）；執行 = append `todo/write` 事件 + 回傳 counts（:54-63）；`deriveTodoList` = 最後一筆 todo/write（:67-73）。**✎ 未掛載**（見 §11）。
+**todo（packages/todo/src/index.ts）** — `todo_write`：whole-list 快照語義（每次呼叫**整表替換**，無合併 → 無競態，:1-5）；參數 `todos:[{content*,status*}*]`（status enum pending/in_progress/completed）；default：最多 1 個 in_progress（`allowParallelInProgress` 選項可增，:15-29）；執行 = append `todo/write` 事件 + 回傳 counts（:54-63）；`deriveTodoList` = 最後一筆 todo/write（:67-73）。**▶ M40 起已掛載**（`session-executor/src/assembly.ts:833`；原寫「未掛載」量到為假，M80 更正）。
 
 **tool_search（packages/tool-search）**——direct、readOnly（tool.ts:10-32）：
 
@@ -212,7 +212,7 @@
 |---|---|---|
 | bash/pwsh | packages/shell/src/index.ts | `registerShell` |
 | read/write/edit/apply_patch/list_dir | packages/fs/src/index.ts（+atomic/version/text/patch） | `createFsTools` |
-| todo_write | packages/todo/src/index.ts | **無掛載點**（見 §11） |
+| todo_write | packages/todo/src/index.ts | `createTodoTool`（`assembly.ts:833`；原記為沒有掛載點，M80 更正） |
 | glob/grep | packages/fs-search/src/index.ts | `createFsSearchTools` |
 | tool_search | packages/tool-search/src/tool.ts（+search.ts） | `registerToolSearch` |
 | skill_search/skill_get | packages/skills/src/tool.ts（+registry/shadow/search） | `registerSkills` |
@@ -252,7 +252,9 @@
 
 ## 二、事件詞彙
 
-### 2.1 SessionEvent union（packages/core-session/src/index.ts:5-117）——**34 種事件型別**
+### 2.1 SessionEvent union（packages/core-session/src/index.ts:5-152）——**37 種事件型別**
+
+> 度量：相異 `type` 字面 = 37，成員行（`| { type: …`）= 37（`grep -c '^    | { type: "'`），兩者一致——`種`＝相異型別。**下表仍列 34 項**（編號 1–34 未動）：其後新增的 `tool/dispatch`／`rewind/point`／`operator/run-end` 三行尚未入表。
 
 | # | 型別 | 欄位（除通用 seq?） | 模型可見 | 檢索文本 |
 |---|---|---|---|---|
@@ -290,9 +292,9 @@
 
 `deriveMessages`（:306-393）是唯一投影：shadowed（summary/reset）先行、tool block 依 step/end flush、prune substitute 應用（`…(pruned N bytes)…`）；FTS 檢索文本 `deriveSearchText`（:398-436）。影像：每訊息 ≤20 張、合併 ≤200 MiB、base64 正規形（:268-299）。
 
-### 2.2 Telemetry 事件集（packages/telemetry）——manifest 23 碼（manifest.ts:16-49）
+### 2.2 Telemetry 事件集（packages/telemetry）——manifest 24 碼（manifest.ts:16-53）
 
-session/start, session/end, session/request, session/queued, session/error, turn/start, turn/end, tool/start, tool/end, tool/error, provider/call, provider/error, provider/usage, provider/truncated, provider/refused, token/usage, retry/start, mcp/server-status, skill/selector-shadow, settings/changed, compaction/attempt, error, warn（= 23 行；`TELEMETRY_EVENT_TYPES`）。sink 多播隔離（emit 同步/異步錯誤 console.warn 不漏）；close() v0 no-op（telemetry.ts）。JSONL sink 每行 `{ts,type,data}`（jsonl.ts）。
+session/start, session/end, session/request, session/queued, session/error, turn/start, turn/end, tool/start, tool/end, tool/error, provider/call, provider/error, provider/usage, provider/truncated, provider/refused, provider/empty, token/usage, retry/start, mcp/server-status, skill/selector-shadow, settings/changed, compaction/attempt, error, warn（= 24 行；`TELEMETRY_EVENT_TYPES`）。sink 多播隔離（emit 同步/異步錯誤 console.warn 不漏）；close() v0 no-op（telemetry.ts）。JSONL sink 每行 `{ts,type,data}`（jsonl.ts）。
 
 ### 2.3 Hook 事件（packages/hooks/src/types.ts:9-19）——9 事件 + 契約
 
@@ -505,7 +507,7 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 - retry（llm-seam/src/index.ts:63-123）：normal（maxRetries default 5、delay 500ms→10s、jitter 0.1、可重試碼 RATE_LIMIT/SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE）或 always；碼分類 = cause 鏈碼優先 → 訊息正則（context-overflow/quota/429/度/5xx，:100-123）；**「產出後不重試」**（chunk/reasoning/tool_call 已出現 → 錯誤面上浮，:178-186）。
 - websearch provider seam（:722-805）：id-keyed 註冊、pin > exactly-one > error、零默認。
 
-### 7.2 思考強度 6 檔 × 4 譯表（M32）
+### 7.2 思考強度 6 檔 × 5 譯表（M32；譯表數 M80 重量）
 
 統一型別 `"off"|"low"|"medium"|"high"|"xhigh"|"max"`（llm-seam:207）；**缺省不發**（undefined → 欄位不存在）；模型不支援 → 原樣透傳（400 上浮）。
 
@@ -532,7 +534,7 @@ HMAC cookie（`hmacSecret` ≥32 字符，違者 throw，:40）、launch token�
 ### 7.3 目錄基調
 
 - `model-catalog.json`（provider/src/model-catalog.json）：seed 卡（deepseek 1,048,576/384,000；gemini 2.5 1,048,576/65,536、1.5 Pro 2,097,152/8,192；bedrock Claude3.5 200,000/8,192），**零硬編碼目錄**——卡片僅能力展示/驗證，無請求預設（provider:48-64）。
-- live discovery：`/api/llm/probe`（草稿鍵記憶體僅用）+ `probe-apply`（探測→upsert，fingerprint=sha256(route+baseURL+apiKey)，assembly 用 `mcp-oauth` 鍵協調器文件存 OAuth token，web.ts:261-271）。
+- live discovery：**已實作且在用**——`probeModels`（`models` 這組動詞裡唯一觸網者、**不寫任何東西**）與 `discoverModels`（探測後合併描述子），皆在 `packages/provider-runtime/src/index.ts`（`:463`／`:521`）；CLI 面 = `i-harness models probe <route>`（`apps/cli/src/models.ts:417`）／`models refresh <route>`（`:431`）。**本行原文的 `/api/llm/probe`／`probe-apply`（含 `fingerprint=sha256(route+baseURL+apiKey)` 防競態）全屬已於 M65 刪除的 `packages/web-host`**——`git ls-files packages/web-host` = 0、`git grep probe-apply -- 'apps/**' 'packages/**'` 零命中；代碼裡只剩兩處註解仍提該死路由（`packages/provider/src/index.ts:446`、`packages/provider/test/directory.test.ts:267`），**無實作**。MCP OAuth token 的協調器文件鍵 `mcp-oauth:<k>` 仍活著，但住在 assembly（`session-executor/src/assembly.ts:948`）。**未做**：bedrock live probe（manual-only）、provider variants。
 - **static switch 立場**：不追 dsh 註冊表/discovery 自動合併（provider：目錄 = 註冊表本身，無第二註冊入口）。
 
 ---
@@ -614,14 +616,14 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 
 ## 十一、已知缺口 / 交付差異（found-vs-assumed）
 
-> **⚠️ 已移除（M65，2026-09-17）：本節若干項目引用 `tui`／`tui-core`／`web-host`，那些套件已刪除。** 具體地：`tui-contracts` 路徑、TUI 16-row 佈局、`--attach` 的 remote 缺口、以及 M49 的 TUI parity 補充——**它們描述的是已不存在的東西**，保留為量測歷史。**仍然成立且仍待處理的**是與前端無關的那些（`todo_write` 未掛載、guardian 語意精化等）。見文首範圍變更註記。
+> **⚠️ 已移除（M65，2026-09-17）：本節若干項目引用 `tui`／`tui-core`／`web-host`，那些套件已刪除。** 具體地：`tui-contracts` 路徑、TUI 16-row 佈局、`--attach` 的 remote 缺口、以及 M49 的 TUI parity 補充——**它們描述的是已不存在的東西**，保留為量測歷史。**仍然成立且仍待處理的**是與前端無關的那些（guardian 語意精化等）；**`todo_write` 不在其中**——它自 M40 起已掛載（`session-executor/src/assembly.ts:833`），本節下表與 §1.2 的原句於 M80 更正。見文首範圍變更註記。
 
 **✎ 與概覽不同（不存在或未掛載）**：
 
 | 概覽（CAPABILITIES.md）主張 | 實際（本檔證據） |
 |---|---|
-| fs「read/write/edit/apply_patch/**read-image**」 | read-image **不存在**（無套件、無掛載）；attachment 儲存與影像事件型別在，但無模型可呼叫的讀取工具 |
-| 工具面列 todo 於工具清單 | `todo_write` 套件齊備但 **assembly 未掛載**——CLI/web 組合中 agent 拿不到 |
+| fs「read/write/edit/apply_patch」＋另列的 **`read_image`** | **不再是差異（M80 重量）**：`read_image` **存在於樹上且已掛載**——`packages/attachment/src/read-image.ts:30`（`createReadImageTool`，工具名 `:33`）→ `session-executor/src/assembly.ts:834`（M40）；概覽 §三 工具面本就把它單列（不併在 fs 括號內）。原右欄（連左欄的舊寫法）斷言它無套件、沒有掛載點——量到為假 |
+| 工具面列 todo 於工具清單 | **不再是差異（M80 重量）**：`todo_write` 已掛載——`createTodoTool` 於 `session-executor/src/assembly.ts:833`（M40）；CLI 組合中 agent 拿得到。原右欄「assembly 未掛載」量到為假 |
 | shell「timeout/retention/spill」屬工具 | 皆 host 層選項；工具 schema 只 `command/background`（無 comment） |
 | LSP「六面」 | 六面路由於**單一 `lsp` 工具**（operation enum）+ 僅 2 工具入註冊表 |
 | 「40+ 路由」 | ~53 HTTP + 7 WS endpoint（§4.1 表） |
@@ -632,8 +634,8 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 | 「scrollback Fenwick」 | 1D Fenwick + O(dirty) 增量；無 2D 分解（僅 groupCache） |
 | 「session picker/welcome」 | 資料源 = `listSessionsFromStore`（raw jsonl、turn/start 計數、mtime） |
 
-1. **`read-image` 工具不存在**——全倉無 read_image 工具、無套件；apps/cli 組合未掛任何影像讀取工具。概覽「fs（…/read-image）」應改。（註：`packages/attachment` 影像儲存＋ M14 影像入 session 事件型別存在；但無模型可呼叫的 read-image。）
-2. **`todo_write` 未掛載**——packages/todo 完整存在（工具本體＋測試），但 `createSessionAssembly`（assembly.ts）未註冊、apps/cli 亦無；現行 CLI/web 組合 agent 拿不到它。TUI todo 面板讀的是事件投影。
+1. **`read_image` 存在且已掛載**（M80 重量；原條目為假）——`packages/attachment/src/read-image.ts:30`（`createReadImageTool`，工具名 `:33`，png/jpeg/gif/webp → ImageInput inline），掛於 `session-executor/src/assembly.ts:834`（M40）；原條目說「全倉無 read_image 工具、無套件」量到為假。
+2. **`todo_write` 已掛載**（M80 重量；原條目「未掛載」為假）——`packages/todo/src/index.ts:33`（工具名），`createTodoTool` 掛於 `session-executor/src/assembly.ts:833`（M40）；原句「`createSessionAssembly`（assembly.ts）未註冊」量到為假。事件投影仍在（`deriveTodoList`，`packages/todo/src/index.ts:67`）——它原先是已於 M65 刪除的 TUI todo 面板的資料源。
 3. **無 `comment` 工具參數**——shell 工具 schema 僅 `command`/`background`；無 timeout/retention 參數欄（host 層選項）。
 4. **web-host 路由**～53 條（概覽「40+」大致對，但以本表為準）；MCP 資源工具三檔（`list_mcp_resources__<s>`/`read_mcp_resource__<s>`/`list_mcp_resource_templates__<s>`）概覽未列。
 5. **SGR mouse 只做 1006**（無 1106）；**probe 無 DA1/DASR 查詢**（僅被動 DA2）；DEC 2026 有實作（非「concern」）。
@@ -656,7 +658,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 - PTY case-010 的 Windows 根因是 host 命令解析時 `chcp` codepage 前置條件未被正確建立；修復保留 marker gate 與既有 timeout，ConPTY 分塊間隙的時間窗限制仍然存在。
 - 搜尋後端 `ensureFts` 需 `events_fts` 表格（「open the database through the coordinator first」）；file-backed 索引為 per-process 記憶體 (``:memory:``)。
 - webshell 深度（terminal PTY 無 tmux 會話吸附）、exec 的 `input` 僅寫後 end（不互動）。
-- telemetry `/api/telemetry` 路由 deferred（manifest 有、surface 無，host.ts:2347-2348）。
+- telemetry `/api/telemetry` 路由——**載體已隨 web-host 刪除（M65，2026-09-17）**：`packages/web-host` 不在樹上（`git ls-files packages/web-host` = 0），原引用 `host.ts:2347-2348` 無所指；全樹今天的讀數是零（`git grep -n "api/telemetry" -- 'apps/**' 'packages/**' 'scripts/**' 'e2e/**' 'installer/**'` 零命中）。telemetry 的 consumer 面 = manifest（24 碼，§2.2）＋ sink，**沒有 HTTP 路由**。
 
 ---
 
@@ -668,14 +670,14 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 3. apply_patch 無 child_process（patch.ts grep 零命中）
 4. tool_search BM25 常數與 +term/select 語義（tool-search/src/search.ts:7-8, 132-161）
 5. skills shadow 三 mode（skills/src/shadow.ts:103-135）
-6. SessionEvent 34 型別計數（core-session/src/index.ts:5-117）
+6. SessionEvent 37 型別計數（core-session/src/index.ts:5-152）——M80 重量：相異 `type` 字面 37 ＝ 成員行 37（原記 34 為當時值）
 7. compaction 默認值與 sticky/breaker（compaction/src/config.ts:81-149, index.ts:190-217）
 8. token 計量常數（token-meter/src/estimate.ts:5-11）
-9. telemetry manifest 23（telemetry/src/manifest.ts:16-49）
+9. telemetry manifest 24（telemetry/src/manifest.ts:16-53；M80 重量）
 10. hooks 9 事件 + sha256 信任（hooks/src/types.ts:9-19, 98-109）
 11. sdk wire v0 凍結（sdk/src/protocol.ts:13-49）
-12. auth fence 常數（web-host/src/auth.ts:25, 40）
-13. mux 8MiB / 30s 心跳（web-host/src/mux.ts:27, 63-68）
+12. auth fence 常數——**已隨 web-host 刪除（M65，2026-09-17）**：`git ls-files packages/web-host` = 0；`hmacSecret`／launch token／`I_HARNESS_HMAC`／`I_HARNESS_TOKEN` 對 `apps/**`＋`packages/**` 零命中（M80 重量），原引用 `web-host/src/auth.ts:25, 40` 無所指
+13. mux 8MiB / 30s 心跳——**同上（M65）**：`web-host/src/mux.ts` 隨整包刪除（`git ls-files packages/web-host` = 0；M80 重量），原引用 `:27, 63-68` 無所指
 14. MCP naming hash+naming（mcp-client/src/naming.ts:17-27）
 15. JSONL torn tail + repair（session-persistence-jsonl/src/index.ts:30-48, 67-87）
 16. session-query app_id 0x49485155（session-query/src/file-backed.ts:35）
@@ -692,7 +694,7 @@ TUI 的引擎是在 TUI 進程內組裝的，那正是要拆掉的耦合。**這
 27. workspace 上限（workspace/src/files.ts:68-77）
 28. instructions AGENTS.md 順序（instructions/src/files.ts:7-22）
 29. schedule 30s poll + durable-first（schedule/src/driver.ts:71-120）
-30. jobs/feedback/schedule 事件與 CAS（jobs/src/index.ts:18-42, feedback/src/index.ts:13-31）
+30. jobs/schedule 事件與 CAS（jobs/src/index.ts:18-42；schedule 見 §2.4）——`feedback` 已於 M65 隨 web 前端刪除（`git ls-files packages/feedback` = 0；M80 重量），原引用 `feedback/src/index.ts:13-31` 無所指
 
 （另兩份由列行探測的 Explore 子代理報告——tui-core/tui 全量 8,862 行直接閱讀——已與我自行抽查的 6 項交叉吻合。）
 
