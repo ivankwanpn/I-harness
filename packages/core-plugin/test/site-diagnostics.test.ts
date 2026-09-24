@@ -19,7 +19,8 @@
 // `error` (M79 Task 4).
 //
 // The clock is FAKE (measured: `advanceTimersByTimeAsync(5_000)` drives the real
-// `setTimeout` the site races against, and the case costs ~0ms of wall clock);
+// `setTimeout` the site races against, and the case costs 15–17 ms of wall clock
+// — two orders of magnitude below the 5 s its real-time twin pays);
 // `plugin.test.ts:250-286` pays the real 5s for its console-spy form.
 //
 // Discipline is COPIED from `packages/diagnostics/test/diagnostics.test.ts:47-55`

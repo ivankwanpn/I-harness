@@ -19,6 +19,9 @@ describe("telemetry event manifest", () => {
     // annotation becomes `false`, and `true` is not assignable to it — a typecheck
     // failure at THIS line. (Measured: before M79 nothing failed; the runtime half
     // was true by construction.)
+    // `Missing` is an ALIASED CONCRETE type, not a naked type parameter, and that
+    // is what makes this annotation work: a generic `IsNever<T>`-style helper would
+    // distribute over `never` and make this passing case unassignable.
     const manifestIsExhaustive: Missing extends never ? true : false = true
     expect(manifestIsExhaustive).toBe(true)
   })

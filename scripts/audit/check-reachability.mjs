@@ -530,9 +530,9 @@ const FLAG_CASE = /case\s+"(--[a-z0-9-]+)"\s*:\s*flags\.([A-Za-z_$][\w$]*)\s*=/g
 
 /** The ONE lexical state machine both text readers below share. It walks `text`
  *  character by character, tracking whether it is inside a string literal, a
- *  block comment or a line comment. Blanking always writes SPACES and never
- *  deletes, and a newline passes through untouched, so a blanked span can
- *  neither join two tokens into one word nor destroy line structure.
+ *  block comment or a line comment. Blanked spans are always spaces -- nothing
+ *  is ever deleted -- and a newline passes through untouched, so a blanked span
+ *  can neither join two tokens into one word nor destroy line structure.
  *
  *  `keepStrings` is the whole of the difference between the two callers: it
  *  decides whether a string literal's CONTENT is evidence or noise. Everything
@@ -544,8 +544,16 @@ const FLAG_CASE = /case\s+"(--[a-z0-9-]+)"\s*:\s*flags\.([A-Za-z_$][\w$]*)\s*=/g
  *  limits): a `/` pair inside a regex literal starts a comment, a quote inside
  *  one opens a string, and a template literal is one string, so its `${...}` is
  *  treated as string content in one mode and blanked in the other. A `//` inside
- *  a regex literal therefore blanks the rest of ITS line in both modes -- a
- *  named span is lost, never invented. */
+ *  a regex literal therefore blanks the rest of ITS line in both modes, but the
+ *  two modes do not pay the same price for it. `codeOnly` (class 3) blanks
+ *  string content by design, so a span lost there is a miss. `commentsBlanked`
+ *  (class 1) KEEPS the strings, so what it blanks instead is REAL CODE: a
+ *  mention that may be a use disappears, which turns the loss into an INVENTED
+ *  row -- the worse of the two errors this file names elsewhere. Measured on
+ *  this tree 2026-09-24: 5 files blank such a span (`task-board.ts`,
+ *  `lsp/render.ts`, `plugin-registry/marketplaces.ts`, `rewind/path.ts`,
+ *  `settings/index.ts`), every span inside a regex source and none containing an
+ *  export name, so the direction is real and the consequence, today, is none. */
 function blankLexical(text, keepStrings) {
   let out = ""
   let quote = null

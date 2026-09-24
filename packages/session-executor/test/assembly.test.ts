@@ -1578,10 +1578,13 @@ describe("createSessionAssembly — the session's budget reaches its children (M
 // team branch), `agent-team/src/scheduler.ts:221`, and the arm the first two
 // feed, `guard-approval/src/guardian/reviewer.ts:178` — but no test asserted the
 // window at any of them, so feeding the SIBLING KEY (`opts.maxOutputTokens`, or
-// `opts.compact?.contextWindow`) where the window belongs type-checks and moves
-// nothing observable. The M73 cases above cannot see it by construction: their
-// fixture window is 200 000, where `clampOutputCap` is a no-op, so a cap
-// assertion reads the same number under either key. Hence the DECOY PAIR in
+// `opts.compact?.contextWindow`) where the window belongs type-checks, and the
+// two forms are not equally invisible (MEASURED, not assumed): the M73 cap
+// assertion at `:1536` catches the `opts.maxOutputTokens` form (the window gets
+// the cap's value, 4_242, which clamps that cap to 3619, so the assertion reads
+// 3619 and not 4_242), while the `opts.compact?.contextWindow` form is what
+// nothing above can see: the fixture passes the SAME window to both keys
+// (`:144-145`). Hence the DECOY PAIR in
 // every fixture below: `contextWindow: 8_000` sits beside
 // `maxOutputTokens: 100_000`, and each assertion reads the number the WINDOW
 // half carried, so a swap MOVES it. The two fixtures whose sites can also swap
