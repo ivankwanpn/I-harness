@@ -265,7 +265,7 @@
 | 5 | assistant/message | text* | ✓ | text |
 | 6 | tool/call | callId*, name*, args* | ✓（block 重排） | json(args) |
 | 7 | tool/result | callId*, name*, output*（可含 images） | ✓ | json(output 去 images) + 影像描述 |
-| 8 | step/end | — | ✓（flushing 邊界） | "" |
+| 8 | step/end | truncated?／refused?／empty?（三個皆可缺席） | ✓（flushing 邊界） | "" |
 | 9 | turn/end | — | ✗ | "" |
 | 10 | subagent/inbox | messageId*, message* | ✗ | message |
 | 11 | compaction/start | — | ✗（marker） | "" |

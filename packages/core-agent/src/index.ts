@@ -500,8 +500,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
 
       // M80: the THIRD ending, and the only one that carries no signal of its
-      // own — a non-content success (HTTP 200, no text, no tool call, a bare
-      // `end`: the ten non-content gemini stop reasons land here). Reported at
+      // own — a non-content success (HTTP 200, no answer text and no tool call,
+      // a bare `end`: the ten non-content gemini stop reasons land here). Reported at
       // the step boundary, where both halves of the predicate are known. The
       // two bits above are EXCLUDED on purpose: a capped or refused step is
       // also text-less with no tool calls, and it already has its own, more

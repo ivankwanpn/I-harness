@@ -99,7 +99,7 @@
 | `workspace` | **等前端** —— SPA sidebar 的專案分組 | 前端 |
 | **`schedule`** | ✅ **已落地（M66，2026-09-21）—— spec 與接線都有** —— spec `docs/superpowers/specs/2026-09-20-schedule-design.md`（owner 2026-09-20 核准）＋ 計畫 `docs/superpowers/plans/2026-09-21-schedule-delivery.md` 六個任務（`742bc96f` · `700e81b9` · `b0d29271` · `3ee94dcd` · `a7a84a7a` · `a4d07e63`）。**▶ 2026-09-24 更正：原格「需要一份 spec，不是接線」量到為假** | **有：`packages/session-executor/src/assembly.ts:836-875`** —— `createScheduleTools`（`:850`，三個工具）＋ `createScheduleDriver`（`:851`，`agent/pre-step` 的 `tick()` 於 `:875`）。原格的「無（從未有人）」量到為假 |
 
-**`schedule` 的三件缺失（agent 沒有建立排程的工具；driver 沒掛進組裝；`onDue` 沒有實作者）已全部補上（M66，2026-09-21）**：三個工具 `createScheduleTools`（`packages/session-executor/src/assembly.ts:850`）、driver 掛在 `agent/pre-step`（`:851` 建、`:875` `tick()`）、`onDue` 由**宿主的一次投遞接縫**取代（`deliver`，`:857-871`：一次 append ＋ `inbox.admit` ＋ `coordinator.flush`；取代的字面在 `docs/superpowers/specs/2026-09-20-schedule-design.md` §4.6 的表 `:393`）。
+**`schedule` 的三件缺失（agent 沒有建立排程的工具；driver 沒掛進組裝；`onDue` 沒有實作者）已全部補上（M66，2026-09-21）**：三個工具 `createScheduleTools`（`packages/session-executor/src/assembly.ts:850`）、driver 掛在 `agent/pre-step`（`:851` 建、`:875` `tick()`）、`onDue` 由**宿主的一次投遞接縫**取代（`deliver`，`:856-870`：一次 append ＋ `inbox.admit` ＋ `coordinator.flush`；取代的字面在 `docs/superpowers/specs/2026-09-20-schedule-design.md` §4.6 的表 `:393`）。
 **這一項不需要前端，是這五個裡唯一現在可動的。**（**▶ 2026-09-24 更正：這一句量到為假** —— 它已落地，不再是「可動的待辦」；上表那一列已改成落地狀態。）
 
 （`plugin-registry` 與 `hooks` 原本也在這份名單上 —— 兩者已在 2026-09-17/18 接上生產路徑。）
