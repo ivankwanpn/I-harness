@@ -4,7 +4,7 @@
 
 **基線：**`D:\frontend-test` clone 的 `51b451395068193f4f83f33939741ed57fea1247`，本地分支 `codex/desktop-workbench`
 
-**狀態：**前端設計稿，待使用者審閱。本文**不批准**任何新增後端功能。
+**狀態：**前端設計方向已於 2026-09-25 確認。使用者同日另行批准新增一個後端包；其具體契約仍須獨立設計，本文不授權修改既有後端包或 SDK v3。
 **產品裁決來源：**使用者指定 ZCode 為 Desktop 視覺主參照、完整日常工作台為首輪範圍、SDK wire 為接入邊界、Desktop 前端只佔 `packages/desktop` 一個包；外部依賴只用公開通用庫；OpenCode 長時間卡頓列為性能驗收；任何新增後端功能須先提案，獲批准後才以 `packages` 下的新包加入；不得推送 GitHub。
 
 ## 1. 目標與完成定義
@@ -23,7 +23,7 @@ Desktop 是讓一個人跨工作區指揮、監督和檢查 I-harness Agent 的�
 - 公開遠端服務、多租戶、帳戶／訂閱、雲端同步、分享、插件市場、內嵌瀏覽器自動化、Office 編輯器、獨立互動終端及完整 Git 客戶端。
 - 照搬 ZCode／OpenCode／DSH 的內部包、私有庫、產品圖標、商標或整個設計系統。採納 ZCode 的**佈局、密度與交互語言**，在本包中重新建立必要組件。
 - 在 `packages/desktop` 內重做 Agent loop、provider 解析、sandbox、持久化或其他後端邏輯；Desktop 主進程只管理 SDK 進程、視窗、通知與本機 UI 偏好。
-- 未經單獨批准就新增後端包、擴大 SDK 方法、修改 `apps/cli` 或更改既有協議版本。
+- 在已批准的新後端包之外，新增其他後端包；未經另行批准擴大既有 SDK 方法、修改 `apps/cli` 或更改既有協議版本。
 
 ## 3. 前端包邊界
 
@@ -39,7 +39,7 @@ Desktop 是讓一個人跨工作區指揮、監督和檢查 I-harness Agent 的�
 | `renderer/review/` | 變動文件列表、diff 和預覽；僅在已批准的只讀後端契約可用時啟用 | 本包的 IPC 契約 |
 | `renderer/design/` | 色彩、字體、間距、圖標與可複用基礎組件 | 公開通用依賴 |
 
-`main/` 不把 `@i-harness/session-executor` 或其他引擎包直接拉入 Desktop；它經 SDK 客戶端與已存在或日後**單獨批准**的 SDK-compatible 宿主通信。Renderer 不取得 Node、檔案系統、模型密鑰或任意命令執行權。Electron 使用隔離的 preload、關閉 renderer Node integration，IPC 方法採明確 allowlist 並驗證參數。
+`main/` 不把 `@i-harness/session-executor` 或其他引擎包直接拉入 Desktop；它經 SDK 客戶端與已存在或新批准的 SDK-compatible 後端宿主通信。Renderer 不取得 Node、檔案系統、模型密鑰或任意命令執行權。Electron 使用隔離的 preload、關閉 renderer Node integration，IPC 方法採明確 allowlist 並驗證參數。
 
 **依賴原則：**React、Electron、Vite、虛擬列表、圖標等可從公開通用套件選取並在實作計畫中釘版本；`@zcode/*`、`@opencode-ai/*`、`@deepseek-ai/*` 等參考項目的內部依賴不進本倉。I-harness 自有 workspace 包不屬外部私有依賴。
 
@@ -97,11 +97,11 @@ flowchart LR
 
 ## 8. 獨立的後端契約提案——等待用戶批准
 
-### 8.1 P0：人機交互與 sandbox 宿主能力
+### 8.1 P0：人機交互與既有 sandbox 的宿主接線
 
-**已核實的現況：**`packages/interaction` 有 approval／question answerer seam，`SessionService.onAssembly` 可供宿主掛接；但 SDK 的 19 方法沒有待批准／待回答列表或 reply。ACP v0 也沒有 `session/request_permission` 往返。當前 `i-harness sdk` 宿主未將 sandbox 模式傳入 `createSessionService`。
+**已核實的現況：**`packages/interaction` 有 approval／question answerer seam，`SessionService.onAssembly` 可供宿主掛接；但 SDK 的 19 方法沒有待批准／待回答列表或 reply。ACP v0 也沒有 `session/request_permission` 往返。**Sandbox 本身已在 `packages/sandbox`、`sandbox-policy`、`sandbox-local`、`sandbox-windows-acl` 及 `session-executor` 實作**；`i-harness run` 會把 `--sandbox` 或已載入的 `settings.sandboxMode` 傳給執行器。缺的是當前 `i-harness sdk` 宿主的 `createSessionService` 呼叫沒有傳該選項。新後端包只需重用既有模式解析與 `AssemblyOptions.sandbox`，不得再寫一套 sandbox 引擎或政策。
 
-**所需契約（產品語義）：**按會話取得權威 pending 請求；請求有穩定 id、種類、來源、可展示內容和合法選項；用戶提交批准／拒絕／答案後獲得明確結果；重複提交、斷線、超時、會話取消和權限收緊有可辨狀態；宿主報告與執行一致的 sandbox 模式。任何失聯或無回答器都 fail closed。
+**所需契約（產品語義）：**按會話取得權威 pending 請求；請求有穩定 id、種類、來源、可展示內容和合法選項；用戶提交批准／拒絕／答案後獲得明確結果；重複提交、斷線、超時、會話取消和權限收緊有可辨狀態；宿主先載入既有 settings，再按既有 `sandboxMode` 設定將模式傳給 `createSessionService`，並報告與執行一致的**既有** sandbox 模式。任何失聯或無回答器都 fail closed。
 
 ### 8.2 P0：成果檢查只讀面
 
@@ -111,7 +111,7 @@ flowchart LR
 
 ### 8.3 後端包界線
 
-若批准 P0，**新增後端功能只在一個另行設計的 `packages/*` 包內實現**，由 Desktop 經類型化 SDK-compatible 協議消費；不得藏在 `packages/desktop`，亦不得默改既有 SDK v3 方法的語義。候選責任是 Desktop 所需的宿主與交互／審查投影；需先核對如何複用既有 `SessionService`／SDK server 而不複製 CLI 裝配。若詳細設計發現必須修改既有後端包或 CLI，應停下來重新向使用者提出具體變更，不能把它當作本提案的隱含授權。
+使用者已於 2026-09-25 批准新增**一個** `packages/*` 後端包承載 P0。它由 Desktop 經類型化 SDK-compatible 協議消費；不得藏在 `packages/desktop`，亦不得默改既有 SDK v3 方法的語義。責任是 Desktop 所需的宿主與交互／審查投影，以及把**既有 sandbox** 選項傳入執行器；需在獨立後端 spec 核對如何複用現有 `SessionService`／SDK server 而不複製 CLI 裝配。若詳細設計發現必須修改既有後端包或 CLI，應停下來重新向使用者提出具體變更，不能把它當作本次新包批准的隱含授權。
 
 Provider 設定、附件上傳、全文搜尋、互動終端與瀏覽器是後續候選；是否需要新契約須按對應畫面另量。本 spec 不授權它們。
 
@@ -120,16 +120,16 @@ Provider 設定、附件上傳、全文搜尋、互動終端與瀏覽器是後�
 | 階段 | 可驗收成果 | 放行條件 |
 |---|---|---|
 | D0：桌面殼與接線 | `packages/desktop` 可開啟窗口、選工作區、以受限 IPC 連 SDK；可見初始化錯誤 | 不需新增後端；有真 SDK handshake 與程序關閉測試 |
-| D1：會話／任務 | 耐久會話、流式 timeline、歷史補齊、queue／tasks、取消與多工作區切換 | 真 SDK e2e；斷線恢復、重複事件與未知 capability 的測試 |
-| D2：人機介入 | 待處理中心、批准／拒絕、問題回覆與通知回返 | **§8.1 後端契約先獨立批准、實作並驗證**；fail-closed e2e |
-| D3：成果檢查 | 任務文件變動、diff／預覽與追問流程 | **§8.2 後端契約先獨立批准、實作並驗證**；有界輸出和路徑測試 |
+| D1：會話／任務 | 耐久會話、流式 timeline、歷史補齊、queue／tasks、取消與多工作區切換 | 真 SDK e2e；**發送可執行工具的提示前，新宿主須已接通既有 sandbox 模式**；斷線恢復、重複事件與未知 capability 的測試 |
+| D2：人機介入 | 待處理中心、批准／拒絕、問題回覆與通知回返 | 新後端包已獲准；**§8.1 詳細契約仍需獨立設計、審閱、實作並驗證**；fail-closed e2e |
+| D3：成果檢查 | 任務文件變動、diff／預覽與追問流程 | 新後端包已獲准；**§8.2 詳細契約仍需獨立設計、審閱、實作並驗證**；有界輸出和路徑測試 |
 | D4：首輪完成 | D0–D3 連貫使用、ZCode 風格視覺校驗、長會話性能與重啟恢復 | 具名 Windows 環境的端到端與 soak；沒有假的功能入口 |
 
 **測試策略：**投影邏輯以確定性事件序列測試；main／preload 的 IPC 用契約測試；真 SDK host 的建立、發送、補頁和取消做端到端；批准／審查待後端獲批後用真宿主測。視覺需檢查淺／深主題、窗口縮放與三區折疊。功能和長會話性能通過前，不擴展高級面板。
 
 ## 10. 風險、判斷與審核點
 
-- **首輪範圍對後端 P0 有硬依賴。**在 P0 未獲批准或未完成前，只能交付 D0／D1 階段成果；不能把 UI 佔位當作「完整工作台」。
+- **首輪範圍對後端 P0 有硬依賴。**新後端包雖已獲准，具體契約及實作未完成前只能交付 D0 或 D1 的非執行型畫面；不能讓沒有 sandbox 接線的 SDK 宿主執行 Desktop 工具任務，也不能把 UI 佔位當作「完整工作台」。
 - **桌面關閉語義是產品決定。**本文預設 Windows 活躍任務關窗後留在托盤，明確退出才停止。用戶若不要托盤續跑，D0 的生命週期和通知策略須調整。
 - **會話來源要忠實。**SDK dashboard 不帶 cost／team/cross-machine member，冷會話 tasks 可為空；UI 不補造數值。未配置模型和未掛能力是可見狀態。
 - **包的複雜度。**單一 `packages/desktop` 是發佈和依賴邊界，不意味所有邏輯集中在一個 `App.tsx`；內部按責任拆分並監測長期性能。
