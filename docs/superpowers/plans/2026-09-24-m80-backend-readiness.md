@@ -175,7 +175,7 @@ git commit -m "docs(capabilities): the citations point at the symbols again — 
 
 **Files:**
 - Modify: `docs/handoff/2026-09-20-queued-work.md`（**追加 allowlist（執行期更正——Task 2 的量測抓到它們在同檔的舊 allowlist 之外）**：`:64` 的 §1 W6 列、`:917` 的 §9.1 M3 列〔同一個「107 ＝ 94」過期讀數〕、§1 那句因 §9.2 的 A2 被刪而變假的話〔「本列與 §9.2 的 A2 是舊檔名唯二的 tracked 引用」〕、以及 `:902` 的「§9.2 A4 末」（十一條行內指針裡唯一落空的——其餘十條的 ID 都在新 summary 表裡，接受））
-- Modify: `docs/handoff/2026-09-18-backend-backlog.md`（**只准動** spec §0.2B 的 11 行）
+- Modify: `docs/handoff/2026-09-18-backend-backlog.md`（**只准動** spec §0.2B 的 11 行 ＋ **執行期更正 ⑤（Task 5 的 §14 量測抓到）**：`＋` 同檔另外九處量到過期的地方〔報告 §14 逐條列出——以內容定位〕）
 - Modify: `docs/roadmap/2026-08-31-roadmap-E-platform.md`（**只准動** `:26`／`:57`／`:85`）
 - Modify: `docs/roadmap/2026-08-31-m27-backlog.md`（**只准動** `:30`／`:73`／`:75`）
 - Modify: `docs/handoff/2026-09-23-backend-closure-plan.md`（**只准動** `:11`／`:20`／`:29`／`:30`／`:48`）
@@ -184,7 +184,7 @@ git commit -m "docs(capabilities): the citations point at the symbols again — 
 - Modify: `docs/handoff/2026-09-24-m79-coverage-completion.md`（**只加**標頭一行 dated 指針：已合併 PR #15 → `bc45dce`）
 - Modify: `docs/handoff/HANDOFF.md`（**只加** `:16` 後一行 dated 指針）
 - Modify: `docs/audit/2026-09-15-reachability-baseline.md`（**只加** `:858` 後一行指針 → §9.4）——**這是唯一准動的 audit 檔，且只加一行**
-- Modify: `docs/CAPABILITIES-DETAIL.md`（**執行期更正 ①（Task 3 複審抓到）**：`＋ §11 的子標題與 banner`〔post-edit `:619`／`:621`：「✎ 與概覽不同（不存在或未掛載）」在 Task 3 之後已無宣稱支撐它〕；**執行期更正 ②（Task 4 的量測抓到）**：`＋ §1.3 的 assembly.ts:272-274`〔今 `:958-960`〕、`＋ §3.4 的 assembly.ts:157-159`〔實為 `AssemblyOptions` 欄位；估價器在 `:351-359`／`:1224-1269`〕、`＋ §2.4 goal 的 core-session :127-149`——三處引用漂移，**以符號定位**；**執行期更正 ③（Task 4 複審的量測抓到）**：`＋ §2 的 :296 兩處`〔`deriveMessages`／`deriveSearchText` 的引用——真符號在 `core-session:489`／`:662`〕與 `:495 的 apps/cli/src/web.ts:370-388`〔M65 已刪〕）
+- Modify: `docs/CAPABILITIES-DETAIL.md`（**執行期更正 ①（Task 3 複審抓到）**：`＋ §11 的子標題與 banner`〔post-edit `:619`／`:621`：「✎ 與概覽不同（不存在或未掛載）」在 Task 3 之後已無宣稱支撐它〕；**執行期更正 ②（Task 4 的量測抓到）**：`＋ §1.3 的 assembly.ts:272-274`〔今 `:958-960`〕、`＋ §3.4 的 assembly.ts:157-159`〔實為 `AssemblyOptions` 欄位；估價器在 `:351-359`／`:1224-1269`〕、`＋ §2.4 goal 的 core-session :127-149`——三處引用漂移，**以符號定位**；**執行期更正 ③（Task 4 複審的量測抓到）**：`＋ §2 的 :296 兩處`〔`deriveMessages`／`deriveSearchText` 的引用——真符號在 `core-session:489`／`:662`〕與 `:495 的 apps/cli/src/web.ts:370-388`〔M65 已刪〕；**執行期更正 ④（Task 5 的 §14 量測抓到）**：`＋ §11 的兩列`〔仍宣稱 web-host 的「~53 HTTP 路由／WS 7」——與 Task 3 修掉的同型〕）
 
 **Interfaces:**
 - Consumes: spec §0.2B／F／G／H／I 的實測與 §1.2 的四處矛盾解法
