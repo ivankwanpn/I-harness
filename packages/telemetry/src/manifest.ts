@@ -38,6 +38,10 @@ export const TELEMETRY_MANIFEST = [
   // denominator ("round-trips the provider refused"). No refs: this code is
   // ours; the five-source audit has no equivalent row for it.
   { code: "provider/refused", domain: "provider", description: "The provider refused to produce content for a round-trip (count = round-trips refused)" },
+  // M80: the same discipline as the three rows above — the event COUNT is the
+  // denominator ("round-trips that came back with no content at all"). No refs:
+  // this code is ours; the five-source audit has no equivalent row for it.
+  { code: "provider/empty", domain: "provider", description: "A provider round-trip succeeded with no content at all — no text, no tool call (count = round-trips empty)" },
   { code: "token/usage", domain: "token", description: "Token usage accounted after a turn", refs: ["opencode token/usage", "codex token/usage"] },
   { code: "retry/start", domain: "retry", description: "A tool retry (guard-retry) started", refs: ["codex retry"] },
   { code: "mcp/server-status", domain: "mcp", description: "MCP server mount/status transition", refs: ["opencode mcp/*"] },
