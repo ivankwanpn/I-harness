@@ -269,7 +269,7 @@ git commit -m "test(session-executor): the four window-half hops get observers, 
 - **新增**：entry 檔的註解**不再**讓列退休。
 - **新增（護欄）**：一個名字只出現在 production 的**字串字面**裡 ⇒ **仍然**讓列退休（防過度剝除）。
 
-Run: `node scripts/audit/check-reachability.mjs --self-test`。**預期：兩條新的紅、護欄那條綠**（記錄 `self-test: N/39`）。
+Run: `node scripts/audit/check-reachability.mjs --self-test`。**預期：兩條新的紅、護欄那條綠**（記錄 `self-test: N/38（執行期更正：36＋2 條新增＝38；反轉不增案例）`）。
 
 - [ ] **Step 2: 修改前先量列集合**
 
@@ -288,7 +288,7 @@ node scripts/audit/check-reachability.mjs --json > .superpowers/m79-reach-before
 - [ ] **Step 4: 跑，看到綠＋量新列**
 
 ```bash
-node scripts/audit/check-reachability.mjs --self-test     # 39/39
+node scripts/audit/check-reachability.mjs --self-test     # 38/38（執行期更正）
 node scripts/audit/check-reachability.mjs --json > .superpowers/m79-reach-after.json
 ```
 
@@ -301,7 +301,7 @@ node scripts/audit/check-reachability.mjs --json > .superpowers/m79-reach-after.
 
 - [ ] **Step 5: 變異證明**
 
-把剝註解的呼叫**只**從 `entryText` 那一路拿掉（或把 helper 換回 raw `f.text`）⇒ **反轉的那條 self-test 紅**。Edit 還原、`sha256sum` 相符。
+把剝註解的呼叫**只**從 `entryText` 那一路拿掉（或把 helper 換回 raw `f.text`）⇒ **新增的 entry 那條 self-test 紅**（執行期更正：反轉的那條需要 **per-file** 路徑才紅——實測）。Edit 還原、`sha256sum` 相符。
 
 - [ ] **Step 6: 播種後驗閘**
 
@@ -328,13 +328,13 @@ Expected: 五步全綠（母體 67）。reachability 的讀數是**修後播種*
 
 - [ ] **Step 2: 報告**（寫給控制器，不進 git）
 
-紅先證據（逐條）、GREEN、**每一條變異與其 sha 驗證**（含實際用的那行編輯）、被改動的既有斷言（預期：T1 一條、T2 若有則具名一條）、**讀數**：三個套件的新 `it` 數、`--self-test` 案例數（36→39）、reachability **修前 432 → 修後 N**（附新列清單與歸類）、core-plugin 那一站的**計時器機制與牆鐘成本**、以及「八個相位成員 → 斷言它的測試檔」表。
+紅先證據（逐條）、GREEN、**每一條變異與其 sha 驗證**（含實際用的那行編輯）、被改動的既有斷言（預期：T1 一條、T2 若有則具名一條）、**讀數**：三個套件的新 `it` 數、`--self-test` 案例數（36→38）、reachability **修前 432 → 修後 N**（附新列清單與歸類）、core-plugin 那一站的**計時器機制與牆鐘成本**、以及「八個相位成員 → 斷言它的測試檔」表。
 
 ---
 
 ## 驗收（照 spec §2）
 
-1. 五個站點各有觀察者（T4）。2. 四個 hop 各有觀察者且交換會移動數字（T5）。3. union 恰 8 成員、每人有相位斷言、內聯複本同步（T2＋T4）。4. manifest 突變紅在該行（T1）。5. 儀器 self-test 39/39、新列逐條指名、播種後 `--gate` PASS（T6）。6. doc 無 19／20 的 telemetry 列數（T3）。7. `pnpm verify:all` 五步全綠、算術寫出來。8. 既有斷言零放寬（兩個具名例外除外）、不新增 export。
+1. 五個站點各有觀察者（T4）。2. 四個 hop 各有觀察者且交換會移動數字（T5）。3. union 恰 8 成員、每人有相位斷言、內聯複本同步（T2＋T4）。4. manifest 突變紅在該行（T1）。5. 儀器 self-test 38/38、新列逐條指名、播種後 `--gate` PASS（T6）。6. doc 無 19／20 的 telemetry 列數（T3）。7. `pnpm verify:all` 五步全綠、算術寫出來。8. 既有斷言零放寬（兩個具名例外除外）、不新增 export。
 
 ## 殘餘（本階段**不做**，寫出來不是忘了）
 
