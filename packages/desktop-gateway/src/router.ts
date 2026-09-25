@@ -11,6 +11,7 @@ import {
 } from "@i-harness/sdk"
 import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
+import { ReviewPathError } from "./review.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers): GatewayWrite {
@@ -22,6 +23,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     const capabilities = { ...frame.result.capabilities }
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
     if (handlers.interaction !== undefined) capabilities["desktop-interaction"] = ["1"]
+    if (handlers.review !== undefined) capabilities["desktop-review"] = ["1"]
     send({ ...frame, result: { ...frame.result, capabilities } })
   }
 }
@@ -115,6 +117,35 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           send(makeSuccess(message.id, reply))
         } catch (error) {
           send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error)))
+        }
+        return
+      }
+
+      if (message.method === "desktop/review/changes" && handlers.review !== undefined) {
+        try {
+          send(makeSuccess(message.id, await handlers.review.changes()))
+        } catch (error) {
+          send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error)))
+        }
+        return
+      }
+
+      if ((message.method === "desktop/review/diff" || message.method === "desktop/review/file") && handlers.review !== undefined) {
+        const params = asRecord(message.params)
+        const maxBytes = params?.maxBytes
+        if (typeof params?.path !== "string" || params.path === ""
+          || (maxBytes !== undefined && (typeof maxBytes !== "number" || !Number.isInteger(maxBytes) || maxBytes < 1))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "path must be text and maxBytes a positive integer"))
+          return
+        }
+        try {
+          const result = message.method === "desktop/review/diff"
+            ? await handlers.review.diff(params.path, maxBytes as number | undefined)
+            : await handlers.review.file(params.path, maxBytes as number | undefined)
+          send(makeSuccess(message.id, result))
+        } catch (error) {
+          send(makeFailure(message.id, error instanceof ReviewPathError ? INVALID_PARAMS : INTERNAL_ERROR,
+            error instanceof Error ? error.message : String(error)))
         }
         return
       }
