@@ -53,6 +53,8 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => 56,
     overscan: 8,
+    // Seed the first measurement so rows mount before any observer fires.
+    initialRect: { width: 1024, height: 768 },
   })
   return (
     <div ref={parentRef} className="timeline" data-testid="timeline">

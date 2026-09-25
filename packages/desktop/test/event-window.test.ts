@@ -4,6 +4,8 @@ import {
   applyHistory,
   applyNotification,
   emptyEventWindow,
+  MAX_RETAINED_EVENTS,
+  MAX_RETAINED_LIVE,
   markDisconnected,
 } from "../src/renderer/session/event-window.ts"
 
@@ -75,5 +77,34 @@ describe("Desktop event window", () => {
     markDisconnected(before)
 
     expect(before).toEqual(snapshot)
+  })
+
+  it("appends a strictly newer notification in order without re-sorting", () => {
+    let state = applyHistory(emptyEventWindow(), page([event(0, "a")], 1))
+    state = applyNotification(state, event(5, "later"))
+    state = applyNotification(state, event(6, "latest"))
+
+    expect(state.events.map((row) => row.seq)).toEqual([0, 5, 6])
+    expect(state.cursor).toBe(1) // live appends never move the durable cursor
+  })
+
+  it("caps the retained window instead of growing without bound", () => {
+    const events = Array.from({ length: MAX_RETAINED_EVENTS + 5_000 }, (_, index) => event(index, `m${index}`))
+    const state = applyHistory(emptyEventWindow(), page(events, events.length))
+
+    expect(state.events).toHaveLength(MAX_RETAINED_EVENTS)
+    expect(state.events[0]?.seq).toBe(5_000)
+    expect(state.events.at(-1)?.seq).toBe(events.length - 1)
+    expect(state.cursor).toBe(events.length)
+  })
+
+  it("caps unsequenced live rows too", () => {
+    let state = emptyEventWindow()
+    for (let index = 0; index < MAX_RETAINED_LIVE + 25; index += 1) {
+      state = applyNotification(state, event(undefined, `t${index}`))
+    }
+
+    expect(state.live).toHaveLength(MAX_RETAINED_LIVE)
+    expect((state.live.at(-1) as { text: string }).text).toBe(`t${MAX_RETAINED_LIVE + 24}`)
   })
 })
