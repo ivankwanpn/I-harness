@@ -85,6 +85,13 @@ describe("Desktop scoped IPC", () => {
     expect(f.history).toHaveBeenCalledWith("s1", { afterSeq: 7, limit: 50 })
   })
 
+  it("answers desktop/capabilities from the initialized host info", async () => {
+    const f = fixture()
+
+    await expect(dispatchDesktopRequest({ kind: "desktop/capabilities", workspaceId: "ws-1" }, f.dependencies))
+      .resolves.toEqual({})
+  })
+
   it("gates session/prompt on the wired sandbox claim", async () => {
     const allowed = fixture()
     await dispatchDesktopRequest({

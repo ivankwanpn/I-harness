@@ -31,6 +31,8 @@ export async function dispatchDesktopRequest(
       return await dependencies.catalog.open(requireNonEmptyPath(value.path))
     case "workspace/sandbox/state":
       return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).sandbox
+    case "desktop/capabilities":
+      return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities
     case "session/list":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
     case "session/dashboard":

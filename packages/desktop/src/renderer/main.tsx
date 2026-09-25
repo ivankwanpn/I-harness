@@ -1,13 +1,12 @@
-import React from "react"
+import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
+import { App } from "./app.tsx"
+import "./design/tokens.css"
 
 const root = document.getElementById("root")
 if (!root) throw new Error("Desktop root missing")
 createRoot(root).render(
-  <React.StrictMode>
-    <main style={{ fontFamily: "system-ui, sans-serif", padding: 32 }}>
-      <h1>I-harness Desktop</h1>
-      <p>正在連接工作區…</p>
-    </main>
-  </React.StrictMode>,
+  <StrictMode>
+    <App bridge={window.ihDesktop} />
+  </StrictMode>,
 )

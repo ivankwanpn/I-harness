@@ -6,6 +6,7 @@ export type DesktopRequest =
   | { kind: "workspace/open"; path: string }
   | { kind: "workspace/list" }
   | { kind: "workspace/sandbox/state"; workspaceId: string }
+  | { kind: "desktop/capabilities"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string }
