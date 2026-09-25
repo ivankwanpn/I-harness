@@ -1,6 +1,7 @@
 import {
   decodeFrame,
   INTERNAL_ERROR,
+  INVALID_PARAMS,
   INVALID_REQUEST,
   isRpcRequest,
   isRpcSuccess,
@@ -20,6 +21,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     }
     const capabilities = { ...frame.result.capabilities }
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
+    if (handlers.interaction !== undefined) capabilities["desktop-interaction"] = ["1"]
     send({ ...frame, result: { ...frame.result, capabilities } })
   }
 }
@@ -81,6 +83,42 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (message.method === "desktop/interaction/pending" && handlers.interaction !== undefined) {
+        const params = asRecord(message.params)
+        if (params === undefined || (params.sessionId !== undefined && (typeof params.sessionId !== "string" || params.sessionId === ""))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "sessionId must be a non-empty string when provided"))
+          return
+        }
+        send(makeSuccess(message.id, handlers.interaction.pending(params.sessionId as string | undefined)))
+        return
+      }
+
+      if (message.method === "desktop/interaction/reply" && handlers.interaction !== undefined) {
+        const params = asRecord(message.params)
+        const decision = asRecord(params?.decision)
+        if (typeof params?.requestId !== "string" || params.requestId === ""
+          || typeof params.sessionId !== "string" || params.sessionId === ""
+          || decision === undefined
+          || !(decision.kind === "approval" && typeof decision.approved === "boolean"
+            || decision.kind === "question" && typeof decision.answer === "string")) {
+          send(makeFailure(message.id, INVALID_PARAMS, "invalid interaction reply"))
+          return
+        }
+        try {
+          const reply = handlers.interaction.reply({
+            requestId: params.requestId,
+            sessionId: params.sessionId,
+            decision: decision.kind === "approval"
+              ? { kind: "approval", approved: decision.approved as boolean }
+              : { kind: "question", answer: decision.answer as string },
+          })
+          send(makeSuccess(message.id, reply))
+        } catch (error) {
+          send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error)))
+        }
+        return
+      }
+
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
     },
     async close() {
@@ -89,4 +127,10 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       await base.close()
     },
   }
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
 }

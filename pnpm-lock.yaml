@@ -335,6 +335,9 @@ importers:
 
   packages/desktop-gateway:
     dependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials

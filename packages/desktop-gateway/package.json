@@ -14,6 +14,7 @@
     "@i-harness/settings": "workspace:*",
     "@i-harness/credentials": "workspace:*",
     "@i-harness/interaction": "workspace:*",
+    "@i-harness/core-plugin": "workspace:*",
     "@i-harness/sandbox": "workspace:*"
   }
 }

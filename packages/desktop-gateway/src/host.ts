@@ -9,6 +9,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore } from "@i-harness/settings"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
+import { createInteractionBridge } from "./interaction.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
 
 export interface DesktopHostOptions {
@@ -84,7 +85,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sessionFor: createDurableSessionLoader(coordinator),
     outputSpill: {},
   })
-  const handlers: DesktopHandlers = { sandboxState: () => sandboxState }
+  const interaction = createInteractionBridge(options.onWrite)
+  const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
+  const handlers: DesktopHandlers = { sandboxState: () => sandboxState, interaction }
   const base = createSdkServer(service, {
     coordinator,
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
@@ -107,6 +110,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   return {
     handleLine: (line) => router.handleLine(line),
     close: () => closing ??= (async () => {
+      interaction.close()
+      offInteraction()
       await router.close()
       await service.close()
       await coordinator.close()
