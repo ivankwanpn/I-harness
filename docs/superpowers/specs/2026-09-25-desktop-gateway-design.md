@@ -18,6 +18,8 @@ Desktop 已選用 SDK wire，但現存 `i-harness sdk` 宿主只接通會話主�
 
 本包持有一個 workspace 對應的一個 `SessionService`、一個耐久 coordinator、一個 SDK server 與一條 stdio 連線；CLI entry 使用 `cwd` 指定 workspace、明確 `--session-dir` 指定耐久位置。stdout 只寫協議 frame，診斷只到 stderr。子進程結束時清理 SDK subscription、pending 人機請求、service、coordinator 和本包暫存資源；不得有被遺留的審批 Promise 或沙箱授權。
 
+Gateway 只服務本機 Desktop；不提供公開遠端、多租戶、自家帳戶、自家訂閱或雲端同步。現有 provider／credential 能力可被組裝使用，但新第三方 OAuth 流程不屬本包這一輪的新增功能，需另行研究與設計。
+
 ## 3. SDK-compatible wire 擴充
 
 既有 19 個 SDK 方法、通知、錯誤碼、`protocolVersion = 3` 的語義保持不變。Gateway 對不屬 `desktop/*` 命名空間的 request 交給 `createSdkServer.handleLine()`。它以 SDK server 的 `onWrite` 為**唯一輸出路徑**：當 `initialize` 成功時，Gateway 只對外加上自己的 capability row，其餘既有 reply 原樣送出；不可把 `handleLine` 的返回字串再次寫 stdout。Gateway 自己的 request／notification也通過同一個有界 writer，遵守 JSON-RPC id 與一行一幀格式。

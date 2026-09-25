@@ -112,7 +112,7 @@ const service = createSessionService({
 ```
 
 If a required role-model or rewind seam is omitted, do not advertise its optional SDK capability. Add the needed seam in this new package only when the task's real-host tests require it; do not copy `runHeadless` or import `apps/cli`.
-- [ ] **Step 4: Run** host tests, targeted real sandbox tests and package typecheck. The e2e must execute a real tool under read-only and workspace-write and verify actual refusal/allowance, including a denied outside-workspace write on Windows; mode echo alone is insufficient. Expected: all pass or record the actual platform limitation and keep Send gated.
+- [ ] **Step 4: Run** host tests and package typecheck. Task 2 proves the selected mode reached the assembly through its `sandbox/mode` event; a real write-tool confinement probe is deferred to Task 3, when a human answerer exists and can distinguish sandbox refusal from unanswered approval. Before that probe passes, Desktop Send remains gated. Expected: host tests and typecheck pass.
 - [ ] **Step 5: Commit** with `feat(desktop-gateway): reuse configured sandbox`.
 
 ## Task 3: Fail-closed approval and question round-trips
@@ -138,7 +138,7 @@ service.onAssembly(attach)
 ```
 
 `waitForApproval` registers a resolver and 24-hour timer before `desktop/interaction/request` notification; `waitForAnswer` does likewise. `reply` removes and clears timer before resolving. Emit `desktop/interaction/closed` on accepted reply, timeout or host close. The router validates exact `{requestId,sessionId,decision}` shape and returns `INVALID_PARAMS` for mismatches; it never treats a truthy object as approval. `pending` is an in-memory snapshot and is not persisted across process crash.
-- [ ] **Step 4: Run** targeted tests and package typecheck. Expected: pass; then run the real SessionService interaction e2e with no `approveAll` option and prove an unanswered request cannot execute a guarded tool.
+- [ ] **Step 4: Run** targeted tests and package typecheck. Expected: pass; then run the real SessionService interaction e2e with no `approveAll` option and prove an unanswered request cannot execute a guarded tool. With a real approval reply, verify read-only denies a workspace write, workspace-write allows a workspace write, and workspace-write denies an outside-workspace write; assert the sandbox denial is distinct from approval denial.
 - [ ] **Step 5: Commit** with `feat(desktop-gateway): bridge human interaction`.
 
 ## Task 4: Bounded, read-only workspace review
