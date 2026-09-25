@@ -89,4 +89,22 @@ describe("Desktop interaction bridge", () => {
     expect(await waiting).toBe(false)
     expect(bridge.pending()).toEqual([])
   })
+
+  it("fails closed for only the cancelled session and rejects a late reply", async () => {
+    const bridge = createInteractionBridge(() => {})
+    const one = assembly("s1")
+    const two = assembly("s2")
+    bridge.attach(one)
+    bridge.attach(two)
+    const cancelled = approval(one.ctx)({ name: "write", reason: "edit" })
+    const unaffected = approval(two.ctx)({ name: "write", reason: "edit" })
+    const { requestId } = bridge.pending("s1")[0]!
+    bridge.cancelSession("s1")
+    expect(await cancelled).toBe(false)
+    expect(bridge.pending("s1")).toEqual([])
+    expect(bridge.pending("s2")).toHaveLength(1)
+    expect(() => bridge.reply({ requestId, sessionId: "s1", decision: { kind: "approval", approved: true } })).toThrow()
+    bridge.close()
+    expect(await unaffected).toBe(false)
+  })
 })

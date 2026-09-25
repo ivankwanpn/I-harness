@@ -88,11 +88,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const interaction = createInteractionBridge(options.onWrite)
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
+  const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
     sandboxState: () => sandboxState,
     interaction,
-    review: createWorkspaceReview(options.workspace),
+    review,
   }
+  const internalIds = new Set<string>()
   const base = createSdkServer(service, {
     coordinator,
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
@@ -108,9 +110,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       }))
       return { sessions }
     },
-    onWrite: createGatewayWrite(options.onWrite, handlers),
+    onWrite: createGatewayWrite(options.onWrite, handlers, internalIds),
   })
-  const router = createDesktopRouter(base, options.onWrite, handlers)
+  const router = createDesktopRouter(base, options.onWrite, handlers, internalIds)
   let closing: Promise<void> | undefined
   return {
     handleLine: (line) => router.handleLine(line),
@@ -118,6 +120,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       interaction.close()
       offInteraction()
       await router.close()
+      await review.close()
       await service.close()
       await coordinator.close()
     })(),

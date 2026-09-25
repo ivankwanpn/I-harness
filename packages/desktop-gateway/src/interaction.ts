@@ -20,13 +20,14 @@ export interface InteractionBridge {
   attach(assembly: SessionAssembly): void
   pending(sessionId?: string): PendingInteraction[]
   reply(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true }
+  cancelSession(sessionId: string): void
   close(): void
 }
 
 interface WaitingRequest {
   view: PendingInteraction
   timer: ReturnType<typeof setTimeout>
-  settle: (decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed") => void
+  settle: (decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed" | "cancelled") => void
 }
 
 const REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000
@@ -35,7 +36,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void):
   const waiting = new Map<string, WaitingRequest>()
   let closed = false
 
-  function finish(row: WaitingRequest, decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed"): void {
+  function finish(row: WaitingRequest, decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed" | "cancelled"): void {
     if (waiting.get(row.view.requestId) !== row) return
     waiting.delete(row.view.requestId)
     clearTimeout(row.timer)
@@ -116,6 +117,11 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void):
       }
       finish(row, input.decision, "reply")
       return { accepted: true }
+    },
+    cancelSession(sessionId) {
+      for (const row of [...waiting.values()]) {
+        if (row.view.sessionId === sessionId) finish(row, undefined, "cancelled")
+      }
     },
     close() {
       if (closed) return

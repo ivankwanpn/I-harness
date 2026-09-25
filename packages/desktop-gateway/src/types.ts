@@ -10,7 +10,7 @@ export interface SandboxState {
 
 export interface DesktopHandlers {
   sandboxState?: () => SandboxState | Promise<SandboxState>
-  interaction?: Pick<InteractionBridge, "pending" | "reply">
+  interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession">>
   review?: WorkspaceReview
 }
 

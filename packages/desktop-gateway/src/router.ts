@@ -12,10 +12,12 @@ import {
 import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
+import { randomUUID } from "node:crypto"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
-export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers): GatewayWrite {
+export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
   return (frame) => {
+    if ("id" in frame && internalIds.has(String(frame.id))) return
     if (!isRpcSuccess(frame) || !isInitializeResult(frame.result)) {
       send(frame)
       return
@@ -44,12 +46,13 @@ function isInitializeResult(value: unknown): value is {
     && !Array.isArray(record.capabilities)
 }
 
-export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handlers: DesktopHandlers): {
+export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): {
   handleLine(line: string): Promise<void>
   close(): Promise<void>
 } {
   let initialized = false
   let closed = false
+  const activePrompts = new Set<string>()
 
   return {
     async handleLine(line) {
@@ -65,7 +68,18 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
+        if (message.method === "session/prompt") {
+          const sessionId = asRecord(message.params)?.sessionId
+          if (typeof sessionId === "string" && sessionId !== "") activePrompts.add(sessionId)
+          try { await base.handleLine(line) }
+          finally { if (typeof sessionId === "string") activePrompts.delete(sessionId) }
+          return
+        }
         await base.handleLine(line)
+        if (message.method === "session/cancel") {
+          const sessionId = asRecord(message.params)?.sessionId
+          if (typeof sessionId === "string" && sessionId !== "") handlers.interaction?.cancelSession?.(sessionId)
+        }
         return
       }
 
@@ -155,6 +169,12 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
     async close() {
       if (closed) return
       closed = true
+      for (const sessionId of activePrompts) {
+        const id = `desktop-internal-${randomUUID()}`
+        internalIds.add(id)
+        try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
+        finally { internalIds.delete(id) }
+      }
       await base.close()
     },
   }

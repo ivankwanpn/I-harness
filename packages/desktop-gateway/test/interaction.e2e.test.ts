@@ -7,6 +7,33 @@ import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import { createInteractionBridge } from "../src/interaction.ts"
 
 describe("Desktop interaction over the SDK-compatible stream", () => {
+  it("settles pending interaction on SDK session/cancel and rejects a late answer", async () => {
+    const frames: RpcMessage[] = []
+    const send = (frame: RpcMessage) => { frames.push(frame) }
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [] })
+    const interaction = createInteractionBridge(send)
+    const off = service.onAssembly((assembly) => interaction.attach(assembly))
+    const handlers = { interaction }
+    const base = createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) })
+    const router = createDesktopRouter(base, send, handlers)
+    try {
+      await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+      const assembly = await service.assemblyFor("s1")
+      const answer = assembly.ctx.services.get<(request: ApprovalRequest) => Promise<boolean>>("approval/answerer")
+      const waiting = answer({ name: "write", reason: "edit" })
+      const { requestId } = interaction.pending("s1")[0]!
+      await router.handleLine(encodeFrame(makeRequest(2, "session/cancel", { sessionId: "s1" })))
+      expect(await waiting).toBe(false)
+      expect(interaction.pending("s1")).toEqual([])
+      await router.handleLine(encodeFrame(makeRequest(3, "desktop/interaction/reply", {
+        requestId, sessionId: "s1", decision: { kind: "approval", approved: true },
+      })))
+      expect(isRpcSuccess(frames.find((frame) => "id" in frame && frame.id === 3))).toBe(false)
+    } finally {
+      interaction.close(); off(); await router.close(); await service.close()
+    }
+  })
+
   it("advertises a wired bridge and routes pending and reply to a real assembly", async () => {
     const frames: RpcMessage[] = []
     const send = (frame: RpcMessage) => { frames.push(frame) }

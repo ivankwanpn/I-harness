@@ -2,8 +2,9 @@
 import { createInterface } from "node:readline"
 import { isAbsolute } from "node:path"
 import { pathToFileURL } from "node:url"
-import { createBoundedWriter, DEFAULT_WRITE_BOUND_BYTES, decodeFrame, isRpcRequest } from "@i-harness/sdk"
+import { DEFAULT_WRITE_BOUND_BYTES, decodeFrame, isRpcRequest } from "@i-harness/sdk"
 import { createDesktopHost } from "./host.ts"
+import { createGatewayOutput } from "./output.ts"
 
 export async function main(args: string[]): Promise<number> {
   if (args.length !== 2 || args[0] !== "--session-dir" || !isAbsolute(args[1]!)) {
@@ -11,22 +12,22 @@ export async function main(args: string[]): Promise<number> {
     return 1
   }
 
-  const writer = createBoundedWriter({
+  let requestClose = () => {}
+  const output = createGatewayOutput({
     write: (chunk) => process.stdout.write(chunk),
     end: () => process.stdout.end(),
     onDrain: (callback) => {
       process.stdout.once("drain", callback)
       return () => { process.stdout.off("drain", callback) }
     },
-    boundBytes: DEFAULT_WRITE_BOUND_BYTES,
-  })
+  }, DEFAULT_WRITE_BOUND_BYTES, () => requestClose())
 
   let host: Awaited<ReturnType<typeof createDesktopHost>>
   try {
     host = await createDesktopHost({
       workspace: process.cwd(),
       sessionDir: args[1],
-      onWrite: (frame) => writer.push(frame),
+      onWrite: (frame) => output.push(frame),
     })
   } catch (error) {
     console.error(`[desktop-gateway] startup failed: ${error instanceof Error ? error.message : String(error)}`)
@@ -38,11 +39,17 @@ export async function main(args: string[]): Promise<number> {
   let handshake: Promise<void> | undefined
   let closing: Promise<void> | undefined
 
-  const close = (): Promise<void> => closing ??= (async () => {
-    rl.close()
-    await host.close()
-    process.stdout.end()
-  })()
+  const close = (): Promise<void> => {
+    if (closing !== undefined) return closing
+    closing = Promise.resolve().then(async () => {
+      rl.close()
+      await host.close()
+      await Promise.allSettled([...active])
+      await output.finish()
+    })
+    return closing
+  }
+  requestClose = () => { void close() }
 
   function track(work: Promise<void>): void {
     active.add(work)
@@ -67,12 +74,14 @@ export async function main(args: string[]): Promise<number> {
   const onSignal = () => { void close() }
   process.once("SIGINT", onSignal)
   process.once("SIGTERM", onSignal)
+  process.stdout.once("error", onSignal)
 
   await new Promise<void>((resolve) => rl.once("close", resolve))
   await close()
   await Promise.allSettled([...active])
   process.off("SIGINT", onSignal)
   process.off("SIGTERM", onSignal)
+  process.stdout.off("error", onSignal)
   return 0
 }
 

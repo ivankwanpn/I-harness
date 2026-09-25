@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
+import type { SdkServer } from "@i-harness/sdk/server"
 import {
   decodeFrame,
   encodeFrame,
@@ -35,6 +36,32 @@ function fixture() {
 }
 
 describe("Desktop SDK router", () => {
+  it("cancels an active SDK prompt before closing", async () => {
+    const sent: RpcMessage[] = []
+    let releasePrompt = () => {}
+    let cancelled = false
+    const base = {
+      async handleLine(line: string) {
+        const frame = decodeFrame(line)
+        if (!frame || !("method" in frame) || !("id" in frame)) return null
+        if (frame.method === "initialize") return encodeFrame(makeSuccess(1, { name: "test", version: "1", protocolVersion: 3, capabilities: {} }))
+        if (frame.method === "session/prompt") {
+          await new Promise<void>((resolve) => { releasePrompt = resolve })
+          return encodeFrame(makeSuccess(2, { ok: true }))
+        }
+        if (frame.method === "session/cancel") { cancelled = true; releasePrompt(); return encodeFrame(makeSuccess(frame.id, { cancelled: true })) }
+        return null
+      },
+      async close() {},
+    } as SdkServer
+    const router = createDesktopRouter(base, (frame) => { sent.push(frame) }, {})
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const prompt = router.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "s1", prompt: "wait" })))
+    await router.close()
+    await prompt
+    expect(cancelled).toBe(true)
+  })
+
   it("advertises sandbox only when a sandbox-state handler is installed", () => {
     const frames: RpcMessage[] = []
     const write = createGatewayWrite((frame) => frames.push(frame), {

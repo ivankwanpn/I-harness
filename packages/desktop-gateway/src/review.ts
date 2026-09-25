@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process"
-import { lstat, open, realpath, stat, type FileHandle } from "node:fs/promises"
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
+import { lstat, realpath } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, win32 } from "node:path"
+import { openPinnedFileForReview, type PinnedReviewFile } from "./review-handle.ts"
 
 export interface ChangeRow {
   path: string
@@ -25,6 +26,7 @@ export interface WorkspaceReview {
   changes(): Promise<ChangesResult>
   diff(path: string, maxBytes?: number): Promise<DiffResult>
   file(path: string, maxBytes?: number): Promise<FileResult>
+  close(): Promise<void>
 }
 
 export class ReviewPathError extends Error {
@@ -43,12 +45,25 @@ const MAX_FILE_BYTES = 1024 * 1024
 
 interface GitResult { data: Buffer; truncated: boolean; code: number | null; missing: boolean }
 
-function runGit(root: string, args: string[], maxBytes: number): Promise<GitResult> {
+function runGit(root: string, args: string[], maxBytes: number, control: {
+  signal: AbortSignal
+  active: Set<ChildProcessWithoutNullStreams>
+  command: string
+  prefixArgs: string[]
+  timeoutMs: number
+}): Promise<GitResult> {
   return new Promise((resolveResult, reject) => {
-    const child = spawn("git", args, {
+    if (control.signal.aborted) { reject(new Error("review closed")); return }
+    const child = spawn(control.command, [...control.prefixArgs, "-c", "core.fsmonitor=false", "-c", "diff.external=", "-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`, ...args], {
       cwd: root, shell: false, windowsHide: true,
       env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
     })
+    control.active.add(child)
+    child.stderr.resume() // Never let an untrusted diagnostic fill the pipe.
+    let timedOut = false
+    const timer = setTimeout(() => { timedOut = true; child.kill() }, control.timeoutMs)
+    const abort = () => child.kill()
+    control.signal.addEventListener("abort", abort, { once: true })
     const chunks: Buffer[] = []
     let count = 0
     let truncated = false
@@ -72,8 +87,13 @@ function runGit(root: string, args: string[], maxBytes: number): Promise<GitResu
       }
     })
     child.on("close", (code) => {
+      clearTimeout(timer)
+      control.signal.removeEventListener("abort", abort)
+      control.active.delete(child)
       if (finished) return
       finished = true
+      if (control.signal.aborted) { reject(new Error("review closed: Git cancelled")); return }
+      if (timedOut) { reject(new Error("Git review timed out")); return }
       resolveResult({ data: Buffer.concat(chunks), truncated, code, missing })
     })
   })
@@ -128,24 +148,37 @@ function parseStatus(data: Buffer): ChangeRow[] {
   return rows
 }
 
-export function createWorkspaceReview(root: string, options: { openFile?: (path: string) => Promise<FileHandle> } = {}): WorkspaceReview {
+export function createWorkspaceReview(root: string, options: {
+  openPinnedFile?: (path: string) => Promise<PinnedReviewFile>
+  gitCommand?: { executable: string; prefixArgs?: string[]; timeoutMs?: number }
+} = {}): WorkspaceReview {
   const workspace = resolve(root)
-  const openFile = options.openFile ?? ((path: string) => open(path, "r"))
+  const openPinnedFile = options.openPinnedFile ?? openPinnedFileForReview
+  const aborter = new AbortController()
+  const active = new Set<ChildProcessWithoutNullStreams>()
+  const gitControl = {
+    signal: aborter.signal,
+    active,
+    command: options.gitCommand?.executable ?? "git",
+    prefixArgs: options.gitCommand?.prefixArgs ?? [],
+    timeoutMs: options.gitCommand?.timeoutMs ?? 10_000,
+  }
+  const git = (args: string[], maxBytes: number) => runGit(workspace, args, maxBytes, gitControl)
 
   async function gitAvailable(): Promise<"ok" | "git-missing" | "not-git-repo" | "no-head"> {
-    const repo = await runGit(workspace, ["rev-parse", "--is-inside-work-tree"], 128)
+    const repo = await git(["rev-parse", "--is-inside-work-tree"], 128)
     if (repo.missing) return "git-missing"
     if (repo.code !== 0 || repo.data.toString("utf8").trim() !== "true") return "not-git-repo"
-    const head = await runGit(workspace, ["rev-parse", "--verify", "HEAD"], 128)
+    const head = await git(["rev-parse", "--verify", "HEAD"], 128)
     return head.code === 0 ? "ok" : "no-head"
   }
 
   async function changes(): Promise<ChangesResult> {
     const available = await gitAvailable()
     if (available !== "ok") return { kind: "unavailable", reason: available }
-    const status = await runGit(workspace, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], STATUS_LIMIT_BYTES)
+    const status = await git(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", "."], STATUS_LIMIT_BYTES)
     if (status.code !== 0 && !status.truncated) throw new Error("git status failed")
-    const prefixResult = await runGit(workspace, ["rev-parse", "--show-prefix"], 4096)
+    const prefixResult = await git(["rev-parse", "--show-prefix"], 4096)
     if (prefixResult.code !== 0 || prefixResult.truncated) throw new Error("git workspace prefix unavailable")
     const prefix = prefixResult.data.toString("utf8").trim()
     const rows = parseStatus(status.data)
@@ -163,9 +196,9 @@ export function createWorkspaceReview(root: string, options: { openFile?: (path:
     if (row.status === "untracked") return { kind: "unavailable", reason: "untracked" }
     if (row.status === "deleted") return { kind: "unavailable", reason: "deleted" }
     const limit = cap(maxBytes, DEFAULT_DIFF_BYTES, MAX_DIFF_BYTES)
-    const numstat = await runGit(workspace, ["diff", "--numstat", "HEAD", "--", gitPath], 1024)
+    const numstat = await git(["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", "--", gitPath], 1024)
     if (numstat.data.toString("utf8").startsWith("-\t-\t")) return { kind: "unavailable", reason: "binary" }
-    const result = await runGit(workspace, ["diff", "--no-ext-diff", "HEAD", "--", gitPath], limit)
+    const result = await git(["diff", "--no-ext-diff", "--no-textconv", "HEAD", "--", gitPath], limit)
     if (result.code !== 0 && !result.truncated) throw new Error("git diff failed")
     if (result.data.length === 0) return { kind: "unavailable", reason: "no-diff" }
     const text = utf8Prefix(result.data.subarray(0, limit), result.truncated)
@@ -185,22 +218,10 @@ export function createWorkspaceReview(root: string, options: { openFile?: (path:
       }
       const before = await realpath(target)
       if (!inside(canonicalRoot, before)) throw new ReviewPathError("review path escapes workspace")
-      const handle = await openFile(target)
+      const handle = await openPinnedFile(target)
       try {
-        const after = await realpath(target)
-        if (!inside(canonicalRoot, after)) throw new ReviewPathError("review path escapes workspace")
-        const opened = await handle.stat()
-        const current = await stat(after)
-        if (opened.dev !== current.dev || opened.ino !== current.ino || !opened.isFile()) {
-          throw new ReviewPathError("review file changed during open")
-        }
-        const bytes = Buffer.alloc(limit + 1)
-        let count = 0
-        while (count < bytes.length) {
-          const read = await handle.read(bytes, count, bytes.length - count, count)
-          if (read.bytesRead === 0) break
-          count += read.bytesRead
-        }
+        if (!inside(canonicalRoot, handle.finalPath)) throw new ReviewPathError("review handle escapes workspace")
+        const { bytes, count } = await handle.read(limit + 1)
         const slice = bytes.subarray(0, Math.min(count, limit))
         if (slice.includes(0)) return { kind: "unavailable", reason: "binary" }
         const text = utf8Prefix(slice, count > limit)
@@ -221,5 +242,10 @@ export function createWorkspaceReview(root: string, options: { openFile?: (path:
     changes,
     diff,
     file,
+    async close() {
+      aborter.abort()
+      for (const child of active) child.kill()
+      if (active.size > 0) await Promise.all([...active].map((child) => new Promise<void>((resolve) => child.once("close", () => resolve()))))
+    },
   }
 }

@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
-import { open } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createWorkspaceReview } from "../src/review.ts"
+import { openPinnedFileForReview } from "../src/review-handle.ts"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -127,6 +127,40 @@ describe("workspace review remains read-only and honest", () => {
     expect(await createWorkspaceReview(root).file("invalid.dat")).toEqual({ kind: "unavailable", reason: "binary" })
   })
 
+  it("does not execute a configured Git textconv helper while reading a diff", async () => {
+    const root = workspace()
+    writeFileSync(join(root, ".gitattributes"), "*.txt diff=evil\n", "utf8")
+    execFileSync("git", ["add", ".gitattributes"], { cwd: root })
+    execFileSync("git", ["commit", "-qm", "attributes"], { cwd: root })
+    writeFileSync(join(root, ".git", "textconv.cjs"), "require('fs').writeFileSync('.git/textconv-ran', 'yes'); process.stdout.write('converted')\n", "utf8")
+    execFileSync("git", ["config", "diff.evil.textconv", "node .git/textconv.cjs"], { cwd: root })
+    writeFileSync(join(root, "tracked.txt"), "changed\n", "utf8")
+    await createWorkspaceReview(root).diff("tracked.txt")
+    expect(existsSync(join(root, ".git", "textconv-ran"))).toBe(false)
+  })
+
+  it("drains Git stderr and returns if Git emits a large diagnostic", async () => {
+    const root = workspace(false)
+    const script = join(root, "fake-git.cjs")
+    writeFileSync(script, "process.stderr.write('x'.repeat(1024 * 1024)); process.stdout.write('true\\n')", "utf8")
+    const review = createWorkspaceReview(root, { gitCommand: { executable: process.execPath, prefixArgs: [script], timeoutMs: 3000 } })
+    try {
+      const result = await review.changes()
+      expect(result.kind).toBe("ok")
+    } finally { await review.close() }
+  })
+
+  it("kills an unresponsive Git child when review closes", async () => {
+    const root = workspace(false)
+    const script = join(root, "stuck-git.cjs")
+    writeFileSync(script, "process.stdout.write('true\\n'); setInterval(() => {}, 1000)", "utf8")
+    const review = createWorkspaceReview(root, { gitCommand: { executable: process.execPath, prefixArgs: [script], timeoutMs: 10000 } })
+    const request = review.changes()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    await review.close()
+    await expect(request).rejects.toThrow(/cancel|clos/i)
+  })
+
   it("does not confuse a repository without HEAD with a clean repository", async () => {
     const root = mkdtempSync(join(tmpdir(), "ih-desktop-review-no-head-"))
     roots.push(root)
@@ -144,17 +178,41 @@ describe("workspace review remains read-only and honest", () => {
     writeFileSync(join(folder, "secret.txt"), "inside", "utf8")
     let swapped = false
     const review = createWorkspaceReview(root, {
-      openFile: async (path) => {
+      openPinnedFile: async (path) => {
         if (!swapped) {
           renameSync(folder, join(root, "old-folder"))
           symlinkSync(outside, folder, "junction")
           swapped = true
         }
-        return open(path, "r")
+        return openPinnedFileForReview(path)
       },
     })
     await expect(review.file("folder/secret.txt")).rejects.toThrow()
     expect(swapped).toBe(true)
+    expect(existsSync(join(outside, "secret.txt"))).toBe(true)
+  })
+
+  it("refuses a handle opened outside even if a junction is restored after open", async () => {
+    const root = workspace()
+    const outside = mkdtempSync(join(tmpdir(), "ih-desktop-review-repeat-outside-"))
+    roots.push(outside)
+    writeFileSync(join(outside, "secret.txt"), "outside-secret", "utf8")
+    const folder = join(root, "folder")
+    const oldFolder = join(root, "old-folder")
+    const outsideLink = join(root, "outside-link")
+    mkdirSync(folder)
+    writeFileSync(join(folder, "secret.txt"), "inside", "utf8")
+    const review = createWorkspaceReview(root, {
+      openPinnedFile: async (path) => {
+        renameSync(folder, oldFolder)
+        symlinkSync(outside, folder, "junction")
+        const handle = await openPinnedFileForReview(path) // Opened outside, pinned to this handle.
+        renameSync(folder, outsideLink)
+        renameSync(oldFolder, folder) // The mutable path now appears to be inside.
+        return handle
+      },
+    })
+    await expect(review.file("folder/secret.txt")).rejects.toThrow(/outside|escape|handle/i)
     expect(existsSync(join(outside, "secret.txt"))).toBe(true)
   })
 })
