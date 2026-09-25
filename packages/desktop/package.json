@@ -1,0 +1,35 @@
+{
+  "name": "@i-harness/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@i-harness/sdk": "workspace:*",
+    "@i-harness/desktop-gateway": "workspace:*",
+    "@tanstack/react-virtual": "3.14.13",
+    "lucide-react": "0.469.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.0",
+    "@types/node": "24.0.0",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "@vitejs/plugin-react": "5.0.4",
+    "electron": "44.4.5",
+    "electron-vite": "5.0.0",
+    "jsdom": "30.1.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.6",
+    "vitest": "3.2.0"
+  }
+}

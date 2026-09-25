@@ -18,6 +18,9 @@ coverage/
 *.log
 *.tmp
 
+# Electron build output（packages/desktop，D0）
+packages/desktop/out/
+
 # NSIS installer staging（build-installer.mjs 產出的可重造 artifact）
 installer/staging/
 
