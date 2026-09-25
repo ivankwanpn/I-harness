@@ -333,6 +333,36 @@ importers:
         specifier: workspace:*
         version: link:../fs
 
+  packages/desktop-gateway:
+    dependencies:
+      '@i-harness/credentials':
+        specifier: workspace:*
+        version: link:../credentials
+      '@i-harness/interaction':
+        specifier: workspace:*
+        version: link:../interaction
+      '@i-harness/provider-runtime':
+        specifier: workspace:*
+        version: link:../provider-runtime
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+      '@i-harness/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@i-harness/session-executor':
+        specifier: workspace:*
+        version: link:../session-executor
+      '@i-harness/session-persistence':
+        specifier: workspace:*
+        version: link:../session-persistence
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
+      '@i-harness/settings':
+        specifier: workspace:*
+        version: link:../settings
+
   packages/diagnostics: {}
 
   packages/exec:
