@@ -12,7 +12,9 @@ function fixture() {
   const listSessions = vi.fn(async () => ({ sessions: [] }))
   const history = vi.fn(async (sessionId: string, options: unknown) => ({ sessionId, options, events: [], nextSeq: 0 }))
   const request = vi.fn(async () => ({ ok: true }))
-  const client = { listSessions, history, request } as unknown as HarnessClient
+  const cancelQueueItem = vi.fn(async () => ({ cancelled: true }))
+  const cancelTask = vi.fn(async () => "cancellation-requested")
+  const client = { listSessions, history, request, cancelQueueItem, cancelTask } as unknown as HarnessClient
   const workspaceRuntime = {
     client,
     info: { name: "test", version: "0.1.0", protocolVersion: 3, capabilities: {} },
@@ -39,6 +41,8 @@ function fixture() {
     listSessions,
     history,
     request,
+    cancelQueueItem,
+    cancelTask,
     get,
     setRuntime(value: unknown) { runtimeFor = value },
     emitEvent(event: DesktopEvent) { eventListener?.(event) },
@@ -90,6 +94,24 @@ describe("Desktop scoped IPC", () => {
 
     await expect(dispatchDesktopRequest({ kind: "desktop/capabilities", workspaceId: "ws-1" }, f.dependencies))
       .resolves.toEqual({})
+  })
+
+  it("cancels a queued prompt row or a task row by exact id", async () => {
+    const f = fixture()
+
+    await expect(dispatchDesktopRequest({
+      kind: "session/queue/cancel", workspaceId: "ws-1", sessionId: "s1", id: "q1",
+    }, f.dependencies)).resolves.toEqual({ cancelled: true })
+    expect(f.cancelQueueItem).toHaveBeenCalledWith("s1", "q1")
+
+    await expect(dispatchDesktopRequest({
+      kind: "session/tasks/cancel", workspaceId: "ws-1", sessionId: "s1", id: "t1",
+    }, f.dependencies)).resolves.toBe("cancellation-requested")
+    expect(f.cancelTask).toHaveBeenCalledWith("s1", "t1")
+
+    await expect(dispatchDesktopRequest({
+      kind: "session/tasks/cancel", workspaceId: "ws-1", sessionId: "s1", id: "",
+    }, f.dependencies)).rejects.toThrow(/id/i)
   })
 
   it("gates session/prompt on the wired sandbox claim", async () => {

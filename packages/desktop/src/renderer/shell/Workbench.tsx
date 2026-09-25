@@ -1,10 +1,28 @@
 import { useState } from "react"
-import type { SessionDashboardResult } from "@i-harness/sdk"
+import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
+import { Composer } from "../session/Composer.tsx"
+import type { TimelineRow } from "../session/project.ts"
+import { TaskPane } from "../session/TaskPane.tsx"
+import { Timeline } from "../session/Timeline.tsx"
 import { TaskList } from "./TaskList.tsx"
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx"
+
+export interface ConversationView {
+  rows: TimelineRow[]
+  canSend: boolean
+  sendReason?: string
+  running: boolean
+  queue?: SessionQueueItem[]
+  tasks?: AgentTaskView[]
+  taskError?: string
+  onPrompt(text: string): Promise<void>
+  onCancel(): void
+  onCancelTask(taskId: string): void
+  onCancelQueue(queueId: string): void
+}
 
 export interface WorkbenchProps {
   bridge: DesktopBridge
@@ -15,6 +33,7 @@ export interface WorkbenchProps {
   error?: string
   selectedWorkspaceId?: string
   selectedSessionId?: string
+  conversation?: ConversationView
   onSelectWorkspace(workspaceId: string): void
   onSelectSession(sessionId: string): void
   onSessionsChanged?(): void
@@ -38,6 +57,7 @@ export function Workbench({
   onSelectWorkspace,
   onSelectSession,
   onSessionsChanged,
+  conversation,
 }: WorkbenchProps) {
   const [createError, setCreateError] = useState<string>()
   const canCreate = capabilities["session-create"]?.includes("1") === true
@@ -79,13 +99,37 @@ export function Workbench({
         {error === undefined ? null : <p className="notice error-text">{error}</p>}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
         <section className="session-body" aria-label="會話">
-          {dashboard === undefined
-            ? <p className="notice">正在載入會話…</p>
-            : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={onSelectSession} />}
+          {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
+            ? (
+              <>
+                <Timeline rows={conversation.rows} />
+                <Composer
+                  workspaceId={selectedWorkspaceId}
+                  sessionId={selectedSessionId}
+                  canSend={conversation.canSend}
+                  sendReason={conversation.sendReason}
+                  running={conversation.running}
+                  onPrompt={conversation.onPrompt}
+                  onCancel={conversation.onCancel}
+                />
+              </>
+            )
+            : dashboard === undefined
+              ? <p className="notice">正在載入會話…</p>
+              : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={onSelectSession} />}
         </section>
       </main>
       <aside className="review-pane" aria-label="成果檢查">
         <h2 className="review-title">成果檢查</h2>
+        {conversation === undefined ? null : (
+          <TaskPane
+            queue={conversation.queue}
+            tasks={conversation.tasks}
+            error={conversation.taskError}
+            onCancelTask={conversation.onCancelTask}
+            onCancelQueue={conversation.onCancelQueue}
+          />
+        )}
         <p className="sandbox-row">
           沙箱：
           {sandbox === undefined

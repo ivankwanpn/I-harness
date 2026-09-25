@@ -62,8 +62,12 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancel(requireNonEmpty(value.sessionId, "sessionId"))
     case "session/queue":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.queue(requireNonEmpty(value.sessionId, "sessionId"))
+    case "session/queue/cancel":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancelQueueItem(requireNonEmpty(value.sessionId, "sessionId"), requireNonEmpty(value.id, "id"))
     case "session/tasks":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.tasks(requireNonEmpty(value.sessionId, "sessionId"))
+    case "session/tasks/cancel":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancelTask(requireNonEmpty(value.sessionId, "sessionId"), requireNonEmpty(value.id, "id"))
     case "session/model/state":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
     default:

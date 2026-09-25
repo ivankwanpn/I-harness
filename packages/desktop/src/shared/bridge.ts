@@ -14,7 +14,9 @@ export type DesktopRequest =
   | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
   | { kind: "session/queue"; workspaceId: string; sessionId: string }
+  | { kind: "session/queue/cancel"; workspaceId: string; sessionId: string; id: string }
   | { kind: "session/tasks"; workspaceId: string; sessionId: string }
+  | { kind: "session/tasks/cancel"; workspaceId: string; sessionId: string; id: string }
   | { kind: "session/model/state"; workspaceId: string; sessionId: string }
 
 export type DesktopEvent =
