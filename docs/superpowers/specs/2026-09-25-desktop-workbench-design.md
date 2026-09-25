@@ -22,7 +22,7 @@ Desktop 是讓一個人跨工作區指揮、監督和檢查 I-harness Agent 的�
 
 - 公開遠端服務、多租戶、**自家**帳戶／收費訂閱／雲端同步、分享、插件市場、內嵌瀏覽器自動化、Office 編輯器、獨立互動終端及完整 Git 客戶端。本項目沒有自家服務器與用戶帳戶系統。第三方提供商 OAuth（包括可能透過用戶已有訂閱資格使用的授權流程）是另一個未來候選，不等於自家訂閱服務；具體提供商的授權與使用條件須另行研究，並不在首輪實作內。
 - 照搬 ZCode／OpenCode／DSH 的內部包、私有庫、產品圖標、商標或整個設計系統。採納 ZCode 的**佈局、密度與交互語言**，在本包中重新建立必要組件。
-- 在 `packages/desktop` 內重做 Agent loop、provider 解析、sandbox、持久化或其他後端邏輯；Desktop 主進程只管理 SDK 進程、視窗、通知與本機 UI 偏好。
+- **不在 `packages/desktop` 複製後端功能。**Desktop 會直接使用本項目後端的能力，但沿已確認的本機 SDK wire 連到 `packages/desktop-gateway`；Gateway 才組裝現有 Agent loop 所在的 `SessionService`、provider runtime、sandbox 與持久化。Desktop 主進程只管理該本機 SDK 進程、視窗、通知與本機 UI 偏好。這個分層不涉及公開遠端服務。
 - 在已批准的新後端包之外，新增其他後端包；未經另行批准擴大既有 SDK 方法、修改 `apps/cli` 或更改既有協議版本。
 
 ## 3. 前端包邊界
