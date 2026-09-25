@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, ipcMain } from "electron"
 import { join } from "node:path"
+import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
@@ -19,11 +20,18 @@ export function workspaceRuntimes(): WorkspaceRuntimeManager {
 }
 
 app.whenReady().then(() => {
-  catalog = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
-  runtimes = createWorkspaceRuntimeManager({ sessionsRoot: join(app.getPath("userData"), "sessions") })
-  createDesktopWindow()
+  const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
+  const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(app.getPath("userData"), "sessions") })
+  catalog = workspaces
+  runtimes = manager
+  const openWindow = (): void => {
+    const window = createDesktopWindow()
+    const unregister = registerDesktopIpc(window, { catalog: workspaces, runtimes: manager }, ipcMain)
+    window.on("closed", unregister)
+  }
+  openWindow()
   app.on("activate", () => {
-    if (process.platform === "darwin" && BrowserWindow.getAllWindows().length === 0) createDesktopWindow()
+    if (process.platform === "darwin" && BrowserWindow.getAllWindows().length === 0) openWindow()
   })
 })
 
