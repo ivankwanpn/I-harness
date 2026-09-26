@@ -11,7 +11,7 @@ import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
-afterEach(() => { cleanup(); useUiStore.setState({ reviewOpen: false }); useLocale.getState().setLocale("zh-TW") })
+afterEach(() => { cleanup(); useUiStore.setState({ reviewOpen: false, surface: "conversation" }); useLocale.getState().setLocale("zh-TW") })
 
 function fakeBridge(): DesktopBridge {
   return {

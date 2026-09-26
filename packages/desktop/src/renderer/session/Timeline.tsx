@@ -3,7 +3,7 @@ import { ArrowDown } from "lucide-react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { outcomeLabel, type TimelineRow } from "./project.ts"
+import { activityLabel, outcomeLabel, type TimelineRow } from "./project.ts"
 import { ToolActivity } from "./ToolActivity.tsx"
 import { useText } from "../design/i18n.ts"
 
@@ -26,7 +26,7 @@ function RowView({ row }: { row: TimelineRow }) {
     return <p className="timeline-outcome">{outcomeLabel(row.flags, t)}</p>
   }
   if (row.kind === "other") {
-    return <p className="timeline-other muted">{row.label}</p>
+    return row.detail ? <details className="timeline-other muted"><summary>{activityLabel(row.label, t)}</summary><pre className="tool-output">{row.detail}</pre></details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
   }
   return <ToolActivity name={row.name} output={row.output} />
 }

@@ -6,6 +6,29 @@ type WireEvent = HistoryRange["events"][number]
 type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 
 describe("projectTimeline", () => {
+  it("replaces streamed text even when another activity arrives before the final message", () => {
+    const rows = projectTimeline([
+      { type: "assistant/chunk", text: "Hel", seq: 0 },
+      { type: "todo/write", version: 1, items: [], seq: 1 },
+      { type: "assistant/chunk", text: "lo", seq: 2 },
+      { type: "assistant/message", text: "Hello", seq: 3 },
+    ])
+    expect(rows.filter((row) => row.kind === "message")).toEqual([{ id: "message:3", kind: "message", role: "assistant", text: "Hello" }])
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length)
+  })
+  it("keeps interrupted streams separate across turns", () => {
+    const rows = projectTimeline([
+      { type: "assistant/chunk", text: "partial", seq: 0 },
+      { type: "turn/end", seq: 1 },
+      { type: "turn/start", seq: 2 },
+      { type: "assistant/chunk", text: "next", seq: 3 },
+    ])
+    expect(rows.filter((row) => row.kind === "message").map((row) => row.text)).toEqual(["partial", "next"])
+    expect(new Set(rows.map((row) => row.id)).size).toBe(rows.length)
+  })
+  it("does not expose internal model-context user messages as user prompts", () => {
+    expect(projectTimeline([{ type: "user/message", text: "internal state", internal: true, seq: 0 }])).toEqual([])
+  })
   it("merges tool/call and tool/result with the same callId into one row", () => {
     const rows = projectTimeline([
       { type: "tool/call", callId: "c1", name: "read", args: { path: "a" }, seq: 0 },
@@ -42,7 +65,7 @@ describe("projectTimeline", () => {
     ])
 
     expect(rows).toEqual([
-      { id: "chunk:stream", kind: "message", role: "assistant", text: "hel", transient: true },
+      { id: "chunk:0", kind: "message", role: "assistant", text: "hel", transient: true },
       { id: "event:1", kind: "other", label: "todo/write" },
       { id: "event:2", kind: "other", label: "goal/change" },
     ])
@@ -75,7 +98,7 @@ describe("projectTimeline", () => {
       { type: "assistant/chunk", text: "lo", seq: 1 },
     ])
     expect(streaming).toEqual([
-      { id: "chunk:stream", kind: "message", role: "assistant", text: "Hello", transient: true },
+      { id: "chunk:0", kind: "message", role: "assistant", text: "Hello", transient: true },
     ])
 
     const settled = projectTimeline([

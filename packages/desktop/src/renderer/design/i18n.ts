@@ -1,8 +1,13 @@
-import { create } from "zustand"
+import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
-export type Locale = "zh-TW" | "en"
 const english = {
+  "思考過程": "Reasoning", "待辦清單已更新": "Todo list updated", "目標已更新": "Goal updated", "背景任務狀態已更新": "Background task updated",
+  "上下文摘要": "Context summary", "上下文已重設": "Context reset", "工具輸出已整理": "Tool outputs condensed",
+  "執行權限已更新": "Execution permissions updated", "協作成員已更新": "Team member updated", "協作任務已更新": "Team task updated",
+  "協作訊息已排入佇列": "Team message queued", "協作訊息已送達": "Team message delivered", "子代理已啟動": "Subagent started", "子代理執行已結束": "Subagent run ended", "收到子代理訊息": "Subagent message received",
+  "輸入已排入佇列": "Input queued", "正在處理佇列輸入": "Processing queued input", "佇列輸入已取消": "Queued input cancelled",
+  "計畫模式已更新": "Plan mode updated", "正在執行命令": "Running command", "命令執行已結束": "Command run ended", "排程已更新": "Schedule updated", "執行記錄已更新": "Run record updated", "會話已回復": "Conversation rewound", "會話狀態已更新": "Conversation state updated",
   "關閉成果面板": "Close review pane",
   "調整成果面板寬度": "Resize review pane",
   "會話內容": "Conversation content", "回到最新內容": "Jump to latest", "關閉側欄": "Close sidebar",
@@ -69,17 +74,7 @@ const english = {
   "送出": "Send", "停止": "Stop", "語言": "Language",
 } as const
 export type Message = keyof typeof english
-function initialLocale(): Locale {
-  try { return localStorage.getItem("ih:locale") === "en" ? "en" : "zh-TW" } catch { return "zh-TW" }
-}
-export const useLocale = create<{ locale: Locale; setLocale(locale: Locale): void }>((set) => ({
-  locale: initialLocale(),
-  setLocale: (locale) => {
-    try { localStorage.setItem("ih:locale", locale) } catch { /* Preference remains usable in memory. */ }
-    document.documentElement.lang = locale
-    set({ locale })
-  },
-}))
+export const useLocale = useUiStore
 export function useText(): (message: Message, values?: Record<string, string | number>) => string {
   const locale = useLocale((state) => state.locale)
   return useCallback((message: Message, values: Record<string, string | number> = {}) => (locale === "en" ? english[message] : message).replace(/\{(\w+)\}/g, (token, key: string) => values[key] === undefined ? token : String(values[key])), [locale])

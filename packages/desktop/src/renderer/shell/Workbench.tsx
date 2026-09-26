@@ -112,7 +112,8 @@ export function Workbench({
   const [compactOpen, setCompactOpen] = useState(false)
   const [workPaneTab, setWorkPaneTab] = useState("changes")
   const workPaneId = useId()
-  const [surface, setSurface] = useState<"conversation" | "memory" | "search" | "settings">("conversation")
+  const surface = useUiStore((state) => state.surface)
+  const setSurface = useUiStore((state) => state.setSurface)
   const memoryOpen = surface === "memory"
   const setMemoryOpen = (open: boolean | ((current: boolean) => boolean)) => setSurface((typeof open === "function" ? open(memoryOpen) : open) ? "memory" : "conversation")
   const reviewOpen = useUiStore((state) => state.reviewOpen)
