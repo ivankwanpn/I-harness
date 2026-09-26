@@ -23,16 +23,36 @@ const question: PendingInteraction = {
 }
 
 describe("PendingPanel", () => {
+  it("keeps concurrent requests independently busy", async () => {
+    let finishFirst!: () => void
+    let finishSecond!: () => void
+    const onReply = vi.fn(({ requestId }: { requestId: string }) => new Promise<void>((resolve) => {
+      if (requestId === "r1") finishFirst = resolve
+      else finishSecond = resolve
+    }))
+    render(<PendingPanel pending={[approval, { ...approval, requestId: "other" }]} onReply={onReply} />)
+    fireEvent.click(screen.getAllByRole("button", { name: "確認" })[0]!)
+    fireEvent.click(screen.getByRole("button", { name: "確認" }))
+    expect(screen.getAllByRole("button", { name: "正在送出…" })).toHaveLength(2)
+    finishFirst()
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "正在送出…" })).toHaveLength(1))
+    expect((screen.getByRole("button", { name: "正在送出…" }) as HTMLButtonElement).disabled).toBe(true)
+    finishSecond()
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "確認" })).toHaveLength(2))
+  })
   it("shows the approval reason and replies with an explicit decision", async () => {
     const onReply = vi.fn(async () => {})
     render(<PendingPanel pending={[approval]} onReply={onReply} />)
 
     expect(screen.getByText(/edit D:\/workspace\/notes\.md/)).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "批准" }))
+    fireEvent.click(screen.getByRole("radio", { name: /批准/ }))
+    expect(onReply).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "確認" }))
     await waitFor(() => {
       expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: true } })
     })
-    fireEvent.click(screen.getByRole("button", { name: "拒絕" }))
+    fireEvent.click(screen.getByRole("radio", { name: /拒絕/ }))
+    fireEvent.click(screen.getByRole("button", { name: "確認" }))
     await waitFor(() => {
       expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: false } })
     })
@@ -53,10 +73,10 @@ describe("PendingPanel", () => {
     const onReply = vi.fn(async () => { throw new Error("宿主拒絕") })
     render(<PendingPanel pending={[approval]} onReply={onReply} />)
 
-    fireEvent.click(screen.getByRole("button", { name: "批准" }))
+    fireEvent.click(screen.getByRole("button", { name: "確認" }))
 
     await waitFor(() => { expect(screen.getByText("宿主拒絕")).toBeTruthy() })
-    expect(screen.getByRole("button", { name: "批准" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "確認" })).toBeTruthy()
   })
 
   it("renders nothing when nothing is pending", () => {

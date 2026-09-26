@@ -1,4 +1,6 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
+import { ApprovalCard } from "./ApprovalCard.tsx"
+import { useText } from "../design/i18n.ts"
 import type { PendingInteraction } from "./pending.ts"
 
 export type InteractionReply = {
@@ -27,44 +29,40 @@ function questionShape(payload: unknown): { prompt: string; options: string[] } 
 }
 
 export function PendingPanel({ pending, onReply }: PendingPanelProps) {
-  const [error, setError] = useState<string>()
-  const [busy, setBusy] = useState<string>()
+  const t = useText()
+  const [errors, setErrors] = useState<Record<string, string | undefined>>({})
+  const [busy, setBusy] = useState<Record<string, boolean>>({})
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const inFlight = useRef(new Set<string>())
 
   if (pending.length === 0) return null
 
   async function reply(row: PendingInteraction, decision: InteractionReply["decision"]): Promise<void> {
-    setBusy(row.requestId)
-    setError(undefined)
+    if (inFlight.current.has(row.requestId)) return
+    inFlight.current.add(row.requestId)
+    setBusy((current) => ({ ...current, [row.requestId]: true }))
+    setErrors((current) => ({ ...current, [row.requestId]: undefined }))
     try {
       await onReply({ requestId: row.requestId, decision })
     } catch (reason) {
       // The item stays: an unaccepted reply must never look accepted.
-      setError(reason instanceof Error ? reason.message : String(reason))
+      setErrors((current) => ({ ...current, [row.requestId]: reason instanceof Error ? reason.message : String(reason) }))
     } finally {
-      setBusy(undefined)
+      inFlight.current.delete(row.requestId)
+      setBusy((current) => ({ ...current, [row.requestId]: false }))
     }
   }
 
   return (
-    <section className="pending-panel" aria-label="待人處理">
-      <h3 className="review-title">待人處理</h3>
-      {error === undefined ? null : <p className="notice error-text">{error}</p>}
+    <section className="pending-panel" aria-label={t("待人處理")}>
+      <h3 className="review-title">{t("待人處理")} · {pending.length}</h3>
       <ul className="task-list">
         {pending.map((row) => row.kind === "approval"
           ? (
             <li key={row.requestId} className="task-row">
-              <span className="row-label">{approvalText(row.payload)}</span>
-              <span className="row-meta">
-                <button type="button" className="primary-button" disabled={busy === row.requestId}
-                  onClick={() => { void reply(row, { kind: "approval", approved: true }) }}>
-                  批准
-                </button>
-                <button type="button" className="primary-button" disabled={busy === row.requestId}
-                  onClick={() => { void reply(row, { kind: "approval", approved: false }) }}>
-                  拒絕
-                </button>
-              </span>
+              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload)} busy={busy[row.requestId] === true}
+                onConfirm={(approved) => { void reply(row, { kind: "approval", approved }) }} />
+              {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
             </li>
           )
           : (() => {
@@ -77,25 +75,26 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
                       ? (
                         <>
                           <input
-                            aria-label={`回答 ${prompt}`}
+                            aria-label={`${t("回答")} ${prompt}`}
                             value={answers[row.requestId] ?? ""}
                             onChange={(event) => {
                               setAnswers((current) => ({ ...current, [row.requestId]: event.target.value }))
                             }}
                           />
-                          <button type="button" className="primary-button" disabled={busy === row.requestId}
+                          <button type="button" className="primary-button" disabled={busy[row.requestId] === true || !(answers[row.requestId] ?? "").trim()}
                             onClick={() => { void reply(row, { kind: "question", answer: answers[row.requestId] ?? "" }) }}>
-                            送出回答
+                            {t("送出回答")}
                           </button>
                         </>
                       )
                       : options.map((option) => (
-                        <button key={option} type="button" className="primary-button" disabled={busy === row.requestId}
+                        <button key={option} type="button" className="primary-button" disabled={busy[row.requestId] === true}
                           onClick={() => { void reply(row, { kind: "question", answer: option }) }}>
                           {option}
                         </button>
                       ))}
                   </span>
+                  {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
                 </li>
               )
             })())}

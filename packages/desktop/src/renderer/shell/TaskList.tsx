@@ -1,4 +1,5 @@
 import type { SessionDashboardResult } from "@i-harness/sdk"
+import { useText } from "../design/i18n.ts"
 
 export interface TaskListProps {
   dashboard: SessionDashboardResult
@@ -8,11 +9,12 @@ export interface TaskListProps {
 
 /** Sessions with only the fields the host actually reported — never invented. */
 export function TaskList({ dashboard, selectedId, onSelect }: TaskListProps) {
+  const t = useText()
   if (dashboard.listingUnavailable === true) {
-    return <p className="notice">無法取得會話列表</p>
+    return <p className="notice">{t("無法取得會話列表")}</p>
   }
   if (dashboard.sessions.length === 0) {
-    return <p className="notice">尚無會話</p>
+    return <p className="notice">{t("尚無會話")}</p>
   }
   return (
     <ul className="session-list">
@@ -24,11 +26,10 @@ export function TaskList({ dashboard, selectedId, onSelect }: TaskListProps) {
             aria-current={row.id === selectedId ? "true" : undefined}
             onClick={() => onSelect(row.id)}
           >
-            <span className="row-label">{row.title ?? row.id}</span>
-            <span className="row-id">{row.id}</span>
+            <span className="row-label">{row.title ?? t("未命名會話")}</span>
             <span className="row-meta">
-              {row.running === true ? "執行中" : row.live ? "已載入" : "未載入"}
-              {row.updatedAt === undefined ? "" : ` · 最後活動 ${new Date(row.updatedAt).toLocaleString()}`}
+              {row.running === true ? t("執行中") : ""}
+              {row.updatedAt === undefined ? "" : ` · ${t("最後活動")} ${new Date(row.updatedAt).toLocaleString()}`}
               {row.turnCount === undefined ? "" : ` · ${row.turnCount} 回合`}
               {row.queued === undefined || row.queued === 0 ? "" : ` · 佇列 ${row.queued}`}
               {row.tasks === undefined || row.tasks === 0 ? "" : ` · 任務 ${row.tasks}`}

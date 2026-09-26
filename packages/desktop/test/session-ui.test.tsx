@@ -17,6 +17,55 @@ function textarea(): HTMLTextAreaElement {
 }
 
 describe("Composer", () => {
+  it("retains a pending send across A to B to A navigation", async () => {
+    let finish!: () => void
+    const onPrompt = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))
+    const view = render(<Composer {...base} canSend onPrompt={onPrompt} />)
+    fireEvent.change(textarea(), { target: { value: "one send" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    view.rerender(<Composer {...base} sessionId="s2" canSend onPrompt={onPrompt} />)
+    view.rerender(<Composer {...base} canSend onPrompt={onPrompt} />)
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(textarea(), { key: "Enter" })
+    expect(onPrompt).toHaveBeenCalledTimes(1)
+    finish()
+    await waitFor(() => expect(textarea().value).toBe(""))
+  })
+  it("sends with Enter but preserves Shift+Enter and IME composition", async () => {
+    const onPrompt = vi.fn(async () => {})
+    render(<Composer {...base} canSend onPrompt={onPrompt} />)
+    fireEvent.change(textarea(), { target: { value: "中文提示" } })
+    fireEvent.keyDown(textarea(), { key: "Enter", shiftKey: true })
+    fireEvent.keyDown(textarea(), { key: "Enter", isComposing: true })
+    expect(onPrompt).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea(), { key: "Enter" })
+    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("中文提示"))
+  })
+
+  it("does not erase edits made while the previous send is pending", async () => {
+    let finish!: () => void
+    render(<Composer {...base} canSend onPrompt={() => new Promise<void>((resolve) => { finish = resolve })} />)
+    fireEvent.change(textarea(), { target: { value: "first prompt" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    fireEvent.change(textarea(), { target: { value: "next draft" } })
+    finish()
+    await waitFor(() => expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false))
+    expect(textarea().value).toBe("next draft")
+    expect(localStorage.getItem("ih:draft:ws-1:s1")).toBe("next draft")
+  })
+
+  it("does not clear another session when the old request finishes", async () => {
+    let finish!: () => void
+    const pending = () => new Promise<void>((resolve) => { finish = resolve })
+    const view = render(<Composer {...base} canSend onPrompt={pending} />)
+    fireEvent.change(textarea(), { target: { value: "first session" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    view.rerender(<Composer {...base} sessionId="s2" canSend onPrompt={async () => {}} />)
+    fireEvent.change(textarea(), { target: { value: "other session draft" } })
+    finish()
+    await waitFor(() => expect(localStorage.getItem("ih:draft:ws-1:s1")).toBeNull())
+    expect(textarea().value).toBe("other session draft")
+  })
   it("disables Send with a reason when the model is unconfigured", () => {
     render(<Composer {...base} canSend={false} sendReason="模型尚未設定" onPrompt={async () => {}} />)
 

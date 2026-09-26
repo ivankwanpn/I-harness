@@ -1,22 +1,18 @@
-import { useRef, useState } from "react"
+import { useRef } from "react"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import Markdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { outcomeLabel, type TimelineRow } from "./project.ts"
-
-const COLLAPSED_OUTPUT_CHARS = 2000
-
-function stringify(output: unknown): string {
-  if (typeof output === "string") return output
-  try {
-    return JSON.stringify(output, null, 2)
-  } catch {
-    return String(output)
-  }
-}
+import { ToolActivity } from "./ToolActivity.tsx"
 
 function RowView({ row }: { row: TimelineRow }) {
-  const [expanded, setExpanded] = useState(false)
   if (row.kind === "message") {
-    return <p className={`timeline-message timeline-${row.role}`}>{row.text}</p>
+    return <div className={`timeline-message timeline-${row.role}`}>
+      {row.role === "assistant" ? <Markdown remarkPlugins={[remarkGfm]} components={{
+        a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
+        img: ({ alt }) => <span className="muted">[圖片：{alt}]</span>,
+      }}>{row.text}</Markdown> : row.text}
+    </div>
   }
   if (row.kind === "outcome") {
     return <p className="timeline-outcome">{outcomeLabel(row.flags)}</p>
@@ -24,25 +20,7 @@ function RowView({ row }: { row: TimelineRow }) {
   if (row.kind === "other") {
     return <p className="timeline-other muted">{row.label}</p>
   }
-  const text = row.output === undefined ? undefined : stringify(row.output)
-  const long = text !== undefined && text.length > COLLAPSED_OUTPUT_CHARS
-  return (
-    <div className="timeline-tool">
-      <span className="row-label">工具：{row.name}</span>
-      {row.output === undefined
-        ? <span className="muted">尚未回報結果</span>
-        : long
-          ? (
-            <span>
-              <button type="button" className="link-button" onClick={() => setExpanded((current) => !current)}>
-                {expanded ? "收合輸出" : `展開輸出（${text!.length} 字元）`}
-              </button>
-              {expanded ? <pre className="tool-output">{text}</pre> : null}
-            </span>
-          )
-          : <pre className="tool-output">{text}</pre>}
-    </div>
-  )
+  return <ToolActivity name={row.name} output={row.output} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
@@ -50,6 +28,7 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const virtualizer = useVirtualizer({
     count: rows.length,
+    getItemKey: (index) => rows[index]!.id,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 56,
     overscan: 8,

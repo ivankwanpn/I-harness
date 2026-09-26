@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
+import { useUiStore } from "../src/renderer/shell/ui-store.ts"
+import { useLocale } from "../src/renderer/design/i18n.ts"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); useUiStore.setState({ reviewOpen: false }); useLocale.getState().setLocale("zh-TW") })
 
 function fakeBridge(): DesktopBridge {
   return {
@@ -39,6 +41,49 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("preserves a draft while a pending request takes over the bottom dock", () => {
+    const conversation = { rows: [], canSend: true, running: true, pending: [], onPrompt: async () => {}, onCancel: vi.fn(), onCancelTask: vi.fn(), onCancelQueue: vi.fn(), onReply: async () => {} }
+    const props = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, selectedSessionId: "dock-test", capabilities: {}, onSelectWorkspace: vi.fn(), onSelectSession: vi.fn() }
+    const view = render(<Workbench {...props} conversation={conversation} />)
+    fireEvent.change(screen.getByRole("textbox", { name: "提示" }), { target: { value: "保留此草稿" } })
+    view.rerender(<Workbench {...props} conversation={{ ...conversation, pending: [{ requestId: "dock-approval", sessionId: "dock-test", kind: "approval", payload: { name: "write" }, openedAt: 1 }] }} />)
+    expect(screen.queryByRole("textbox", { name: "提示" })).toBeNull()
+    expect(screen.getByRole("button", { name: "確認" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "停止" })).toBeTruthy()
+    view.rerender(<Workbench {...props} conversation={conversation} />)
+    expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe("保留此草稿")
+  })
+  it.each(["existing", "new"])("returns from Memory when opening a %s conversation", async (mode) => {
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "desktop/memory/state" ? { enabled: false }
+      : request.kind === "desktop/memory/list" ? { notes: [] } : { sessionId: "created" })
+    const onSelectSession = vi.fn()
+    render(<Workbench bridge={bridge} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id}
+      dashboard={{ sessions: [{ id: "existing", title: "既有會話", live: false }] }}
+      capabilities={{ "desktop-memory": ["1"], "session-create": ["1"] }}
+      onSelectWorkspace={() => {}} onSelectSession={onSelectSession} />)
+    fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
+    expect(await screen.findByRole("region", { name: "工作區記憶" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
+    await waitFor(() => expect(screen.queryByRole("region", { name: "工作區記憶" })).toBeNull())
+    expect(onSelectSession).toHaveBeenCalledWith(mode === "existing" ? "existing" : "created")
+  })
+  it("switches shell language while preserving workspace navigation", () => {
+    render(<Harness dashboard={{ sessions: [] }} />)
+    fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
+    expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "Bring your ideas to life" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "workspace" })).toBeTruthy()
+    expect(document.documentElement.lang).toBe("en")
+  })
+  it("keeps review closed until requested and allows closing it", () => {
+    render(<Harness dashboard={{ sessions: [] }} />)
+    expect(screen.queryByRole("complementary", { name: "成果檢查" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "成果檢查" }))
+    expect(screen.getByRole("complementary", { name: "成果檢查" })).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "成果檢查" }))
+    expect(screen.queryByRole("complementary", { name: "成果檢查" })).toBeNull()
+  })
   it("says the session list is unavailable instead of showing zero sessions", () => {
     render(<Harness dashboard={{ sessions: [], listingUnavailable: true }} />)
 
@@ -64,9 +109,9 @@ describe("Desktop workbench shell", () => {
     )
 
     expect(screen.getByTestId("session-header").textContent).toContain("尚未選擇會話")
-    fireEvent.click(screen.getByRole("button", { name: /session-b/ }))
+    fireEvent.click(screen.getByRole("button", { name: /第二個/ }))
 
-    expect(screen.getByTestId("session-header").textContent).toContain("session-b")
+    expect(screen.getByTestId("session-header").textContent).toContain("第二個")
     expect(screen.getByTestId("session-announcer").textContent).toContain("session-b")
   })
 

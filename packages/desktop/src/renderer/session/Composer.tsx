@@ -1,7 +1,18 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
+import { ArrowUp, Square } from "lucide-react"
+import { useText } from "../design/i18n.ts"
 
 const DRAFT_LIMIT_BYTES = 32 * 1024
 const memoryDrafts = new Map<string, string>()
+type SendState = { sending: boolean; error?: string }
+const idleSend: SendState = { sending: false }
+const sends = new Map<string, SendState>()
+const sendListeners = new Set<() => void>()
+function publishSend(key: string, state: SendState) {
+  if (state === idleSend) sends.delete(key)
+  else sends.set(key, state)
+  for (const listener of sendListeners) listener()
+}
 
 /** localStorage can be unavailable (opaque file:// origins); memory keeps the
  * promise of a bounded per-session draft either way. */
@@ -66,7 +77,11 @@ export interface ComposerProps {
   onCancel(): void
 }
 
-export function Composer({
+export function Composer(props: ComposerProps) {
+  return <SessionComposer key={draftKey(props.workspaceId, props.sessionId)} {...props} />
+}
+
+function SessionComposer({
   workspaceId,
   sessionId,
   canSend,
@@ -75,30 +90,33 @@ export function Composer({
   onPrompt,
   onCancel,
 }: ComposerProps) {
+  const t = useText()
+  const key = draftKey(workspaceId, sessionId)
+  const sendState = useSyncExternalStore(
+    (listener) => { sendListeners.add(listener); return () => { sendListeners.delete(listener) } },
+    () => sends.get(key) ?? idleSend,
+  )
   const [value, setValue] = useState(() => readDraft(workspaceId, sessionId))
-  const [error, setError] = useState<string>()
-  const [sending, setSending] = useState(false)
-
+  const { sending, error } = sendState
   useEffect(() => {
-    setValue(readDraft(workspaceId, sessionId))
-    setError(undefined)
-  }, [workspaceId, sessionId])
+    if (!sending) setValue(readDraft(workspaceId, sessionId))
+  }, [sending, workspaceId, sessionId])
 
   async function send(): Promise<void> {
     const text = value
-    if (!canSend || text.trim() === "" || sending) return
-    setSending(true)
-    setError(undefined)
+    if (!canSend || text.trim() === "" || sends.get(key)?.sending) return
+    publishSend(key, { sending: true })
     try {
       await onPrompt(text)
       // Only a confirmed send clears the draft.
-      clearDraft(workspaceId, sessionId)
-      setValue("")
+      if (readDraft(workspaceId, sessionId) === text) {
+        clearDraft(workspaceId, sessionId)
+        setValue("")
+      }
+      publishSend(key, idleSend)
     } catch (reason) {
       // The draft stays; the failure is visible.
-      setError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      setSending(false)
+      publishSend(key, { sending: false, error: reason instanceof Error ? reason.message : String(reason) })
     }
   }
 
@@ -111,23 +129,29 @@ export function Composer({
       }}
     >
       <textarea
-        aria-label="提示"
+        aria-label={t("提示")}
         className="composer-input"
         rows={3}
         value={value}
+        onKeyDown={(event) => {
+          if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.keyCode === 229) return
+          event.preventDefault()
+          void send()
+        }}
         onChange={(event) => {
           const next = boundedDraft(event.target.value)
           setValue(next)
           writeDraft(workspaceId, sessionId, next)
         }}
-        placeholder={canSend ? "輸入提示…" : (sendReason ?? "目前無法送出")}
+        placeholder={canSend ? t("輸入提示…") : (sendReason ?? t("目前無法送出"))}
       />
       <div className="composer-actions">
-        <button type="submit" className="primary-button" disabled={!canSend || sending || value.trim() === ""}>
-          送出
+        <span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span>
+        <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || value.trim() === ""}>
+          <ArrowUp size={18} />
         </button>
-        <button type="button" className="primary-button" disabled={!running} onClick={onCancel}>
-          停止
+        <button type="button" className="icon-button" aria-label={t("停止")} title={t("停止")} disabled={!running} onClick={onCancel}>
+          <Square size={15} />
         </button>
         {canSend || sendReason === undefined ? null : <span className="muted">{sendReason}</span>}
         {error === undefined ? null : <span className="error-text">{error}</span>}

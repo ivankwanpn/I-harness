@@ -1,0 +1,47 @@
+import { create } from "zustand"
+
+export type Locale = "zh-TW" | "en"
+const english = {
+  "待人處理": "Needs your attention", "回答": "Answer", "送出回答": "Send answer",
+  "尚未回報結果": "Awaiting result", "已收到結果": "Result received", "工具詳情": "Tool details",
+  "需要你的確認": "Your confirmation is needed", "選擇回覆": "Choose a response", "批准": "Allow", "拒絕": "Deny",
+  "僅允許這一次": "Only this time", "不執行此操作": "Do not perform this action", "選擇後按確認送出": "Choose an option, then confirm",
+  "正在送出…": "Submitting…", "確認": "Confirm",
+  "工作區記憶": "Workspace memory", "啟用工作區記憶": "Enable workspace memory",
+  "筆記保存在此工作區，可供不同會話查找。目前不會自動生成記憶。": "Notes are stored in this workspace for recall across conversations. Automatic memory generation is not available.",
+  "搜尋筆記": "Search notes", "搜尋": "Search", "全部筆記": "All notes", "正在讀取…": "Loading…",
+  "最多顯示 100 筆；可搜尋其他筆記。": "Showing up to 100 notes. Search to find more.",
+  "沒有符合的筆記": "No matching notes", "新增筆記": "New note", "標題": "Title", "內容": "Content", "儲存筆記": "Save note",
+  "刪除筆記": "Delete note", "確認刪除此筆記": "Confirm deletion", "取消": "Cancel", "返回會話": "Back to conversation",
+  "啟用記憶後才可新增筆記；現有筆記仍可閱讀。": "Enable memory to add notes. Existing notes remain readable.",
+  "Enter 送出，Shift+Enter 換行": "Enter to send, Shift+Enter for a new line",
+  "工作區": "Workspaces", "新增會話": "New conversation", "開啟工作區": "Open workspace",
+  "尚未開啟工作區": "No workspace open", "尚未選擇會話": "No conversation selected",
+  "未命名會話": "Untitled conversation", "成果檢查": "Review", "會話": "Conversation",
+  "今天想完成甚麼？": "What would you like to work on?", "描述你的目標，從這個工作區開始。": "Describe your goal and start in this workspace.",
+  "讓想法成為成果": "Bring your ideas to life", "選擇本機資料夾，開始你的第一個任務。": "Choose a local folder to start your first task.",
+  "延續左側的會話，或開始一項新任務。": "Continue a conversation in the sidebar or start a new task.",
+  "選擇資料夾": "Choose folder", "開始新任務": "Start a new task", "等待工作區連線": "Waiting for workspace",
+  "選擇工作區以檢查檔案變動。": "Choose a workspace to review file changes.", "重試": "Retry",
+  "無法取得會話列表": "Conversation list unavailable", "尚無會話": "No conversations yet",
+  "執行中": "Running", "最後活動": "Last active", "沙箱": "Sandbox", "唯讀": "Read only",
+  "可寫入工作區": "Workspace write", "完整存取": "Full access",
+  "提示": "Prompt", "輸入提示…": "Describe a task…", "目前無法送出": "Cannot send right now",
+  "送出": "Send", "停止": "Stop", "語言": "Language",
+} as const
+export type Message = keyof typeof english
+function initialLocale(): Locale {
+  try { return localStorage.getItem("ih:locale") === "en" ? "en" : "zh-TW" } catch { return "zh-TW" }
+}
+export const useLocale = create<{ locale: Locale; setLocale(locale: Locale): void }>((set) => ({
+  locale: initialLocale(),
+  setLocale: (locale) => {
+    try { localStorage.setItem("ih:locale", locale) } catch { /* Preference remains usable in memory. */ }
+    document.documentElement.lang = locale
+    set({ locale })
+  },
+}))
+export function useText(): (message: Message) => string {
+  const locale = useLocale((state) => state.locale)
+  return (message) => locale === "en" ? english[message] : message
+}

@@ -1,4 +1,8 @@
 import { useState } from "react"
+import { PanelRight, Plus, FolderOpen } from "lucide-react"
+import { useUiStore } from "./ui-store.ts"
+import { useText, type Message } from "../design/i18n.ts"
+import { MemoryPane } from "../memory/MemoryPane.tsx"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
@@ -57,7 +61,7 @@ export interface WorkbenchProps {
   onSessionsChanged?(): void
 }
 
-const SANDBOX_LABELS: Record<SandboxState["mode"], string> = {
+const SANDBOX_LABELS: Record<SandboxState["mode"], Message> = {
   "read-only": "唯讀",
   "workspace-write": "可寫入工作區",
   "danger-full-access": "完整存取",
@@ -80,44 +84,52 @@ export function Workbench({
   onRetry,
   onOpenWorkspace,
 }: WorkbenchProps) {
+  const t = useText()
   const [createError, setCreateError] = useState<string>()
+  const [creating, setCreating] = useState(false)
+  const [memoryOpen, setMemoryOpen] = useState(false)
+  const reviewOpen = useUiStore((state) => state.reviewOpen)
+  const toggleReview = useUiStore((state) => state.toggleReview)
+  const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
   async function createSession(): Promise<void> {
-    if (selectedWorkspaceId === undefined) return
+    if (selectedWorkspaceId === undefined || creating) return
+    setCreating(true)
     setCreateError(undefined)
     try {
       const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId })
       const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
-      if (typeof sessionId === "string") onSelectSession(sessionId)
+      if (typeof sessionId === "string") { setMemoryOpen(false); onSelectSession(sessionId) }
       onSessionsChanged?.()
     } catch (reason) {
       setCreateError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setCreating(false)
     }
   }
 
   return (
-    <div className="workbench">
+    <div className={reviewOpen ? "workbench review-open" : "workbench"}>
       <WorkspaceSidebar
         workspaces={workspaces}
         selectedId={selectedWorkspaceId}
         onSelect={onSelectWorkspace}
         onOpen={() => onOpenWorkspace?.()}
-      />
+        onCreate={() => { void createSession() }}
+        canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
+      >
+        {dashboard === undefined ? null : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { setMemoryOpen(false); onSelectSession(id) }} />}
+      </WorkspaceSidebar>
       <main className="center-pane">
         <header className="session-header" data-testid="session-header">
-          <button
-            type="button"
-            className="primary-button"
-            disabled={!canCreate}
-            title={canCreate ? "建立新會話" : "此宿主未提供建立會話能力"}
-            onClick={() => { void createSession() }}
-          >
-            新增會話
-          </button>
           {selectedSessionId === undefined
-            ? <span className="muted">尚未選擇會話</span>
-            : <span>會話 <span className="session-header-id">{selectedSessionId}</span></span>}
+            ? <span className="muted">{t("尚未選擇會話")}</span>
+            : <span className="header-title">{sessionTitle}</span>}
+          <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={reviewOpen} onClick={toggleReview}>
+            <PanelRight size={18} />
+          </button>
+          {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setMemoryOpen((open) => !open)}>{t(memoryOpen ? "返回會話" : "工作區記憶")}</button> : null}
         </header>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
           {selectedSessionId === undefined ? "" : `已選擇會話 ${selectedSessionId}`}
@@ -128,17 +140,22 @@ export function Workbench({
             <p className="notice error-text">
               {error}
               {onRetry === undefined ? null : (
-                <button type="button" className="link-button" onClick={onRetry}>重試</button>
+                <button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button>
               )}
             </p>
           )}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
-        <section className="session-body" aria-label="會話">
+        {memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>
-                <Timeline rows={conversation.rows} />
-                <PendingPanel pending={conversation.pending} onReply={conversation.onReply} />
+                {conversation.rows.length === 0
+                  ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
+                  : <Timeline rows={conversation.rows} />}
+                <div className="conversation-dock">
+                <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} pending={conversation.pending} onReply={conversation.onReply} />
+                {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
+                <div hidden={conversation.pending.length > 0}>
                 <Composer
                   workspaceId={selectedWorkspaceId}
                   sessionId={selectedSessionId}
@@ -148,16 +165,27 @@ export function Workbench({
                   onPrompt={conversation.onPrompt}
                   onCancel={conversation.onCancel}
                 />
+                </div>
+                </div>
               </>
             )
-            : dashboard === undefined
-              ? <p className="notice">正在載入會話…</p>
-              : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={onSelectSession} />}
-        </section>
+            : <div className="empty-conversation">
+                <span className="welcome-mark">I</span>
+                <h1>{t("讓想法成為成果")}</h1>
+                <p>{t(selectedWorkspaceId === undefined ? "選擇本機資料夾，開始你的第一個任務。" : "延續左側的會話，或開始一項新任務。")}</p>
+                <button type="button" className="welcome-action" disabled={selectedWorkspaceId !== undefined && (!canCreate || creating)} onClick={() => selectedWorkspaceId === undefined ? onOpenWorkspace?.() : void createSession()}>
+                  {selectedWorkspaceId === undefined ? <FolderOpen size={17} /> : <Plus size={17} />}
+                  {t(selectedWorkspaceId === undefined ? "選擇資料夾" : "開始新任務")}
+                </button>
+              </div>}
+        </section>}
+        <footer className="workspace-status">
+          {sandbox === undefined ? t("等待工作區連線") : `${t("沙箱")} · ${t(SANDBOX_LABELS[sandbox.mode])}`}
+        </footer>
       </main>
-      <aside className="review-pane" aria-label="成果檢查">
-        <h2 className="review-title">成果檢查</h2>
-        {review === undefined ? null : (
+      {reviewOpen ? <aside className="review-pane" aria-label={t("成果檢查")}>
+        <h2 className="review-title">{t("成果檢查")}</h2>
+        {review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
             changes={review.changes}
             error={review.error}
@@ -177,14 +205,8 @@ export function Workbench({
             onCancelQueue={conversation.onCancelQueue}
           />
         )}
-        <p className="sandbox-row">
-          沙箱：
-          {sandbox === undefined
-            ? <span className="muted">此宿主未回報</span>
-            : <span>{SANDBOX_LABELS[sandbox.mode]}（{sandbox.source}，已接線）</span>}
-        </p>
-        {review === undefined ? <p className="notice">逐檔變動與檔案預覽會在成果檢查契約接通後出現。</p> : null}
-      </aside>
+        {review === undefined || selectedWorkspaceId === undefined ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
+      </aside> : null}
     </div>
   )
 }

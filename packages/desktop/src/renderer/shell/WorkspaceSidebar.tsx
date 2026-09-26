@@ -1,21 +1,32 @@
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
+import type { ReactNode } from "react"
+import { FolderOpen, Plus, ChevronDown } from "lucide-react"
+import { useLocale, useText } from "../design/i18n.ts"
 
 export interface WorkspaceSidebarProps {
   workspaces: WorkspaceEntry[]
   selectedId?: string
   onSelect(workspaceId: string): void
   onOpen(): void
+  onCreate?(): void
+  canCreate?: boolean
+  children?: ReactNode
 }
 
-export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen }: WorkspaceSidebarProps) {
+export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onCreate, canCreate, children }: WorkspaceSidebarProps) {
+  const t = useText()
+  const locale = useLocale((state) => state.locale)
+  const setLocale = useLocale((state) => state.setLocale)
   return (
-    <nav className="sidebar" aria-label="工作區">
-      <h2 className="sidebar-title">工作區</h2>
+    <nav className="sidebar" aria-label={t("工作區")}>
+      <div className="brand">I-harness <span>Desktop</span></div>
+      <button type="button" className="sidebar-new" disabled={!canCreate} onClick={onCreate}><Plus size={18} />{t("新增會話")}</button>
+      <h2 className="sidebar-title">{t("工作區")}</h2>
       <button type="button" className="primary-button sidebar-open" onClick={onOpen}>
-        開啟工作區
+        <FolderOpen size={16} />{t("開啟工作區")}
       </button>
       {workspaces.length === 0 ? (
-        <p className="notice">尚未開啟工作區</p>
+        <p className="notice">{t("尚未開啟工作區")}</p>
       ) : (
         <ul className="sidebar-list">
           {workspaces.map((workspace) => (
@@ -26,13 +37,18 @@ export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen }: W
                 aria-current={workspace.id === selectedId ? "true" : undefined}
                 onClick={() => onSelect(workspace.id)}
               >
-                <span className="row-label">{workspace.label}</span>
-                <span className="row-path" title={workspace.path}>{workspace.path}</span>
+                <span className="workspace-label" title={workspace.path}><ChevronDown size={14} /><span className="row-label">{workspace.label}</span></span>
               </button>
+              {workspace.id === selectedId ? children : null}
             </li>
           ))}
         </ul>
       )}
+      <div className="sidebar-footer">
+        <label>{t("語言")}<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}>
+          <option value="zh-TW">繁體中文</option><option value="en">English</option>
+        </select></label>
+      </div>
     </nav>
   )
 }

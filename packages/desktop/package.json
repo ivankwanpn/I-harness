@@ -14,12 +14,15 @@
     "dist": "electron-vite build && node scripts/build-gateway.mjs && node scripts/package-app.mjs"
   },
   "dependencies": {
-    "@i-harness/sdk": "workspace:*",
     "@i-harness/desktop-gateway": "workspace:*",
+    "@i-harness/sdk": "workspace:*",
     "@tanstack/react-virtual": "3.14.13",
     "lucide-react": "0.469.0",
     "react": "19.1.1",
-    "react-dom": "19.1.1"
+    "react-dom": "19.1.1",
+    "react-markdown": "10.1.0",
+    "remark-gfm": "4.0.1",
+    "zustand": "5.0.8"
   },
   "devDependencies": {
     "@testing-library/react": "16.3.0",
