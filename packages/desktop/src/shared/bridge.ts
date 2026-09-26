@@ -6,6 +6,11 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "browser/list" | "browser/open" | "browser/hide"; workspaceId: string }
+  | { kind: "browser/close"; workspaceId: string; id: string }
+  | { kind: "browser/navigate"; workspaceId: string; id: string; url: string }
+  | { kind: "browser/action"; workspaceId: string; id: string; action: "back" | "forward" | "reload" | "stop" }
+  | { kind: "browser/show"; workspaceId: string; id: string; bounds: { x: number; y: number; width: number; height: number } }
   | { kind: "desktop/terminal/list" | "desktop/terminal/open"; workspaceId: string }
   | { kind: "desktop/terminal/close"; workspaceId: string; id: string }
   | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }

@@ -6,6 +6,7 @@ import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
 import { createLocalPreferences } from "./local-preferences.ts"
 import { attachNativeWindow } from "./native-window.ts"
+import { createBrowserSurface } from "./browser-surface.ts"
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
@@ -35,10 +36,12 @@ app.whenReady().then(() => {
   const openWindow = (): void => {
     const window = createDesktopWindow(localPreferences.get())
     const native = attachNativeWindow(window, localPreferences)
+    const browser = createBrowserSurface(window)
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
       runtimes: manager,
       native,
+      browser,
       pickFolder: async () => {
         const result = await dialog.showOpenDialog(window, { properties: ["openDirectory"] })
         return result.canceled ? undefined : result.filePaths[0]

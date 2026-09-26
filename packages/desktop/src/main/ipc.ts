@@ -4,6 +4,7 @@ import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import { contextRequestParams } from "./context-requests.ts"
 import type { attachNativeWindow } from "./native-window.ts"
+import type { createBrowserSurface } from "./browser-surface.ts"
 
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
@@ -11,6 +12,7 @@ export interface DesktopIpcDependencies {
   /** Native folder picker; injected so the dispatcher stays testable. */
   pickFolder?: () => Promise<string | undefined>
   native?: ReturnType<typeof attachNativeWindow>
+  browser?: ReturnType<typeof createBrowserSurface>
 }
 
 /**
@@ -28,6 +30,12 @@ export async function dispatchDesktopRequest(
 ): Promise<unknown> {
   const value = requireRecord(request)
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind.startsWith("browser/")) {
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    if (!dependencies.catalog.get(workspaceId)) throw new Error("Unknown browser workspace")
+    if (!dependencies.browser) throw new Error("Browser surface unavailable")
+    return dependencies.browser.request(workspaceId, value)
+  }
   const contextParams = contextRequestParams(value)
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)

@@ -51,6 +51,16 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("keeps native browser operations outside the SDK and checks workspace identity", async () => {
+    const f = fixture()
+    const request = vi.fn(() => [])
+    f.dependencies.browser = { request, dispose: vi.fn() }
+    await dispatchDesktopRequest({ kind: "browser/list", workspaceId: ENTRY.id }, f.dependencies)
+    expect(request).toHaveBeenCalledWith(ENTRY.id, { kind: "browser/list", workspaceId: ENTRY.id })
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({ kind: "browser/list", workspaceId: "unknown" }, f.dependencies)).rejects.toThrow("Unknown browser workspace")
+    expect(request).toHaveBeenCalledTimes(1)
+  })
   it("forwards a scoped provider command and refuses unknown operations", async () => {
     const f = fixture()
     const command = { action: "model/edit", id: "route", model: "model", fields: { contextWindow: 272000 } }
