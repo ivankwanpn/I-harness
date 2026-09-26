@@ -58,7 +58,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const operations = useSessionOperation(bridge)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true
-  const [connection, setConnection] = useState<"online" | "offline">("online")
+  const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("online")
   const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
   const pending = interactions.pending
   const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
@@ -165,6 +165,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     let active = true
     setCapabilities({})
     setSandbox(undefined)
+    setConnection((current) => current === "reconnecting" ? "reconnecting" : "connecting")
     void (async () => {
       try {
         const [dashboardResult, capabilitiesResult, sandboxResult] = await Promise.all([
@@ -176,10 +177,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setDashboard(dashboardResult as SessionDashboardResult)
         setCapabilities((capabilitiesResult ?? {}) as Record<string, string[]>)
         setSandbox(sandboxResult as SandboxState | undefined)
+        setConnection("online")
         setError(undefined)
-        if ((capabilitiesResult as Record<string, string[]> | undefined)?.["desktop-interaction"]?.includes("1")) await interactions.refresh()
+        if ((capabilitiesResult as Record<string, string[]> | undefined)?.["desktop-interaction"]?.includes("1")) {
+          void interactions.refresh().catch((reason: unknown) => { if (active) setError(String(reason)) })
+        }
       } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : String(reason))
+        if (active) { setConnection("offline"); setError(reason instanceof Error ? reason.message : String(reason)) }
       }
     })()
     return () => { active = false }
@@ -287,7 +291,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setTasks(undefined)
     setTaskError(undefined)
     setRunning(false)
-    setConnection("online")
     chunkBuffer.current.length = 0
     void (async () => {
       try {
@@ -391,6 +394,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       error={error}
       selectedWorkspaceId={selectedWorkspaceId}
       selectedSessionId={selectedSessionId}
+      connection={selectedWorkspaceId ? connection : undefined}
       conversation={conversation}
       review={{
         changes: reviewChanges,
@@ -404,9 +408,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
       }}
       onSelectWorkspace={(workspaceId) => {
-        setSelectedWorkspaceId(workspaceId)
+        if (workspaceId !== selectedWorkspaceId) {
+          setConnection("connecting")
+          setSelectedWorkspaceId(workspaceId)
+          setDashboard(undefined)
+        }
         setSelectedSessionId(undefined)
-        setDashboard(undefined)
       }}
       onSelectSession={setSelectedSessionId}
       onOpenWorkspace={() => {
@@ -417,6 +424,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             const entry = opened as WorkspaceEntry
             await refreshWorkspaces()
             setSelectedWorkspaceId(entry.id)
+            if (entry.id !== selectedWorkspaceId) setConnection("connecting")
             setSelectedSessionId(undefined)
           } catch (reason) {
             setError(reason instanceof Error ? reason.message : String(reason))
@@ -424,6 +432,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         })()
       }}
       onRetry={() => {
+        setConnection("reconnecting")
         setError(undefined)
         setRetryNonce((current) => current + 1)
       }}

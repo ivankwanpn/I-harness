@@ -10,12 +10,12 @@ User authorized completing all feasible UI and source reuse against existing bac
 - Browser visual acceptance deferred by user after persistent tool permission block. Do not bypass.
 
 ## Execution checklist
-- [ ] Review file rows/detail navigation and workspace shell refinement.
+- [x] Review file rows/detail navigation and workspace shell refinement (code/tests; visuals deferred).
 - [x] Session search and manual compaction using approved bridge (automated verification; visual acceptance deferred).
 - [x] Unified local settings surface and memory navigation (appearance/language/text/sidebar/review; native preferences follow).
-- [ ] Full zh-TW/en strings for supported user flows.
+- [x] Typed zh-TW/en strings for supported flows, saved/system locale and preserved backend content.
 - [x] Native window controls/local geometry without backend logic (automated verification; visual acceptance deferred).
-- [ ] Long-session behavior, async selection isolation and narrow layout verification.
+- [x] Long-session behavior, async selection isolation and narrow layout automated checks/profile; real renderer geometry/heap deferred.
 - [x] Capability inventory: provider/plugin/terminal/browser/quota gaps accurately documented outside repo in desktop-audit/capability-map.md.
 - [ ] Final test/typecheck/build, independent reviews and local commits.
 
@@ -38,3 +38,5 @@ Responsive/read pass: below 760px sidebar becomes a focus-contained drawer with 
 Attention/review pass: workspace pending snapshots merge with live changes and closed tombstones, feeding sidebar attention counts. Questions now require explicit submission and preserve failed answers. Diff gutters derive real old/new numbers from unified hunks; metadata has none. Relative activity replaces verbose dates. Full139 tests passed before final source documentation. Remaining: UI-store consolidation, event labels, performance/profile/package gates and final code-scope audit.
 
 Consolidation/verification pass: one Zustand UI store now owns locale, appearance, route and pane state, preserving old preference keys. Timeline handles interleaved final messages without duplicated stream rows, separates incomplete streams between turns, hides internal user messages/diagnostic events and localizes activities. New regression tests reproduced all three prior projection failures. Full verify:all passed (3344 passed,9 skipped,70/70projects,typecheck,E2E,reachability). Performance report and packaged-gateway smoke evidence are outside repo under desktop-audit. Portable ZIP rebuilt; isolated copy under playground confirmed SDK3, wired read-only sandbox, create/history, memory state, licenses and clean exit without model calls. Still pending: final frame hierarchy/alignment audit and any remaining UI-code gaps; screenshot/runtime geometry acceptance remains deferred by user.
+
+Final code audit: integrated one header containing task/route title, review/actions and native controls; added memory excerpts, persistent header connection status with real connecting/retry lifecycle, reduced-motion CSS and saved/system locale fallback. Latest Desktop146tests,typecheck/build pass. The second full verification hit a pre-existing CLI Windows temp-directory cleanup EPERM; its isolated case passed. Final full verification and refreshed packaging will be recorded without hiding that failure. No new backend features added.

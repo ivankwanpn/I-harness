@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type CSSProperties } from "react"
-import { PanelLeft, PanelRight, Plus, FolderOpen } from "lucide-react"
+import { Brain, Search, PanelLeft, PanelRight, Plus, FolderOpen } from "lucide-react"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
@@ -61,6 +61,7 @@ export interface WorkbenchProps {
   workspaces: WorkspaceEntry[]
   dashboard?: SessionDashboardResult
   attentionBySession?: Record<string, number>
+  connection?: "online" | "offline" | "connecting" | "reconnecting"
   capabilities: Record<string, string[]>
   sandbox?: SandboxState
   error?: string
@@ -86,6 +87,7 @@ export function Workbench({
   workspaces,
   dashboard,
   attentionBySession,
+  connection,
   capabilities,
   sandbox,
   error,
@@ -145,7 +147,6 @@ export function Workbench({
   }
 
   return (
-    <><TitleBar bridge={bridge} />
     <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>
       {drawer.narrow && drawer.open ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={() => drawer.setOpen(false)} /> : null}
       <div ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : "sidebar-container"} hidden={drawer.narrow ? !drawer.open : sidebarCollapsed} role={drawer.narrow && drawer.open ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open ? true : undefined} aria-label={drawer.narrow ? t("工作區") : undefined}>
@@ -163,17 +164,15 @@ export function Workbench({
       </WorkspaceSidebar>
       </div>
       <main className="center-pane">
-        <header className="session-header" data-testid="session-header">
-          <button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={() => drawer.narrow ? drawer.setOpen(!drawer.open) : updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>
-          {selectedSessionId === undefined
-            ? <span className="muted">{t("尚未選擇會話")}</span>
-            : <span className="header-title">{sessionTitle}</span>}
+        <TitleBar bridge={bridge} title={surface === "settings" ? t("設定") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? t("尚未選擇會話") : sessionTitle}
+          leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={() => drawer.narrow ? drawer.setOpen(!drawer.open) : updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>}>
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={reviewOpen} onClick={toggleReview}>
             <PanelRight size={18} />
           </button>
-          {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setMemoryOpen((open) => !open)}>{t(memoryOpen ? "返回會話" : "工作區記憶")}</button> : null}
-          {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setSurface(surface === "search" ? "conversation" : "search")}>{t(surface === "search" ? "返回會話" : "搜尋會話")}</button> : null}
-        </header>
+          {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "連線中…")}</span> : null}
+          {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(memoryOpen ? "返回會話" : "工作區記憶")} title={t(memoryOpen ? "返回會話" : "工作區記憶")} onClick={() => setMemoryOpen((open) => !open)}><Brain size={16} /><span className="header-action-label">{t(memoryOpen ? "返回會話" : "工作區記憶")}</span></button> : null}
+          {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}><Search size={16} /><span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
+        </TitleBar>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
           {selectedSessionId === undefined ? "" : t("已選擇會話 {title}", { title: sessionTitle })}
         </p>
@@ -260,6 +259,6 @@ export function Workbench({
         {workPaneTab === "tasks" && conversation === undefined ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         </div>
       </aside> : null}
-    </div></>
+    </div>
   )
 }

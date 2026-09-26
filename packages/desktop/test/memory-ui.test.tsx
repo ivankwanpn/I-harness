@@ -12,6 +12,7 @@ function fixture(enabled = false) {
       case "desktop/memory/list": return { notes: [{ id: "n1", title: "專案偏好" }] }
       case "desktop/memory/read": return { note: { id: "n1", title: "專案偏好", text: "使用繁體中文" } }
       case "desktop/memory/search": return { hits: [] }
+      case "desktop/memory/summary": return { text: "筆記擷取內容" }
       case "desktop/memory/configure": return { enabled: request.enabled }
       default: return {}
     }
@@ -22,6 +23,13 @@ function fixture(enabled = false) {
 }
 
 describe("workspace memory", () => {
+  it("reads an existing summary through the scoped memory endpoint", async () => {
+    const request = fixture()
+    await screen.findByRole("button", { name: "專案偏好" })
+    fireEvent.click(screen.getByRole("button", { name: "查看筆記摘要" }))
+    expect(await screen.findByText("筆記擷取內容")).toBeTruthy()
+    expect(request).toHaveBeenCalledWith({ kind: "desktop/memory/summary", workspaceId: "playground" })
+  })
   it("reads existing notes while disabled and scopes all requests", async () => {
     const request = fixture()
     await screen.findByRole("button", { name: "專案偏好" })

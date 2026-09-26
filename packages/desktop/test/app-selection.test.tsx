@@ -80,3 +80,16 @@ it("does not carry an outstanding prompt into another session's running state", 
   await act(async () => { old.resolve({}); await prompt })
   expect(captured.props!.conversation!.running).toBe(false)
 })
+
+it("reports real connection bootstrap failure and a successful retry", async () => {
+  let fail = true
+  fixture((request) => request.kind === "desktop/capabilities" ? fail ? Promise.reject(new Error("offline")) : Promise.resolve({}) : undefined)
+  await waitFor(() => expect(captured.props?.connection).toBe("offline"))
+  fail = false
+  act(() => captured.props!.onRetry!())
+  expect(captured.props!.connection).toBe("reconnecting")
+  await waitFor(() => expect(captured.props!.connection).toBe("online"))
+  act(() => captured.props!.onSelectWorkspace("w1"))
+  expect(captured.props!.connection).toBe("online")
+  expect(captured.props!.dashboard).toBeDefined()
+})

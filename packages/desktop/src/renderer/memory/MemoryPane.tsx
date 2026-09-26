@@ -16,6 +16,7 @@ export function MemoryPane({ bridge, workspaceId }: { bridge: DesktopBridge; wor
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string>()
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [summary, setSummary] = useState<string>()
   const lock = useRef(false)
 
   useEffect(() => {
@@ -46,6 +47,7 @@ export function MemoryPane({ bridge, workspaceId }: { bridge: DesktopBridge; wor
     const result = await bridge.request({ kind: "desktop/memory/list", workspaceId, limit: 100 }) as { notes: Note[] }
     setNotes(result.notes)
     setQuery("")
+    setSummary(undefined)
   }
 
   return <section className="memory-pane" aria-label={t("工作區記憶")}>
@@ -67,6 +69,13 @@ export function MemoryPane({ bridge, workspaceId }: { bridge: DesktopBridge; wor
       <button type="button" className="primary-button" disabled={busy} onClick={() => { void run(refresh) }}>{t("全部筆記")}</button>
     </form>
     {busy ? <p role="status" className="muted">{t("正在讀取…")}</p> : null}
+    <div className="memory-summary"><button type="button" className="primary-button" disabled={busy} onClick={() => { void run(async () => {
+      const result = await bridge.request({ kind: "desktop/memory/summary", workspaceId }) as { text: string }
+      setSummary(result.text)
+    }) }}>{t("查看筆記摘要")}</button>
+      <p className="muted">{t("僅擷取已保存筆記，不會呼叫模型。")}</p>
+      {summary === undefined ? null : <pre className="tool-output">{summary || t("沒有可顯示的摘要")}</pre>}
+    </div>
     <div className="memory-columns">
       <div><p className="muted">{t("最多顯示 100 筆；可搜尋其他筆記。")}</p>
         {!busy && notes.length === 0 ? <p className="muted">{t("沒有符合的筆記")}</p> : null}

@@ -1,6 +1,6 @@
 import { create } from "zustand"
+import { resolveLocale, type Locale } from "../design/locale.ts"
 
-export type Locale = "zh-TW" | "en"
 export type Appearance = "dark" | "light" | "system"
 export type Surface = "conversation" | "memory" | "search" | "settings"
 interface Preferences { appearance: Appearance; fontSize: number; sidebarCollapsed: boolean }
@@ -13,7 +13,9 @@ function readPreferences(): Preferences {
   } catch { return defaults }
 }
 function readLocale(): Locale {
-  try { return localStorage.getItem("ih:locale") === "en" ? "en" : "zh-TW" } catch { return "zh-TW" }
+  let saved: string | null = null
+  try { saved = localStorage.getItem("ih:locale") } catch { /* Fall back to the system locale. */ }
+  return resolveLocale(saved, typeof navigator === "undefined" ? [] : navigator.languages ?? [navigator.language])
 }
 
 // UI state only. SDK state remains owned by the renderer data layer.
