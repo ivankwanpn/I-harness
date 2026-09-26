@@ -36,6 +36,29 @@ function fixture() {
 }
 
 describe("Desktop SDK router", () => {
+  it("reserves a session while an asynchronous model switch is pending", async () => {
+    const sent: RpcMessage[] = []
+    let release!: () => void
+    const base = {
+      async handleLine(line: string) {
+        const frame = decodeFrame(line)
+        if (!frame || !("method" in frame)) return null
+        if (frame.method === "initialize") return encodeFrame(makeSuccess(1, {}))
+        if (frame.method === "session/model/set") await new Promise<void>((resolve) => { release = resolve })
+        return null
+      },
+      async close() {},
+    } as SdkServer
+    const router = createDesktopRouter(base, (frame) => sent.push(frame), { compact: async () => ({ compacted: true }) })
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const change = router.handleLine(encodeFrame(makeRequest(2, "session/model/set", { sessionId: "s" })))
+    await Promise.resolve()
+    await router.handleLine(encodeFrame(makeRequest(3, "session/prompt", { sessionId: "s", prompt: "test" })))
+    await router.handleLine(encodeFrame(makeRequest(4, "desktop/session/compact", { sessionId: "s" })))
+    expect(sent).toHaveLength(2)
+    expect(sent.every(isRpcFailure)).toBe(true)
+    release(); await change; await router.close()
+  })
   it("cancels an active SDK prompt before closing", async () => {
     const sent: RpcMessage[] = []
     let releasePrompt = () => {}

@@ -99,6 +99,16 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancelTask(requireNonEmpty(value.sessionId, "sessionId"), requireNonEmpty(value.id, "id"))
     case "session/model/state":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
+    case "session/model/set": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const selection = requireRecord(value.selection)
+      const provider = requireNonEmpty(selection.provider, "provider")
+      const model = requireNonEmpty(selection.model, "model")
+      const protocol = selection.protocol === undefined ? undefined : requireNonEmpty(selection.protocol, "protocol")
+      const reasoningEffort = selection.reasoningEffort === undefined ? undefined : requireNonEmpty(selection.reasoningEffort, "reasoningEffort")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request("session/model/set", { sessionId, selection: { provider, model, ...(protocol ? { protocol } : {}), ...(reasoningEffort ? { reasoningEffort } : {}) } })
+    }
     case "desktop/provider/directory":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
     case "desktop/provider/probe":

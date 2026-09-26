@@ -64,6 +64,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
   const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
+  const modelSwitches = new Map<string, Promise<unknown>>()
 
   return {
     async handleLine(line) {
@@ -81,6 +82,10 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if (!message.method.startsWith("desktop/")) {
         if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
         const scopedSessionId = asRecord(message.params)?.sessionId
+        if (typeof scopedSessionId === "string" && modelSwitches.has(scopedSessionId)
+          && ["session/prompt", "session/model/set", "session/rewind/execute"].includes(message.method)) {
+          send(makeFailure(message.id, INVALID_REQUEST, "session model change is running", { reason: "session_busy" })); return
+        }
         if (message.method === "session/cancel" && typeof scopedSessionId === "string" && compacting.has(scopedSessionId)) {
           compacting.get(scopedSessionId)!.abort()
           send(makeSuccess(message.id, { cancelled: true }))
@@ -89,6 +94,13 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         if ((message.method === "session/model/set" || message.method === "session/rewind/execute")
           && typeof scopedSessionId === "string" && compacting.has(scopedSessionId)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session compaction is running", { reason: "session_busy" }))
+          return
+        }
+        if (message.method === "session/model/set" && typeof scopedSessionId === "string") {
+          if (activePrompts.has(scopedSessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "session is busy", { reason: "session_busy" })); return }
+          const job = Promise.resolve().then(() => base.handleLine(line))
+          modelSwitches.set(scopedSessionId, job)
+          try { await job } finally { modelSwitches.delete(scopedSessionId) }
           return
         }
         if (message.method === "session/prompt") {
@@ -156,7 +168,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           return
         }
         const sessionId = params.sessionId
-        if (activePrompts.has(sessionId) || compacting.has(sessionId)) {
+        if (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId)) {
           send(makeFailure(message.id, INVALID_REQUEST, "session is busy", { reason: "session_busy" }))
           return
         }
@@ -277,6 +289,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if (closed) return
       closed = true
       await probes?.close()
+      await Promise.allSettled(modelSwitches.values())
       for (const controller of compacting.values()) controller.abort()
       for (const sessionId of activePrompts.keys()) {
         const id = `desktop-internal-${randomUUID()}`

@@ -8,7 +8,8 @@ import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
-import { resolveSettingsPath, SettingsStore } from "@i-harness/settings"
+import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
+import { commitModelSwitch } from "./model-switch.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -137,6 +138,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     modelState: async (sessionId) => {
       await coordinator.profile(sessionId)
       return service.modelState(sessionId)
+    },
+    setSessionModel: async (sessionId, selection) => {
+      const { meta } = await coordinator.profile(sessionId)
+      if (selection.protocol !== undefined && !(PROVIDER_PROTOCOLS as readonly string[]).includes(selection.protocol)) throw new Error("Invalid model protocol")
+      const durable = { provider: selection.provider, model: selection.model, ...(selection.reasoningEffort !== undefined ? { reasoningEffort: selection.reasoningEffort } : {}) }
+      const transient = { ...durable, ...(selection.protocol !== undefined ? { protocol: selection.protocol as SettingsProviderProtocol } : {}) }
+      const state = await modelBindingFor(sessionId, { ...meta, modelSelection: transient })
+      if (state.status !== "ready") throw new Error(state.reason)
+      await commitModelSwitch(service, sessionId, state.binding, () => coordinator.updateMeta(sessionId, { modelSelection: durable }))
     },
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
     listSessions: async () => {

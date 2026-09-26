@@ -25,6 +25,8 @@ import { TitleBar } from "./TitleBar.tsx"
 import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
+import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
+import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
 export interface ConversationView {
   rows: TimelineRow[]
@@ -32,6 +34,8 @@ export interface ConversationView {
   sendReason?: string
   running: boolean
   modelLabel?: string
+  modelState?: SessionModelState
+  onSetModel?(selection: SessionModelSelection): Promise<void>
   operation?: SessionOperation
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
@@ -213,6 +217,7 @@ export function Workbench({
                   sendReason={conversation.sendReason}
                   running={conversation.running}
                   modelLabel={conversation.modelLabel}
+                  modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={conversation.onSetModel} /> : undefined}
                   onPrompt={conversation.onPrompt}
                   onCancel={conversation.onCancel}
                 />

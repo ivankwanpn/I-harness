@@ -1,9 +1,11 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
+import type { SessionModelSelection } from "@i-harness/sdk"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }
   | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }
   | { kind: "desktop/provider/probe/cancel"; workspaceId: string; token: string }

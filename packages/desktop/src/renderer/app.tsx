@@ -4,6 +4,7 @@ import type {
   HistoryRange,
   SessionDashboardResult,
   SessionModelState,
+  SessionModelSelection,
   SessionQueueItem,
 } from "@i-harness/sdk"
 import type { SandboxState } from "../main/sdk-runtime.ts"
@@ -64,7 +65,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [running, setRunning] = useState(false)
   const operations = useSessionOperation(bridge)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
-  const sending = operation?.busy === true
+  const sending = operation?.busy === true && operation.kind !== "model"
   const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("online")
   const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
   const pending = interactions.pending
@@ -355,12 +356,20 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: projectTimeline(eventWindow.events),
-        canSend: gate.canSend && !(operation?.kind === "compact" && operation.busy),
+        canSend: gate.canSend && !(operation?.busy && operation.kind !== "prompt"),
         sendReason: operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
+        modelState: model,
+        onSetModel: async (selectionValue: SessionModelSelection) => {
+          const scope = selection.current
+          const result = await operations.changeModel(selectedWorkspaceId, selectedSessionId, selectionValue)
+          if (selection.current !== scope) return
+          setModel(result)
+          void refreshDashboard(selectedWorkspaceId)
+        },
         operation,
-        canCompact: gate.canSend && !running && !sending && !(queue?.length),
+        canCompact: gate.canSend && !running && !operation?.busy && !(queue?.length),
         onCompact: async (instructions?: string): Promise<void> => {
           const scope = selection.current
           await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)

@@ -41,10 +41,12 @@ Discovery checkpoint: read-only probes now use an isolated settings snapshot and
 Ruling: use the existing fs-lock primitive inside provider-runtime instead of a new config package. This serializes cooperating file-runtime users; legacy external writers do not yet participate. Configuration uses a shared global file while sessions are workspace scoped. No OAuth/account usage/reset implementation.
 
 ## Remaining goal checklist
-- [ ] Session model switching: SDK busy/compaction guards, resolution/rebind/persistence consistency, composer picker and stale-navigation tests.
+- [x] Session model switching implementation: SDK busy/compaction guards, resolution/rebind/persistence consistency, composer picker and selection-scope guard. Final integration review remains required.
 - [ ] Session management using existing session packages, with supported rename/archive/fork/rewind contracts and UI.
 - [ ] Plugin/marketplace from existing registry/core-plugin, with install/enable lifecycle and UI.
 - [ ] Interactive terminal from terminal package, bounded output, lifecycle/input/resize, native dependency packaging.
 - [ ] Browser surface with separate documented responsibility and lifecycle; no remote service.
 - [ ] Whole integration review, final gates, rebuilt portable package, external report; pixels remain deferred.
+
+Model switch checkpoint: host injects the existing SDK setSessionModel hook, resolves before rebind, persists provider/model/effort and strips transient protocol. A failed durable save evicts the transient assembly/binding so later reads resolve durable state. Router reserves the session during asynchronous transitions, blocks prompt/compact/second model switches, and drains transitions on close. Rebinding reuses the compaction-signal wrapper. Composer picker fetches routes on demand and uses the same per-session operation lock as prompt/compact; stale selection responses cannot update another session. Tests cover failed-save eviction, busy refusal, gateway restart persistence, explicit picker submission and router reservation; typechecks/build passed. Whole provider review and broader remaining work are still pending.
 

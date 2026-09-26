@@ -1,8 +1,9 @@
 import { useRef, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
+import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
 export interface CompactResult { compacted: boolean; summary?: string; reason?: "summarizer-failed"; reset?: boolean; pruned?: boolean }
-export interface SessionOperation { kind: "prompt" | "compact"; busy: boolean; error?: string; result?: CompactResult }
+export interface SessionOperation { kind: "prompt" | "compact" | "model"; busy: boolean; error?: string; result?: CompactResult }
 export const operationKey = (workspaceId: string, sessionId: string) => JSON.stringify([workspaceId, sessionId])
 
 /** UI request ownership only: execution and compaction belong to the gateway. */
@@ -26,5 +27,19 @@ export function useSessionOperation(bridge: DesktopBridge) {
       throw reason
     } finally { locks.current.delete(key) }
   }
-  return { states, run }
+  async function changeModel(workspaceId: string, sessionId: string, selection: SessionModelSelection) {
+    const key = operationKey(workspaceId, sessionId)
+    if (locks.current.has(key)) throw new Error("Session is busy")
+    locks.current.add(key)
+    setStates((old) => ({ ...old, [key]: { kind: "model", busy: true } }))
+    try {
+      const result = await bridge.request({ kind: "session/model/set", workspaceId, sessionId, selection }) as SessionModelState
+      setStates((old) => ({ ...old, [key]: { kind: "model", busy: false } }))
+      return result
+    } catch (reason) {
+      setStates((old) => ({ ...old, [key]: { kind: "model", busy: false, error: reason instanceof Error ? reason.message : String(reason) } }))
+      throw reason
+    } finally { locks.current.delete(key) }
+  }
+  return { states, run, changeModel }
 }

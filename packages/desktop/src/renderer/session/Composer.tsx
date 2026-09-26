@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react"
 import { ArrowUp, Square } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
@@ -75,6 +75,7 @@ export interface ComposerProps {
   sendReason?: string
   running: boolean
   modelLabel?: string
+  modelControl?: ReactNode
   onPrompt(text: string): Promise<void>
   onCancel(): void
 }
@@ -90,6 +91,7 @@ function SessionComposer({
   sendReason,
   running,
   modelLabel,
+  modelControl,
   onPrompt,
   onCancel,
 }: ComposerProps) {
@@ -148,7 +150,7 @@ function SessionComposer({
         <span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span>
       }
       trailingActions={<>
-        {modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null}
+        {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
         <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || value.trim() === ""}>
           <ArrowUp size={18} />
         </button>
