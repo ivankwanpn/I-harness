@@ -1,0 +1,10 @@
+{
+  "name": "@i-harness/memory",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": { "@i-harness/core-tools": "workspace:*", "@i-harness/diagnostics": "workspace:*" },
+  "devDependencies": { "@i-harness/core-plugin": "workspace:*", "@i-harness/guard-approval": "workspace:*" }
+}

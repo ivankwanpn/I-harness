@@ -1,4 +1,6 @@
 import type { RpcMessage } from "@i-harness/sdk"
+import type { SessionQuery } from "@i-harness/session-query"
+import type { MemoryStore } from "@i-harness/memory"
 import type { InteractionBridge } from "./interaction.ts"
 import type { WorkspaceReview } from "./review.ts"
 
@@ -9,6 +11,9 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  memory?: MemoryStore
+  compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
+  sessionQuery?: SessionQuery
   sandboxState?: () => SandboxState | Promise<SandboxState>
   interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession">>
   review?: WorkspaceReview

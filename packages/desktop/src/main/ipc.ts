@@ -2,6 +2,7 @@ import type { BrowserWindow } from "electron"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest } from "../shared/bridge.ts"
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
+import { contextRequestParams } from "./context-requests.ts"
 
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
@@ -25,6 +26,11 @@ export async function dispatchDesktopRequest(
 ): Promise<unknown> {
   const value = requireRecord(request)
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  const contextParams = contextRequestParams(value)
+  if (contextParams !== undefined) {
+    const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+    return runtime.client.request(value.kind, contextParams, value.kind === "desktop/session/compact" ? 600000 : 30000)
+  }
 
   switch (value.kind as DesktopRequest["kind"]) {
     case "workspace/list":

@@ -4,6 +4,9 @@ import { createCredentialStore } from "@i-harness/credentials"
 import { createProviderRuntime } from "@i-harness/provider-runtime"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
+import { createFileBackedSessionQuery } from "@i-harness/session-query"
+import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
+import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore } from "@i-harness/settings"
@@ -69,15 +72,32 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
     lock: { enabled: true, lockRoot: options.sessionDir },
   })
-  const modelBindingFor: NonNullable<SessionServiceOptions["modelBindingFor"]> = async (_sessionId, meta) => {
+  const compactionSignals = new Map<string, AbortSignal>()
+  const modelBindingFor: NonNullable<SessionServiceOptions["modelBindingFor"]> = async (sessionId, meta) => {
     const state = await runtime.resolveModel(meta?.modelSelection === undefined
       ? {}
       : { sessionSelection: meta.modelSelection })
     if (state.status !== "ready") return state
     const { client, ...binding } = state.binding
-    return { status: "ready", binding: { model: client, ...binding } }
+    return { status: "ready", binding: { ...binding, model: {
+      stream(request) {
+        const compactSignal = compactionSignals.get(sessionId)
+        const signal = compactSignal && request.signal
+          ? AbortSignal.any([compactSignal, request.signal])
+          : compactSignal ?? request.signal
+        signal?.throwIfAborted()
+        return client.stream({ ...request, ...(signal ? { signal } : {}) })
+      },
+    } } }
   }
-  const service = createSessionService({
+  // The derived in-memory search index belongs to this workspace gateway
+  // process. Never call global query cleanup when closing an individual host.
+  const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
+  const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
+  const additionalTools = createMemoryTools(memory, () => memory.enabled())
+  const service: SessionService = createSessionService({
+    additionalTools,
+    sessionQuery,
     workspace: options.workspace,
     sandbox: mode,
     modelPolicy: "required",
@@ -91,6 +111,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    memory,
+    compact: async (sessionId, instructions, signal) => {
+      signal.throwIfAborted()
+      await coordinator.profile(sessionId)
+      const state = service.queueState(sessionId)
+      if (state.running || state.queued > 0) throw new Error("session is busy")
+      compactionSignals.set(sessionId, signal)
+      try {
+        const assembly = await service.assemblyFor(sessionId)
+        signal.throwIfAborted()
+        const result = await assembly.compactNow(instructions)
+        await coordinator.flush(sessionId)
+        return result
+      } finally { compactionSignals.delete(sessionId) }
+    },
+    sessionQuery,
     sandboxState: () => sandboxState,
     interaction,
     review,
@@ -123,6 +159,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       await router.close()
       await review.close()
       await service.close()
+      memory.close()
       await coordinator.close()
     })(),
   }

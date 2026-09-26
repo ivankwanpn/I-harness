@@ -49,6 +49,17 @@ it.each([true, false])("honors Desktop auto-compaction setting %s with the confi
     expect(events.some(e => e.type === "compaction/summary")).toBe(auto)
     expect(calls).toBe(auto ? 2 : 1)
     expect(isRpcSuccess(frames.find(f => "id" in f && f.id === 3))).toBe(true)
+    if (!auto) {
+      await request(5, "desktop/session/compact", { sessionId })
+      const compact = frames.find(f => "id" in f && f.id === 5)
+      expect(isRpcSuccess(compact)).toBe(true)
+      if (!isRpcSuccess(compact)) throw new Error("manual compaction unavailable")
+      expect(compact.result).toMatchObject({ compacted: true })
+      await request(6, "session/history", { sessionId, afterSeq: 0, limit: 200 })
+      const durable = frames.find(f => "id" in f && f.id === 6)
+      if (!isRpcSuccess(durable)) throw new Error("history unavailable")
+      expect((durable.result as { events: { type: string }[] }).events.some(e => e.type === "compaction/summary")).toBe(true)
+    }
   } finally {
     await host?.close()
     server.closeAllConnections()

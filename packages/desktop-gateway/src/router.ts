@@ -13,6 +13,8 @@ import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
 import { randomUUID } from "node:crypto"
+import { memoryRequest } from "./memory-wire.ts"
+import { boundSearchHits } from "./search-bounds.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -23,6 +25,9 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
+    if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
+    if (handlers.sessionQuery !== undefined) capabilities["desktop-session-search"] = ["1"]
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
     if (handlers.interaction !== undefined) capabilities["desktop-interaction"] = ["1"]
     if (handlers.review !== undefined) capabilities["desktop-review"] = ["1"]
@@ -53,6 +58,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   let initialized = false
   let closed = false
   const activePrompts = new Set<string>()
+  const compacting = new Map<string, AbortController>()
+  const compactJobs = new Set<Promise<unknown>>()
 
   return {
     async handleLine(line) {
@@ -68,8 +75,24 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
+        if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
+        const scopedSessionId = asRecord(message.params)?.sessionId
+        if (message.method === "session/cancel" && typeof scopedSessionId === "string" && compacting.has(scopedSessionId)) {
+          compacting.get(scopedSessionId)!.abort()
+          send(makeSuccess(message.id, { cancelled: true }))
+          return
+        }
+        if ((message.method === "session/model/set" || message.method === "session/rewind/execute")
+          && typeof scopedSessionId === "string" && compacting.has(scopedSessionId)) {
+          send(makeFailure(message.id, INVALID_REQUEST, "session compaction is running", { reason: "session_busy" }))
+          return
+        }
         if (message.method === "session/prompt") {
           const sessionId = asRecord(message.params)?.sessionId
+          if (typeof sessionId === "string" && compacting.has(sessionId)) {
+            send(makeFailure(message.id, INVALID_REQUEST, "session compaction is running", { reason: "session_busy" }))
+            return
+          }
           if (typeof sessionId === "string" && sessionId !== "") activePrompts.add(sessionId)
           try { await base.handleLine(line) }
           finally { if (typeof sessionId === "string") activePrompts.delete(sessionId) }
@@ -87,6 +110,60 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         send(makeFailure(message.id, INVALID_REQUEST, "not initialized: send initialize first", {
           reason: "not_initialized",
         }))
+        return
+      }
+
+      if (message.method.startsWith("desktop/memory/") && handlers.memory !== undefined) {
+        try { send(makeSuccess(message.id, memoryRequest(handlers.memory, message.method, message.params))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (message.method === "desktop/session/compact" && handlers.compact !== undefined) {
+        const params = asRecord(message.params)
+        if (typeof params?.sessionId !== "string" || !params.sessionId
+          || (params.instructions !== undefined && (typeof params.instructions !== "string" || params.instructions.length > 4096))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "sessionId is required and instructions must be at most 4096 characters"))
+          return
+        }
+        const sessionId = params.sessionId
+        if (activePrompts.has(sessionId) || compacting.has(sessionId)) {
+          send(makeFailure(message.id, INVALID_REQUEST, "session is busy", { reason: "session_busy" }))
+          return
+        }
+        const controller = new AbortController()
+        compacting.set(sessionId, controller)
+        const compact = handlers.compact
+        const job = Promise.resolve().then(() => compact(sessionId, params.instructions as string | undefined,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(120000)])))
+        compactJobs.add(job)
+        try {
+          send(makeSuccess(message.id, await job))
+        } catch (error) {
+          send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error)))
+        } finally {
+          compacting.delete(sessionId)
+          compactJobs.delete(job)
+        }
+        return
+      }
+
+      if (message.method === "desktop/session/search" && handlers.sessionQuery !== undefined) {
+        const params = asRecord(message.params)
+        if (typeof params?.query !== "string" || !params.query.trim() || params.query.length > 4096
+          || (params.sessionId !== undefined && (typeof params.sessionId !== "string" || !params.sessionId))
+          || (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isInteger(params.limit) || params.limit < 1 || params.limit > 100))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "query must contain 1-4096 characters and limit must be 1-100"))
+          return
+        }
+        try {
+          const hits = await handlers.sessionQuery.search(params.query, {
+            ...(typeof params.sessionId === "string" ? { sessionId: params.sessionId } : {}),
+            ...(typeof params.limit === "number" ? { limit: params.limit } : {}),
+          })
+          send(makeSuccess(message.id, boundSearchHits(hits)))
+        } catch (error) {
+          send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error)))
+        }
         return
       }
 
@@ -169,12 +246,14 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
     async close() {
       if (closed) return
       closed = true
+      for (const controller of compacting.values()) controller.abort()
       for (const sessionId of activePrompts) {
         const id = `desktop-internal-${randomUUID()}`
         internalIds.add(id)
         try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
         finally { internalIds.delete(id) }
       }
+      await Promise.allSettled([...compactJobs])
       await base.close()
     },
   }

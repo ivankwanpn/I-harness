@@ -3,6 +3,14 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
+  | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
+  | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }
+  | { kind: "desktop/memory/configure"; workspaceId: string; enabled: boolean }
+  | { kind: "desktop/memory/list"; workspaceId: string; limit?: number }
+  | { kind: "desktop/memory/search"; workspaceId: string; query: string; limit?: number }
+  | { kind: "desktop/memory/read" | "desktop/memory/forget"; workspaceId: string; id: string }
+  | { kind: "desktop/memory/note"; workspaceId: string; title: string; text: string }
   | { kind: "workspace/open"; path: string }
   | { kind: "workspace/pick" }
   | { kind: "workspace/list" }

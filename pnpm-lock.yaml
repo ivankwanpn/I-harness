@@ -399,6 +399,9 @@ importers:
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
+      '@i-harness/memory':
+        specifier: workspace:*
+        version: link:../memory
       '@i-harness/provider-runtime':
         specifier: workspace:*
         version: link:../provider-runtime
@@ -417,6 +420,9 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
+      '@i-harness/session-query':
+        specifier: workspace:*
+        version: link:../session-query
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
@@ -675,6 +681,22 @@ importers:
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+
+  packages/memory:
+    dependencies:
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      '@i-harness/diagnostics':
+        specifier: workspace:*
+        version: link:../diagnostics
+    devDependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
+      '@i-harness/guard-approval':
+        specifier: workspace:*
+        version: link:../guard-approval
 
   packages/output-retention:
     dependencies:

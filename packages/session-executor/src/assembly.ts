@@ -8,7 +8,7 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { append, createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
-import { createToolRegistry, registerContextRemaining } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining, type Tool } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -174,6 +174,8 @@ export interface AssemblyOptions {
   skills?: { extraDirs?: string[] } // plugin overlay skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
+  /** Host-owned tools participate in the same validation and approval pipeline. */
+  additionalTools?: Tool[]
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
   compact?: CompactionRequest
@@ -785,6 +787,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   if (opts.sessionQuery) {
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
+  for (const tool of opts.additionalTools ?? []) tools.register(tool)
 
   // ── session: coordinator mirror (write-behind) ─────────────────────────────
   // `session` itself is created at the top of the function — the sandbox policy

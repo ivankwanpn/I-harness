@@ -51,6 +51,16 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("routes memory and compaction only to known workspaces after validating arguments", async () => {
+    const f = fixture()
+    await expect(dispatchDesktopRequest({ kind: "desktop/memory/search", workspaceId: "ws-1", query: "pnpm", limit: -1 }, f.dependencies)).rejects.toThrow(/limit/)
+    expect(f.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({ kind: "desktop/memory/read", workspaceId: "unknown", id: "note" }, f.dependencies)).rejects.toThrow(/workspace/)
+    await dispatchDesktopRequest({ kind: "desktop/memory/note", workspaceId: "ws-1", title: "decision", text: "pnpm", path: "outside" }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/memory/note", { title: "decision", text: "pnpm" }, 30000)
+    await dispatchDesktopRequest({ kind: "desktop/session/compact", workspaceId: "ws-1", sessionId: "s1" }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/session/compact", { sessionId: "s1" }, 600000)
+  })
   it("rejects malformed, unknown, and out-of-range requests before touching the runtime", async () => {
     const f = fixture()
 
