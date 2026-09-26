@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "管理會話": "Manage conversations", "目前會話": "Current conversations", "已封存會話": "Archived conversations", "重新命名": "Rename", "還原會話": "Restore conversation", "建立分支": "Fork conversation", "確認封存": "Confirm archive", "封存會話": "Archive conversation", "會話名稱": "Conversation name",
   "選擇模型": "Choose model", "推理強度": "Reasoning effort", "套用模型": "Apply model",
   "篩選模型": "Filter models", "上一頁": "Previous page", "下一頁": "Next page",
   "探測模型列表": "Discover models", "選取後才加入設定；已有模型的自訂值會保留。": "Select models to add. Existing model overrides are preserved.", "沒有找到模型": "No models found", "加入所選模型": "Add selected models", "已加入 {count} 個模型": "Added {count} models",

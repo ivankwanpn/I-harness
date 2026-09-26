@@ -64,6 +64,16 @@ export async function dispatchDesktopRequest(
       return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities
     case "session/list":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
+    case "desktop/session/archived":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {})
+    case "desktop/session/manage": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      if (!["rename", "archive", "restore", "fork"].includes(String(value.action))) throw new Error("invalid session action")
+      const title = value.action === "rename" ? requireNonEmpty(value.title, "title") : undefined
+      if (title && title.length > 256) throw new Error("title is too long")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { sessionId, action: value.action, ...(title ? { title } : {}) })
+    }
     case "session/dashboard":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.dashboard()
     case "session/create":

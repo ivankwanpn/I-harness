@@ -5,6 +5,8 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/session/archived"; workspaceId: string }
+  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "fork"; title?: string }
   | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }
   | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }

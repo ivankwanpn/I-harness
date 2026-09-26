@@ -60,7 +60,7 @@ describe("forkSession", () => {
   it("creates a child from the latest completed-turn prefix and preserves lineage/title", async () => {
     const { coordinator, cleanup } = await fixture()
     try {
-      await coordinator.create({ sessionId: "source", title: "Source title", workspaceId: "ws-source" })
+      await coordinator.create({ sessionId: "source", title: "Source title", workspaceId: "ws-source", modelSelection: { provider: "custom", model: "m" } })
       await coordinator.append("source", [
         { type: "turn/start", seq: 0 },
         { type: "user/message", text: "one", seq: 1 },
@@ -73,6 +73,7 @@ describe("forkSession", () => {
       ])
 
       const result = await forkSession(coordinator, "source")
+      expect((await coordinator.profile(result.sessionId)).meta.modelSelection).toEqual({ provider: "custom", model: "m" })
       expect(result).toMatchObject({ sessionId: expect.any(String), seedLength: 8, title: "Source title" })
       const child = await coordinator.load(result.sessionId)
       expect(child.session.events.map((event) => event.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7])

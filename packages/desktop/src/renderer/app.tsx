@@ -469,6 +469,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setSelectedSessionId(undefined)
       }}
       onSelectSession={setSelectedSessionId}
+      onManageSession={async (sessionId, action, title) => {
+        if (!selectedWorkspaceId) return
+        const scope = selection.current
+        const result = await bridge.request({ kind: "desktop/session/manage", workspaceId: selectedWorkspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) }) as { sessionId: string }
+        await refreshDashboard(selectedWorkspaceId)
+        if (selection.current !== scope) return
+        if (action === "archive" && selectedSessionId === sessionId) setSelectedSessionId(undefined)
+        if (action === "fork") { setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
+      }}
       onOpenWorkspace={() => {
         void (async () => {
           try {

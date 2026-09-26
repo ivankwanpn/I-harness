@@ -26,6 +26,7 @@ import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
+import type { ManageSession } from "../session/SessionManager.tsx"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
 export interface ConversationView {
@@ -79,6 +80,7 @@ export interface WorkbenchProps {
   onOpenWorkspace?(): void
   onSelectWorkspace(workspaceId: string): void
   onSelectSession(sessionId: string): void
+  onManageSession?: ManageSession
   onSessionsChanged?(): void
 }
 
@@ -101,6 +103,7 @@ export function Workbench({
   selectedSessionId,
   onSelectWorkspace,
   onSelectSession,
+  onManageSession,
   onSessionsChanged,
   conversation,
   review,
@@ -197,7 +200,7 @@ export function Workbench({
           <button type="button" className="link-button" aria-expanded={compactOpen} onClick={() => setCompactOpen((open) => !open)}>{t("壓縮上下文")}</button>
           {compactOpen ? <CompactionPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} operation={conversation.operation} disabled={!conversation.canCompact} onCompact={conversation.onCompact} onCancel={conversation.onCancel} /> : null}
         </div> : null}
-        {surface === "settings" ? <SettingsPane bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
+        {surface === "settings" ? <SettingsPane onManageSession={capabilities["desktop-sessions"]?.includes("1") ? onManageSession : undefined} bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>

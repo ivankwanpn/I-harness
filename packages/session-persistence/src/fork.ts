@@ -42,6 +42,7 @@ export async function forkSession(
   const { id } = await coordinator.create({
     ...(title !== undefined ? { title } : {}),
     ...(workspaceId !== undefined ? { workspaceId } : {}),
+    ...(profile.meta.modelSelection !== undefined ? { modelSelection: { ...profile.meta.modelSelection } } : {}),
     parentSession: sourceSessionId,
     seedLength: prefix.length,
   })
