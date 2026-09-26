@@ -162,6 +162,8 @@ describe("provider directory", () => {
     await expect(runtime.directory()).resolves.toContainEqual({
       id: "deepseek",
       displayName: "Private DeepSeek",
+      baseURL: "https://gateway.example",
+      apiKeyEnv: "DEEPSEEK_API_KEY",
       protocol: "openai-completions",
       configured: true,
       auth: { configured: true, source: "file", writable: true },

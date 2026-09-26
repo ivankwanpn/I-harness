@@ -15,6 +15,7 @@ import { ReviewPathError } from "./review.ts"
 import { randomUUID } from "node:crypto"
 import { memoryRequest } from "./memory-wire.ts"
 import { boundSearchHits } from "./search-bounds.ts"
+import { providerCommand } from "./provider-wire.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -123,6 +124,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {
         try { send(makeSuccess(message.id, await handlers.provider.directory())) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "provider directory unavailable")) }
+        return
+      }
+      if (message.method === "desktop/provider/mutate" && handlers.provider !== undefined) {
+        try { send(makeSuccess(message.id, await providerCommand(handlers.provider, message.params))) }
+        catch { send(makeFailure(message.id, INVALID_PARAMS, "Provider change failed. Check the fields, credential source and configuration file permissions.")) }
         return
       }
       if (message.method.startsWith("desktop/memory/") && handlers.memory !== undefined) {

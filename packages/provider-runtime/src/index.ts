@@ -78,6 +78,9 @@ export interface SessionModelBinding {
 export interface ProviderRuntimeEntry {
   id: string
   displayName: string
+  baseURL?: string
+  modelsURL?: string
+  apiKeyEnv?: string
   /** The route's DECLARED wire protocol. ABSENT means the route declares none
    * OF ITS OWN — which is not a default, and NOT a verdict on usability: the
    * resolution chain is selection > model row > route (`resolveModel`), so
@@ -330,6 +333,9 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         rows.push({
           id: view.id,
           displayName: view.displayName,
+          ...(view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
+          ...(view.modelsURL !== undefined ? { modelsURL: view.modelsURL } : {}),
+          ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
           protocol: view.protocol,
           configured: view.user !== undefined,
           auth: { ...authInfo },

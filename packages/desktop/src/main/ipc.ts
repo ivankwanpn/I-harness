@@ -101,6 +101,13 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
     case "desktop/provider/directory":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
+    case "desktop/provider/mutate": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const command = requireRecord(value.command)
+      if (!["provider/create", "provider/edit", "provider/remove", "key/set", "key/clear", "model/add", "model/edit", "model/remove", "default/set"].includes(String(command.action))
+        || JSON.stringify(command).length > 24000) throw new Error("invalid provider command")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request("desktop/provider/mutate", command)
+    }
     case "desktop/interaction/pending": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = value.sessionId === undefined ? undefined : requireNonEmpty(value.sessionId, "sessionId")

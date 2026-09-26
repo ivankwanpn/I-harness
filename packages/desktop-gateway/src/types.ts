@@ -12,7 +12,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
-  provider?: Pick<ProviderRuntime, "directory">
+  provider?: ProviderRuntime
   memory?: MemoryStore
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
   sessionQuery?: SessionQuery

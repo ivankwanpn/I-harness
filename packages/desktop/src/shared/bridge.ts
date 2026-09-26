@@ -1,9 +1,11 @@
+import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
   | { kind: "desktop/provider/directory"; workspaceId: string }
+  | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
   | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en" }

@@ -1,0 +1,21 @@
+import { expect, it, vi } from "vitest"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
+import { providerCommand } from "../src/provider-wire.ts"
+
+it("rejects malformed commands before invoking the runtime", async () => {
+  const setModel = vi.fn()
+  const runtime = { setModel } as unknown as ProviderRuntime
+  await expect(providerCommand(runtime, { action: "model/edit", id: "route", model: "m", fields: { contextWindow: -1 } })).rejects.toThrow("positive integer")
+  await expect(providerCommand(runtime, { action: "model/edit", id: "route", model: "m", fields: { apiKey: "secret" } })).rejects.toThrow("Unknown field")
+  expect(setModel).not.toHaveBeenCalled()
+})
+it("preserves omitted values and explicit resets for individual models", async () => {
+  const setModel = vi.fn().mockResolvedValue([])
+  await providerCommand({ setModel } as unknown as ProviderRuntime, { action: "model/edit", id: "route", model: "m", fields: { contextWindow: 1000000, maxTokens: null } })
+  expect(setModel).toHaveBeenCalledWith("route", "m", { contextWindow: 1000000, maxTokens: null })
+})
+it("never includes API key material in validation errors or success responses", async () => {
+  const setApiKey = vi.fn().mockResolvedValue(undefined)
+  expect(await providerCommand({ setApiKey } as unknown as ProviderRuntime, { action: "key/set", id: "route", value: "fixture-secret" })).toEqual({ ok: true })
+  expect(setApiKey).toHaveBeenCalledWith("route", "fixture-secret")
+})

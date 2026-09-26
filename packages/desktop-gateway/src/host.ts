@@ -1,7 +1,6 @@
 import { readFile, mkdir } from "node:fs/promises"
 import { dirname, join, isAbsolute } from "node:path"
-import { createCredentialStore } from "@i-harness/credentials"
-import { createProviderRuntime } from "@i-harness/provider-runtime"
+import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
@@ -66,8 +65,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await settings.load()
   const mode = settings.get().sandboxMode
   const sandboxState: SandboxState = { mode, source: "settings", wired: true }
-  const credentials = createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"))
-  const runtime = createProviderRuntime({ settings, credentials })
+  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json") })
   await mkdir(options.sessionDir, { recursive: true })
   const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
     lock: { enabled: true, lockRoot: options.sessionDir },

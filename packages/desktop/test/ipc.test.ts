@@ -51,6 +51,14 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("forwards a scoped provider command and refuses unknown operations", async () => {
+    const f = fixture()
+    const command = { action: "model/edit", id: "route", model: "model", fields: { contextWindow: 272000 } }
+    await dispatchDesktopRequest({ kind: "desktop/provider/mutate", workspaceId: ENTRY.id, command }, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("desktop/provider/mutate", command)
+    await expect(dispatchDesktopRequest({ kind: "desktop/provider/mutate", workspaceId: ENTRY.id, command: { action: "exec" } }, f.dependencies)).rejects.toThrow("invalid provider command")
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
   it("routes provider reads only through a registered workspace", async () => {
     const f = fixture()
     await dispatchDesktopRequest({ kind: "desktop/provider/directory", workspaceId: ENTRY.id }, f.dependencies)

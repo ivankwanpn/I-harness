@@ -28,7 +28,7 @@ describe("Desktop host sandbox configuration", () => {
     const credentialsPath = join(f.root, "credentials.json")
     await createCredentialStore(credentialsPath).set("DESKTOP_TEST_SECRET", "test-secret-not-for-renderer")
     writeFileSync(f.settingsPath, JSON.stringify({ sandboxMode: "read-only", llm: {
-      providers: { "desktop-test": { protocol: "openai-compatible", apiKeyEnv: "DESKTOP_TEST_SECRET", baseUrl: "https://example.invalid/v1", models: [{ id: "test-model", contextWindow: 272000 }] } },
+      providers: { "desktop-test": { protocol: "openai-completions", apiKeyEnv: "DESKTOP_TEST_SECRET", baseUrl: "https://example.invalid/v1", models: [{ id: "test-model", contextWindow: 272000 }] } },
     } }))
     const host = await createDesktopHost({ ...f, credentialsPath, onWrite: (frame) => f.frames.push(frame) })
     try {

@@ -791,6 +791,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
