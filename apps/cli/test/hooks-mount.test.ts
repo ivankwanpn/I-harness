@@ -54,6 +54,8 @@ describe("hooks mount — the harness home's hooks.json gates a real run", () =>
         version: 1,
         handlers: [{
           id: "deny-read",
+          // This suite checks trust/mount behavior, not process startup latency.
+          timeoutMs: 5000,
           event: "pre-tool",
           type: "command",
           matcher: { tool: "read" },
@@ -111,6 +113,7 @@ describe("hooks mount — the harness home's hooks.json gates a real run", () =>
         version: 1,
         handlers: [{
           id: "plugin-deny", event: "pre-tool", type: "command", matcher: { tool: "read" },
+          timeoutMs: 5000,
           command: { cmd: process.execPath, args: [handler] },
           trust: { script: handler, sha256: await sha256File(handler) },
         }],
