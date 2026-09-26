@@ -10,7 +10,7 @@ Turn the existing D0–D4 implementation into a complete daily Desktop workbench
 
 The workbench must let a local user open and switch workspaces; create, resume, and monitor sessions; read long conversations and tool activity; answer questions and approvals; inspect task progress; and review workspace changes without reading backend identifiers.
 
-The layout and interaction language follow the observed ZCode Desktop: dark material hierarchy, one task-centered left sidebar, a quiet conversation surface, a bottom composer, and an on-demand right work pane.
+The visual target is a high-fidelity reproduction of the observed ZCode Desktop: dark material hierarchy, geometry, density, typography scale, task-centered left sidebar, quiet conversation surface, bottom composer, on-demand right work pane, empty states, and interaction feedback. I-harness implements that experience through its own components and data contracts.
 
 ## 2. Scope and constraints
 
@@ -66,9 +66,12 @@ ZCode is Apache-2.0. Direct redistribution of substantial source requires retain
 
 This implementation will:
 
-1. reuse observed layout, density, interaction patterns, spacing relationships, and state hierarchy as design reference;
-2. reimplement low-coupling patterns against I-harness interfaces, including the window frame, window controls, collapsible side pane, compact activity rows, and nested sidebar;
-3. avoid copying ZCode's large components or store/service layer. Its sidebar, task item, Git pane, and composer are tightly coupled to ZCode state and services.
+1. reproduce the observed layout, proportions, density, typography, interaction patterns, spacing relationships, and state hierarchy with high visual fidelity;
+2. reimplement every required surface against I-harness interfaces, including the window frame, window controls, collapsible side pane, compact activity rows, nested sidebar, conversation timeline, composer, interaction cards, review pane, and settings shell;
+3. use I-harness-owned components for ZCode's large or tightly coupled components. Their unsuitable implementation dependencies do not remove the corresponding visual surface or user workflow from scope;
+4. avoid importing ZCode's store and service layer. Its sidebar, task item, Git pane, and composer are tightly coupled to ZCode state and services.
+
+The implementation rule is therefore: reproduce the product experience, then connect it to I-harness state. A ZCode component that cannot be moved directly is rebuilt with the same visible purpose and interaction quality using I-harness data, rather than simplified away.
 
 No ZCode logo, trademark, provider-specific UI, private dependency, telemetry, account flow, subscription flow, remote workspace model, terminal, or browser implementation is copied.
 
@@ -239,3 +242,4 @@ Screenshot inspection is part of acceptance.
 9. Backend semantics and safety gates remain unchanged.
 10. Desktop tests, typecheck, build, package smoke, real-gateway E2E, and long-session profile complete with recorded evidence.
 11. No GitHub push occurs.
+12. The empty workbench, active conversation, tool activity, composer, review pane, and settings shell visibly match the reference hierarchy and density; using different internal components is not grounds for reducing the visual or interaction target.
