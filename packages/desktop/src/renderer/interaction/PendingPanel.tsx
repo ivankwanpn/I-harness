@@ -13,17 +13,17 @@ export interface PendingPanelProps {
   onReply(reply: InteractionReply): Promise<void>
 }
 
-function approvalText(payload: unknown): string {
+function approvalText(payload: unknown, fallback: string): string {
   const record = payload !== null && typeof payload === "object" ? payload as { name?: unknown; reason?: unknown } : {}
-  const name = typeof record.name === "string" ? record.name : "工具請求"
+  const name = typeof record.name === "string" ? record.name : fallback
   const reason = typeof record.reason === "string" ? record.reason : undefined
   return reason === undefined ? name : `${name}：${reason}`
 }
 
-function questionShape(payload: unknown): { prompt: string; options: string[] } {
+function questionShape(payload: unknown, fallback: string): { prompt: string; options: string[] } {
   const record = payload !== null && typeof payload === "object" ? payload as { prompt?: unknown; options?: unknown } : {}
   return {
-    prompt: typeof record.prompt === "string" ? record.prompt : "代理提出問題",
+    prompt: typeof record.prompt === "string" ? record.prompt : fallback,
     options: Array.isArray(record.options) ? record.options.filter((row): row is string => typeof row === "string") : [],
   }
 }
@@ -60,13 +60,13 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
         {pending.map((row) => row.kind === "approval"
           ? (
             <li key={row.requestId} className="task-row">
-              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload)} busy={busy[row.requestId] === true}
+              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} busy={busy[row.requestId] === true}
                 onConfirm={(approved) => { void reply(row, { kind: "approval", approved }) }} />
               {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
             </li>
           )
           : (() => {
-              const { prompt, options } = questionShape(row.payload)
+              const { prompt, options } = questionShape(row.payload, t("代理提出問題"))
               return (
                 <li key={row.requestId} className="task-row">
                   <span className="row-label">{prompt}</span>

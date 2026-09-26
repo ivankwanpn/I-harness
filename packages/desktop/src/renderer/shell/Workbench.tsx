@@ -152,7 +152,7 @@ export function Workbench({
           {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setSurface(surface === "search" ? "conversation" : "search")}>{t(surface === "search" ? "返回會話" : "搜尋會話")}</button> : null}
         </header>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
-          {selectedSessionId === undefined ? "" : `已選擇會話 ${selectedSessionId}`}
+          {selectedSessionId === undefined ? "" : t("已選擇會話 {title}", { title: sessionTitle })}
         </p>
         {error === undefined
           ? null

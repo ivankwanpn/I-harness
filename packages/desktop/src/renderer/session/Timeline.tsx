@@ -4,18 +4,20 @@ import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { outcomeLabel, type TimelineRow } from "./project.ts"
 import { ToolActivity } from "./ToolActivity.tsx"
+import { useText } from "../design/i18n.ts"
 
 function RowView({ row }: { row: TimelineRow }) {
+  const t = useText()
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
       {row.role === "assistant" ? <Markdown remarkPlugins={[remarkGfm]} components={{
         a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
-        img: ({ alt }) => <span className="muted">[圖片：{alt}]</span>,
+        img: ({ alt }) => <span className="muted">[{t("圖片")}: {alt}]</span>,
       }}>{row.text}</Markdown> : row.text}
     </div>
   }
   if (row.kind === "outcome") {
-    return <p className="timeline-outcome">{outcomeLabel(row.flags)}</p>
+    return <p className="timeline-outcome">{outcomeLabel(row.flags, t)}</p>
   }
   if (row.kind === "other") {
     return <p className="timeline-other muted">{row.label}</p>

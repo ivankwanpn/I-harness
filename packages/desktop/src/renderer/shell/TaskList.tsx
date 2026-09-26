@@ -1,5 +1,5 @@
 import type { SessionDashboardResult } from "@i-harness/sdk"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
 
 export interface TaskListProps {
   dashboard: SessionDashboardResult
@@ -10,6 +10,7 @@ export interface TaskListProps {
 /** Sessions with only the fields the host actually reported — never invented. */
 export function TaskList({ dashboard, selectedId, onSelect }: TaskListProps) {
   const t = useText()
+  const locale = useLocale((state) => state.locale)
   if (dashboard.listingUnavailable === true) {
     return <p className="notice">{t("無法取得會話列表")}</p>
   }
@@ -29,10 +30,10 @@ export function TaskList({ dashboard, selectedId, onSelect }: TaskListProps) {
             <span className="row-label">{row.title ?? t("未命名會話")}</span>
             <span className="row-meta">
               {row.running === true ? t("執行中") : ""}
-              {row.updatedAt === undefined ? "" : ` · ${t("最後活動")} ${new Date(row.updatedAt).toLocaleString()}`}
-              {row.turnCount === undefined ? "" : ` · ${row.turnCount} 回合`}
-              {row.queued === undefined || row.queued === 0 ? "" : ` · 佇列 ${row.queued}`}
-              {row.tasks === undefined || row.tasks === 0 ? "" : ` · 任務 ${row.tasks}`}
+              {row.updatedAt === undefined ? "" : ` · ${t("最後活動")} ${new Date(row.updatedAt).toLocaleString(locale)}`}
+              {row.turnCount === undefined ? "" : ` · ${row.turnCount} ${t("回合")}`}
+              {row.queued === undefined || row.queued === 0 ? "" : ` · ${t("佇列")} ${row.queued}`}
+              {row.tasks === undefined || row.tasks === 0 ? "" : ` · ${t("任務")} ${row.tasks}`}
               {row.modelLabel === undefined ? "" : ` · ${row.modelLabel}`}
             </span>
           </button>

@@ -1,5 +1,6 @@
 import type { SessionModelState } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
+import type { Message } from "../design/i18n.ts"
 
 /**
  * Send is allowed only when the host reported a wired sandbox AND a ready
@@ -9,14 +10,14 @@ export function sendGate(input: {
   model: SessionModelState | undefined
   sandbox: SandboxState | undefined
   connection: "online" | "offline"
-}): { canSend: boolean; reason?: string } {
+}, t: (message: Message) => string = (message) => message): { canSend: boolean; reason?: string } {
   if (input.connection === "offline") {
-    return { canSend: false, reason: "SDK 連線已中斷，送出已停用" }
+    return { canSend: false, reason: t("SDK 連線已中斷，送出已停用") }
   }
   if (input.sandbox?.wired !== true) {
-    return { canSend: false, reason: "沙箱尚未接線：宿主未回報可執行模式，送出已停用" }
+    return { canSend: false, reason: t("沙箱尚未接線：宿主未回報可執行模式，送出已停用") }
   }
-  if (input.model === undefined) return { canSend: false, reason: "模型狀態未知，送出已停用" }
+  if (input.model === undefined) return { canSend: false, reason: t("模型狀態未知，送出已停用") }
   if (input.model.status !== "ready") return { canSend: false, reason: input.model.reason }
   return { canSend: true }
 }

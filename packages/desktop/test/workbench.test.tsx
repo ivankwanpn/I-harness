@@ -121,7 +121,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: /第二個/ }))
 
     expect(screen.getByTestId("session-header").textContent).toContain("第二個")
-    expect(screen.getByTestId("session-announcer").textContent).toContain("session-b")
+    expect(screen.getByTestId("session-announcer").textContent).toContain("第二個")
   })
 
   it("renders a disabled create control when the host lacks session-create", () => {

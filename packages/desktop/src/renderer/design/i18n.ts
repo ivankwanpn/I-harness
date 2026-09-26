@@ -1,7 +1,26 @@
 import { create } from "zustand"
+import { useCallback } from "react"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "任務": "Tasks", "佇列": "Queue", "回合": "turns", "等候中": "Waiting", "已完成": "Completed", "已失敗": "Failed", "已取消": "Cancelled",
+  "佇列狀態未知": "Queue state unavailable", "佇列為空": "Queue is empty", "任務狀態未知": "Task state unavailable", "暫無可確認的任務": "No reported tasks",
+  "已修改": "Modified", "已新增": "Added", "已刪除": "Deleted", "未追蹤": "Untracked", "已重新命名": "Renamed",
+  "不是 Git 工作區，無法列出變更": "This is not a Git workspace; changes cannot be listed", "找不到 Git，無法列出變更": "Git was not found; changes cannot be listed",
+  "儲存庫還沒有任何提交，無法比對": "This repository has no commits to compare against", "未追蹤的檔案沒有 diff": "Untracked files have no diff",
+  "二進位內容不顯示": "Binary content is not displayed", "檔案已刪除": "The file was deleted", "沒有差異": "No differences", "找不到檔案": "File not found",
+  "沒有可比較的提交": "No commit to compare against", "不是 Git 工作區": "Not a Git workspace", "找不到 Git": "Git not found",
+  "無法讀取": "Unable to read", "變更": "Changes", "重新整理": "Refresh", "正在讀取變更…": "Loading changes…", "預覽": "Preview",
+  "工作區目前沒有未提交的變更": "No uncommitted changes in this workspace",
+  "變更列表已截斷，只顯示前 {count} 筆": "Change list truncated; showing the first {count} files",
+  "（已截斷，僅顯示前 {bytes} bytes）": " (truncated to the first {bytes} bytes)",
+  "SDK 連線已中斷，送出已停用": "SDK disconnected; sending is disabled",
+  "沙箱尚未接線：宿主未回報可執行模式，送出已停用": "The host has not reported an active sandbox; sending is disabled",
+  "模型狀態未知，送出已停用": "Model state unavailable; sending is disabled", "正在壓縮上下文": "Compacting context",
+  "模型拒絕產生內容": "The model declined to produce content", "輸出達到上限被截斷": "Output was truncated at its limit", "模型回覆為空": "The model returned no content",
+  "圖片": "Image", "工具請求": "Tool request", "代理提出問題": "The agent has a question",
+  "已選擇會話 {title}": "Selected conversation: {title}", "SDK 連線中斷：{message}": "SDK disconnected: {message}",
+  "歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。": "Loaded {count} history events. Use conversation search to find other content.",
   "設定": "Settings", "設定分類": "Settings categories", "一般": "General", "關於": "About", "外觀": "Appearance",
   "深色": "Dark", "淺色": "Light", "跟隨系統": "System", "文字大小": "Text size", "顯示側欄": "Show sidebar",
   "外觀偏好只儲存在此電腦。": "Appearance preferences are stored on this computer only.", "重設外觀偏好": "Reset appearance preferences",
@@ -54,7 +73,7 @@ export const useLocale = create<{ locale: Locale; setLocale(locale: Locale): voi
     set({ locale })
   },
 }))
-export function useText(): (message: Message) => string {
+export function useText(): (message: Message, values?: Record<string, string | number>) => string {
   const locale = useLocale((state) => state.locale)
-  return (message) => locale === "en" ? english[message] : message
+  return useCallback((message: Message, values: Record<string, string | number> = {}) => (locale === "en" ? english[message] : message).replace(/\{(\w+)\}/g, (token, key: string) => values[key] === undefined ? token : String(values[key])), [locale])
 }

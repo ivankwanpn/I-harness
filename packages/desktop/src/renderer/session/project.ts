@@ -1,4 +1,5 @@
 import type { HistoryRange } from "@i-harness/sdk"
+import type { Message } from "../design/i18n.ts"
 
 export type WireEvent = HistoryRange["events"][number]
 
@@ -59,10 +60,10 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   return rows
 }
 
-export function outcomeLabel(flags: { refused?: true; truncated?: true; empty?: true }): string {
+export function outcomeLabel(flags: { refused?: true; truncated?: true; empty?: true }, t: (message: Message) => string = (message) => message): string {
   const parts: string[] = []
-  if (flags.refused === true) parts.push("模型拒絕產生內容")
-  if (flags.truncated === true) parts.push("輸出達到上限被截斷")
-  if (flags.empty === true) parts.push("模型回覆為空")
+  if (flags.refused === true) parts.push(t("模型拒絕產生內容"))
+  if (flags.truncated === true) parts.push(t("輸出達到上限被截斷"))
+  if (flags.empty === true) parts.push(t("模型回覆為空"))
   return parts.join("；")
 }

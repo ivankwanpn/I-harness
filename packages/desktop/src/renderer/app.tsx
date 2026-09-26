@@ -26,6 +26,7 @@ import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
+import { useText } from "./design/i18n.ts"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -33,6 +34,9 @@ const HISTORY_MAX_PAGES = 40
 /** The renderer data layer: it owns the bridge, selection and refresh rules;
  * the workbench below renders exactly what it is told. */
 export function App({ bridge }: { bridge: DesktopBridge }) {
+  const t = useText()
+  const textRef = useRef(t)
+  textRef.current = t
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([])
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>()
   const [selectedSessionId, setSelectedSessionId] = useState<string>()
@@ -133,7 +137,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     if (selection.current !== scope) return
     setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
     if (!load.exhausted) {
-      setTaskError(`歷史視窗已載入 ${load.events.length} 筆；更早的內容仍在後端日誌中，可捲動後再補頁`)
+      setTaskError(textRef.current("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: load.events.length }))
     }
   }, [bridge])
 
@@ -185,7 +189,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.kind === "sdk/disconnected") {
         setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
-        setError(`SDK 連線中斷：${event.message}`)
+        setError(textRef.current("SDK 連線中斷：{message}", { message: event.message }))
         return
       }
       if (event.method === "desktop/interaction/request") {
@@ -314,13 +318,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }
   }, [bridge, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
-  const gate = sendGate({ model, sandbox, connection })
+  const gate = sendGate({ model, sandbox, connection }, t)
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
         rows: projectTimeline(eventWindow.events),
         canSend: gate.canSend && !(operation?.kind === "compact" && operation.busy),
-        sendReason: operation?.kind === "compact" && operation.busy ? "正在壓縮上下文" : gate.reason,
+        sendReason: operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
         operation,
