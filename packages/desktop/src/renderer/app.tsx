@@ -57,6 +57,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
+  const selection = useRef({ workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+  if (selection.current.workspaceId !== selectedWorkspaceId || selection.current.sessionId !== selectedSessionId) {
+    selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
+  }
+  const reviewRequest = useRef(0)
+  const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
+  if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
 
   useEffect(() => {
     cursorRef.current = eventWindow.cursor
@@ -70,30 +77,40 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge])
 
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
+    const scope = workspaceSelection.current
+    if (scope.workspaceId !== workspaceId) return
     const result = await bridge.request({ kind: "session/dashboard", workspaceId })
+    if (workspaceSelection.current !== scope) return
     setDashboard(result as SessionDashboardResult)
   }, [bridge])
 
   const refreshTasks = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
+    const scope = selection.current
+    if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
     try {
       const [queueRows, taskRows] = await Promise.all([
         bridge.request({ kind: "session/queue", workspaceId, sessionId }),
         bridge.request({ kind: "session/tasks", workspaceId, sessionId }),
       ])
+      if (selection.current !== scope) return
       setQueue(queueRows as SessionQueueItem[])
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
     } catch (reason) {
-      setTaskError(reason instanceof Error ? reason.message : String(reason))
+      if (selection.current === scope) setTaskError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
   const refreshChanges = useCallback(async (workspaceId: string): Promise<void> => {
+    const scope = workspaceSelection.current
+    if (scope.workspaceId !== workspaceId) return
     try {
-      setReviewChanges(await bridge.request({ kind: "desktop/review/changes", workspaceId }) as ReviewChanges)
+      const result = await bridge.request({ kind: "desktop/review/changes", workspaceId }) as ReviewChanges
+      if (workspaceSelection.current !== scope) return
+      setReviewChanges(result)
       setReviewError(undefined)
     } catch (reason) {
-      setReviewError(reason instanceof Error ? reason.message : String(reason))
+      if (workspaceSelection.current === scope) setReviewError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -102,12 +119,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     sessionId: string,
     afterSeq: number,
   ): Promise<void> => {
+    const scope = selection.current
+    if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
     const load = await loadHistory(
       (params) => bridge.request({
         kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, limit: params.limit,
       }) as Promise<HistoryRange>,
       { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES },
     )
+    if (selection.current !== scope) return
     setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
     if (!load.exhausted) {
       setTaskError(`歷史視窗已載入 ${load.events.length} 筆；更早的內容仍在後端日誌中，可捲動後再補頁`)
@@ -130,6 +150,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
     let active = true
+    setCapabilities({})
+    setSandbox(undefined)
     void (async () => {
       try {
         const [dashboardResult, capabilitiesResult, sandboxResult] = await Promise.all([
@@ -148,6 +170,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     })()
     return () => { active = false }
   }, [bridge, retryNonce, selectedWorkspaceId])
+
+  useEffect(() => { setPending([]) }, [selectedWorkspaceId])
 
   // Subscribe BEFORE the first history read (spec §6): a live event that lands
   // during the read must not be lost.
@@ -218,7 +242,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
 
   const selectReview = useCallback(async (path: string, mode: "diff" | "preview"): Promise<void> => {
     if (selectedWorkspaceId === undefined) return
+    const scope = workspaceSelection.current
+    const request = ++reviewRequest.current
     setReviewSelected({ path, mode })
+    setReviewDiff(undefined)
+    setReviewPreview(undefined)
     setReviewError(undefined)
     try {
       const result = await bridge.request({
@@ -226,10 +254,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         workspaceId: selectedWorkspaceId,
         path,
       })
+      if (workspaceSelection.current !== scope || reviewRequest.current !== request) return
       if (mode === "diff") setReviewDiff(result as ReviewText)
       else setReviewPreview(result as ReviewText)
     } catch (reason) {
-      setReviewError(reason instanceof Error ? reason.message : String(reason))
+      if (workspaceSelection.current === scope && reviewRequest.current === request) setReviewError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge, selectedWorkspaceId])
 
@@ -280,7 +309,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         chunkFrame.current = undefined
       }
     }
-  }, [bridge, pageHistory, refreshTasks, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
   const gate = sendGate({ model, sandbox, connection })
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined

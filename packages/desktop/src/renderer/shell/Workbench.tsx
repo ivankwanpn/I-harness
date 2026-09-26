@@ -3,6 +3,7 @@ import { PanelRight, Plus, FolderOpen } from "lucide-react"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
+import { SessionSearch } from "../session/SessionSearch.tsx"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
@@ -88,7 +89,9 @@ export function Workbench({
   const t = useText()
   const [createError, setCreateError] = useState<string>()
   const [creating, setCreating] = useState(false)
-  const [memoryOpen, setMemoryOpen] = useState(false)
+  const [surface, setSurface] = useState<"conversation" | "memory" | "search">("conversation")
+  const memoryOpen = surface === "memory"
+  const setMemoryOpen = (open: boolean | ((current: boolean) => boolean)) => setSurface((typeof open === "function" ? open(memoryOpen) : open) ? "memory" : "conversation")
   const reviewOpen = useUiStore((state) => state.reviewOpen)
   const toggleReview = useUiStore((state) => state.toggleReview)
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
@@ -131,6 +134,7 @@ export function Workbench({
             <PanelRight size={18} />
           </button>
           {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setMemoryOpen((open) => !open)}>{t(memoryOpen ? "返回會話" : "工作區記憶")}</button> : null}
+          {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button" onClick={() => setSurface(surface === "search" ? "conversation" : "search")}>{t(surface === "search" ? "返回會話" : "搜尋會話")}</button> : null}
         </header>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
           {selectedSessionId === undefined ? "" : `已選擇會話 ${selectedSessionId}`}
@@ -146,7 +150,7 @@ export function Workbench({
             </p>
           )}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
-        {memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
+        {surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>

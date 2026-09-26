@@ -15,6 +15,8 @@ Additional extractions: ToolSummaryRow.tsx derives summary layout and classes fr
 Source SHA256:
 Additional extraction: ReviewFileRow.tsx adapts the file header in GitPaneChangeCard.tsx. It replaces ZCode file descriptors and numeric change counts with I-harness path/status props, and omits context-menu mutations and unsupported filesystem actions.
 GitPaneChangeCard.tsx SHA256: EC300EC0D682BB3E6E7A23F5C888550C4FBA0C8711CAD5A66A61FE28AD6F0088.
+SearchInput.tsx adapts settings/SettingsSearchInput.tsx icon/input/clear-button layout, using native controls instead of ZCode helpers.
+SettingsSearchInput.tsx SHA256: 0667FC8747F934D6FF45FCF71F0BA864F12D6E6E1A50EEF5117BC69562C646BD.
 - ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
 - components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
 

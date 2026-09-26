@@ -22,3 +22,5 @@ User authorized completing all feasible UI and source reuse against existing bac
 Already shipped locally: baseline be8414c; permission/composer reuse 9cff8a5; tool/diff reuse f23d893f. Latest full Desktop baseline 105 tests passing.
 
 Progress: ReviewFileRow now reuses GitPaneChangeCard header layout with real path/status data, no fake counts. Review UI tests (4), Desktop typecheck and build passed. Next: finish Review navigation and implement existing session-search/compact UI; inspect async selection handling while connecting these surfaces.
+
+Session search now uses the existing workspace query API, optional current-session scope, truncated-result notice and opening matching conversations. SearchInput reuses ZCode presentation. Async history/tasks/review/dashboard responses are scoped to current selection; latest-file selection wins. Review found retry cleared pending requests, fixed by workspace-only clearing and reloading session data on retry. Remaining: prompt/cancel continuation state across navigation, manual compaction UI, shell/settings/localization/native features above.

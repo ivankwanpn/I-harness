@@ -2,6 +2,10 @@ import { create } from "zustand"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "搜尋會話": "Search conversations", "搜尋會話內容": "Search conversation content", "清除搜尋": "Clear search",
+  "搜尋此工作區已保存的會話內容，最多顯示 50 筆。": "Search saved conversations in this workspace. Up to 50 results are shown.",
+  "只搜尋目前會話": "Search only this conversation", "正在搜尋…": "Searching…",
+  "結果已截斷，請縮小搜尋範圍。": "Results were truncated. Refine your search.", "沒有符合的會話內容": "No matching conversation content",
   "待人處理": "Needs your attention", "回答": "Answer", "送出回答": "Send answer",
   "尚未回報結果": "Awaiting result", "已收到結果": "Result received", "工具詳情": "Tool details",
   "需要你的確認": "Your confirmation is needed", "選擇回覆": "Choose a response", "批准": "Allow", "拒絕": "Deny",
