@@ -61,6 +61,8 @@
 .zc-tool-summary .tool-summary-kind-label { max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
 .zc-diff { max-height: 360px; border: 1px solid var(--ih-divider); border-radius: 12px; margin-top: 8px; }
 .zc-diff code { font-family: Consolas, "Microsoft JhengHei", monospace; }
+.zc-diff-gutter { display: inline-flex; position: sticky; left: 0; flex-shrink: 0; z-index: 1; background: var(--ih-bg); color: var(--ih-muted); border-right: 1px solid var(--ih-divider); user-select: none; font-variant-numeric: tabular-nums; }
+.zc-diff-gutter > span { min-width: 4ch; padding: 0 5px; text-align: right; }
 .zc-review-file { border: 0; border-radius: 6px; cursor: pointer; color: var(--ih-text); }
 .zc-review-file:disabled { opacity: .5; cursor: not-allowed; }
 .zc-review-file[aria-current="true"] { background: var(--color-selected); }

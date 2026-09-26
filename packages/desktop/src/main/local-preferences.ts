@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 export interface WindowBounds { x: number; y: number; width: number; height: number }
 export interface LocalPreferences { notifications: boolean; locale: "zh-TW" | "en"; bounds?: WindowBounds; maximized?: boolean }
-export function validBounds(value: unknown): value is WindowBounds {
+function validBounds(value: unknown): value is WindowBounds {
   if (!value || typeof value !== "object") return false
   const row = value as Record<string, unknown>
   return ["x", "y", "width", "height"].every((key) => typeof row[key] === "number" && Number.isInteger(row[key])) && (row.width as number) >= 640 && (row.height as number) >= 480

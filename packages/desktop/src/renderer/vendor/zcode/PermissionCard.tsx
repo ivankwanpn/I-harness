@@ -6,15 +6,16 @@
 import { Info } from "lucide-react"
 import type { ReactNode } from "react"
 
-export function PermissionCard({ requestId, title, preview, options, selectedId, responding, hint, confirmLabel, onSelect, onConfirm }: {
+export function PermissionCard({ requestId, title, preview, options, selectedId, responding, hint, confirmLabel, onSelect, onConfirm, confirmDisabled = false }: {
   requestId: string; title: string; preview: ReactNode;
   options: { id: string; label: string; description: string }[];
   selectedId: string; responding: boolean; hint: string; confirmLabel: string;
   onSelect(id: string): void; onConfirm(): void
+  confirmDisabled?: boolean
 }) {
   return (
     <div className="zc-permission w-full shrink-0 relative z-1">
-      <form onSubmit={(event) => { event.preventDefault(); if (!responding) onConfirm() }} className="w-full overflow-hidden rounded-2xl border border-border bg-popover shadow-xs">
+      <form onSubmit={(event) => { event.preventDefault(); if (!responding && !confirmDisabled) onConfirm() }} className="w-full overflow-hidden rounded-2xl border border-border bg-popover shadow-xs">
         <div className="flex flex-col gap-3 p-3">
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2">
@@ -43,7 +44,7 @@ export function PermissionCard({ requestId, title, preview, options, selectedId,
           </div>
           <div className="flex items-center justify-between gap-2 px-1">
             <p className="flex gap-2 text-ui-base items-center text-foreground-subtle"><Info className="text-foreground size-4 shrink-0" />{hint}</p>
-            <button type="submit" disabled={responding} className="zc-confirm inline-flex items-center justify-center h-8 rounded-lg px-2.5 text-ui-base bg-brand text-foreground-inverse hover:bg-brand/80">{confirmLabel}</button>
+            <button type="submit" disabled={responding || confirmDisabled} className="zc-confirm inline-flex items-center justify-center h-8 rounded-lg px-2.5 text-ui-base bg-brand text-foreground-inverse hover:bg-brand/80">{confirmLabel}</button>
           </div>
         </div>
       </form>

@@ -60,6 +60,7 @@ export interface WorkbenchProps {
   bridge: DesktopBridge
   workspaces: WorkspaceEntry[]
   dashboard?: SessionDashboardResult
+  attentionBySession?: Record<string, number>
   capabilities: Record<string, string[]>
   sandbox?: SandboxState
   error?: string
@@ -84,6 +85,7 @@ export function Workbench({
   bridge,
   workspaces,
   dashboard,
+  attentionBySession,
   capabilities,
   sandbox,
   error,
@@ -156,7 +158,7 @@ export function Workbench({
         canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
         onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
       >
-        {dashboard === undefined ? null : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
+        {dashboard === undefined ? null : <TaskList attentionCounts={attentionBySession} dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
       </WorkspaceSidebar>
       </div>
       <main className="center-pane">

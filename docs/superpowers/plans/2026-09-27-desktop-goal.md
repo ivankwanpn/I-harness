@@ -16,7 +16,7 @@ User authorized completing all feasible UI and source reuse against existing bac
 - [ ] Full zh-TW/en strings for supported user flows.
 - [x] Native window controls/local geometry without backend logic (automated verification; visual acceptance deferred).
 - [ ] Long-session behavior, async selection isolation and narrow layout verification.
-- [ ] Capability inventory: provider/plugin/terminal/browser/quota gaps accurately documented.
+- [x] Capability inventory: provider/plugin/terminal/browser/quota gaps accurately documented outside repo in desktop-audit/capability-map.md.
 - [ ] Final test/typecheck/build, independent reviews and local commits.
 
 Already shipped locally: baseline be8414c; permission/composer reuse 9cff8a5; tool/diff reuse f23d893f. Latest full Desktop baseline 105 tests passing.
@@ -34,3 +34,5 @@ Localization pass: Review reasons/status/truncation, task/queue controls, intera
 Native pass: source-adapted window controls invoke sender-scoped allowlisted IPC. Main persists normal bounds/maximized state and clamps restoration to available displays, provides reset and opt-in generic background approval/question notifications. Notification content excludes prompts/paths, deduplicates request IDs with a bounded cache, and raises the window on click. Native settings and labels are localized; no SDK forwarding or backend changes. Remaining focus: narrow drawer/layout, timeline follow/read UX, capability gap inventory and completion audit.
 
 Responsive/read pass: below 760px sidebar becomes a focus-contained drawer with Escape/backdrop/selection dismissal. Review overlays up to 1179px and has Changes/Tasks tabs, close and desktop-width keyboard/pointer resizing. Timeline follows only while near bottom and offers Jump to latest; Markdown message bodies are memoized separately. Session creation results are guarded across workspace switches. Added focused keyboard/drawer/follow tests; actual renderer geometry verification is still deferred, not claimed.
+
+Attention/review pass: workspace pending snapshots merge with live changes and closed tombstones, feeding sidebar attention counts. Questions now require explicit submission and preserve failed answers. Diff gutters derive real old/new numbers from unified hunks; metadata has none. Relative activity replaces verbose dates. Full139 tests passed before final source documentation. Remaining: UI-store consolidation, event labels, performance/profile/package gates and final code-scope audit.

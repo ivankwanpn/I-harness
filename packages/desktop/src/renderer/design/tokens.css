@@ -151,6 +151,8 @@ button { font: inherit; color: inherit; }
 .row-label { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-id { font-size: 12px; color: var(--ih-muted); overflow: hidden; text-overflow: ellipsis; }
 .row-meta { font-size: 12px; color: var(--ih-muted); }
+.attention-badge { font-size: 11px; color: #dcb76b; background: #a775201a; border-radius: 6px; padding: 2px 6px; width: fit-content; }
+:root[data-theme="light"] .attention-badge { color: #805a0d; }
 .row-path { font-size: 12px; color: var(--ih-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .notice { margin: 8px 10px; color: var(--ih-muted); }
@@ -220,6 +222,7 @@ button { font: inherit; color: inherit; }
 .dock-cancel { display: block; margin: 4px 8px 10px auto; }
 .approval-description { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
 .pending-panel input { padding: 4px 8px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: inherit; font: inherit; }
+.question-answer { width: 100%; min-height: 70px; max-height: 180px; resize: vertical; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; padding: 8px; }
 .review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .review-detail { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ih-divider); }
 .review-text pre { max-height: 320px; }

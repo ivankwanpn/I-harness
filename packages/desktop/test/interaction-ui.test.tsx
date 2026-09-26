@@ -23,6 +23,13 @@ const question: PendingInteraction = {
 }
 
 describe("PendingPanel", () => {
+  it("preserves a typed question answer when submission fails", async () => {
+    render(<PendingPanel pending={[{ ...question, payload: { prompt: "補充說明" } }]} onReply={async () => { throw new Error("reply failed") }} />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "不要遺失" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出回答" }))
+    await screen.findByText("reply failed")
+    expect((screen.getByRole("textbox") as HTMLTextAreaElement).value).toBe("不要遺失")
+  })
   it("keeps concurrent requests independently busy", async () => {
     let finishFirst!: () => void
     let finishSecond!: () => void
@@ -63,7 +70,9 @@ describe("PendingPanel", () => {
     render(<PendingPanel pending={[question]} onReply={onReply} />)
 
     expect(screen.getByText("要用哪個方案？")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "B" }))
+    fireEvent.click(screen.getByRole("radio", { name: "B" }))
+    expect(onReply).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "送出回答" }))
     await waitFor(() => {
       expect(onReply).toHaveBeenCalledWith({ requestId: "r2", decision: { kind: "question", answer: "B" } })
     })

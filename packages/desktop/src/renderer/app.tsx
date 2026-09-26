@@ -20,7 +20,8 @@ import {
 import { loadHistory } from "./session/history.ts"
 import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
-import { pendingForSession, removePending, upsertPending, type PendingInteraction } from "./interaction/pending.ts"
+import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
+import { usePendingInteractions } from "./interaction/use-pending-interactions.ts"
 import { classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
@@ -58,7 +59,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true
   const [connection, setConnection] = useState<"online" | "offline">("online")
-  const [pending, setPending] = useState<PendingInteraction[]>([])
+  const interactions = usePendingInteractions(bridge, selectedWorkspaceId)
+  const pending = interactions.pending
   const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
   const [reviewError, setReviewError] = useState<string>()
   const [reviewSelected, setReviewSelected] = useState<{ path: string; mode: "diff" | "preview" }>()
@@ -175,14 +177,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setCapabilities((capabilitiesResult ?? {}) as Record<string, string[]>)
         setSandbox(sandboxResult as SandboxState | undefined)
         setError(undefined)
+        if ((capabilitiesResult as Record<string, string[]> | undefined)?.["desktop-interaction"]?.includes("1")) await interactions.refresh()
       } catch (reason) {
         if (active) setError(reason instanceof Error ? reason.message : String(reason))
       }
     })()
     return () => { active = false }
-  }, [bridge, retryNonce, selectedWorkspaceId])
-
-  useEffect(() => { setPending([]) }, [selectedWorkspaceId])
+  }, [bridge, interactions.refresh, retryNonce, selectedWorkspaceId])
 
   // Subscribe BEFORE the first history read (spec §6): a live event that lands
   // during the read must not be lost.
@@ -199,19 +200,23 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.method === "desktop/interaction/request") {
         const view = event.params as PendingInteraction | undefined
         if (view === undefined || typeof view.requestId !== "string" || typeof view.sessionId !== "string") return
-        setPending((current) => upsertPending(current, view))
+        interactions.update(view.requestId, view)
         return
       }
       if (event.method === "desktop/interaction/closed") {
         const params = event.params as { requestId?: unknown } | undefined
         const requestId = params?.requestId
         if (typeof requestId !== "string") return
-        setPending((current) => removePending(current, requestId))
+        interactions.update(requestId)
         return
       }
       if (event.method !== "session/event" && event.method !== "session/status") return
       const info = classifyNotification(event.method, event.params)
-      if (info.kind === "ignore" || info.sessionId !== selectedSessionId) return
+      if (info.kind === "ignore") return
+      if (info.sessionId !== selectedSessionId) {
+        if (info.kind === "status") void refreshDashboard(selectedWorkspaceId)
+        return
+      }
       if (info.kind === "chunk") {
         const params = event.params as { event?: unknown }
         if (params.event === undefined) return
@@ -239,7 +244,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       void refreshTasks(selectedWorkspaceId, info.sessionId)
       void refreshDashboard(selectedWorkspaceId)
     })
-  }, [bridge, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, interactions.update, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
@@ -299,15 +304,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
       try {
-        const rows = await bridge.request({
-          kind: "desktop/interaction/pending", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId,
-        })
-        if (active) {
-          setPending((current) => [
-            ...current.filter((row) => row.sessionId !== selectedSessionId),
-            ...(rows as PendingInteraction[]),
-          ])
-        }
+        if (active) await interactions.refresh(selectedSessionId)
       } catch (reason) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
@@ -320,7 +317,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         chunkFrame.current = undefined
       }
     }
-  }, [bridge, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
   const gate = sendGate({ model, sandbox, connection }, t)
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
@@ -379,7 +376,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             sessionId,
             decision,
           })
-          setPending((current) => removePending(current, requestId))
+          interactions.update(requestId)
         },
       }
 
@@ -388,6 +385,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       bridge={bridge}
       workspaces={workspaces}
       dashboard={dashboard}
+      attentionBySession={pending.reduce<Record<string, number>>((counts, row) => { counts[row.sessionId] = (counts[row.sessionId] ?? 0) + 1; return counts }, {})}
       capabilities={capabilities}
       sandbox={sandbox}
       error={error}

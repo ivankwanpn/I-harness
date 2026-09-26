@@ -1,5 +1,6 @@
 import { useRef, useState } from "react"
 import { ApprovalCard } from "./ApprovalCard.tsx"
+import { QuestionCard } from "./QuestionCard.tsx"
 import { useText } from "../design/i18n.ts"
 import type { PendingInteraction } from "./pending.ts"
 
@@ -32,7 +33,6 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
   const t = useText()
   const [errors, setErrors] = useState<Record<string, string | undefined>>({})
   const [busy, setBusy] = useState<Record<string, boolean>>({})
-  const [answers, setAnswers] = useState<Record<string, string>>({})
   const inFlight = useRef(new Set<string>())
 
   if (pending.length === 0) return null
@@ -69,31 +69,7 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
               const { prompt, options } = questionShape(row.payload, t("代理提出問題"))
               return (
                 <li key={row.requestId} className="task-row">
-                  <span className="row-label">{prompt}</span>
-                  <span className="row-meta">
-                    {options.length === 0
-                      ? (
-                        <>
-                          <input
-                            aria-label={`${t("回答")} ${prompt}`}
-                            value={answers[row.requestId] ?? ""}
-                            onChange={(event) => {
-                              setAnswers((current) => ({ ...current, [row.requestId]: event.target.value }))
-                            }}
-                          />
-                          <button type="button" className="primary-button" disabled={busy[row.requestId] === true || !(answers[row.requestId] ?? "").trim()}
-                            onClick={() => { void reply(row, { kind: "question", answer: answers[row.requestId] ?? "" }) }}>
-                            {t("送出回答")}
-                          </button>
-                        </>
-                      )
-                      : options.map((option) => (
-                        <button key={option} type="button" className="primary-button" disabled={busy[row.requestId] === true}
-                          onClick={() => { void reply(row, { kind: "question", answer: option }) }}>
-                          {option}
-                        </button>
-                      ))}
-                  </span>
+                  <QuestionCard requestId={row.requestId} prompt={prompt} options={options} busy={busy[row.requestId] === true} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} />
                   {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
                 </li>
               )
