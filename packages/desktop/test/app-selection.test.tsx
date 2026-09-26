@@ -6,7 +6,8 @@ import type { DesktopBridge, DesktopRequest } from "../src/shared/bridge.ts"
 const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefined }))
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
 import { App } from "../src/renderer/app.tsx"
-afterEach(cleanup)
+import { useUiStore } from "../src/renderer/shell/ui-store.ts"
+afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
 function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined) {

@@ -29,6 +29,7 @@ import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
 import { useLocale, useText } from "./design/i18n.ts"
+import { useUiStore } from "./shell/ui-store.ts"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -44,8 +45,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const textRef = useRef(t)
   textRef.current = t
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([])
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>()
-  const [selectedSessionId, setSelectedSessionId] = useState<string>()
+  const selectedWorkspaceId = useUiStore((state) => state.selectedWorkspaceId)
+  const selectedSessionId = useUiStore((state) => state.selectedSessionId)
+  const setSelectedWorkspaceId = useUiStore((state) => state.setSelectedWorkspaceId)
+  const setSelectedSessionId = useUiStore((state) => state.setSelectedSessionId)
   const [dashboard, setDashboard] = useState<SessionDashboardResult>()
   const [capabilities, setCapabilities] = useState<Record<string, string[]>>({})
   const [sandbox, setSandbox] = useState<SandboxState>()

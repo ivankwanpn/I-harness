@@ -20,6 +20,10 @@ function readLocale(): Locale {
 
 // UI state only. SDK state remains owned by the renderer data layer.
 export const useUiStore = create<Preferences & {
+  selectedWorkspaceId?: string
+  selectedSessionId?: string
+  setSelectedWorkspaceId(value: string | undefined | ((current: string | undefined) => string | undefined)): void
+  setSelectedSessionId(value: string | undefined): void
   locale: Locale
   setLocale(locale: Locale): void
   update(patch: Partial<Preferences>): void
@@ -32,6 +36,10 @@ export const useUiStore = create<Preferences & {
   toggleReview(): void
 }>((set, get) => ({
   ...readPreferences(),
+  selectedWorkspaceId: undefined,
+  selectedSessionId: undefined,
+  setSelectedWorkspaceId: (value) => set((state) => ({ selectedWorkspaceId: typeof value === "function" ? value(state.selectedWorkspaceId) : value })),
+  setSelectedSessionId: (selectedSessionId) => set({ selectedSessionId }),
   locale: readLocale(),
   setLocale: (locale) => {
     try { localStorage.setItem("ih:locale", locale) } catch { /* In-memory preference still applies. */ }
