@@ -414,6 +414,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
+      '@i-harness/hooks':
+        specifier: workspace:*
+        version: link:../hooks
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction

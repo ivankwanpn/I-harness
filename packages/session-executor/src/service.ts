@@ -85,6 +85,12 @@ type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
+  /** Trusted host extension snapshot, re-read for each new assembly. */
+  extensionsFor?: (sessionId: string) => Promise<{
+    options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents">
+    mount?: (assembly: SessionAssembly) => Promise<(() => void | Promise<void>) | void>
+  }>
   beforeDispose?: () => Promise<void>
   /** Shared host event stream (also handed to each assembly). */
   telemetry?: Telemetry
@@ -319,6 +325,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     let pending = creating.get(sessionId)
     if (pending === undefined) {
       pending = (async () => {
+        const extensions = await opts.extensionsFor?.(sessionId)
         let assembly: SessionAssembly
         if (opts.modelBindingFor !== undefined) {
           const result = await bindingFor(sessionId)
@@ -344,6 +351,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
           assembly = await createSessionAssembly({
             ...opts,
+            ...extensions?.options,
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -373,12 +381,23 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             : opts.reasoningEffortFor(sessionId, meta)
           assembly = await createSessionAssembly({
             ...opts,
+            ...extensions?.options,
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),
             ...(opts.contextWindowFor !== undefined ? { contextWindow } : {}),
             ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
           })
+        }
+        if (extensions?.mount) {
+          try {
+            const cleanup = await extensions.mount(assembly)
+            if (cleanup) {
+              const dispose = assembly.dispose.bind(assembly)
+              let disposing: Promise<void> | undefined
+              assembly.dispose = () => disposing ??= (async () => { try { await cleanup() } finally { await dispose() } })()
+            }
+          } catch (error) { await assembly.dispose(); throw error }
         }
         assemblies.set(sessionId, assembly)
         // The A-region serial lane over this assembly (tiers; send on submit).
@@ -456,19 +475,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         settle() // the queued turn never starts; the chain keeps moving
         return
       }
-      getOrCreate(sessionId).then(() => {
+      getOrCreate(sessionId).then(async (assembly) => {
         if (controller.signal.aborted || closed) {
           settle()
           return
         }
         const lane = lanes.get(sessionId)!
         try {
+          const prepared = opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
+          if (controller.signal.aborted || closed) { settle(); return }
           // M41b: the submit signal now rides INTO the lane — the agent's
           // run() gets it and aborts at step boundaries/yields (in-flight
           // cancel reaches the engine, not just the queue gate). Task 11:
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
-          lane.submit({ tier: "send", text: prompt, signal: controller.signal }, id)
+          lane.submit({ tier: "send", text: prepared, signal: controller.signal }, id)
           record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.

@@ -6,6 +6,7 @@ import type { InteractionBridge } from "./interaction.ts"
 import type { WorkspaceReview } from "./review.ts"
 import type { createSessionManagement } from "./session-management.ts"
 import type { createDesktopRewind } from "./rewind.ts"
+import type { createDesktopPlugins } from "./plugins.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -14,6 +15,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  plugins?: ReturnType<typeof createDesktopPlugins>
   rewind?: ReturnType<typeof createDesktopRewind>
   sessions?: ReturnType<typeof createSessionManagement>
   provider?: ProviderRuntime

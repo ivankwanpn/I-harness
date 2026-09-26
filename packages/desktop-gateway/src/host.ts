@@ -12,6 +12,8 @@ import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsPr
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
 import { createDesktopRewind } from "./rewind.ts"
+import { createDesktopPlugins } from "./plugins.ts"
+import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -96,7 +98,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   const additionalTools = createMemoryTools(memory, () => memory.enabled())
+  const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const service: SessionService = createSessionService({
+    extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), dirname(settingsPath), id, (messages) => plugins.report(id, messages)),
+    transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
     additionalTools,
     sessionQuery,
@@ -114,6 +119,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
     sessions: createSessionManagement(coordinator, service),
     provider: runtime,
@@ -179,6 +185,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       await router.close()
       await review.close()
       await service.close()
+      await plugins.close()
       memory.close()
       await coordinator.close()
     })(),
