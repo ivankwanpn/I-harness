@@ -77,6 +77,35 @@ No ZCode logo, trademark, provider-specific UI, private dependency, telemetry, a
 
 If a ZCode fragment later proves worth copying verbatim, implementation pauses before the copy and adds the required Apache license and notice material in the same change. The current design requires no verbatim ZCode source.
 
+### 4.4 Desktop state, services, and localization
+
+The Desktop renderer uses a small Zustand store for UI-owned state only:
+
+- selected workspace and session;
+- sidebar expansion and narrow-window drawer state;
+- active workbench surface and review-pane visibility;
+- local settings route;
+- per-surface ephemeral selection such as the chosen review file.
+
+SDK events, session history, pending interactions, provider facts, plugin facts, terminal processes, telemetry, and sandbox state do not become duplicate Zustand authorities. Service hooks wrap the preload bridge and expose typed operations to components. Store selectors remain narrow so streaming updates do not rerender the entire shell.
+
+Localization begins in this redesign inside `packages/desktop`. New visible strings use typed message keys rather than component-local literals. The first dictionaries are Traditional Chinese and English, with a Desktop-local locale preference and system-locale fallback. Backend codes and reason values remain stable protocol values and are translated at the presentation boundary.
+
+### 4.5 Existing backend capability inventory
+
+| Surface | Existing backend | Desktop status for this design |
+| --- | --- | --- |
+| Plugins and marketplace | `packages/plugin-registry` supports marketplace sources, catalog, install, uninstall, enable, disable, skills, commands, agents, hooks, and MCP materialization | No Desktop gateway methods yet; requires explicit backend approval before wiring |
+| Providers and models | `packages/provider`, `provider-runtime`, `credentials`, and provider adapters support routes, discovery, model rows, credentials, and runtime resolution | Gateway initializes provider runtime and reports session model state; management methods are not exposed |
+| Terminal | `packages/terminal` owns a real `node-pty` service with open, send, read, signal, close, resize, and list | No Desktop wire; an interactive surface must preserve session ownership and sandbox escalation |
+| Browser | `packages/web` supplies bounded `webfetch` and provider-backed `websearch` tools | No interactive browser/CDP surface; excluded from this redesign |
+| Telemetry | `packages/telemetry` supplies local events, sinks, JSONL, and metrics | No Desktop query wire; the redesign uses existing session state and does not invent analytics |
+| Tab/workbench | No backend object is required | Implemented as Desktop-local Zustand state and component composition |
+| Account and provider usage | No shared subscription or usage account contract | Deferred; future provider-specific adapters may expose official read/reset APIs without selling subscriptions |
+| Remote workspace | Deliberately unnecessary for this local product | Excluded |
+
+The official Claude plugin directory uses the same plugin ecosystem shapes: `.claude-plugin/plugin.json`, optional `.mcp.json`, commands, agents, and skills. Desktop UI may therefore present I-harness plugin-registry data without adopting ZCode state or services.
+
 ## 5. Information architecture
 
 ### 5.1 Desktop frame
@@ -155,7 +184,9 @@ Binary, missing, deleted, untracked, no-head, no-diff, and not-git explanations 
 
 ### 7.7 Local settings
 
-The first settings surface covers only Desktop-owned appearance, sidebar visibility, review behavior, existing notification preference, and window preference reset. Provider, Agent, sandbox, account, subscription, and cloud settings are excluded.
+The first settings surface covers Desktop-owned language, appearance, sidebar visibility, review behavior, existing notification preference, and window preference reset. The settings navigation is extensible through service-backed sections; it does not show dead controls for unavailable services.
+
+Plugin marketplace and provider/model management can be added to this settings shell after their Desktop gateway contracts receive explicit backend approval. Account usage is a later provider-specific surface. Subscription creation, cloud settings, and remote workspace settings remain excluded.
 
 ## 8. Data flow and ownership
 
@@ -243,3 +274,5 @@ Screenshot inspection is part of acceptance.
 10. Desktop tests, typecheck, build, package smoke, real-gateway E2E, and long-session profile complete with recorded evidence.
 11. No GitHub push occurs.
 12. The empty workbench, active conversation, tool activity, composer, review pane, and settings shell visibly match the reference hierarchy and density; using different internal components is not grounds for reducing the visual or interaction target.
+13. New visible copy is served by the Desktop-local typed i18n catalog, with Traditional Chinese and English dictionaries.
+14. Zustand contains only UI-owned state; backend facts continue to come from typed service hooks over the existing bridge.
