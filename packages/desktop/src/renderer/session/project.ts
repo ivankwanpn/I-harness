@@ -3,7 +3,7 @@ import type { HistoryRange } from "@i-harness/sdk"
 export type WireEvent = HistoryRange["events"][number]
 
 export type TimelineRow =
-  | { id: string; kind: "message"; role: "user" | "assistant"; text: string }
+  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; transient?: true }
   | { id: string; kind: "tool"; name: string; output?: unknown }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string }
@@ -12,6 +12,12 @@ export type TimelineRow =
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = []
   const toolIndex = new Map<string, number>()
+  let pendingChunks = ""
+  const flushChunks = (): void => {
+    if (pendingChunks === "") return
+    rows.push({ id: "chunk:stream", kind: "message", role: "assistant", text: pendingChunks, transient: true })
+    pendingChunks = ""
+  }
   for (const [index, event] of events.entries()) {
     if (event.type === "tool/call") {
       toolIndex.set(event.callId, rows.length)
@@ -31,16 +37,22 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         },
       })
     } else if (event.type === "user/message" || event.type === "assistant/message") {
+      // The durable message replaces whatever the stream had shown.
+      pendingChunks = ""
       rows.push({
         id: `message:${event.seq ?? index}`,
         kind: "message",
         role: event.type === "user/message" ? "user" : "assistant",
         text: event.text,
       })
-    } else if (event.type !== "assistant/chunk") {
+    } else if (event.type === "assistant/chunk") {
+      pendingChunks += event.text
+    } else {
+      flushChunks()
       rows.push({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type })
     }
   }
+  flushChunks()
   return rows
 }
 

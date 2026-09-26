@@ -83,4 +83,26 @@ describe("Desktop workbench shell", () => {
     const create = screen.getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(false)
   })
+
+  it("offers a folder control that asks the main process to open a workspace", () => {
+    const bridge = fakeBridge()
+    const request = vi.fn(async () => ({ id: "ws-2", path: "D:/other", label: "other" }))
+    bridge.request = request
+
+    render(
+      <Workbench
+        bridge={bridge}
+        workspaces={[ENTRY]}
+        dashboard={{ sessions: [] }}
+        capabilities={{ "session-create": ["1"] }}
+        selectedWorkspaceId={ENTRY.id}
+        onSelectWorkspace={() => {}}
+        onSelectSession={() => {}}
+        onOpenWorkspace={() => { void bridge.request({ kind: "workspace/pick" }) }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "開啟工作區" }))
+    expect(request).toHaveBeenCalledWith({ kind: "workspace/pick" })
+  })
 })

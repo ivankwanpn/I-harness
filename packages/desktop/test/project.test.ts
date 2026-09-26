@@ -34,7 +34,7 @@ describe("projectTimeline", () => {
     expect(labels[2]).toContain("空")
   })
 
-  it("keeps unknown events readable and drops transient chunks", () => {
+  it("keeps unknown events readable and flushes the stream ahead of them", () => {
     const rows = projectTimeline([
       { type: "assistant/chunk", text: "hel", seq: 0 },
       { type: "todo/write", version: 1, items: [], seq: 1 },
@@ -42,6 +42,7 @@ describe("projectTimeline", () => {
     ])
 
     expect(rows).toEqual([
+      { id: "chunk:stream", kind: "message", role: "assistant", text: "hel", transient: true },
       { id: "event:1", kind: "other", label: "todo/write" },
       { id: "event:2", kind: "other", label: "goal/change" },
     ])
@@ -66,5 +67,24 @@ describe("projectTimeline", () => {
     ])
 
     expect(rows.map((row) => row.id)).toEqual(["message:0", "step:1"])
+  })
+
+  it("streams assistant chunks as one transient row and drops them once the durable message lands", () => {
+    const streaming = projectTimeline([
+      { type: "assistant/chunk", text: "Hel", seq: 0 },
+      { type: "assistant/chunk", text: "lo", seq: 1 },
+    ])
+    expect(streaming).toEqual([
+      { id: "chunk:stream", kind: "message", role: "assistant", text: "Hello", transient: true },
+    ])
+
+    const settled = projectTimeline([
+      { type: "assistant/chunk", text: "Hel", seq: 0 },
+      { type: "assistant/chunk", text: "lo", seq: 1 },
+      { type: "assistant/message", text: "Hello", seq: 2 },
+    ])
+    expect(settled).toEqual([
+      { id: "message:2", kind: "message", role: "assistant", text: "Hello" },
+    ])
   })
 })

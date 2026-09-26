@@ -4,12 +4,16 @@ export interface WorkspaceSidebarProps {
   workspaces: WorkspaceEntry[]
   selectedId?: string
   onSelect(workspaceId: string): void
+  onOpen(): void
 }
 
-export function WorkspaceSidebar({ workspaces, selectedId, onSelect }: WorkspaceSidebarProps) {
+export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen }: WorkspaceSidebarProps) {
   return (
     <nav className="sidebar" aria-label="工作區">
       <h2 className="sidebar-title">工作區</h2>
+      <button type="button" className="primary-button sidebar-open" onClick={onOpen}>
+        開啟工作區
+      </button>
       {workspaces.length === 0 ? (
         <p className="notice">尚未開啟工作區</p>
       ) : (

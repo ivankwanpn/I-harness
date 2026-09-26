@@ -6,6 +6,8 @@ import type { WorkspaceCatalog } from "./workspaces.ts"
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
   runtimes: WorkspaceRuntimeManager
+  /** Native folder picker; injected so the dispatcher stays testable. */
+  pickFolder?: () => Promise<string | undefined>
 }
 
 /**
@@ -29,6 +31,10 @@ export async function dispatchDesktopRequest(
       return await dependencies.catalog.list()
     case "workspace/open":
       return await dependencies.catalog.open(requireNonEmptyPath(value.path))
+    case "workspace/pick": {
+      const picked = await dependencies.pickFolder?.()
+      return picked === undefined ? undefined : await dependencies.catalog.open(picked)
+    }
     case "workspace/sandbox/state":
       return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).sandbox
     case "desktop/capabilities":

@@ -74,7 +74,7 @@ describe("Composer", () => {
 
 describe("sendGate", () => {
   it("refuses to send without a wired sandbox and says why", () => {
-    expect(sendGate({ model: undefined, sandbox: undefined })).toEqual({
+    expect(sendGate({ model: undefined, sandbox: undefined, connection: "online" })).toEqual({
       canSend: false,
       reason: expect.stringContaining("沙箱"),
     })
@@ -84,6 +84,7 @@ describe("sendGate", () => {
     const gate = sendGate({
       model: { status: "unconfigured", reason: "尚未選擇模型" },
       sandbox: { mode: "read-only", source: "settings", wired: true },
+      connection: "online",
     })
 
     expect(gate.canSend).toBe(false)
@@ -94,7 +95,19 @@ describe("sendGate", () => {
     expect(sendGate({
       model: { status: "ready", providerId: "fixture", modelId: "m", label: "fixture: m" },
       sandbox: { mode: "workspace-write", source: "settings", wired: true },
+      connection: "online",
     })).toEqual({ canSend: true })
+  })
+
+  it("keeps Send disabled while the SDK connection is down", () => {
+    const gate = sendGate({
+      model: { status: "ready", providerId: "fixture", modelId: "m", label: "fixture: m" },
+      sandbox: { mode: "workspace-write", source: "settings", wired: true },
+      connection: "offline",
+    })
+
+    expect(gate.canSend).toBe(false)
+    expect(gate.reason).toContain("中斷")
   })
 })
 

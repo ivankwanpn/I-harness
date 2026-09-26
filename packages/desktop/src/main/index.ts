@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from "electron"
+import { app, BrowserWindow, dialog, ipcMain } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
@@ -26,7 +26,14 @@ app.whenReady().then(() => {
   runtimes = manager
   const openWindow = (): void => {
     const window = createDesktopWindow()
-    const unregister = registerDesktopIpc(window, { catalog: workspaces, runtimes: manager }, ipcMain)
+    const unregister = registerDesktopIpc(window, {
+      catalog: workspaces,
+      runtimes: manager,
+      pickFolder: async () => {
+        const result = await dialog.showOpenDialog(window, { properties: ["openDirectory"] })
+        return result.canceled ? undefined : result.filePaths[0]
+      },
+    }, ipcMain)
     window.on("closed", unregister)
   }
   openWindow()

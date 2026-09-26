@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import type {
   AgentTaskView,
   HistoryRange,
@@ -9,12 +9,22 @@ import type {
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
 import type { DesktopBridge } from "../shared/bridge.ts"
-import { applyHistory, applyNotification, emptyEventWindow, type EventWindow, type WireEvent } from "./session/event-window.ts"
+import {
+  applyHistory,
+  applyNotification,
+  emptyEventWindow,
+  markDisconnected,
+  type EventWindow,
+  type WireEvent,
+} from "./session/event-window.ts"
+import { loadHistory } from "./session/history.ts"
+import { classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
 
 const HISTORY_LIMIT = 500
+const HISTORY_MAX_PAGES = 40
 
 /** The renderer data layer: it owns the bridge, selection and refresh rules;
  * the workbench below renders exactly what it is told. */
@@ -33,6 +43,21 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [taskError, setTaskError] = useState<string>()
   const [running, setRunning] = useState(false)
   const [sending, setSending] = useState(false)
+  const [connection, setConnection] = useState<"online" | "offline">("online")
+  const cursorRef = useRef(0)
+  const chunkBuffer = useRef<WireEvent[]>([])
+  const chunkFrame = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    cursorRef.current = eventWindow.cursor
+  }, [eventWindow.cursor])
+
+  const refreshWorkspaces = useCallback(async (): Promise<WorkspaceEntry[]> => {
+    const rows = await bridge.request({ kind: "workspace/list" })
+    const list = rows as WorkspaceEntry[]
+    setWorkspaces(list)
+    return list
+  }, [bridge])
 
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const result = await bridge.request({ kind: "session/dashboard", workspaceId })
@@ -53,28 +78,35 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }
   }, [bridge])
 
-  const refreshHistory = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
-    const page = await bridge.request({
-      kind: "session/history", workspaceId, sessionId, afterSeq: 0, limit: HISTORY_LIMIT,
-    })
-    // Re-reading the bounded window is idempotent: events merge by seq.
-    setEventWindow((current) => applyHistory(current, page as HistoryRange))
+  const pageHistory = useCallback(async (
+    workspaceId: string,
+    sessionId: string,
+    afterSeq: number,
+  ): Promise<void> => {
+    const load = await loadHistory(
+      (params) => bridge.request({
+        kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, limit: params.limit,
+      }) as Promise<HistoryRange>,
+      { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES },
+    )
+    setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
+    if (!load.exhausted) {
+      setTaskError(`歷史視窗已載入 ${load.events.length} 筆；更早的內容仍在後端日誌中，可捲動後再補頁`)
+    }
   }, [bridge])
 
   useEffect(() => {
     let active = true
-    void bridge.request({ kind: "workspace/list" })
-      .then((rows) => {
+    void refreshWorkspaces()
+      .then((list) => {
         if (!active) return
-        const list = rows as WorkspaceEntry[]
-        setWorkspaces(list)
         setSelectedWorkspaceId((current) => current ?? list[0]?.id)
       })
       .catch((reason: unknown) => {
         if (active) setError(reason instanceof Error ? reason.message : String(reason))
       })
     return () => { active = false }
-  }, [bridge])
+  }, [refreshWorkspaces])
 
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
@@ -98,6 +130,50 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     return () => { active = false }
   }, [bridge, selectedWorkspaceId])
 
+  // Subscribe BEFORE the first history read (spec §6): a live event that lands
+  // during the read must not be lost.
+  useEffect(() => {
+    if (selectedWorkspaceId === undefined) return
+    return bridge.onEvent((event) => {
+      if (event.workspaceId !== selectedWorkspaceId) return
+      if (event.kind === "sdk/disconnected") {
+        setConnection("offline")
+        setEventWindow((current) => markDisconnected(current))
+        setError(`SDK 連線中斷：${event.message}`)
+        return
+      }
+      if (event.method !== "session/event" && event.method !== "session/status") return
+      const info = classifyNotification(event.method, event.params)
+      if (info.kind === "ignore" || info.sessionId !== selectedSessionId) return
+      if (info.kind === "chunk") {
+        const params = event.params as { event?: unknown }
+        if (params.event === undefined) return
+        chunkBuffer.current.push(params.event as WireEvent)
+        if (chunkFrame.current === undefined) {
+          chunkFrame.current = requestAnimationFrame(() => {
+            chunkFrame.current = undefined
+            const buffered = chunkBuffer.current.splice(0)
+            if (buffered.length === 0) return
+            setEventWindow((current) => buffered.reduce((next, item) => applyNotification(next, item), current))
+          })
+        }
+        return
+      }
+      if (info.kind === "durable") {
+        const params = event.params as { event?: unknown }
+        if (params.event !== undefined) {
+          setEventWindow((current) => applyNotification(current, params.event as WireEvent))
+        }
+        void refreshTasks(selectedWorkspaceId, info.sessionId)
+        void refreshDashboard(selectedWorkspaceId)
+        return
+      }
+      setRunning(info.status === "queued")
+      void refreshTasks(selectedWorkspaceId, info.sessionId)
+      void refreshDashboard(selectedWorkspaceId)
+    })
+  }, [bridge, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
+
   useEffect(() => {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
@@ -107,47 +183,34 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setTasks(undefined)
     setTaskError(undefined)
     setRunning(false)
+    setConnection("online")
+    chunkBuffer.current.length = 0
     void (async () => {
       try {
-        const [page, modelState] = await Promise.all([
-          bridge.request({
-            kind: "session/history", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, afterSeq: 0, limit: HISTORY_LIMIT,
-          }),
-          bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }),
-        ])
-        if (!active) return
-        setEventWindow(applyHistory(emptyEventWindow(), page as HistoryRange))
-        setModel(modelState as SessionModelState)
+        await pageHistory(selectedWorkspaceId, selectedSessionId, 0)
       } catch (reason) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
-      if (!active) return
-      await refreshTasks(selectedWorkspaceId, selectedSessionId)
+      try {
+        const modelState = await bridge.request({
+          kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId,
+        })
+        if (active) setModel(modelState as SessionModelState)
+      } catch (reason) {
+        if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
+      }
+      if (active) await refreshTasks(selectedWorkspaceId, selectedSessionId)
     })()
-    return () => { active = false }
-  }, [bridge, refreshTasks, selectedSessionId, selectedWorkspaceId])
-
-  useEffect(() => {
-    if (selectedWorkspaceId === undefined) return
-    return bridge.onEvent((event) => {
-      if (event.kind !== "sdk/notification" || event.workspaceId !== selectedWorkspaceId) return
-      void refreshDashboard(event.workspaceId)
-      if (selectedSessionId === undefined) return
-      const params = (event.params ?? {}) as { sessionId?: unknown; event?: unknown; status?: unknown }
-      if (params.sessionId !== selectedSessionId) return
-      if (event.method === "session/event" && params.event !== undefined) {
-        const wireEvent = params.event as WireEvent
-        setEventWindow((current) => applyNotification(current, wireEvent))
-        void refreshTasks(selectedWorkspaceId, selectedSessionId)
+    return () => {
+      active = false
+      if (chunkFrame.current !== undefined) {
+        cancelAnimationFrame(chunkFrame.current)
+        chunkFrame.current = undefined
       }
-      if (event.method === "session/status") {
-        setRunning(params.status === "queued")
-        void refreshTasks(selectedWorkspaceId, selectedSessionId)
-      }
-    })
-  }, [bridge, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
+    }
+  }, [bridge, pageHistory, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
-  const gate = sendGate({ model, sandbox })
+  const gate = sendGate({ model, sandbox, connection })
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
@@ -167,7 +230,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           } finally {
             setSending(false)
           }
-          void refreshHistory(selectedWorkspaceId, selectedSessionId)
+          if (connection === "online") {
+            void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+          }
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
           void refreshDashboard(selectedWorkspaceId)
         },
@@ -205,6 +270,20 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setDashboard(undefined)
       }}
       onSelectSession={setSelectedSessionId}
+      onOpenWorkspace={() => {
+        void (async () => {
+          try {
+            const opened = await bridge.request({ kind: "workspace/pick" })
+            if (opened === undefined) return
+            const entry = opened as WorkspaceEntry
+            await refreshWorkspaces()
+            setSelectedWorkspaceId(entry.id)
+            setSelectedSessionId(undefined)
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason))
+          }
+        })()
+      }}
       onSessionsChanged={() => {
         if (selectedWorkspaceId !== undefined) void refreshDashboard(selectedWorkspaceId)
       }}

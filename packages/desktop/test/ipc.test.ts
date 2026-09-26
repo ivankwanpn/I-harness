@@ -96,6 +96,20 @@ describe("Desktop scoped IPC", () => {
       .resolves.toEqual({})
   })
 
+  it("opens the folder the picker returns and reports a cancelled picker", async () => {
+    const f = fixture()
+    const pickFolder = vi.fn(async () => "D:/chosen")
+    const withPicker = { ...f.dependencies, pickFolder }
+
+    await expect(dispatchDesktopRequest({ kind: "workspace/pick" }, withPicker))
+      .resolves.toEqual(ENTRY)
+    expect(pickFolder).toHaveBeenCalledTimes(1)
+    expect(f.catalog.open).toHaveBeenCalledWith("D:/chosen")
+
+    const cancelled = { ...f.dependencies, pickFolder: vi.fn(async () => undefined) }
+    await expect(dispatchDesktopRequest({ kind: "workspace/pick" }, cancelled)).resolves.toBeUndefined()
+  })
+
   it("cancels a queued prompt row or a task row by exact id", async () => {
     const f = fixture()
 

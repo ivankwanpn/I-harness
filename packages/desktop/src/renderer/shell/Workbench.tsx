@@ -34,6 +34,7 @@ export interface WorkbenchProps {
   selectedWorkspaceId?: string
   selectedSessionId?: string
   conversation?: ConversationView
+  onOpenWorkspace?(): void
   onSelectWorkspace(workspaceId: string): void
   onSelectSession(sessionId: string): void
   onSessionsChanged?(): void
@@ -58,6 +59,7 @@ export function Workbench({
   onSelectSession,
   onSessionsChanged,
   conversation,
+  onOpenWorkspace,
 }: WorkbenchProps) {
   const [createError, setCreateError] = useState<string>()
   const canCreate = capabilities["session-create"]?.includes("1") === true
@@ -77,7 +79,12 @@ export function Workbench({
 
   return (
     <div className="workbench">
-      <WorkspaceSidebar workspaces={workspaces} selectedId={selectedWorkspaceId} onSelect={onSelectWorkspace} />
+      <WorkspaceSidebar
+        workspaces={workspaces}
+        selectedId={selectedWorkspaceId}
+        onSelect={onSelectWorkspace}
+        onOpen={() => onOpenWorkspace?.()}
+      />
       <main className="center-pane">
         <header className="session-header" data-testid="session-header">
           <button

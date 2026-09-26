@@ -8,7 +8,11 @@ import type { SandboxState } from "../../main/sdk-runtime.ts"
 export function sendGate(input: {
   model: SessionModelState | undefined
   sandbox: SandboxState | undefined
+  connection: "online" | "offline"
 }): { canSend: boolean; reason?: string } {
+  if (input.connection === "offline") {
+    return { canSend: false, reason: "SDK 連線已中斷，送出已停用" }
+  }
   if (input.sandbox?.wired !== true) {
     return { canSend: false, reason: "沙箱尚未接線：宿主未回報可執行模式，送出已停用" }
   }

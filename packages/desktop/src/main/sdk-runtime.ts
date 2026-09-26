@@ -24,6 +24,12 @@ export interface LaunchedRuntime {
   exited: Promise<void>
 }
 
+/** A child that writes more than the pipe buffer holds would block forever if
+ * nobody reads that stream; its diagnostics are not a protocol channel. */
+export function drainChildStream(stream: NodeJS.ReadableStream | null | undefined): void {
+  stream?.resume()
+}
+
 export interface WorkspaceRuntimeManager {
   get(workspace: WorkspaceEntry): Promise<WorkspaceRuntime>
   onEvent(listener: (event: DesktopEvent) => void): () => void
@@ -63,6 +69,7 @@ export function launchLocalGateway(workspace: WorkspaceEntry, sessionDir: string
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   })
+  drainChildStream(child.stderr)
   const exited = new Promise<void>((resolveExit) => {
     child.once("exit", () => resolveExit())
     child.once("error", () => resolveExit())

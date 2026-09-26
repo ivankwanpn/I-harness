@@ -4,6 +4,7 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
   | { kind: "workspace/open"; path: string }
+  | { kind: "workspace/pick" }
   | { kind: "workspace/list" }
   | { kind: "workspace/sandbox/state"; workspaceId: string }
   | { kind: "desktop/capabilities"; workspaceId: string }
