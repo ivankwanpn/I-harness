@@ -1,6 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from "react"
 import { ArrowUp, Square } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 
 const DRAFT_LIMIT_BYTES = 32 * 1024
 const memoryDrafts = new Map<string, string>()
@@ -73,6 +74,7 @@ export interface ComposerProps {
   canSend: boolean
   sendReason?: string
   running: boolean
+  modelLabel?: string
   onPrompt(text: string): Promise<void>
   onCancel(): void
 }
@@ -87,6 +89,7 @@ function SessionComposer({
   canSend,
   sendReason,
   running,
+  modelLabel,
   onPrompt,
   onCancel,
 }: ComposerProps) {
@@ -121,13 +124,8 @@ function SessionComposer({
   }
 
   return (
-    <form
-      className="composer"
-      onSubmit={(event) => {
-        event.preventDefault()
-        void send()
-      }}
-    >
+    <ComposerSurface onSubmit={() => { void send() }} error={error ?? (!canSend ? sendReason : undefined)}
+      editor={
       <textarea
         aria-label={t("提示")}
         className="composer-input"
@@ -145,17 +143,19 @@ function SessionComposer({
         }}
         placeholder={canSend ? t("輸入提示…") : (sendReason ?? t("目前無法送出"))}
       />
-      <div className="composer-actions">
+      }
+      leadingActions={
         <span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span>
+      }
+      trailingActions={<>
+        {modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null}
         <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || value.trim() === ""}>
           <ArrowUp size={18} />
         </button>
         <button type="button" className="icon-button" aria-label={t("停止")} title={t("停止")} disabled={!running} onClick={onCancel}>
           <Square size={15} />
         </button>
-        {canSend || sendReason === undefined ? null : <span className="muted">{sendReason}</span>}
-        {error === undefined ? null : <span className="error-text">{error}</span>}
-      </div>
-    </form>
+      </>}
+    />
   )
 }

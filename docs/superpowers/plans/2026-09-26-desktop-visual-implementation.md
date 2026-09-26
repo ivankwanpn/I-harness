@@ -15,6 +15,14 @@
 
 ## Checkpoint — 2026-09-26
 
+### Approved strategy revision: reuse source first
+
+User approved adapting ZCode UI source before tuning appearance. Baseline saved as be8414c. First extraction is PermissionCard, retaining upstream JSX hierarchy and Tailwind utility classes, using a small I-harness approval adapter. Apache license and original NOTICE are preserved under packages/desktop/licenses/zcode and copied by the portable packaging script. Tailwind is a build-time public dependency; no ZCode backend services or stores imported. Explicit confirmation and native radio accessibility are retained intentionally.
+
+Development visual fixture: /permission-preview.html, using simulated requests only. Browser automation denied access to localhost:5173, so visual acceptance of this extraction is still pending; no fallback bypass attempted.
+
+ComposerSurface now adapts the form/input-shell/toolbar from prompt-editor/ChatPromptEditor.tsx. Existing I-harness textarea, bounded drafts, pending-send ownership, IME handling and cancellation remain connected through slots. Model label is read-only backend data. Both extractions retain provenance in licenses/zcode/README.md. The same fixture includes a clearly labelled simulated composer whose submit only returns a local preview error.
+
 Implemented shell geometry, nested navigation, default-closed review, safe Markdown, shell localization, IME-safe Enter handling and session-owned pending sends. Memory management now uses the existing workspace-scoped gateway for list/search/read/add/delete/configure. Review diff lines distinguish additions/removals/hunks.
 
 Independent review found and prompted fixes for bounded pending interactions, external HTTPS/HTTP links, pending-send ownership across remounts, and conversation navigation from Memory. Regression cases cover the latter two. Native screenshots confirmed empty/workspace shell and language changes; user confirmed the native folder picker works. Automated native focus remains unreliable, so memory CRUD and long-conversation visual acceptance are not claimed complete.

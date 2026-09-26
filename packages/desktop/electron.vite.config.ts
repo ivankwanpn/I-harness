@@ -1,5 +1,6 @@
 import { defineConfig } from "electron-vite"
 import react from "@vitejs/plugin-react"
+import tailwindcss from "@tailwindcss/vite"
 import { devCspPlugin } from "./electron.csp.ts"
 
 export default defineConfig({
@@ -11,5 +12,5 @@ export default defineConfig({
       rollupOptions: { output: { format: "cjs", entryFileNames: "[name].cjs" } },
     },
   },
-  renderer: { plugins: [react(), devCspPlugin] },
+  renderer: { plugins: [react(), tailwindcss(), devCspPlugin] },
 })

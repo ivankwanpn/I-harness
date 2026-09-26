@@ -22,6 +22,7 @@ export interface ConversationView {
   canSend: boolean
   sendReason?: string
   running: boolean
+  modelLabel?: string
   queue?: SessionQueueItem[]
   tasks?: AgentTaskView[]
   taskError?: string
@@ -162,6 +163,7 @@ export function Workbench({
                   canSend={conversation.canSend}
                   sendReason={conversation.sendReason}
                   running={conversation.running}
+                  modelLabel={conversation.modelLabel}
                   onPrompt={conversation.onPrompt}
                   onCancel={conversation.onCancel}
                 />

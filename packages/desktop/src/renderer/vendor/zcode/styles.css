@@ -1,0 +1,48 @@
+/* SPDX-License-Identifier: Apache-2.0
+ * Theme values adapted from ZCode 3.14.0 styles.css (Codex dark).
+ * Modified: only extracted UI utilities; no upstream global reset.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./PermissionCard.tsx";
+@source "./ComposerSurface.tsx";
+@theme {
+  --spacing: 4px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --text-ui-base: 14px;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-hover: rgba(255, 255, 255, 0.05);
+  --color-selected: rgba(255, 255, 255, 0.1);
+  --color-popover: #2b2b2b;
+  --color-brand: #ffffff;
+  --color-foreground: #e5e5e5;
+  --color-foreground-subtle: rgba(212, 212, 212, 0.6);
+  --color-foreground-subtlest: rgba(212, 212, 212, 0.3);
+  --color-foreground-inverse: #0d0d0d;
+  --color-input: #2b2b2b;
+  --color-input-focused: #2b2b2b;
+  --color-input-border: rgba(255, 255, 255, 0.1);
+  --color-input-border-hover: rgba(255, 255, 255, 0.2);
+  --color-input-border-focused: rgba(255, 255, 255, 0.2);
+}
+@layer base {
+  .zc-permission *, .zc-permission *::before, .zc-permission *::after { box-sizing: border-box; border-width: 0; border-style: solid; }
+  .zc-permission p { margin: 0; }
+  .zc-permission button { cursor: pointer; }
+  .zc-composer *, .zc-composer *::before, .zc-composer *::after { box-sizing: border-box; border-width: 0; border-style: solid; }
+}
+.zc-composer { width: 100%; margin: 12px auto 6px; }
+.zc-composer-error { margin-bottom: 12px; color: #f79a91; overflow-wrap: anywhere; }
+.zc-composer .composer-input { padding: 0; min-height: 72px; line-height: 1.6; }
+.composer-model { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--ih-muted); }
+@media (max-width: 1000px) { .composer-model { max-width: 120px; } }
+.zc-permission { line-height: 1.5; }
+.zc-permission-option { position: relative; cursor: pointer; }
+.zc-permission-option input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.zc-permission-option:focus-within { outline: 2px solid var(--ih-accent); outline-offset: -2px; }
+.zc-permission-option:has(input:disabled) { opacity: .6; cursor: wait; }
+.zc-confirm { flex-shrink: 0; color: var(--color-foreground-inverse); }
+.zc-confirm:disabled { opacity: .5; cursor: wait; }

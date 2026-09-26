@@ -34,6 +34,7 @@ renameSync(join(appDir, "electron.exe"), join(appDir, `${appName}.exe`))
 
 const resources = join(appDir, "resources")
 cpSync(outDir, join(resources, "app", "out"), { recursive: true, dereference: true })
+cpSync(join(packageRoot, "licenses"), join(resources, "app", "licenses"), { recursive: true })
 writeFileSync(join(resources, "app", "package.json"), `${JSON.stringify({
   name: manifest.name,
   productName: appName,

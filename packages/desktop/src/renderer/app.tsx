@@ -290,6 +290,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canSend: gate.canSend,
         sendReason: gate.reason,
         running: running || sending,
+        modelLabel: model?.status === "ready" ? model.label : undefined,
         queue,
         tasks,
         taskError,
