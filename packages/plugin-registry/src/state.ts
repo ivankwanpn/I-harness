@@ -80,13 +80,17 @@ function rebuilt(reason: string, file: string): PluginState {
 }
 
 /** Load the registry state; missing/unreadable/corrupt → default + console.warn. */
-export async function loadState(root: string): Promise<PluginState> {
+export async function loadState(root: string, options?: { strict?: boolean }): Promise<PluginState> {
   const file = join(root, STATE_FILE_NAME)
   try {
     const parsed: unknown = JSON.parse(await readFile(file, "utf8"))
-    if (!isPluginState(parsed)) return rebuilt("has an invalid shape", file)
+    if (!isPluginState(parsed)) {
+      if (options?.strict) throw new Error("Invalid plugin registry state")
+      return rebuilt("has an invalid shape", file)
+    }
     return parsed
-  } catch {
+  } catch (error) {
+    if (options?.strict && (error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot read valid plugin registry state")
     return rebuilt("is missing or unreadable", file)
   }
 }

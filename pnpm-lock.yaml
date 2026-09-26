@@ -420,6 +420,9 @@ importers:
       '@i-harness/memory':
         specifier: workspace:*
         version: link:../memory
+      '@i-harness/plugin-registry':
+        specifier: workspace:*
+        version: link:../plugin-registry
       '@i-harness/provider-runtime':
         specifier: workspace:*
         version: link:../provider-runtime
@@ -751,6 +754,9 @@ importers:
       '@i-harness/fs':
         specifier: workspace:*
         version: link:../fs
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
     devDependencies:
       '@i-harness/mcp-client':
         specifier: workspace:*
