@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.plugins) capabilities["desktop-plugins"] = ["1"]
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
@@ -157,6 +158,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         try { send(makeSuccess(message.id, await job)) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         finally { modelSwitches.delete(sessionId) }
+        return
+      }
+      if (message.method.startsWith("desktop/terminal/") && handlers.terminal) {
+        try { send(makeSuccess(message.id, handlers.terminal.request(message.method, message.params))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
       if ((message.method === "desktop/plugins/state" || message.method === "desktop/plugins/mutate") && handlers.plugins) {

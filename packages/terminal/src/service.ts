@@ -20,6 +20,8 @@ export function filterConptyNoise(text: string): string {
 }
 
 export interface TerminalOpenSpec {
+  /** Preserve CR/LF and control sequences for terminal emulators. */
+  rawOutput?: boolean
   command: string
   args?: string[]
   cwd?: string
@@ -41,6 +43,8 @@ export interface TerminalView {
 }
 export interface TerminalRunSpec { id: string; pid: number; cols: number; rows: number }
 export interface TerminalReadResult {
+  /** Requested cursor preceded the retained output window. */
+  dropped?: boolean
   id: string
   data: string
   nextOffset: number
@@ -71,6 +75,8 @@ class PtySession {
   static counter = 0 // 先於 id 初始化（useDefineForClassFields 聲明序）
   readonly id = `term-${++PtySession.counter}`
   private chunks: string[] = []
+  private retainedLength = 0
+  startOffset = 0
   // 超過 RING_MAX 就丟最舊——早於 ring 起點的 offset 從 ring 起點開始（文件化缺點）。
   private static readonly RING_MAX = 1_000_000
   status: "running" | "exited" = "running"
@@ -104,10 +110,19 @@ class PtySession {
       // "Cannot resize a pty that has already exited"（async uncaught——vitest 視為失敗），
       // 所以 resize 只在 ready 後直接走（sync throw 可被捕）。
       this.ptyReady = true
-      const cleaned = d.replace(/\r\n/g, "\n") // Windows pty CRLF/LF 歸一
-      this.chunks.push(cleaned)
-      const joined = this.chunks.join("")
-      if (joined.length > PtySession.RING_MAX) this.chunks = [joined.slice(-PtySession.RING_MAX)]
+      const cleaned = spec.rawOutput ? d : d.replace(/\r\n/g, "\n")
+      const last = this.chunks.length - 1
+      if (last >= 0 && this.chunks[last]!.length < 4096 && cleaned.length < 4096) this.chunks[last] += cleaned
+      else this.chunks.push(cleaned)
+      this.retainedLength += cleaned.length
+      while (this.retainedLength > PtySession.RING_MAX) {
+        const first = this.chunks[0]!
+        const remove = Math.min(first.length, this.retainedLength - PtySession.RING_MAX)
+        if (remove === first.length) this.chunks.shift()
+        else this.chunks[0] = first.slice(remove)
+        this.retainedLength -= remove
+        this.startOffset += remove
+      }
       for (const w of this.dataWaiters) w()
       this.dataWaiters = []
     })
@@ -121,8 +136,9 @@ class PtySession {
 
   textSince(offset: number): string {
     const combined = this.chunks.join("")
-    if (offset >= combined.length) return ""
-    return combined.slice(Math.max(0, offset))
+    const relative = Math.max(0, offset - this.startOffset)
+    if (relative >= combined.length) return ""
+    return combined.slice(relative)
   }
 
   closePty(): void { try { this.pty.kill() } catch { /* 已死 */ } }
@@ -172,7 +188,8 @@ export function createTerminalService(): TerminalService {
       return {
         id,
         data,
-        nextOffset: offset + data.length,
+        nextOffset: Math.max(offset, s.startOffset) + data.length,
+        ...(offset < s.startOffset ? { dropped: true } : {}),
         truncated: text.length > data.length,
         status: s.status,
         ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {}),

@@ -453,6 +453,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/terminal':
+        specifier: workspace:*
+        version: link:../terminal
       koffi:
         specifier: ^3.1.0
         version: 3.1.6
