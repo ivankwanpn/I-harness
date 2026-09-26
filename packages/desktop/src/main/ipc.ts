@@ -140,6 +140,29 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
     case "desktop/plugins/state":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {}, 120000)
+    case "desktop/terminal/list":
+    case "desktop/terminal/open":
+    case "desktop/terminal/read":
+    case "desktop/terminal/write":
+    case "desktop/terminal/resize":
+    case "desktop/terminal/close": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const params: Record<string, unknown> = {}
+      if (value.kind !== "desktop/terminal/list" && value.kind !== "desktop/terminal/open") params.id = requireNonEmpty(value.id, "terminal id")
+      if (value.kind === "desktop/terminal/read") params.offset = requireNonNegativeInteger(value.offset, "offset")
+      if (value.kind === "desktop/terminal/write") {
+        if (typeof value.data !== "string" || value.data.length > 32768) throw new Error("invalid terminal input")
+        params.data = value.data
+      }
+      if (value.kind === "desktop/terminal/resize") {
+        for (const dimension of ["cols", "rows"]) {
+          const size = requireNonNegativeInteger(value[dimension], dimension)
+          if (size < 2 || size > 500) throw new Error("invalid terminal size")
+          params[dimension] = size
+        }
+      }
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params)
+    }
     case "desktop/plugins/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const command = requireRecord(value.command)

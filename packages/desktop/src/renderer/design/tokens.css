@@ -344,6 +344,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .marketplace-pane h1 { margin: 0 0 12px; font-size: 24px; }
 .marketplace-pane details { margin: 18px 0; }
 .marketplace-pane p { overflow-wrap: anywhere; }
+.terminal-pane { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 260px; padding: 8px; box-sizing: border-box; }
+.terminal-pane > p { font-size: 12px; margin: 5px 0; overflow-wrap: anywhere; }
+.terminal-emulator { flex: 1; min-height: 120px; min-width: 0; overflow: hidden; background: #151515; }
 .provider-discovery-list { max-height: 260px; overflow: auto; margin: 10px 0; }
 .provider-discovery-list label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px; overflow-wrap: anywhere; }
 .provider-discovery-list small { opacity: .65; }

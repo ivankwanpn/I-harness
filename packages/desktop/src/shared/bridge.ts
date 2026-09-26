@@ -6,6 +6,11 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/terminal/list" | "desktop/terminal/open"; workspaceId: string }
+  | { kind: "desktop/terminal/close"; workspaceId: string; id: string }
+  | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }
+  | { kind: "desktop/terminal/write"; workspaceId: string; id: string; data: string }
+  | { kind: "desktop/terminal/resize"; workspaceId: string; id: string; cols: number; rows: number }
   | { kind: "desktop/plugins/state"; workspaceId: string }
   | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }

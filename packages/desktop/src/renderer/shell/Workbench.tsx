@@ -1,11 +1,12 @@
-import { useId, useRef, useState, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, Plus, FolderOpen } from "lucide-react"
+import { useId, useRef, useState, lazy, Suspense, type CSSProperties } from "react"
+import { Brain, Search, PanelLeft, PanelRight, Plus, FolderOpen, TerminalSquare } from "lucide-react"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { SessionSearch } from "../session/SessionSearch.tsx"
 import { SettingsPane } from "../settings/SettingsPane.tsx"
 import { PluginMarketplace } from "../settings/PluginMarketplace.tsx"
+const TerminalPane = lazy(() => import("../terminal/TerminalPane.tsx").then((module) => ({ default: module.TerminalPane })))
 import { useAppearance, usePreferences } from "../design/preferences.ts"
 import { CompactionPanel } from "../session/CompactionPanel.tsx"
 import type { SessionOperation } from "../session/use-session-operation.ts"
@@ -184,6 +185,7 @@ export function Workbench({
           </button>
           {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "連線中…")}</span> : null}
           {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(memoryOpen ? "返回會話" : "工作區記憶")} title={t(memoryOpen ? "返回會話" : "工作區記憶")} onClick={() => setMemoryOpen((open) => !open)}><Brain size={16} /><span className="header-action-label">{t(memoryOpen ? "返回會話" : "工作區記憶")}</span></button> : null}
+          {selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t("終端")} onClick={() => { if (!reviewOpen) toggleReview(); setWorkPaneTab("terminal") }}><TerminalSquare size={16} /><span className="header-action-label">{t("終端")}</span></button> : null}
           {selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(surface === "search" ? "返回會話" : "搜尋會話")} title={t(surface === "search" ? "返回會話" : "搜尋會話")} onClick={() => setSurface(surface === "search" ? "conversation" : "search")}><Search size={16} /><span className="header-action-label">{t(surface === "search" ? "返回會話" : "搜尋會話")}</span></button> : null}
         </TitleBar>
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
@@ -248,9 +250,10 @@ export function Workbench({
       </main>
       {reviewOpen ? <aside className="review-pane" aria-label={t("成果檢查")}>
         <ReviewResizeHandle width={reviewWidth} onResize={setReviewWidth} />
-        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }]} selected={workPaneTab} onSelect={setWorkPaneTab} />
+        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
+        {workPaneTab === "terminal" && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense> : null}
         {workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
             changes={review.changes}
