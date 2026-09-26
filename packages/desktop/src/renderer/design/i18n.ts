@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "關閉": "Close", "僅還原檔案，對話內容保持不變。": "Restore files only; conversation content is unchanged.",
+  "回復會話": "Rewind conversation", "回復到所選回合開始前；之後的回合將不再提供給模型。": "Rewind to before the selected turn; later turns will no longer be sent to the model.", "回復點": "Rewind point", "選擇回復點": "Choose a rewind point", "沒有已記錄的回復點": "No recorded rewind points", "回復範圍": "Rewind scope", "對話與檔案": "Conversation and files", "僅對話": "Conversation only", "僅檔案": "Files only", "預覽回復": "Preview rewind", "檔案操作：{count}": "File operations: {count}", "刪除新建檔案": "Delete created file", "還原檔案內容": "Restore file contents", "存在衝突；確認後仍會覆寫下列檔案。": "Conflicts exist; confirming will still overwrite these files.", "下列變更沒有完整快照，不會自動還原。": "These changes have no complete snapshot and will not be restored automatically.", "Shell 或外部程式造成的變更可能未被記錄。": "Changes made by shell commands or external applications may not have been recorded.", "我已查看影響範圍並確認回復": "I have reviewed the affected scope and confirm the rewind", "確認回復": "Confirm rewind", "已回復 {count} 個檔案": "Reverted {count} files",
   "管理會話": "Manage conversations", "目前會話": "Current conversations", "已封存會話": "Archived conversations", "重新命名": "Rename", "還原會話": "Restore conversation", "建立分支": "Fork conversation", "確認封存": "Confirm archive", "封存會話": "Archive conversation", "會話名稱": "Conversation name",
   "選擇模型": "Choose model", "推理強度": "Reasoning effort", "套用模型": "Apply model",
   "篩選模型": "Filter models", "上一頁": "Previous page", "下一頁": "Next page",

@@ -66,6 +66,23 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
     case "desktop/session/archived":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {})
+    case "desktop/rewind/points":
+    case "desktop/rewind/plan":
+    case "desktop/rewind/execute": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const params: Record<string, unknown> = { sessionId }
+      if (value.kind !== "desktop/rewind/points") {
+        params.target = requireNonNegativeInteger(value.target, "target")
+        if (!["all", "files", "conversation"].includes(String(value.mode))) throw new Error("invalid rewind mode")
+        params.mode = value.mode
+      }
+      if (value.kind === "desktop/rewind/execute") {
+        if (typeof value.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(value.fingerprint)) throw new Error("invalid rewind confirmation")
+        params.fingerprint = value.fingerprint
+      }
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params, 120000)
+    }
     case "desktop/session/manage": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")

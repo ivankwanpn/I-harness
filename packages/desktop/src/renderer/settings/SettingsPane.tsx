@@ -9,7 +9,7 @@ import { NativeSettings } from "./NativeSettings.tsx"
 import { ProviderDirectory } from "./ProviderDirectory.tsx"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 
-export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession }) {
+export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void }) {
   const t = useText()
   const [tab, setTab] = useState<"general" | "workspace" | "about">("general")
   const locale = useLocale((state) => state.locale)
@@ -36,7 +36,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
         <button className="primary-button" onClick={preferences.reset}>{t("重設外觀偏好")}</button>
         {bridge ? <NativeSettings bridge={bridge} /> : null}
       </> : tab === "workspace" ? <>
-        {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} /> : null}
+        {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} onRewindComplete={onRewindComplete} /> : null}
         {workspace ? <><SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup>{bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} /> : null}</> : <p className="muted">{t("尚未開啟工作區")}</p>}
       </> : <SettingsGroup><SettingsRow label="I-harness Desktop" description={t("本機 Agent 工作台；使用既有後端執行任務。") } control={<span>MIT</span>} /><SettingsRow label={t("第三方 UI 程式碼")} description={t("部分介面改編自 ZCode，依 Apache-2.0 保留授權與來源說明。") } control={<span>Apache-2.0</span>} /></SettingsGroup>}
     </div>

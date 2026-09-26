@@ -469,6 +469,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setSelectedSessionId(undefined)
       }}
       onSelectSession={setSelectedSessionId}
+      onRewindComplete={(workspaceId, sessionId) => {
+        if (selection.current.workspaceId !== workspaceId) return
+        void refreshDashboard(workspaceId)
+        void refreshChanges(workspaceId)
+        if (selection.current.sessionId === sessionId) setRetryNonce((value) => value + 1)
+      }}
       onManageSession={async (sessionId, action, title) => {
         if (!selectedWorkspaceId) return
         const scope = selection.current

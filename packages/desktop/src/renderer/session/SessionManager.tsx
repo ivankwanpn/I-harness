@@ -2,9 +2,10 @@ import { useEffect, useRef, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import { RewindPanel } from "./RewindPanel.tsx"
 export type ManageSession = (sessionId: string, action: "rename" | "archive" | "restore" | "fork", title?: string) => Promise<void>
 interface Row { id: string; title?: string }
-export function SessionManager({ bridge, workspaceId, onManage }: { bridge: DesktopBridge; workspaceId: string; onManage: ManageSession }) {
+export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete }: { bridge: DesktopBridge; workspaceId: string; onManage: ManageSession; onRewindComplete?: (sessionId: string) => void }) {
   const t = useText()
   const [archived, setArchived] = useState(false)
   const [rows, setRows] = useState<Row[]>()
@@ -15,6 +16,7 @@ export function SessionManager({ bridge, workspaceId, onManage }: { bridge: Desk
   const [editing, setEditing] = useState<string>()
   const [title, setTitle] = useState("")
   const [confirm, setConfirm] = useState<string>()
+  const [rewinding, setRewinding] = useState<string>()
   useEffect(() => {
     let active = true
     setRows(undefined); setError(undefined); setEditing(undefined); setConfirm(undefined)
@@ -40,11 +42,13 @@ export function SessionManager({ bridge, workspaceId, onManage }: { bridge: Desk
         <button disabled={busy} onClick={() => { setEditing(row.id); setTitle(row.title ?? "") }}>{t("重新命名")}</button>
         {archived ? <button disabled={busy} onClick={() => { void run(row.id, "restore") }}>{t("還原會話")}</button> : <>
           <button disabled={busy} onClick={() => { void run(row.id, "fork") }}>{t("建立分支")}</button>
+          {onRewindComplete ? <button disabled={busy} onClick={() => setRewinding(row.id)}>{t("回復會話")}</button> : null}
           <button disabled={busy} onClick={() => { if (confirm === row.id) void run(row.id, "archive"); else setConfirm(row.id) }}>{t(confirm === row.id ? "確認封存" : "封存會話")}</button>
         </>}
       </div>} />
       {confirm === row.id ? <button disabled={busy} onClick={() => setConfirm(undefined)}>{t("取消")}</button> : null}
       {editing === row.id ? <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); void run(row.id, "rename", title) }}><label>{t("會話名稱")}<input required maxLength={256} disabled={busy} value={title} onChange={(event) => setTitle(event.target.value)} /></label><button disabled={busy || !title.trim()}>{t("儲存")}</button><button type="button" disabled={busy} onClick={() => setEditing(undefined)}>{t("取消")}</button></form> : null}
     </SettingsGroup>)}
+    {rewinding && onRewindComplete ? <RewindPanel key={rewinding} bridge={bridge} workspaceId={workspaceId} sessionId={rewinding} onComplete={() => onRewindComplete(rewinding)} onClose={() => setRewinding(undefined)} /> : null}
   </section>
 }
