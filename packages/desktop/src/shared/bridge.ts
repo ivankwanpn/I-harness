@@ -27,6 +27,9 @@ export type DesktopRequest =
       sessionId: string
       decision: { kind: "approval"; approved: boolean } | { kind: "question"; answer: string }
     }
+  | { kind: "desktop/review/changes"; workspaceId: string }
+  | { kind: "desktop/review/diff"; workspaceId: string; path: string; maxBytes?: number }
+  | { kind: "desktop/review/file"; workspaceId: string; path: string; maxBytes?: number }
 
 export type DesktopEvent =
   | {

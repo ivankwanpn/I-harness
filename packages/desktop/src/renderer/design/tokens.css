@@ -164,6 +164,9 @@ button { font: inherit; color: inherit; }
 .sidebar-open { width: 100%; margin: 0 0 10px; }
 .pending-panel { padding: 8px 12px 0; }
 .pending-panel input { padding: 4px 8px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: inherit; font: inherit; }
+.review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.review-detail { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--ih-divider); }
+.review-text pre { max-height: 320px; }
 
 .visually-hidden {
   position: absolute;

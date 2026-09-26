@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest"
 import { createServer, type Server, type ServerResponse } from "node:http"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { RpcNotification } from "@i-harness/sdk"
@@ -216,6 +217,33 @@ describe("Desktop SDK reconnect and cancel against the real gateway", () => {
       expect(await settled).toBe("rejected")
       expect(existsSync(fixture.outsidePath)).toBe(false)
       expect(await runtime.client.request("desktop/interaction/pending", { sessionId })).toEqual([])
+    } finally {
+      await fixture.close()
+    }
+  }, 60_000)
+
+  it("reviews a real git workspace through the read-only review wire", async () => {
+    const fixture = await setup("text")
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: fixture.workspace.path })
+      execFileSync("git", ["config", "user.email", "review@example.test"], { cwd: fixture.workspace.path })
+      execFileSync("git", ["config", "user.name", "Review Test"], { cwd: fixture.workspace.path })
+      writeFileSync(join(fixture.workspace.path, "tracked.txt"), "before\n", "utf8")
+      execFileSync("git", ["add", "tracked.txt"], { cwd: fixture.workspace.path })
+      execFileSync("git", ["commit", "-qm", "seed"], { cwd: fixture.workspace.path })
+      writeFileSync(join(fixture.workspace.path, "tracked.txt"), "after\n", "utf8")
+
+      const runtime = await fixture.manager.get(fixture.workspace)
+      const changes = await runtime.client.request("desktop/review/changes", {}) as {
+        kind: string
+        files: Array<{ path: string; status: string }>
+      }
+      expect(changes.kind).toBe("ok")
+      expect(changes.files).toContainEqual(expect.objectContaining({ path: "tracked.txt", status: "modified" }))
+
+      const diff = await runtime.client.request("desktop/review/diff", { path: "tracked.txt" }) as { kind: string; text?: string }
+      expect(diff.kind).toBe("text")
+      expect(diff.text).toContain("+after")
     } finally {
       await fixture.close()
     }

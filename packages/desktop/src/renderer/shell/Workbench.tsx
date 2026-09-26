@@ -9,6 +9,7 @@ import { TaskPane } from "../session/TaskPane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
 import { PendingPanel, type InteractionReply } from "../interaction/PendingPanel.tsx"
 import type { PendingInteraction } from "../interaction/pending.ts"
+import { ReviewPane, type ReviewChanges, type ReviewText } from "../review/ReviewPane.tsx"
 import { TaskList } from "./TaskList.tsx"
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx"
 
@@ -28,6 +29,16 @@ export interface ConversationView {
   onReply(reply: InteractionReply): Promise<void>
 }
 
+export interface ReviewView {
+  changes?: ReviewChanges
+  error?: string
+  selected?: { path: string; mode: "diff" | "preview" }
+  diff?: ReviewText
+  preview?: ReviewText
+  onSelect(path: string, mode: "diff" | "preview"): void
+  onRefresh(): void
+}
+
 export interface WorkbenchProps {
   bridge: DesktopBridge
   workspaces: WorkspaceEntry[]
@@ -38,6 +49,7 @@ export interface WorkbenchProps {
   selectedWorkspaceId?: string
   selectedSessionId?: string
   conversation?: ConversationView
+  review?: ReviewView
   onOpenWorkspace?(): void
   onSelectWorkspace(workspaceId: string): void
   onSelectSession(sessionId: string): void
@@ -63,6 +75,7 @@ export function Workbench({
   onSelectSession,
   onSessionsChanged,
   conversation,
+  review,
   onOpenWorkspace,
 }: WorkbenchProps) {
   const [createError, setCreateError] = useState<string>()
@@ -133,6 +146,17 @@ export function Workbench({
       </main>
       <aside className="review-pane" aria-label="成果檢查">
         <h2 className="review-title">成果檢查</h2>
+        {review === undefined ? null : (
+          <ReviewPane
+            changes={review.changes}
+            error={review.error}
+            selected={review.selected}
+            diff={review.diff}
+            preview={review.preview}
+            onSelect={review.onSelect}
+            onRefresh={review.onRefresh}
+          />
+        )}
         {conversation === undefined ? null : (
           <TaskPane
             queue={conversation.queue}
@@ -148,7 +172,7 @@ export function Workbench({
             ? <span className="muted">此宿主未回報</span>
             : <span>{SANDBOX_LABELS[sandbox.mode]}（{sandbox.source}，已接線）</span>}
         </p>
-        <p className="notice">逐檔變動與檔案預覽會在成果檢查契約接通後出現。</p>
+        {review === undefined ? <p className="notice">逐檔變動與檔案預覽會在成果檢查契約接通後出現。</p> : null}
       </aside>
     </div>
   )

@@ -19,6 +19,7 @@ import {
 } from "./session/event-window.ts"
 import { loadHistory } from "./session/history.ts"
 import type { InteractionReply } from "./interaction/PendingPanel.tsx"
+import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, removePending, upsertPending, type PendingInteraction } from "./interaction/pending.ts"
 import { classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
@@ -47,6 +48,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [sending, setSending] = useState(false)
   const [connection, setConnection] = useState<"online" | "offline">("online")
   const [pending, setPending] = useState<PendingInteraction[]>([])
+  const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
+  const [reviewError, setReviewError] = useState<string>()
+  const [reviewSelected, setReviewSelected] = useState<{ path: string; mode: "diff" | "preview" }>()
+  const [reviewDiff, setReviewDiff] = useState<ReviewText>()
+  const [reviewPreview, setReviewPreview] = useState<ReviewText>()
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
@@ -78,6 +84,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       setTaskError(undefined)
     } catch (reason) {
       setTaskError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [bridge])
+
+  const refreshChanges = useCallback(async (workspaceId: string): Promise<void> => {
+    try {
+      setReviewChanges(await bridge.request({ kind: "desktop/review/changes", workspaceId }) as ReviewChanges)
+      setReviewError(undefined)
+    } catch (reason) {
+      setReviewError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -191,6 +206,33 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {
+    if (selectedWorkspaceId === undefined) return
+    setReviewChanges(undefined)
+    setReviewSelected(undefined)
+    setReviewDiff(undefined)
+    setReviewPreview(undefined)
+    setReviewError(undefined)
+    void refreshChanges(selectedWorkspaceId)
+  }, [refreshChanges, selectedWorkspaceId])
+
+  const selectReview = useCallback(async (path: string, mode: "diff" | "preview"): Promise<void> => {
+    if (selectedWorkspaceId === undefined) return
+    setReviewSelected({ path, mode })
+    setReviewError(undefined)
+    try {
+      const result = await bridge.request({
+        kind: mode === "diff" ? "desktop/review/diff" : "desktop/review/file",
+        workspaceId: selectedWorkspaceId,
+        path,
+      })
+      if (mode === "diff") setReviewDiff(result as ReviewText)
+      else setReviewPreview(result as ReviewText)
+    } catch (reason) {
+      setReviewError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [bridge, selectedWorkspaceId])
+
+  useEffect(() => {
     if (selectedWorkspaceId === undefined || selectedSessionId === undefined) return
     let active = true
     setEventWindow(emptyEventWindow())
@@ -265,6 +307,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           }
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
           void refreshDashboard(selectedWorkspaceId)
+          void refreshChanges(selectedWorkspaceId)
         },
         onCancel: () => {
           void bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
@@ -306,6 +349,17 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       selectedWorkspaceId={selectedWorkspaceId}
       selectedSessionId={selectedSessionId}
       conversation={conversation}
+      review={{
+        changes: reviewChanges,
+        error: reviewError,
+        selected: reviewSelected,
+        diff: reviewDiff,
+        preview: reviewPreview,
+        onSelect: (path, mode) => { void selectReview(path, mode) },
+        onRefresh: () => {
+          if (selectedWorkspaceId !== undefined) void refreshChanges(selectedWorkspaceId)
+        },
+      }}
       onSelectWorkspace={(workspaceId) => {
         setSelectedWorkspaceId(workspaceId)
         setSelectedSessionId(undefined)

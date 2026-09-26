@@ -104,6 +104,20 @@ export async function dispatchDesktopRequest(
           : { kind: "question", answer: record.answer as string },
       })
     }
+    case "desktop/review/changes":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/review/changes", {})
+    case "desktop/review/diff":
+    case "desktop/review/file": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const path = requireNonEmpty(value.path, "path")
+      const maxBytes = value.maxBytes === undefined
+        ? undefined
+        : requirePositiveInteger(value.maxBytes, "maxBytes")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, {
+        path,
+        ...(maxBytes === undefined ? {} : { maxBytes }),
+      })
+    }
     default:
       throw new Error("unknown Desktop request")
   }
@@ -169,4 +183,10 @@ function requireHistoryLimit(value: unknown): number {
   const limit = requireNonNegativeInteger(value, "limit")
   if (limit < 1 || limit > 1000) throw new Error("limit must be an integer between 1 and 1000")
   return limit
+}
+
+function requirePositiveInteger(value: unknown, field: string): number {
+  const number = requireNonNegativeInteger(value, field)
+  if (number < 1) throw new Error(`${field} must be a positive integer`)
+  return number
 }
