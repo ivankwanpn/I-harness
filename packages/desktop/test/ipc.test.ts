@@ -51,6 +51,13 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("routes provider reads only through a registered workspace", async () => {
+    const f = fixture()
+    await dispatchDesktopRequest({ kind: "desktop/provider/directory", workspaceId: ENTRY.id }, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("desktop/provider/directory", {})
+    await expect(dispatchDesktopRequest({ kind: "desktop/provider/directory", workspaceId: "unknown" }, f.dependencies)).rejects.toThrow()
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
   it("validates native window preferences and never forwards them to the SDK", async () => {
     const f = fixture()
     const configure = vi.fn(() => ({ notifications: true }))

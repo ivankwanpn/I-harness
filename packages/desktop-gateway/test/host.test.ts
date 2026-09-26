@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createCredentialStore } from "@i-harness/credentials"
 
 const roots: string[] = []
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }) })
@@ -22,6 +23,28 @@ function fixture(mode: "read-only" | "workspace-write" | "danger-full-access") {
 }
 
 describe("Desktop host sandbox configuration", () => {
+  it("exposes the existing provider directory without returning credentials", async () => {
+    const f = fixture("read-only")
+    const credentialsPath = join(f.root, "credentials.json")
+    await createCredentialStore(credentialsPath).set("DESKTOP_TEST_SECRET", "test-secret-not-for-renderer")
+    writeFileSync(f.settingsPath, JSON.stringify({ sandboxMode: "read-only", llm: {
+      providers: { "desktop-test": { protocol: "openai-compatible", apiKeyEnv: "DESKTOP_TEST_SECRET", baseUrl: "https://example.invalid/v1", models: [{ id: "test-model", contextWindow: 272000 }] } },
+    } }))
+    const host = await createDesktopHost({ ...f, credentialsPath, onWrite: (frame) => f.frames.push(frame) })
+    try {
+      await host.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+      await host.handleLine(encodeFrame(makeRequest(2, "desktop/provider/directory", {})))
+      const reply = f.frames.find((frame) => "id" in frame && frame.id === 2)
+      expect(isRpcSuccess(reply)).toBe(true)
+      if (!isRpcSuccess(reply)) throw new Error("provider directory missing")
+      expect(reply.result).toEqual(expect.arrayContaining([expect.objectContaining({ id: "desktop-test", models: expect.arrayContaining([expect.objectContaining({ id: "test-model", contextWindow: 272000 })]) })]))
+      expect(JSON.stringify(reply.result)).not.toContain('"apiKey":')
+      expect(JSON.stringify(reply.result)).not.toContain("test-secret-not-for-renderer")
+      expect(reply.result).toEqual(expect.arrayContaining([expect.objectContaining({ id: "desktop-test", auth: expect.objectContaining({ configured: true }) })]))
+      const initialized = f.frames.find((frame) => "id" in frame && frame.id === 1)
+      expect(isRpcSuccess(initialized) && initialized.result).toMatchObject({ capabilities: { "desktop-provider": ["1"] } })
+    } finally { await host.close() }
+  })
   it("loads settings before reporting the wired read-only mode", async () => {
     const f = fixture("read-only")
     const host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })

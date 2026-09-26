@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "模型與提供商": "Models and providers", "讀取提供商目錄中…": "Loading provider directory…", "沒有可用的提供商": "No providers available",
+  "憑證已設定": "Credentials configured", "憑證未設定": "Credentials not configured", "模型數量：{count}": "Models: {count}", "上下文大小": "Context window", "未指定": "Unspecified",
   "逐段瀏覽差異": "Browse diff sections", "上一段": "Previous section", "下一段": "Next section", "回到差異摘要": "Back to diff summary",
   "預覽略去中間 {count} 列；可逐段瀏覽。": "Preview omits {count} middle lines. Browse sections to read them.",
   "已連線": "Connected", "連線已中斷": "Disconnected", "重新連線中…": "Reconnecting…", "連線中…": "Connecting…", "正在連線，送出暫時停用": "Connecting; sending is temporarily disabled",

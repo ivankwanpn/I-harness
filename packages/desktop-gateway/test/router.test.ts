@@ -88,6 +88,7 @@ describe("Desktop SDK router", () => {
       expect(result.capabilities["desktop-sandbox"]).toEqual(["1"])
       expect(result.capabilities["desktop-interaction"]).toBeUndefined()
       expect(result.capabilities["desktop-review"]).toBeUndefined()
+      expect(result.capabilities["desktop-provider"]).toBeUndefined()
     } finally { await f.close() }
   })
 

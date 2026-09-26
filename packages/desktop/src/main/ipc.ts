@@ -99,6 +99,8 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancelTask(requireNonEmpty(value.sessionId, "sessionId"), requireNonEmpty(value.id, "id"))
     case "session/model/state":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
+    case "desktop/provider/directory":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
     case "desktop/interaction/pending": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = value.sessionId === undefined ? undefined : requireNonEmpty(value.sessionId, "sessionId")

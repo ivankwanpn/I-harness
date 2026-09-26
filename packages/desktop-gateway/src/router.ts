@@ -25,6 +25,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
     if (handlers.sessionQuery !== undefined) capabilities["desktop-session-search"] = ["1"]
@@ -119,6 +120,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {
+        try { send(makeSuccess(message.id, await handlers.provider.directory())) }
+        catch { send(makeFailure(message.id, INTERNAL_ERROR, "provider directory unavailable")) }
+        return
+      }
       if (message.method.startsWith("desktop/memory/") && handlers.memory !== undefined) {
         try { send(makeSuccess(message.id, memoryRequest(handlers.memory, message.method, message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

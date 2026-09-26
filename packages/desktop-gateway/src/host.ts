@@ -112,6 +112,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    provider: runtime,
     memory,
     compact: async (sessionId, instructions, signal) => {
       signal.throwIfAborted()

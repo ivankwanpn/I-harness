@@ -1,4 +1,5 @@
 import type { RpcMessage } from "@i-harness/sdk"
+import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import type { SessionQuery } from "@i-harness/session-query"
 import type { MemoryStore } from "@i-harness/memory"
 import type { InteractionBridge } from "./interaction.ts"
@@ -11,6 +12,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  provider?: Pick<ProviderRuntime, "directory">
   memory?: MemoryStore
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
   sessionQuery?: SessionQuery

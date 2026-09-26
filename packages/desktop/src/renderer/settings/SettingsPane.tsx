@@ -6,6 +6,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { NativeSettings } from "./NativeSettings.tsx"
+import { ProviderDirectory } from "./ProviderDirectory.tsx"
 
 export function SettingsPane({ workspace, onMemory, onClose, bridge }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge }) {
   const t = useText()
@@ -34,7 +35,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge }: { workspa
         <button className="primary-button" onClick={preferences.reset}>{t("重設外觀偏好")}</button>
         {bridge ? <NativeSettings bridge={bridge} /> : null}
       </> : tab === "workspace" ? <>
-        {workspace ? <SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup> : <p className="muted">{t("尚未開啟工作區")}</p>}
+        {workspace ? <><SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup>{bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} /> : null}</> : <p className="muted">{t("尚未開啟工作區")}</p>}
       </> : <SettingsGroup><SettingsRow label="I-harness Desktop" description={t("本機 Agent 工作台；使用既有後端執行任務。") } control={<span>MIT</span>} /><SettingsRow label={t("第三方 UI 程式碼")} description={t("部分介面改編自 ZCode，依 Apache-2.0 保留授權與來源說明。") } control={<span>Apache-2.0</span>} /></SettingsGroup>}
     </div>
   </section>
