@@ -138,6 +138,17 @@ export async function dispatchDesktopRequest(
     }
     case "desktop/provider/directory":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
+    case "desktop/plugins/state":
+      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {}, 120000)
+    case "desktop/plugins/mutate": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const command = requireRecord(value.command)
+      if (!["source/add", "source/refresh", "source/remove", "install", "uninstall", "enable", "disable"].includes(String(command.action))) throw new Error("invalid plugin action")
+      const field = command.action === "source/add" ? "source" : String(command.action).startsWith("source/") ? "name" : "id"
+      const valueText = requireNonEmpty(command[field], field)
+      if (valueText.length > 4096) throw new Error("plugin parameter too long")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { action: command.action, [field]: valueText }, 300000)
+    }
     case "desktop/provider/probe":
     case "desktop/provider/probe/cancel": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")

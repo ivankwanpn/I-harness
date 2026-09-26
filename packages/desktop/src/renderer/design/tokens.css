@@ -340,6 +340,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .provider-actions button { padding: 5px 9px; border-radius: 6px; }
 .provider-discovery { margin-top: 14px; }
+.marketplace-pane { overflow: auto; min-height: 0; padding: 28px clamp(16px, 5vw, 64px); }
+.marketplace-pane h1 { margin: 0 0 12px; font-size: 24px; }
+.marketplace-pane details { margin: 18px 0; }
+.marketplace-pane p { overflow-wrap: anywhere; }
 .provider-discovery-list { max-height: 260px; overflow: auto; margin: 10px 0; }
 .provider-discovery-list label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px; overflow-wrap: anywhere; }
 .provider-discovery-list small { opacity: .65; }

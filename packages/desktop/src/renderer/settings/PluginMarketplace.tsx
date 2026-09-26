@@ -1,0 +1,63 @@
+import { useEffect, useRef, useState } from "react"
+import type { DesktopBridge } from "../../shared/bridge.ts"
+import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
+import { useText } from "../design/i18n.ts"
+import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+interface Plugin { id: string; name: string; description?: string; installed: boolean; enabled: boolean; capabilities?: Record<string, boolean>; conflicts?: { name: string; reason: string }[] }
+interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]> }
+export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
+  const t = useText()
+  const [state, setState] = useState<State>()
+  const [error, setError] = useState<string>()
+  const [source, setSource] = useState("")
+  const [query, setQuery] = useState("")
+  const [installed, setInstalled] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [confirm, setConfirm] = useState<string>()
+  const [reload, setReload] = useState(0)
+  const [page, setPage] = useState(0)
+  const lock = useRef(false)
+  useEffect(() => {
+    let active = true
+    void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (active) { setState(value as State); setError(undefined) } }).catch((reason: unknown) => { if (active) setError(String(reason)) })
+    return () => { active = false }
+  }, [bridge, workspaceId, reload])
+  async function run(command: PluginCommand) {
+    if (lock.current) return
+    lock.current = true; setBusy(true); setError(undefined)
+    try {
+      await bridge.request({ kind: "desktop/plugins/mutate", workspaceId, command })
+      setConfirm(undefined); if (command.action === "source/add") setSource("")
+      setReload((value) => value + 1)
+    } catch (reason) { setError(String(reason)) }
+    finally { lock.current = false; setBusy(false) }
+  }
+  const remove = (command: PluginCommand, key: string) => confirm === key ? void run(command) : setConfirm(key)
+  const rows = state?.plugins.filter((row) => (!installed || row.installed) && `${row.id} ${row.name} ${row.description ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? []
+  return <section className="marketplace-pane" aria-label={t("插件市場")}>
+    <h1>{t("插件市場")}</h1>
+    <p className="muted">{t("變更會在新建 Agent 實例時生效，執行中的任務不受影響。")}</p>
+    {error ? <p role="alert">{error}<button disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</button></p> : null}
+    {busy ? <p role="status">{t("正在處理插件操作…")}</p> : null}
+    <details><summary>{t("管理市場來源")}</summary>
+      <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); void run({ action: "source/add", source }) }}>
+        <label>{t("來源網址或本機路徑")}<input required maxLength={4096} disabled={busy} value={source} onChange={(event) => setSource(event.target.value)} /></label>
+        <div className="provider-actions"><button disabled={busy || !source.trim()}>{t("加入來源")}</button><button type="button" disabled={busy} onClick={() => setSource("anthropics/claude-plugins-official")}>{t("填入官方市場來源")}</button></div>
+      </form>
+      {state?.sources.map((entry) => <SettingsGroup key={entry.name}><SettingsRow label={entry.name} description={entry.source} control={<div className="provider-actions"><button disabled={busy} onClick={() => { void run({ action: "source/refresh", name: entry.name }) }}>{t("重新整理")}</button><button disabled={busy} onClick={() => remove({ action: "source/remove", name: entry.name }, `source:${entry.name}`)}>{t(confirm === `source:${entry.name}` ? "確認移除來源" : "移除來源")}</button></div>} />{entry.error ? <p role="alert">{entry.error}</p> : null}</SettingsGroup>)}
+    </details>
+    <div className="provider-editor"><label>{t("搜尋插件")}<input value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} /></label><label><input type="checkbox" checked={installed} onChange={(event) => { setInstalled(event.target.checked); setPage(0) }} />{t("僅顯示已安裝")}</label></div>
+    {!state ? <p role="status">{t("正在讀取插件目錄…")}</p> : rows.length === 0 ? <p>{t("沒有符合的插件；可先加入市場來源。")}</p> : null}
+    {rows.slice(page * 50, (page + 1) * 50).map((plugin) => <SettingsGroup key={plugin.id}>
+      <SettingsRow label={plugin.name} description={plugin.description ?? plugin.id} control={<span>{t(plugin.enabled ? "已啟用" : plugin.installed ? "已安裝" : "未安裝")}</span>} />
+      <p className="muted">{plugin.id}</p>
+      <p>{Object.entries(plugin.capabilities ?? {}).filter(([, value]) => value).map(([name]) => name).join(" · ")}</p>
+      {plugin.capabilities?.hooks ? <p className="muted">{t("Hook 仍須通過既有信任檢查，啟用插件不會自動授權。")}</p> : null}
+      {plugin.conflicts?.map((conflict) => <p role="alert" key={conflict.name}>{conflict.name}: {conflict.reason}</p>)}
+      <div className="provider-actions">{plugin.installed ? <><button disabled={busy} onClick={() => { void run({ action: plugin.enabled ? "disable" : "enable", id: plugin.id }) }}>{t(plugin.enabled ? "停用" : "啟用")}</button><button disabled={busy} onClick={() => remove({ action: "uninstall", id: plugin.id }, plugin.id)}>{t(confirm === plugin.id ? "確認卸載" : "卸載")}</button></> : <button disabled={busy} onClick={() => { void run({ action: "install", id: plugin.id }) }}>{t("安裝")}</button>}</div>
+    </SettingsGroup>)}
+    {rows.length > 50 ? <div className="provider-actions"><button disabled={page === 0} onClick={() => setPage(page - 1)}>{t("上一頁")}</button><span>{page + 1} / {Math.ceil(rows.length / 50)}</span><button disabled={(page + 1) * 50 >= rows.length} onClick={() => setPage(page + 1)}>{t("下一頁")}</button></div> : null}
+    {confirm ? <button disabled={busy} onClick={() => setConfirm(undefined)}>{t("取消")}</button> : null}
+    {Object.entries(state?.diagnostics ?? {}).some(([, messages]) => messages.length) ? <details><summary>{t("插件載入診斷")}</summary>{Object.entries(state?.diagnostics ?? {}).map(([session, messages]) => messages.length ? <div key={session}><h3>{session}</h3>{messages.map((message, index) => <p key={index}>{message}</p>)}</div> : null)}</details> : null}
+  </section>
+}

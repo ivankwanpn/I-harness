@@ -12,7 +12,7 @@ export function createDesktopPlugins(root: string) {
   const managed = createManagedPluginRegistry({ root })
   const diagnostics = new Map<string, string[]>()
   return {
-    state: () => managed.run(async (registry) => ({ sources: await registry.listSources(), ...(await registry.catalog()), diagnostics: Object.fromEntries(diagnostics) })),
+    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics) })),
     report(sessionId: string, messages: string[]) {
       diagnostics.delete(sessionId); diagnostics.set(sessionId, messages.slice(-100))
       while (diagnostics.size > 100) diagnostics.delete(diagnostics.keys().next().value!)

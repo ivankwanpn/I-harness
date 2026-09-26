@@ -1,10 +1,13 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
+import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
 import type { SessionModelSelection } from "@i-harness/sdk"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/plugins/state"; workspaceId: string }
+  | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }
   | { kind: "desktop/rewind/execute"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation"; fingerprint: string }

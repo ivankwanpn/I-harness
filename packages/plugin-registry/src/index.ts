@@ -171,13 +171,13 @@ export class PluginRegistry {
   }
 
   /** Registered sources with their collect status (error = manifest unreadable). */
-  async listSources(): Promise<{ name: string; source: string; lastUpdated: number; error?: string }[]> {
+  async listSources(options?: { fetchMissing?: boolean }): Promise<{ name: string; source: string; lastUpdated: number; error?: string }[]> {
     const state = await loadState(this.root)
     const out: { name: string; source: string; lastUpdated: number; error?: string }[] = []
     for (const src of state.sources) {
       const entry = { name: src.name, source: src.source, lastUpdated: src.lastUpdated }
       try {
-        await this.collectSource(src.source)
+        await this.collectSource(src.source, options?.fetchMissing !== false)
       } catch (e) {
         out.push({ ...entry, error: e instanceof Error ? e.message : String(e) })
         continue
@@ -245,13 +245,13 @@ export class PluginRegistry {
    * marketplace no longer yields an entry (source removed or renamed — their
    * `source` falls back to ""). Sorted by id.
    */
-  async catalog(): Promise<{ plugins: CatalogPlugin[] }> {
+  async catalog(options?: { fetchMissing?: boolean }): Promise<{ plugins: CatalogPlugin[] }> {
     const state = await loadState(this.root)
     const byId = new Map<string, CatalogPlugin>()
     for (const src of state.sources) {
       let collected: { manifest: MarketplaceManifest }
       try {
-        collected = await this.collectSource(src.source)
+        collected = await this.collectSource(src.source, options?.fetchMissing !== false)
       } catch (e) {
         const reason = e instanceof Error ? e.message : String(e)
         d.warn(`[plugin-registry] catalog: source ${src.name} (${src.source}) unreadable: ${reason}`)
@@ -511,7 +511,7 @@ export class PluginRegistry {
    * cache-backed source is served from its deterministic cache dir when that
    * copy is usable (catalog is offline-friendly), otherwise re-pulled.
    */
-  private async collectSource(source: string): Promise<{ manifest: MarketplaceManifest; manifestDir: string }> {
+  private async collectSource(source: string, fetchMissing = true): Promise<{ manifest: MarketplaceManifest; manifestDir: string }> {
     try {
       if (existsSync(source) && statSync(source).isDirectory()) {
         const manifestDir = resolve(source)
@@ -525,6 +525,7 @@ export class PluginRegistry {
           // cached copy unusable → fall through to a fresh pull
         }
       }
+      if (!fetchMissing) throw new Error("Marketplace cache unavailable; refresh this source explicitly")
       return await fetchSource(source, this.cacheDir)
     } catch (e) {
       if (e instanceof MarketplaceFetchError) throw e

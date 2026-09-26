@@ -2,7 +2,7 @@ import { create } from "zustand"
 import { resolveLocale, type Locale } from "../design/locale.ts"
 
 export type Appearance = "dark" | "light" | "system"
-export type Surface = "conversation" | "memory" | "search" | "settings"
+export type Surface = "conversation" | "memory" | "search" | "settings" | "plugins"
 interface Preferences { appearance: Appearance; fontSize: number; sidebarCollapsed: boolean }
 const defaults: Preferences = { appearance: "dark", fontSize: 14, sidebarCollapsed: false }
 function readPreferences(): Preferences {

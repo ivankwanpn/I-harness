@@ -12,14 +12,16 @@ export interface WorkspaceSidebarProps {
   canCreate?: boolean
   children?: ReactNode
   onSettings?(): void
+  onPlugins?(): void
 }
 
-export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onCreate, canCreate, children, onSettings }: WorkspaceSidebarProps) {
+export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onCreate, canCreate, children, onSettings, onPlugins }: WorkspaceSidebarProps) {
   const t = useText()
   return (
     <nav className="sidebar" aria-label={t("工作區")}>
       <div className="brand">I-harness <span>Desktop</span></div>
       <button type="button" className="sidebar-new" disabled={!canCreate} onClick={onCreate}><Plus size={18} />{t("新增會話")}</button>
+      {onPlugins ? <button type="button" className="row-button" onClick={onPlugins}>{t("插件市場")}</button> : null}
       <h2 className="sidebar-title">{t("工作區")}</h2>
       <button type="button" className="primary-button sidebar-open" onClick={onOpen}>
         <FolderOpen size={16} />{t("開啟工作區")}

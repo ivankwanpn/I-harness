@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "插件市場": "Plugin marketplace", "變更會在新建 Agent 實例時生效，執行中的任務不受影響。": "Changes apply to newly created agent instances; running tasks keep their current configuration.", "正在處理插件操作…": "Processing plugin operation…", "管理市場來源": "Manage marketplace sources", "來源網址或本機路徑": "Source URL or local path", "加入來源": "Add source", "填入官方市場來源": "Fill official marketplace source", "重新整理": "Refresh", "確認移除來源": "Confirm source removal", "移除來源": "Remove source", "搜尋插件": "Search plugins", "僅顯示已安裝": "Installed only", "正在讀取插件目錄…": "Loading plugin catalog…", "沒有符合的插件；可先加入市場來源。": "No matching plugins. Add a marketplace source to get started.", "已啟用": "Enabled", "已安裝": "Installed", "未安裝": "Not installed", "Hook 仍須通過既有信任檢查，啟用插件不會自動授權。": "Hooks still require the existing trust checks; enabling a plugin does not grant trust.", "停用": "Disable", "啟用": "Enable", "確認卸載": "Confirm uninstall", "卸載": "Uninstall", "安裝": "Install", "插件載入診斷": "Plugin mount diagnostics",
   "關閉": "Close", "僅還原檔案，對話內容保持不變。": "Restore files only; conversation content is unchanged.",
   "回復會話": "Rewind conversation", "回復到所選回合開始前；之後的回合將不再提供給模型。": "Rewind to before the selected turn; later turns will no longer be sent to the model.", "回復點": "Rewind point", "選擇回復點": "Choose a rewind point", "沒有已記錄的回復點": "No recorded rewind points", "回復範圍": "Rewind scope", "對話與檔案": "Conversation and files", "僅對話": "Conversation only", "僅檔案": "Files only", "預覽回復": "Preview rewind", "檔案操作：{count}": "File operations: {count}", "刪除新建檔案": "Delete created file", "還原檔案內容": "Restore file contents", "存在衝突；確認後仍會覆寫下列檔案。": "Conflicts exist; confirming will still overwrite these files.", "下列變更沒有完整快照，不會自動還原。": "These changes have no complete snapshot and will not be restored automatically.", "Shell 或外部程式造成的變更可能未被記錄。": "Changes made by shell commands or external applications may not have been recorded.", "我已查看影響範圍並確認回復": "I have reviewed the affected scope and confirm the rewind", "確認回復": "Confirm rewind", "已回復 {count} 個檔案": "Reverted {count} files",
   "管理會話": "Manage conversations", "目前會話": "Current conversations", "已封存會話": "Archived conversations", "重新命名": "Rename", "還原會話": "Restore conversation", "建立分支": "Fork conversation", "確認封存": "Confirm archive", "封存會話": "Archive conversation", "會話名稱": "Conversation name",
@@ -38,7 +39,7 @@ const english = {
   "儲存庫還沒有任何提交，無法比對": "This repository has no commits to compare against", "未追蹤的檔案沒有 diff": "Untracked files have no diff",
   "二進位內容不顯示": "Binary content is not displayed", "檔案已刪除": "The file was deleted", "沒有差異": "No differences", "找不到檔案": "File not found",
   "沒有可比較的提交": "No commit to compare against", "不是 Git 工作區": "Not a Git workspace", "找不到 Git": "Git not found",
-  "無法讀取": "Unable to read", "變更": "Changes", "重新整理": "Refresh", "正在讀取變更…": "Loading changes…", "預覽": "Preview",
+  "無法讀取": "Unable to read", "變更": "Changes", "正在讀取變更…": "Loading changes…", "預覽": "Preview",
   "工作區目前沒有未提交的變更": "No uncommitted changes in this workspace",
   "變更列表已截斷，只顯示前 {count} 筆": "Change list truncated; showing the first {count} files",
   "（已截斷，僅顯示前 {bytes} bytes）": " (truncated to the first {bytes} bytes)",
