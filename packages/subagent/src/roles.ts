@@ -1,4 +1,6 @@
 export interface SubagentRole {
+  /** Live plugin-owned roles are reconstructed from the current registry. */
+  ephemeral?: boolean
   name: string
   description: string
   systemPrompt: string

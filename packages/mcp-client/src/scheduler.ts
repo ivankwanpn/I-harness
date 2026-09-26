@@ -55,11 +55,11 @@ const defaultStatusLogger = (ev: McpServerStatusEvent): void => {
   }
 }
 
-// Module-level reservation so a serverName can only ever be live once (a
-// second mount with the same name is a hard error, not a silent shadow).
+// Reserve within the owning tool registry. Independent session registries may
+// use the same logical server name without shadowing each other's tools.
 // Mount-level only: supervisor reconnects reuse the same reservation (same
 // server, new generation).
-const liveServerNames = new Set<string>()
+const reservations = new WeakMap<ToolRegistry, Set<string>>()
 
 export async function mountMcpClient(
   _ctx: PluginContext,
@@ -68,6 +68,8 @@ export async function mountMcpClient(
   deps?: McpMountDeps,
 ): Promise<McpMountHandle> {
   validateMcpConfig(config)
+  let liveServerNames = reservations.get(tools)
+  if (!liveServerNames) { liveServerNames = new Set(); reservations.set(tools, liveServerNames) }
   if (liveServerNames.has(config.serverName)) {
     throw new Error(`mcp-client: serverName "${config.serverName}" is already reserved by a live instance`)
   }

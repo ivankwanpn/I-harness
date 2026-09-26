@@ -285,7 +285,7 @@ describe("registry wiring (createHookRegistry mounts)", () => {
     await expect(tools.execute({ name: "read", args: {} })).rejects.toThrow(/denied/)
   })
 
-  it("prompt/submit: a blocking handler rejects the agent/pre-step emit", async () => {
+  it("prompt/submit: a blocking handler can be disposed without replacing its context", async () => {
     const dir = await tmpDir()
     const script = await writeHandler(dir, "prompt.js", jsonBody({ block: true, reason: "prompt blocked" }))
     const configPath = await configWith(dir, [{
@@ -294,8 +294,10 @@ describe("registry wiring (createHookRegistry mounts)", () => {
       trust: { script, sha256: await sha256File(script) },
     }])
     const ctx = createContext()
-    await createHookRegistry(ctx, { configPath, configDir: dir })
+    const registry = await createHookRegistry(ctx, { configPath, configDir: dir })
     await expect(ctx.emit("agent/pre-step", { task: "do it", session: {} })).rejects.toThrow(/prompt blocked/)
+    await registry.dispose()
+    await expect(ctx.emit("agent/pre-step", { task: "after disable", session: {} })).resolves.toMatchObject({ task: "after disable" })
   })
 
   it("stop: a blocking handler rejects the agent/stop emit", async () => {

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs"
+import { randomUUID } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { isCascadeRedispatch, type PluginContext } from "@i-harness/core-plugin"
@@ -98,6 +99,8 @@ export interface LoadedHandler {
 }
 
 export interface HookRegistry {
+  /** Detach this registry's event handlers from a still-running context. */
+  dispose(): Promise<void>
   /**
    * Programmatic events only: session/start, session/end, subagent/stop
    * (sessionId) and notification (message). Tool/prompt/stop events are
@@ -388,6 +391,9 @@ export async function createHookRegistry(
     throw new HookConfigError(`hooks config ${configPath} does not exist (explicit configPath)`)
   }
 
+  const mountName = `hooks:${randomUUID()}`
+  let disposed = false
+  ctx.mount({ name: mountName, mount() {
   // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
   ctx.onCascade("tools/execute", async (input, next) => {
     const call = input as { name: string; args: unknown }
@@ -451,7 +457,9 @@ export async function createHookRegistry(
     )
   })
 
+  } })
   return {
+    async dispose() { if (disposed) return; disposed = true; await ctx.unmount(mountName); registry.loaded = [] },
     async fire(event, input) {
       if (event === "session/start" || event === "session/end" || event === "subagent/stop") {
         if (typeof input.sessionId !== "string") {

@@ -16,7 +16,7 @@ export type DesktopRequest =
   | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }
   | { kind: "desktop/terminal/write"; workspaceId: string; id: string; data: string }
   | { kind: "desktop/terminal/resize"; workspaceId: string; id: string; cols: number; rows: number }
-  | { kind: "desktop/plugins/state"; workspaceId: string }
+  | { kind: "desktop/plugins/state" | "desktop/plugins/commands" | "desktop/plugins/refresh"; workspaceId: string }
   | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }

@@ -4,11 +4,12 @@ import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 interface Plugin { id: string; name: string; description?: string; installed: boolean; enabled: boolean; capabilities?: Record<string, boolean>; conflicts?: { name: string; reason: string }[] }
-interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]> }
+interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]>; refreshError?: string }
 export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
   const t = useText()
   const [state, setState] = useState<State>()
   const [error, setError] = useState<string>()
+  const [loadError, setLoadError] = useState<string>()
   const [source, setSource] = useState("")
   const [query, setQuery] = useState("")
   const [installed, setInstalled] = useState(false)
@@ -19,7 +20,7 @@ export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBrid
   const lock = useRef(false)
   useEffect(() => {
     let active = true
-    void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (active) { setState(value as State); setError(undefined) } }).catch((reason: unknown) => { if (active) setError(String(reason)) })
+    void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (active) { setState(value as State); setLoadError(undefined) } }).catch((reason: unknown) => { if (active) setLoadError(String(reason)) })
     return () => { active = false }
   }, [bridge, workspaceId, reload])
   async function run(command: PluginCommand) {
@@ -29,15 +30,20 @@ export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBrid
       await bridge.request({ kind: "desktop/plugins/mutate", workspaceId, command })
       setConfirm(undefined); if (command.action === "source/add") setSource("")
       setReload((value) => value + 1)
-    } catch (reason) { setError(String(reason)) }
+    } catch (reason) { setError(String(reason)); setReload((value) => value + 1) }
     finally { lock.current = false; setBusy(false) }
   }
   const remove = (command: PluginCommand, key: string) => confirm === key ? void run(command) : setConfirm(key)
   const rows = state?.plugins.filter((row) => (!installed || row.installed) && `${row.id} ${row.name} ${row.description ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? []
   return <section className="marketplace-pane" aria-label={t("插件市場")}>
     <h1>{t("插件市場")}</h1>
-    <p className="muted">{t("變更會在新建 Agent 實例時生效，執行中的任務不受影響。")}</p>
-    {error ? <p role="alert">{error}<button disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</button></p> : null}
+    <p className="muted">{t("插件變更會即時套用到現有 Agent；已開始的操作會依原機制收尾。")}</p>
+    {state?.refreshError ? <p role="alert">{state.refreshError}<button disabled={busy} onClick={() => {
+      if (lock.current) return
+      lock.current = true; setBusy(true); setError(undefined)
+      void bridge.request({ kind: "desktop/plugins/refresh", workspaceId }).catch((reason: unknown) => setError(String(reason))).finally(() => { lock.current = false; setBusy(false); setReload((value) => value + 1) })
+    }}>{t("重試即時套用")}</button></p> : null}
+    {error || loadError ? <p role="alert">{error ?? loadError}<button disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</button></p> : null}
     {busy ? <p role="status">{t("正在處理插件操作…")}</p> : null}
     <details><summary>{t("管理市場來源")}</summary>
       <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); void run({ action: "source/add", source }) }}>

@@ -165,8 +165,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
-      if ((message.method === "desktop/plugins/state" || message.method === "desktop/plugins/mutate") && handlers.plugins) {
-        try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.plugins.state() : await handlers.plugins.mutate(message.params))) }
+      if (["desktop/plugins/state", "desktop/plugins/mutate", "desktop/plugins/commands", "desktop/plugins/refresh"].includes(message.method) && handlers.plugins) {
+        try {
+          const result = message.method.endsWith("/state") ? await handlers.plugins.state() : message.method.endsWith("/commands") ? await handlers.plugins.commands() : message.method.endsWith("/refresh") ? (await handlers.plugins.refresh(), { ok: true }) : await handlers.plugins.mutate(message.params)
+          send(makeSuccess(message.id, result))
+        }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }

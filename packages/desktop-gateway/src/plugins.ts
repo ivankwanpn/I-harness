@@ -11,8 +11,19 @@ function text(value: unknown): string {
 export function createDesktopPlugins(root: string) {
   const managed = createManagedPluginRegistry({ root })
   const diagnostics = new Map<string, string[]>()
+  let refresh: (() => Promise<void>) | undefined
+  let refreshError: string | undefined
+  let refreshTail: Promise<void> = Promise.resolve()
+  const refreshLive = () => {
+    const job = refreshTail.catch(() => undefined).then(async () => { await refresh?.(); refreshError = undefined })
+    refreshTail = job.catch((error: unknown) => { refreshError = String(error) })
+    return job
+  }
   return {
-    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics) })),
+    refresh: refreshLive,
+    state: () => managed.run(async (registry) => ({ sources: await registry.listSources({ fetchMissing: false }), ...(await registry.catalog({ fetchMissing: false })), diagnostics: Object.fromEntries(diagnostics), ...(refreshError ? { refreshError } : {}) })),
+    bindRefresh(callback: () => Promise<void>) { refresh = callback; return managed.observe(refreshLive, (error) => { refreshError = String(error) }) },
+    commands: () => managed.run((registry) => registry.runtimeInputs().commandDescriptors.map(({ name, description, argumentHints }) => ({ name, description, argumentHints }))),
     report(sessionId: string, messages: string[]) {
       diagnostics.delete(sessionId); diagnostics.set(sessionId, messages.slice(-100))
       while (diagnostics.size > 100) diagnostics.delete(diagnostics.keys().next().value!)
@@ -21,7 +32,7 @@ export function createDesktopPlugins(root: string) {
     async mutate(value: unknown) {
       if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid plugin command")
       const command = value as Record<string, unknown>
-      return managed.run(async (registry) => {
+      await managed.run(async (registry) => {
         switch (command.action) {
           case "source/add": await registry.addSource(text(command.source)); break
           case "source/refresh": await registry.refreshSource(text(command.name)); break
@@ -34,7 +45,10 @@ export function createDesktopPlugins(root: string) {
         }
         return { ok: true }
       })
+      try { await refreshLive() }
+      catch { throw new Error("Plugin settings were saved, but live update failed; retry the operation") }
+      return { ok: true }
     },
-    close: () => managed.close(),
+    close: async () => { await managed.close(); await refreshTail },
   }
 }

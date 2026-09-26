@@ -136,9 +136,12 @@ export function registerCommand(ctx: PluginContext, cmd: Command): void {
 
 /** Register a prompt-expanded command. Same grammar and same registry as
  * `registerCommand` — one name is one entry, last registration wins. */
-export function registerPromptCommand(ctx: PluginContext, cmd: PromptCommand): void {
+export function registerPromptCommand(ctx: PluginContext, cmd: PromptCommand): () => void {
   assertCommandName(cmd.name)
-  registryForRegistration(ctx).set(cmd.name, { kind: "prompt", command: cmd })
+  const registry = registryForRegistration(ctx)
+  const entry = { kind: "prompt" as const, command: cmd }
+  registry.set(cmd.name, entry)
+  return () => { if (registry.get(cmd.name) === entry) registry.delete(cmd.name) }
 }
 
 export async function runCommand(ctx: PluginContext, name: string, input: string): Promise<CommandOutcome> {

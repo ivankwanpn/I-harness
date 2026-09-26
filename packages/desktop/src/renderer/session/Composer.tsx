@@ -1,7 +1,9 @@
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react"
+import { useEffect, useState, useSyncExternalStore, useRef, type ReactNode } from "react"
 import { ArrowUp, Square } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
+import type { DesktopBridge } from "../../shared/bridge.ts"
+import { SlashCommands } from "./SlashCommands.tsx"
 
 const DRAFT_LIMIT_BYTES = 32 * 1024
 const memoryDrafts = new Map<string, string>()
@@ -69,6 +71,7 @@ export function clearDraft(workspaceId: string, sessionId: string): void {
 }
 
 export interface ComposerProps {
+  bridge?: DesktopBridge
   workspaceId: string
   sessionId: string
   canSend: boolean
@@ -85,6 +88,7 @@ export function Composer(props: ComposerProps) {
 }
 
 function SessionComposer({
+  bridge,
   workspaceId,
   sessionId,
   canSend,
@@ -96,6 +100,7 @@ function SessionComposer({
   onCancel,
 }: ComposerProps) {
   const t = useText()
+  const editorRef = useRef<HTMLTextAreaElement>(null)
   const key = draftKey(workspaceId, sessionId)
   const sendState = useSyncExternalStore(
     (listener) => { sendListeners.add(listener); return () => { sendListeners.delete(listener) } },
@@ -128,7 +133,10 @@ function SessionComposer({
   return (
     <ComposerSurface onSubmit={() => { void send() }} error={error ?? (!canSend ? sendReason : undefined)}
       editor={
+      <>
+      {bridge ? <SlashCommands bridge={bridge} workspaceId={workspaceId} text={value} onSelect={(name) => { const next = `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); editorRef.current?.focus() }} /> : null}
       <textarea
+        ref={editorRef}
         aria-label={t("提示")}
         className="composer-input"
         rows={3}
@@ -145,6 +153,7 @@ function SessionComposer({
         }}
         placeholder={canSend ? t("輸入提示…") : (sendReason ?? t("目前無法送出"))}
       />
+      </>
       }
       leadingActions={
         <span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span>

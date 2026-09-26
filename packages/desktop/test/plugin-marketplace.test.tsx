@@ -3,6 +3,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest"
 import { PluginMarketplace } from "../src/renderer/settings/PluginMarketplace.tsx"
 afterEach(cleanup)
+it("keeps an installation failure visible after refreshing the catalog", async () => {
+  const request = vi.fn(async (value) => {
+    if (value.kind === "desktop/plugins/mutate") throw new Error("install failed")
+    return { sources: [], plugins: [{ id: "p", name: "Example", installed: false, enabled: false }] }
+  })
+  render(<PluginMarketplace bridge={{ request, onEvent: () => () => {} }} workspaceId="w" />)
+  fireEvent.click(await screen.findByRole("button", { name: "安裝" }))
+  await waitFor(() => expect(request.mock.calls.filter(([value]) => value.kind === "desktop/plugins/state")).toHaveLength(2))
+  expect(screen.getByRole("alert").textContent).toContain("install failed")
+})
 it("reads cached state and requires confirmation before uninstalling", async () => {
   const request = vi.fn(async (value) => value.kind === "desktop/plugins/state" ? { sources: [], plugins: [{ id: "m__p", name: "Example", installed: true, enabled: true }] } : { ok: true })
   render(<PluginMarketplace bridge={{ request, onEvent: () => () => {} }} workspaceId="w" />)

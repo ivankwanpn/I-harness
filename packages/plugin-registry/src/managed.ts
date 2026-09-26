@@ -1,4 +1,5 @@
 import { join, resolve } from "node:path"
+import { stat } from "node:fs/promises"
 import { acquireSessionLock } from "@i-harness/fs-lock"
 import { PluginRegistry } from "./index.ts"
 import type { RegistryOptions } from "./types.ts"
@@ -12,6 +13,7 @@ export function createManagedPluginRegistry(options: RegistryOptions) {
   const registry = new PluginRegistry({ ...options, root })
   let tail: Promise<unknown> = Promise.resolve()
   let closed = false
+  const observers = new Set<() => Promise<void>>()
   return {
     run<T>(operation: (registry: PluginRegistry) => T | Promise<T>): Promise<T> {
       if (closed) return Promise.reject(new Error("Plugin registry is closed"))
@@ -23,6 +25,24 @@ export function createManagedPluginRegistry(options: RegistryOptions) {
       tail = job.catch(() => undefined)
       return job
     },
-    async close() { closed = true; await tail },
+    observe(onChange: () => Promise<void>, onError: (error: unknown) => void) {
+      if (closed) throw new Error("Plugin registry is closed")
+      let stopped = false; let previous: string | undefined; let pending: Promise<void> | undefined
+      const tick = () => {
+        if (stopped || pending) return
+        pending = (async () => {
+          const info = await stat(join(root, "state.json")).catch((error: NodeJS.ErrnoException) => { if (error.code === "ENOENT") return undefined; throw error })
+          const signature = info ? `${info.mtimeMs}:${info.size}` : "missing"
+          if (stopped || signature === previous) return
+          previous = signature
+          await onChange()
+        })().catch(onError).finally(() => { pending = undefined })
+      }
+      const timer = setInterval(tick, 250); timer.unref?.(); tick()
+      const dispose = async () => { stopped = true; clearInterval(timer); await pending; observers.delete(dispose) }
+      observers.add(dispose)
+      return dispose
+    },
+    async close() { closed = true; for (const dispose of [...observers]) await dispose(); await tail },
   }
 }

@@ -222,6 +222,7 @@ export function Workbench({
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 <Composer
+                  bridge={bridge}
                   workspaceId={selectedWorkspaceId}
                   sessionId={selectedSessionId}
                   canSend={conversation.canSend}

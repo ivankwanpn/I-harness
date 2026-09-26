@@ -147,6 +147,8 @@ export async function dispatchDesktopRequest(
     case "desktop/provider/directory":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
     case "desktop/plugins/state":
+    case "desktop/plugins/commands":
+    case "desktop/plugins/refresh":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {}, 120000)
     case "desktop/terminal/list":
     case "desktop/terminal/open":

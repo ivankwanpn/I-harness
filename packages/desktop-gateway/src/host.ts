@@ -118,6 +118,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     compact: { auto: settings.get().compaction.auto },
   })
   const interaction = createInteractionBridge(options.onWrite)
+  const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
@@ -184,6 +185,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     handleLine: (line) => router.handleLine(line),
     close: () => closing ??= (async () => {
       interaction.close()
+      await stopPluginObserver()
       terminal.close()
       offInteraction()
       await router.close()

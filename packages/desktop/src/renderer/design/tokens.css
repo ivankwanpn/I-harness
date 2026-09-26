@@ -356,6 +356,9 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .browser-toolbar input { flex: 1; min-width: 40px; border: 1px solid var(--ih-divider); border-radius: 8px; padding: 6px; color: var(--ih-text); background: var(--ih-bg); }
 .browser-pane > p { overflow-wrap: anywhere; font-size: 12px; padding: 6px; margin: 0; }
 .browser-viewport { flex: 1; min-height: 80px; background: var(--ih-bg); }
+.slash-commands { max-height: 220px; overflow: auto; padding: 6px; border-bottom: 1px solid var(--ih-divider); }
+.slash-commands button { display: flex; width: 100%; gap: 10px; text-align: left; padding: 7px; border-radius: 6px; }
+.slash-commands span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .provider-discovery-list { max-height: 260px; overflow: auto; margin: 10px 0; }
 .provider-discovery-list label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px; overflow-wrap: anywhere; }
 .provider-discovery-list small { opacity: .65; }

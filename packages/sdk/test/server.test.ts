@@ -82,6 +82,7 @@ function drive(server: SdkServer): {
 function makeStubService(): SessionService {
   return {
     submit: vi.fn(async () => {}),
+    refreshExtensions: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
     // The server itself never rebinds (the host seam does, Task 4) — present

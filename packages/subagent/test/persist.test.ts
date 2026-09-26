@@ -19,6 +19,15 @@ function makeState(): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistr
 }
 
 describe("subagent state snapshot", () => {
+  it("does not resurrect live plugin roles from a durable snapshot", () => {
+    const state = makeState()
+    state.roles.register({ name: "plugin-live", description: "plugin", systemPrompt: "plugin", tools: [], ephemeral: true })
+    state.roles.register({ name: "user-custom", description: "user", systemPrompt: "user", tools: [] })
+    const restored = makeState()
+    restoreState(restored, snapshotState(state))
+    expect(restored.roles.get("plugin-live")).toBeUndefined()
+    expect(restored.roles.get("user-custom")).toBeDefined()
+  })
   it("snapshotState captures jobs, settled agent entries, and roles", () => {
     const s = makeState()
     const { id } = s.jobs.registerJob("root", "subagent", "helper")

@@ -88,8 +88,9 @@ export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
-    options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents">
+    options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral">
     mount?: (assembly: SessionAssembly) => Promise<(() => void | Promise<void>) | void>
+    update?: (assembly: SessionAssembly) => Promise<void>
   }>
   beforeDispose?: () => Promise<void>
   /** Shared host event stream (also handed to each assembly). */
@@ -142,6 +143,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
 }
 
 export interface SessionService {
+  /** Update plugin-owned capabilities without replacing sessions or agents. */
+  refreshExtensions(): Promise<void>
   /** One prompt for one session (tier send). Serialized per session;
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
@@ -212,6 +215,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const lanes = new Map<string, SessionTurnLane>()
   const creating = new Map<string, Promise<SessionAssembly>>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
+  const extensionRefreshes = new Map<string, Promise<void>>()
+  const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
   const chains = new Map<string, Promise<void>>()
   const active = new Set<Promise<void>>()
@@ -399,13 +404,21 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           try {
             const cleanup = await extensions.mount(assembly)
             if (cleanup) {
-              const dispose = assembly.dispose.bind(assembly)
-              let disposing: Promise<void> | undefined
-              assembly.dispose = () => disposing ??= (async () => { try { await cleanup() } finally { await dispose() } })()
+              extensionCleanups.set(sessionId, cleanup)
             }
           } catch (error) { await assembly.dispose(); throw error }
         }
+        if (opts.extensionsFor) {
+          const dispose = assembly.dispose.bind(assembly)
+          let disposing: Promise<void> | undefined
+          assembly.dispose = () => disposing ??= (async () => {
+            await extensionRefreshes.get(sessionId)?.catch(() => undefined)
+            const current = extensionCleanups.get(sessionId); extensionCleanups.delete(sessionId)
+            try { await current?.() } finally { await dispose() }
+          })()
+        }
         assemblies.set(sessionId, assembly)
+        assembly.ctx.on("agent/pre-step", async () => { await extensionRefreshes.get(sessionId)?.catch(() => undefined) })
         // The A-region serial lane over this assembly (tiers; send on submit).
         lanes.set(sessionId, createSessionExecutor({
           session: assembly.session,
@@ -488,6 +501,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
         const lane = lanes.get(sessionId)!
         try {
+          await extensionRefreshes.get(sessionId)?.catch(() => undefined)
           const prepared = opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
           if (controller.signal.aborted || closed) { settle(); return }
           // M41b: the submit signal now rides INTO the lane — the agent's
@@ -695,6 +709,34 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   return {
+    async refreshExtensions() {
+      if (closed || !opts.extensionsFor) return
+      await Promise.allSettled([...creating.values()])
+      const jobs = [...assemblies].map(([id, assembly]) => {
+        const job = (extensionRefreshes.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+          if (closed || assemblies.get(id) !== assembly) return
+          const next = await opts.extensionsFor!(id)
+          if (closed || assemblies.get(id) !== assembly) return
+          const failures: unknown[] = []
+          try { await assembly.updatePluginCapabilities(next.options) } catch (error) { failures.push(error) }
+          try {
+            if (next.update) await next.update(assembly)
+            else {
+              await extensionCleanups.get(id)?.(); extensionCleanups.delete(id)
+              const cleanup = await next.mount?.(assembly)
+              if (cleanup) extensionCleanups.set(id, cleanup)
+            }
+          } catch (error) { failures.push(error) }
+          if (failures.length) throw new AggregateError(failures, "Live plugin update failed")
+        })
+        extensionRefreshes.set(id, job)
+        void job.finally(() => { if (extensionRefreshes.get(id) === job) extensionRefreshes.delete(id) }).catch(() => undefined)
+        return job
+      })
+      const results = await Promise.allSettled(jobs)
+      const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+      if (errors.length) throw new AggregateError(errors.map((result) => result.reason), "Some live plugin updates failed")
+    },
     submit,
     assemblyFor: getOrCreate,
     modelState,

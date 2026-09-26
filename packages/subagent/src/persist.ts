@@ -90,7 +90,7 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
     ...(e.lastInboxSeq !== undefined ? { lastInboxSeq: e.lastInboxSeq } : {}),
   }))
 
-  const roles = state.roles.list()
+  const roles = state.roles.list().filter((role) => !role.ephemeral)
 
   return { formatVersion: 1, jobs: jobsOut, agentTable, roles }
 }

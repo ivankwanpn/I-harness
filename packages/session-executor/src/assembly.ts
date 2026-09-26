@@ -6,6 +6,7 @@
 // output-spill/plan-mode/guardian/instructions/runtime-context/mcp-oauth —
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
+import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { append, createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type Tool } from "@i-harness/core-tools"
@@ -170,6 +171,7 @@ export interface AssemblyOptions {
   // clobber a restored, user-edited role. A name already taken is SKIPPED, never
   // replaced; pluginAgentResults reports per role like pluginMcpResults does.
   pluginAgents?: SubagentRole[]
+  pluginAgentsEphemeral?: boolean
   lsp?: LspServerConfig[] // M18: LSP servers to mount
   skills?: { extraDirs?: string[] } // plugin overlay skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
@@ -341,6 +343,7 @@ export interface SessionAssembly {
   /** Per-role outcome of the plugin subagent roles (role name → registered).
    * false means the name was already taken and the role was SKIPPED. */
   pluginAgentResults: Map<string, boolean>
+  updatePluginCapabilities(options: PluginCapabilities): Promise<void>
   /** M42 G1: rewind engine handle — present only when the host supplied
    * rewindStoreRoot (with a sessionId) AND the journal is not bound to another
    * workspace (M54 G3 mismatch → rewind stays off, "not enabled"). */
@@ -779,9 +782,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   registerAskUserInput(ctx, tools)
 
   registerToolSearch(ctx, tools)
+  const pluginSkillDirs = [...(opts.skills?.extraDirs ?? [])]
   const skillsMount = registerSkills(ctx, tools, {
     workspace: opts.workspace,
-    ...(opts.skills?.extraDirs !== undefined ? { extraDirs: opts.skills.extraDirs } : {}),
+    extraDirs: pluginSkillDirs,
   })
   const execService = ctx.services.get<ExecService>("exec/service")
   for (const tool of createFsSearchTools({ exec: execService, workspace: opts.workspace })) tools.register(tool)
@@ -994,6 +998,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   const mcpHandles: McpMountHandle[] = []
+  let pluginCapabilities: ReturnType<typeof createPluginCapabilities> | undefined
   const lspHandles: LspMountHandle[] = []
   const teamHandles: TeamMountHandle[] = []
   let workflowMount: WorkflowMountHandle | undefined
@@ -1005,16 +1010,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // Plugin MCP servers — per-server containment (live-agent precedent): a
     // server this host cannot serve degrades to a warn; the result map reports.
     const pluginMcpResults = new Map<string, boolean>()
-    for (const cfg of opts.pluginMcp ?? []) {
-      try {
-        mcpHandles.push(await mountMcpClient(ctx, tools, prepareMcpConfig(cfg), opts.telemetry ? { onStatus: mcpStatusHook } : undefined))
-        pluginMcpResults.set(cfg.serverName, true)
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        d.warn(`[i-harness] plugin MCP server "${cfg.serverName}" failed to mount (skipped for this agent): ${reason}`)
-        pluginMcpResults.set(cfg.serverName, false)
-      }
-    }
     // M6-D3: the catalogue's rebuild boundary. A server that announced
     // `notifications/tools/list_changed` has its catalogue rebuilt HERE — at the
     // step boundary, never inside the notification callback — and the rebuild is
@@ -1036,9 +1031,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // attempt; the cadence is the supervisor's.
     // Registered after BOTH MCP loops; `mcpHandles` is typed McpMountHandle[],
     // so the lsp/team handles (separate arrays) are never asked these questions.
-    for (const mcpHandle of mcpHandles) {
-      ctx.on("agent/pre-step", async () => {
-        if (!mcpHandle.catalogDirty()) return
+    ctx.on("agent/pre-step", async () => {
+      for (const mcpHandle of [...mcpHandles]) {
+        if (!mcpHandle.catalogDirty()) continue
         try {
           await mcpHandle.refreshCatalog()
         } catch (err) {
@@ -1046,8 +1041,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
             `[i-harness] mcp-server(${mcpHandle.serverName}) catalogue refresh failed: ${err instanceof Error ? err.message : String(err)}`,
           )
         }
-      })
-    }
+      }
+    })
     for (const cfg of opts.lsp ?? []) {
       lspHandles.push(await mountLspClient(ctx, tools, { ...cfg, cwd: cfg.cwd ?? opts.workspace }))
     }
@@ -1120,11 +1115,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // name is skipped, and RoleRegistry.register's duplicate throw is never
     // used as control flow.
     const pluginAgentResults = new Map<string, boolean>()
-    for (const role of opts.pluginAgents ?? []) {
-      const free = subagent.roles.get(role.name) === undefined
-      if (free) subagent.roles.register(role)
-      pluginAgentResults.set(role.name, free)
-    }
+    pluginCapabilities = createPluginCapabilities({
+      skillDirs: pluginSkillDirs, handles: mcpHandles, roles: subagent.roles,
+      mcpResults: pluginMcpResults, roleResults: pluginAgentResults,
+      mount: (config) => mountMcpClient(ctx, tools, prepareMcpConfig(config), opts.telemetry ? { onStatus: mcpStatusHook } : undefined),
+      warn: (message) => d.warn(message),
+    })
+    await pluginCapabilities.update(opts, false)
     if (opts.guardian) {
       await registerGuardian(ctx, {
         subagents: {
@@ -1388,6 +1385,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,
       pluginAgentResults,
+      updatePluginCapabilities: (options) => pluginCapabilities!.update(options),
       ...(rewindStore !== undefined && rewindRecorder !== undefined
         ? { rewind: { store: rewindStore, recorder: rewindRecorder } }
         : {}),
@@ -1400,6 +1398,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
+    try { await pluginCapabilities?.dispose() } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
     rewindSubscription = undefined
