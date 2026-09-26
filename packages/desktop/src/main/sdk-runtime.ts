@@ -77,6 +77,32 @@ export function launchLocalGateway(workspace: WorkspaceEntry, sessionDir: string
   return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
 }
 
+/**
+ * Packaged launcher: the same tsx + source-tree startup the e2e tests
+ * exercise, but rooted in `<resources>/gateway` instead of the repo checkout.
+ */
+export function launchBundledGateway(
+  resourcesPath: string,
+  workspace: WorkspaceEntry,
+  sessionDir: string,
+): LaunchedRuntime {
+  const gatewayRoot = join(resourcesPath, "gateway")
+  const tsxLoader = pathToFileURL(join(gatewayRoot, "node_modules", "tsx", "dist", "loader.mjs")).href
+  const gatewayEntry = join(gatewayRoot, "cli", "src", "cli.ts")
+  const child = spawn(process.execPath, ["--import", tsxLoader, gatewayEntry, "--session-dir", sessionDir], {
+    cwd: workspace.path,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+  })
+  drainChildStream(child.stderr)
+  const exited = new Promise<void>((resolveExit) => {
+    child.once("exit", () => resolveExit())
+    child.once("error", () => resolveExit())
+  })
+  return { client: new HarnessClient(child.stdout, child.stdin, { child }), exited }
+}
+
 export function createWorkspaceRuntimeManager(options: {
   sessionsRoot: string
   launch?: (workspace: WorkspaceEntry, sessionDir: string) => LaunchedRuntime

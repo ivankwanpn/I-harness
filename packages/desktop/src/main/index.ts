@@ -1,7 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc } from "./ipc.ts"
-import { createWorkspaceRuntimeManager, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
+import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
 
@@ -21,7 +21,12 @@ export function workspaceRuntimes(): WorkspaceRuntimeManager {
 
 app.whenReady().then(() => {
   const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
-  const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(app.getPath("userData"), "sessions") })
+  const manager = createWorkspaceRuntimeManager({
+    sessionsRoot: join(app.getPath("userData"), "sessions"),
+    ...(app.isPackaged
+      ? { launch: (workspace, sessionDir) => launchBundledGateway(process.resourcesPath, workspace, sessionDir) }
+      : {}),
+  })
   catalog = workspaces
   runtimes = manager
   const openWindow = (): void => {

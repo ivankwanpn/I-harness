@@ -20,6 +20,9 @@ coverage/
 
 # Electron build output（packages/desktop，D0）
 packages/desktop/out/
+# Electron packaging output（packages/desktop，D4）
+packages/desktop/release/
+packages/desktop/.gateway-dist/
 
 # NSIS installer staging（build-installer.mjs 產出的可重造 artifact）
 installer/staging/
