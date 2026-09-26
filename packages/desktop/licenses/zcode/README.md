@@ -13,6 +13,8 @@ Modifications (2026-09-26): extract JSX layout and utility classes, replace serv
 Additional extractions: ToolSummaryRow.tsx derives summary layout and classes from ToolCallBlocks/ToolSummaryRow.tsx, replacing Radix triggering with a native button. LightweightDiffPreview.tsx derives row layout and addition/removal tint styles from components/ui/lightweight-diff-preview.tsx; it consumes raw unified diff, distinguishes headers from hunk content, preserves protocol markers and omits synthetic line numbers, syntax-highlighter and settings-store dependencies. Lazy tool output handling remains in the I-harness adapter.
 
 Source SHA256:
+Additional extraction: ReviewFileRow.tsx adapts the file header in GitPaneChangeCard.tsx. It replaces ZCode file descriptors and numeric change counts with I-harness path/status props, and omits context-menu mutations and unsupported filesystem actions.
+GitPaneChangeCard.tsx SHA256: EC300EC0D682BB3E6E7A23F5C888550C4FBA0C8711CAD5A66A61FE28AD6F0088.
 - ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
 - components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
 

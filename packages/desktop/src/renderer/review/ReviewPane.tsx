@@ -1,4 +1,5 @@
 import { LightweightDiffPreview } from "../vendor/zcode/LightweightDiffPreview.tsx"
+import { ReviewFileRow } from "../vendor/zcode/ReviewFileRow.tsx"
 
 export type ReviewChangeStatus = "modified" | "added" | "deleted" | "untracked" | "renamed"
 
@@ -93,15 +94,9 @@ export function ReviewPane({ changes, error, selected, diff, preview, onSelect, 
           <ul className="task-list">
             {changes.files.map((row) => (
               <li key={row.path} className="task-row">
-                <button
-                  type="button"
-                  className="row-button"
-                  disabled={!row.canDiff && !row.canPreview}
-                  onClick={() => onSelect(row.path, row.canDiff ? "diff" : "preview")}
-                >
-                  <span className="row-label">{row.path}</span>
-                  <span className="row-meta">{STATUS_LABELS[row.status]}</span>
-                </button>
+                <ReviewFileRow path={row.path} status={STATUS_LABELS[row.status]}
+                  selected={selected?.path === row.path} disabled={!row.canDiff && !row.canPreview}
+                  onSelect={() => onSelect(row.path, row.canDiff ? "diff" : "preview")} />
                 {row.canPreview && row.canDiff ? (
                   <button type="button" className="link-button" onClick={() => onSelect(row.path, "preview")}>預覽</button>
                 ) : null}
