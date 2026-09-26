@@ -10,4 +10,10 @@ Adapted files: src/renderer/vendor/zcode/PermissionCard.tsx and styles.css.
 Additional adapted file: src/renderer/vendor/zcode/ComposerSurface.tsx from packages/ui/src/prompt-editor/ChatPromptEditor.tsx, SHA256 A560C7B3711FC2B0DACD036D205313BF5FE91FB09389082110E9F118FA18D96C. Retains form/surface/toolbar markup and classes; replaces Lexical and service-backed menus with React slots connected to existing I-harness drafts and sends. Model label uses existing session/model/state and is read-only.
 Modifications (2026-09-26): extract JSX layout and utility classes, replace services/providers/stores with props, use native radio controls and explicit confirmation, preserve visible focus, omit global resets. No brand assets copied.
 
+Additional extractions: ToolSummaryRow.tsx derives summary layout and classes from ToolCallBlocks/ToolSummaryRow.tsx, replacing Radix triggering with a native button. LightweightDiffPreview.tsx derives row layout and addition/removal tint styles from components/ui/lightweight-diff-preview.tsx; it consumes raw unified diff, distinguishes headers from hunk content, preserves protocol markers and omits synthetic line numbers, syntax-highlighter and settings-store dependencies. Lazy tool output handling remains in the I-harness adapter.
+
+Source SHA256:
+- ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
+- components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
+
 LICENSE and UPSTREAM-NOTICE.md are preserved verbatim. The upstream notice describes ZCode, not I-harness. No ZCode runtime, provider, remote service or telemetry implementation is included in this extraction.

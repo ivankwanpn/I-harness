@@ -23,6 +23,8 @@ Development visual fixture: /permission-preview.html, using simulated requests o
 
 ComposerSurface now adapts the form/input-shell/toolbar from prompt-editor/ChatPromptEditor.tsx. Existing I-harness textarea, bounded drafts, pending-send ownership, IME handling and cancellation remain connected through slots. Model label is read-only backend data. Both extractions retain provenance in licenses/zcode/README.md. The same fixture includes a clearly labelled simulated composer whose submit only returns a local preview error.
 
+ToolSummaryRow and LightweightDiffPreview now adapt upstream summary/row presentation. Existing lazy tool output and read-only review contracts are retained. Unified diff headers are kept neutral; content with repeated +/- prefixes inside hunks is still treated as changed code. Visual acceptance remains deferred after the app restart did not clear the saved browser block; user explicitly requested continuing source work.
+
 Implemented shell geometry, nested navigation, default-closed review, safe Markdown, shell localization, IME-safe Enter handling and session-owned pending sends. Memory management now uses the existing workspace-scoped gateway for list/search/read/add/delete/configure. Review diff lines distinguish additions/removals/hunks.
 
 Independent review found and prompted fixes for bounded pending interactions, external HTTPS/HTTP links, pending-send ownership across remounts, and conversation navigation from Memory. Regression cases cover the latter two. Native screenshots confirmed empty/workspace shell and language changes; user confirmed the native folder picker works. Automated native focus remains unreliable, so memory CRUD and long-conversation visual acceptance are not claimed complete.

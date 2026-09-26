@@ -2,6 +2,8 @@
 import { createRoot } from "react-dom/client"
 import { ApprovalCard } from "./interaction/ApprovalCard.tsx"
 import { Composer } from "./session/Composer.tsx"
+import { ToolActivity } from "./session/ToolActivity.tsx"
+import { LightweightDiffPreview } from "./vendor/zcode/LightweightDiffPreview.tsx"
 import "./design/tokens.css"
 import "./vendor/zcode/styles.css"
 
@@ -15,5 +17,8 @@ createRoot(document.getElementById("root")!).render(
     <ApprovalCard requestId="preview-busy" description="write_file · playground/desktop-ui-probe.md" busy onConfirm={() => {}} />
     <h2 style={{ fontSize: 16, marginTop: 28 }}>輸入區 · 模擬送出會保留草稿</h2>
     <Composer workspaceId="visual-fixture" sessionId="composer" modelLabel="示例模型（非後端資料）" canSend running={false} onCancel={() => {}} onPrompt={async () => { throw new Error("純 UI 預覽，不送到後端") }} />
+    <h2 style={{ fontSize: 16, marginTop: 28 }}>工具活動與 Diff · 模擬資料</h2>
+    <ToolActivity name="read_file" output={{ path: "playground/example.md", text: "示例內容" }} />
+    <LightweightDiffPreview text={'--- a/example.md\n+++ b/example.md\n@@ -1 +1 @@\n-舊內容\n+新內容'} />
   </main>,
 )

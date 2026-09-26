@@ -1,3 +1,5 @@
+import { LightweightDiffPreview } from "../vendor/zcode/LightweightDiffPreview.tsx"
+
 export type ReviewChangeStatus = "modified" | "added" | "deleted" | "untracked" | "renamed"
 
 export interface ReviewChangeRow {
@@ -64,9 +66,7 @@ function TextBlock({ value, label }: { value: ReviewText; label: string }) {
         {label}
         {value.truncated ? `（已截斷，僅顯示前 ${value.bytes} bytes）` : ""}
       </p>
-      <pre className="tool-output review-code">{label === "diff"
-        ? value.text.split("\n").map((line, index) => <span key={index} className={line.startsWith("@@") ? "diff-hunk" : line.startsWith("+") && !line.startsWith("+++") ? "diff-added" : line.startsWith("-") && !line.startsWith("---") ? "diff-removed" : undefined}>{line}{"\n"}</span>)
-        : value.text}</pre>
+      {label === "diff" ? <LightweightDiffPreview text={value.text} /> : <pre className="tool-output review-code">{value.text}</pre>}
     </div>
   )
 }

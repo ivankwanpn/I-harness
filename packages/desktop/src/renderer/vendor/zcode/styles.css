@@ -7,6 +7,8 @@
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 @source "./PermissionCard.tsx";
 @source "./ComposerSurface.tsx";
+@source "./ToolSummaryRow.tsx";
+@source "./LightweightDiffPreview.tsx";
 @theme {
   --spacing: 4px;
   --radius-lg: 8px;
@@ -27,6 +29,9 @@
   --color-input-border: rgba(255, 255, 255, 0.1);
   --color-input-border-hover: rgba(255, 255, 255, 0.2);
   --color-input-border-focused: rgba(255, 255, 255, 0.2);
+  --color-background: #151515;
+  --color-diff-added: #22c55e;
+  --color-diff-removed: #ef4444;
 }
 @layer base {
   .zc-permission *, .zc-permission *::before, .zc-permission *::after { box-sizing: border-box; border-width: 0; border-style: solid; }
@@ -46,3 +51,7 @@
 .zc-permission-option:has(input:disabled) { opacity: .6; cursor: wait; }
 .zc-confirm { flex-shrink: 0; color: var(--color-foreground-inverse); }
 .zc-confirm:disabled { opacity: .5; cursor: wait; }
+.zc-tool-summary { border: 0; background: transparent; padding: 6px 0; color: var(--ih-muted); width: 100%; }
+.zc-tool-summary .tool-summary-kind-label { max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+.zc-diff { max-height: 360px; border: 1px solid var(--ih-divider); border-radius: 12px; margin-top: 8px; }
+.zc-diff code { font-family: Consolas, "Microsoft JhengHei", monospace; }
