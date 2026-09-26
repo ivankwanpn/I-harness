@@ -324,7 +324,7 @@ describe("createSessionService", () => {
     }
   }, 30_000)
 
-  it("does not construct an assembly for an unconfigured binding", async () => {
+  it("rechecks an unconfigured binding without constructing an assembly", async () => {
     let calls = 0
     const service = createSessionService({
       workspace: process.cwd(),
@@ -343,7 +343,7 @@ describe("createSessionService", () => {
       const assembly = service.assemblyFor("s1")
       await expect(assembly).rejects.toBeInstanceOf(ModelUnavailableError)
       await expect(assembly).rejects.toThrow("No model configured")
-      expect(calls).toBe(1)
+      expect(calls).toBe(2)
       expect(service.hasAssembly("s1")).toBe(false)
     } finally {
       await service.close()
