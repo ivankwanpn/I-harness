@@ -11,7 +11,7 @@ User authorized completing all feasible UI and source reuse against existing bac
 
 ## Execution checklist
 - [ ] Review file rows/detail navigation and workspace shell refinement.
-- [ ] Session search and manual compaction using approved bridge.
+- [x] Session search and manual compaction using approved bridge (automated verification; visual acceptance deferred).
 - [ ] Unified local settings surface and memory navigation.
 - [ ] Full zh-TW/en strings for supported user flows.
 - [ ] Native window controls/local geometry without backend logic.
@@ -24,3 +24,5 @@ Already shipped locally: baseline be8414c; permission/composer reuse 9cff8a5; to
 Progress: ReviewFileRow now reuses GitPaneChangeCard header layout with real path/status data, no fake counts. Review UI tests (4), Desktop typecheck and build passed. Next: finish Review navigation and implement existing session-search/compact UI; inspect async selection handling while connecting these surfaces.
 
 Session search now uses the existing workspace query API, optional current-session scope, truncated-result notice and opening matching conversations. SearchInput reuses ZCode presentation. Async history/tasks/review/dashboard responses are scoped to current selection; latest-file selection wins. Review found retry cleared pending requests, fixed by workspace-only clearing and reloading session data on retry. Remaining: prompt/cancel continuation state across navigation, manual compaction UI, shell/settings/localization/native features above.
+
+Manual compaction now exposes optional retention instructions, byte-limit validation, busy/cancel, error, no-op and summarizer-failure states plus returned summary. Request ownership is keyed to workspace/session, shared with prompt submission to prevent overlapping local operations. Prompt/cancel completion no longer changes another selected session's UI. Added operation/panel/cross-selection regression tests; backend untouched. Next: unify settings/routes and complete localization, then native frame and layout/performance acceptance.

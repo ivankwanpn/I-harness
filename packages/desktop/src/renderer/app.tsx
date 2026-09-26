@@ -25,6 +25,7 @@ import { classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
+import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -45,7 +46,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [tasks, setTasks] = useState<AgentTaskView[]>()
   const [taskError, setTaskError] = useState<string>()
   const [running, setRunning] = useState(false)
-  const [sending, setSending] = useState(false)
+  const operations = useSessionOperation(bridge)
+  const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
+  const sending = operation?.busy === true
   const [connection, setConnection] = useState<"online" | "offline">("online")
   const [pending, setPending] = useState<PendingInteraction[]>([])
   const [reviewChanges, setReviewChanges] = useState<ReviewChanges>()
@@ -316,23 +319,25 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: projectTimeline(eventWindow.events),
-        canSend: gate.canSend,
-        sendReason: gate.reason,
+        canSend: gate.canSend && !(operation?.kind === "compact" && operation.busy),
+        sendReason: operation?.kind === "compact" && operation.busy ? "正在壓縮上下文" : gate.reason,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
+        operation,
+        canCompact: gate.canSend && !running && !sending && !(queue?.length),
+        onCompact: async (instructions?: string): Promise<void> => {
+          const scope = selection.current
+          await operations.run(selectedWorkspaceId, selectedSessionId, "compact", instructions)
+          if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
+        },
         queue,
         tasks,
         taskError,
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string): Promise<void> => {
-          setSending(true)
-          try {
-            await bridge.request({
-              kind: "session/prompt", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, prompt: text,
-            })
-          } finally {
-            setSending(false)
-          }
+          const scope = selection.current
+          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text)
+          if (selection.current !== scope) return
           if (connection === "online") {
             void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
           }
@@ -341,9 +346,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           void refreshChanges(selectedWorkspaceId)
         },
         onCancel: () => {
+          const scope = selection.current
           void bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
-            .then(() => { setRunning(false) })
-            .catch(() => undefined)
+            .then(() => { if (selection.current === scope) setRunning(false) })
+            .catch((reason: unknown) => { if (selection.current === scope) setTaskError(String(reason)) })
         },
         onCancelTask: (taskId: string) => {
           void bridge.request({ kind: "session/tasks/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: taskId })

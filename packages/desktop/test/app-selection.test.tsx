@@ -64,3 +64,19 @@ it("reloads pending interactions on retry without losing an outstanding approval
   await waitFor(() => expect(reads()).toBeGreaterThan(before))
   expect(captured.props!.conversation!.pending).toEqual([approval])
 })
+
+it("does not carry an outstanding prompt into another session's running state", async () => {
+  const old = defer()
+  fixture((request) => request.kind === "session/prompt" ? old.promise : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  let prompt!: Promise<void>
+  act(() => { prompt = captured.props!.conversation!.onPrompt("test") })
+  expect(captured.props!.conversation!.running).toBe(true)
+  act(() => captured.props!.onSelectSession("b"))
+  expect(captured.props!.conversation!.running).toBe(false)
+  act(() => captured.props!.onSelectSession("a"))
+  expect(captured.props!.conversation!.running).toBe(true)
+  await act(async () => { old.resolve({}); await prompt })
+  expect(captured.props!.conversation!.running).toBe(false)
+})

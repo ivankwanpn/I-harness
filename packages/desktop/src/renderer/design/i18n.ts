@@ -2,6 +2,10 @@ import { create } from "zustand"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "壓縮上下文": "Compact context", "整理目前會話的上下文；可能呼叫模型。保留重點可留空。": "Condense this conversation's context; this may call the model. Retention instructions are optional.",
+  "希望保留的重點": "What to preserve", "內容超過 4096 bytes，請縮短。": "Instructions exceed 4096 bytes. Please shorten them.",
+  "正在壓縮…": "Compacting…", "開始壓縮": "Start compaction", "摘要產生失敗，未完成壓縮。": "Summary generation failed; compaction did not complete.",
+  "上下文已整理完成。": "Context processing completed.", "目前沒有需要壓縮的內容。": "There is nothing to compact right now.", "查看摘要": "View summary",
   "搜尋會話": "Search conversations", "搜尋會話內容": "Search conversation content", "清除搜尋": "Clear search",
   "搜尋此工作區已保存的會話內容，最多顯示 50 筆。": "Search saved conversations in this workspace. Up to 50 results are shown.",
   "只搜尋目前會話": "Search only this conversation", "正在搜尋…": "Searching…",
