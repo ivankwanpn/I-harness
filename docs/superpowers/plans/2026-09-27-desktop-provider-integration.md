@@ -32,7 +32,7 @@ Write each detailed implementation plan after inspecting its owning package: (2)
 - [x] Directory supplies editable route URL/ref metadata, retaining one-way auth status and no key values.
 - [x] Provider editor UI: populated route forms, write-only key input, individual model context/output/protocol forms, default selection, explicit remove confirmation, busy/error/retry; only changed fields patched.
 - [x] Network discovery: explicit action with timeout/cancel and selection before import. Avoid holding shared configuration locks across long network probes.
-- [ ] Real host mutation/persistence regression, cross-process concurrency test, UI mutation tests and fresh independent review before finalizing slice.
+- [x] Real host mutation/persistence regression, cross-process concurrency test, UI mutation tests and fresh independent review before finalizing slice.
 
 Editor checkpoint: route/model forms and API key controls now use existing SettingsGroup/Row presentation, typed backend commands and localized feedback. Only changed fields are patched, blank existing values become null; failure retains input. Directory refresh does not unmount other unsaved forms, and a failed refresh does not hide the last good rows. Dedicated tests cover context editing/clearing, retry and explicit removal confirmation. Real host commands now round-trip create/key/model/context/default across restart without returning a key value. Focused UI tests,typechecks and build pass; full Desktop evidence in external provider-editor-tests.log. Still pending for provider slice: discovery, model switch UI, subprocess concurrency and independent review. Browser pixels remain deferred.
 
@@ -42,11 +42,11 @@ Ruling: use the existing fs-lock primitive inside provider-runtime instead of a 
 
 ## Remaining goal checklist
 - [x] Session model switching implementation: SDK busy/compaction guards, resolution/rebind/persistence consistency, composer picker and selection-scope guard. Final integration review remains required.
-- [ ] Session management using existing session packages, with supported rename/archive/fork/rewind contracts and UI.
-- [ ] Plugin/marketplace from existing registry/core-plugin, with install/enable lifecycle and UI.
-- [ ] Interactive terminal from terminal package, bounded output, lifecycle/input/resize, native dependency packaging.
-- [ ] Browser surface with separate documented responsibility and lifecycle; no remote service.
-- [ ] Whole integration review, final gates, rebuilt portable package, external report; pixels remain deferred.
+- [x] Session management using existing session packages, with supported rename/archive/fork/rewind contracts and UI.
+- [x] Plugin/marketplace from existing registry/core-plugin, with install/enable lifecycle and UI.
+- [x] Interactive terminal from terminal package, bounded output, lifecycle/input/resize, native dependency packaging.
+- [x] Browser surface with separate documented responsibility and lifecycle; no remote service.
+- [x] Whole integration review, final gates, rebuilt portable package, external report; pixels remain deferred.
 
 Model switch checkpoint: host injects the existing SDK setSessionModel hook, resolves before rebind, persists provider/model/effort and strips transient protocol. A failed durable save evicts the transient assembly/binding so later reads resolve durable state. Router reserves the session during asynchronous transitions, blocks prompt/compact/second model switches, and drains transitions on close. Rebinding reuses the compaction-signal wrapper. Composer picker fetches routes on demand and uses the same per-session operation lock as prompt/compact; stale selection responses cannot update another session. Tests cover failed-save eviction, busy refusal, gateway restart persistence, explicit picker submission and router reservation; typechecks/build passed. Whole provider review and broader remaining work are still pending.
 
@@ -54,3 +54,4 @@ Independent review found two P2 defects, both reproduced with failing tests: HTT
 
 Whole-integration checkpoint: verify:all at a3e003ca passed3399tests/9skipped/70projects plus typecheck,E2E and reachability; log outside repo integration-verification.log. Fresh reviewer found one P2: non-ready model bindings remained cached after provider setup. Fixed by evicting only failed/non-ready resolution attempts while preserving successful ready bindings; successful settings mutations increment an ephemeral UI revision that refreshes a selected non-ready model with request-version guards. Regression first failed, then service/App tests and real-host configure-after-session-create test passed. Cross-process concurrency evidence, final package and post-fix completion audit still pending.
 
+Final delivery checkpoint: authorized code scope complete. verify:all at3f6c24d6 passed3402tests/9skipped/70projects, typecheck,E2E and reachability. Fresh integration review and non-ready model recovery fix confirmed. Provider two-process test preserved16routes/credentials/models; portable app copied to playground passed SDK/gateway/provider/plugin/PTY smoke and process-exit checks. ZIP SHA256 90519DC1B1D2A7957DE898D1C73CEF749695C3E821DF77DAAD9010597A046253. Product source is0235f068; subsequent changes are tests/docs only. Full evidence and limitations are outside repo in desktop-audit/integration-delivery.md. Browser pixels/native geometry remain explicitly user-deferred, not claimed verified. No GitHub push.
