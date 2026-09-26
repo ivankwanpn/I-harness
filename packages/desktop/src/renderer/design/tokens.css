@@ -29,9 +29,10 @@ body {
 button { font: inherit; color: inherit; }
 
 .workbench {
+  position: relative;
   display: grid;
   grid-template-columns: var(--sidebar-width, 256px) minmax(0, 1fr);
-  height: 100vh;
+  height: calc(100vh - 36px);
   padding: 8px 8px 8px 0;
   overflow: hidden;
   background: var(--ih-sidebar);
@@ -41,7 +42,7 @@ button { font: inherit; color: inherit; }
 @media (max-width: 900px) {
   .workbench { grid-template-columns: 200px minmax(0, 1fr); }
   .workbench.review-open { grid-template-columns: 180px minmax(0, 1fr); }
-  .review-open .review-pane { position: absolute; right: 8px; top: 64px; bottom: 8px; width: min(420px, calc(100vw - 210px)); z-index: 3; box-shadow: -16px 0 48px #0008; }
+  .review-open .review-pane { position: absolute; right: 8px; top: 72px; bottom: 8px; width: min(420px, calc(100vw - 210px)); z-index: 3; box-shadow: -16px 0 48px #0008; }
 }
 
 .sidebar {
@@ -53,6 +54,9 @@ button { font: inherit; color: inherit; }
   overflow-y: auto;
 }
 .sidebar-container { min-height: 0; overflow: hidden; }
+.desktop-titlebar { height: 36px; display: flex; align-items: center; justify-content: space-between; background: var(--ih-sidebar); color: var(--ih-muted); padding: 0 4px 0 16px; app-region: drag; user-select: none; }
+.desktop-drag-title { flex: 1; height: 100%; display: flex; align-items: center; font-size: 12px; }
+.native-error { color: #f79a91; font-size: 11px; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; app-region: no-drag; }
 .sidebar-container > .sidebar { height: 100%; }
 .sidebar-container[hidden] { display: none; }
 .workbench[data-sidebar-collapsed="true"] { grid-template-columns: minmax(0,1fr); padding-left: 8px; }
@@ -80,6 +84,10 @@ button { font: inherit; color: inherit; }
 }
 
 .session-header {
+  height: 56px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 10px;

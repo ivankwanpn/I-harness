@@ -4,6 +4,8 @@ import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
+import { createLocalPreferences } from "./local-preferences.ts"
+import { attachNativeWindow } from "./native-window.ts"
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
@@ -20,6 +22,7 @@ export function workspaceRuntimes(): WorkspaceRuntimeManager {
 }
 
 app.whenReady().then(() => {
+  const localPreferences = createLocalPreferences(join(app.getPath("userData"), "desktop-preferences.json"))
   const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
   const manager = createWorkspaceRuntimeManager({
     sessionsRoot: join(app.getPath("userData"), "sessions"),
@@ -30,10 +33,12 @@ app.whenReady().then(() => {
   catalog = workspaces
   runtimes = manager
   const openWindow = (): void => {
-    const window = createDesktopWindow()
+    const window = createDesktopWindow(localPreferences.get())
+    const native = attachNativeWindow(window, localPreferences)
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
       runtimes: manager,
+      native,
       pickFolder: async () => {
         const result = await dialog.showOpenDialog(window, { properties: ["openDirectory"] })
         return result.canceled ? undefined : result.filePaths[0]

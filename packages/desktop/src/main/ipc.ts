@@ -3,12 +3,14 @@ import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest } f
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import { contextRequestParams } from "./context-requests.ts"
+import type { attachNativeWindow } from "./native-window.ts"
 
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
   runtimes: WorkspaceRuntimeManager
   /** Native folder picker; injected so the dispatcher stays testable. */
   pickFolder?: () => Promise<string | undefined>
+  native?: ReturnType<typeof attachNativeWindow>
 }
 
 /**
@@ -33,6 +35,21 @@ export async function dispatchDesktopRequest(
   }
 
   switch (value.kind as DesktopRequest["kind"]) {
+    case "window/control":
+      if (value.action !== "minimize" && value.action !== "toggle-maximize" && value.action !== "close") throw new Error("invalid window action")
+      if (!dependencies.native) throw new Error("native window unavailable")
+      return dependencies.native.control(value.action)
+    case "window/reset-bounds":
+      if (!dependencies.native) throw new Error("native window unavailable")
+      return dependencies.native.resetBounds()
+    case "desktop/local/state":
+      if (!dependencies.native) throw new Error("native preferences unavailable")
+      return dependencies.native.state()
+    case "desktop/local/configure":
+      if (value.notifications !== undefined && typeof value.notifications !== "boolean") throw new Error("invalid notifications preference")
+      if (value.locale !== undefined && value.locale !== "zh-TW" && value.locale !== "en") throw new Error("invalid locale")
+      if (!dependencies.native) throw new Error("native preferences unavailable")
+      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
     case "workspace/open":
@@ -140,6 +157,7 @@ export function registerDesktopIpc(
   })
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
+    try { dependencies.native?.onEvent(desktopEvent) } catch { /* Notifications cannot interrupt SDK event delivery. */ }
     window.webContents.send(DESKTOP_EVENT_CHANNEL, desktopEvent)
   })
   let removed = false

@@ -3,6 +3,9 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
+  | { kind: "window/reset-bounds" | "desktop/local/state" }
+  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en" }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
   | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
   | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }

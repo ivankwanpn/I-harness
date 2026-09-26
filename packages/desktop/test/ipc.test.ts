@@ -51,6 +51,19 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("validates native window preferences and never forwards them to the SDK", async () => {
+    const f = fixture()
+    const configure = vi.fn(() => ({ notifications: true }))
+    const control = vi.fn(() => ({ maximized: false }))
+    f.dependencies.native = { configure, control } as unknown as NonNullable<DesktopIpcDependencies["native"]>
+    await expect(dispatchDesktopRequest({ kind: "window/control", action: "exec" }, f.dependencies)).rejects.toThrow("invalid window action")
+    await expect(dispatchDesktopRequest({ kind: "desktop/local/configure", notifications: "yes" }, f.dependencies)).rejects.toThrow("invalid notifications")
+    await dispatchDesktopRequest({ kind: "desktop/local/configure", notifications: true, path: "ignored" }, f.dependencies)
+    expect(configure).toHaveBeenCalledWith({ notifications: true })
+    await dispatchDesktopRequest({ kind: "window/control", action: "minimize" }, f.dependencies)
+    expect(control).toHaveBeenCalledWith("minimize")
+    expect(f.get).not.toHaveBeenCalled()
+  })
   it("routes memory and compaction only to known workspaces after validating arguments", async () => {
     const f = fixture()
     await expect(dispatchDesktopRequest({ kind: "desktop/memory/search", workspaceId: "ws-1", query: "pnpm", limit: -1 }, f.dependencies)).rejects.toThrow(/limit/)

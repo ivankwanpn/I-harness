@@ -14,7 +14,7 @@ User authorized completing all feasible UI and source reuse against existing bac
 - [x] Session search and manual compaction using approved bridge (automated verification; visual acceptance deferred).
 - [x] Unified local settings surface and memory navigation (appearance/language/text/sidebar/review; native preferences follow).
 - [ ] Full zh-TW/en strings for supported user flows.
-- [ ] Native window controls/local geometry without backend logic.
+- [x] Native window controls/local geometry without backend logic (automated verification; visual acceptance deferred).
 - [ ] Long-session behavior, async selection isolation and narrow layout verification.
 - [ ] Capability inventory: provider/plugin/terminal/browser/quota gaps accurately documented.
 - [ ] Final test/typecheck/build, independent reviews and local commits.
@@ -30,3 +30,5 @@ Manual compaction now exposes optional retention instructions, byte-limit valida
 Settings now reuses upstream SettingsRow/Group presentation with General, Workspace and About routes. Persisted local preferences cover appearance (dark/light/system), font size and sidebar; review visibility can be toggled; memory management is reachable from workspace settings. Language moved from sidebar footer into settings. Added system-theme listener/persistence/reset tests and sidebar hide/restore coverage. Native notifications/window preference reset remain in upcoming native work.
 
 Localization pass: Review reasons/status/truncation, task/queue controls, interaction fallbacks, timeline outcomes, model/sandbox send-gate reasons and session announcement now use typed messages. Date formatting follows selected locale; raw backend/user content is preserved. History cap notice now truthfully points to search rather than claiming nonexistent scroll pagination. Added English/reactive-language coverage. Native labels and capability-gap copy will be localized as those surfaces land.
+
+Native pass: source-adapted window controls invoke sender-scoped allowlisted IPC. Main persists normal bounds/maximized state and clamps restoration to available displays, provides reset and opt-in generic background approval/question notifications. Notification content excludes prompts/paths, deduplicates request IDs with a bounded cache, and raises the window on click. Native settings and labels are localized; no SDK forwarding or backend changes. Remaining focus: narrow drawer/layout, timeline follow/read UX, capability gap inventory and completion audit.

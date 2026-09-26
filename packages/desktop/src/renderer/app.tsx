@@ -26,7 +26,7 @@ import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
 import { Workbench } from "./shell/Workbench.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
-import { useText } from "./design/i18n.ts"
+import { useLocale, useText } from "./design/i18n.ts"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -35,6 +35,10 @@ const HISTORY_MAX_PAGES = 40
  * the workbench below renders exactly what it is told. */
 export function App({ bridge }: { bridge: DesktopBridge }) {
   const t = useText()
+  const locale = useLocale((state) => state.locale)
+  useEffect(() => {
+    void bridge.request({ kind: "desktop/local/configure", locale }).catch(() => undefined)
+  }, [bridge, locale])
   const textRef = useRef(t)
   textRef.current = t
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([])

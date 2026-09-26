@@ -3,6 +3,10 @@ import { useCallback } from "react"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "最小化視窗": "Minimize window", "最大化或還原視窗": "Maximize or restore window", "關閉視窗": "Close window",
+  "視窗與通知": "Window and notifications", "背景待處理通知": "Notify when attention is needed",
+  "此系統不支援桌面通知。": "Desktop notifications are not supported on this system.", "視窗不在前景時，有審批或問題需要處理便通知。": "Notify about approvals and questions while the window is in the background.",
+  "視窗位置與大小": "Window position and size", "關閉時保存，下次啟動恢復。": "Saved on close and restored on the next launch.", "重設視窗": "Reset window",
   "任務": "Tasks", "佇列": "Queue", "回合": "turns", "等候中": "Waiting", "已完成": "Completed", "已失敗": "Failed", "已取消": "Cancelled",
   "佇列狀態未知": "Queue state unavailable", "佇列為空": "Queue is empty", "任務狀態未知": "Task state unavailable", "暫無可確認的任務": "No reported tasks",
   "已修改": "Modified", "已新增": "Added", "已刪除": "Deleted", "未追蹤": "Untracked", "已重新命名": "Renamed",
