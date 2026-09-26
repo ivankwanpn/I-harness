@@ -1368,7 +1368,9 @@ describe("headless CLI W10 foreground promotion", () => {
       const finished = await pollUntil(async () => (existsSync(donePath) ? true : undefined), 10_000)
       expect(finished).toBe(true)
     } finally {
-      rmSync(dir, { recursive: true, force: true })
+      // The completion marker precedes the background process releasing its
+      // Windows cwd handle. Retry cleanup without weakening any job assertions.
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   }, 20_000)
 })
