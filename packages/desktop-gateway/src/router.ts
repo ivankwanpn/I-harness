@@ -16,6 +16,7 @@ import { randomUUID } from "node:crypto"
 import { memoryRequest } from "./memory-wire.ts"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
+import { createProviderProbes } from "./provider-probes.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -62,6 +63,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
   const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
+  const probes = handlers.provider ? createProviderProbes(handlers.provider) : undefined
 
   return {
     async handleLine(line) {
@@ -121,6 +123,16 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if ((message.method === "desktop/provider/probe" || message.method === "desktop/provider/probe/cancel") && probes) {
+        const params = asRecord(message.params)
+        if (typeof params?.token !== "string" || !params.token || params.token.length > 128
+          || (message.method === "desktop/provider/probe" && (typeof params.id !== "string" || !params.id || params.id.length > 128))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid provider probe parameters")); return
+        }
+        try { send(makeSuccess(message.id, message.method.endsWith("/cancel") ? probes.cancel(params.token) : await probes.start(params.id as string, params.token))) }
+        catch { send(makeFailure(message.id, INTERNAL_ERROR, "Provider probe failed or was cancelled. Check endpoint, protocol and credentials.")) }
+        return
+      }
       if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {
         try { send(makeSuccess(message.id, await handlers.provider.directory())) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "provider directory unavailable")) }
@@ -264,6 +276,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
     async close() {
       if (closed) return
       closed = true
+      await probes?.close()
       for (const controller of compacting.values()) controller.abort()
       for (const sessionId of activePrompts.keys()) {
         const id = `desktop-internal-${randomUUID()}`

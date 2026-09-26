@@ -46,13 +46,21 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
           for (const path of paths) locks.push(await acquireSessionLock({ lockPath: `${path}.provider.lock`, deadlineMs: 10000 }))
           for (const path of paths) await validateDocument(path)
           await settings.load()
-          return await method(...args)
+          if (key === "probeModels") {
+            // A read-only network probe uses its own settings snapshot. Release
+            // shared file locks before waiting for an endpoint response.
+            const snapshot = new SettingsStore({ path: options.settingsPath })
+            await snapshot.load()
+            const probeRuntime = createProviderRuntime({ settings: snapshot, credentials: createCredentialStore(options.credentialsPath) })
+            return { invoke: () => (probeRuntime.probeModels as (...values: unknown[]) => Promise<unknown>)(...args) }
+          }
+          return { value: await method(...args) }
         } finally {
           for (const lock of locks.reverse()) await lock.release()
         }
       })
       tail = job.catch(() => undefined)
-      return job
+      return job.then((result) => result.invoke !== undefined ? result.invoke() : result.value)
     } })
   }
   return result

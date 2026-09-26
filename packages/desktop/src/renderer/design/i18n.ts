@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "篩選模型": "Filter models", "上一頁": "Previous page", "下一頁": "Next page",
+  "探測模型列表": "Discover models", "選取後才加入設定；已有模型的自訂值會保留。": "Select models to add. Existing model overrides are preserved.", "沒有找到模型": "No models found", "加入所選模型": "Add selected models", "已加入 {count} 個模型": "Added {count} models",
   "設定已儲存": "Settings saved",
   "操作進行中": "An operation is in progress", "設定 API key": "Set API key", "確認移除提供商": "Confirm provider removal", "移除提供商": "Remove provider", "確認清除 API key": "Confirm API key removal", "清除 API key": "Clear API key", "設為預設模型": "Set as default model", "確認移除模型": "Confirm model removal", "移除模型": "Remove model", "新增模型": "Add model", "新增提供商": "Add provider",
   "顯示名稱": "Display name", "最大輸出 Token": "Maximum output tokens", "通訊協定": "Protocol", "API 網址": "API URL", "模型列表網址": "Models URL", "模型規格來源": "Model card family", "API key 環境變數": "API key environment variable",

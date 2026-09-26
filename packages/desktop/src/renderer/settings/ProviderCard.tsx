@@ -3,13 +3,15 @@ import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wi
 import { ProviderEditor, type EditableProvider, type EditableModel } from "./ProviderEditor.tsx"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import { ProviderDiscovery } from "./ProviderDiscovery.tsx"
+import type { DesktopBridge } from "../../shared/bridge.ts"
 
 export interface DirectoryRow extends EditableProvider {
   auth: { configured: boolean; writable?: boolean; source?: string }
   models: EditableModel[]
   defaultModel?: string
 }
-export function ProviderCard({ row, onSave }: { row: DirectoryRow; onSave(command: ProviderCommand): Promise<void> }) {
+export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: DirectoryRow; onSave(command: ProviderCommand): Promise<void>; bridge?: DesktopBridge; workspaceId?: string }) {
   const t = useText()
   const [editor, setEditor] = useState<"provider" | "new-model" | EditableModel>()
   const [key, setKey] = useState("")
@@ -48,6 +50,7 @@ export function ProviderCard({ row, onSave }: { row: DirectoryRow; onSave(comman
         <div className="provider-actions"><button disabled={busy} onClick={() => setEditor(model)}>{t("編輯模型")}</button><button disabled={busy} onClick={() => run({ action: "default/set", id: row.id, model: model.id })}>{t("設為預設模型")}</button><button disabled={busy} onClick={() => remove(`model:${model.id}`, { action: "model/remove", id: row.id, model: model.id })}>{t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")}</button></div>
       </div>)}
       <button disabled={busy} onClick={() => setEditor("new-model")}>{t("新增模型")}</button>
+      {bridge && workspaceId ? <ProviderDiscovery bridge={bridge} workspaceId={workspaceId} id={row.id} onSave={save} /> : null}
     </details>
     {editor !== undefined ? <ProviderEditor key={typeof editor === "string" ? editor : editor.id} id={row.id} provider={editor === "provider" ? row : undefined} model={typeof editor === "object" ? editor : undefined} newModel={editor === "new-model"} onSave={save} onClose={() => setEditor(undefined)} /> : null}
   </SettingsGroup>

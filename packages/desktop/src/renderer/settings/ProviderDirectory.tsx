@@ -37,6 +37,6 @@ export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBrid
     {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
     {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
       : rows.length === 0 ? <p>{t("沒有可用的提供商")}</p>
-      : rows.map((row) => <ProviderCard key={row.id} row={row} onSave={save} />)}
+      : rows.map((row) => <ProviderCard key={row.id} row={row} onSave={save} bridge={bridge} workspaceId={workspaceId} />)}
   </section>
 }

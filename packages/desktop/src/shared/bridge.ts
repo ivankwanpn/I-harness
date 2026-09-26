@@ -5,6 +5,8 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
   | { kind: "desktop/provider/directory"; workspaceId: string }
+  | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }
+  | { kind: "desktop/provider/probe/cancel"; workspaceId: string; token: string }
   | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }

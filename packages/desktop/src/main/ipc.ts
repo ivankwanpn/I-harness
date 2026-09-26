@@ -101,6 +101,14 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
     case "desktop/provider/directory":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/provider/directory", {})
+    case "desktop/provider/probe":
+    case "desktop/provider/probe/cancel": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const token = requireNonEmpty(value.token, "token")
+      const id = value.kind === "desktop/provider/probe" ? requireNonEmpty(value.id, "provider id") : undefined
+      if (token.length > 128 || (id !== undefined && id.length > 128)) throw new Error("invalid provider probe")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { token, ...(id ? { id } : {}) }, 40000)
+    }
     case "desktop/provider/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const command = requireRecord(value.command)
