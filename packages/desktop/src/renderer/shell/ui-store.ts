@@ -20,6 +20,7 @@ function readLocale(): Locale {
 
 // UI state only. SDK state remains owned by the renderer data layer.
 export const useUiStore = create<Preferences & {
+  providerRevision: number
   selectedWorkspaceId?: string
   selectedSessionId?: string
   setSelectedWorkspaceId(value: string | undefined | ((current: string | undefined) => string | undefined)): void
@@ -53,6 +54,7 @@ export const useUiStore = create<Preferences & {
   },
   reset: () => get().update(defaults),
   surface: "conversation",
+  providerRevision: 0,
   setSurface: (surface) => set({ surface }),
   reviewOpen: false,
   reviewWidth: 360,

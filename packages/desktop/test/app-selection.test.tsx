@@ -7,9 +7,19 @@ const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefi
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
 import { App } from "../src/renderer/app.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
-afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined }) })
+afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0 }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("recovers the selected unconfigured session after provider settings are saved", async () => {
+  let configured = false
+  fixture((request) => request.kind === "session/model/state" ? Promise.resolve(configured ? { status: "ready", providerId: "p", modelId: "m", label: "Configured" } : { status: "unconfigured", reason: "missing key" }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.modelState?.status).toBe("unconfigured"))
+  configured = true
+  act(() => useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 })))
+  await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("Configured"))
+})
 it("refreshes the model after leaving and returning during a pending switch", async () => {
   const pending = defer()
   let modelId = "old"

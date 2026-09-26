@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
+import { useUiStore } from "../shell/ui-store.ts"
 import { ProviderCard, type DirectoryRow } from "./ProviderCard.tsx"
 import { ProviderEditor } from "./ProviderEditor.tsx"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
@@ -16,6 +17,7 @@ export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBrid
   const save = async (command: ProviderCommand) => {
     setSaved(false)
     await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
+    useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 }))
     setSaved(true)
     setReload((value) => value + 1)
   }

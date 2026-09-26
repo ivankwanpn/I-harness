@@ -41,6 +41,7 @@ const HISTORY_MAX_PAGES = 40
 export function App({ bridge }: { bridge: DesktopBridge }) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
+  const providerRevision = useUiStore((state) => state.providerRevision)
   useEffect(() => {
     void bridge.request({ kind: "desktop/local/configure", locale }).catch(() => undefined)
   }, [bridge, locale])
@@ -364,6 +365,17 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }).catch((reason: unknown) => { if (active && selection.current === scope) setTaskError(String(reason)) })
     return () => { active = false }
   }, [bridge, operation, selectedSessionId, selectedWorkspaceId])
+
+  useEffect(() => {
+    if (!providerRevision || !selectedWorkspaceId || !selectedSessionId || !model || model.status === "ready") return
+    const scope = selection.current
+    const version = ++modelRequest.current
+    let active = true
+    void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).then((result) => {
+      if (active && selection.current === scope && version === modelRequest.current) setModel(result as SessionModelState)
+    }).catch((reason: unknown) => { if (active && selection.current === scope) setTaskError(String(reason)) })
+    return () => { active = false }
+  }, [bridge, providerRevision, selectedWorkspaceId, selectedSessionId, model?.status])
 
   const gate = sendGate({ model, sandbox, connection }, t)
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined

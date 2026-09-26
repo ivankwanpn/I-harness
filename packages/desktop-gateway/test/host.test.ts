@@ -37,12 +37,14 @@ describe("Desktop host sandbox configuration", () => {
     }
     try {
       await call("initialize", {})
+      const session = await call("session/create", {}) as { sessionId: string }
+      expect(await call("session/model/state", { sessionId: session.sessionId })).toMatchObject({ status: "unconfigured" })
       await call("desktop/provider/mutate", { action: "provider/create", id: "ui-test", fields: { protocol: "openai-completions", baseURL: "https://example.invalid" } })
       await call("desktop/provider/mutate", { action: "key/set", id: "ui-test", value: "ui-secret-fixture" })
       await call("desktop/provider/mutate", { action: "model/add", id: "ui-test", model: "m", fields: { contextWindow: 272000 } })
       await call("desktop/provider/mutate", { action: "model/edit", id: "ui-test", model: "m", fields: { contextWindow: 1000000 } })
       await call("desktop/provider/mutate", { action: "default/set", id: "ui-test", model: "m" })
-      const session = await call("session/create", {}) as { sessionId: string }
+      expect(await call("session/model/state", { sessionId: session.sessionId })).toMatchObject({ status: "ready", modelId: "m" })
       const selection = { provider: "ui-test", model: "another-model", protocol: "openai-responses", reasoningEffort: "high" }
       expect(await call("session/model/set", { sessionId: session.sessionId, selection })).toMatchObject({ status: "ready", providerId: "ui-test", modelId: "another-model" })
       await call("desktop/session/manage", { sessionId: session.sessionId, action: "rename", title: "Saved title" })

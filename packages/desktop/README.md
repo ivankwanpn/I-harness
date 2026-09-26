@@ -26,12 +26,21 @@ The unsigned portable build is written to `packages/desktop/release/I-harness De
 - Traditional Chinese/English with saved/system locale selection; dark/light/system appearance and text size.
 - Narrow sidebar drawer, latest-content navigation, reduced-motion support.
 - Native frame controls, bounds restore/reset and opt-in background attention notifications.
+- Provider/API key and per-model context/output/protocol forms, explicit discovery/import, default and per-session model selection.
+- Session rename, archive/restore, completed-turn forks and rewind preview/confirmation/results.
+- Plugin marketplace source/install/enable management, capability/conflict/mount diagnostics and actual fresh-assembly plugin inputs.
+- Interactive workspace PTYs with lazy xterm rendering, bounded output and explicit lifecycle controls.
+- Workspace-isolated native human browser tabs, address/navigation controls and restricted guest permissions.
 
 Desktop main manages native UI and SDK processes. Renderer does not resolve providers, run the agent loop, implement sandboxing or own backend persistence.
 
-## Backend configuration and deferred interfaces
+## Backend configuration and scope
 
-Gateway uses the existing settings/provider/credential implementation, including its `IH_CONFIG_DIR` configuration location. This experimental UI displays the resolved session model but does not provide a model catalog/editor. Provider/model editing, plugin-marketplace operations, interactive terminal/browser surfaces, account usage/reset and session rename/archive/fork require separately approved Desktop contracts. No replacement backend or fictional controls are provided.
+Gateway uses the existing settings/provider/credential implementation, including its `IH_CONFIG_DIR` configuration location. Provider edits use shared-file serialization for cooperating Desktop hosts. Live sessions keep their resolved bindings until an explicit model selection or a new assembly; editing defaults does not silently retarget a running task. Plugin changes likewise apply to newly built assemblies, with existing hook trust rules retained.
+
+The interactive terminal uses local user permissions and is separate from agent sandboxed tools. Browser tabs are native UI in the Desktop package; they have no Node/preload/SDK bridge and do not expose agent browser automation. Popups, downloads and unsolicited permissions are restricted. Browser sessions are ephemeral and capped at eight tabs per window.
+
+Provider account usage, quota resets and OAuth are explicitly excluded from this round. No hosted service, remote workspace, own account/subscription system or cloud sync was added.
 
 Workspace memory is manually managed. Its excerpt action uses stored notes without a model call; automatic memory extraction is unavailable. Context size continues to be each model's backend setting; Desktop adds no billing threshold policy.
 

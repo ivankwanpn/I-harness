@@ -279,6 +279,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             return resolveBinding(sessionId, meta)
           })()
       modelBindings.set(sessionId, pending)
+      const attempt = pending
+      // A missing key/default can be repaired while this host stays alive.
+      // Keep successful bindings stable; only failed resolution is retryable.
+      void attempt.then((result) => {
+        if (result.status !== "ready" && modelBindings.get(sessionId) === attempt) modelBindings.delete(sessionId)
+      }, () => { if (modelBindings.get(sessionId) === attempt) modelBindings.delete(sessionId) })
     }
     return pending
   }
