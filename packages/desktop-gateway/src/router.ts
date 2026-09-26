@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
@@ -135,6 +136,29 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (message.method === "desktop/session/archived" && handlers.sessions) {
+        try { send(makeSuccess(message.id, await handlers.sessions.archived())) }
+        catch { send(makeFailure(message.id, INTERNAL_ERROR, "Archived sessions unavailable")) }
+        return
+      }
+      if (message.method === "desktop/session/manage" && handlers.sessions) {
+        const params = asRecord(message.params)
+        const sessionId = params?.sessionId
+        const action = params?.action
+        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "fork"].includes(String(action))
+          || (action === "rename" && (typeof params?.title !== "string" || !params.title.trim() || params.title.length > 256))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid session management request")); return
+        }
+        if (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId)) {
+          send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
+        }
+        const job = handlers.sessions.mutate(sessionId, action as "rename" | "archive" | "restore" | "fork", params?.title as string | undefined)
+        modelSwitches.set(sessionId, job)
+        try { send(makeSuccess(message.id, await job)) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        finally { modelSwitches.delete(sessionId) }
+        return
+      }
       if ((message.method === "desktop/provider/probe" || message.method === "desktop/provider/probe/cancel") && probes) {
         const params = asRecord(message.params)
         if (typeof params?.token !== "string" || !params.token || params.token.length > 128

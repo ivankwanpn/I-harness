@@ -45,10 +45,16 @@ describe("Desktop host sandbox configuration", () => {
       const session = await call("session/create", {}) as { sessionId: string }
       const selection = { provider: "ui-test", model: "another-model", protocol: "openai-responses", reasoningEffort: "high" }
       expect(await call("session/model/set", { sessionId: session.sessionId, selection })).toMatchObject({ status: "ready", providerId: "ui-test", modelId: "another-model" })
+      await call("desktop/session/manage", { sessionId: session.sessionId, action: "rename", title: "Saved title" })
+      await call("desktop/session/manage", { sessionId: session.sessionId, action: "archive" })
+      expect(await call("session/list", {})).toMatchObject({ sessions: [] })
       await host.close()
       host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
       await call("initialize", {})
       expect(await call("session/model/state", { sessionId: session.sessionId })).toMatchObject({ status: "ready", providerId: "ui-test", modelId: "another-model" })
+      expect(await call("desktop/session/archived", {})).toEqual(expect.arrayContaining([expect.objectContaining({ id: session.sessionId, title: "Saved title" })]))
+      await call("desktop/session/manage", { sessionId: session.sessionId, action: "restore" })
+      expect(await call("session/list", {})).toMatchObject({ sessions: [{ id: session.sessionId, title: "Saved title" }] })
       const directory = await call("desktop/provider/directory", {})
       expect(directory).toEqual(expect.arrayContaining([expect.objectContaining({ id: "ui-test", auth: expect.objectContaining({ configured: true }), models: [expect.objectContaining({ id: "m", contextWindow: 1000000 })] })]))
       expect(JSON.stringify(f.frames)).not.toContain("ui-secret-fixture")

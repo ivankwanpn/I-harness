@@ -51,6 +51,7 @@ export function parseHeader(line: string): SessionMeta {
     ...(typeof h.workspaceId === "string" ? { workspaceId: h.workspaceId } : {}),
     // C5 session title: same passthrough rule — a repair never strips it.
     ...(typeof h.title === "string" ? { title: h.title } : {}),
+    ...(typeof h.archived === "boolean" ? { archived: h.archived } : {}),
     ...(modelSelection !== undefined ? { modelSelection } : {}),
   }
 }

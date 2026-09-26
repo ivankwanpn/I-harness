@@ -33,6 +33,8 @@ export interface SessionMeta extends SessionHeader {
   /** C5 session title (DSH parity): header-rewrite metadata like rename —
    * never a SessionEvent (a rename is a metadata rewrite, not a log op). */
   title?: string
+  /** Reversible navigation state; archiving never removes session events. */
+  archived?: boolean
   /** C5 per-session model selection: header metadata (resolution chain:
    * session meta > llm.defaultModel > legacy core.model > unconfigured). */
   modelSelection?: SessionModelSelection

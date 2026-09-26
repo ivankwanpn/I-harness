@@ -10,6 +10,7 @@ import { createDurableSessionLoader, createSessionService, type SessionServiceOp
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
+import { createSessionManagement } from "./session-management.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -111,6 +112,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    sessions: createSessionManagement(coordinator, service),
     provider: runtime,
     memory,
     compact: async (sessionId, instructions, signal) => {
@@ -154,12 +156,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       const sessions = await Promise.all(ids.map(async (id) => {
         try {
           const { meta } = await coordinator.profile(id)
+          if (meta.archived) return undefined
           return { id, ...(meta.title === undefined ? {} : { title: meta.title }) }
         } catch {
           return { id }
         }
       }))
-      return { sessions }
+      return { sessions: sessions.filter((row) => row !== undefined) }
     },
     onWrite: createGatewayWrite(options.onWrite, handlers, internalIds),
   })

@@ -4,6 +4,7 @@ import type { SessionQuery } from "@i-harness/session-query"
 import type { MemoryStore } from "@i-harness/memory"
 import type { InteractionBridge } from "./interaction.ts"
 import type { WorkspaceReview } from "./review.ts"
+import type { createSessionManagement } from "./session-management.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -12,6 +13,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  sessions?: ReturnType<typeof createSessionManagement>
   provider?: ProviderRuntime
   memory?: MemoryStore
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
