@@ -418,6 +418,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         onSelect: (path, mode) => { void selectReview(path, mode) },
         onRefresh: () => {
           if (selectedWorkspaceId !== undefined) void refreshChanges(selectedWorkspaceId)
+          if (reviewSelected !== undefined) void selectReview(reviewSelected.path, reviewSelected.mode)
         },
       }}
       onSelectWorkspace={(workspaceId) => {

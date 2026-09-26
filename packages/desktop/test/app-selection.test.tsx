@@ -102,3 +102,13 @@ it("keeps a history failure visible even when task loading succeeds", async () =
   await waitFor(() => expect(captured.props!.conversation!.queue).toEqual([]))
   expect(captured.props!.conversation!.historyError).toBe("history unavailable")
 })
+
+it("refreshes the selected file content together with the change list", async () => {
+  let reads = 0
+  fixture((request) => request.kind === "desktop/review/diff" ? Promise.resolve({ kind: "text", text: `version${++reads}`, truncated: false, bytes: 8 }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.review!.onSelect("file", "diff"))
+  await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version1" }))
+  act(() => captured.props!.review!.onRefresh())
+  await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version2" }))
+})
