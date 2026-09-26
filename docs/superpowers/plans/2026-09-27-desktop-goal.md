@@ -17,7 +17,7 @@ User authorized completing all feasible UI and source reuse against existing bac
 - [x] Native window controls/local geometry without backend logic (automated verification; visual acceptance deferred).
 - [x] Long-session behavior, async selection isolation and narrow layout automated checks/profile; real renderer geometry/heap deferred.
 - [x] Capability inventory: provider/plugin/terminal/browser/quota gaps accurately documented outside repo in desktop-audit/capability-map.md.
-- [ ] Final test/typecheck/build, independent reviews and local commits.
+- [x] Final test/typecheck/build, independent reviews and local commits (code scope; user-deferred visual acceptance remains separate).
 
 Already shipped locally: baseline be8414c; permission/composer reuse 9cff8a5; tool/diff reuse f23d893f. Latest full Desktop baseline 105 tests passing.
 
@@ -44,3 +44,5 @@ Final code audit: integrated one header containing task/route title, review/acti
 Final correctness audit also changed initial history loading to probe the existing SDK head and load the latest bounded window, rather than the oldest window of a large log. A dedicated history error survives successful task refreshes. The max-cursor contract is covered against the real gateway, and a100k-event fixture proves the latest20kwindow/cursor. CLI cleanup race now has bounded rmSync retries in its test only; product backend behavior unchanged. Full verify rerun after that test fix passed3348/9skipped/70projects; final Desktop delta and package refresh still to record.
 
 Large diff preview now adopts upstream's800-row head/tail fallback and provides section navigation for omitted rows, resetting scroll position between sections. Default512KiB diff responses therefore cannot mount hundreds of thousands of code rows at once. Latest Desktop149tests/typecheck/build passed; final full verification and package refresh follow on the frozen code state.
+
+Delivery checkpoint: full repository verification at5818a973 passed3352tests/9skipped/70projects plus typecheck,E2E,reachability. Final commit0a12ad90 coalesces background event refreshes, serializes in-flight reads, stops obsolete history paging and retains successful initial dashboard data after a newer failed refresh. Final Desktop153tests across40files and typecheck passed; independent reviewer confirmed the dashboard race correction. Portable dist rebuilt on this source; isolated packaged gateway smoke in playground passed SDK3,wired read-only sandbox,session/history,memory,licenses and clean exit. Final report and exact package hash are in the external desktop-audit/verification-status.md. All applicable approved UI code scope is complete; visual fidelity/native geometry/renderer heap checks remain explicitly deferred, and missing backend integration contracts remain documented.
