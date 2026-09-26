@@ -101,6 +101,25 @@ function makeStubService(): SessionService {
 }
 
 describe("createSdkServer", () => {
+  it("does not submit a prompt whose preparation finishes after close starts", async () => {
+    const service = makeStubService()
+    let release!: () => void
+    let entered = false
+    const gate = new Promise<void>(resolve => { release = resolve })
+    const coordinator = {
+      list: async () => { entered = true; await gate; return ["s"] },
+      adoptOwnership: async () => {},
+    } as unknown as SessionCoordinator
+    const server = createSdkServer(service, { coordinator })
+    await handshake(server)
+    const prompt = server.handleLine(encodeFrame(makeRequest(91, "session/prompt", { sessionId: "s", prompt: "task" })))
+    await vi.waitFor(() => expect(entered).toBe(true))
+    const closing = server.close()
+    release()
+    await closing
+    await prompt
+    expect(service.submit).not.toHaveBeenCalled()
+  })
   it("initialize returns the server info", async () => {
     const { service, cleanup } = await makeService()
     try {
@@ -1082,7 +1101,7 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
     }
   })
 
-  it("session/cancel aborts a QUEUED submit (the signal reaches the service chain — it never runs)", async () => {
+  it("session/queue/cancel aborts the selected queued submit without stopping the running one", async () => {
     const dir = await mkdtemp(join(tmpdir(), "ih-sdk-cancel-queued-"))
     const { model, release } = gatedModel()
     const service = createSessionService({ workspace: dir, approveAll: true, model: model as never })
@@ -1091,11 +1110,11 @@ describe("createSdkServer v1.1 (session/cancel + session/rewind/*)", () => {
       await handshake(server)
       const first = server.handleLine(encodeFrame(makeRequest(150, "session/prompt", { sessionId: "cq", prompt: "first" })))
       await waitStatus(server, "cq", { running: true })
-      // second submit chains behind the running turn → queued; its controller
-      // is the per-session cancel slot (the latest submit — set before submit).
+      // Queue cancellation uses the row id; session/cancel targets the running turn.
       const second = server.handleLine(encodeFrame(makeRequest(151, "session/prompt", { sessionId: "cq", prompt: "second" })))
       await waitStatus(server, "cq", { running: true, queued: 1 })
-      const cancelReply = await server.handleLine(encodeFrame(makeRequest(153, "session/cancel", { sessionId: "cq" })))
+      const queued = service.queue("cq").find(row => row.text === "second")!
+      const cancelReply = await server.handleLine(encodeFrame(makeRequest(153, "session/queue/cancel", { sessionId: "cq", id: queued.id })))
       expect((decodeFrame(cancelReply!) as RpcSuccess).result).toEqual({ cancelled: true })
       release()
       // both submits settle (the aborted queued turn never started)…

@@ -31,6 +31,7 @@ export interface SessionExecutor {
    * is generated (pre-M49 behavior). */
   submit(input: InputSubmit, inputId?: string): { inputId: string }
   cancel(inputId: string): { cancelled: boolean }
+  cancelCurrent?(): { cancelled: boolean }
   pending(): PendingInput[]
   isRunning(): boolean
   /** M49 Task 11: the input the lane is currently executing (promoted, not yet
@@ -76,6 +77,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   let chain: Promise<void> = Promise.resolve()
   let running = false
   let current: PendingInput | undefined
+  let currentAbort: AbortController | undefined
   let disposed = false
   // Serial-lane error surface: a rejected turn must not permanently break the
   // lane (hardening, driveFollowups precedent) — but the failure DOES need to
@@ -100,7 +102,8 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           // (agent.run), so the promoted marker immediately precedes them.
           const sig = turnSignals.get(next.inputId) ?? deps.signal
           turnSignals.delete(next.inputId)
-          await deps.agent.run(next.text, sig)
+          currentAbort = new AbortController()
+          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal)
           lastError = undefined
         } catch (err) {
           lastError = err
@@ -109,6 +112,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
         } finally {
           running = false
           current = undefined
+          currentAbort = undefined
         }
       }
     }).catch(() => {
@@ -134,6 +138,11 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
     cancel(inputId) {
       const cancelled = deps.inbox.cancel(inputId)
       return { cancelled }
+    },
+    cancelCurrent() {
+      if (!currentAbort) return { cancelled: false }
+      currentAbort.abort()
+      return { cancelled: true }
     },
     pending: () => deps.inbox.pending(),
     isRunning: () => running,

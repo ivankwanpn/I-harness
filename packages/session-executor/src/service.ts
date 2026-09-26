@@ -155,16 +155,9 @@ export interface SessionService {
    * effort CLEARS the live one). It NEVER disposes an assembly: the live rebind
    * IS the point. Returns whether a live assembly was retargeted; false means
    * nothing was live, and the refreshed binding is what the next build in this
-   * process starts from. KNOWN BOUNDARY, not a silent one: the assembly's
-   * compaction WINDOW is construction-time config (`contextWindow` →
-   * assembly.ts's `budget: { contextWindow: … }`) — a rebind moves the client,
-   * not the window; a new window takes effect at the next build. M72 Ⅱ's
-   * output cap is the same kind of config (the agent-deps type's
-   * `maxOutputTokens`, read when the agent assembles a request) and follows
-   * the same rule — the refreshed binding reports the new cap immediately,
-   * the live assembly sends it from the next build. Spelled descriptively
-   * here ON PURPOSE: a literal type name would word-match the reachability
-   * scan and hide @i-harness/core-agent's unimported-export row for it. */
+   * process starts from. A live idle rebind installs context/output limits and
+   * the compactor with the client before updating the reported binding. Busy
+   * sessions and active agent tasks reject rebind rather than mixing models. */
   rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
   hasAssembly(sessionId: string): boolean
@@ -182,6 +175,8 @@ export interface SessionService {
    * unknown/already-finished row or a RUNNING one (whole-turn cancel is
    * session/cancel, not row cancel). */
   cancelQueued(sessionId: string, id: string): { cancelled: boolean }
+  /** Cancel the executing submission; queued submissions retain their own controllers. */
+  cancelRunning?(sessionId: string): { cancelled: boolean }
   /** M49 Task 12 (spec §8.2): the per-session task projection (assembly tasks
    * rows — subagent/job/workflow). Workflow rows are attributed to the session
    * that started the run (the run-level store is shared — another session's
@@ -299,23 +294,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
     if (closed) throw new Error("session service closed")
-    // The REPORTING cell first: `modelState` (and the dashboard row that reads
-    // it) resolves through this memo, and before Task 4 only `closeSession`
-    // ever replaced it — so a rebind left those surfaces naming the OLD
-    // provider:model until something else closed the session (F1, MEDIUM).
+    if (chains.has(sessionId) || creating.has(sessionId) || closing.has(sessionId)) throw new Error("session is busy")
+    const live = assemblies.get(sessionId)
+    if (live?.tasks().some(task => task.group !== "job" && ["queued", "running", "waiting"].includes(task.status))) throw new Error("session has active agent tasks")
+    if (live !== undefined) {
+      if (!live.setModelBinding) throw new Error("assembly does not support atomic model binding")
+      live.setModelBinding(binding, opts.compact)
+    }
+    // Publish only after the live assembly accepted the complete binding.
     modelBindings.set(sessionId, Promise.resolve({ status: "ready", binding }))
     const assembly = assemblies.get(sessionId)
     if (assembly === undefined) return false
-    // The SPENDING half: one assignment on the identity-stable handle, so every
-    // handle-reachable holder (turn loop, compaction engine, subagents, the
-    // guardian's INHERITED model, team, auto-title) follows without being told
-    // (R-B1 / Task 1). The effort is the second cell of the same surface
-    // (review F-1): the binding's effort — including `undefined`, which CLEARS
-    // it — must move with the client, or the wire keeps sending the
-    // construction-time value while the RPC answers `ready`.
-    assembly.setModel(binding.model)
-    assembly.setReasoningEffort(binding.reasoningEffort)
-    // The label is a reporting surface too — fixed at construction otherwise.
     assembly.modelLabel = binding.label
     return true
   }
@@ -619,6 +608,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { cancelled: true }
   }
 
+  function cancelRunning(sessionId: string): { cancelled: boolean } {
+    const current = lanes.get(sessionId)?.currentInput()
+    if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) return lanes.get(sessionId)!.cancelCurrent!()
+    const records = queues.get(sessionId)?.byId
+    const record = current === undefined
+      ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
+      : records?.get(current.inputId)
+    if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
+    record.controller.abort()
+    if (current === undefined) record.state = "cancelled"
+    return { cancelled: true }
+  }
+
   async function close(): Promise<void> {
     if (closed) return
     closed = true
@@ -685,6 +687,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     },
     queue: (sessionId) => queue(sessionId),
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),
+    cancelRunning,
     // M49 Task 12: the sessions' task rows — the assembly owns the truth; a
     // session whose assembly does not exist (or was closed) has NO tasks
     // (honest empty, never a fabricated row).

@@ -111,6 +111,7 @@ export interface Agent {
   // M33 §5: optional `instructions` are threaded to the summarizer (the
   // session-compact command surface).
   compact?(instructions?: string): Promise<CompactionResult>
+  updateContext?(config: { budget?: AgentBudgetConfig; compact?: CompactionConfig; maxOutputTokens?: number }): void
 }
 
 /** M5 T2 (second half): one message as canonical JSON, for the per-request
@@ -146,7 +147,30 @@ function canonicalJson(value: unknown): string {
   return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`
 }
 
+function validateBudget(budget: AgentBudgetConfig | undefined): void {
+  if (budget !== undefined) {
+    const { contextWindow, resetRetainLast, overheadTokens } = budget
+    if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
+      throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
+    }
+    if (resetRetainLast !== undefined && (!Number.isInteger(resetRetainLast) || resetRetainLast < 0)) {
+      throw new Error(`budget.resetRetainLast must be a non-negative integer (got ${resetRetainLast})`)
+    }
+    // M33 §3.1: fail loud at creation like resetRetainLast — a NaN/negative
+    // overhead would silently poison every comparison downstream.
+    if (overheadTokens !== undefined && (!Number.isInteger(overheadTokens) || overheadTokens < 0)) {
+      throw new Error(`budget.overheadTokens must be a non-negative integer (got ${overheadTokens})`)
+    }
+  }
+}
+
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
+  let activeOperations = 0
+  async function track<T>(operation: () => Promise<T>): Promise<T> {
+    activeOperations++
+    try { return await operation() }
+    finally { activeOperations-- }
+  }
   const maxTurns = deps.maxTurns ?? 20
   const maxParallel = deps.maxParallelToolCalls ?? 10
   if (!Number.isInteger(maxParallel) || maxParallel < 1) {
@@ -160,20 +184,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // failed closed at resetWindow time, but late/mislabeled — reject invalid
   // values at creation too. Absent optional fields keep their defaults; no
   // change to `resetWindow` runtime behavior.
-  if (deps.budget !== undefined) {
-    const { contextWindow, resetRetainLast, overheadTokens } = deps.budget
-    if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
-      throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
-    }
-    if (resetRetainLast !== undefined && (!Number.isInteger(resetRetainLast) || resetRetainLast < 0)) {
-      throw new Error(`budget.resetRetainLast must be a non-negative integer (got ${resetRetainLast})`)
-    }
-    // M33 §3.1: fail loud at creation like resetRetainLast — a NaN/negative
-    // overhead would silently poison every comparison downstream.
-    if (overheadTokens !== undefined && (!Number.isInteger(overheadTokens) || overheadTokens < 0)) {
-      throw new Error(`budget.overheadTokens must be a non-negative integer (got ${overheadTokens})`)
-    }
-  }
+  validateBudget(deps.budget)
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
   // M5/D2: the agent is the only layer that knows the shape the model sees, so
@@ -182,29 +193,31 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // summarizer falls back to its text form and the whole conversation is re-read
   // at full price; with it, the call is a byte-prefix of the main request and the
   // provider's cache serves it.
-  const compactor = deps.compact
+  function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined) {
+    return compact
     ? createCompactionEngine({
         model: deps.model,
-        config: deps.compact,
+        config: compact,
         // M73: compaction builds and sends its OWN model request, so it never
         // met the clamp the session's requests go through — on an anthropic
         // route that left the adapter's 128k fallback unclamped on the call
         // that runs BECAUSE the context is nearly full. The resolved cap is
         // handed down here; the engine clamps it against the window it
         // resolved (compaction's own `contextWindow`, above).
-        ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+        ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
         requestShape: () => ({
           systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
           tools: deps.tools.schemas(),
         }),
       })
     : undefined
-  const compactEnabled = deps.compact?.auto ?? true
+  }
+  let compactor = buildCompactor(deps.compact, deps.maxOutputTokens)
+  let outputCap = deps.maxOutputTokens
+  let compactEnabled = deps.compact?.auto ?? true
   // M20: budget ladder config (`contextWindow`/`resetRetainLast` are validated
   // at creation above); the default matches the engine convention.
-  const budgetCfg = deps.budget
-  const resetAllowed = budgetCfg?.resetWindow ?? true
-  const resetRetainLast = budgetCfg?.resetRetainLast ?? 20
+  let budgetCfg = deps.budget
 
   // M20: absolute-budget enforcement, called at every step boundary after
   // maybeCompact (pressure check) and before the model sees the derived
@@ -221,6 +234,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   //     under budget. No budget config → no-op (pre-M20 behavior).
   async function enforceBudget(): Promise<void> {
     if (budgetCfg === undefined) return
+    const resetAllowed = budgetCfg.resetWindow ?? true
+    const resetRetainLast = budgetCfg.resetRetainLast ?? 20
     // M33 §3.1: the host-known charge the session log does not carry (system
     // prompt + tool schemas) is added to EVERY boundary measurement.
     const overhead = budgetCfg.overheadTokens ?? 0
@@ -308,10 +323,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // Estimated with the same meter the budget check uses, plus the same
         // overhead it charges — so the clamp and the compaction ladder agree on
         // what "the input" costs. Absent deps value → absent field.
-        ...(deps.maxOutputTokens !== undefined
+        ...(outputCap !== undefined
           ? {
               maxOutputTokens: clampOutputCap(
-                deps.maxOutputTokens,
+                outputCap,
                 budgetCfg?.contextWindow,
                 estimateContent(messages) + (budgetCfg?.overheadTokens ?? 0),
               ),
@@ -541,14 +556,28 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     // turn's failure). No handlers → emit returns the payload unchanged
     // (zero behavior change; additive event, no session-log write).
     await ctx.emit("agent/stop", { session: deps.session, turns: steps, finalText })
+    // Execution may already have external effects. A save failure is reported
+    // separately and must never be presented as a successful durable turn.
+    try { await deps.flush?.() }
+    catch (cause) { throw new Error("Execution completed, but session saving failed", { cause }) }
     return { finalText, turns: steps, reasoning }
   }
 
   return {
-    run: (task, signal) => runTurn(task, signal),
-    followup: (message, signal) => runTurn(message, signal),
-    compact: async (instructions?: string) =>
-      compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] },
+    updateContext(config) {
+      if (activeOperations > 0) throw new Error("agent is busy")
+      validateBudget(config.budget)
+      if (config.maxOutputTokens !== undefined && (!Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens < 1)) throw new Error("invalid output cap")
+      const next = buildCompactor(config.compact, config.maxOutputTokens)
+      compactor = next
+      budgetCfg = config.budget
+      outputCap = config.maxOutputTokens
+      compactEnabled = config.compact?.auto ?? true
+    },
+    run: (task, signal) => track(() => runTurn(task, signal)),
+    followup: (message, signal) => track(() => runTurn(message, signal)),
+    compact: (instructions?: string) => track(async () =>
+      compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] }),
   }
 }
 

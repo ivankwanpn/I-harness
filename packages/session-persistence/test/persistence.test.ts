@@ -49,6 +49,21 @@ function fakeBackend(): PersistenceBackend {
 }
 
 describe("session coordinator", () => {
+  it("reports failed final flush while still draining the other sessions", async () => {
+    const backend = fakeBackend()
+    const append = backend.append.bind(backend)
+    const coordinator = createSessionCoordinator(backend, { maxDelayMs: 60000, reportBackgroundFailure: () => {} })
+    const bad = (await coordinator.create()).id
+    const good = (await coordinator.create()).id
+    backend.append = async (id, events) => {
+      if (id === bad) throw new Error("disk full")
+      return append(id, events)
+    }
+    coordinator.enqueue(bad, [{ type: "assistant/message", text: "lost until retried" }])
+    coordinator.enqueue(good, [{ type: "assistant/message", text: "saved" }])
+    await expect(coordinator.close()).rejects.toThrow(/persist/)
+    expect((await backend.read(good)).events).toContainEqual({ type: "assistant/message", text: "saved" })
+  })
   it("create generates an id and writes the header via the backend", async () => {
     const backend = fakeBackend()
     const coordinator = createSessionCoordinator(backend)

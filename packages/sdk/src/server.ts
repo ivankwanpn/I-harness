@@ -187,12 +187,8 @@ export interface SdkServer {
   close(): Promise<void>
 }
 
-/** A session/prompt submission in flight (per-session serialization needed to
- * keep the notification stream ordered for the client). M41b v1.1: the
- * controller is the per-session cancel slot — session/prompt creates it
- * before submit, session/cancel aborts it, and the submit's own finally clears
- * it (only when the slot still holds THIS submit's controller — a staggered
- * second submit must not be clobbered early). */
+/** Outstanding transport submissions retain individual controllers for shutdown.
+ * SessionService selects the running turn; legacy services use FIFO fallback. */
 interface Inflight {
   prompt: string
   controller: AbortController
@@ -203,7 +199,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const knownSessions = new Set<string>()
   const preparingSessions = new Map<string, Promise<boolean>>()
   const preparingHistorySessions = new Map<string, Promise<Session | undefined>>()
-  const inflight = new Map<string, Inflight>()
+  const inflight = new Map<string, Set<Inflight>>()
   let closed = false
 
   // M68 batch B (v3): the connection-scoped state — the gate and the identity
@@ -336,6 +332,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   async function sessionForHistory(sessionId: string): Promise<Session | undefined> {
     const live = service.liveSession(sessionId)
     if (live !== undefined) return live
+    if (opts.coordinator?.snapshot !== undefined) {
+      try { return (await opts.coordinator.snapshot(sessionId)).session }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+        throw error
+      }
+    }
     const existing = preparingHistorySessions.get(sessionId)
     if (existing !== undefined) return existing
 
@@ -571,7 +574,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/cancel requires a non-empty sessionId")
         }
-        const inFlight = inflight.get(p.sessionId)
+        if (service.cancelRunning !== undefined) {
+          const result = service.cancelRunning(p.sessionId)
+          if (result.cancelled) return makeSuccess(id, result)
+          const known = service.liveSession(p.sessionId) !== undefined || knownSessions.has(p.sessionId) || inflight.has(p.sessionId)
+          return makeSuccess(id, { cancelled: false, reason: known ? "not-running" : "not-found" })
+        }
+        const inFlight = inflight.get(p.sessionId)?.values().next().value
         if (inFlight !== undefined) {
           inFlight.controller.abort()
           return makeSuccess(id, { cancelled: true })
@@ -773,15 +782,15 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             error: error instanceof Error ? error.message : String(error),
           })
         }
-        // M41b v1.1 — the per-session cancel slot: ONE controller per submit,
-        // registered BEFORE service.submit (session/cancel aborts it), cleared
-        // after. A staggered second submit overwrites the slot (its abort
-        // becomes the cancel target — the queued turn is the one at risk); the
-        // clear is conditional so an earlier submit's settle never unseats a
-        // later in-flight one.
+        if (closed) return makeFailure(id, INVALID_REQUEST, "server closed during session preparation")
+        // Track every outstanding submission. A queued request must not replace
+        // the executing request's cancellation identity.
         const controller = new AbortController()
         statusNotify(sessionId, "queued")
-        inflight.set(sessionId, { prompt, controller })
+        const submission = { prompt, controller }
+        const submissions = inflight.get(sessionId) ?? new Set<Inflight>()
+        submissions.add(submission)
+        inflight.set(sessionId, submissions)
         try {
           await service.submit(sessionId, prompt, controller.signal)
           statusNotify(sessionId, "idle")
@@ -794,7 +803,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
             events: liveEventsFor(service, sessionId),
           })
         } finally {
-          if (inflight.get(sessionId)?.controller === controller) inflight.delete(sessionId)
+          submissions.delete(submission)
+          if (submissions.size === 0 && inflight.get(sessionId) === submissions) inflight.delete(sessionId)
         }
       }
       case "shutdown": {
@@ -832,6 +842,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     async close() {
       if (closed) return
       closed = true
+      for (const submissions of inflight.values()) for (const submission of submissions) submission.controller.abort()
+      await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values()])
       offAssembly()
       for (const unsub of assemblyUnsubscribes.values()) unsub()
       assemblyUnsubscribes.clear()

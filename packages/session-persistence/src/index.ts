@@ -110,6 +110,8 @@ export interface SessionCoordinator {
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   enqueue(sessionId: string, events: SessionEvent[]): void
   load(sessionId: string): Promise<{ session: Session }>
+  /** Read the durable prefix without ownership, disk repair or runtime creation. */
+  snapshot?(sessionId: string): Promise<{ session: Session }>
   /** Acquire long-term ownership before reading, durably canonicalize crash
    * recovery, and return a writable snapshot whose length equals its next seq. */
   loadOwned(sessionId: string): Promise<{ session: Session }>
@@ -122,7 +124,7 @@ export interface SessionCoordinator {
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
   flush(sessionId: string): Promise<void>
   /**
-   * Drain all live write-behinds best-effort (flush failures are swallowed) and
+   * Drain all live write-behinds best-effort (flush failures are aggregated) and
    * stop their automatic timers. Write-behinds stay in the map after close(),
    * so a later enqueue still works; a session whose flush failed here retains
    * its batch for a future enqueue/flush. When the ownership lease is enabled,
@@ -483,6 +485,15 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       const wb = writeBehindFor(sessionId)
       for (const ev of events) wb.enqueue(ev)
     },
+    async snapshot(sessionId) {
+      const { version, events, meta } = await backend.read(sessionId)
+      assertVersionSupported(version)
+      return { session: {
+        formatVersion: CURRENT_FORMAT_VERSION,
+        events: await migrate(version, guardIgnorable(events)),
+        ...(meta === undefined ? {} : { header: meta }),
+      } }
+    },
     async load(sessionId) {
       return withSessionOperation(sessionId, async () => {
         const peeked = await backend.read(sessionId)
@@ -587,7 +598,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       if (wb) await wb.flush()
     },
     async close() {
-      await Promise.allSettled([...writeBehinds.values()].map((wb) => wb.flush()))
+      const flushed = await Promise.allSettled([...writeBehinds.values()].map((wb) => wb.flush()))
       for (const wb of writeBehinds.values()) wb.cancelAutomaticWait()
       await docChain
       await Promise.allSettled([...sessionOperations.values()])
@@ -600,6 +611,8 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       // rejection allSettled swallows: every lease is attempted.
       await Promise.allSettled([...heldLocks.values()].map((lock) => Promise.resolve().then(() => lock.release())))
       heldLocks.clear()
+      const failures = flushed.flatMap(result => result.status === "rejected" ? [result.reason] : [])
+      if (failures.length > 0) throw new AggregateError(failures, "Failed to persist sessions during shutdown")
     },
     async putDocument(key, data) {
       const p = docChain.then(() => putDocumentWithLease(key, data))

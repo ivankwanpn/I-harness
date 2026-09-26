@@ -102,6 +102,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sandbox: mode,
     modelPolicy: "required",
     modelBindingFor,
+    loadMeta: async (sessionId) => (await coordinator.profile(sessionId)).meta,
     coordinator,
     sessionFor: createDurableSessionLoader(coordinator),
     outputSpill: {},
@@ -134,6 +135,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const internalIds = new Set<string>()
   const base = createSdkServer(service, {
     coordinator,
+    modelState: async (sessionId) => {
+      await coordinator.profile(sessionId)
+      return service.modelState(sessionId)
+    },
     createSession: async () => ({ sessionId: (await coordinator.create()).id }),
     listSessions: async () => {
       const ids = await coordinator.list()

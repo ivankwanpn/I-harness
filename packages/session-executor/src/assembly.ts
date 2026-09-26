@@ -304,6 +304,7 @@ export interface SessionAssembly {
    * `SessionService.rebindModel`, not by this call. Identity of `model` does NOT
    * change, which is deliberate: a rebind is one assignment, never a re-wiring. */
   setModel(client: ModelClient): void
+  setModelBinding?(binding: { model: ModelClient; contextWindow?: number; maxOutputTokens?: number; reasoningEffort?: ReasoningEffort }, compact?: CompactionRequest): void
   /** Task 4 review F-1: the effort half of the live model surface. A SIBLING of
    * `setModel` rather than an optional second parameter on it, deliberately:
    * `undefined` here means "the new selection names no effort — clear it", and
@@ -1077,8 +1078,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // the registration chain down to the spawn sites (index.ts's
       // subagentDeps → tools.ts's spawn_agent), so the values are only ever as
       // present as the host made them.
-      ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
-      ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+      get contextWindow() { return opts.contextWindow },
+      get maxOutputTokens() { return opts.maxOutputTokens },
       exec: execService,
       parentModel: model,
       parentSession: session,
@@ -1146,8 +1147,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // deps.parentModel`) and is the only place that can decide whether the
         // session's numbers describe the model this review will run on. It
         // passes them on the INHERITED arm alone.
-        ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
-        ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+        get contextWindow() { return opts.contextWindow },
+        get maxOutputTokens() { return opts.maxOutputTokens },
         parentModel: model,
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
@@ -1182,8 +1183,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // role-model fields above (agent-team mirrors SpawnOptions field by
           // field) — a teammate that inherits runs on the session's own model
           // and must carry its window and cap.
-          ...(opts.contextWindow !== undefined ? { contextWindow: opts.contextWindow } : {}),
-          ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+          get contextWindow() { return opts.contextWindow },
+          get maxOutputTokens() { return opts.maxOutputTokens },
           childSessions:
             opts.coordinator !== undefined && opts.sessionId !== undefined
               ? { coordinator: opts.coordinator, parentSessionId: opts.sessionId }
@@ -1273,7 +1274,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         : {}),
       // M72 Ⅱ: the output cap travels beside the budget it belongs to, verbatim
       // (the clamp is the agent's, at request assembly).
-      ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
+      get maxOutputTokens() { return opts.maxOutputTokens },
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       // M70: the checkpoint the tool scheduler awaits between the `tool/dispatch`
@@ -1326,6 +1327,23 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // model, the team scheduler, auto-title (the six of the R-B1 note above)
       // — follows a `setModel` without being told.
       setModel: (client) => { currentModel = client },
+      setModelBinding: (binding, compact) => {
+        const overhead = estimateAssemblyOverhead(systemPromptNow(), tools.schemas())
+        agent.updateContext!({
+          ...(binding.contextWindow === undefined ? {} : {
+            budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
+            ...(compact === undefined ? {} : { compact: { ...compact, contextWindow: binding.contextWindow, overheadTokens: compact.overheadTokens ?? overhead } }),
+          }),
+          ...(binding.maxOutputTokens === undefined ? {} : { maxOutputTokens: binding.maxOutputTokens }),
+        })
+        // No await between installing validated limits and the matching client.
+        currentModel = binding.model
+        currentReasoningEffort = binding.reasoningEffort
+        opts.contextWindow = binding.contextWindow
+        opts.maxOutputTokens = binding.maxOutputTokens
+        tools.unregister("get_context_remaining")
+        registerContextRemaining(ctx, tools, { contextWindow: binding.contextWindow, session })
+      },
       // The second half of the pair, and the PAIRING IS THE INVARIANT: nothing
       // in these types forces the two calls to happen together. A rebind that
       // goes through `setModel` alone leaves the effort frozen on the previous

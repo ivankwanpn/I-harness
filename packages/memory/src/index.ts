@@ -3,16 +3,16 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, lstatSync } from "node:fs"
 import { dirname, isAbsolute } from "node:path"
 import { createRedactor, type Redactor } from "@i-harness/diagnostics"
-export { createMemoryTools, MEMORY_NOTICE } from "./tools.ts"
+export { createMemoryTools } from "./tools.ts"
 
-export interface MemoryNote {
+interface MemoryNote {
   id: string
   title: string
   text: string
   sessionId: string | null
   createdAt: number
 }
-export interface MemoryHit {
+interface MemoryHit {
   id: string
   title: string
   snippet: string

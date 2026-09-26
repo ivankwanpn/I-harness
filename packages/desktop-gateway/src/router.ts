@@ -57,7 +57,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
 } {
   let initialized = false
   let closed = false
-  const activePrompts = new Set<string>()
+  const activePrompts = new Map<string, number>()
   const compacting = new Map<string, AbortController>()
   const compactJobs = new Set<Promise<unknown>>()
 
@@ -93,9 +93,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             send(makeFailure(message.id, INVALID_REQUEST, "session compaction is running", { reason: "session_busy" }))
             return
           }
-          if (typeof sessionId === "string" && sessionId !== "") activePrompts.add(sessionId)
+          if (typeof sessionId === "string" && sessionId !== "") activePrompts.set(sessionId, (activePrompts.get(sessionId) ?? 0) + 1)
           try { await base.handleLine(line) }
-          finally { if (typeof sessionId === "string") activePrompts.delete(sessionId) }
+          finally {
+            if (typeof sessionId === "string") {
+              const remaining = (activePrompts.get(sessionId) ?? 1) - 1
+              if (remaining > 0) activePrompts.set(sessionId, remaining)
+              else activePrompts.delete(sessionId)
+            }
+          }
           return
         }
         await base.handleLine(line)
@@ -247,7 +253,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if (closed) return
       closed = true
       for (const controller of compacting.values()) controller.abort()
-      for (const sessionId of activePrompts) {
+      for (const sessionId of activePrompts.keys()) {
         const id = `desktop-internal-${randomUUID()}`
         internalIds.add(id)
         try { await base.handleLine(JSON.stringify({ jsonrpc: "2.0", id, method: "session/cancel", params: { sessionId } })) }
