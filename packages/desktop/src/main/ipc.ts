@@ -76,6 +76,34 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancelTask(requireNonEmpty(value.sessionId, "sessionId"), requireNonEmpty(value.id, "id"))
     case "session/model/state":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.modelState(requireNonEmpty(value.sessionId, "sessionId"))
+    case "desktop/interaction/pending": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = value.sessionId === undefined ? undefined : requireNonEmpty(value.sessionId, "sessionId")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(
+        "desktop/interaction/pending",
+        sessionId === undefined ? {} : { sessionId },
+      )
+    }
+    case "desktop/interaction/reply": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const requestId = requireNonEmpty(value.requestId, "requestId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const decision = value.decision
+      if (decision === null || typeof decision !== "object" || Array.isArray(decision)) {
+        throw new Error("decision must be an approval or a question answer")
+      }
+      const record = decision as Record<string, unknown>
+      const approval = record.kind === "approval" && typeof record.approved === "boolean"
+      const answer = record.kind === "question" && typeof record.answer === "string"
+      if (!approval && !answer) throw new Error("decision must be an approval or a question answer")
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request("desktop/interaction/reply", {
+        requestId,
+        sessionId,
+        decision: approval
+          ? { kind: "approval", approved: record.approved as boolean }
+          : { kind: "question", answer: record.answer as string },
+      })
+    }
     default:
       throw new Error("unknown Desktop request")
   }

@@ -157,7 +157,7 @@ describe("Desktop SDK runtime manager", () => {
     await manager.close()
   })
 
-  it("forwards only session/event and session/status notifications", async () => {
+  it("forwards session and desktop-interaction notifications only", async () => {
     const root = tempRoot()
     const host = fakeClient()
     const manager = createWorkspaceRuntimeManager({
@@ -175,10 +175,13 @@ describe("Desktop SDK runtime manager", () => {
     notify("session/status")
     notify("session/queue")
     notify("desktop/interaction/request")
+    notify("desktop/interaction/closed")
 
     expect(events).toEqual([
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/event", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/status", params: { seq: 0 } },
+      { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/request", params: { seq: 0 } },
+      { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/closed", params: { seq: 0 } },
     ])
     await manager.close()
   })

@@ -19,9 +19,22 @@ export type DesktopRequest =
   | { kind: "session/tasks"; workspaceId: string; sessionId: string }
   | { kind: "session/tasks/cancel"; workspaceId: string; sessionId: string; id: string }
   | { kind: "session/model/state"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/interaction/pending"; workspaceId: string; sessionId?: string }
+  | {
+      kind: "desktop/interaction/reply"
+      workspaceId: string
+      requestId: string
+      sessionId: string
+      decision: { kind: "approval"; approved: boolean } | { kind: "question"; answer: string }
+    }
 
 export type DesktopEvent =
-  | { kind: "sdk/notification"; workspaceId: string; method: "session/event" | "session/status"; params: unknown }
+  | {
+      kind: "sdk/notification"
+      workspaceId: string
+      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed"
+      params: unknown
+    }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string }
 
 export interface DesktopBridge {

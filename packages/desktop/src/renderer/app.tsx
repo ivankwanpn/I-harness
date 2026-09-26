@@ -18,6 +18,8 @@ import {
   type WireEvent,
 } from "./session/event-window.ts"
 import { loadHistory } from "./session/history.ts"
+import type { InteractionReply } from "./interaction/PendingPanel.tsx"
+import { pendingForSession, removePending, upsertPending, type PendingInteraction } from "./interaction/pending.ts"
 import { classifyNotification } from "./session/notifications.ts"
 import { projectTimeline } from "./session/project.ts"
 import { sendGate } from "./session/send-gate.ts"
@@ -44,6 +46,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [running, setRunning] = useState(false)
   const [sending, setSending] = useState(false)
   const [connection, setConnection] = useState<"online" | "offline">("online")
+  const [pending, setPending] = useState<PendingInteraction[]>([])
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
@@ -142,6 +145,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         setError(`SDK 連線中斷：${event.message}`)
         return
       }
+      if (event.method === "desktop/interaction/request") {
+        const view = event.params as PendingInteraction | undefined
+        if (view === undefined || typeof view.requestId !== "string" || typeof view.sessionId !== "string") return
+        setPending((current) => upsertPending(current, view))
+        return
+      }
+      if (event.method === "desktop/interaction/closed") {
+        const params = event.params as { requestId?: unknown } | undefined
+        const requestId = params?.requestId
+        if (typeof requestId !== "string") return
+        setPending((current) => removePending(current, requestId))
+        return
+      }
       if (event.method !== "session/event" && event.method !== "session/status") return
       const info = classifyNotification(event.method, event.params)
       if (info.kind === "ignore" || info.sessionId !== selectedSessionId) return
@@ -199,6 +215,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       } catch (reason) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
+      try {
+        const rows = await bridge.request({
+          kind: "desktop/interaction/pending", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId,
+        })
+        if (active) {
+          setPending((current) => [
+            ...current.filter((row) => row.sessionId !== selectedSessionId),
+            ...(rows as PendingInteraction[]),
+          ])
+        }
+      } catch (reason) {
+        if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
+      }
       if (active) await refreshTasks(selectedWorkspaceId, selectedSessionId)
     })()
     return () => {
@@ -221,6 +250,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         queue,
         tasks,
         taskError,
+        pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string): Promise<void> => {
           setSending(true)
           try {
@@ -250,6 +280,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           void bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
             .then(() => refreshTasks(selectedWorkspaceId, selectedSessionId))
             .catch(() => undefined)
+        },
+        onReply: async ({ requestId, decision }: InteractionReply) => {
+          const row = pending.find((candidate) => candidate.requestId === requestId)
+          const sessionId = row?.sessionId ?? selectedSessionId
+          await bridge.request({
+            kind: "desktop/interaction/reply",
+            workspaceId: selectedWorkspaceId,
+            requestId,
+            sessionId,
+            decision,
+          })
+          setPending((current) => removePending(current, requestId))
         },
       }
 

@@ -162,6 +162,8 @@ button { font: inherit; color: inherit; }
 .task-row:hover { background: color-mix(in srgb, var(--ih-text) 4%, transparent); }
 .link-button { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--ih-accent); cursor: pointer; text-decoration: underline; }
 .sidebar-open { width: 100%; margin: 0 0 10px; }
+.pending-panel { padding: 8px 12px 0; }
+.pending-panel input { padding: 4px 8px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: inherit; font: inherit; }
 
 .visually-hidden {
   position: absolute;

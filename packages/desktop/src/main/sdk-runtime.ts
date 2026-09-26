@@ -106,7 +106,10 @@ export function createWorkspaceRuntimeManager(options: {
         ? validateSandboxState(await launched.client.request("desktop/sandbox/state", {}))
         : undefined
       launched.client.onNotification((frame) => {
-        if (frame.method !== "session/event" && frame.method !== "session/status") return
+        if (frame.method !== "session/event"
+          && frame.method !== "session/status"
+          && frame.method !== "desktop/interaction/request"
+          && frame.method !== "desktop/interaction/closed") return
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params: frame.params })
       })
       return { client: launched.client, info, sandbox }

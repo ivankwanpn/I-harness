@@ -7,6 +7,8 @@ import { Composer } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
+import { PendingPanel, type InteractionReply } from "../interaction/PendingPanel.tsx"
+import type { PendingInteraction } from "../interaction/pending.ts"
 import { TaskList } from "./TaskList.tsx"
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx"
 
@@ -18,10 +20,12 @@ export interface ConversationView {
   queue?: SessionQueueItem[]
   tasks?: AgentTaskView[]
   taskError?: string
+  pending: PendingInteraction[]
   onPrompt(text: string): Promise<void>
   onCancel(): void
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
+  onReply(reply: InteractionReply): Promise<void>
 }
 
 export interface WorkbenchProps {
@@ -110,6 +114,7 @@ export function Workbench({
             ? (
               <>
                 <Timeline rows={conversation.rows} />
+                <PendingPanel pending={conversation.pending} onReply={conversation.onReply} />
                 <Composer
                   workspaceId={selectedWorkspaceId}
                   sessionId={selectedSessionId}
