@@ -11,12 +11,13 @@
 @source "./LightweightDiffPreview.tsx";
 @source "./ReviewFileRow.tsx";
 @source "./SearchInput.tsx";
+@source "./SettingsRow.tsx";
 @theme {
   --spacing: 4px;
   --radius-lg: 8px;
   --radius-xl: 12px;
   --radius-2xl: 16px;
-  --text-ui-base: 14px;
+  --text-ui-base: var(--ui-font-size, 14px);
   --color-border: rgba(255, 255, 255, 0.1);
   --color-hover: rgba(255, 255, 255, 0.05);
   --color-selected: rgba(255, 255, 255, 0.1);
@@ -32,6 +33,7 @@
   --color-input-border-hover: rgba(255, 255, 255, 0.2);
   --color-input-border-focused: rgba(255, 255, 255, 0.2);
   --color-background: #151515;
+  --color-card: var(--ih-panel);
   --color-diff-added: #22c55e;
   --color-diff-removed: #ef4444;
 }
@@ -70,3 +72,9 @@
 .search-results { margin-top: 20px; }
 .search-results li { padding: 8px 0; border-bottom: 1px solid var(--ih-divider); }
 .search-snippet { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; color: var(--ih-muted); }
+.zc-settings-group { border: 1px solid var(--ih-divider); container-type: inline-size; }
+.zc-settings-row { border-style: solid; border-width: 1px 0 0; }
+.zc-settings-row:first-child { border-top-width: 0; }
+.zc-settings-row-grid { grid-template-columns: minmax(0,1fr); }
+.zc-settings-row .text-foreground { overflow-wrap: anywhere; }
+@container (min-width: 480px) { .zc-settings-row-grid { grid-template-columns: minmax(0,1fr) 192px; } }

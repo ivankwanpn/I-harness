@@ -1,9 +1,11 @@
 import { useState } from "react"
-import { PanelRight, Plus, FolderOpen } from "lucide-react"
+import { PanelLeft, PanelRight, Plus, FolderOpen } from "lucide-react"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { SessionSearch } from "../session/SessionSearch.tsx"
+import { SettingsPane } from "../settings/SettingsPane.tsx"
+import { useAppearance, usePreferences } from "../design/preferences.ts"
 import { CompactionPanel } from "../session/CompactionPanel.tsx"
 import type { SessionOperation } from "../session/use-session-operation.ts"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
@@ -92,10 +94,13 @@ export function Workbench({
   onOpenWorkspace,
 }: WorkbenchProps) {
   const t = useText()
+  useAppearance()
+  const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
+  const updatePreferences = usePreferences((state) => state.update)
   const [createError, setCreateError] = useState<string>()
   const [creating, setCreating] = useState(false)
   const [compactOpen, setCompactOpen] = useState(false)
-  const [surface, setSurface] = useState<"conversation" | "memory" | "search">("conversation")
+  const [surface, setSurface] = useState<"conversation" | "memory" | "search" | "settings">("conversation")
   const memoryOpen = surface === "memory"
   const setMemoryOpen = (open: boolean | ((current: boolean) => boolean)) => setSurface((typeof open === "function" ? open(memoryOpen) : open) ? "memory" : "conversation")
   const reviewOpen = useUiStore((state) => state.reviewOpen)
@@ -120,7 +125,8 @@ export function Workbench({
   }
 
   return (
-    <div className={reviewOpen ? "workbench review-open" : "workbench"}>
+    <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={sidebarCollapsed}>
+      <div className="sidebar-container" hidden={sidebarCollapsed}>
       <WorkspaceSidebar
         workspaces={workspaces}
         selectedId={selectedWorkspaceId}
@@ -128,11 +134,14 @@ export function Workbench({
         onOpen={() => onOpenWorkspace?.()}
         onCreate={() => { void createSession() }}
         canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
+        onSettings={() => setSurface("settings")}
       >
         {dashboard === undefined ? null : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { setMemoryOpen(false); onSelectSession(id) }} />}
       </WorkspaceSidebar>
+      </div>
       <main className="center-pane">
         <header className="session-header" data-testid="session-header">
+          <button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={!sidebarCollapsed} onClick={() => updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>
           {selectedSessionId === undefined
             ? <span className="muted">{t("尚未選擇會話")}</span>
             : <span className="header-title">{sessionTitle}</span>}
@@ -160,7 +169,7 @@ export function Workbench({
           <button type="button" className="link-button" aria-expanded={compactOpen} onClick={() => setCompactOpen((open) => !open)}>{t("壓縮上下文")}</button>
           {compactOpen ? <CompactionPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} operation={conversation.operation} disabled={!conversation.canCompact} onCompact={conversation.onCompact} onCancel={conversation.onCancel} /> : null}
         </div> : null}
-        {surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
+        {surface === "settings" ? <SettingsPane workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>

@@ -17,6 +17,8 @@ Additional extraction: ReviewFileRow.tsx adapts the file header in GitPaneChange
 GitPaneChangeCard.tsx SHA256: EC300EC0D682BB3E6E7A23F5C888550C4FBA0C8711CAD5A66A61FE28AD6F0088.
 SearchInput.tsx adapts settings/SettingsSearchInput.tsx icon/input/clear-button layout, using native controls instead of ZCode helpers.
 SettingsSearchInput.tsx SHA256: 0667FC8747F934D6FF45FCF71F0BA864F12D6E6E1A50EEF5117BC69562C646BD.
+SettingsRow.tsx adapts SettingsRow and SettingsGroupCard in settings/SettingsPageParts.tsx: prop-based labels/descriptions/controls, utility layout and responsive group presentation. Native div containers replace upstream Card helpers; no settings services copied.
+SettingsPageParts.tsx SHA256: 15E03F262FE165692FA3716E496DD61CC2529000EDB82E8122AD1E1B8660894B.
 - ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
 - components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
 

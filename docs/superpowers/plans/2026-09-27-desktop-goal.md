@@ -12,7 +12,7 @@ User authorized completing all feasible UI and source reuse against existing bac
 ## Execution checklist
 - [ ] Review file rows/detail navigation and workspace shell refinement.
 - [x] Session search and manual compaction using approved bridge (automated verification; visual acceptance deferred).
-- [ ] Unified local settings surface and memory navigation.
+- [x] Unified local settings surface and memory navigation (appearance/language/text/sidebar/review; native preferences follow).
 - [ ] Full zh-TW/en strings for supported user flows.
 - [ ] Native window controls/local geometry without backend logic.
 - [ ] Long-session behavior, async selection isolation and narrow layout verification.
@@ -26,3 +26,5 @@ Progress: ReviewFileRow now reuses GitPaneChangeCard header layout with real pat
 Session search now uses the existing workspace query API, optional current-session scope, truncated-result notice and opening matching conversations. SearchInput reuses ZCode presentation. Async history/tasks/review/dashboard responses are scoped to current selection; latest-file selection wins. Review found retry cleared pending requests, fixed by workspace-only clearing and reloading session data on retry. Remaining: prompt/cancel continuation state across navigation, manual compaction UI, shell/settings/localization/native features above.
 
 Manual compaction now exposes optional retention instructions, byte-limit validation, busy/cancel, error, no-op and summarizer-failure states plus returned summary. Request ownership is keyed to workspace/session, shared with prompt submission to prevent overlapping local operations. Prompt/cancel completion no longer changes another selected session's UI. Added operation/panel/cross-selection regression tests; backend untouched. Next: unify settings/routes and complete localization, then native frame and layout/performance acceptance.
+
+Settings now reuses upstream SettingsRow/Group presentation with General, Workspace and About routes. Persisted local preferences cover appearance (dark/light/system), font size and sidebar; review visibility can be toggled; memory management is reachable from workspace settings. Language moved from sidebar footer into settings. Added system-theme listener/persistence/reset tests and sidebar hide/restore coverage. Native notifications/window preference reset remain in upcoming native work.

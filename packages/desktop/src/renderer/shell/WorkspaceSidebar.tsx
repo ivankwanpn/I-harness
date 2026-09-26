@@ -1,7 +1,7 @@
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { ReactNode } from "react"
 import { FolderOpen, Plus, ChevronDown } from "lucide-react"
-import { useLocale, useText } from "../design/i18n.ts"
+import { useText } from "../design/i18n.ts"
 
 export interface WorkspaceSidebarProps {
   workspaces: WorkspaceEntry[]
@@ -11,12 +11,11 @@ export interface WorkspaceSidebarProps {
   onCreate?(): void
   canCreate?: boolean
   children?: ReactNode
+  onSettings?(): void
 }
 
-export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onCreate, canCreate, children }: WorkspaceSidebarProps) {
+export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onCreate, canCreate, children, onSettings }: WorkspaceSidebarProps) {
   const t = useText()
-  const locale = useLocale((state) => state.locale)
-  const setLocale = useLocale((state) => state.setLocale)
   return (
     <nav className="sidebar" aria-label={t("工作區")}>
       <div className="brand">I-harness <span>Desktop</span></div>
@@ -45,9 +44,7 @@ export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onC
         </ul>
       )}
       <div className="sidebar-footer">
-        <label>{t("語言")}<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}>
-          <option value="zh-TW">繁體中文</option><option value="en">English</option>
-        </select></label>
+        <button type="button" className="row-button" onClick={onSettings}>{t("設定")}</button>
       </div>
     </nav>
   )

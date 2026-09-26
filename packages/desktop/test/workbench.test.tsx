@@ -41,6 +41,13 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("can hide and restore navigation without losing the header toggle", () => {
+    render(<Harness dashboard={{ sessions: [] }} />)
+    fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
+    expect(screen.queryByRole("navigation", { name: "工作區" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
+    expect(screen.getByRole("navigation", { name: "工作區" })).toBeTruthy()
+  })
   it("preserves a draft while a pending request takes over the bottom dock", () => {
     const conversation = { rows: [], canSend: true, running: true, pending: [], onPrompt: async () => {}, onCancel: vi.fn(), onCancelTask: vi.fn(), onCancelQueue: vi.fn(), onReply: async () => {} }
     const props = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, selectedSessionId: "dock-test", capabilities: {}, onSelectWorkspace: vi.fn(), onSelectSession: vi.fn() }
@@ -70,7 +77,9 @@ describe("Desktop workbench shell", () => {
   })
   it("switches shell language while preserving workspace navigation", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
+    fireEvent.click(screen.getByRole("button", { name: "設定" }))
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
+    fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
     expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "Bring your ideas to life" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "workspace" })).toBeTruthy()

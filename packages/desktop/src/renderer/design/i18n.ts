@@ -2,6 +2,11 @@ import { create } from "zustand"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "設定": "Settings", "設定分類": "Settings categories", "一般": "General", "關於": "About", "外觀": "Appearance",
+  "深色": "Dark", "淺色": "Light", "跟隨系統": "System", "文字大小": "Text size", "顯示側欄": "Show sidebar",
+  "外觀偏好只儲存在此電腦。": "Appearance preferences are stored on this computer only.", "重設外觀偏好": "Reset appearance preferences",
+  "本機 Agent 工作台；使用既有後端執行任務。": "A local agent workbench powered by the existing backend.",
+  "第三方 UI 程式碼": "Third-party UI code", "部分介面改編自 ZCode，依 Apache-2.0 保留授權與來源說明。": "Parts of the interface are adapted from ZCode under Apache-2.0, with licenses and attribution retained.",
   "壓縮上下文": "Compact context", "整理目前會話的上下文；可能呼叫模型。保留重點可留空。": "Condense this conversation's context; this may call the model. Retention instructions are optional.",
   "希望保留的重點": "What to preserve", "內容超過 4096 bytes，請縮短。": "Instructions exceed 4096 bytes. Please shorten them.",
   "正在壓縮…": "Compacting…", "開始壓縮": "Start compaction", "摘要產生失敗，未完成壓縮。": "Summary generation failed; compaction did not complete.",
