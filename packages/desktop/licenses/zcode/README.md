@@ -21,6 +21,8 @@ SettingsRow.tsx adapts SettingsRow and SettingsGroupCard in settings/SettingsPag
 SettingsPageParts.tsx SHA256: 15E03F262FE165692FA3716E496DD61CC2529000EDB82E8122AD1E1B8660894B.
 WindowControls.tsx adapts DesktopWindowControls.tsx's item-driven button group and classes. Platform command service, custom icon components and logging are replaced by prop callbacks, public Lucide icons and I-harness native IPC. Window sizing and notification implementation is I-harness code.
 DesktopWindowControls.tsx SHA256: 270C88A75AFA147C753E79582BF89E8FADCEA9D51693E59BC6BE0EE643AAB152.
+PaneTabs.tsx adapts tab presentation classes from app-shell/SidePaneTabTrigger.tsx. Native buttons and keyboard navigation replace Radix, drag/drop and service/store dependencies. Width dragging is independent I-harness UI code.
+SidePaneTabTrigger.tsx SHA256: 7949761BDB39AE9438407387465EC754D199F9C6EE63DBE3AAB902F6222A6B52.
 - ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
 - components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
 

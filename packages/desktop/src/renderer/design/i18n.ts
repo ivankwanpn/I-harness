@@ -3,6 +3,9 @@ import { useCallback } from "react"
 
 export type Locale = "zh-TW" | "en"
 const english = {
+  "關閉成果面板": "Close review pane",
+  "調整成果面板寬度": "Resize review pane",
+  "會話內容": "Conversation content", "回到最新內容": "Jump to latest", "關閉側欄": "Close sidebar",
   "最小化視窗": "Minimize window", "最大化或還原視窗": "Maximize or restore window", "關閉視窗": "Close window",
   "視窗與通知": "Window and notifications", "背景待處理通知": "Notify when attention is needed",
   "此系統不支援桌面通知。": "Desktop notifications are not supported on this system.", "視窗不在前景時，有審批或問題需要處理便通知。": "Notify about approvals and questions while the window is in the background.",

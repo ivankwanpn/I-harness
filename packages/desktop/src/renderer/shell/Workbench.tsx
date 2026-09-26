@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useId, useRef, useState, type CSSProperties } from "react"
 import { PanelLeft, PanelRight, Plus, FolderOpen } from "lucide-react"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
@@ -22,6 +22,9 @@ import { ReviewPane, type ReviewChanges, type ReviewText } from "../review/Revie
 import { TaskList } from "./TaskList.tsx"
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx"
 import { TitleBar } from "./TitleBar.tsx"
+import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
+import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
+import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 
 export interface ConversationView {
   rows: TimelineRow[]
@@ -95,55 +98,70 @@ export function Workbench({
   onOpenWorkspace,
 }: WorkbenchProps) {
   const t = useText()
+  const drawer = useNarrowSidebar()
   useAppearance()
   const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
   const updatePreferences = usePreferences((state) => state.update)
   const [createError, setCreateError] = useState<string>()
   const [creating, setCreating] = useState(false)
+  const createLock = useRef(false)
+  const workspaceScope = useRef({ id: selectedWorkspaceId })
+  if (workspaceScope.current.id !== selectedWorkspaceId) workspaceScope.current = { id: selectedWorkspaceId }
   const [compactOpen, setCompactOpen] = useState(false)
+  const [workPaneTab, setWorkPaneTab] = useState("changes")
+  const workPaneId = useId()
   const [surface, setSurface] = useState<"conversation" | "memory" | "search" | "settings">("conversation")
   const memoryOpen = surface === "memory"
   const setMemoryOpen = (open: boolean | ((current: boolean) => boolean)) => setSurface((typeof open === "function" ? open(memoryOpen) : open) ? "memory" : "conversation")
   const reviewOpen = useUiStore((state) => state.reviewOpen)
+  const reviewWidth = useUiStore((state) => state.reviewWidth)
+  const setReviewWidth = useUiStore((state) => state.setReviewWidth)
   const toggleReview = useUiStore((state) => state.toggleReview)
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
   async function createSession(): Promise<void> {
-    if (selectedWorkspaceId === undefined || creating) return
+    if (selectedWorkspaceId === undefined || createLock.current) return
+    const scope = workspaceScope.current
+    createLock.current = true
+    drawer.setOpen(false)
     setCreating(true)
     setCreateError(undefined)
     try {
       const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId })
+      if (workspaceScope.current !== scope) return
       const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
       if (typeof sessionId === "string") { setMemoryOpen(false); onSelectSession(sessionId) }
       onSessionsChanged?.()
     } catch (reason) {
-      setCreateError(reason instanceof Error ? reason.message : String(reason))
+      if (workspaceScope.current === scope) setCreateError(reason instanceof Error ? reason.message : String(reason))
     } finally {
+      createLock.current = false
       setCreating(false)
     }
   }
 
   return (
     <><TitleBar bridge={bridge} />
-    <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={sidebarCollapsed}>
-      <div className="sidebar-container" hidden={sidebarCollapsed}>
+    <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>
+      {drawer.narrow && drawer.open ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={() => drawer.setOpen(false)} /> : null}
+      <div ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : "sidebar-container"} hidden={drawer.narrow ? !drawer.open : sidebarCollapsed} role={drawer.narrow && drawer.open ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open ? true : undefined} aria-label={drawer.narrow ? t("工作區") : undefined}>
+      {drawer.narrow ? <button type="button" className="drawer-close primary-button" onClick={() => drawer.setOpen(false)}>{t("關閉側欄")}</button> : null}
       <WorkspaceSidebar
         workspaces={workspaces}
         selectedId={selectedWorkspaceId}
-        onSelect={onSelectWorkspace}
+        onSelect={(id) => { drawer.setOpen(false); setSurface("conversation"); onSelectWorkspace(id) }}
         onOpen={() => onOpenWorkspace?.()}
         onCreate={() => { void createSession() }}
         canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
-        onSettings={() => setSurface("settings")}
+        onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
       >
-        {dashboard === undefined ? null : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { setMemoryOpen(false); onSelectSession(id) }} />}
+        {dashboard === undefined ? null : <TaskList dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
       </WorkspaceSidebar>
       </div>
       <main className="center-pane">
         <header className="session-header" data-testid="session-header">
-          <button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={!sidebarCollapsed} onClick={() => updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>
+          <button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={() => drawer.narrow ? drawer.setOpen(!drawer.open) : updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>
           {selectedSessionId === undefined
             ? <span className="muted">{t("尚未選擇會話")}</span>
             : <span className="header-title">{sessionTitle}</span>}
@@ -177,7 +195,7 @@ export function Workbench({
               <>
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
-                  : <Timeline rows={conversation.rows} />}
+                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} />}
                 <div className="conversation-dock">
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} pending={conversation.pending} onReply={conversation.onReply} />
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
@@ -211,8 +229,11 @@ export function Workbench({
         </footer>
       </main>
       {reviewOpen ? <aside className="review-pane" aria-label={t("成果檢查")}>
-        <h2 className="review-title">{t("成果檢查")}</h2>
-        {review === undefined || selectedWorkspaceId === undefined ? null : (
+        <ReviewResizeHandle width={reviewWidth} onResize={setReviewWidth} />
+        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }]} selected={workPaneTab} onSelect={setWorkPaneTab} />
+          <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
+        <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
+        {workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
             changes={review.changes}
             error={review.error}
@@ -223,7 +244,7 @@ export function Workbench({
             onRefresh={review.onRefresh}
           />
         )}
-        {conversation === undefined ? null : (
+        {workPaneTab !== "tasks" || conversation === undefined ? null : (
           <TaskPane
             queue={conversation.queue}
             tasks={conversation.tasks}
@@ -232,7 +253,9 @@ export function Workbench({
             onCancelQueue={conversation.onCancelQueue}
           />
         )}
-        {review === undefined || selectedWorkspaceId === undefined ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
+        {workPaneTab === "changes" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
+        {workPaneTab === "tasks" && conversation === undefined ? <p className="notice">{t("尚未選擇會話")}</p> : null}
+        </div>
       </aside> : null}
     </div></>
   )
