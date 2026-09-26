@@ -2,6 +2,10 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "設定已儲存": "Settings saved",
+  "操作進行中": "An operation is in progress", "設定 API key": "Set API key", "確認移除提供商": "Confirm provider removal", "移除提供商": "Remove provider", "確認清除 API key": "Confirm API key removal", "清除 API key": "Clear API key", "設為預設模型": "Set as default model", "確認移除模型": "Confirm model removal", "移除模型": "Remove model", "新增模型": "Add model", "新增提供商": "Add provider",
+  "顯示名稱": "Display name", "最大輸出 Token": "Maximum output tokens", "通訊協定": "Protocol", "API 網址": "API URL", "模型列表網址": "Models URL", "模型規格來源": "Model card family", "API key 環境變數": "API key environment variable",
+  "請輸入正整數": "Enter a positive integer", "編輯模型": "Edit model", "編輯提供商": "Edit provider", "模型 ID": "Model ID", "提供商 ID": "Provider ID", "留空以清除覆寫；未更改的欄位不會寫入。": "Leave blank to clear an override; unchanged fields are not written.", "儲存中…": "Saving…", "儲存": "Save",
   "模型與提供商": "Models and providers", "讀取提供商目錄中…": "Loading provider directory…", "沒有可用的提供商": "No providers available",
   "憑證已設定": "Credentials configured", "憑證未設定": "Credentials not configured", "模型數量：{count}": "Models: {count}", "上下文大小": "Context window", "未指定": "Unspecified",
   "逐段瀏覽差異": "Browse diff sections", "上一段": "Previous section", "下一段": "Next section", "回到差異摘要": "Back to diff summary",

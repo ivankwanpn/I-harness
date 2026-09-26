@@ -23,6 +23,33 @@ function fixture(mode: "read-only" | "workspace-write" | "danger-full-access") {
 }
 
 describe("Desktop host sandbox configuration", () => {
+  it("persists provider commands across a host restart without leaking the API key", async () => {
+    const f = fixture("read-only")
+    let host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
+    let nextId = 1
+    const call = async (method: string, params: unknown) => {
+      const id = nextId++
+      await host.handleLine(encodeFrame(makeRequest(id, method, params)))
+      const reply = f.frames.find((frame) => "id" in frame && frame.id === id)
+      expect(isRpcSuccess(reply)).toBe(true)
+      if (!isRpcSuccess(reply)) throw new Error("operation failed")
+      return reply.result
+    }
+    try {
+      await call("initialize", {})
+      await call("desktop/provider/mutate", { action: "provider/create", id: "ui-test", fields: { protocol: "openai-completions", baseURL: "https://example.invalid" } })
+      await call("desktop/provider/mutate", { action: "key/set", id: "ui-test", value: "ui-secret-fixture" })
+      await call("desktop/provider/mutate", { action: "model/add", id: "ui-test", model: "m", fields: { contextWindow: 272000 } })
+      await call("desktop/provider/mutate", { action: "model/edit", id: "ui-test", model: "m", fields: { contextWindow: 1000000 } })
+      await call("desktop/provider/mutate", { action: "default/set", id: "ui-test", model: "m" })
+      await host.close()
+      host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
+      await call("initialize", {})
+      const directory = await call("desktop/provider/directory", {})
+      expect(directory).toEqual(expect.arrayContaining([expect.objectContaining({ id: "ui-test", auth: expect.objectContaining({ configured: true }), models: [expect.objectContaining({ id: "m", contextWindow: 1000000 })] })]))
+      expect(JSON.stringify(f.frames)).not.toContain("ui-secret-fixture")
+    } finally { await host.close() }
+  })
   it("exposes the existing provider directory without returning credentials", async () => {
     const f = fixture("read-only")
     const credentialsPath = join(f.root, "credentials.json")

@@ -30,9 +30,11 @@ Write each detailed implementation plan after inspecting its owning package: (2)
 - [x] Gateway command boundary delegates create/edit/remove, key set/clear, model add/edit/remove and default set to existing runtime. Strict field/protocol/positive integer validation; omitted values preserved and explicit null clears supported. Generic wire failures never echo credentials.
 - [x] Scoped IPC and typed commands connected; unknown command and workspace rejected.
 - [x] Directory supplies editable route URL/ref metadata, retaining one-way auth status and no key values.
-- [ ] Provider editor UI: populated route forms, write-only key input, individual model context/output/protocol forms, default selection, explicit remove confirmation, busy/error/retry; only changed fields patched.
+- [x] Provider editor UI: populated route forms, write-only key input, individual model context/output/protocol forms, default selection, explicit remove confirmation, busy/error/retry; only changed fields patched.
 - [ ] Network discovery: explicit action with timeout/cancel and selection before import. Avoid holding shared configuration locks across long network probes.
 - [ ] Real host mutation/persistence regression, cross-process concurrency test, UI mutation tests and fresh independent review before finalizing slice.
+
+Editor checkpoint: route/model forms and API key controls now use existing SettingsGroup/Row presentation, typed backend commands and localized feedback. Only changed fields are patched, blank existing values become null; failure retains input. Directory refresh does not unmount other unsaved forms, and a failed refresh does not hide the last good rows. Dedicated tests cover context editing/clearing, retry and explicit removal confirmation. Real host commands now round-trip create/key/model/context/default across restart without returning a key value. Focused UI tests,typechecks and build pass; full Desktop evidence in external provider-editor-tests.log. Still pending for provider slice: discovery, model switch UI, subprocess concurrency and independent review. Browser pixels remain deferred.
 
 Ruling: use the existing fs-lock primitive inside provider-runtime instead of a new config package. This serializes cooperating file-runtime users; legacy external writers do not yet participate. Configuration uses a shared global file while sessions are workspace scoped. No OAuth/account usage/reset implementation.
 

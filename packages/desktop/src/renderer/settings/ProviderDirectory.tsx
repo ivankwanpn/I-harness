@@ -1,15 +1,9 @@
 import { useEffect, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
-import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
-
-interface DirectoryRow {
-  id: string
-  displayName: string
-  protocol?: string
-  auth: { configured: boolean }
-  models: { id: string; contextWindow?: number }[]
-}
+import { ProviderCard, type DirectoryRow } from "./ProviderCard.tsx"
+import { ProviderEditor } from "./ProviderEditor.tsx"
+import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 
 /** Displays the backend directory; loading never probes a provider endpoint. */
 export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
@@ -17,9 +11,16 @@ export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBrid
   const [rows, setRows] = useState<DirectoryRow[]>()
   const [error, setError] = useState<string>()
   const [reload, setReload] = useState(0)
+  const [adding, setAdding] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const save = async (command: ProviderCommand) => {
+    setSaved(false)
+    await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
+    setSaved(true)
+    setReload((value) => value + 1)
+  }
   useEffect(() => {
     let active = true
-    setRows(undefined)
     setError(undefined)
     void bridge.request({ kind: "desktop/provider/directory", workspaceId }).then((result) => {
       if (active) setRows(result as DirectoryRow[])
@@ -30,14 +31,12 @@ export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBrid
   }, [bridge, workspaceId, reload])
   return <section aria-label={t("模型與提供商")}>
     <h2>{t("模型與提供商")}</h2>
-    {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div>
-      : rows === undefined ? <p role="status">{t("讀取提供商目錄中…")}</p>
+    <button onClick={() => setAdding(true)}>{t("新增提供商")}</button>
+    {saved ? <p role="status">{t("設定已儲存")}</p> : null}
+    {adding ? <ProviderEditor onSave={save} onClose={() => setAdding(false)} /> : null}
+    {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
+    {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
       : rows.length === 0 ? <p>{t("沒有可用的提供商")}</p>
-      : rows.map((row) => <SettingsGroup key={row.id}>
-        <SettingsRow label={row.displayName} description={[row.id, row.protocol].filter(Boolean).join(" · ")} control={<span>{t(row.auth.configured ? "憑證已設定" : "憑證未設定")}</span>} />
-        <details><summary>{t("模型數量：{count}", { count: row.models.length })}</summary>
-          {row.models.map((model) => <SettingsRow key={model.id} label={model.id} description={t("上下文大小")} control={<span>{model.contextWindow ?? t("未指定")}</span>} />)}
-        </details>
-      </SettingsGroup>)}
+      : rows.map((row) => <ProviderCard key={row.id} row={row} onSave={save} />)}
   </section>
 }
