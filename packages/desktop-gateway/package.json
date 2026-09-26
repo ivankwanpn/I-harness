@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit", "gateway": "node --import tsx src/cli.ts" },
   "dependencies": {
+    "@i-harness/core-session": "workspace:*",
+    "@i-harness/rewind": "workspace:*",
     "@i-harness/memory": "workspace:*",
     "@i-harness/session-query": "workspace:*",
     "@i-harness/sdk": "workspace:*",

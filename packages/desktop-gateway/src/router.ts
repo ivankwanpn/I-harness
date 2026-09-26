@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
@@ -136,6 +137,27 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (message.method.startsWith("desktop/rewind/") && handlers.rewind) {
+        const params = asRecord(message.params)
+        const sessionId = params?.sessionId
+        const operation = message.method.slice("desktop/rewind/".length)
+        if (typeof sessionId !== "string" || !sessionId || !["points", "plan", "execute"].includes(operation)
+          || (operation !== "points" && (typeof params?.target !== "number" || !Number.isInteger(params.target) || params.target < 0 || !["all", "files", "conversation"].includes(String(params.mode))))
+          || (operation === "execute" && (typeof params?.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(params.fingerprint)))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid rewind request")); return
+        }
+        if (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId)) {
+          send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
+        }
+        const target = params?.target as number
+        const mode = params?.mode as "all" | "files" | "conversation"
+        const job = operation === "points" ? handlers.rewind.points(sessionId) : operation === "plan" ? handlers.rewind.plan(sessionId, target, mode) : handlers.rewind.execute(sessionId, target, mode, params!.fingerprint as string)
+        modelSwitches.set(sessionId, job)
+        try { send(makeSuccess(message.id, await job)) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        finally { modelSwitches.delete(sessionId) }
+        return
+      }
       if (message.method === "desktop/session/archived" && handlers.sessions) {
         try { send(makeSuccess(message.id, await handlers.sessions.archived())) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "Archived sessions unavailable")) }

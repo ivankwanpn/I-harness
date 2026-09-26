@@ -11,6 +11,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createDesktopRewind } from "./rewind.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -96,6 +97,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   const additionalTools = createMemoryTools(memory, () => memory.enabled())
   const service: SessionService = createSessionService({
+    rewindStoreRoot: options.sessionDir,
     additionalTools,
     sessionQuery,
     workspace: options.workspace,
@@ -112,6 +114,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
     sessions: createSessionManagement(coordinator, service),
     provider: runtime,
     memory,

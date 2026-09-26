@@ -35,6 +35,11 @@ describe("RewindService", () => {
       { turnIndex: 1, preview: "second", files: 0 },
     ])
   })
+  it("retains rewind points when asynchronous marker persistence fails", async () => {
+    await store.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "p", files: [] })
+    await expect(service.execute(0, "conversation", { appendEvent: async () => { throw new Error("disk unavailable") } })).rejects.toThrow("disk unavailable")
+    expect(await service.points()).toHaveLength(1)
+  })
 
   it("plan: clean (current == afterHash) yields restore-blob op", async () => {
     const blob = await store.writeBlob(utf8("one"))

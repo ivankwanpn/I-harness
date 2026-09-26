@@ -80,7 +80,7 @@ export interface RewindServiceOptions {
 
 export interface RewindExecuteHooks {
   /** Append the rewind/point conversation marker into the session log. */
-  appendEvent(ev: RewindEvent): void
+  appendEvent(ev: RewindEvent): unknown
   /**
    * Optional seam for the live in-memory view (G2 owns deriveMessages'
    * cutSeq projection — the projection reads the marker from the log itself,
@@ -310,7 +310,7 @@ export class RewindService {
       mode,
       fileOps: plan.ops.map((o) => ({ path: o.path, op: o.kind === "restore-blob" ? "restore" : "delete" })),
     }
-    hooks.appendEvent(event)
+    await hooks.appendEvent(event)
     hooks.deriveSkip?.(target.anchorSeq)
 
     // had_errors ⇒ keep points (retry data, spec §3). A files-only rewind
