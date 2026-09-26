@@ -47,6 +47,9 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       })
     } else if (event.type === "assistant/chunk") {
       pendingChunks += event.text
+    } else if (event.type === "turn/start" || event.type === "turn/end"
+      || event.type === "step/start" || event.type === "step/end") {
+      // Structural markers carry no readable content.
     } else {
       flushChunks()
       rows.push({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type })

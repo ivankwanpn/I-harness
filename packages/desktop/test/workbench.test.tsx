@@ -105,4 +105,35 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "開啟工作區" }))
     expect(request).toHaveBeenCalledWith({ kind: "workspace/pick" })
   })
+
+  it("shows last activity only when the host reported it", () => {
+    render(
+      <Harness dashboard={{
+        sessions: [
+          { id: "session-a", live: true },
+          { id: "session-b", live: true, updatedAt: Date.UTC(2026, 0, 2, 3, 4, 5) },
+        ],
+      }} />,
+    )
+
+    expect(screen.getAllByText(/最後活動/)).toHaveLength(1)
+  })
+
+  it("offers a retry when a load failed", () => {
+    const onRetry = vi.fn()
+    render(
+      <Workbench
+        bridge={fakeBridge()}
+        workspaces={[]}
+        capabilities={{}}
+        error="連線失敗"
+        onRetry={onRetry}
+        onSelectWorkspace={() => {}}
+        onSelectSession={() => {}}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "重試" }))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+  })
 })

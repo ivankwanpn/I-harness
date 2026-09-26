@@ -87,4 +87,15 @@ describe("projectTimeline", () => {
       { id: "message:2", kind: "message", role: "assistant", text: "Hello" },
     ])
   })
+
+  it("drops structural markers that carry no readable content", () => {
+    const rows = projectTimeline([
+      { type: "turn/start", seq: 0 },
+      { type: "step/start", seq: 1 },
+      { type: "step/end", seq: 2 },
+      { type: "turn/end", seq: 3 },
+    ])
+
+    expect(rows).toEqual([])
+  })
 })

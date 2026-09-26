@@ -1,5 +1,6 @@
 import { defineConfig } from "electron-vite"
 import react from "@vitejs/plugin-react"
+import { devCspPlugin } from "./electron.csp.ts"
 
 export default defineConfig({
   main: { build: { externalizeDeps: { exclude: ["@i-harness/sdk"] } } },
@@ -10,5 +11,5 @@ export default defineConfig({
       rollupOptions: { output: { format: "cjs", entryFileNames: "[name].cjs" } },
     },
   },
-  renderer: { plugins: [react()] },
+  renderer: { plugins: [react(), devCspPlugin] },
 })

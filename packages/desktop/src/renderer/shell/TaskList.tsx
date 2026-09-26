@@ -28,6 +28,7 @@ export function TaskList({ dashboard, selectedId, onSelect }: TaskListProps) {
             <span className="row-id">{row.id}</span>
             <span className="row-meta">
               {row.running === true ? "執行中" : row.live ? "已載入" : "未載入"}
+              {row.updatedAt === undefined ? "" : ` · 最後活動 ${new Date(row.updatedAt).toLocaleString()}`}
               {row.turnCount === undefined ? "" : ` · ${row.turnCount} 回合`}
               {row.queued === undefined || row.queued === 0 ? "" : ` · 佇列 ${row.queued}`}
               {row.tasks === undefined || row.tasks === 0 ? "" : ` · 任務 ${row.tasks}`}

@@ -53,6 +53,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [reviewSelected, setReviewSelected] = useState<{ path: string; mode: "diff" | "preview" }>()
   const [reviewDiff, setReviewDiff] = useState<ReviewText>()
   const [reviewPreview, setReviewPreview] = useState<ReviewText>()
+  const [retryNonce, setRetryNonce] = useState(0)
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
@@ -124,7 +125,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (active) setError(reason instanceof Error ? reason.message : String(reason))
       })
     return () => { active = false }
-  }, [refreshWorkspaces])
+  }, [refreshWorkspaces, retryNonce])
 
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
@@ -146,7 +147,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }
     })()
     return () => { active = false }
-  }, [bridge, selectedWorkspaceId])
+  }, [bridge, retryNonce, selectedWorkspaceId])
 
   // Subscribe BEFORE the first history read (spec §6): a live event that lands
   // during the read must not be lost.
@@ -379,6 +380,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             setError(reason instanceof Error ? reason.message : String(reason))
           }
         })()
+      }}
+      onRetry={() => {
+        setError(undefined)
+        setRetryNonce((current) => current + 1)
       }}
       onSessionsChanged={() => {
         if (selectedWorkspaceId !== undefined) void refreshDashboard(selectedWorkspaceId)

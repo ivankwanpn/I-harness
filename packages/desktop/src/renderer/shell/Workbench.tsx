@@ -50,6 +50,7 @@ export interface WorkbenchProps {
   selectedSessionId?: string
   conversation?: ConversationView
   review?: ReviewView
+  onRetry?(): void
   onOpenWorkspace?(): void
   onSelectWorkspace(workspaceId: string): void
   onSelectSession(sessionId: string): void
@@ -76,6 +77,7 @@ export function Workbench({
   onSessionsChanged,
   conversation,
   review,
+  onRetry,
   onOpenWorkspace,
 }: WorkbenchProps) {
   const [createError, setCreateError] = useState<string>()
@@ -120,7 +122,16 @@ export function Workbench({
         <p data-testid="session-announcer" aria-live="polite" className="visually-hidden">
           {selectedSessionId === undefined ? "" : `已選擇會話 ${selectedSessionId}`}
         </p>
-        {error === undefined ? null : <p className="notice error-text">{error}</p>}
+        {error === undefined
+          ? null
+          : (
+            <p className="notice error-text">
+              {error}
+              {onRetry === undefined ? null : (
+                <button type="button" className="link-button" onClick={onRetry}>重試</button>
+              )}
+            </p>
+          )}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
         <section className="session-body" aria-label="會話">
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
