@@ -284,6 +284,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     }
 
     const models = await registry.probeModels(id, {
+      ...(probeOptions.signal !== undefined ? { signal: probeOptions.signal } : {}),
       ...(view.modelsURL !== undefined
         ? { modelsURL: view.modelsURL }
         : view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
@@ -297,6 +298,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       // discovery too) — the probe's own auth keys still win.
       ...(view.headers !== undefined ? { headers: view.headers } : {}),
     })
+    probeOptions.signal?.throwIfAborted()
     // Copied: the registry's array is not a caller's to mutate.
     return cloneModels(models)
   }

@@ -381,6 +381,7 @@ interface DirectoryEntry {
  * URL makes the generic builtin probe run for ANY route (task 7 — D4: the
  * route-gate applies to the route-based preview flow only). */
 export interface ProbeRequest {
+  signal?: AbortSignal
   baseURL?: string
   modelsURL?: string
   apiKey?: string
@@ -623,11 +624,13 @@ type CandidateResult =
   | { kind: "ok"; models: ModelDescriptor[] }
   | { kind: "error"; text: string; tryNext: boolean }
 
-async function probeCandidate(url: string, headers: Record<string, string>): Promise<CandidateResult> {
+async function probeCandidate(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<CandidateResult> {
   let response: Response
   try {
-    response = await fetch(url, { headers, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) })
+    signal?.throwIfAborted()
+    response = await fetch(url, { headers, signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(PROBE_TIMEOUT_MS)]) : AbortSignal.timeout(PROBE_TIMEOUT_MS) })
   } catch (error) {
+    signal?.throwIfAborted()
     // A black-hole/unroutable baseURL rejects here — must never escape as an
     // unbranded failure; the abort signal contributes its TimeoutError/AbortError.
     const timedOut = error instanceof DOMException
@@ -758,7 +761,9 @@ function createBuiltinProbe(resolveProfile: () => ProviderProfile | undefined): 
     const failures: string[] = []
     const candidates = modelsURL !== undefined ? [modelsURL] : probeCandidatePaths(baseURL!)
     for (const url of candidates) {
-      const result = await probeCandidate(url, headers)
+      req.signal?.throwIfAborted()
+      const result = await probeCandidate(url, headers, req.signal)
+      req.signal?.throwIfAborted()
       if (result.kind === "ok") return result.models
       failures.push(result.text)
       if (!result.tryNext) break

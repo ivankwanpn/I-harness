@@ -83,6 +83,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
   }
   const reviewRequest = useRef(0)
+  const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
   const tasksRequest = useRef(0)
@@ -328,10 +329,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
       try {
+        if (!active) return
+        const version = ++modelRequest.current
         const modelState = await bridge.request({
           kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId,
         })
-        if (active) setModel(modelState as SessionModelState)
+        if (active && version === modelRequest.current) setModel(modelState as SessionModelState)
       } catch (reason) {
         if (active) setTaskError(reason instanceof Error ? reason.message : String(reason))
       }
@@ -351,6 +354,17 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }
   }, [bridge, interactions.refresh, pageHistory, refreshTasks, retryNonce, selectedSessionId, selectedWorkspaceId])
 
+  useEffect(() => {
+    if (!selectedWorkspaceId || !selectedSessionId || operation?.kind !== "model" || operation.busy) return
+    const scope = selection.current
+    const version = ++modelRequest.current
+    let active = true
+    void bridge.request({ kind: "session/model/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).then((result) => {
+      if (active && selection.current === scope && version === modelRequest.current) setModel(result as SessionModelState)
+    }).catch((reason: unknown) => { if (active && selection.current === scope) setTaskError(String(reason)) })
+    return () => { active = false }
+  }, [bridge, operation, selectedSessionId, selectedWorkspaceId])
+
   const gate = sendGate({ model, sandbox, connection }, t)
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
@@ -363,9 +377,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         modelState: model,
         onSetModel: async (selectionValue: SessionModelSelection) => {
           const scope = selection.current
-          const result = await operations.changeModel(selectedWorkspaceId, selectedSessionId, selectionValue)
+          await operations.changeModel(selectedWorkspaceId, selectedSessionId, selectionValue)
           if (selection.current !== scope) return
-          setModel(result)
           void refreshDashboard(selectedWorkspaceId)
         },
         operation,

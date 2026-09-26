@@ -10,6 +10,22 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("refreshes the model after leaving and returning during a pending switch", async () => {
+  const pending = defer()
+  let modelId = "old"
+  fixture((request) => request.kind === "session/model/set" ? pending.promise : request.kind === "session/model/state" ? Promise.resolve({ status: "ready", providerId: "p", modelId, label: modelId }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("old"))
+  let switchJob!: Promise<void>
+  act(() => { switchJob = captured.props!.conversation!.onSetModel!({ provider: "p", model: "new" }) })
+  act(() => captured.props!.onSelectSession("b"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("old"))
+  modelId = "new"
+  await act(async () => { pending.resolve({ status: "ready", providerId: "p", modelId, label: modelId }); await switchJob })
+  await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("new"))
+})
 function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined, onEvent: DesktopBridge["onEvent"] = () => () => {}) {
   const request = vi.fn(async (request: DesktopRequest): Promise<unknown> => {
     const custom = override(request)
