@@ -257,6 +257,7 @@ function validateSpec(entry: unknown, configPath: string): HookHandlerSpec {
   if (e.timeoutMs !== undefined && (typeof e.timeoutMs !== "number" || !Number.isInteger(e.timeoutMs) || e.timeoutMs <= 0)) {
     throw new HookConfigError(`hook handler ${e.id}: timeoutMs must be a positive integer`)
   }
+  if (typeof e.timeoutMs === "number") spec.timeoutMs = e.timeoutMs
   return spec
 }
 

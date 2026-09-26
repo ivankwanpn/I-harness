@@ -290,11 +290,13 @@ describe("registry wiring (createHookRegistry mounts)", () => {
     const script = await writeHandler(dir, "prompt.js", jsonBody({ block: true, reason: "prompt blocked" }))
     const configPath = await configWith(dir, [{
       id: "p", event: "prompt/submit", type: "prompt",
+      timeoutMs: 5000,
       command: { cmd: process.execPath, args: [script] },
       trust: { script, sha256: await sha256File(script) },
     }])
     const ctx = createContext()
     const registry = await createHookRegistry(ctx, { configPath, configDir: dir })
+    expect(registry.handlers()[0]?.spec.timeoutMs).toBe(5000)
     await expect(ctx.emit("agent/pre-step", { task: "do it", session: {} })).rejects.toThrow(/prompt blocked/)
     await registry.dispose()
     await expect(ctx.emit("agent/pre-step", { task: "after disable", session: {} })).resolves.toMatchObject({ task: "after disable" })
