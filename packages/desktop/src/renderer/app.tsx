@@ -30,6 +30,7 @@ import { Workbench } from "./shell/Workbench.tsx"
 import { operationKey, useSessionOperation } from "./session/use-session-operation.ts"
 import { useLocale, useText } from "./design/i18n.ts"
 import { useUiStore } from "./shell/ui-store.ts"
+import { createRefreshScheduler } from "./session/refresh-scheduler.ts"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -81,6 +82,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
   }
   const reviewRequest = useRef(0)
+  const dashboardRequest = useRef(0)
+  const dashboardApplied = useRef(0)
+  const tasksRequest = useRef(0)
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
   if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
 
@@ -98,25 +102,28 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
     if (scope.workspaceId !== workspaceId) return
+    const request = ++dashboardRequest.current
     const result = await bridge.request({ kind: "session/dashboard", workspaceId })
-    if (workspaceSelection.current !== scope) return
+    if (workspaceSelection.current !== scope || request < dashboardApplied.current) return
+    dashboardApplied.current = request
     setDashboard(result as SessionDashboardResult)
   }, [bridge])
 
   const refreshTasks = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
+    const request = ++tasksRequest.current
     try {
       const [queueRows, taskRows] = await Promise.all([
         bridge.request({ kind: "session/queue", workspaceId, sessionId }),
         bridge.request({ kind: "session/tasks", workspaceId, sessionId }),
       ])
-      if (selection.current !== scope) return
+      if (selection.current !== scope || request !== tasksRequest.current) return
       setQueue(queueRows as SessionQueueItem[])
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
     } catch (reason) {
-      if (selection.current === scope) setTaskError(reason instanceof Error ? reason.message : String(reason))
+      if (selection.current === scope && request === tasksRequest.current) setTaskError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -140,9 +147,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   ): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
-    const request = (params: HistoryPageRequest) => bridge.request({
+    const request = async (params: HistoryPageRequest) => {
+      if (selection.current !== scope) throw new Error("History selection changed")
+      return bridge.request({
         kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, limit: params.limit,
       }) as Promise<HistoryRange>
+    }
     try {
       const load = afterSeq === 0
         ? await loadRecentHistory(request, { limit: HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
@@ -175,6 +185,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setCapabilities({})
     setSandbox(undefined)
     setConnection((current) => current === "reconnecting" ? "reconnecting" : "connecting")
+    const dashboardVersion = ++dashboardRequest.current
     void (async () => {
       try {
         const [dashboardResult, capabilitiesResult, sandboxResult] = await Promise.all([
@@ -183,7 +194,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }),
         ])
         if (!active) return
-        setDashboard(dashboardResult as SessionDashboardResult)
+        if (dashboardVersion >= dashboardApplied.current) {
+          dashboardApplied.current = dashboardVersion
+          setDashboard(dashboardResult as SessionDashboardResult)
+        }
         setCapabilities((capabilitiesResult ?? {}) as Record<string, string[]>)
         setSandbox(sandboxResult as SandboxState | undefined)
         setConnection("online")
@@ -202,7 +216,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   // during the read must not be lost.
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
-    return bridge.onEvent((event) => {
+    const refresh = createRefreshScheduler(() => Promise.allSettled([
+      refreshDashboard(selectedWorkspaceId),
+      ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
+    ]))
+    const unsubscribe = bridge.onEvent((event) => {
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
         setConnection("offline")
@@ -227,7 +245,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       const info = classifyNotification(event.method, event.params)
       if (info.kind === "ignore") return
       if (info.sessionId !== selectedSessionId) {
-        if (info.kind === "status") void refreshDashboard(selectedWorkspaceId)
+        if (info.kind === "status") refresh.schedule()
         return
       }
       if (info.kind === "chunk") {
@@ -249,14 +267,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (params.event !== undefined) {
           setEventWindow((current) => applyNotification(current, params.event as WireEvent))
         }
-        void refreshTasks(selectedWorkspaceId, info.sessionId)
-        void refreshDashboard(selectedWorkspaceId)
+        refresh.schedule()
         return
       }
       setRunning(info.status === "queued")
-      void refreshTasks(selectedWorkspaceId, info.sessionId)
-      void refreshDashboard(selectedWorkspaceId)
+      refresh.schedule()
     })
+    return () => { unsubscribe(); refresh.dispose() }
   }, [bridge, interactions.update, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
 
   useEffect(() => {

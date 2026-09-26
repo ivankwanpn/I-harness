@@ -10,7 +10,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
-function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined) {
+function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined, onEvent: DesktopBridge["onEvent"] = () => () => {}) {
   const request = vi.fn(async (request: DesktopRequest): Promise<unknown> => {
     const custom = override(request)
     if (custom) return custom
@@ -25,10 +25,24 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
       default: return []
     }
   })
-  const bridge: DesktopBridge = { request, onEvent: () => () => {} }
+  const bridge: DesktopBridge = { request, onEvent }
   render(<App bridge={bridge} />)
   return request
 }
+
+it("retains a successful initial dashboard when a newer background read fails", async () => {
+  const initial = defer()
+  let reads = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture((request) => request.kind === "session/dashboard"
+    ? ++reads === 1 ? initial.promise : Promise.reject(new Error("temporary failure"))
+    : undefined, (listener) => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "a", status: "idle" } }))
+  await waitFor(() => expect(reads).toBe(2))
+  await act(async () => { initial.resolve({ sessions: [], marker: "initial" }); await initial.promise })
+  expect(captured.props!.dashboard).toMatchObject({ marker: "initial" })
+})
 
 it("ignores history from a session left while loading", async () => {
   const old = defer()
