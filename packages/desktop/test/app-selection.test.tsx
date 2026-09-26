@@ -93,3 +93,11 @@ it("reports real connection bootstrap failure and a successful retry", async () 
   expect(captured.props!.connection).toBe("online")
   expect(captured.props!.dashboard).toBeDefined()
 })
+
+it("keeps a history failure visible even when task loading succeeds", async () => {
+  fixture((request) => request.kind === "session/history" ? Promise.reject(new Error("history unavailable")) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.queue).toEqual([]))
+  expect(captured.props!.conversation!.historyError).toBe("history unavailable")
+})

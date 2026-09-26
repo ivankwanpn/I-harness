@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 import type { HistoryRange } from "@i-harness/sdk"
-import { loadHistory } from "../src/renderer/session/history.ts"
+import { loadHistory, loadRecentHistory } from "../src/renderer/session/history.ts"
 
 type WireEvent = HistoryRange["events"][number]
 
@@ -13,6 +13,22 @@ function page(from: number, count: number, nextSeq: number): HistoryRange {
 }
 
 describe("loadHistory", () => {
+  it("opens the newest bounded window rather than the first pages of a large log", async () => {
+    const size = 100_000
+    const request = vi.fn(async ({ afterSeq, limit }: { afterSeq: number; limit: number }) => {
+      const start = Math.min(size, afterSeq)
+      const end = Math.min(size, start + limit)
+      return page(start, end - start, end)
+    })
+    const result = await loadRecentHistory(request, { limit: 500, maxEvents: 20_000 })
+    expect(request.mock.calls[0]![0]).toEqual({ afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
+    expect(result.startSeq).toBe(80_000)
+    expect(result.events[0]?.seq).toBe(80_000)
+    expect(result.events.at(-1)?.seq).toBe(99_999)
+    expect(result.cursor).toBe(100_000)
+    expect(result.events).toHaveLength(20_000)
+    expect(request).toHaveBeenCalledTimes(41)
+  })
   it("pages from the cursor until the durable log is exhausted", async () => {
     const pages = [page(0, 500, 500), page(500, 500, 1000), page(1000, 120, 1120)]
     const request = vi.fn(async (params: { afterSeq: number; limit: number }) => {

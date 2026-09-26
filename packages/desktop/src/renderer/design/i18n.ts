@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "逐段瀏覽差異": "Browse diff sections", "上一段": "Previous section", "下一段": "Next section", "回到差異摘要": "Back to diff summary",
+  "預覽略去中間 {count} 列；可逐段瀏覽。": "Preview omits {count} middle lines. Browse sections to read them.",
   "已連線": "Connected", "連線已中斷": "Disconnected", "重新連線中…": "Reconnecting…", "連線中…": "Connecting…", "正在連線，送出暫時停用": "Connecting; sending is temporarily disabled",
   "查看筆記摘要": "View note summary", "僅擷取已保存筆記，不會呼叫模型。": "Excerpts from saved notes only. No model call.", "沒有可顯示的摘要": "No summary to display",
   "思考過程": "Reasoning", "待辦清單已更新": "Todo list updated", "目標已更新": "Goal updated", "背景任務狀態已更新": "Background task updated",

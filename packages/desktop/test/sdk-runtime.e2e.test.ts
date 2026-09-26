@@ -32,6 +32,10 @@ describe("Desktop SDK runtime against the real local gateway", () => {
       expect(runtime.info.capabilities["session-list"]).toEqual(["1"])
       expect(runtime.sandbox).toEqual({ mode: "read-only", source: "settings", wired: true })
       expect(await runtime.client.listSessions()).toEqual({ sessions: [] })
+      const created = await runtime.client.request("session/create", {}) as { sessionId: string }
+      const head = await runtime.client.history(created.sessionId, { afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
+      expect(head.events).toEqual([])
+      expect(head.nextSeq).toBe(0)
     } finally {
       await manager.close()
       if (previousConfig === undefined) delete process.env.IH_CONFIG_DIR

@@ -11,6 +11,8 @@ Additional adapted file: src/renderer/vendor/zcode/ComposerSurface.tsx from pack
 Modifications (2026-09-26): extract JSX layout and utility classes, replace services/providers/stores with props, use native radio controls and explicit confirmation, preserve visible focus, omit global resets. No brand assets copied.
 
 Additional extractions: ToolSummaryRow.tsx derives summary layout and classes from ToolCallBlocks/ToolSummaryRow.tsx, replacing Radix triggering with a native button. LightweightDiffPreview.tsx derives row layout and addition/removal tint styles from components/ui/lightweight-diff-preview.tsx; it consumes raw unified diff, distinguishes headers from hunk content, preserves protocol markers and omits synthetic line numbers, syntax-highlighter and settings-store dependencies. Lazy tool output handling remains in the I-harness adapter.
+LightweightDiffPreview also adapts lib/patchDiffPreview.ts's 800-row head/tail fallback. An I-harness section browser makes omitted middle rows accessible while keeping the DOM bounded. Actual old/new line numbers are derived by the separate I-harness unified-diff parser.
+lib/patchDiffPreview.ts SHA256: 777F24E72685D824AF0A53633E57D959EEA1530984B5BFA8B4AD4A2F30B7B3D8.
 
 Source SHA256:
 Additional extraction: ReviewFileRow.tsx adapts the file header in GitPaneChangeCard.tsx. It replaces ZCode file descriptors and numeric change counts with I-harness path/status props, and omits context-menu mutations and unsupported filesystem actions.

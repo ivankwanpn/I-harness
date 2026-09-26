@@ -10,6 +10,20 @@ export interface HistoryLoad {
   cursor: number
   /** False when the page budget ran out before the durable log did. */
   exhausted: boolean
+  startSeq?: number
+}
+
+/** Existing SDK history clamps an oversized cursor to the durable log head.
+ * Probe that head without loading content, then load only the latest window. */
+export async function loadRecentHistory(
+  request: (params: HistoryPageRequest) => Promise<HistoryRange>,
+  options: { limit: number; maxEvents: number },
+): Promise<HistoryLoad> {
+  const head = await request({ afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
+  if (!Number.isSafeInteger(head.nextSeq) || head.nextSeq < 0) throw new Error("Invalid history head")
+  const startSeq = Math.max(0, head.nextSeq - options.maxEvents)
+  const loaded = await loadHistory(request, { afterSeq: startSeq, limit: options.limit, maxPages: Math.ceil(options.maxEvents / options.limit) })
+  return { ...loaded, startSeq, exhausted: loaded.cursor >= head.nextSeq }
 }
 
 /**

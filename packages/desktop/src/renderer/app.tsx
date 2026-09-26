@@ -14,10 +14,11 @@ import {
   applyNotification,
   emptyEventWindow,
   markDisconnected,
+  MAX_RETAINED_EVENTS,
   type EventWindow,
   type WireEvent,
 } from "./session/event-window.ts"
-import { loadHistory } from "./session/history.ts"
+import { loadHistory, loadRecentHistory, type HistoryPageRequest } from "./session/history.ts"
 import type { InteractionReply } from "./interaction/PendingPanel.tsx"
 import type { ReviewChanges, ReviewText } from "./review/ReviewPane.tsx"
 import { pendingForSession, type PendingInteraction } from "./interaction/pending.ts"
@@ -54,6 +55,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [queue, setQueue] = useState<SessionQueueItem[]>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
   const [taskError, setTaskError] = useState<string>()
+  const [historyError, setHistoryError] = useState<string>()
+  const [historyCount, setHistoryCount] = useState<number>()
   const [running, setRunning] = useState(false)
   const operations = useSessionOperation(bridge)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
@@ -134,16 +137,19 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   ): Promise<void> => {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
-    const load = await loadHistory(
-      (params) => bridge.request({
+    const request = (params: HistoryPageRequest) => bridge.request({
         kind: "session/history", workspaceId, sessionId, afterSeq: params.afterSeq, limit: params.limit,
-      }) as Promise<HistoryRange>,
-      { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES },
-    )
-    if (selection.current !== scope) return
-    setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
-    if (!load.exhausted) {
-      setTaskError(textRef.current("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: load.events.length }))
+      }) as Promise<HistoryRange>
+    try {
+      const load = afterSeq === 0
+        ? await loadRecentHistory(request, { limit: HISTORY_LIMIT, maxEvents: MAX_RETAINED_EVENTS })
+        : await loadHistory(request, { afterSeq, limit: HISTORY_LIMIT, maxPages: HISTORY_MAX_PAGES })
+      if (selection.current !== scope) return
+      setEventWindow((current) => applyHistory(current, { events: load.events, nextSeq: load.cursor }))
+      setHistoryError(undefined)
+      if (afterSeq === 0 || !load.exhausted) setHistoryCount((load.startSeq ?? 0) > 0 || !load.exhausted ? load.events.length : undefined)
+    } catch (reason) {
+      if (selection.current === scope) setHistoryError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -290,6 +296,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setQueue(undefined)
     setTasks(undefined)
     setTaskError(undefined)
+    setHistoryError(undefined)
+    setHistoryCount(undefined)
     setRunning(false)
     chunkBuffer.current.length = 0
     void (async () => {
@@ -341,6 +349,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         queue,
         tasks,
         taskError,
+        historyError,
+        historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string): Promise<void> => {
           const scope = selection.current
