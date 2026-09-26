@@ -85,6 +85,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     coordinator,
     sessionFor: createDurableSessionLoader(coordinator),
     outputSpill: {},
+    compact: { auto: settings.get().compaction.auto },
   })
   const interaction = createInteractionBridge(options.onWrite)
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
