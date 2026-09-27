@@ -30,6 +30,17 @@ it("uses a new-model title when adding a model", () => {
   render(<ProviderEditor id="route" newModel onSave={vi.fn()} onClose={() => {}} />)
   expect(screen.getByText("新增模型")).toBeTruthy()
 })
+it("treats an unconfigured built-in provider as editing while keeping its first-override write", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderEditor provider={{ id: "built-in", displayName: "Built in", configured: false, baseURL: "https://built.example/v1" }} onSave={save} onClose={() => {}} />)
+  expect(screen.getByText("編輯提供商")).toBeTruthy()
+  expect(screen.queryByText("新增提供商")).toBeNull()
+  expect(screen.queryByText("進階設定")).toBeNull()
+  expect(screen.getByLabelText("模型列表網址")).toBeTruthy()
+  expect(screen.getByText(/第一次儲存會建立自訂設定/)).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith(expect.objectContaining({ action: "provider/create", id: "built-in" }))
+})
 it("submits only changed model fields and preserves input on failure", async () => {
   const save = vi.fn().mockRejectedValueOnce(new Error("failed")).mockResolvedValue(undefined)
   render(<ProviderEditor id="route" model={{ id: "m", contextWindow: 272000, maxTokens: 4096 }} onSave={save} onClose={() => {}} />)

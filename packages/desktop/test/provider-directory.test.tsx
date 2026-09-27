@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { ProviderDirectory } from "../src/renderer/settings/ProviderDirectory.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
@@ -59,6 +59,9 @@ it("does not dismiss provider creation while its write is still pending", async 
   fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "new-route" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   await waitFor(() => expect(request.mock.calls.some(([value]) => value.kind === "desktop/provider/mutate")).toBe(true))
+  const advanced = within(screen.getByRole("dialog")).getByText("進階設定")
+  advanced.focus()
+  expect(fireEvent.keyDown(advanced, { key: "Tab" })).toBe(false)
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
   expect(screen.getByRole("dialog")).toBeTruthy()
   finish()

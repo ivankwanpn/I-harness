@@ -31,6 +31,8 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
   const inFlight = useRef(false)
   const [error, setError] = useState<string>()
   const existing = isModel ? model !== undefined : provider?.configured === true
+  const creatingProvider = !isModel && provider === undefined
+  const editingBuiltIn = !isModel && provider !== undefined && !existing
   const renderField = (key: string) => {
     const label = labels[key]!
     return <label key={key}>{t(label)}{key === "protocol"
@@ -59,13 +61,13 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
     void onSave(command as ProviderCommand).then(onClose).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => { inFlight.current = false; setBusy(false); onBusyChange?.(false) })
   }}>
     <fieldset disabled={busy}>
-      <legend>{t(isModel ? existing ? "編輯模型" : "新增模型" : existing ? "編輯提供商" : "新增提供商")}</legend>
+      <legend>{t(isModel ? existing ? "編輯模型" : "新增模型" : creatingProvider ? "新增提供商" : "編輯提供商")}</legend>
       <label>{t(isModel ? "模型 ID" : "提供商 ID")}<input required maxLength={isModel ? 256 : 128} value={identity} disabled={model !== undefined || provider !== undefined} onChange={(event) => setIdentity(event.target.value)} /></label>
-      {!isModel && !existing ? <>
+      {creatingProvider ? <>
         {["displayName", "baseURL", "protocol"].map(renderField)}
         <details className="provider-advanced"><summary>{t("進階設定")}</summary>{["modelsURL", "catalog", "apiKeyEnv"].map(renderField)}</details>
       </> : Object.keys(labels).map(renderField)}
-      <p className="muted">{t(existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>
+      <p className="muted">{t(editingBuiltIn ? "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。" : existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>
       {error ? <p role="alert">{error}</p> : null}
       <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
     </fieldset>

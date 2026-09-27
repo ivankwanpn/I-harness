@@ -41,6 +41,6 @@
 
 **Files:** Add a dated `docs/audit/` report and update this checklist.
 
-- [ ] Build packaged Electron; verify normal/narrow dialog, focus, Escape and no saved provider mutation in playground context.
-- [ ] Request read-only code review, fix Important findings and rerun affected verification.
-- [ ] Record exact tests, artifact hash, limitations and local commit. No GitHub push.
+- [x] Build packaged Electron; verify normal/narrow dialog, focus, Escape and clean up a temporary playground provider.
+- [x] Request read-only code review, fix Important findings and rerun affected verification.
+- [x] Record exact tests, artifact hash, limitations and local commit. No GitHub push.

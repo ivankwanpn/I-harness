@@ -24,7 +24,7 @@ export function SettingsDialog({ title, closeLabel, busy = false, initialFocusSe
     <div ref={dialog} className="settings-dialog" role="dialog" aria-modal="true" aria-label={title} onKeyDown={(event) => {
       if (event.key === "Escape") { event.preventDefault(); if (!busy) onClose(); return }
       if (event.key !== "Tab") return
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])") ?? [])
+      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex]:not([tabindex='-1'])") ?? [])
       const first = focusable[0], last = focusable.at(-1)
       if (event.shiftKey && document.activeElement === first && last) { event.preventDefault(); last.focus() }
       else if (!event.shiftKey && document.activeElement === last && first) { event.preventDefault(); first.focus() }
