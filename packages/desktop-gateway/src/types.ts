@@ -9,6 +9,7 @@ import type { createDesktopRewind } from "./rewind.ts"
 import type { createDesktopPlugins } from "./plugins.ts"
 import type { createDesktopTerminal } from "./terminal.ts"
 import type { createAgentSettings } from "./agent-settings.ts"
+import type { createSubagentSettings } from "./subagent-settings.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -17,6 +18,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  subagents?: ReturnType<typeof createSubagentSettings>
   agentSettings?: ReturnType<typeof createAgentSettings>
   terminal?: ReturnType<typeof createDesktopTerminal>
   plugins?: ReturnType<typeof createDesktopPlugins>

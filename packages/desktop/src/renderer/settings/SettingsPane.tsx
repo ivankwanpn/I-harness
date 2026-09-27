@@ -11,6 +11,7 @@ import { ProviderDirectory } from "./ProviderDirectory.tsx"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 import { TitleBar } from "../shell/TitleBar.tsx"
 import { AgentSettings } from "./AgentSettings.tsx"
+import { SubagentSettings } from "./SubagentSettings.tsx"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { PluginMarketplace } from "./PluginMarketplace.tsx"
 
@@ -20,6 +21,7 @@ const sections = [
   { id: "notifications", label: "通知", icon: Bell, group: "基本設定" },
   { id: "models", label: "模型與提供商", icon: Server, group: "Agent 設定" },
   { id: "execution", label: "執行與上下文", icon: Shield, group: "Agent 設定", capability: "desktop-agent-settings" },
+  { id: "subagents", label: "子代理", icon: Brain, group: "Agent 設定", capability: "desktop-subagents" },
   { id: "memory", label: "記憶", icon: Brain, group: "Agent 設定", capability: "desktop-memory" },
   { id: "plugins", label: "插件", icon: Puzzle, group: "Agent 設定", capability: "desktop-plugins" },
   { id: "workspace", label: "工作區", icon: Folder, group: "本機資料" },
@@ -79,6 +81,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
       </> : tab === "notifications" ? bridge ? <NativeSettings bridge={bridge} section="notifications" /> : null
       : tab === "models" ? workspace && bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
       : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "workspace" ? <>

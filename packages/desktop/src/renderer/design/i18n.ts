@@ -101,6 +101,14 @@ const english = {
   "依模型的上下文大小自動整理內容；關閉後仍可手動壓縮。": "Automatically condenses context based on the model's context window. Manual compaction remains available when disabled.",
   "重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。": "Restart Desktop to apply. Running Agents keep their current settings.",
   "記憶": "Memory", "插件": "Plugins",
+  "子代理": "Subagents", "角色模型": "Role models", "角色名稱": "Role name", "設定角色模型": "Set role model", "恢復繼承": "Inherit parent", "繼承主會話模型": "Inherits the parent conversation model", "新增角色配置": "Add role mapping",
+  "允許角色使用獨立模型": "Allow separate role models",
+  "未指定模型的角色繼承主會話。角色模型配置在下一次建立子代理時讀取，不會更換已執行中的子代理。": "Unconfigured roles inherit the parent conversation. Role mappings are read when creating a subagent; running subagents keep their model.",
+  "這個開關重啟 Desktop 後生效。關閉時，後端會拒絕使用已指定模型的角色。": "This switch takes effect after restarting Desktop. When disabled, the backend refuses roles with a declared model.",
+  "角色設定已儲存，下一個新子代理會讀取此設定。": "Role mapping saved. The next new subagent will read this setting.",
+  "填入既有角色名稱；此設定不會建立新的角色或工具權限。": "Enter an existing role name. This setting does not create a role or grant tools.",
+  "移除模型覆寫": "Remove model override",
+  "未覆寫時沿用角色定義；內建角色預設繼承主會話。模型配置在下一次建立子代理時讀取，不會更換已執行中的子代理。": "Without an override, the role definition applies; built-in roles inherit the parent conversation by default. Model mappings are read for new subagents, without changing running ones.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.plugins) capabilities["desktop-plugins"] = ["1"]
@@ -140,6 +141,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if ((message.method === "desktop/subagents/state" || message.method === "desktop/subagents/mutate") && handlers.subagents) {
+        try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.subagents.state() : await handlers.subagents.mutate(message.params))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if ((message.method === "desktop/agent-settings/state" || message.method === "desktop/agent-settings/configure") && handlers.agentSettings) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentSettings.state() : await handlers.agentSettings.configure(message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

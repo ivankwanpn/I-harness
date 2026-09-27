@@ -11,6 +11,13 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/subagents/state": return {}
+    case "desktop/subagents/mutate": {
+      if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid subagent settings command")
+      const command = value.command as Record<string, unknown>
+      if (!["enable", "role/set", "role/clear"].includes(String(command.action))) throw new Error("invalid subagent settings action")
+      return { ...command }
+    }
     case "desktop/agent-settings/state": return {}
     case "desktop/agent-settings/configure": {
       if (!value.patch || typeof value.patch !== "object" || Array.isArray(value.patch)) throw new Error("invalid agent settings patch")

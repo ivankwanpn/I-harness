@@ -462,6 +462,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/subagent':
+        specifier: workspace:*
+        version: link:../subagent
       '@i-harness/terminal':
         specifier: workspace:*
         version: link:../terminal

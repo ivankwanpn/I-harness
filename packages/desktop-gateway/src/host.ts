@@ -16,6 +16,7 @@ import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
 import { createDesktopTerminal } from "./terminal.ts"
 import { createAgentSettings } from "./agent-settings.ts"
+import { createSubagentSettings } from "./subagent-settings.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -102,7 +103,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const additionalTools = createMemoryTools(memory, () => memory.enabled())
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
+  const subagents = createSubagentSettings(settingsPath, settings.get().plugins.subagentModel)
   const service: SessionService = createSessionService({
+    roleSelectionFor: subagents.selectionFor,
+    allowSubagentModelSelection: settings.get().plugins.subagentModel,
+    resolveRoleModel: (selection) => runtime.resolveModel({ sessionSelection: selection }),
     extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), dirname(settingsPath), id, (messages) => plugins.report(id, messages)),
     transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
@@ -123,6 +128,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    subagents,
     agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
     terminal,
     plugins,
