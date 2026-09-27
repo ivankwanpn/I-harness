@@ -14,6 +14,20 @@ it("preserves omitted values and explicit resets for individual models", async (
   await providerCommand({ setModel } as unknown as ProviderRuntime, { action: "model/edit", id: "route", model: "m", fields: { contextWindow: 1000000, maxTokens: null } })
   expect(setModel).toHaveBeenCalledWith("route", "m", { contextWindow: 1000000, maxTokens: null })
 })
+it("accepts only declared text/image modality combinations", async () => {
+  const setModel = vi.fn().mockResolvedValue([])
+  const runtime = { setModel } as unknown as ProviderRuntime
+  await providerCommand(runtime, { action: "model/edit", id: "route", model: "vision", fields: { inputModalities: ["text", "image"] } })
+  expect(setModel).toHaveBeenCalledWith("route", "vision", { inputModalities: ["text", "image"] })
+  await expect(providerCommand(runtime, { action: "model/edit", id: "route", model: "vision", fields: { inputModalities: ["image"] } })).rejects.toThrow()
+})
+it("does not allow a Desktop provider-level input-modality mutation", async () => {
+  const createProvider = vi.fn()
+  await expect(providerCommand({ createProvider } as unknown as ProviderRuntime, {
+    action: "provider/create", id: "route", fields: { inputModalities: ["text", "image"] },
+  })).rejects.toThrow("Unknown field")
+  expect(createProvider).not.toHaveBeenCalled()
+})
 it("never includes API key material in validation errors or success responses", async () => {
   const setApiKey = vi.fn().mockResolvedValue(undefined)
   expect(await providerCommand({ setApiKey } as unknown as ProviderRuntime, { action: "key/set", id: "route", value: "fixture-secret" })).toEqual({ ok: true })

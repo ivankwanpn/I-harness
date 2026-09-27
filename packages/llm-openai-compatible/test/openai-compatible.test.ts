@@ -93,6 +93,25 @@ describe("llm-openai-compatible protocol", () => {
     ])
   })
 
+  it("retains DeepSeek reasoning_content and replays it with a tool call", async () => {
+    const sse = [
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "think " } }] })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "more", tool_calls: [{ index: 0, function: { name: "read", arguments: "{}" } }] } }] })}`,
+      "data: [DONE]",
+    ].join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", model: "deepseek-flash" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-compatible", reasoningContent: "think more" } })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", reasoningContent: "think more" } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.messages[0].reasoning_content).toBe("think more")
+    await iterator.return?.()
+  })
+
   it("yields an error event on non-OK response", async () => {
     const fetchMock = vi.fn(async () => new Response("boom", { status: 500 }))
     vi.stubGlobal("fetch", fetchMock)
@@ -491,7 +510,7 @@ describe("M72 Ⅲ: one frame handler for both loops (openai-compatible)", () => 
     const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
-    expect(events.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { name: "read", args: { path: "a.txt" } } }])
+    expect(events.filter((e) => e.type === "tool_call")).toEqual([{ type: "tool_call", call: { id: "c1", name: "read", args: { path: "a.txt" } } }])
   })
 })
 
@@ -663,7 +682,7 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
     expect(events).toEqual([
       { type: "reasoning", text: "weighing" },
       { type: "text/chunk", text: "done" },
-      { type: "end" },
+      { type: "end", providerContinuation: { kind: "openai-compatible", reasoningContent: "weighing" } },
     ])
   })
 })

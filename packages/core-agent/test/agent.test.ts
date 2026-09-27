@@ -84,6 +84,63 @@ describe("agent loop", () => {
     expect(result.finalText).toBe("edited")
   })
 
+  it("retains signed thinking on the assistant tool message for the next provider call", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    let calls = 0
+    let secondMessages: ReturnType<typeof deriveMessages> = []
+    deps.model = {
+      async *stream(request) {
+        calls += 1
+        if (calls === 1) {
+          yield { type: "tool_call", call: { id: "provider_tool_7", name: "read", args: { path: "a.txt" } } }
+          yield { type: "end", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] }
+        } else {
+          secondMessages = request.messages
+          yield { type: "text/chunk", text: "done" }
+          yield { type: "end" }
+        }
+      },
+    }
+    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("read")
+    expect(secondMessages).toContainEqual(expect.objectContaining({
+      role: "assistant", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }],
+      toolCalls: [expect.objectContaining({ id: "provider_tool_7", name: "read" })],
+    }))
+    expect(secondMessages).toContainEqual(expect.objectContaining({ role: "tool", toolCallId: "provider_tool_7" }))
+    expect(deps.session.events.find((event) => event.type === "assistant/message")).toMatchObject({ thinkingBlocks: [{ signature: "signed" }] })
+  })
+
+  it("persists provider continuation metadata with a tool turn", async () => {
+    const ctx = createContext(), deps = makeDeps(ctx)
+    let calls = 0
+    let secondMessages: ReturnType<typeof deriveMessages> = []
+    deps.model = { async *stream(request) {
+      if (++calls === 1) {
+        yield { type: "tool_call", call: { id: "deepseek-call-1", name: "read", args: { path: "a.txt" } } }
+        yield { type: "end", providerContinuation: { kind: "openai-compatible", reasoningContent: "inspect a.txt" } }
+      } else {
+        secondMessages = request.messages
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      }
+    } }
+    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
+    expect(secondMessages).toContainEqual(expect.objectContaining({ role: "assistant", providerContinuation: { kind: "openai-compatible", reasoningContent: "inspect a.txt" } }))
+    expect(deps.session.events.find((event) => event.type === "assistant/message")).toMatchObject({ providerContinuation: { reasoningContent: "inspect a.txt" } })
+  })
+
+  it("durably records signed thinking before a tool commit fails", async () => {
+    const ctx = createContext(), deps = makeDeps(ctx)
+    deps.model = { async *stream() {
+      yield { type: "tool_call", call: { id: "tool-1", name: "read", args: { path: "a.txt" } } }
+      yield { type: "end", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] }
+    } }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p", flush: async () => { throw new Error("commit failed") } })
+    await expect(agent.run("inspect")).rejects.toThrow()
+    expect(deps.session.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "assistant/message", thinkingBlocks: [{ type: "thinking", thinking: "inspect", signature: "signed" }] })]))
+  })
+
   it("writes callIds on tool/call and tool/result events", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)

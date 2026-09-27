@@ -1,5 +1,5 @@
 import { append } from "./index.ts"
-import type { Session } from "./index.ts"
+import type { ImageInput, Session } from "./index.ts"
 
 export type InputDelivery = "queue" | "steer"
 export type InputIntent = "user" | "system"
@@ -11,6 +11,7 @@ export interface AdmittedInput {
   delivery: InputDelivery
   intent: InputIntent
   synthetic?: InputSynthetic
+  images?: ImageInput[]
 }
 
 export interface PendingInput extends AdmittedInput { admittedSeq: number }
@@ -48,6 +49,7 @@ export class Inbox {
       delivery: input.delivery,
       intent: input.intent,
       ...(input.synthetic !== undefined ? { synthetic: input.synthetic } : {}),
+      ...(input.images?.length ? { images: input.images } : {}),
     })
     return this.session.events.at(-1)!.seq!
   }
@@ -82,11 +84,12 @@ export class Inbox {
     for (const ev of this.session.events) {
       if (ev.type !== "agent/input/admitted") continue
       if ((ev.seq ?? 0) < this.fromSeq) continue
-      const a = ev as unknown as { inputId: string; text: string; delivery: InputDelivery; intent: InputIntent; synthetic?: InputSynthetic }
+      const a = ev as unknown as { inputId: string; text: string; delivery: InputDelivery; intent: InputIntent; synthetic?: InputSynthetic; images?: ImageInput[] }
       if (consumed.has(a.inputId)) continue
       result.push({
         inputId: a.inputId, text: a.text, delivery: a.delivery, intent: a.intent,
         ...(a.synthetic !== undefined ? { synthetic: a.synthetic } : {}),
+        ...(a.images?.length ? { images: a.images } : {}),
         admittedSeq: ev.seq ?? 0,
       })
     }
@@ -109,6 +112,7 @@ export class Inbox {
       append(this.session, {
         type: "user/message",
         text: p.text,
+        ...(p.images?.length ? { images: p.images } : {}),
         ...(p.intent === "system"
           ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } }
           : {}),

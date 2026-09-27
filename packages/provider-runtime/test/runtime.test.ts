@@ -350,8 +350,15 @@ describe("model resolution", () => {
       defaultModel: { provider: "zen", model: "glm-5.3-flash" },
       credentials: { ZEN_KEY: "k" },
     })
-    await expect(route.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
+    await expect(route.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready", binding: { imageInput: true } })
+    const directory = await route.runtime.directory()
+    expect(directory.find((entry) => entry.id === "zen")?.models[0]?.inputModalities).toEqual(["text", "image"])
+    expect(directory.find((entry) => entry.id === "zen")).not.toHaveProperty("inputModalities")
     expect(route.builds[0]?.profile.inputModalities).toEqual(["text", "image"])
+    await route.runtime.setModel("zen", "glm-5.3-flash", { inputModalities: ["text"] })
+    const textOnly = await route.runtime.resolveModel({})
+    expect(textOnly.status).toBe("ready")
+    if (textOnly.status === "ready") expect(textOnly.binding.imageInput).toBeUndefined()
 
     // The MODEL entry overrides the route's declaration
     const model = await fixture({
@@ -369,6 +376,8 @@ describe("model resolution", () => {
     })
     await expect(model.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
     expect(model.builds[0]?.profile.inputModalities).toEqual(["text"])
+    await model.runtime.setModel("zen", "text-only-model", { inputModalities: ["text", "image"] })
+    await expect(model.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready", binding: { imageInput: true } })
 
     // Absent everywhere → the profile carries no field (M14 text-only default)
     const plain = await fixture({
@@ -385,6 +394,25 @@ describe("model resolution", () => {
     })
     await expect(plain.runtime.resolveModel({})).resolves.toMatchObject({ status: "ready" })
     expect(plain.builds[0]?.profile.inputModalities).toBeUndefined()
+  })
+
+  it("does not grant image input to an unlisted model through a provider template", async () => {
+    const f = await fixture({
+      providers: { zen: { baseURL: "https://example.test", protocol: "openai-completions", apiKeyEnv: "ZEN_KEY", models: [{ id: "listed" }] } },
+      defaultModel: { provider: "zen", model: "unlisted" }, credentials: { ZEN_KEY: "k" },
+      registry(registry) { registry.register({ name: "zen", displayName: "Zen", protocol: "openai-compatible", inputModalities: ["text", "image"] }) },
+    })
+    const result = await f.runtime.resolveModel({})
+    expect(result.status).toBe("ready")
+    if (result.status === "ready") expect(result.binding.imageInput).toBeUndefined()
+    expect(f.builds[0]?.profile.inputModalities).toBeUndefined()
+  })
+
+  it("rejects new provider-level modality writes while retaining legacy reads", async () => {
+    const f = await fixture({ providers: { zen: { baseURL: "https://example.test", protocol: "openai-completions", apiKeyEnv: "ZEN_KEY", models: [{ id: "listed" }], inputModalities: ["text", "image"] } }, credentials: { ZEN_KEY: "k" } })
+    await expect(f.runtime.patchProvider("zen", { inputModalities: ["text"] } as never)).rejects.toThrow("model")
+    await expect(f.runtime.createProvider("other", { protocol: "openai-completions", inputModalities: ["text", "image"] } as never)).rejects.toThrow("model")
+    expect(f.settings.get().llm.providers.zen?.inputModalities).toEqual(["text", "image"])
   })
 
   it("M72 Ⅱ: the route's maxTokensField survives settings → profile (absent stays absent)", async () => {

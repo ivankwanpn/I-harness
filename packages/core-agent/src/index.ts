@@ -1,9 +1,9 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { Session } from "@i-harness/core-session"
+import type { ImageInput, Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { ModelClient, LLMRequest } from "@i-harness/llm-seam"
+import type { ModelClient, LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
 import { activeTokens, checkBudget, estimateContent } from "@i-harness/token-meter"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -103,7 +103,7 @@ export interface AgentResult {
 }
 
 export interface Agent {
-  run(task: string, signal?: AbortSignal): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal): Promise<AgentResult>
   // M11: explicit manual compaction. Optional because a registry may hold
   // agents that were never configured with a compact seam (no engine). With no
@@ -259,6 +259,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // trail as the original run.
   let steps = 0
   let callSeq = 0
+  const usedCallIds = new Set(deps.session.events.filter((event) => event.type === "tool/call").map((event) => event.callId))
   const reasoning: string[] = []
   // M5/D3: how many rewrite markers the log carried at the PREVIOUS request. A
   // bigger count next time means a rewrite landed in between, which is what
@@ -275,13 +276,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // resumed session has no predecessor to compare with and claims none.
   let prevFingerprints: string[] | undefined
 
-  async function runTurn(message: string, signal?: AbortSignal): Promise<AgentResult> {
+  async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult> {
     const abort = signal ?? deps.signal
     append(deps.session, { type: "turn/start" })
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
-    append(deps.session, { type: "user/message", text: message })
+    append(deps.session, { type: "user/message", text: message, ...(images?.length ? { images } : {}) })
 
     let needsContinuation = true
     while (needsContinuation) {
@@ -416,6 +417,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // refused — so neither bit is the other's `else`, and a clean ending
       // writes no field at all.
       let refusedThisStep = false
+      let thinkingBlocks: Extract<LLMStreamEvent, { type: "end" }>["thinkingBlocks"]
+      let providerContinuation: Extract<LLMStreamEvent, { type: "end" }>["providerContinuation"]
       for await (const ev of deps.model.stream(request)) {
         if (abort?.aborted) throw new Error("agent aborted")
         switch (ev.type) {
@@ -427,7 +430,14 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             break
           case "tool_call": {
             callSeq += 1
-            const callId = `call_${callSeq}`
+            let callId = ev.call.id
+            if (callId) {
+              if (usedCallIds.has(callId)) throw new Error(`duplicate provider tool call id: ${callId}`)
+            } else {
+              callId = `call_${callSeq}`
+              while (usedCallIds.has(callId)) callId = `call_${++callSeq}`
+            }
+            usedCallIds.add(callId)
             // M26 (R-D1): capture the seq BEFORE append — append assigns seq =
             // events.length, so the value below IS the tool/call event's
             // durable seq.
@@ -452,6 +462,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
             deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
             throw new Error(`model stream error: ${ev.error.message}`)
           case "end":
+            thinkingBlocks = ev.thinkingBlocks
+            providerContinuation = ev.providerContinuation
             // M72 Ⅱ / M77. Recorded in TWO places on purpose: the durable log
             // (what a reopen reads) and the host's telemetry (what an operator
             // watches). Absent stays absent — a clean ending writes no field at
@@ -477,6 +489,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (Object.keys(stepUsage).length > 0) {
         deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
       }
+
+      // The provider's signed continuation belongs to its tool-use message.
+      // Persist it before a tool can be refused, cancelled or fail to commit;
+      // otherwise a resumed session has tool calls without their signatures.
+      if (stepText || toolCallsThisStep === 0 || thinkingBlocks?.length || providerContinuation) append(deps.session, { type: "assistant/message", text: stepText, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
 
       if (batch.length > 0) {
         // M13: concurrent execution. The scheduler appends tool/result in model
@@ -511,9 +528,6 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // "the model was blocked" would stay indistinguishable on the one surface
       // a reopen reads. The bit lives on `step/end.refused` below; the text is
       // the model's output and there was none.
-      if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
-      else if (toolCallsThisStep === 0) append(deps.session, { type: "assistant/message", text: "" })
-
       // M80: the THIRD ending, and the only one that carries no signal of its
       // own — a non-content success (HTTP 200, no answer text and no tool call,
       // a bare `end`: the ten non-content gemini stop reasons land here). Reported at
@@ -574,7 +588,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       outputCap = config.maxOutputTokens
       compactEnabled = config.compact?.auto ?? true
     },
-    run: (task, signal) => track(() => runTurn(task, signal)),
+    run: (task, signal, images) => track(() => runTurn(task, signal, images)),
     followup: (message, signal) => track(() => runTurn(message, signal)),
     compact: (instructions?: string) => track(async () =>
       compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] }),

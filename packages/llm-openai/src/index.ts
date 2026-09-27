@@ -104,6 +104,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             }
             // assistant
             if (m.toolCalls && m.toolCalls.length > 0) {
+              const reasoningItems = m.providerContinuation?.kind === "openai-responses" ? m.providerContinuation.reasoningItems : []
               const calls = m.toolCalls.map((c) => ({
                 type: "function_call",
                 call_id: c.id,
@@ -113,9 +114,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
               // M51/B2: a folded step message carries the step's text AND its
               // tool calls — emit the assistant text item before the
               // function_call items (dropping it lost the narration).
-              return m.content.trim() !== "" ? [{ role: "assistant", content: m.content }, ...calls] : calls
+              return [...reasoningItems, ...(m.content.trim() !== "" ? [{ role: "assistant", content: m.content }] : []), ...calls]
             }
-            return { role: "assistant", content: m.content }
+            const reasoningItems = m.providerContinuation?.kind === "openai-responses" ? m.providerContinuation.reasoningItems : []
+            return reasoningItems.length ? [...reasoningItems, { role: "assistant", content: m.content }] : { role: "assistant", content: m.content }
           })
           .flat(),
         tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
@@ -165,7 +167,8 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // response can be both truncated and refused, so neither bit may be
       // produced as the other's `else`. Only `true` is ever written.
       let refused = false
-      const pendingCalls = new Map<string, { name: string; argsBuffer: string }>()
+      const reasoningItems = new Map<string, Record<string, unknown>>()
+      const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string }>()
       const yieldedInline = new Set<string>()
       // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
       // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
@@ -196,20 +199,25 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (t === "response.output_text.delta") {
           return [{ type: "text/chunk", text: (event as { delta: string }).delta }]
         }
+        if (t === "response.output_item.done") {
+          const item = event.item as Record<string, unknown> | undefined
+          if (item?.type === "reasoning" && typeof item.id === "string") reasoningItems.set(item.id, item)
+          return []
+        }
         if (t === "response.output_item.added") {
-          const item = event.item as { type: string; id?: string; name?: string; arguments?: string }
+          const item = event.item as { type: string; id?: string; call_id?: string; name?: string; arguments?: string }
           if (item?.type === "function_call") {
             // Some Responses streams send the full arguments inline on the item.
             if (item.arguments && item.arguments.trim() !== "") {
               try {
                 const args = JSON.parse(item.arguments) as unknown
                 if (item.id) yieldedInline.add(item.id)
-                return [{ type: "tool_call", call: { name: item.name!, args } }]
+                return [{ type: "tool_call", call: { ...(item.call_id ? { id: item.call_id } : {}), name: item.name!, args } }]
               } catch {
                 return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
               }
             }
-            if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "" })
+            if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "", ...(item.call_id ? { callId: item.call_id } : {}) })
           }
           return []
         }
@@ -227,7 +235,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             if (!yieldedInline.has(ev.item_id)) {
               try {
                 const args = JSON.parse(pending.argsBuffer) as unknown
-                return [{ type: "tool_call", call: { name: pending.name, args } }]
+                return [{ type: "tool_call", call: { ...(pending.callId ? { id: pending.callId } : {}), name: pending.name, args } }]
               } catch {
                 return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
               }
@@ -336,7 +344,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // M77: the two bits are independent — each is written on its own, so a
       // response that was both truncated and refused carries both. Both absent
       // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size ? { providerContinuation: { kind: "openai-responses", reasoningItems: [...reasoningItems.values()] } as const } : {}) }
     },
   }
 }

@@ -44,6 +44,7 @@
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
     "@i-harness/telemetry": "workspace:*",
+    "@i-harness/token-meter": "workspace:*",
     "@i-harness/terminal": "workspace:*",
     "@i-harness/todo": "workspace:*",
     "@i-harness/tool-search": "workspace:*",

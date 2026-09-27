@@ -1,5 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises"
-import type { LLMMessage, Session } from "@i-harness/core-session"
+import type { LLMMessage, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
 
 /**
@@ -66,14 +66,14 @@ export interface LLMUsage {
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
   | { type: "reasoning"; text: string }
-  | { type: "tool_call"; call: { name: string; args: unknown } }
+  | { type: "tool_call"; call: { id?: string; name: string; args: unknown } }
   | { type: "usage"; usage: LLMUsage }
-  | { type: "end"; truncated?: true; refused?: true }
+  | { type: "end"; truncated?: true; refused?: true; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
   | { type: "error"; error: Error }
 
 // LLMMessage is owned by core-session (it is the audit seam for the session
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
-export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType } from "@i-harness/core-session"
+export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation } from "@i-harness/core-session"
 
 export type RetryableErrorCode =
   | "RATE_LIMIT"

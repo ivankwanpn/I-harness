@@ -11,7 +11,7 @@ export type SessionEvent =
     // scrollback skips it. Additive — old logs simply never carry it.
     | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
-    | { type: "assistant/message"; text: string; seq?: number }
+    | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
     // M4: the DISPATCH BOUNDARY. `tool/call` is written when the MODEL emits the
     // call; the body runs later, in a batch (core-agent/src/index.ts:261-264).
@@ -96,7 +96,7 @@ export type SessionEvent =
     // All three are log-only (never model-visible; the text enters the model
     // surface only through the promoted user/message). version 1 (M19/M21
     // convention for structured new event slots).
-    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; seq?: number }
+    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; images?: ImageInput[]; seq?: number }
     | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
     | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
     // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).
@@ -207,6 +207,19 @@ export interface ImageInput {
   width?: number // host-provided informational metadata (NOT verified in v0)
   height?: number
 }
+
+/** Signed provider blocks are retained for a tool continuation. They are
+ * opaque protocol data; the UI and search index use assistant text instead. */
+export type ProviderThinkingBlock =
+  | { type: "thinking"; thinking: string; signature: string }
+  | { type: "redacted_thinking"; data: string }
+
+/** Opaque state needed when a provider continues an assistant tool turn. */
+export type ProviderContinuation =
+  | { kind: "openai-compatible"; reasoningContent: string }
+  | { kind: "openai-responses"; reasoningItems: Record<string, unknown>[] }
+  | { kind: "gemini"; callSignatures: (string | null)[] }
+  | { kind: "bedrock"; reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[] }
 
 export type LLMContentPart =
   | { type: "text"; text: string }
@@ -366,7 +379,7 @@ function isValidBase64(s: string): boolean {
   return /^[A-Za-z0-9+/]*={0,2}$/.test(s) && s.length % 4 === 0 && !s.includes(" ")
 }
 
-function validateImages(images: ImageInput[], evType: string): void {
+export function validateImages(images: ImageInput[], evType: string): void {
   if (images.length > MAX_IMAGES_PER_MESSAGE) {
     throw new Error(`image attachment: at most ${MAX_IMAGES_PER_MESSAGE} images per ${evType}`)
   }
@@ -393,7 +406,7 @@ function validateImages(images: ImageInput[], evType: string): void {
 
 export type LLMMessage =
   | { role: "user"; content: string | LLMContentPart[] }
-  | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[] }
+  | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[]; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
   | { role: "tool"; toolCallId: string; content: string | LLMContentPart[] }
 
 /** M5/D3: the three markers that share the shadow mechanism (see the pre-pass
@@ -502,11 +515,16 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // tool → user(reminder) → assistant(stepText).
   const deferredUser: LLMMessage[] = []
   // M51/B2: whether a step/start..step/end window is open. The agent loop
-  // appends the step's assistant/message AFTER its tool results but BEFORE
-  // step/end, so "the current step's tool block is still open" is exactly
+  // appends the step's assistant/message before tool execution, so a failed
+  // tool still leaves the signed provider continuation in the durable log.
+  // "The current step's tool block is still open" is exactly
   // `stepOpen && pendingCalls !== undefined` (core-agent appends step/start
   // unconditionally at the top of every step).
   let stepOpen = false
+  // An early assistant/message can flush the call list before the tools have
+  // returned. Keep the result block open until step/end so post-tool user
+  // reminders cannot split parallel tool results.
+  let toolResultsPending = false
   // M11 compaction shadow pre-pass: collect every seq a compaction/summary
   // replaced on the surface so the render pass skips them. The raw log keeps
   // all events; only this projection shrinks.
@@ -557,7 +575,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // message (M51/B2) and the reminder follows the results. Every other
       // user/message position (turn start, the agent/pre-step boundary before
       // the first tool call, after step/end) keeps the immediate push.
-      if (stepOpen && pendingCalls) {
+      if (stepOpen && (pendingCalls || toolResultsPending)) {
         deferredUser.push(message)
       } else {
         flushToolBlock()
@@ -573,10 +591,11 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // A message outside an open step (e.g. a step-less log, or the final
       // answer after step/end) keeps the pre-fold behavior: its own message.
       if (stepOpen && pendingCalls) {
-        flushToolBlock(ev.text)
+        toolResultsPending = true
+        flushToolBlock(ev.text, ev.thinkingBlocks, ev.providerContinuation)
       } else {
         flushToolBlock()
-        result.push({ role: "assistant", content: ev.text })
+        result.push({ role: "assistant", content: ev.text, ...(ev.thinkingBlocks?.length ? { thinkingBlocks: ev.thinkingBlocks } : {}), ...(ev.providerContinuation ? { providerContinuation: ev.providerContinuation } : {}) })
       }
     } else if (ev.type === "step/start") {
       stepOpen = true
@@ -588,6 +607,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // turn"). Well-formed turns already end every step before turn/end, so
       // this reset is a no-op for them.
       stepOpen = false
+      toolResultsPending = false
     } else if (ev.type === "compaction/summary") {
       flushToolBlock()
       result.push({ role: "user", content: ev.text })
@@ -620,6 +640,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
       // log never folds across steps into consecutive user/tool-result runs
       // (which would violate Anthropic's Messages API role alternation).
       stepOpen = false
+      toolResultsPending = false
       flushToolBlock()
     }
     // assistant/chunk events carry no model-visible text; skipped entirely
@@ -638,9 +659,9 @@ export function deriveMessages(session: Session): LLMMessage[] {
 
   // `content` is the folded step text (M51/B2); every no-text caller passes
   // nothing and gets the historical `content: ""` message byte-for-byte.
-  function flushToolBlock(content = "") {
+  function flushToolBlock(content = "", thinkingBlocks?: ProviderThinkingBlock[], providerContinuation?: ProviderContinuation) {
     if (pendingCalls) {
-      result.push({ role: "assistant", content, toolCalls: pendingCalls })
+      result.push({ role: "assistant", content, toolCalls: pendingCalls, ...(thinkingBlocks?.length ? { thinkingBlocks } : {}), ...(providerContinuation ? { providerContinuation } : {}) })
       pendingCalls = undefined
     }
     if (pendingResults.length > 0) {

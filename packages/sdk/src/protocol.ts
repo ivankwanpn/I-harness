@@ -386,7 +386,12 @@ export interface SessionModelSelection {
 export type SessionModelState =
   | { status: "unconfigured"; reason: string }
   | { status: "invalid"; reason: string; providerId?: string; modelId?: string }
-  | { status: "ready"; providerId: string; modelId: string; label: string }
+  | { status: "ready"; providerId: string; modelId: string; label: string; imageInput?: true }
+
+/** Local token-meter estimate; it is not a provider billing report. */
+export type SessionContextState =
+  | { kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens?: { user: number; assistant: number; tool: number } }
+  | { kind: "unavailable"; reason: string }
 
 // ── M41b v1.1: session/cancel + session/rewind/* wire types ─────────────────
 // All shapes below STRUCTURALLY MIRROR packages/rewind's types (the wire can't

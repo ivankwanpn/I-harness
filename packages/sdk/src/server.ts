@@ -70,7 +70,7 @@
 //   session/status { sessionId, status, error? } — lifecycle transitions
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
-import { append, subscribe, type Session, type SessionEvent } from "@i-harness/core-session"
+import { append, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -400,6 +400,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           protocolVersion: SDK_SERVER_PROTOCOL_VERSION,
           capabilities: {
             "prompt-context": ["1"],
+            "prompt-images": ["1"],
+            "session-context": ["1"],
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
@@ -765,13 +767,30 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           return makeFailure(id, INTERNAL_ERROR, `session/rewind/execute: ${message}`)
         }
       }
+      case "session/context": {
+        const p = params as { sessionId?: unknown } | undefined
+        if (typeof p?.sessionId !== "string" || p.sessionId === "") return makeFailure(id, INVALID_PARAMS, "session/context requires a non-empty sessionId")
+        try { return makeSuccess(id, await service.contextState(p.sessionId)) }
+        catch (error) { return hostMethodFailure(id, "session/context", error) }
+      }
       case "session/prompt": {
-        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown } | undefined
+        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty sessionId")
         }
         const prompt = typeof p.prompt === "string" ? p.prompt : ""
         if (p.context !== undefined && (typeof p.context !== "string" || p.context.length > 131072)) return makeFailure(id, INVALID_PARAMS, "Invalid prompt context")
+        let images: ImageInput[] | undefined
+        if (p.images !== undefined) {
+          if (!Array.isArray(p.images) || p.images.length > 10) return makeFailure(id, INVALID_PARAMS, "Prompt accepts at most 10 images")
+          try {
+            const entries = p.images as ImageInput[]
+            if (entries.some((image) => !image || !IMAGE_MEDIA_TYPES.has(image.mediaType) || typeof image.dataBase64 !== "string" || image.dataBase64.length === 0 || image.dataBase64.length > Math.ceil(10 * 1024 * 1024 / 3) * 4 || (image.name !== undefined && (typeof image.name !== "string" || image.name.length > 256)))) throw new Error("Invalid prompt image")
+            validateImages(entries, "session/prompt")
+            if (entries.reduce((total, image) => total + image.dataBase64.length / 4 * 3 - (image.dataBase64.endsWith("==") ? 2 : image.dataBase64.endsWith("=") ? 1 : 0), 0) > 20 * 1024 * 1024) throw new Error("Prompt images exceed 20 MB")
+            images = entries
+          } catch (error) { return makeFailure(id, INVALID_PARAMS, error instanceof Error ? error.message : "Invalid prompt images") }
+        }
         if (prompt === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty prompt string")
         }
@@ -794,7 +813,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         submissions.add(submission)
         inflight.set(sessionId, submissions)
         try {
-          if (typeof p.context === "string") await service.submit(sessionId, prompt, controller.signal, { context: p.context })
+          if (typeof p.context === "string" || images?.length) await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}) })
           else await service.submit(sessionId, prompt, controller.signal)
           statusNotify(sessionId, "idle")
           return makeSuccess(id, { sessionId, ok: true })
@@ -934,6 +953,7 @@ function serializeModelState(state: SessionModelState): SessionModelState {
       providerId: state.providerId,
       modelId: state.modelId,
       label: state.label,
+      ...(state.imageInput === true ? { imageInput: true } : {}),
     }
   }
   throw new Error("invalid ready model state")

@@ -80,47 +80,44 @@ function imageFormatOf(mediaType: string): "png" | "jpeg" | "gif" | "webp" {
  * claude-opus-4-7+, also -4.6 style and anything later) uses the adaptive
  * protocol; every older generation uses the legacy budget protocol.
  */
-const ADAPTIVE_CLAUDE_RE = /\-4[-.](?:6|7|8|9|[1-9][0-9]+)/
+const ADAPTIVE_CLAUDE_RE = /claude-(?:opus|sonnet|haiku|fable|mythos)-(?:4[-.](?:6|7|8|9|[1-9][0-9]+)|[5-9](?:[-.]|$))/
 
-/** M32 legacy budget table (documented mapping): low/medium/high only. */
-function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number | string {
-  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+/** Converse expects a number in the legacy budget slot. */
+function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number {
+  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort === "xhigh" ? 32768 : 65536
 }
 
 /** Wire fields for `additionalModelRequestFields` (the adapter's free-form
  * extra-parameters channel — Converse only accepts maxTokens/temperature/
  * topP/stopSequences in inferenceConfig). */
 export interface BedrockReasoningFields {
-  reasoningConfig?: { type: "adaptive"; maxReasoningEffort: string }
-  thinking?: { type: "adaptive" }
-  thinkingConfig?: { type: "enabled"; budgetTokens: number | string }
+  reasoningConfig?: { type: "enabled"; maxReasoningEffort: "low" | "medium" | "high" }
+  thinking?: { type: "adaptive" } | { type: "enabled"; budget_tokens: number }
+  output_config?: { effort: string }
 }
 
 /**
  * M32 bedrock translation table with generation rules:
- * - claude 4.6+ → `additionalModelRequestFields`:
- *   `reasoningConfig:{type:"adaptive", maxReasoningEffort:<effort verbatim>}`
- *   + `thinking:{type:"adaptive"}`.
- * - claude ≤4.5 → `thinkingConfig:{type:"enabled", budgetTokens:<documented
- *   table>}`; effort is NEVER sent (xhigh/max land verbatim in budgetTokens →
- *   provider 400, fail-loud).
- * - amazon nova → its own adaptive `reasoningConfig`; effort verbatim.
- * - unknown family → the legacy thinkingConfig shape (a model that rejects it
- *   surfaces its 400 — fail-loud, never silently drop the effort).
+ * - Claude 4.6+ → `thinking:{type:"adaptive"}` plus
+ *   `output_config:{effort}` in additionalModelRequestFields.
+ * - Claude ≤4.5 → `thinking:{type:"enabled",budget_tokens:N}`.
+ * - Amazon Nova → `reasoningConfig:{type:"enabled",maxReasoningEffort}`
+ *   with the three levels Nova accepts.
+ * - Unknown families reject an explicit effort locally.
  * - "off" → undefined (do not include any thinking fields).
  */
 export function translateReasoning(model: string, effort: ReasoningEffort | undefined): BedrockReasoningFields | undefined {
   if (effort === undefined || effort === "off") return undefined
   if (/claude/i.test(model)) {
     if (ADAPTIVE_CLAUDE_RE.test(model)) {
-      return { reasoningConfig: { type: "adaptive", maxReasoningEffort: effort }, thinking: { type: "adaptive" } }
+      return { thinking: { type: "adaptive" }, output_config: { effort } }
     }
-    return { thinkingConfig: { type: "enabled", budgetTokens: legacyBudgetTokens(effort) } }
+    return { thinking: { type: "enabled", budget_tokens: legacyBudgetTokens(effort) } }
   }
   if (/nova/i.test(model)) {
-    return { reasoningConfig: { type: "adaptive", maxReasoningEffort: effort } }
+    return { reasoningConfig: { type: "enabled", maxReasoningEffort: effort === "low" || effort === "medium" ? effort : "high" } }
   }
-  return { thinkingConfig: { type: "enabled", budgetTokens: legacyBudgetTokens(effort) } }
+  throw new Error(`Bedrock model does not have a known reasoning wire: ${model}`)
 }
 
 function toolResultContent(content: string | LLMContentPart[]): unknown[] {
@@ -152,6 +149,15 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
       // M32: request-level effort wins over config.options (explicit per-request intent).
       const reasoning = translateReasoning(config.model, request.reasoningEffort)
+      const legacyThinking = reasoning?.thinking?.type === "enabled" ? reasoning.thinking : undefined
+      const outputLimit = request.maxOutputTokens ?? (legacyThinking ? 8192 : undefined)
+      if (legacyThinking && outputLimit !== undefined && outputLimit <= 1024) {
+        yield { type: "error", error: new Error("Bedrock Claude thinking requires maxTokens above 1024") }
+        return
+      }
+      const effectiveReasoning = legacyThinking && outputLimit !== undefined
+        ? { ...reasoning, thinking: { type: "enabled" as const, budget_tokens: Math.min(legacyThinking.budget_tokens, outputLimit - 1) } }
+        : reasoning
       const body: ConverseStreamCommandInput = {
         modelId: config.model,
         ...(request.systemPrompt.trim() !== "" ? { system: [{ text: request.systemPrompt }] } : {}),
@@ -163,7 +169,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
             }
           }
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-            const content: unknown[] = m.content.trim() !== "" ? [{ text: m.content }] : []
+            const blocks = m.providerContinuation?.kind === "bedrock" ? m.providerContinuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
+            const content: unknown[] = [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : [])]
             for (const c of m.toolCalls) {
               content.push({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } })
             }
@@ -174,14 +181,14 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         ...(request.tools.length > 0
           ? { toolConfig: { tools: request.tools.map((t) => ({ toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.inputSchema } } })) } as ConverseStreamCommandInput["toolConfig"] }
           : {}),
-        ...(config.options !== undefined || reasoning !== undefined
-          ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(reasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
+        ...(config.options !== undefined || effectiveReasoning !== undefined
+          ? { additionalModelRequestFields: { ...(config.options ?? {}), ...(effectiveReasoning ?? {}) } as ConverseStreamCommandInput["additionalModelRequestFields"] }
           : {}),
         // M72 Ⅱ: Converse accepts maxTokens ONLY inside inferenceConfig, which
         // this adapter has never built (every option went to
         // additionalModelRequestFields, which the wire does not read for it).
-        ...(request.maxOutputTokens !== undefined
-          ? { inferenceConfig: { maxTokens: request.maxOutputTokens } }
+        ...(outputLimit !== undefined
+          ? { inferenceConfig: { maxTokens: outputLimit } }
           : {}),
       }
       // M61: the AWS SDK takes the abort at the REQUEST level — cancel must
@@ -206,6 +213,9 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       // deltas; the stop event completes the block, and the args are parsed
       // there (mirrors the llm-openai-compatible accumulation).
       const pendingToolUses = new Map<number, { id: string; name: string; buffer: string }>()
+      const pendingReasoning = new Map<number, { text: string; signature: string }>()
+      const pendingRedacted = new Map<number, Uint8Array[]>()
+      const reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[] = []
       // M72 Ⅱ: the wire's own truncation literal (`messageStop.stopReason:
       // "max_tokens"`) — set in `handleMember` below, read once at the ending.
       // Absent stays absent: only `true` writes the field.
@@ -226,7 +236,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       const handleMember = (member: unknown): LLMStreamEvent[] => {
         const m = member as {
           contentBlockStart?: { contentBlockIndex?: number; start?: { toolUse?: { toolUseId?: string; name?: string } } }
-          contentBlockDelta?: { contentBlockIndex?: number; delta?: { text?: string; toolUse?: { input?: string }; reasoningContent?: { text?: string } } }
+          contentBlockDelta?: { contentBlockIndex?: number; delta?: { text?: string; toolUse?: { input?: string }; reasoningContent?: { text?: string; signature?: string; redactedContent?: Uint8Array } } }
           contentBlockStop?: { contentBlockIndex?: number }
           messageStop?: { stopReason?: string }
           metadata?: { usage?: unknown }
@@ -258,19 +268,43 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
               }
               return []
             }
-            if (delta.reasoningContent !== undefined && typeof delta.reasoningContent.text === "string") {
-              return [{ type: "reasoning", text: delta.reasoningContent.text }]
+            if (delta.reasoningContent !== undefined) {
+              const index = m.contentBlockDelta.contentBlockIndex ?? 0
+              const block = delta.reasoningContent
+              if (block.redactedContent instanceof Uint8Array) {
+                const fragments = pendingRedacted.get(index) ?? []
+                fragments.push(block.redactedContent)
+                pendingRedacted.set(index, fragments)
+              }
+              if (typeof block.text === "string" || typeof block.signature === "string") {
+                const pending = pendingReasoning.get(index) ?? { text: "", signature: "" }
+                pending.text += block.text ?? ""
+                pending.signature += block.signature ?? ""
+                pendingReasoning.set(index, pending)
+              }
+              if (typeof block.text === "string") return [{ type: "reasoning", text: block.text }]
             }
           }
           return []
         }
         if (m.contentBlockStop !== undefined) {
+          const index = m.contentBlockStop.contentBlockIndex ?? 0
+          const redacted = pendingRedacted.get(index)
+          if (redacted) {
+            pendingRedacted.delete(index)
+            reasoningBlocks.push({ redactedContentBase64: Buffer.concat(redacted.map((bytes) => Buffer.from(bytes))).toString("base64") })
+          }
+          const reasoning = pendingReasoning.get(index)
+          if (reasoning) {
+            pendingReasoning.delete(m.contentBlockStop.contentBlockIndex ?? 0)
+            if (reasoning.signature) reasoningBlocks.push({ reasoningText: reasoning })
+          }
           const pending = pendingToolUses.get(m.contentBlockStop.contentBlockIndex ?? 0)
           pendingToolUses.delete(m.contentBlockStop.contentBlockIndex ?? 0)
           if (pending !== undefined) {
             try {
               const args = JSON.parse(pending.buffer.trim() === "" ? "{}" : pending.buffer) as unknown
-              return [{ type: "tool_call", call: { name: pending.name, args } }]
+              return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
             } catch {
               return [{
                 type: "error",
@@ -332,7 +366,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningBlocks.length ? { providerContinuation: { kind: "bedrock", reasoningBlocks } as const } : {}) }
     },
   }
 }

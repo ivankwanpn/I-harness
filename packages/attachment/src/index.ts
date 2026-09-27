@@ -47,7 +47,7 @@ export interface ImageAttachmentStore {
 
 const DEFAULT_LIMITS: ImageAttachmentLimits = {
   maxImageBytes: 10 * 1024 * 1024,
-  maxImagesPerMessage: 4,
+  maxImagesPerMessage: 10,
   maxMessageImageBytes: 20 * 1024 * 1024,
   maxImagePixels: 16 * 1024 * 1024,
   maxImageDimension: 8192,

@@ -44,6 +44,7 @@ interface ModelFields {
   contextWindow?: number | null
   maxTokens?: number | null
   name?: string | null
+  inputModalities?: SettingsInputModality[] | null
 }
 
 /** The route fields `patchProvider` may change. `models` is absent ON PURPOSE —
@@ -73,6 +74,8 @@ export interface SessionModelBinding {
   /** M72 Ⅱ: the resolved output cap (user row > card). Absent → the adapter
    * sends nothing (anthropic falls back to its own constant). */
   maxOutputTokens?: number
+  /** Only an explicit route/model image declaration enables image input. */
+  imageInput?: true
 }
 
 export interface ProviderRuntimeEntry {
@@ -114,7 +117,7 @@ export interface ProviderRuntime {
   upsertProvider(id: string, config: SettingsProviderConfig): Promise<void>
   /** Create a route. Refuses an id that already exists — `patchProvider` is the
    * verb for changing one, so a typo cannot silently rewrite a live route. */
-  createProvider(id: string, fields: Omit<SettingsProviderConfig, "models">): Promise<void>
+  createProvider(id: string, fields: Omit<SettingsProviderConfig, "models" | "inputModalities">): Promise<void>
   /** Change named fields on an existing route. `models` is deliberately NOT
    * patchable: changing a protocol or a base URL must not empty the catalog the
    * route holds. `null` clears a field. */
@@ -176,8 +179,8 @@ interface ProviderView {
   catalog?: string
   /** M59: literal extra request headers (user config wins over the template). */
   headers?: Record<string, string>
-  /** M61: the ROUTE's declared content types (user config wins over the
-   * template; a model entry may narrow/override it — see resolveModel). */
+  /** Legacy route declaration, projected only onto listed models that lack an
+   * explicit modality; new Desktop settings write model rows only. */
   inputModalities?: SettingsInputModality[]
   /** M72 Ⅱ: the ROUTE's chosen output-cap field name (user config wins over
    * the template; absent → the adapter's own default). */
@@ -341,7 +344,12 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           protocol: view.protocol,
           configured: view.user !== undefined,
           auth: { ...authInfo },
-          models: cloneModels(view.models),
+          // Older route declarations are projected onto each listed model so
+          // the directory and model binding describe the same capability.
+          models: cloneModels(view.models).map((model) => {
+            const modalities = model.inputModalities ?? view.inputModalities
+            return { ...model, ...(modalities ? { inputModalities: [...modalities] } : {}) }
+          }),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
           cardFamily: cardFamilyOf(view),
@@ -363,6 +371,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async createProvider(id, fields) {
       assertProviderId(id)
+      if (Object.hasOwn(fields, "inputModalities")) throw new Error("Input modality belongs to a model")
       const llm = canonicalLlm(options.settings)
       if (llm.providers[id] !== undefined) {
         // No sibling METHOD name in the message: a library caller can act on
@@ -379,6 +388,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async patchProvider(id, patch) {
       assertProviderId(id)
+      if (Object.hasOwn(patch, "inputModalities")) throw new Error("Input modality belongs to a model")
       const llm = canonicalLlm(options.settings)
       const current = llm.providers[id]
       if (current === undefined) {
@@ -649,8 +659,10 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const userModel = view.user?.models?.find((model) => model.id === modelId)
       // The chain, most specific first: the SELECTION (a session's or a role's),
       // then the model row, then the route — see runtimeProfile.
+      const listedModel = view.models.find((model) => model.id === modelId)
+      const modelModalities = userModel?.inputModalities ?? listedModel?.inputModalities ?? (listedModel ? view.inputModalities : undefined)
       const profile = runtimeProfile(
-        view, apiKey, userModel?.inputModalities, selection.protocol ?? userModel?.protocol,
+        view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol,
       )
       if (profile === undefined) {
         // The chain ran out. Name the ROUTE (not the model): the protocol is
@@ -700,6 +712,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
             ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
+            ...(profile.inputModalities?.includes("image") ? { imageInput: true as const } : {}),
           },
         }
       } catch (error) {
@@ -793,9 +806,10 @@ function runtimeProfile(
   if (protocol === undefined) return undefined
   const template = { ...(view.template ?? {}) }
   delete template.apiKey
-  // M61: the MODEL entry narrows/overrides the route's declaration; absent on
-  // both → no field (text-only, the M14 negative capability).
-  const modalities = modelModalities ?? view.inputModalities
+  delete template.inputModalities
+  // Capability belongs to the selected model. The caller has already folded
+  // a legacy route declaration onto a listed model, when present.
+  const modalities = modelModalities
   return {
     ...template,
     name: view.id,

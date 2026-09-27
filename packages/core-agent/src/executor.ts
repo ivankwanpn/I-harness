@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import type { Session } from "@i-harness/core-session"
+import type { ImageInput, Session } from "@i-harness/core-session"
 import { Inbox, type AdmittedInput, type PendingInput } from "@i-harness/core-session"
 import type { AgentResult } from "./index.ts"
 
@@ -7,13 +7,13 @@ export type InputSubmit =
   /** `signal` (M41b): the per-turn abort — the pump forwards it to
    * agent.run so an in-flight turn can be cancelled at step boundaries /
    * stream yields (not just the queued gate). */
-  | { tier: "send"; text: string; signal?: AbortSignal }
-  | { tier: "followup"; text: string; signal?: AbortSignal }
-  | { tier: "steer"; text: string; signal?: AbortSignal }
+  | { tier: "send"; text: string; signal?: AbortSignal; images?: ImageInput[] }
+  | { tier: "followup"; text: string; signal?: AbortSignal; images?: ImageInput[] }
+  | { tier: "steer"; text: string; signal?: AbortSignal; images?: ImageInput[] }
   | { tier: "inject"; text: string; description: string; scope: "turn" | "session" }
 
 export interface AgentRunSurface {
-  run(task: string, signal?: AbortSignal): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult>
 }
 
 export interface SessionExecutorDeps {
@@ -51,9 +51,9 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   switch (input.tier) {
     case "send":
     case "followup":
-      return { inputId: randomUUID(), text: input.text, delivery: "queue", intent: "user" }
+      return { inputId: randomUUID(), text: input.text, delivery: "queue", intent: "user", ...(input.images?.length ? { images: input.images } : {}) }
     case "steer":
-      return { inputId: randomUUID(), text: input.text, delivery: "steer", intent: "user" }
+      return { inputId: randomUUID(), text: input.text, delivery: "steer", intent: "user", ...(input.images?.length ? { images: input.images } : {}) }
     case "inject":
       return {
         inputId: randomUUID(),
@@ -103,7 +103,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           const sig = turnSignals.get(next.inputId) ?? deps.signal
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
-          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal)
+          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images)
           lastError = undefined
         } catch (err) {
           lastError = err

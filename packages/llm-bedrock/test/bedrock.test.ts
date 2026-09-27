@@ -127,6 +127,37 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     expect(events).toEqual(["r:pondering", "end"])
   })
 
+  it("round-trips signed Converse reasoning with a tool result", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "plan" } } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { signature: "signed" } } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: "tool-7", name: "read" } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: "{}" } } } },
+      { contentBlockStop: { contentBlockIndex: 1 } },
+    ])
+    const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } })
+    const replay = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "tool-7", name: "read", args: {} }], providerContinuation: { kind: "bedrock", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await replay.next()
+    const { input } = await lastCommandSent(fake)
+    expect((input.messages as { content: unknown[] }[])[0]!.content[0]).toEqual({ reasoningContent: { reasoningText: { text: "plan", signature: "signed" } } })
+    await replay.return?.()
+  })
+
+  it("reassembles one redacted reasoning block split across stream deltas", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { redactedContent: Uint8Array.from([1, 2]) } } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { redactedContent: Uint8Array.from([3, 4]) } } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+    ])
+    const events: LLMStreamEvent[] = []
+    for await (const event of createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", reasoningBlocks: [{ redactedContentBase64: "AQIDBA==" }] } })
+  })
+
   it("yields an error event and stops on malformed tool args", async () => {
     const { fake } = fakeRuntime([
       { contentBlockStart: { contentBlockIndex: 0, start: { toolUse: { toolUseId: "tu_1", name: "write" } } } },
@@ -298,33 +329,34 @@ describe("bedrock region resolution", () => {
 })
 
 describe("M32 reasoning effort (bedrock Converse)", () => {
-  it("maps claude 4.6+ to adaptive reasoningConfig + adaptive thinking (effort verbatim)", () => {
+  it("maps Claude 4.6+ to Bedrock Converse adaptive thinking and output_config", () => {
     expect(translateReasoning("anthropic.claude-sonnet-4-6", "high")).toEqual({
-      reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" },
       thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
     })
     expect(translateReasoning("anthropic.claude-opus-4-7", "max")).toEqual({
-      reasoningConfig: { type: "adaptive", maxReasoningEffort: "max" },
       thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
     })
     expect(translateReasoning("anthropic.claude-sonnet-4-6-v1:0", "xhigh")).toEqual({
-      reasoningConfig: { type: "adaptive", maxReasoningEffort: "xhigh" },
       thinking: { type: "adaptive" },
+      output_config: { effort: "xhigh" },
     })
   })
 
-  it("maps claude ≤4.5 to thinkingConfig budgetTokens table (no effort)", () => {
-    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "low")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 2048 } })
-    expect(translateReasoning("anthropic.claude-sonnet-4-5", "medium")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 8192 } })
-    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "high")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: 16384 } })
-    expect(translateReasoning("anthropic.claude-sonnet-4-5", "xhigh")).toEqual({ thinkingConfig: { type: "enabled", budgetTokens: "xhigh" } })
+  it("maps Claude ≤4.5 to the numeric thinking.budget_tokens field", () => {
+    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "low")).toEqual({ thinking: { type: "enabled", budget_tokens: 2048 } })
+    expect(translateReasoning("anthropic.claude-sonnet-4-5", "medium")).toEqual({ thinking: { type: "enabled", budget_tokens: 8192 } })
+    expect(translateReasoning("anthropic.claude-3-5-sonnet-20240620", "high")).toEqual({ thinking: { type: "enabled", budget_tokens: 16384 } })
+    expect(translateReasoning("anthropic.claude-sonnet-4-5", "xhigh")).toEqual({ thinking: { type: "enabled", budget_tokens: 32768 } })
+    expect(translateReasoning("anthropic.claude-sonnet-4-5", "max")).toEqual({ thinking: { type: "enabled", budget_tokens: 65536 } })
   })
 
-  it("maps amazon nova effort verbatim via adaptive reasoningConfig", () => {
-    expect(translateReasoning("amazon.nova-premier-v1:0", "low")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" } })
-    expect(translateReasoning("amazon.nova-pro-v1:0", "medium")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "medium" } })
-    expect(translateReasoning("amazon.nova-pro-v1:0", "high")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" } })
-    expect(translateReasoning("amazon.nova-pro-v1:0", "max")).toEqual({ reasoningConfig: { type: "adaptive", maxReasoningEffort: "max" } })
+  it("maps Nova effort to enabled reasoningConfig with supported levels", () => {
+    expect(translateReasoning("amazon.nova-2-lite-v1:0", "low")).toEqual({ reasoningConfig: { type: "enabled", maxReasoningEffort: "low" } })
+    expect(translateReasoning("amazon.nova-2-lite-v1:0", "medium")).toEqual({ reasoningConfig: { type: "enabled", maxReasoningEffort: "medium" } })
+    expect(translateReasoning("amazon.nova-2-lite-v1:0", "high")).toEqual({ reasoningConfig: { type: "enabled", maxReasoningEffort: "high" } })
+    expect(translateReasoning("amazon.nova-2-lite-v1:0", "max")).toEqual({ reasoningConfig: { type: "enabled", maxReasoningEffort: "high" } })
   })
 
   it("sends nothing on off (all families) and when unset", () => {
@@ -342,8 +374,8 @@ describe("M32 reasoning effort (bedrock Converse)", () => {
     await it.return?.()
     const { input } = await lastCommandSent(fake)
     expect(input.additionalModelRequestFields).toEqual({
-      reasoningConfig: { type: "adaptive", maxReasoningEffort: "high" },
       thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
     })
 
     const { fake: fake2 } = fakeRuntime([])
@@ -364,9 +396,29 @@ describe("M32 reasoning effort (bedrock Converse)", () => {
     const { input } = await lastCommandSent(fake)
     expect(input.additionalModelRequestFields).toEqual({
       max_tokens: 100,
-      reasoningConfig: { type: "adaptive", maxReasoningEffort: "low" },
       thinking: { type: "adaptive" },
+      output_config: { effort: "low" },
     })
+  })
+
+  it("keeps a Claude legacy thinking budget below Converse maxTokens", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake)
+    const iterator = client.stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "high", maxOutputTokens: 8192 })[Symbol.asyncIterator]()
+    await iterator.next()
+    const { input } = await lastCommandSent(fake)
+    expect(input.additionalModelRequestFields).toEqual({ thinking: { type: "enabled", budget_tokens: 8191 } })
+    await iterator.return?.()
+  })
+
+  it("supplies a bounded output cap when legacy thinking has no model cap", async () => {
+    const { fake } = fakeRuntime([])
+    const iterator = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "high" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const { input } = await lastCommandSent(fake)
+    expect(input.inferenceConfig).toEqual({ maxTokens: 8192 })
+    expect(input.additionalModelRequestFields).toEqual({ thinking: { type: "enabled", budget_tokens: 8191 } })
+    await iterator.return?.()
   })
 })
 

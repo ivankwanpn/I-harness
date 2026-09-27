@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { randomUUID } from "node:crypto"
-import type { Session } from "@i-harness/core-session"
+import { validateImages, type ImageInput, type Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
@@ -29,6 +29,7 @@ import type { AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
+import { breakdown } from "@i-harness/token-meter"
 
 // W6 T6: ONE module-scope handle for this file's single report. The phase is
 // `session`: the message is about THIS session's resolved model binding (a
@@ -59,6 +60,7 @@ export type SessionModelBindingResult =
         /** M72 Ⅱ: the resolved output cap. Absent → nothing was resolved, and
          * nothing is defaulted in its place (the adapter sends none). */
         maxOutputTokens?: number
+        imageInput?: true
       }
     }
 
@@ -82,7 +84,7 @@ export interface SessionQueueItem {
 
 type SessionModelState =
   | Exclude<SessionModelBindingResult, { status: "ready" }>
-  | { status: "ready"; providerId: string; modelId: string; label: string }
+  | { status: "ready"; providerId: string; modelId: string; label: string; imageInput?: true }
 
 export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
@@ -149,10 +151,12 @@ export interface SessionService {
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string }): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[] }): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
+  /** Estimated active transcript size; no provider request is made. */
+  contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }>
   /** Task 4 (F1): install a HOST-RESOLVED model binding for a session — the
    * `session/model/set` rebind. The host resolves because only it owns the
    * runtime and the wire's optional protocol (§4.2②); this method makes the
@@ -306,7 +310,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       providerId: result.binding.providerId,
       modelId: result.binding.modelId,
       label: result.binding.label,
+      ...(result.binding.imageInput ? { imageInput: true } : {}),
     }
+  }
+
+  async function contextState(sessionId: string): Promise<{ kind: "ready"; estimatedTokens: number; contextWindow: number; roleTokens: { user: number; assistant: number; tool: number } } | { kind: "unavailable"; reason: string }> {
+    if (closed) throw new Error("session service closed")
+    const model = await bindingFor(sessionId)
+    if (model.status !== "ready") return { kind: "unavailable", reason: model.reason }
+    const window = model.binding.contextWindow
+    if (window === undefined) return { kind: "unavailable", reason: "This model has no configured context window" }
+    const session = assemblies.get(sessionId)?.session ?? await opts.sessionFor?.(sessionId) ?? opts.session
+    if (session === undefined) return { kind: "unavailable", reason: "Session history is unavailable" }
+    const measured = breakdown(session)
+    const roleTokens = { user: 0, assistant: 0, tool: 0 }
+    for (const message of measured.perMessage) roleTokens[message.role] += message.tokens
+    return { kind: "ready", estimatedTokens: measured.total, contextWindow: window, roleTokens }
   }
 
   function rebindModel(sessionId: string, binding: ReadyModelBinding): boolean {
@@ -436,9 +455,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string }): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[] }): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
+    const images = options?.images?.map((image) => ({ ...image }))
+    if (images !== undefined) {
+      try { if (!Array.isArray(images)) throw new Error("images must be an array"); validateImages(images, "session/prompt") }
+      catch (error) { return Promise.reject(error) }
+    }
     if (closed) return Promise.reject(new Error("session service closed"))
     if (closing.has(sessionId)) return Promise.reject(new Error(`session closing: ${sessionId}`))
     // M49 Task 11: the STABLE row id + a SERVICE-OWNED controller are created
@@ -512,7 +536,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
           const text = context ? `${prepared}\n\n${context}` : prepared
-          lane.submit({ tier: "send", text, signal: controller.signal }, id)
+          lane.submit({ tier: "send", text, signal: controller.signal, ...(images?.length ? { images } : {}) }, id)
           record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.
@@ -743,6 +767,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     submit,
     assemblyFor: getOrCreate,
     modelState,
+    contextState,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
     hasAssembly: (sessionId) => assemblies.has(sessionId),

@@ -34,3 +34,31 @@ it("retains context after prompt command expansion and in durable input events",
     ]))
   } finally { await server.close(); await service.close() }
 })
+
+it("admits a bounded image and promotes it into the model-visible user message", async () => {
+  const image = { mediaType: "image/png", dataBase64: "aGVsbG8=", name: "sample.png" }
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [{ role: "assistant", text: "seen" }] })
+  const server = createSdkServer(service)
+  try {
+    const hello = decodeFrame((await server.handleLine(encodeFrame(makeRequest(1, "initialize", {}))))!)
+    expect(hello).toMatchObject({ result: { capabilities: { "prompt-images": ["1"] } } })
+    const reply = await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "images", prompt: "inspect", images: [image] })))
+    expect(isRpcSuccess(decodeFrame(reply!))).toBe(true)
+    expect(service.liveSession("images")?.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "agent/input/admitted", images: [image] }),
+      expect.objectContaining({ type: "user/message", images: [image] }),
+    ]))
+  } finally { await server.close(); await service.close() }
+})
+
+it("refuses eleven images before creating a session", async () => {
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [{ role: "assistant", text: "seen" }] })
+  const server = createSdkServer(service)
+  try {
+    await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const image = { mediaType: "image/png", dataBase64: "aGVsbG8=" }
+    const reply = decodeFrame((await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "too-many", prompt: "inspect", images: Array(11).fill(image) }))))!)
+    expect(reply).toMatchObject({ error: { code: -32602 } })
+    expect(service.liveSession("too-many")).toBeUndefined()
+  } finally { await server.close(); await service.close() }
+})

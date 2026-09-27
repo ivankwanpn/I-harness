@@ -36,24 +36,24 @@ function mergeConfiguredHeaders(
  * M32 gemini translation table with generation rules — ONLY these two:
  * - gemini-3 (and unknown generations default to the current thinkingLevel
  *   wire) → `thinkingConfig:{thinkingLevel}`: off→minimal, low/medium/high
- *   verbatim, xhigh/max verbatim (Gemini 3 has no such levels — the provider
- *   rejects them → 400 propagates, fail-loud).
+ *   verbatim, xhigh/max use the highest supported level.
  * - gemini-2.5 → `thinkingConfig:{thinkingBudget}`: off 0 / low 4096 /
- *   medium 8192 / high 16384 (the documented mapping; unmapped levels land
- *   verbatim in the numeric slot → provider 400).
+ *   medium 8192 / high 16384; upper levels stay within each model's budget range.
  * Unset effort → undefined (don't send — provider default).
  */
 export function translateReasoning(model: string, effort: ReasoningEffort | undefined):
   | { thinkingConfig: { thinkingLevel: string } }
-  | { thinkingConfig: { thinkingBudget: number | string } }
+  | { thinkingConfig: { thinkingBudget: number } }
   | undefined {
   if (effort === undefined) return undefined
+  if (effort === "off" && (model.includes("gemini-2.5-pro") || /gemini-3(?:\.\d+)?-pro/.test(model))) throw new Error(`${model} cannot disable thinking`)
   if (model.includes("gemini-2.5")) {
-    const thinkingBudget: number | string =
-      effort === "off" ? 0 : effort === "low" ? 4096 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+    const cap = model.includes("pro") ? 32768 : 24576
+    const thinkingBudget = effort === "off" ? 0 : effort === "low" ? 4096 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort === "xhigh" ? Math.min(24576, cap) : cap
     return { thinkingConfig: { thinkingBudget } }
   }
-  return { thinkingConfig: { thinkingLevel: effort === "off" ? "minimal" : effort } }
+  const pro = /gemini-3(?:\.\d+)?-pro/.test(model)
+  return { thinkingConfig: { thinkingLevel: effort === "xhigh" || effort === "max" || (pro && effort === "medium") ? "high" : effort === "off" ? pro ? "low" : "minimal" : effort } }
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -168,7 +168,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           }
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
             const parts: unknown[] = m.content.trim() !== "" ? [{ text: m.content }] : []
-            for (const c of m.toolCalls) parts.push({ functionCall: { name: c.name, args: c.args } })
+            for (const [index, c] of m.toolCalls.entries()) {
+              const signature = m.providerContinuation?.kind === "gemini" ? m.providerContinuation.callSignatures[index] : undefined
+              parts.push({ functionCall: { name: c.name, args: c.args }, ...(signature ? { thoughtSignature: signature } : {}) })
+            }
             return { role: "model", parts }
           }
           return { role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) }
@@ -244,28 +247,31 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         name: string
         argsJson: string
         rawArgs: Record<string, unknown>[]
+        signature?: string
       }
       const pendingCalls: PendingCall[] = []
+      const callSignatures: (string | null)[] = []
       const accumulateArgs = (call: PendingCall, args: unknown): void => {
         if (typeof args === "object" && args !== null) {
           call.rawArgs.push(args as Record<string, unknown>)
           call.argsJson += JSON.stringify(args)
         }
       }
-      const handleFunctionCall = (fc: { name?: string; args?: unknown }): void => {
+      const handleFunctionCall = (fc: { name?: string; args?: unknown }, signature?: string): void => {
         if (fc.name !== undefined) {
           // A name always opens a new call — never fold into an existing
           // same-name pending call (parallel calls would lose their args).
-          const call: PendingCall = { name: fc.name, argsJson: "", rawArgs: [] }
+          const call: PendingCall = { name: fc.name, argsJson: "", rawArgs: [], ...(signature ? { signature } : {}) }
           pendingCalls.push(call)
           if (fc.args !== undefined) accumulateArgs(call, fc.args)
         } else if (fc.args !== undefined) {
           const call = pendingCalls[pendingCalls.length - 1]
-          if (call !== undefined) accumulateArgs(call, fc.args)
+          if (call !== undefined) { accumulateArgs(call, fc.args); if (signature) call.signature = signature }
         }
       }
       const finalizeCalls = function* (): Generator<LLMStreamEvent, boolean, unknown> {
         for (const call of pendingCalls) {
+          callSignatures.push(call.signature ?? null)
           let args: unknown = {}
           try {
             args = JSON.parse(call.argsJson === "" ? "{}" : call.argsJson) as unknown
@@ -292,7 +298,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const events: LLMStreamEvent[] = []
-        const candidates = event.candidates as { content?: { parts?: { text?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
+        const candidates = event.candidates as { content?: { parts?: { text?: string; thoughtSignature?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
         const finishReason = (candidates?.[0] as { finishReason?: string } | undefined)?.finishReason
         if (finishReason === "MAX_TOKENS") truncated = true
         // M77 (fix wave): the candidate-side carrier, over the WHOLE set of
@@ -325,7 +331,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         const parts = candidates?.[0]?.content?.parts ?? []
         for (const part of parts) {
           if (part.functionCall !== undefined) {
-            handleFunctionCall(part.functionCall)
+            handleFunctionCall(part.functionCall, part.thoughtSignature)
           } else if (typeof part.text === "string" && part.text.length > 0) {
             events.push({ type: "text/chunk", text: part.text })
           }
@@ -370,7 +376,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(callSignatures.some(Boolean) ? { providerContinuation: { kind: "gemini", callSignatures } as const } : {}) }
     },
   }
 }

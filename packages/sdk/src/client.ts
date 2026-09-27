@@ -23,6 +23,7 @@ import {
   type SessionIdResult,
   type SessionModelSelection,
   type SessionModelState,
+  type SessionContextState,
   type SessionQueueItem,
   type QueueCancelResult,
   type AgentTaskView,
@@ -75,6 +76,7 @@ export class SdkRunError extends Error {
 export interface RunInput {
   /** Additional user context, appended after any host prompt-command expansion. */
   context?: string
+  images?: Extract<SessionEvent, { type: "user/message" }>["images"]
   /** Existing session id; absent → one-shot run with a server-generated id. */
   sessionId?: string
   prompt: string
@@ -205,6 +207,10 @@ export class HarnessClient {
     return await this.request("session/model/state", { sessionId }) as SessionModelState
   }
 
+  async contextState(sessionId: string): Promise<SessionContextState> {
+    return await this.request("session/context", { sessionId }) as SessionContextState
+  }
+
   async setSessionModel(
     sessionId: string,
     selection: SessionModelSelection,
@@ -217,6 +223,7 @@ export class HarnessClient {
    * (the collected events ride along). */
   async run(input: RunInput): Promise<RunResult> {
     if (input.context !== undefined && !this.serverInfo?.capabilities?.["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported; initialize a capable server first")
+    if (input.images?.length && !this.serverInfo?.capabilities?.["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported; initialize a capable server first")
     const sessionId = input.sessionId
       ?? `sdk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const events: SessionEvent[] = []
@@ -228,7 +235,7 @@ export class HarnessClient {
       }
     })
     try {
-      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}) })
+      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}) })
     } catch (error) {
       if (error instanceof RpcError) {
         throw new SdkRunError(

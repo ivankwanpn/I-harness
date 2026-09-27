@@ -65,6 +65,26 @@ describe("llm-openai protocol", () => {
     expect(events).toEqual(["t:hel", "t:lo", "c:read", "end"])
   })
 
+  it("retains a Responses reasoning item and replays it before function calls", async () => {
+    const item = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "encrypted" }
+    const sse = [
+      `data: ${JSON.stringify({ type: "response.output_item.done", item })}`,
+      `data: ${JSON.stringify({ type: "response.output_item.added", item: { type: "function_call", id: "fc_1", name: "read", arguments: "{}" } })}`,
+      "data: [DONE]",
+    ].join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "gpt-test" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", reasoningItems: [item] } })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", reasoningItems: [item] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([item, { type: "function_call", call_id: "c1", name: "read", arguments: "{}" }])
+    await iterator.return?.()
+  })
+
   it("translates neutral tool messages to Responses input items", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)

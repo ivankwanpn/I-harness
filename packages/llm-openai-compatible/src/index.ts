@@ -114,12 +114,16 @@ function toWireMessage(m: {
   content: string | LLMContentPart[]
   toolCalls?: { id: string; name: string; args: unknown }[]
   toolCallId?: string
+  providerContinuation?: { kind: string; reasoningContent?: string }
 }): Record<string, unknown> {
   if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId!, content: toContent(m.content) }
+  const reasoning = m.role === "assistant" && m.providerContinuation?.kind === "openai-compatible" && m.providerContinuation.reasoningContent
+    ? { reasoning_content: m.providerContinuation.reasoningContent } : {}
   if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
     return {
       role: "assistant",
       content: toContent(m.content),
+      ...reasoning,
       tool_calls: m.toolCalls.map((c) => ({
         id: c.id,
         type: "function",
@@ -127,7 +131,7 @@ function toWireMessage(m: {
       })),
     }
   }
-  return { role: m.role, content: toContent(m.content) }
+  return { role: m.role, content: toContent(m.content), ...reasoning }
 }
 
 export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): ModelClient {
@@ -209,6 +213,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       // answered with nothing. Two variables rather than one: a response can
       // be both, so neither bit may be the other's `else`.
       let refused = false
+      let reasoningContent = ""
       // tool call accumulation: index -> { id, name, argsBuffer }
       const pendingToolCalls = new Map<number, { id: string; name: string; argsBuffer: string }>()
 
@@ -233,7 +238,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           try {
             const args = JSON.parse(pending.argsBuffer) as unknown
             pendingToolCalls.delete(index)
-            if (yield* emit([{ type: "tool_call", call: { name: pending.name, args } }])) return true
+            if (yield* emit([{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }])) return true
           } catch {
             // arguments still incomplete; keep accumulating
           }
@@ -268,6 +273,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
           // does so in that order.
           const reasoningText = (delta as { reasoning_content?: unknown }).reasoning_content
           if (typeof reasoningText === "string" && reasoningText.length > 0) {
+            reasoningContent += reasoningText
             events.push({ type: "reasoning", text: reasoningText })
           }
           if (typeof delta.content === "string" && delta.content.length > 0) {
@@ -293,7 +299,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
               const idx = tc.index ?? 0
               let pending = pendingToolCalls.get(idx)
               if (!pending) {
-                pending = { id: tc.id ?? `call_${idx}`, name: tc.function?.name ?? "", argsBuffer: "" }
+                pending = { id: tc.id ?? "", name: tc.function?.name ?? "", argsBuffer: "" }
                 pendingToolCalls.set(idx, pending)
               }
               if (tc.id) pending.id = tc.id
@@ -367,7 +373,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningContent ? { providerContinuation: { kind: "openai-compatible", reasoningContent } as const } : {}) }
     },
   }
 }

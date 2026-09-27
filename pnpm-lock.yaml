@@ -1036,6 +1036,9 @@ importers:
       '@i-harness/todo':
         specifier: workspace:*
         version: link:../todo
+      '@i-harness/token-meter':
+        specifier: workspace:*
+        version: link:../token-meter
       '@i-harness/tool-search':
         specifier: workspace:*
         version: link:../tool-search

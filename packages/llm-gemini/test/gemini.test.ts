@@ -95,6 +95,21 @@ describe("llm-gemini protocol", () => {
     expect(usage).toEqual({ inputTokens: 2, outputTokens: 5 })
   })
 
+  it("replays Gemini thought signatures on the original function-call part", async () => {
+    const sse = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" }] } }] })}\n\n`
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "gemini", callSignatures: ["signed"] } })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "gemini", callSignatures: ["signed"] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.contents[0].parts[0]).toEqual({ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" })
+    await iterator.return?.()
+  })
+
   it("merges partial-args objects (canonical Google docs accumulation) and accepts a complete inline args object", async () => {
     const fetchMock = vi.fn(async () => sseResponse([
       { candidates: [{ content: { parts: [{ functionCall: { name: "Power", args: {} } }] } }] },
@@ -305,28 +320,30 @@ describe("M32 reasoning effort (gemini)", () => {
     vi.unstubAllGlobals()
   })
 
-  it("maps gemini-3 to thinkingConfig.thinkingLevel (off→minimal, low/medium/high verbatim)", () => {
-    expect(translateReasoning("gemini-3-pro", "off")).toEqual({ thinkingConfig: { thinkingLevel: "minimal" } })
+  it("maps Gemini 3 levels to values each model accepts", () => {
+    expect(() => translateReasoning("gemini-3-pro", "off")).toThrow(/cannot disable thinking/i)
     expect(translateReasoning("gemini-3-flash", "low")).toEqual({ thinkingConfig: { thinkingLevel: "low" } })
-    expect(translateReasoning("gemini-3-pro", "medium")).toEqual({ thinkingConfig: { thinkingLevel: "medium" } })
+    expect(translateReasoning("gemini-3-pro", "medium")).toEqual({ thinkingConfig: { thinkingLevel: "high" } })
     expect(translateReasoning("gemini-3-pro", "high")).toEqual({ thinkingConfig: { thinkingLevel: "high" } })
   })
 
-  it("passes unsupported xhigh/max verbatim on gemini-3 (fail-loud: provider 400)", () => {
-    expect(translateReasoning("gemini-3-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingLevel: "xhigh" } })
-    expect(translateReasoning("gemini-3-pro", "max")).toEqual({ thinkingConfig: { thinkingLevel: "max" } })
+  it("uses the highest available Gemini 3 level for xhigh/max", () => {
+    expect(translateReasoning("gemini-3-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingLevel: "high" } })
+    expect(translateReasoning("gemini-3-pro", "max")).toEqual({ thinkingConfig: { thinkingLevel: "high" } })
   })
 
   it("maps gemini-2.5 to thinkingConfig.thinkingBudget (off 0 / low 4096 / medium 8192 / high 16384)", () => {
-    expect(translateReasoning("gemini-2.5-pro", "off")).toEqual({ thinkingConfig: { thinkingBudget: 0 } })
+    expect(() => translateReasoning("gemini-2.5-pro", "off")).toThrow(/cannot disable thinking/i)
+    expect(translateReasoning("gemini-2.5-flash", "off")).toEqual({ thinkingConfig: { thinkingBudget: 0 } })
     expect(translateReasoning("gemini-2.5-flash", "low")).toEqual({ thinkingConfig: { thinkingBudget: 4096 } })
     expect(translateReasoning("gemini-2.5-pro", "medium")).toEqual({ thinkingConfig: { thinkingBudget: 8192 } })
     expect(translateReasoning("gemini-2.5-pro", "high")).toEqual({ thinkingConfig: { thinkingBudget: 16384 } })
   })
 
-  it("passes unmapped levels verbatim into the 2.5 budget slot (fail-loud)", () => {
-    expect(translateReasoning("gemini-2.5-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingBudget: "xhigh" } })
-    expect(translateReasoning("gemini-2.5-pro", "max")).toEqual({ thinkingConfig: { thinkingBudget: "max" } })
+  it("maps upper levels to each Gemini 2.5 model's numeric budget range", () => {
+    expect(translateReasoning("gemini-2.5-pro", "xhigh")).toEqual({ thinkingConfig: { thinkingBudget: 24576 } })
+    expect(translateReasoning("gemini-2.5-pro", "max")).toEqual({ thinkingConfig: { thinkingBudget: 32768 } })
+    expect(translateReasoning("gemini-2.5-flash", "max")).toEqual({ thinkingConfig: { thinkingBudget: 24576 } })
   })
 
   it("sends nothing when effort is unset", () => {

@@ -85,6 +85,7 @@ function makeStubService(): SessionService {
     refreshExtensions: vi.fn(async () => {}),
     assemblyFor: vi.fn(async () => { throw new Error("unused in sdk server ownership test") }),
     modelState: vi.fn(async () => ({ status: "unconfigured" as const, reason: "No model configured" })),
+    contextState: vi.fn(async () => ({ kind: "unavailable" as const, reason: "No model configured" })),
     // The server itself never rebinds (the host seam does, Task 4) — present
     // only to satisfy the interface the stub stands in for.
     rebindModel: vi.fn(() => true),
@@ -159,6 +160,8 @@ describe("createSdkServer", () => {
           protocolVersion: 3,
           capabilities: {
             "prompt-context": ["1"],
+            "prompt-images": ["1"],
+            "session-context": ["1"],
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],

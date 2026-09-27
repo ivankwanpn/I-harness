@@ -1,4 +1,4 @@
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -77,27 +77,25 @@ function toAnthropicContent(content: string | LLMContentPart[]): unknown {
  * also the -4.6 dotted style, and anything later) use the ADAPTIVE thinking
  * protocol; every older generation uses the legacy budget protocol.
  */
-const ADAPTIVE_THINKING_RE = /\-4[-.](?:6|7|8|9|[1-9][0-9]+)/
+const ADAPTIVE_THINKING_RE = /claude-(?:opus|sonnet|haiku|fable|mythos)-(?:4[-.](?:6|7|8|9|[1-9][0-9]+)|[5-9](?:[-.]|$))/
 
-/** M32 legacy budget table (documented mapping): low/medium/high only. */
-function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number | string {
-  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort
+/** Legacy budgets are numeric; the UI's upper effort levels map to larger budgets. */
+function legacyBudgetTokens(effort: "low" | "medium" | "high" | "xhigh" | "max"): number {
+  return effort === "low" ? 2048 : effort === "medium" ? 8192 : effort === "high" ? 16384 : effort === "xhigh" ? 32768 : 65536
 }
 
 /**
  * M32 anthropic translation table with generation rules:
  * - 4.6+ → `thinking:{type:"adaptive"}` + `output_config:{effort}` (effort
  *   verbatim — xhigh/max included, the provider rejects what it cannot do).
- * - legacy → `thinking:{type:"enabled", budget_tokens:<a number from the
- *   documented table>}`; effort is NEVER sent to legacy (its translation is
- *   budget tokens; xhigh/max land verbatim in budget_tokens → provider 400,
- *   fail-loud: no clamping/guessing).
+ * - legacy → numeric `thinking:{type:"enabled", budget_tokens:N}`; effort is
+ *   never sent to legacy (its translation is a token budget).
  * - "off" → return undefined: NO thinking block in either generation.
  * - unset → undefined (don't send — provider default).
  */
 export function translateReasoning(model: string, effort: ReasoningEffort | undefined):
   | { thinking: { type: "adaptive" }; output_config: { effort: string } }
-  | { thinking: { type: "enabled"; budget_tokens: number | string } }
+  | { thinking: { type: "enabled"; budget_tokens: number } }
   | undefined {
   if (effort === undefined || effort === "off") return undefined
   if (ADAPTIVE_THINKING_RE.test(model)) {
@@ -128,6 +126,16 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
       const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      const maxTokens = request.maxOutputTokens ??
+        (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK)
+      const reasoning = translateReasoning(config.model, request.reasoningEffort)
+      if (reasoning && reasoning.thinking.type === "enabled" && maxTokens <= 1024) {
+        yield { type: "error", error: new Error("anthropic thinking requires max_tokens above 1024") }
+        return
+      }
+      const boundedReasoning = reasoning?.thinking.type === "enabled"
+        ? { thinking: { type: "enabled" as const, budget_tokens: Math.min(reasoning.thinking.budget_tokens, maxTokens - 1) } }
+        : reasoning
       const body = {
         model: config.model,
         system: request.systemPrompt,
@@ -139,7 +147,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
             // M51/B2: a folded step message carries the step's text AND its
             // tool calls — emit the text block before the tool_use blocks
             // (dropping it made the model's pre-tool narration vanish).
-            const content: unknown[] = m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []
+            const content: unknown[] = [...(m.thinkingBlocks ?? []), ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : [])]
             for (const c of m.toolCalls) content.push({ type: "tool_use", id: c.id, name: c.name, input: c.args })
             return { role: "assistant", content }
           }
@@ -149,14 +157,12 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         stream: true,
         ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
-        ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
+        ...(boundedReasoning ?? {}),
         // M72 Ⅱ: `max_tokens` is REQUIRED by the Messages API — the one wire
         // where "send nothing" is not an option. The chain is request → route
         // options → the named constant, so a route that already configured
         // `options.max_tokens` keeps working and the constant is the last resort.
-        max_tokens:
-          request.maxOutputTokens ??
-          (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK),
+        max_tokens: maxTokens,
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -193,7 +199,9 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       // instead. A separate variable from `truncated` because the two are
       // independent — neither is the other's `else`. Only `true` is written.
       let refused = false
-      const pendingToolUses = new Map<number, { name: string; argsBuffer: string }>()
+      const thinkingBlocks: ProviderThinkingBlock[] = []
+      const pendingThinking = new Map<number, { thinking: string; signature: string }>()
+      const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
         const index = event.index as number
@@ -239,43 +247,60 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "content_block_start") {
-          const block = event.content_block as { type: string; name?: string; input?: unknown; thinking?: string }
+          const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; thinking?: string; signature?: string; data?: string }
           if (block?.type === "tool_use") {
             const input = block.input as Record<string, unknown> | undefined
             // Some streams send the full input inline on the start event; if
             // present (and non-empty) seed the args buffer with it.
             const hasInlineInput = !!input && Object.keys(input).length > 0
             pendingToolUses.set(index, {
+              ...(block.id ? { id: block.id } : {}),
               name: block.name ?? "",
               argsBuffer: hasInlineInput ? JSON.stringify(input) : "",
             })
           } else if (block?.type === "thinking") {
+            pendingThinking.set(index, { thinking: block.thinking ?? "", signature: block.signature ?? "" })
             return [{ type: "reasoning", text: block.thinking ?? "" }]
+          } else if (block?.type === "redacted_thinking" && typeof block.data === "string") {
+            thinkingBlocks.push({ type: "redacted_thinking", data: block.data })
           }
           return []
         }
         if (t === "content_block_delta") {
-          const delta = event.delta as { type: string; text?: string; partial_json?: string; thinking?: string }
+          const delta = event.delta as { type: string; text?: string; partial_json?: string; thinking?: string; signature?: string }
           if (delta?.type === "text_delta") return [{ type: "text/chunk", text: delta.text ?? "" }]
           if (delta?.type === "input_json_delta") {
             const pending = pendingToolUses.get(index)
             if (pending) pending.argsBuffer += delta.partial_json ?? ""
             return []
           }
-          if (delta?.type === "thinking_delta") return [{ type: "reasoning", text: delta.thinking ?? "" }]
+          if (delta?.type === "thinking_delta") {
+            const pending = pendingThinking.get(index)
+            if (pending) pending.thinking += delta.thinking ?? ""
+            return [{ type: "reasoning", text: delta.thinking ?? "" }]
+          }
+          if (delta?.type === "signature_delta") {
+            const pending = pendingThinking.get(index)
+            if (pending) pending.signature += delta.signature ?? ""
+          }
           return []
         }
         if (t === "content_block_stop") {
+          const thinking = pendingThinking.get(index)
+          if (thinking) {
+            pendingThinking.delete(index)
+            if (thinking.signature) thinkingBlocks.push({ type: "thinking", thinking: thinking.thinking, signature: thinking.signature })
+          }
           const pending = pendingToolUses.get(index)
           if (pending) {
             pendingToolUses.delete(index)
             if (pending.argsBuffer.trim() === "") {
               // Empty inline input ({}) with no deltas → no-arg tool call.
-              return [{ type: "tool_call", call: { name: pending.name, args: {} } }]
+              return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args: {} } }]
             }
             try {
               const args = JSON.parse(pending.argsBuffer) as unknown
-              return [{ type: "tool_call", call: { name: pending.name, args } }]
+              return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
             } catch {
               return [{ type: "error", error: new Error("anthropic malformed tool_use input") }]
             }
@@ -333,7 +358,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}) }
     },
   }
 }

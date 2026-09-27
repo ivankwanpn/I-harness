@@ -342,6 +342,7 @@ export function resolveEffectiveModelContext(input: EffectiveContextInput): Effe
 /** One discoverable model (probe results / static catalog rows). */
 export interface ModelDescriptor {
   id: string
+  inputModalities?: ("text" | "image")[]
   name?: string
   /** Discovered context window (tokens) — probe-normalized, positive ints only. */
   contextWindow?: number

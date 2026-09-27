@@ -109,6 +109,21 @@ describe("llm-anthropic protocol", () => {
     await it.return?.()
   })
 
+  it("sends saved thinking blocks before tool use on the next request", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "m" })
+    const request: LLMRequest = { messages: [
+      { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "signed" }], toolCalls: [{ id: "c1", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "c1", content: "done" },
+    ], tools: [], systemPrompt: "" }
+    const iterator = client.stream(request)[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([{ type: "thinking", thinking: "plan", signature: "signed" }, { type: "tool_use", id: "c1", name: "read", input: {} }])
+    await iterator.return?.()
+  })
+
   it("accumulates input_json_delta into tool args", async () => {
     const sse = [
       `data: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "tu_1", name: "write", input: {} } })}`,
@@ -144,6 +159,27 @@ describe("llm-anthropic protocol", () => {
       if (ev.type === "end") events.push("end")
     }
     expect(events).toEqual(["r:ponder", "r:ing", "end"])
+  })
+
+  it("returns complete signed thinking blocks for a tool continuation", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "first" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: " second" } },
+      { type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "signed" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "redacted_thinking", data: "opaque" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_start", index: 2, content_block: { type: "tool_use", name: "read", input: {} } },
+      { type: "content_block_stop", index: 2 },
+      { type: "message_stop" },
+    ].map((item) => `data: ${JSON.stringify(item)}`).join("\n\n")
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const events: LLMStreamEvent[] = []
+    for await (const ev of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(ev)
+    expect(events.at(-1)).toEqual({ type: "end", thinkingBlocks: [
+      { type: "thinking", thinking: "first second", signature: "signed" },
+      { type: "redacted_thinking", data: "opaque" },
+    ] })
   })
 
   it("yields an error event and aborts on malformed tool args", async () => {
@@ -357,6 +393,9 @@ describe("M32 reasoning effort (anthropic)", () => {
       thinking: { type: "adaptive" },
       output_config: { effort: "xhigh" },
     })
+    expect(translateReasoning("claude-sonnet-5", "high")).toEqual({
+      thinking: { type: "adaptive" }, output_config: { effort: "high" },
+    })
   })
 
   it("maps legacy (≤4.5) models to budget_tokens from the table and never sends effort", () => {
@@ -365,9 +404,9 @@ describe("M32 reasoning effort (anthropic)", () => {
     expect(translateReasoning("claude-3-5-sonnet-20241022", "high")).toEqual({ thinking: { type: "enabled", budget_tokens: 16384 } })
   })
 
-  it("passes unmapped xhigh/max to legacy models verbatim (fail-loud: provider 400)", () => {
-    expect(translateReasoning("claude-sonnet-4-5", "xhigh")).toEqual({ thinking: { type: "enabled", budget_tokens: "xhigh" } })
-    expect(translateReasoning("claude-3-5-sonnet-20241022", "max")).toEqual({ thinking: { type: "enabled", budget_tokens: "max" } })
+  it("maps xhigh/max to numeric legacy budgets", () => {
+    expect(translateReasoning("claude-sonnet-4-5", "xhigh")).toEqual({ thinking: { type: "enabled", budget_tokens: 32768 } })
+    expect(translateReasoning("claude-3-5-sonnet-20241022", "max")).toEqual({ thinking: { type: "enabled", budget_tokens: 65536 } })
   })
 
   it("sends no thinking block on off (both generations) and nothing when unset", () => {
@@ -394,6 +433,17 @@ describe("M32 reasoning effort (anthropic)", () => {
     const body2 = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string) as Record<string, unknown>
     expect(body2.thinking).toBeUndefined()
     expect(body2.output_config).toBeUndefined()
+  })
+
+  it("keeps a legacy thinking budget below a configured output limit", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "deepseek-flash", options: { max_tokens: 4096 } })
+    const iterator = client.stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "max" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 4095 })
+    await iterator.return?.()
   })
 })
 

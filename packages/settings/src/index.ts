@@ -76,8 +76,8 @@ export interface SettingsModel {
    * protocol is a property of the endpoint, so the route states the default and
    * a row states the exception. Absent → the route's. */
   protocol?: SettingsProviderProtocol
-  /** M61: content types this MODEL accepts — the per-model override of the
-   * route's declaration (see SettingsProviderConfig.inputModalities). */
+  /** Content types this MODEL accepts. A historical provider declaration is
+   * used only as a compatibility default for listed models. */
   inputModalities?: SettingsInputModality[]
 }
 
@@ -154,8 +154,9 @@ export interface SettingsProviderConfig {
    * session/tenant header). Keys and values are non-empty strings; secrets
    * belong in `apiKeyEnv`, not here. */
   headers?: Record<string, string>
-  /** M61: content types this ROUTE accepts — the fallback when the selected
-   * model entry does not declare its own. Absent = text-only (M14). */
+  /** Legacy M61 route-level input type. New Desktop writes use model rows only;
+   * keep this readable so existing settings retain their listed models' image
+   * capability until each model is configured explicitly. */
   inputModalities?: SettingsInputModality[]
   /** M72 Ⅱ: the wire field this ROUTE's openai-compatible requests carry the
    * output cap on. Absent = the adapter's own `max_tokens` default, which is

@@ -7,6 +7,16 @@ import { createAgent } from "../src/index.ts"
 import { createSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "../src/executor.ts"
 
 describe("SessionExecutor", () => {
+  it("delivers an image submitted with a queued turn", async () => {
+    const ctx = createContext(), session = createSession(), inbox = new Inbox(session)
+    const model = createMockClient([{ role: "assistant", text: "done" }])
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model, systemPrompt: "p" })
+    const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }
+    const lane = createSessionExecutor({ session, agent, inbox })
+    lane.submit({ tier: "send", text: "inspect", images: [image] })
+    await lane.drain()
+    expect(session.events.find((event) => event.type === "user/message")).toMatchObject({ images: [image] })
+  })
   it("runs one turn per pending input, serially, in admission order", async () => {
     const ctx = createContext()
     const session = createSession()
