@@ -11,6 +11,14 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/mcp/state":
+    case "desktop/mcp/refresh": return {}
+    case "desktop/mcp/mutate": {
+      if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid MCP command")
+      const command = value.command as Record<string, unknown>
+      if (!["save", "enable", "disable", "remove"].includes(String(command.action))) throw new Error("invalid MCP action")
+      return { ...command }
+    }
     case "desktop/hooks/state":
     case "desktop/hooks/refresh": return {}
     case "desktop/hooks/mutate": {

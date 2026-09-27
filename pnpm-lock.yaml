@@ -429,6 +429,9 @@ importers:
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
+      '@i-harness/mcp-client':
+        specifier: workspace:*
+        version: link:../mcp-client
       '@i-harness/memory':
         specifier: workspace:*
         version: link:../memory
@@ -717,6 +720,9 @@ importers:
       '@i-harness/diagnostics':
         specifier: workspace:*
         version: link:../diagnostics
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.0
         version: 1.30.0(zod@4.4.3)

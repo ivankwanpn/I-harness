@@ -3,9 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./config": "./src/config-store.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
+    "@i-harness/fs-lock": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/diagnostics": "workspace:*",

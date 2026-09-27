@@ -371,6 +371,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-editor legend { margin-bottom: 14px; font-weight: 600; }
 .provider-editor label { display: grid; gap: 6px; margin: 12px 0; font-size: 13px; }
 .provider-editor input, .provider-editor select { min-width: 0; width: 100%; box-sizing: border-box; background: transparent; color: var(--ih-text); border: 1px solid var(--ih-divider); border-radius: 7px; padding: 8px 10px; font: inherit; }
+.provider-editor textarea { width: 100%; min-height: 72px; resize: vertical; padding: 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
+.mcp-secret-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr) auto; gap: 8px; align-items: center; margin: 8px 0; overflow-wrap: anywhere; }
 .provider-editor select option { background: var(--color-background); color: var(--ih-text); }
 .provider-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .provider-actions button { padding: 5px 9px; border-radius: 6px; }

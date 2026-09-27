@@ -116,6 +116,11 @@ const english = {
   "呼叫參數": "Invocation arguments", "執行輸出": "Output", "查閱": "Explore", "終端操作": "Terminal activity", "檔案變更": "File changes", "{count} 項工具": "{count} tools",
   "在成果面板開啟 {path}": "Open {path} in review",
   "工作過程": "Work details",
+  "MCP 伺服器": "MCP servers", "新增 MCP 伺服器": "Add MCP server", "MCP 伺服器設定": "MCP server settings", "伺服器名稱": "Server name", "連線方式": "Transport", "執行程式": "Executable", "參數（JSON 陣列）": "Arguments (JSON array)", "工作目錄（選填）": "Working directory (optional)", "環境變數": "Environment variables", "HTTP Headers": "HTTP headers", "進階設定": "Advanced settings", "進階設定（JSON）": "Advanced settings (JSON)", "進階設定必須是 JSON 物件": "Advanced settings must be a JSON object", "重新套用": "Reapply", "重試套用": "Retry applying", "編輯 MCP 設定": "Edit MCP settings", "確認移除 MCP": "Confirm MCP removal", "設定已啟用": "Enabled in settings", "尚未設定 MCP 伺服器": "No MCP servers configured", "私密欄位名稱": "Private field name", "私密欄位值": "Private field value", "待移除": "Pending removal", "已保存的值保持不變": "Keep saved value", "移除": "Remove", "加入": "Add",
+  "已保存的值不會回傳；留空保持不變，移除會在儲存後生效。": "Saved values are not returned. Leave blank to preserve them; removals apply on save.",
+  "新增設定預設停用；儲存後可啟用並載入現有會話。": "New configurations start disabled. Enable after saving to load into existing conversations.",
+  "管理直接設定的 MCP 伺服器。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。": "Manage directly configured MCP servers. Enablement changes apply to existing Agents; plugin-provided servers are managed through Plugins.",
+  "這些 MCP 設定由本機工作區共用。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。": "These MCP settings are shared by local workspaces. Enablement changes apply to existing Agents; plugin-provided MCP is managed through Plugins.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

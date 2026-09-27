@@ -18,6 +18,7 @@ import { createDesktopTerminal } from "./terminal.ts"
 import { createAgentSettings } from "./agent-settings.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
+import { createDesktopMcp } from "./mcp-settings.ts"
 import { watchSettings } from "@i-harness/settings"
 import { resolveHookTrustPath } from "@i-harness/hooks"
 import type { RpcMessage } from "@i-harness/sdk"
@@ -107,11 +108,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
   const subagents = createSubagentSettings(settingsPath, settings.get().plugins.subagentModel)
+  const mcpPath = join(dirname(settingsPath), "mcp-servers.json")
+  const mcp = createDesktopMcp(mcpPath)
   const service: SessionService = createSessionService({
     roleSelectionFor: subagents.selectionFor,
     allowSubagentModelSelection: settings.get().plugins.subagentModel,
     resolveRoleModel: (selection) => runtime.resolveModel({ sessionSelection: selection }),
-    extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), dirname(settingsPath), id, (messages) => plugins.report(id, messages)),
+    extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active()),
     transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
     additionalTools,
@@ -128,9 +131,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const interaction = createInteractionBridge(options.onWrite)
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
+  mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
     subagents,
     agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
@@ -193,8 +198,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const router = createDesktopRouter(base, options.onWrite, handlers, internalIds)
   let closing: Promise<void> | undefined
-  const trustWatcher = watchSettings(resolveHookTrustPath(dirname(settingsPath)), () => {
-    if (!closing) void plugins.refresh().catch(() => { /* Plugin state exposes live refresh failures. */ })
+  const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], () => {
+    if (!closing) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   })
   return {
     handleLine: (line) => router.handleLine(line),

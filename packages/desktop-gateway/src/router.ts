@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
     if (handlers.hooks) capabilities["desktop-hooks"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
@@ -142,6 +143,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/mcp/state", "desktop/mcp/mutate", "desktop/mcp/refresh"].includes(message.method) && handlers.mcp) {
+        try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.mcp.state() : message.method.endsWith("/refresh") ? await handlers.mcp.refresh() : await handlers.mcp.mutate(message.params))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/hooks/state", "desktop/hooks/mutate", "desktop/hooks/refresh"].includes(message.method) && handlers.hooks) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.hooks.state() : message.method.endsWith("/refresh") ? await handlers.hooks.refresh() : await handlers.hooks.mutate(message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

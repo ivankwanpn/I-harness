@@ -13,6 +13,7 @@ import { TitleBar } from "../shell/TitleBar.tsx"
 import { AgentSettings } from "./AgentSettings.tsx"
 import { SubagentSettings } from "./SubagentSettings.tsx"
 import { HookSettings } from "./HookSettings.tsx"
+import { McpSettings } from "./McpSettings.tsx"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { PluginMarketplace } from "./PluginMarketplace.tsx"
 
@@ -24,6 +25,7 @@ const sections = [
   { id: "execution", label: "執行與上下文", icon: Shield, group: "Agent 設定", capability: "desktop-agent-settings" },
   { id: "subagents", label: "子代理", icon: Brain, group: "Agent 設定", capability: "desktop-subagents" },
   { id: "hooks", label: "Hooks 信任", icon: Shield, group: "Agent 設定", capability: "desktop-hooks" },
+  { id: "mcp", label: "MCP 伺服器", icon: Server, group: "Agent 設定", capability: "desktop-mcp" },
   { id: "memory", label: "記憶", icon: Brain, group: "Agent 設定", capability: "desktop-memory" },
   { id: "plugins", label: "插件", icon: Puzzle, group: "Agent 設定", capability: "desktop-plugins" },
   { id: "workspace", label: "工作區", icon: Folder, group: "本機資料" },
@@ -85,6 +87,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
       : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === "mcp" && workspace && bridge ? <McpSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "workspace" ? <>

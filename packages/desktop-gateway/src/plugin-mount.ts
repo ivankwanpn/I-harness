@@ -5,6 +5,7 @@ import { toMcpServerConfigs, toSubagentRoles, type RuntimeInputs } from "@i-harn
 import { createPromptCommand, registerPromptCommand, parseCommandLine, listCommands, runCommand } from "@i-harness/interaction"
 import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-executor"
+import type { McpServerConfig } from "@i-harness/mcp-client"
 
 interface Mounted {
   commands: Map<string, { signature: string; dispose(): void }>
@@ -12,7 +13,7 @@ interface Mounted {
 }
 const live = new WeakMap<SessionAssembly, Mounted>()
 
-export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
+export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void, directMcp: McpServerConfig[] = []): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
   const mcp = toMcpServerConfigs(inputs.mcpServerConfigs)
   const agents = toSubagentRoles(inputs.agentDescriptors, { allowedTools: ["read", "glob", "grep", "list_dir"] })
   const messages = [...mcp.skipped.map((row) => `MCP ${row.serverName}: ${row.reason}`), ...agents.unresolved.map((row) => `Agent ${row.role}: ${row.tool} (${row.reason})`)]
@@ -69,7 +70,7 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
       if (strict && failures.length) throw new AggregateError(failures, "Plugin hooks failed to update")
   }
   return {
-    options: { skills: { extraDirs: inputs.skillDirs }, pluginMcp: mcp.configs, pluginAgents: agents.roles, pluginAgentsEphemeral: true },
+    options: { skills: { extraDirs: inputs.skillDirs }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true },
     update,
     async mount(assembly) {
       await update(assembly, false)
