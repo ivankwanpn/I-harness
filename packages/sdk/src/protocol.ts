@@ -25,7 +25,9 @@
  *
  * Methods (client → server):
  *   initialize              → { name, version, protocolVersion, capabilities }
- *   session/prompt { sessionId, prompt }
+ *   session/prompt { sessionId, prompt, context? }
+ *     prompt-context capability v1: bounded additional user text, appended
+ *     after host prompt-command expansion and admitted durably with the prompt.
  *                           → { sessionId, ok: true } when the turn drained;
  *                             failure → -32603 (data.event = collected events)
  *   session/status { sessionId } → { running, queued }

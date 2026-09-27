@@ -42,6 +42,10 @@ app.whenReady().then(() => {
       runtimes: manager,
       native,
       browser,
+      pickFiles: async (workspacePath) => {
+        const result = await dialog.showOpenDialog(window, { defaultPath: workspacePath, properties: ["openFile", "multiSelections"] })
+        return result.canceled ? undefined : result.filePaths
+      },
       pickFolder: async () => {
         const result = await dialog.showOpenDialog(window, { properties: ["openDirectory"] })
         return result.canceled ? undefined : result.filePaths[0]

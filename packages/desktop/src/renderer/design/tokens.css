@@ -108,12 +108,12 @@ button { font: inherit; color: inherit; }
 .session-header {
   height: 56px;
   flex-shrink: 0;
-  overflow-x: auto;
+  overflow: hidden;
   white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 22px;
+  padding: 8px 16px;
   min-height: 54px;
   border-bottom: 1px solid var(--ih-divider);
   font-weight: 600;
@@ -225,6 +225,10 @@ button { font: inherit; color: inherit; }
 .composer-input { width: 100%; min-height: 72px; max-height: 240px; resize: vertical; padding: 4px 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: 1.6; }
 .composer-input:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 1px; }
 .composer-hint { margin-right: auto; font-size: 11px; color: var(--ih-muted); }
+.composer-file-references { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 0; }
+.composer-file-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 5px 8px; border: 1px solid var(--ih-divider); border-radius: 7px; color: var(--ih-text); font-size: 12px; }
+.composer-file-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-file-chip button { display: grid; place-items: center; padding: 2px; border-radius: 4px; }
 .composer-send { display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 9px; background: #ececec; color: #202020; cursor: pointer; }
 .composer-send:disabled, .icon-button:disabled { opacity: .35; cursor: not-allowed; }
 
@@ -445,4 +449,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-discovery-list label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px; overflow-wrap: anywhere; }
 .provider-discovery-list small { opacity: .65; }
 .session-model-picker { position: relative; min-width: 0; }
-.model-picker-panel { position: absolute; bottom: calc(100% + 12px); right: 0; width: min(340px, calc(100vw - 48px)); max-height: min(65vh, 520px); overflow: auto; z-index: 8; background: var(--ih-panel); box-shadow: 0 12px 36px #0005; }
+.composer-model { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 6px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ih-muted); font: inherit; }
+button.composer-model { cursor: pointer; }
+button.composer-model:hover:not(:disabled) { background: var(--ih-divider); color: var(--ih-text); }
+button.composer-model:disabled { opacity: .5; cursor: not-allowed; }
+.model-picker-panel { position: fixed; margin: 0; width: min(340px, calc(100vw - 32px)); overflow: auto; z-index: 100; background: var(--ih-panel); box-shadow: 0 12px 36px #0005; }

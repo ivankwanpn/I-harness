@@ -1,4 +1,5 @@
 import type { BrowserWindow } from "electron"
+import { relative, isAbsolute, sep } from "node:path"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest } from "../shared/bridge.ts"
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
@@ -11,6 +12,7 @@ export interface DesktopIpcDependencies {
   runtimes: WorkspaceRuntimeManager
   /** Native folder picker; injected so the dispatcher stays testable. */
   pickFolder?: () => Promise<string | undefined>
+  pickFiles?: (workspacePath: string) => Promise<string[] | undefined>
   native?: ReturnType<typeof attachNativeWindow>
   browser?: ReturnType<typeof createBrowserSurface>
 }
@@ -44,6 +46,25 @@ export async function dispatchDesktopRequest(
   }
 
   switch (value.kind as DesktopRequest["kind"]) {
+    case "workspace/files/pick": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const workspace = dependencies.catalog.get(workspaceId)
+      if (!workspace) throw new Error("Unknown workspace")
+      const chosen = await dependencies.pickFiles?.(workspace.path)
+      if (!chosen?.length) return { paths: [] }
+      if (chosen.length > 8) throw new Error("Select at most 8 workspace files")
+      const paths = [...new Set(chosen.map((file) => {
+        const path = relative(workspace.path, file).split(sep).join("/")
+        if (!path || isAbsolute(path) || path.split("/").includes("..") || /[\0\r\n:]/.test(path) || path.length > 4096) throw new Error("Select files inside the current workspace")
+        return path
+      }))]
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      for (const path of paths) {
+        const result = await runtime.client.request("desktop/review/file", { path, maxBytes: 1 }) as { kind?: string; reason?: string }
+        if (result?.kind !== "text" && result?.reason !== "binary") throw new Error(`Cannot reference workspace file: ${path}`)
+      }
+      return { paths }
+    }
     case "window/control":
       if (value.action !== "minimize" && value.action !== "toggle-maximize" && value.action !== "close") throw new Error("invalid window action")
       if (!dependencies.native) throw new Error("native window unavailable")
@@ -116,11 +137,14 @@ export async function dispatchDesktopRequest(
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       const prompt = requireNonEmpty(value.prompt, "prompt")
+      if (value.context !== undefined && (typeof value.context !== "string" || value.context.length > 131072)) throw new Error("Invalid prompt context")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
+      if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
       return await runtime.client.request("session/prompt", {
         sessionId,
         prompt,
+        ...(value.context !== undefined ? { context: value.context } : {}),
       }, 24 * 60 * 60 * 1000)
     }
     case "session/cancel":

@@ -399,6 +399,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
           version: opts.version ?? "0.1.0",
           protocolVersion: SDK_SERVER_PROTOCOL_VERSION,
           capabilities: {
+            "prompt-context": ["1"],
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],
@@ -765,11 +766,12 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         }
       }
       case "session/prompt": {
-        const p = params as { sessionId?: unknown; prompt?: unknown } | undefined
+        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty sessionId")
         }
         const prompt = typeof p.prompt === "string" ? p.prompt : ""
+        if (p.context !== undefined && (typeof p.context !== "string" || p.context.length > 131072)) return makeFailure(id, INVALID_PARAMS, "Invalid prompt context")
         if (prompt === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty prompt string")
         }
@@ -792,7 +794,8 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         submissions.add(submission)
         inflight.set(sessionId, submissions)
         try {
-          await service.submit(sessionId, prompt, controller.signal)
+          if (typeof p.context === "string") await service.submit(sessionId, prompt, controller.signal, { context: p.context })
+          else await service.submit(sessionId, prompt, controller.signal)
           statusNotify(sessionId, "idle")
           return makeSuccess(id, { sessionId, ok: true })
         } catch (error) {

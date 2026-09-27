@@ -125,6 +125,8 @@ const english = {
   "顯示後端有效技能；同名項目的優先順序為工作區、插件、全域。選取後才載入內容。": "Shows effective skills. Workspace skills take precedence over plugins, then global skills. Content loads when selected.",
   "顯示已啟用插件提供的提示命令；帶入輸入框後由你送出。": "Shows prompt commands from enabled plugins. Insert into the composer and send when ready.",
   "後端尚未執行的宣告：{fields}": "Declarations not enforced by the backend: {fields}", "先選擇會話，再帶入輸入框。": "Select a conversation before inserting into the composer.", "草稿已達上限，請先整理內容。": "The draft is full. Shorten it before inserting more content.",
+  "引用工作區檔案": "Reference workspace files", "最多引用 8 個工作區檔案。": "You can reference at most 8 workspace files.", "請查看引用的工作區檔案。": "Please inspect the referenced workspace files.", "引用的工作區檔案（請按需讀取）：": "Referenced workspace files (read as needed):", "移除檔案引用 {path}": "Remove file reference {path}",
+  "尚未選擇模型，請在輸入框右下方選擇模型。": "No model selected. Choose a model at the bottom right of the composer.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

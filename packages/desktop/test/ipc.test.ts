@@ -51,6 +51,15 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("accepts file references only from the native picker and checks them through review", async () => {
+    const f = fixture()
+    f.dependencies.pickFiles = vi.fn(async () => [`${ENTRY.path}/a.md`])
+    f.request.mockResolvedValue({ kind: "text", text: "a", truncated: true, bytes: 1 } as never)
+    expect(await dispatchDesktopRequest({ kind: "workspace/files/pick", workspaceId: ENTRY.id }, f.dependencies)).toEqual({ paths: ["a.md"] })
+    expect(f.request).toHaveBeenCalledWith("desktop/review/file", { path: "a.md", maxBytes: 1 })
+    f.dependencies.pickFiles = vi.fn(async () => ["D:/outside/secret.md"])
+    await expect(dispatchDesktopRequest({ kind: "workspace/files/pick", workspaceId: ENTRY.id }, f.dependencies)).rejects.toThrow()
+  })
   it("limits Agent settings patches to supported fields in a known workspace", async () => {
     const f = fixture()
     await dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: ENTRY.id, patch: { autoCompaction: false } }, f.dependencies)

@@ -149,7 +149,7 @@ export interface SessionService {
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string }): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
@@ -436,7 +436,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string }): Promise<void> {
+    const context = options?.context
+    if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     if (closed) return Promise.reject(new Error("session service closed"))
     if (closing.has(sessionId)) return Promise.reject(new Error(`session closing: ${sessionId}`))
     // M49 Task 11: the STABLE row id + a SERVICE-OWNED controller are created
@@ -509,7 +511,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // cancel reaches the engine, not just the queue gate). Task 11:
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
-          lane.submit({ tier: "send", text: prepared, signal: controller.signal }, id)
+          const text = context ? `${prepared}\n\n${context}` : prepared
+          lane.submit({ tier: "send", text, signal: controller.signal }, id)
           record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.

@@ -19,6 +19,6 @@ export function sendGate(input: {
     return { canSend: false, reason: t("沙箱尚未接線：宿主未回報可執行模式，送出已停用") }
   }
   if (input.model === undefined) return { canSend: false, reason: t("模型狀態未知，送出已停用") }
-  if (input.model.status !== "ready") return { canSend: false, reason: input.model.reason }
+  if (input.model.status !== "ready") return { canSend: false, reason: input.model.reason === "No model configured" ? t("尚未選擇模型，請在輸入框右下方選擇模型。") : input.model.reason }
   return { canSend: true }
 }

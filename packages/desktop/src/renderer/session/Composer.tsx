@@ -1,9 +1,10 @@
 import { useEffect, useState, useSyncExternalStore, useRef, type ReactNode } from "react"
-import { ArrowUp, Square } from "lucide-react"
+import { ArrowUp, Square, Paperclip, X } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SlashCommands } from "./SlashCommands.tsx"
+import { readFileReferences, writeFileReferences, subscribeFileReferences } from "./file-reference-drafts.ts"
 
 const DRAFT_LIMIT_BYTES = 32 * 1024
 const memoryDrafts = new Map<string, string>()
@@ -79,7 +80,8 @@ export interface ComposerProps {
   running: boolean
   modelLabel?: string
   modelControl?: ReactNode
-  onPrompt(text: string): Promise<void>
+  fileReferencesEnabled?: boolean
+  onPrompt(text: string, context?: string): Promise<void>
   onCancel(): void
 }
 
@@ -96,11 +98,28 @@ function SessionComposer({
   running,
   modelLabel,
   modelControl,
+  fileReferencesEnabled = false,
   onPrompt,
   onCancel,
 }: ComposerProps) {
   const t = useText()
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const references = useSyncExternalStore(subscribeFileReferences, () => readFileReferences(workspaceId, sessionId))
+  const [picking, setPicking] = useState(false)
+  const [pickError, setPickError] = useState<string>()
+  const pickLock = useRef(false)
+  async function pickFiles() {
+    if (!bridge || pickLock.current) return
+    pickLock.current = true; setPicking(true); setPickError(undefined)
+    try {
+      const result = await bridge.request({ kind: "workspace/files/pick", workspaceId }) as { paths: string[] }
+      if (result.paths.length === 0) return
+      const next = [...new Set([...readFileReferences(workspaceId, sessionId), ...result.paths])]
+      if (next.length > 8) throw new Error(t("最多引用 8 個工作區檔案。"))
+      writeFileReferences(workspaceId, sessionId, next)
+    } catch (reason) { setPickError(String(reason)) }
+    finally { pickLock.current = false; setPicking(false) }
+  }
   const key = draftKey(workspaceId, sessionId)
   const sendState = useSyncExternalStore(
     (listener) => { sendListeners.add(listener); return () => { sendListeners.delete(listener) } },
@@ -114,15 +133,17 @@ function SessionComposer({
 
   async function send(): Promise<void> {
     const text = value
-    if (!canSend || text.trim() === "" || sends.get(key)?.sending) return
+    if (!canSend || (text.trim() === "" && references.length === 0) || sends.get(key)?.sending) return
     publishSend(key, { sending: true })
     try {
-      await onPrompt(text)
+      if (references.length) await onPrompt(text.trim() ? text : t("請查看引用的工作區檔案。"), `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references, null, 2)}`)
+      else await onPrompt(text)
       // Only a confirmed send clears the draft.
       if (readDraft(workspaceId, sessionId) === text) {
         clearDraft(workspaceId, sessionId)
         setValue("")
       }
+      if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
       publishSend(key, idleSend)
     } catch (reason) {
       // The draft stays; the failure is visible.
@@ -134,6 +155,8 @@ function SessionComposer({
     <ComposerSurface onSubmit={() => { void send() }} error={error ?? (!canSend ? sendReason : undefined)}
       editor={
       <>
+      {references.length ? <div className="composer-file-references">{references.map((path) => <span key={path} className="composer-file-chip" title={path}><span>{path}</span><button type="button" aria-label={t("移除檔案引用 {path}", { path })} onClick={() => writeFileReferences(workspaceId, sessionId, references.filter((value) => value !== path))}><X size={12} /></button></span>)}</div> : null}
+      {pickError ? <p role="alert" className="error-text">{pickError}</p> : null}
       {bridge ? <SlashCommands bridge={bridge} workspaceId={workspaceId} text={value} onSelect={(name) => { const next = `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); editorRef.current?.focus() }} /> : null}
       <textarea
         ref={editorRef}
@@ -151,16 +174,16 @@ function SessionComposer({
           setValue(next)
           writeDraft(workspaceId, sessionId, next)
         }}
-        placeholder={canSend ? t("輸入提示…") : (sendReason ?? t("目前無法送出"))}
+        placeholder={t("輸入提示…")}
       />
       </>
       }
       leadingActions={
-        <span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span>
+        <>{bridge && fileReferencesEnabled ? <button type="button" className="icon-button" aria-label={t("引用工作區檔案")} title={t("引用工作區檔案")} disabled={picking} onClick={() => { void pickFiles() }}><Paperclip size={17} /></button> : null}<span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span></>
       }
       trailingActions={<>
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
-        <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || value.trim() === ""}>
+        <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || (value.trim() === "" && references.length === 0)}>
           <ArrowUp size={18} />
         </button>
         <button type="button" className="icon-button" aria-label={t("停止")} title={t("停止")} disabled={!running} onClick={onCancel}>

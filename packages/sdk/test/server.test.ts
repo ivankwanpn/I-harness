@@ -158,6 +158,7 @@ describe("createSdkServer", () => {
           version: "0.1.0",
           protocolVersion: 3,
           capabilities: {
+            "prompt-context": ["1"],
             session: ["prompt", "status"],
             notifications: ["session/event", "session/status"],
             "session-history": ["1"],

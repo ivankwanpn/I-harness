@@ -406,9 +406,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
         pending: pendingForSession(pending, selectedSessionId),
-        onPrompt: async (text: string): Promise<void> => {
+        onPrompt: async (text: string, context?: string): Promise<void> => {
           const scope = selection.current
-          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text)
+          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context)
           if (selection.current !== scope) return
           if (connection === "online") {
             void pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)

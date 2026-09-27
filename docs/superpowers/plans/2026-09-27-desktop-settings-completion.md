@@ -92,3 +92,21 @@ Using a resource prefixes `$skill` or `/command` into the selected conversation'
 Inspected ZCode SkillsSection and CommandCard source for source-aware management and readonly/plugin distinctions. Improved provider/resource list/detail responsiveness using the settings content container width, avoiding unnecessary stacking on a 1024px desktop window whose content area still fits both columns.
 
 Verification: plugin-registry 182 tests, gateway 78 tests, Desktop 194 tests passed. Source metadata assertions were updated for the new pluginId field without weakening their exact checks. Real registry precedence and deferred response bodies are tested; a Workbench integration test confirms existing draft preservation and no automatic prompt submission. Package typechecks, Desktop build and reachability passed; independent review found no actionable issues. Final visual verification and packaging remain pending.
+
+## Workspace file references and prompt context
+
+Added native workspace-file selection and removable composer reference chips, limited to eight paths. Native selection is workspace-confined and checked through the existing pinned review reader. References are per-workspace/session UI drafts; failed sends preserve them, late picker results stay with their originating session, and storage quota failures keep the new value in memory rather than re-reading stale storage.
+
+SDK now advertises the additive `prompt-context` v1 capability. Optional bounded text context is appended by session-executor after host prompt-command expansion, then enters the normal durable admission and user-message flow. Existing text-only callers remain unchanged. Desktop IPC and the high-level SDK client require advertised support before sending context, preventing older servers from silently ignoring it. This supports read-as-needed workspace references; it is not direct image upload or a snapshot of file bytes. Direct image intake remains a separate unfinished part because its durable-input/transport handling is not yet wired.
+
+Verification: SDK 74 tests, session-executor 151 tests (with the established Git Bash PATH), Desktop 198 tests passed. The SDK field-level capability sentinel was updated for the declared extension; legacy/cancel tests remain passing. Added command-expansion retention, old-peer refusal, picker scope, session-switch ownership, send-failure retention and quota fallback coverage. Relevant typechecks and Desktop build passed; independent review found no actionable issue.
+
+Visual access: the native I-harness Desktop window was started successfully (development renderer remains localhost:5173). Exact-origin Browser Use retries still returned a saved-permission denial explicitly forbidding alternate ports/surfaces/CDP; no bypass attempted. Read-only inspection found the user's config.toml already has access=allow for this origin. The separate saved block has not been cleared; no successful visual acceptance is claimed.
+
+## Existing-model selection follow-up
+
+The user's live screenshot showed `No model configured` although a provider and model already existed. Read-only runtime inspection established the distinction: the DeepSeek route, credential and `deepseek-flash` model were configured and resolvable, while the canonical default model and this session's explicit selection were empty. No global default was silently changed.
+
+The composer now describes this state as an unselected model and keeps the prompt placeholder independent from the send-gate error. Its picker is portaled outside the clipped composer, is styled as a workbench control, and suggests the sole configured provider/model without applying it until the user confirms. Escape restores trigger focus, the trigger cannot submit the composer form, and the session header no longer creates the screenshot's vertical scrollbar.
+
+Fresh verification after this follow-up: Desktop 200 tests passed, followed by typecheck and production build. SDK 74 tests and session-executor 151 tests also passed for the prompt-context changes. Independent read-only review found no actionable issue in the model-selection fix. Live visual acceptance remains pending under the existing Browser Use constraint; changing the development port may support manual user inspection but is not treated as a Browser Use bypass.

@@ -11,6 +11,7 @@ export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "workspace/files/pick"; workspaceId: string }
   | { kind: "desktop/resources/list"; workspaceId: string; resourceKind: ResourceKind; query: string; offset: number }
   | { kind: "desktop/resources/read"; workspaceId: string; resourceKind: ResourceKind; name: string }
   | { kind: "desktop/mcp/state" | "desktop/mcp/refresh"; workspaceId: string }
@@ -63,7 +64,7 @@ export type DesktopRequest =
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
-  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string }
+  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
   | { kind: "session/queue"; workspaceId: string; sessionId: string }
   | { kind: "session/queue/cancel"; workspaceId: string; sessionId: string; id: string }

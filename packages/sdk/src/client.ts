@@ -73,6 +73,8 @@ export class SdkRunError extends Error {
 }
 
 export interface RunInput {
+  /** Additional user context, appended after any host prompt-command expansion. */
+  context?: string
   /** Existing session id; absent → one-shot run with a server-generated id. */
   sessionId?: string
   prompt: string
@@ -115,6 +117,7 @@ export class HarnessClient {
   private exitError: Error | undefined
   private child: ChildProcess | undefined
   private closed = false
+  private serverInfo: ServerInfo | undefined
 
   constructor(readable: Readable, writable: Writable, opts?: { child?: ChildProcess }) {
     this.transport = new JsonRpcLineTransport(readable, writable)
@@ -185,7 +188,9 @@ export class HarnessClient {
   }
 
   async initialize(): Promise<ServerInfo> {
-    return await this.request("initialize", {}) as ServerInfo
+    const info = await this.request("initialize", {}) as ServerInfo
+    this.serverInfo = info
+    return info
   }
 
   async createSession(): Promise<SessionIdResult> {
@@ -211,6 +216,7 @@ export class HarnessClient {
    * resolves when the turn completed. A failed turn rejects with SdkRunError
    * (the collected events ride along). */
   async run(input: RunInput): Promise<RunResult> {
+    if (input.context !== undefined && !this.serverInfo?.capabilities?.["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported; initialize a capable server first")
     const sessionId = input.sessionId
       ?? `sdk-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
     const events: SessionEvent[] = []
@@ -222,7 +228,7 @@ export class HarnessClient {
       }
     })
     try {
-      await this.request("session/prompt", { sessionId, prompt: input.prompt })
+      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}) })
     } catch (error) {
       if (error instanceof RpcError) {
         throw new SdkRunError(

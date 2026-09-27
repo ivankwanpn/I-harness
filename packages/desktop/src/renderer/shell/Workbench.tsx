@@ -49,7 +49,7 @@ export interface ConversationView {
   historyError?: string
   historyNotice?: string
   pending: PendingInteraction[]
-  onPrompt(text: string): Promise<void>
+  onPrompt(text: string, context?: string): Promise<void>
   onCancel(): void
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
@@ -230,6 +230,7 @@ export function Workbench({
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 <Composer
+                  fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   bridge={bridge}
                   workspaceId={selectedWorkspaceId}
                   sessionId={selectedSessionId}

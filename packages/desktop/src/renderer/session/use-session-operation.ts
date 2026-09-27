@@ -10,14 +10,14 @@ export const operationKey = (workspaceId: string, sessionId: string) => JSON.str
 export function useSessionOperation(bridge: DesktopBridge) {
   const [states, setStates] = useState<Record<string, SessionOperation>>({})
   const locks = useRef(new Set<string>())
-  async function run(workspaceId: string, sessionId: string, kind: "prompt" | "compact", text?: string) {
+  async function run(workspaceId: string, sessionId: string, kind: "prompt" | "compact", text?: string, context?: string) {
     const key = operationKey(workspaceId, sessionId)
     if (locks.current.has(key)) throw new Error("Session is busy")
     locks.current.add(key)
     setStates((old) => ({ ...old, [key]: { kind, busy: true } }))
     try {
       const value = await bridge.request(kind === "prompt"
-        ? { kind: "session/prompt", workspaceId, sessionId, prompt: text ?? "" }
+        ? { kind: "session/prompt", workspaceId, sessionId, prompt: text ?? "", ...(context ? { context } : {}) }
         : { kind: "desktop/session/compact", workspaceId, sessionId, ...(text?.trim() ? { instructions: text } : {}) })
       const result = kind === "compact" ? value as CompactResult : undefined
       setStates((old) => ({ ...old, [key]: { kind, busy: false, result } }))
