@@ -121,6 +121,10 @@ const english = {
   "新增設定預設停用；儲存後可啟用並載入現有會話。": "New configurations start disabled. Enable after saving to load into existing conversations.",
   "管理直接設定的 MCP 伺服器。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。": "Manage directly configured MCP servers. Enablement changes apply to existing Agents; plugin-provided servers are managed through Plugins.",
   "這些 MCP 設定由本機工作區共用。啟用與停用會套用到現有 Agent；插件提供的 MCP 由插件頁管理。": "These MCP settings are shared by local workspaces. Enablement changes apply to existing Agents; plugin-provided MCP is managed through Plugins.",
+  "技能": "Skills", "命令": "Commands", "全域": "Global", "搜尋名稱或描述": "Search names or descriptions", "管理插件": "Manage plugins", "管理來源插件": "Manage source plugin", "載入診斷": "Load diagnostics", "沒有符合的項目": "No matching items", "使用此技能": "Use this skill", "帶入此命令": "Insert this command", "選擇項目以查看內容": "Select an item to view its content", "內容過長，預覽已截斷。": "The content is too long; this preview is truncated.", "項目已不可用，請重新整理。": "This item is no longer available. Refresh the list.",
+  "顯示後端有效技能；同名項目的優先順序為工作區、插件、全域。選取後才載入內容。": "Shows effective skills. Workspace skills take precedence over plugins, then global skills. Content loads when selected.",
+  "顯示已啟用插件提供的提示命令；帶入輸入框後由你送出。": "Shows prompt commands from enabled plugins. Insert into the composer and send when ready.",
+  "後端尚未執行的宣告：{fields}": "Declarations not enforced by the backend: {fields}", "先選擇會話，再帶入輸入框。": "Select a conversation before inserting into the composer.", "草稿已達上限，請先整理內容。": "The draft is full. Shorten it before inserting more content.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

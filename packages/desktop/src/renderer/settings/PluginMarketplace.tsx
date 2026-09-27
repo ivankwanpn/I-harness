@@ -5,13 +5,13 @@ import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 interface Plugin { id: string; name: string; description?: string; installed: boolean; enabled: boolean; capabilities?: Record<string, boolean>; conflicts?: { name: string; reason: string }[] }
 interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]>; refreshError?: string }
-export function PluginMarketplace({ bridge, workspaceId, embedded = false }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean }) {
+export function PluginMarketplace({ bridge, workspaceId, embedded = false, initialQuery = "" }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean; initialQuery?: string }) {
   const t = useText()
   const [state, setState] = useState<State>()
   const [error, setError] = useState<string>()
   const [loadError, setLoadError] = useState<string>()
   const [source, setSource] = useState("")
-  const [query, setQuery] = useState("")
+  const [query, setQuery] = useState(initialQuery)
   const [installed, setInstalled] = useState(false)
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<string>()

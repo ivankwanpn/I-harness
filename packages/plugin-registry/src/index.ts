@@ -590,7 +590,7 @@ export class PluginRegistry {
    * LATER enables). */
   private effectiveDescriptors(rec: PluginRecord): CommandDescriptor[] {
     const blocked = new Set((rec.conflicts ?? []).map((c) => c.name))
-    return describeCommands(join(this.root, "commands", rec.id)).filter((d) => !blocked.has(d.name))
+    return describeCommands(join(this.root, "commands", rec.id)).filter((d) => !blocked.has(d.name)).map((descriptor) => ({ ...descriptor, pluginId: rec.id }))
   }
 
   /** Write the D5 limitation onto a record (empty → field removed, kept clean). */

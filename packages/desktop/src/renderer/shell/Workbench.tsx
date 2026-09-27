@@ -15,7 +15,7 @@ import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { Composer } from "../session/Composer.tsx"
+import { Composer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
@@ -160,7 +160,13 @@ export function Workbench({
     }
   }
 
-  if (surface === "settings") return <SettingsPane capabilities={capabilities} onRewindComplete={selectedWorkspaceId && capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? (sessionId) => onRewindComplete(selectedWorkspaceId, sessionId) : undefined} onManageSession={capabilities["desktop-sessions"]?.includes("1") ? onManageSession : undefined} bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} />
+  if (surface === "settings") return <SettingsPane onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
+    const draft = readDraft(selectedWorkspaceId, selectedSessionId)
+    const next = draft.startsWith(prefix) ? draft : prefix + draft
+    if (boundedDraft(next) !== next) throw new Error(t("草稿已達上限，請先整理內容。"))
+    writeDraft(selectedWorkspaceId, selectedSessionId, next)
+    setSurface("conversation")
+  } : undefined} capabilities={capabilities} onRewindComplete={selectedWorkspaceId && capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? (sessionId) => onRewindComplete(selectedWorkspaceId, sessionId) : undefined} onManageSession={capabilities["desktop-sessions"]?.includes("1") ? onManageSession : undefined} bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} />
 
   return (
     <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>

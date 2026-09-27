@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.resources) capabilities["desktop-resources"] = ["1"]
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
     if (handlers.hooks) capabilities["desktop-hooks"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
@@ -143,6 +144,17 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/resources/list", "desktop/resources/read"].includes(message.method) && handlers.resources) {
+        const params = asRecord(message.params)
+        if ((params?.resourceKind !== "skills" && params?.resourceKind !== "commands") || (message.method.endsWith("/list")
+          ? typeof params.query !== "string" || params.query.length > 512 || typeof params.offset !== "number" || !Number.isSafeInteger(params.offset) || params.offset < 0
+          : typeof params.name !== "string" || !params.name || params.name.length > 256 || /[\0\r\n]/.test(params.name))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid resource request")); return
+        }
+        try { send(makeSuccess(message.id, message.method.endsWith("/list") ? await handlers.resources.list(params.resourceKind, params.query as string, params.offset as number) : await handlers.resources.read(params.resourceKind, params.name as string) ?? null)) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/mcp/state", "desktop/mcp/mutate", "desktop/mcp/refresh"].includes(message.method) && handlers.mcp) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.mcp.state() : message.method.endsWith("/refresh") ? await handlers.mcp.refresh() : await handlers.mcp.mutate(message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }

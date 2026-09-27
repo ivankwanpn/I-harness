@@ -465,6 +465,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/skills':
+        specifier: workspace:*
+        version: link:../skills
       '@i-harness/subagent':
         specifier: workspace:*
         version: link:../subagent

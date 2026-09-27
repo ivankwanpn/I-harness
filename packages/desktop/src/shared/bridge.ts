@@ -5,11 +5,14 @@ import type { AgentDefaults } from "@i-harness/desktop-gateway/src/agent-setting
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
 import type { HookSettingsCommand } from "@i-harness/desktop-gateway/src/hook-settings.ts"
 import type { McpSettingsCommand } from "@i-harness/desktop-gateway/src/mcp-settings.ts"
+import type { ResourceKind } from "@i-harness/desktop-gateway/src/resources.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/resources/list"; workspaceId: string; resourceKind: ResourceKind; query: string; offset: number }
+  | { kind: "desktop/resources/read"; workspaceId: string; resourceKind: ResourceKind; name: string }
   | { kind: "desktop/mcp/state" | "desktop/mcp/refresh"; workspaceId: string }
   | { kind: "desktop/mcp/mutate"; workspaceId: string; command: McpSettingsCommand }
   | { kind: "desktop/hooks/state" | "desktop/hooks/refresh"; workspaceId: string }

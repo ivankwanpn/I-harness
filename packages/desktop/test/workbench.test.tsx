@@ -8,6 +8,7 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { useLocale } from "../src/renderer/design/i18n.ts"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
+import { writeDraft, clearDraft } from "../src/renderer/session/Composer.tsx"
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
@@ -41,6 +42,22 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("inserts a settings command into the existing draft without sending", async () => {
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "desktop/resources/list" ? { items: [{ name: "hello", source: "plugin" }], total: 1, diagnostics: [] }
+      : request.kind === "desktop/resources/read" ? { name: "hello", source: "plugin", body: "A prompt", truncated: false } : { notifications: false, notificationsSupported: false })
+    const onPrompt = vi.fn(async () => {})
+    writeDraft(ENTRY.id, "resource-test", "existing prompt")
+    useUiStore.setState({ surface: "settings" })
+    render(<Workbench bridge={bridge} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="resource-test" capabilities={{ "desktop-resources": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}}
+      conversation={{ rows: [], canSend: true, running: false, pending: [], onPrompt, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+    fireEvent.click(screen.getByRole("button", { name: "命令" }))
+    fireEvent.click(await screen.findByRole("button", { name: "hello" }))
+    fireEvent.click(await screen.findByRole("button", { name: "帶入此命令" }))
+    expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe("/hello existing prompt")
+    expect(onPrompt).not.toHaveBeenCalled()
+    clearDraft(ENTRY.id, "resource-test")
+  })
   it("can hide and restore navigation without losing the header toggle", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))

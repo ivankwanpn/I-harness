@@ -309,7 +309,7 @@ describe("PluginRegistry: install/uninstall", () => {
     // fresh descriptor materialized; the still-conflicting command stays blocked
     expect((await stat(join(root, "commands", HELLO_ID, "meta.md"))).isFile()).toBe(true)
     expect((await stat(join(root, "commands", HELLO_ID, "hello.md"))).isFile()).toBe(true) // materialized but excluded
-    expect(r.runtimeInputs().commandDescriptors).toEqual([{ name: "meta", body: "# meta command" }])
+    expect(r.runtimeInputs().commandDescriptors).toEqual([{ name: "meta", body: "# meta command", pluginId: HELLO_ID }])
     const rec = (await loadState(root)).plugins.find((p) => p.id === HELLO_ID)!
     expect(rec).toMatchObject({ enabled: true, installed: true })
     expect(rec.conflicts).toEqual([{ name: "hello", reason: "already registered by the host" }])
@@ -487,6 +487,7 @@ describe("PluginRegistry: enable/disable", () => {
           description: "Greets the user by name",
           argumentHints: "[name]",
           body: "Greet the user named {name} with a warm hello.",
+          pluginId: HELLO_ID,
         },
       ],
     })
@@ -505,6 +506,7 @@ describe("PluginRegistry: enable/disable", () => {
           description: "Greets the user by name",
           argumentHints: "[name]",
           body: "Greet the user named {name} with a warm hello.",
+          pluginId: HELLO_ID,
         },
       ],
     })
@@ -700,7 +702,7 @@ describe("PluginRegistry: command conflicts (D5: enable succeeds, conflicting co
     await r.addSource(src)
     await r.install("Test Mkt__builder")
     const inputs = await r.enable("Test Mkt__builder")
-    expect(inputs.commandDescriptors).toEqual([{ name: "greet", body: "# builder-specific" }])
+    expect(inputs.commandDescriptors).toEqual([{ name: "greet", body: "# builder-specific", pluginId: "Test Mkt__builder" }])
     expect((await loadState(root)).plugins.find((p) => p.id === "Test Mkt__builder")).toMatchObject({
       enabled: true,
       conflicts: [{ name: "help", reason: "already registered by the host" }],
@@ -792,6 +794,7 @@ describe("PluginRegistry: runtimeInputs", () => {
           description: "Greets the user by name",
           argumentHints: "[name]",
           body: "Greet the user named {name} with a warm hello.",
+          pluginId: HELLO_ID,
         },
       ],
     })

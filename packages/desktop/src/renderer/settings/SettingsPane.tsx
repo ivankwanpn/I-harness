@@ -14,6 +14,7 @@ import { AgentSettings } from "./AgentSettings.tsx"
 import { SubagentSettings } from "./SubagentSettings.tsx"
 import { HookSettings } from "./HookSettings.tsx"
 import { McpSettings } from "./McpSettings.tsx"
+import { ResourceSettings } from "./ResourceSettings.tsx"
 import { MemoryPane } from "../memory/MemoryPane.tsx"
 import { PluginMarketplace } from "./PluginMarketplace.tsx"
 
@@ -26,6 +27,8 @@ const sections = [
   { id: "subagents", label: "子代理", icon: Brain, group: "Agent 設定", capability: "desktop-subagents" },
   { id: "hooks", label: "Hooks 信任", icon: Shield, group: "Agent 設定", capability: "desktop-hooks" },
   { id: "mcp", label: "MCP 伺服器", icon: Server, group: "Agent 設定", capability: "desktop-mcp" },
+  { id: "skills", label: "技能", icon: Brain, group: "Agent 設定", capability: "desktop-resources" },
+  { id: "commands", label: "命令", icon: Server, group: "Agent 設定", capability: "desktop-resources" },
   { id: "memory", label: "記憶", icon: Brain, group: "Agent 設定", capability: "desktop-memory" },
   { id: "plugins", label: "插件", icon: Puzzle, group: "Agent 設定", capability: "desktop-plugins" },
   { id: "workspace", label: "工作區", icon: Folder, group: "本機資料" },
@@ -37,10 +40,11 @@ function readSection(): Section {
   catch { return "general" }
 }
 
-export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, capabilities = {} }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; capabilities?: Record<string, string[]> }) {
+export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, capabilities = {}, onUseResource }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; capabilities?: Record<string, string[]>; onUseResource?(prefix: string): void }) {
   const t = useText()
   const [selectedTab, setTab] = useState<Section>(readSection)
   const [search, setSearch] = useState("")
+  const [pluginQuery, setPluginQuery] = useState("")
   const available = sections.filter((section) => !("capability" in section) || (workspace && bridge && capabilities[section.capability]?.includes("1")))
   const current = available.find((section) => section.id === selectedTab) ?? available[0]!
   const tab = current.id
@@ -88,8 +92,9 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
       : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "mcp" && workspace && bridge ? <McpSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : (tab === "skills" || tab === "commands") && workspace && bridge ? <ResourceSettings key={`${workspace.id}:${tab}`} resourceKind={tab} bridge={bridge} workspaceId={workspace.id} onUse={onUseResource} onManagePlugins={capabilities["desktop-plugins"]?.includes("1") ? (id) => { setPluginQuery(id ?? ""); select("plugins") } : undefined} />
       : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
-      : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
+      : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={`${workspace.id}:${pluginQuery}`} initialQuery={pluginQuery} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "workspace" ? <>
         {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} onRewindComplete={onRewindComplete} /> : null}
         {workspace ? <SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup> : <p className="muted">{t("尚未開啟工作區")}</p>}

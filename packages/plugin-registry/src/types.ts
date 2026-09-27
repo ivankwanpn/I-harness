@@ -52,6 +52,8 @@ export type MCP_CONFIG_SHAPE = {
 
 /** One markdown command discovered in a plugin's commands/*.md (name = file name). */
 export interface CommandDescriptor {
+  /** Present on effective runtime descriptors for settings/source management. */
+  pluginId?: string
   name: string
   description?: string
   argumentHints?: string

@@ -12,6 +12,7 @@ import type { createAgentSettings } from "./agent-settings.ts"
 import type { createSubagentSettings } from "./subagent-settings.ts"
 import type { createHookSettings } from "./hook-settings.ts"
 import type { createDesktopMcp } from "./mcp-settings.ts"
+import type { createDesktopResources } from "./resources.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -20,6 +21,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  resources?: ReturnType<typeof createDesktopResources>
   mcp?: ReturnType<typeof createDesktopMcp>
   hooks?: ReturnType<typeof createHookSettings>
   subagents?: ReturnType<typeof createSubagentSettings>

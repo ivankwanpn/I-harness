@@ -284,7 +284,20 @@ button { font: inherit; color: inherit; }
 .settings-navigation [aria-current="page"] { background: var(--color-selected); }
 .settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .settings-scroll { overflow-y: auto; flex: 1; }
-.settings-content { padding: 34px 32px 48px; max-width: 960px; margin: 0 auto; min-width: 0; }
+.settings-content { padding: 34px 32px 48px; max-width: 960px; margin: 0 auto; min-width: 0; container-type: inline-size; }
+.resource-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
+.resource-search input { min-width: 140px; flex: 1; border: 1px solid var(--ih-divider); border-radius: 8px; padding: 9px 12px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
+.resource-layout { display: grid; grid-template-columns: 210px minmax(0,1fr); border: 1px solid var(--ih-divider); border-radius: 12px; overflow: hidden; }
+.resource-list { padding: 8px; border-right: 1px solid var(--ih-divider); max-height: 65vh; overflow: auto; }
+.resource-list > button { display: block; width: 100%; padding: 10px; border-radius: 8px; text-align: left; overflow-wrap: anywhere; }
+.resource-list > button[aria-current="true"] { background: var(--ih-panel); }
+.resource-list strong { font-size: 13px; font-weight: 500; }
+.resource-list small, .resource-source { display: block; margin-top: 5px; color: var(--ih-muted); font-size: 11px; }
+.resource-detail { min-width: 0; padding: 20px; overflow-wrap: anywhere; }
+.resource-detail h2 { margin-top: 0; }
+.resource-body { max-height: 60vh; overflow: auto; line-height: 1.7; }
+.resource-body pre { overflow: auto; padding: 12px; background: var(--ih-sidebar); border-radius: 8px; font-size: 12px; }
+@container (max-width: 560px) { .resource-layout { grid-template-columns: minmax(0,1fr); } .resource-list { max-height: 240px; border-right: 0; border-bottom: 1px solid var(--ih-divider); } }
 .settings-content h1 { font-size: 24px; margin: 0 0 24px; }
 .settings-content > .zc-settings-group + .zc-settings-group { margin-top: 20px; }
 .settings-description { color: var(--ih-muted); line-height: 1.7; margin: -8px 0 24px; }
@@ -401,7 +414,7 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-model-actions { display: flex; gap: 3px; }
 .provider-model-actions button { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; border-radius: 6px; }
 .provider-model-actions button[aria-pressed="true"] { color: var(--ih-accent); background: var(--ih-sidebar); }
-@media (max-width: 1100px) {
+@container (max-width: 560px) {
   .provider-directory-layout { grid-template-columns: minmax(0,1fr); }
   .provider-list { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--ih-divider); }
   .provider-list button { width: auto; flex-shrink: 0; }

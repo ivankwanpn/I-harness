@@ -11,6 +11,13 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/resources/list":
+    case "desktop/resources/read": {
+      if (value.resourceKind !== "skills" && value.resourceKind !== "commands") throw new Error("invalid resource kind")
+      if (value.kind === "desktop/resources/read") return { resourceKind: value.resourceKind, name: text("name", 256) }
+      if (typeof value.query !== "string" || value.query.length > 512 || typeof value.offset !== "number" || !Number.isSafeInteger(value.offset) || value.offset < 0) throw new Error("invalid resource query")
+      return { resourceKind: value.resourceKind, query: value.query, offset: value.offset }
+    }
     case "desktop/mcp/state":
     case "desktop/mcp/refresh": return {}
     case "desktop/mcp/mutate": {

@@ -19,6 +19,7 @@ import { createAgentSettings } from "./agent-settings.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
 import { createDesktopMcp } from "./mcp-settings.ts"
+import { createDesktopResources } from "./resources.ts"
 import { watchSettings } from "@i-harness/settings"
 import { resolveHookTrustPath } from "@i-harness/hooks"
 import type { RpcMessage } from "@i-harness/sdk"
@@ -135,6 +136,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
     subagents,
