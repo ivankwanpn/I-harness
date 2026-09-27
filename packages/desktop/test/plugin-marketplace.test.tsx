@@ -30,3 +30,17 @@ it("filling the official source does not install or fetch it", async () => {
   expect((screen.getByLabelText("來源網址或本機路徑") as HTMLInputElement).value).toBe("anthropics/claude-plugins-official")
   expect(request).toHaveBeenCalledTimes(1)
 })
+
+it("keeps the catalog compact and reveals the full plugin description on demand", async () => {
+  const description = "A long plugin description for daily work. ".repeat(18)
+  const request = vi.fn().mockResolvedValue({ sources: [], plugins: [{ id: "official__example", name: "Example", description, installed: false, enabled: false, conflicts: [{ name: "tool", reason: "incompatible" }] }] })
+  render(<PluginMarketplace bridge={{ request, onEvent: () => () => {} }} workspaceId="w" />)
+  await screen.findByRole("button", { name: "查看插件詳情 Example" })
+  expect(screen.queryByText(description.trim())).toBeNull()
+  expect(screen.getByRole("button", { name: "安裝" })).toBeTruthy()
+  expect(screen.getByRole("alert").textContent).toContain("incompatible")
+  fireEvent.click(screen.getByRole("button", { name: "查看插件詳情 Example" }))
+  expect(screen.getByText(description.trim())).toBeTruthy()
+  expect(screen.getByText("official__example")).toBeTruthy()
+  expect(request).toHaveBeenCalledTimes(1)
+})
