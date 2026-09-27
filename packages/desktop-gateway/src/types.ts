@@ -8,6 +8,7 @@ import type { createSessionManagement } from "./session-management.ts"
 import type { createDesktopRewind } from "./rewind.ts"
 import type { createDesktopPlugins } from "./plugins.ts"
 import type { createDesktopTerminal } from "./terminal.ts"
+import type { createDesktopSchedules } from "./schedules.ts"
 import type { createAgentSettings } from "./agent-settings.ts"
 import type { createSubagentSettings } from "./subagent-settings.ts"
 import type { createHookSettings } from "./hook-settings.ts"
@@ -27,6 +28,7 @@ export interface DesktopHandlers {
   subagents?: ReturnType<typeof createSubagentSettings>
   agentSettings?: ReturnType<typeof createAgentSettings>
   terminal?: ReturnType<typeof createDesktopTerminal>
+  schedules?: ReturnType<typeof createDesktopSchedules>
   plugins?: ReturnType<typeof createDesktopPlugins>
   rewind?: ReturnType<typeof createDesktopRewind>
   sessions?: ReturnType<typeof createSessionManagement>

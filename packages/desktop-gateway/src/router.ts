@@ -13,6 +13,8 @@ import type { SdkServer } from "@i-harness/sdk/server"
 import type { DesktopHandlers, GatewayWrite } from "./types.ts"
 import { ReviewPathError } from "./review.ts"
 import { randomUUID } from "node:crypto"
+import { ScheduleInputError } from "@i-harness/schedule"
+import { ModelUnavailableError } from "@i-harness/session-executor"
 import { memoryRequest } from "./memory-wire.ts"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
@@ -33,6 +35,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
+    if (handlers.schedules) capabilities["desktop-schedule"] = ["1"]
     if (handlers.plugins) capabilities["desktop-plugins"] = ["1"]
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
@@ -199,6 +202,48 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if (message.method.startsWith("desktop/terminal/") && handlers.terminal) {
         try { send(makeSuccess(message.id, handlers.terminal.request(message.method, message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/schedule/list", "desktop/schedule/create", "desktop/schedule/delete"].includes(message.method) && handlers.schedules) {
+        const params = asRecord(message.params)
+        const sessionId = params?.sessionId
+        if (typeof sessionId !== "string" || !sessionId || sessionId.length > 128) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid schedule session")); return
+        }
+        let command: { prompt: string; after_seconds?: number; at?: string; every_seconds?: number } | undefined
+        let deleteId: string | undefined
+        if (message.method === "desktop/schedule/create") {
+          const raw = asRecord(params?.command)
+          const fields = raw ? Object.keys(raw) : []
+          const selectors = [raw?.after_seconds, raw?.at, raw?.every_seconds].filter((value) => value !== undefined)
+          if (!raw || fields.some((field) => !["prompt", "after_seconds", "at", "every_seconds"].includes(field))
+            || typeof raw.prompt !== "string" || !raw.prompt.trim() || raw.prompt.length > 4096 || selectors.length !== 1
+            || (raw.after_seconds !== undefined && (typeof raw.after_seconds !== "number" || !Number.isSafeInteger(raw.after_seconds) || raw.after_seconds < 1))
+            || (raw.every_seconds !== undefined && (typeof raw.every_seconds !== "number" || !Number.isSafeInteger(raw.every_seconds) || raw.every_seconds < 300))
+            || (raw.at !== undefined && (typeof raw.at !== "string" || raw.at.length > 40))) {
+            send(makeFailure(message.id, INVALID_PARAMS, "Invalid schedule rule")); return
+          }
+          command = { prompt: raw.prompt, ...(raw.after_seconds !== undefined ? { after_seconds: raw.after_seconds as number } : {}), ...(raw.at !== undefined ? { at: raw.at as string } : {}), ...(raw.every_seconds !== undefined ? { every_seconds: raw.every_seconds as number } : {}) }
+        }
+        if (message.method === "desktop/schedule/delete") {
+          if (typeof params?.id !== "string" || !/^schedule-[1-9]\d*$/.test(params.id)) {
+            send(makeFailure(message.id, INVALID_PARAMS, "Invalid schedule id")); return
+          }
+          deleteId = params.id
+        }
+        if (message.method !== "desktop/schedule/list" && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId))) {
+          send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
+        }
+        const schedules = handlers.schedules
+        const job = message.method === "desktop/schedule/list" ? schedules.list(sessionId)
+          : message.method === "desktop/schedule/create" ? schedules.create(sessionId, command!) : schedules.delete(sessionId, deleteId!)
+        if (message.method !== "desktop/schedule/list") modelSwitches.set(sessionId, job)
+        try { send(makeSuccess(message.id, await job)) }
+        catch (error) {
+          const code = error instanceof ScheduleInputError ? INVALID_PARAMS
+            : error instanceof ModelUnavailableError || (error instanceof Error && error.message === "session is busy") ? INVALID_REQUEST : INTERNAL_ERROR
+          send(makeFailure(message.id, code, error instanceof Error ? error.message : String(error)))
+        } finally { if (message.method !== "desktop/schedule/list") modelSwitches.delete(sessionId) }
         return
       }
       if (["desktop/plugins/state", "desktop/plugins/mutate", "desktop/plugins/commands", "desktop/plugins/refresh"].includes(message.method) && handlers.plugins) {

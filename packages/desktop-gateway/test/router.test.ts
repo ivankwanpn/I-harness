@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import type { SdkServer } from "@i-harness/sdk/server"
@@ -14,6 +14,33 @@ import {
 } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
+
+it("advertises and validates session reminder methods only when the schedule handler is wired", async () => {
+  const sent: RpcMessage[] = []
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [] })
+  const schedules = { list: vi.fn(async () => ({ schedules: [] })), create: vi.fn(async () => ({ id: "schedule-1", kind: "after", scheduledAt: "2099-01-01T00:00:00.000Z" })), delete: vi.fn(async (_sessionId: string, id: string) => ({ deleted: id })) } as unknown as NonNullable<DesktopHandlers["schedules"]>
+  const handlers: DesktopHandlers = { schedules }
+  const send = (frame: RpcMessage) => { sent.push(frame) }
+  const base = createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) })
+  const router = createDesktopRouter(base, send, handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    expect(sent[0]).toMatchObject({ result: { capabilities: { "desktop-schedule": ["1"] } } })
+    await router.handleLine(encodeFrame(makeRequest(2, "desktop/schedule/create", { sessionId: "s", command: { prompt: "x", after_seconds: 600, every_seconds: 300 } })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true)
+    expect(schedules.create).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(3, "desktop/schedule/create", { sessionId: "s", command: { prompt: "later", after_seconds: 600, command: "pwsh" } })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true)
+    expect(schedules.create).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(4, "desktop/schedule/create", { sessionId: "s", command: { prompt: "later", after_seconds: 600 } })))
+    expect(isRpcSuccess(sent.at(-1))).toBe(true)
+    expect(schedules.create).toHaveBeenCalledWith("s", { prompt: "later", after_seconds: 600 })
+    await router.handleLine(encodeFrame(makeRequest(5, "desktop/schedule/list", { sessionId: "s" })))
+    expect(schedules.list).toHaveBeenCalledWith("s")
+    await router.handleLine(encodeFrame(makeRequest(6, "desktop/schedule/delete", { sessionId: "s", id: "schedule-1" })))
+    expect(schedules.delete).toHaveBeenCalledWith("s", "schedule-1")
+  } finally { await router.close(); await service.close() }
+})
 
 function fixture() {
   const sent: RpcMessage[] = []

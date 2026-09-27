@@ -447,6 +447,9 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/schedule':
+        specifier: workspace:*
+        version: link:../schedule
       '@i-harness/sdk':
         specifier: workspace:*
         version: link:../sdk

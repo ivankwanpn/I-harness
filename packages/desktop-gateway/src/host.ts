@@ -17,6 +17,7 @@ import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
 import { createDesktopTerminal } from "./terminal.ts"
+import { createDesktopSchedules } from "./schedules.ts"
 import { createAgentSettings } from "./agent-settings.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
@@ -164,6 +165,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     subagents,
     agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
     terminal,
+    schedules: createDesktopSchedules(coordinator, service),
     plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
     sessions: createSessionManagement(coordinator, service),
