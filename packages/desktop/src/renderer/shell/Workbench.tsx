@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, lazy, Suspense, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, Plus, FolderOpen, TerminalSquare, Globe } from "lucide-react"
+import { ArrowUp, Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
@@ -27,6 +27,7 @@ import { TitleBar } from "./TitleBar.tsx"
 import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
+import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
 import type { ImageInput } from "@i-harness/sdk"
 import type { ManageSession } from "../session/SessionManager.tsx"
@@ -129,8 +130,20 @@ export function Workbench({
   const [createError, setCreateError] = useState<string>()
   const [creating, setCreating] = useState(false)
   const createLock = useRef(false)
+  const [emptyPrompt, setEmptyPrompt] = useState("")
+  const emptyPromptRef = useRef("")
+  const focusCreatedSession = useRef<string | undefined>(undefined)
   const workspaceScope = useRef({ id: selectedWorkspaceId })
   if (workspaceScope.current.id !== selectedWorkspaceId) workspaceScope.current = { id: selectedWorkspaceId }
+  useEffect(() => { emptyPromptRef.current = ""; focusCreatedSession.current = undefined; setEmptyPrompt("") }, [selectedWorkspaceId])
+  useEffect(() => {
+    if (selectedSessionId === undefined || focusCreatedSession.current !== selectedSessionId) return
+    const frame = requestAnimationFrame(() => {
+      document.querySelector<HTMLTextAreaElement>(".composer-input")?.focus()
+      focusCreatedSession.current = undefined
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [selectedSessionId])
   const [workPaneTab, setWorkPaneTab] = useState("changes")
   const workPaneId = useId()
   const surface = useUiStore((state) => state.surface)
@@ -144,8 +157,8 @@ export function Workbench({
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
-  async function createSession(): Promise<void> {
-    if (selectedWorkspaceId === undefined || createLock.current) return
+  async function createSession(seedEmptyPrompt = false): Promise<void> {
+    if (selectedWorkspaceId === undefined || createLock.current || focusCreatedSession.current !== undefined) return
     const scope = workspaceScope.current
     createLock.current = true
     drawer.setOpen(false)
@@ -155,7 +168,14 @@ export function Workbench({
       const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId })
       if (workspaceScope.current !== scope) return
       const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
-      if (typeof sessionId === "string") { setMemoryOpen(false); onSelectSession(sessionId) }
+      if (typeof sessionId === "string") {
+        if (seedEmptyPrompt) {
+          writeDraft(selectedWorkspaceId, sessionId, emptyPromptRef.current)
+          focusCreatedSession.current = sessionId
+        }
+        setMemoryOpen(false)
+        onSelectSession(sessionId)
+      }
       onSessionsChanged?.()
     } catch (reason) {
       if (workspaceScope.current === scope) setCreateError(reason instanceof Error ? reason.message : String(reason))
@@ -252,13 +272,22 @@ export function Workbench({
               </>
             )
             : <div className="empty-conversation">
-                <span className="welcome-mark">I</span>
-                <h1>{t("讓想法成為成果")}</h1>
-                <p>{t(selectedWorkspaceId === undefined ? "選擇本機資料夾，開始你的第一個任務。" : "延續左側的會話，或開始一項新任務。")}</p>
-                <button type="button" className="welcome-action" disabled={selectedWorkspaceId !== undefined && (!canCreate || creating)} onClick={() => selectedWorkspaceId === undefined ? onOpenWorkspace?.() : void createSession()}>
-                  {selectedWorkspaceId === undefined ? <FolderOpen size={17} /> : <Plus size={17} />}
-                  {t(selectedWorkspaceId === undefined ? "選擇資料夾" : "開始新任務")}
-                </button>
+                {selectedWorkspaceId === undefined ? <>
+                  <span className="welcome-mark">I</span>
+                  <h1>{t("讓想法成為成果")}</h1>
+                  <p>{t("選擇本機資料夾，開始你的第一個任務。")}</p>
+                  <button type="button" className="welcome-action" onClick={() => onOpenWorkspace?.()}><FolderOpen size={17} />{t("選擇資料夾")}</button>
+                </> : <>
+                  <h1>{t("今天想完成甚麼？")}</h1>
+                  <p>{t("描述你的目標，從這個工作區開始。")}</p>
+                  <div className="empty-composer"><ComposerSurface onSubmit={() => { void createSession(true) }}
+                    editor={<textarea aria-label={t("提示")} className="composer-input" rows={3} value={emptyPrompt} disabled={!canCreate}
+                      onChange={(event) => { const next = boundedDraft(event.target.value); emptyPromptRef.current = next; setEmptyPrompt(next); if (next.trim()) void createSession(true) }}
+                      placeholder={t("輸入提示…")} />}
+                    leadingActions={<span className="empty-composer-context"><FolderOpen size={15} />{workspaces.find((item) => item.id === selectedWorkspaceId)?.label}</span>}
+                    trailingActions={<button type="submit" className="composer-send" aria-label={t("開始新任務")} disabled={!canCreate || creating}><ArrowUp size={18} /></button>}
+                  /></div>
+                </>}
               </div>}
         </section>}
         <footer className="workspace-status">

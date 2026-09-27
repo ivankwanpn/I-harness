@@ -1,14 +1,14 @@
 // @vitest-environment jsdom
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { useLocale } from "../src/renderer/design/i18n.ts"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
-import { writeDraft, clearDraft } from "../src/renderer/session/Composer.tsx"
+import { writeDraft, readDraft, clearDraft } from "../src/renderer/session/Composer.tsx"
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
@@ -42,6 +42,65 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("shows a new-task composer without creating a session until typing, then preserves typed text", async () => {
+    let finish!: (result: { sessionId: string }) => void
+    const pending = new Promise<{ sessionId: string }>((resolve) => { finish = resolve })
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "session/create" ? pending : undefined)
+    const onSelectSession = vi.fn()
+    function NewTask() {
+      const [selected, setSelected] = useState<string>()
+      return <Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
+        selectedSessionId={selected} capabilities={{ "session-create": ["1"] }} onSelectWorkspace={() => {}}
+        onSelectSession={(id) => { onSelectSession(id); setSelected(id) }}
+        conversation={selected ? { rows: [], canSend: false, running: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } : undefined} />
+    }
+    render(<NewTask />)
+    const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
+    expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/create", workspaceId: ENTRY.id })
+    fireEvent.focus(editor)
+    expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/create", workspaceId: ENTRY.id })
+    fireEvent.change(editor, { target: { value: "Review the playground" } })
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "session/create", workspaceId: ENTRY.id }))
+    await act(async () => finish({ sessionId: "created-from-composer" }))
+    await waitFor(() => expect(onSelectSession).toHaveBeenCalledWith("created-from-composer"))
+    expect(readDraft(ENTRY.id, "created-from-composer")).toBe("Review the playground")
+    await waitFor(() => expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe("Review the playground"))
+    clearDraft(ENTRY.id, "created-from-composer")
+  })
+  it("does not create a second empty session while the first selection is rendering", async () => {
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "session/create" ? { sessionId: "created-once" } : undefined)
+    const onSelectSession = vi.fn()
+    render(<Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
+      capabilities={{ "session-create": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={onSelectSession} />)
+    const editor = screen.getByRole("textbox", { name: "提示" })
+    fireEvent.change(editor, { target: { value: "First" } })
+    await waitFor(() => expect(onSelectSession).toHaveBeenCalledWith("created-once"))
+    fireEvent.change(editor, { target: { value: "First and second" } })
+    const calls = vi.mocked(bridge.request).mock.calls.filter(([request]) => request.kind === "session/create")
+    expect(calls).toHaveLength(1)
+    clearDraft(ENTRY.id, "created-once")
+  })
+  it("keeps the new-task draft after creation fails and transfers it on retry", async () => {
+    let fail = true
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "session/create"
+      ? fail ? Promise.reject(new Error("workspace unavailable")) : { sessionId: "created-after-retry" }
+      : undefined)
+    const onSelectSession = vi.fn()
+    render(<Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
+      capabilities={{ "session-create": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={onSelectSession} />)
+    const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
+    fireEvent.change(editor, { target: { value: "Keep this task" } })
+    await waitFor(() => expect(screen.getByText("workspace unavailable")).toBeTruthy())
+    expect(editor.value).toBe("Keep this task")
+    fail = false
+    fireEvent.click(screen.getByRole("button", { name: "開始新任務" }))
+    await waitFor(() => expect(onSelectSession).toHaveBeenCalledWith("created-after-retry"))
+    expect(readDraft(ENTRY.id, "created-after-retry")).toBe("Keep this task")
+    clearDraft(ENTRY.id, "created-after-retry")
+  })
   it("inserts a settings command into the existing draft without sending", async () => {
     const bridge = fakeBridge()
     bridge.request = vi.fn(async (request) => request.kind === "desktop/resources/list" ? { items: [{ name: "hello", source: "plugin" }], total: 1, diagnostics: [] }
@@ -99,7 +158,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
     expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy()
-    expect(screen.getByRole("heading", { name: "Bring your ideas to life" })).toBeTruthy()
+    expect(screen.getByRole("heading", { name: "What would you like to work on?" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "workspace" })).toBeTruthy()
     expect(document.documentElement.lang).toBe("en")
   })
