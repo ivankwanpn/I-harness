@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto"
 import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+
+function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
+  return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
+}
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -137,8 +142,10 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       const boundedReasoning = reasoning?.thinking.type === "enabled"
         ? { thinking: { type: "enabled" as const, budget_tokens: Math.min(reasoning.thinking.budget_tokens, maxTokens - 1) } }
         : reasoning
+      const wireTools = request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema }))
       const wireMessages: { role: "user" | "assistant"; content: unknown }[] = []
       let toolResults: unknown[] | undefined
+      let invalidThinkingChain = false
       for (const m of messages) {
         if (m.role === "tool") {
           if (toolResults === undefined) {
@@ -152,25 +159,43 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
           // New streams keep the provider's interleaved block order. Older
           // sessions without that metadata retain the canonical fallback.
-          const replayThinking = m.providerContinuation?.kind === "anthropic" && !canReplayContinuation(m.providerContinuation, config)
-            ? [] : m.thinkingBlocks ?? []
+          const continuation = m.providerContinuation?.kind === "anthropic" ? m.providerContinuation : undefined
+          const sourceMatches = m.providerContinuation?.kind === undefined || continuation !== undefined && canReplayContinuation(continuation, config)
+          const prefixMatches = continuation?.prefixFingerprint === undefined || continuation.prefixFingerprint === fingerprintPrefix(request.systemPrompt, wireTools, wireMessages)
+          const toolsMatch = continuation?.prefixFingerprint === undefined || continuation.toolBindings?.length === m.toolCalls.length && continuation.toolBindings.every((binding, index) => {
+            const call = m.toolCalls![index]
+            return call !== undefined && binding.name === call.name && binding.inputJson === JSON.stringify(call.args) && (binding.id === undefined || binding.id === call.id)
+          })
+          if (m.thinkingBlocks?.length) {
+            // A later response produced after earlier blocks were dropped has
+            // its own valid prefix. Its fingerprint starts a new chain.
+            if (continuation?.prefixFingerprint !== undefined) invalidThinkingChain = !sourceMatches || !prefixMatches || !toolsMatch
+            else if (!sourceMatches) invalidThinkingChain = true
+          }
+          let replayThinking = invalidThinkingChain ? [] : m.thinkingBlocks ?? []
           const toolBlocks = m.toolCalls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.args }))
-          const order = m.providerContinuation?.kind === "anthropic" && canReplayContinuation(m.providerContinuation, config)
-            ? m.providerContinuation.contentOrder : undefined
-          const content: unknown[] = replayBlockOrder<unknown>(order, m.content, replayThinking, toolBlocks, (text) => ({ type: "text", text }))
-            ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]
+          const order = continuation && sourceMatches ? continuation.contentOrder : undefined
+          let orderedContent = replayBlockOrder<unknown>(invalidThinkingChain ? order?.filter((entry) => entry.kind !== "reasoning") : order, m.content, replayThinking, toolBlocks, (text) => ({ type: "text", text }))
+          if (order && orderedContent === undefined && replayThinking.length) {
+            invalidThinkingChain = true
+            replayThinking = []
+            orderedContent = replayBlockOrder<unknown>(order.filter((entry) => entry.kind !== "reasoning"), m.content, [], toolBlocks, (text) => ({ type: "text", text }))
+          }
+          const content: unknown[] = orderedContent ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]
           wireMessages.push({ role: "assistant", content })
           continue
         }
         wireMessages.push({ role: m.role, content: toAnthropicContent(m.content) })
       }
       const body = {
+        ...(config.options ?? {}),
+        // Extra route options must not replace the selected model or the
+        // neutral transcript that provenance and signature checks describe.
         model: config.model,
         system: request.systemPrompt,
         messages: wireMessages,
-        tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
+        tools: wireTools,
         stream: true,
-        ...(config.options ?? {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(boundedReasoning ?? {}),
         // M72 Ⅱ: `max_tokens` is REQUIRED by the Messages API — the one wire
@@ -217,8 +242,9 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       const thinkingBlocks: ProviderThinkingBlock[] = []
       const blockOrder = new Map<number, ProviderBlockOrderEntry>()
       let toolOrdinal = 0
+      const toolBindings: { id?: string; name: string; inputJson: string }[] = []
       const pendingThinking = new Map<number, { thinking: string; signature: string }>()
-      const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string }>()
+      const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string; ordinal: number }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const t = event.type as string
         const index = event.index as number
@@ -266,7 +292,8 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         if (t === "content_block_start") {
           const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; text?: string; thinking?: string; signature?: string; data?: string }
           if (block?.type === "tool_use") {
-            blockOrder.set(index, { kind: "tool", index: toolOrdinal++ })
+            const ordinal = toolOrdinal++
+            blockOrder.set(index, { kind: "tool", index: ordinal })
             const input = block.input as Record<string, unknown> | undefined
             // Some streams send the full input inline on the start event; if
             // present (and non-empty) seed the args buffer with it.
@@ -275,6 +302,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
               ...(block.id ? { id: block.id } : {}),
               name: block.name ?? "",
               argsBuffer: hasInlineInput ? JSON.stringify(input) : "",
+              ordinal,
             })
           } else if (block?.type === "thinking") {
             pendingThinking.set(index, { thinking: block.thinking ?? "", signature: block.signature ?? "" })
@@ -325,10 +353,12 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
             pendingToolUses.delete(index)
             if (pending.argsBuffer.trim() === "") {
               // Empty inline input ({}) with no deltas → no-arg tool call.
+              toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: "{}" }
               return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args: {} } }]
             }
             try {
               const args = JSON.parse(pending.argsBuffer) as unknown
+              toolBindings[pending.ordinal] = { ...(pending.id ? { id: pending.id } : {}), name: pending.name, inputJson: JSON.stringify(args) }
               return [{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }]
             } catch {
               return [{ type: "error", error: new Error("anthropic malformed tool_use input") }]
@@ -396,7 +426,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         previousRank = Math.max(previousRank, current)
         return outOfOrder
       })
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}), ...(thinkingBlocks.length || interleaved ? { providerContinuation: { kind: "anthropic", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(interleaved ? { contentOrder } : {}) } as const } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}), ...(thinkingBlocks.length || interleaved ? { providerContinuation: { kind: "anthropic", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(interleaved ? { contentOrder } : {}), ...(thinkingBlocks.length ? { prefixFingerprint: fingerprintPrefix(body.system, body.tools, body.messages) } : {}), ...(toolBindings.length ? { toolBindings } : {}) } as const } : {}) }
     },
   }
 }

@@ -20,6 +20,19 @@ describe("llm-anthropic protocol", () => {
     await it.return?.()
   })
 
+  it("keeps the selected model and neutral messages authoritative over provider extra options", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createAnthropicClient({ apiKey: "k", model: "claude-selected", options: {
+      model: "claude-other", system: "replaced", messages: [{ role: "user", content: "replaced" }], tools: [], stream: false,
+    } }).stream({ messages: [{ role: "user", content: "original" }], tools: [{ name: "read", description: "d", inputSchema: {} }], systemPrompt: "trusted" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body).toMatchObject({ model: "claude-selected", system: "trusted", messages: [{ role: "user", content: "original" }], stream: true })
+    expect(body.tools).toEqual([{ name: "read", description: "d", input_schema: {} }])
+    await iterator.return?.()
+  })
+
   it("M60 G: a case-variant configured auth header is dropped — exactly one x-api-key", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
@@ -288,10 +301,154 @@ describe("llm-anthropic protocol", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
     const events: LLMStreamEvent[] = []
     for await (const ev of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(ev)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "anthropic", model: "m" }, thinkingBlocks: [
+    expect(events.at(-1)).toMatchObject({ type: "end", providerContinuation: { kind: "anthropic", model: "m", prefixFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) }, thinkingBlocks: [
       { type: "thinking", thinking: "first second", signature: "signed" },
       { type: "redacted_thinking", data: "opaque" },
     ] })
+  })
+
+  it("drops signed thinking when its original system, tools or message prefix changed", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "plan", signature: "signed" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "call_1", name: "read", input: {} } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_stop" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "claude-test" })
+    const tools = [{ name: "read", description: "read a file", inputSchema: {} }]
+    const first: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [{ role: "user", content: "read a file" }], tools, systemPrompt: "stable instructions" })) first.push(event)
+    const end = first.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    expect(end.providerContinuation).toMatchObject({ prefixFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/) })
+    const history: LLMRequest["messages"] = [
+      { role: "user", content: "read a file" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }], thinkingBlocks: end.thinkingBlocks, providerContinuation: end.providerContinuation },
+      { role: "tool", toolCallId: "call_1", content: "data" },
+    ]
+    const same = client.stream({ messages: history, tools, systemPrompt: "stable instructions" })[Symbol.asyncIterator]()
+    await same.next()
+    const sameBody = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(sameBody.messages[1].content[0]).toEqual({ type: "thinking", thinking: "plan", signature: "signed" })
+    await same.return?.()
+    const changed = client.stream({ messages: history, tools, systemPrompt: "changed instructions" })[Symbol.asyncIterator]()
+    await changed.next()
+    const changedBody = JSON.parse((fetchMock.mock.calls[2]![1] as RequestInit).body as string)
+    expect(changedBody.messages[1].content).toEqual([{ type: "tool_use", id: "call_1", name: "read", input: {} }])
+    await changed.return?.()
+    const changedTools = client.stream({ messages: history, tools: [{ ...tools[0]!, description: "changed tool" }], systemPrompt: "stable instructions" })[Symbol.asyncIterator]()
+    await changedTools.next()
+    const changedToolsBody = JSON.parse((fetchMock.mock.calls[3]![1] as RequestInit).body as string)
+    expect(changedToolsBody.messages[1].content).toEqual([{ type: "tool_use", id: "call_1", name: "read", input: {} }])
+    await changedTools.return?.()
+    const changedHistory: LLMRequest["messages"] = [{ role: "user", content: "edited request" }, ...history.slice(1)]
+    const changedMessage = client.stream({ messages: changedHistory, tools, systemPrompt: "stable instructions" })[Symbol.asyncIterator]()
+    await changedMessage.next()
+    const changedMessageBody = JSON.parse((fetchMock.mock.calls[4]![1] as RequestInit).body as string)
+    expect(changedMessageBody.messages[1].content).toEqual([{ type: "tool_use", id: "call_1", name: "read", input: {} }])
+    await changedMessage.return?.()
+  })
+
+  it("does not replay a different adapter's signed thinking as Anthropic thinking", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createAnthropicClient({ apiKey: "k", model: "claude-test" }).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }],
+        thinkingBlocks: [{ type: "thinking", thinking: "old", signature: "foreign" }],
+        providerContinuation: { kind: "bedrock", reasoningBlocks: [], model: "aws-model" } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([{ type: "tool_use", id: "call_1", name: "read", input: {} }])
+    await iterator.return?.()
+  })
+
+  it("keeps legacy signed tool continuity on a compatible non-Claude endpoint", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.deepseek.com/anthropic", model: "deepseek-flash" }).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }],
+        thinkingBlocks: [{ type: "thinking", thinking: "old", signature: "signed" }],
+        providerContinuation: { kind: "anthropic", model: "deepseek-flash" } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].content[0]).toEqual({ type: "thinking", thinking: "old", signature: "signed" })
+    await iterator.return?.()
+  })
+
+  it("allows a new signed chain after earlier thinking was dropped for an edited prefix", async () => {
+    const signed = (id: string) => [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: `plan-${id}`, signature: `sig-${id}` } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id, name: "read", input: {} } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_stop" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(signed("call_a"), { status: 200 }))
+      .mockResolvedValueOnce(new Response(signed("call_b"), { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "claude-test" })
+    const first: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [{ role: "user", content: "read" }], tools: [], systemPrompt: "old" })) first.push(event)
+    const firstEnd = first.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    const historyA: LLMRequest["messages"] = [
+      { role: "user", content: "read" },
+      { role: "assistant", content: "", toolCalls: [{ id: "call_a", name: "read", args: {} }], thinkingBlocks: firstEnd.thinkingBlocks, providerContinuation: firstEnd.providerContinuation },
+      { role: "tool", toolCallId: "call_a", content: "A" },
+    ]
+    const second: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: historyA, tools: [], systemPrompt: "new" })) second.push(event)
+    const secondEnd = second.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    const historyB: LLMRequest["messages"] = [
+      ...historyA,
+      { role: "assistant", content: "", toolCalls: [{ id: "call_b", name: "read", args: {} }], thinkingBlocks: secondEnd.thinkingBlocks, providerContinuation: secondEnd.providerContinuation },
+      { role: "tool", toolCallId: "call_b", content: "B" },
+    ]
+    const third = client.stream({ messages: historyB, tools: [], systemPrompt: "new" })[Symbol.asyncIterator]()
+    await third.next()
+    const body = JSON.parse((fetchMock.mock.calls[2]![1] as RequestInit).body as string)
+    expect(body.messages[1].content).toEqual([{ type: "tool_use", id: "call_a", name: "read", input: {} }])
+    expect(body.messages[3].content[0]).toEqual({ type: "thinking", thinking: "plan-call_b", signature: "sig-call_b" })
+    await third.return?.()
+  })
+
+  it("drops signed interleaved thinking when an earlier tool-use argument changes", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "before", signature: "sig-before" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "call_a", name: "read", input: { path: "old" } } },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_start", index: 2, content_block: { type: "thinking", thinking: "after", signature: "sig-after" } },
+      { type: "content_block_stop", index: 2 },
+      { type: "content_block_start", index: 3, content_block: { type: "tool_use", id: "call_b", name: "read", input: {} } },
+      { type: "content_block_stop", index: 3 },
+      { type: "message_stop" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "claude-test" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    const end = events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [
+      { id: "call_a", name: "read", args: { path: "new" } },
+      { id: "call_b", name: "read", args: {} },
+    ], thinkingBlocks: end.thinkingBlocks, providerContinuation: end.providerContinuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([
+      { type: "tool_use", id: "call_a", name: "read", input: { path: "new" } },
+      { type: "tool_use", id: "call_b", name: "read", input: {} },
+    ])
+    await iterator.return?.()
   })
 
   it("replays interleaved signed thinking and tool uses in their original order", async () => {

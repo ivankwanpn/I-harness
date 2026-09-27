@@ -231,7 +231,7 @@ export type ProviderBlockOrderEntry =
   | { kind: "text"; text: string; phase?: string | null; thoughtSignature?: string }
 
 export type ProviderContinuation =
-  | { kind: "anthropic"; model: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[] }
+  | { kind: "anthropic"; model: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[]; prefixFingerprint?: string; toolBindings?: { id?: string; name: string; inputJson: string }[] }
   | { kind: "openai-compatible"; reasoningContent: string; model?: string; providerId?: string }
   | { kind: "openai-responses"; reasoningItems: Record<string, unknown>[]; model?: string; providerId?: string; outputOrder?: ProviderBlockOrderEntry[] }
   | { kind: "gemini"; callSignatures: (string | null)[]; model?: string; providerId?: string; thoughtParts?: { text: string; thoughtSignature?: string }[]; textSignature?: string; emptyTextSignatures?: string[]; partOrder?: ProviderBlockOrderEntry[]; callBindings?: { id?: string; name: string; argsJson: string }[] }
