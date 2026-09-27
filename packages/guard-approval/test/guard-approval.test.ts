@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
-import { registerApprovalAnswerer } from "@i-harness/interaction"
+import { registerApprovalAnswerer, registerAskUserInput, registerQuestionProvider } from "@i-harness/interaction"
 import { createApprovalPolicy, type ApprovalConfig } from "../src/index.ts"
 
 function setup(config: ApprovalConfig) {
@@ -35,6 +35,18 @@ describe("guard-approval policy", () => {
     registry.register(makeReadTool)
     const result = await registry.execute({ name: "read", args: {} })
     expect(result.output).toEqual({ content: "x" })
+  })
+
+  it("ask_user_input opens its question without a second approval prompt", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd() })
+    const asked: string[] = []
+    registerQuestionProvider(ctx, { ask: async (question) => { asked.push(question.prompt); return "Option A" } })
+    registerAskUserInput(ctx, registry)
+    // No approval answerer is installed. A separate approval request would
+    // fail closed here, even though the human-facing question is available.
+    const result = await registry.execute({ name: "ask_user_input", args: { question: "Which option?", options: ["Option A", "Option B"] } })
+    expect(asked).toEqual(["Which option?"])
+    expect(result.output).toEqual({ question: "Which option?", answer: "Option A" })
   })
 
   it("Layer 1: non-readOnly tool asks → fail-closed without answerer", async () => {

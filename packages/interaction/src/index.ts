@@ -199,6 +199,10 @@ export interface AskUserInputToolDeps {
 export function createAskUserInputTool(deps?: AskUserInputToolDeps): Tool {
   return {
     name: "ask_user_input",
+    // The operation only relays a question to the human. It does not read or
+    // mutate workspace resources; asking for approval first duplicates the
+    // human interaction and can block the question itself.
+    isReadOnly: true,
     description:
       "Ask the human user a structured question and wait for their answer. Use this for decisions that need the user's preference (not for approvals — approvals use the approval flow).",
     inputSchema: {

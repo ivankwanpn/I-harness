@@ -93,6 +93,23 @@ it("keeps the latest chosen file when an earlier diff arrives late", async () =>
   expect(captured.props!.review!.diff).toMatchObject({ text: "B" })
 })
 
+it("clears a selected review detail when refresh reports no remaining changes", async () => {
+  let files = [{ path: "note.txt", status: "modified", canDiff: true, canPreview: true }]
+  fixture((request) => request.kind === "desktop/review/changes"
+    ? Promise.resolve({ kind: "ok", files, truncated: false })
+    : request.kind === "desktop/review/diff"
+      ? Promise.resolve({ kind: "text", text: "+after", truncated: false, bytes: 6 })
+      : undefined)
+  await waitFor(() => expect(captured.props?.review?.changes).toMatchObject({ kind: "ok", files: [{ path: "note.txt" }] }))
+  act(() => captured.props!.review!.onSelect("note.txt", "diff"))
+  await waitFor(() => expect(captured.props?.review?.diff).toMatchObject({ text: "+after" }))
+  files = []
+  act(() => captured.props!.review!.onRefresh())
+  await waitFor(() => expect(captured.props?.review?.changes).toMatchObject({ kind: "ok", files: [] }))
+  expect(captured.props!.review!.selected).toBeUndefined()
+  expect(captured.props!.review!.diff).toBeUndefined()
+})
+
 it("reloads pending interactions on retry without losing an outstanding approval", async () => {
   const approval = { requestId: "approval", sessionId: "a", kind: "approval", payload: { name: "write" }, openedAt: 1 }
   const request = fixture((value) => value.kind === "desktop/interaction/pending" ? Promise.resolve([approval]) : undefined)
@@ -145,7 +162,9 @@ it("keeps a history failure visible even when task loading succeeds", async () =
 
 it("refreshes the selected file content together with the change list", async () => {
   let reads = 0
-  fixture((request) => request.kind === "desktop/review/diff" ? Promise.resolve({ kind: "text", text: `version${++reads}`, truncated: false, bytes: 8 }) : undefined)
+  fixture((request) => request.kind === "desktop/review/changes"
+    ? Promise.resolve({ kind: "ok", files: [{ path: "file", status: "modified", canDiff: true, canPreview: true }], truncated: false })
+    : request.kind === "desktop/review/diff" ? Promise.resolve({ kind: "text", text: `version${++reads}`, truncated: false, bytes: 8 }) : undefined)
   await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
   act(() => captured.props!.review!.onSelect("file", "diff"))
   await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version1" }))

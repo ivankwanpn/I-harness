@@ -1,4 +1,4 @@
-import { useId, useRef, useState, lazy, Suspense, type CSSProperties } from "react"
+import { useEffect, useId, useRef, useState, lazy, Suspense, type CSSProperties } from "react"
 import { Brain, Search, PanelLeft, PanelRight, Plus, FolderOpen, TerminalSquare, Globe } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -117,6 +117,12 @@ export function Workbench({
 }: WorkbenchProps) {
   const t = useText()
   const drawer = useNarrowSidebar()
+  const drawerWorkspace = useRef(selectedWorkspaceId)
+  useEffect(() => {
+    if (drawerWorkspace.current === selectedWorkspaceId) return
+    drawerWorkspace.current = selectedWorkspaceId
+    if (selectedWorkspaceId !== undefined) drawer.setOpen(false)
+  }, [selectedWorkspaceId, drawer.setOpen])
   useAppearance()
   const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
   const updatePreferences = usePreferences((state) => state.update)

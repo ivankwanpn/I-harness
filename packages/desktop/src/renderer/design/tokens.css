@@ -279,6 +279,11 @@ button { font: inherit; color: inherit; }
 .diff-hunk { color: #b8c9ed; background: #26334688; }
 
 .workbench.review-open { grid-template-columns: var(--sidebar-width, 256px) minmax(0, 1fr) clamp(280px, var(--review-width,360px), calc(100vw - 656px)); }
+@media (min-width: 1180px) {
+  .workbench.review-open .desktop-titlebar .zc-window-controls { position: fixed; top: 12px; right: 16px; z-index: 7; }
+  .workbench.review-open .review-pane { padding-top: 70px; }
+  .workbench.review-open .review-pane::before { content: ""; position: absolute; top: 55px; left: 0; right: 0; border-bottom: 1px solid var(--ih-divider); }
+}
 .review-resizer { position: absolute; left: 0; top: 0; bottom: 0; width: 6px; cursor: col-resize; touch-action: none; z-index: 2; }
 .review-resizer:hover, .review-resizer:focus-visible { background: var(--ih-accent); }
 @media (max-width: 1179px) { .review-resizer { display: none; } }

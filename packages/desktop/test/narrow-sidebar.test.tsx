@@ -16,3 +16,17 @@ it("opens a narrow drawer and restores focus on Escape without altering desktop 
   expect(screen.queryByRole("dialog", { name: "工作區" })).toBeNull()
   expect(document.activeElement).toBe(toggle)
 })
+
+it("closes the narrow drawer after opening a new workspace", () => {
+  window.matchMedia = vi.fn((query) => ({ matches: query.includes("759px"), addEventListener: vi.fn(), removeEventListener: vi.fn() }) as unknown as MediaQueryList)
+  const bridge = { request: async () => undefined, onEvent: () => () => {} }
+  const onOpenWorkspace = vi.fn()
+  const props = { bridge, capabilities: {}, onSelectSession: () => {}, onSelectWorkspace: () => {}, onOpenWorkspace }
+  const view = render(<Workbench {...props} workspaces={[]} />)
+  fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
+  fireEvent.click(screen.getByRole("button", { name: "開啟工作區" }))
+  expect(onOpenWorkspace).toHaveBeenCalledOnce()
+  expect(screen.getByRole("dialog", { name: "工作區" })).toBeTruthy()
+  view.rerender(<Workbench {...props} workspaces={[{ id: "w1", path: "D:/agent-complete/playground", label: "playground" }]} selectedWorkspaceId="w1" />)
+  expect(screen.queryByRole("dialog", { name: "工作區" })).toBeNull()
+})

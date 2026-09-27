@@ -84,6 +84,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
   }
   const reviewRequest = useRef(0)
+  const reviewChangesRequest = useRef(0)
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
@@ -130,16 +131,18 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     }
   }, [bridge])
 
-  const refreshChanges = useCallback(async (workspaceId: string): Promise<void> => {
+  const refreshChanges = useCallback(async (workspaceId: string): Promise<ReviewChanges | undefined> => {
     const scope = workspaceSelection.current
     if (scope.workspaceId !== workspaceId) return
+    const request = ++reviewChangesRequest.current
     try {
       const result = await bridge.request({ kind: "desktop/review/changes", workspaceId }) as ReviewChanges
-      if (workspaceSelection.current !== scope) return
+      if (workspaceSelection.current !== scope || reviewChangesRequest.current !== request) return
       setReviewChanges(result)
       setReviewError(undefined)
+      return result
     } catch (reason) {
-      if (workspaceSelection.current === scope) setReviewError(reason instanceof Error ? reason.message : String(reason))
+      if (workspaceSelection.current === scope && reviewChangesRequest.current === request) setReviewError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [bridge])
 
@@ -468,8 +471,22 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         preview: reviewPreview,
         onSelect: (path, mode) => { void selectReview(path, mode) },
         onRefresh: () => {
-          if (selectedWorkspaceId !== undefined) void refreshChanges(selectedWorkspaceId)
-          if (reviewSelected !== undefined) void selectReview(reviewSelected.path, reviewSelected.mode)
+          if (selectedWorkspaceId === undefined) return
+          const scope = workspaceSelection.current
+          const detailRequest = reviewRequest.current
+          const selected = reviewSelected
+          void refreshChanges(selectedWorkspaceId).then((changes) => {
+            if (!changes || workspaceSelection.current !== scope || reviewRequest.current !== detailRequest) return
+            const row = changes.kind === "ok" ? changes.files.find((file) => file.path === selected?.path) : undefined
+            if (selected && row && (selected.mode === "diff" ? row.canDiff : row.canPreview)) {
+              void selectReview(selected.path, selected.mode)
+              return
+            }
+            reviewRequest.current++ // invalidate an old diff/preview request
+            setReviewSelected(undefined)
+            setReviewDiff(undefined)
+            setReviewPreview(undefined)
+          })
         },
       }}
       onSelectWorkspace={(workspaceId) => {
