@@ -13,6 +13,23 @@ it("requires a second action before removing a model", async () => {
   fireEvent.click(screen.getByRole("button", { name: "確認移除模型" }))
   expect(save).toHaveBeenCalledWith({ action: "model/remove", id: "r", model: "m" })
 })
+it("labels new provider creation honestly and keeps advanced fields folded", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderEditor onSave={save} onClose={() => {}} />)
+  expect(screen.getByText("新增提供商")).toBeTruthy()
+  expect(screen.getByText(/建立後可新增模型與設定 API key/)).toBeTruthy()
+  expect(screen.queryByText("留空以清除覆寫；未更改的欄位不會寫入。")).toBeNull()
+  const details = screen.getByText("進階設定").closest("details") as HTMLDetailsElement
+  expect(details.open).toBe(false)
+  fireEvent.click(screen.getByText("進階設定"))
+  expect(details.open).toBe(true)
+  expect(screen.getByLabelText("模型列表網址")).toBeTruthy()
+})
+
+it("uses a new-model title when adding a model", () => {
+  render(<ProviderEditor id="route" newModel onSave={vi.fn()} onClose={() => {}} />)
+  expect(screen.getByText("新增模型")).toBeTruthy()
+})
 it("submits only changed model fields and preserves input on failure", async () => {
   const save = vi.fn().mockRejectedValueOnce(new Error("failed")).mockResolvedValue(undefined)
   render(<ProviderEditor id="route" model={{ id: "m", contextWindow: 272000, maxTokens: 4096 }} onSave={save} onClose={() => {}} />)

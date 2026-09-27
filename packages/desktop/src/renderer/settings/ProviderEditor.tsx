@@ -17,9 +17,9 @@ function fieldValue(key: string, value: unknown): string {
 
 /** Local unsaved form state only. Blank edits clear overrides; unchanged fields
  * are omitted so independent changes to another field remain intact. */
-export function ProviderEditor({ id, provider, model, newModel = false, onSave, onClose }: {
+export function ProviderEditor({ id, provider, model, newModel = false, onSave, onClose, onBusyChange }: {
   id?: string; provider?: EditableProvider; model?: EditableModel; newModel?: boolean
-  onSave(command: ProviderCommand): Promise<void>; onClose(): void
+  onSave(command: ProviderCommand): Promise<void>; onClose(): void; onBusyChange?(busy: boolean): void
 }) {
   const t = useText()
   const isModel = model !== undefined || newModel
@@ -31,6 +31,13 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
   const inFlight = useRef(false)
   const [error, setError] = useState<string>()
   const existing = isModel ? model !== undefined : provider?.configured === true
+  const renderField = (key: string) => {
+    const label = labels[key]!
+    return <label key={key}>{t(label)}{key === "protocol"
+      ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select>
+      : key === "inputModalities" ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option><option value="text">{t("僅文字")}</option><option value="text,image">{t("文字與圖片")}</option>{values[key] === "image" ? <option value="image" disabled>{t("僅圖片（舊設定）")}</option> : null}</select>
+      : <input type={key === "contextWindow" || key === "maxTokens" ? "number" : "text"} min={1} step={1} maxLength={2048} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} />}</label>
+  }
   return <form className="provider-editor" onSubmit={(event) => {
     event.preventDefault()
     if (inFlight.current) return
@@ -48,17 +55,17 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
     const command = isModel
       ? { action: existing ? "model/edit" : "model/add", id: id!, model: identity, fields }
       : { action: existing ? "provider/edit" : "provider/create", id: provider?.id ?? identity, fields }
-    inFlight.current = true; setBusy(true); setError(undefined)
-    void onSave(command as ProviderCommand).then(onClose).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => { inFlight.current = false; setBusy(false) })
+    inFlight.current = true; setBusy(true); onBusyChange?.(true); setError(undefined)
+    void onSave(command as ProviderCommand).then(onClose).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => { inFlight.current = false; setBusy(false); onBusyChange?.(false) })
   }}>
     <fieldset disabled={busy}>
-      <legend>{t(isModel ? "編輯模型" : "編輯提供商")}</legend>
+      <legend>{t(isModel ? existing ? "編輯模型" : "新增模型" : existing ? "編輯提供商" : "新增提供商")}</legend>
       <label>{t(isModel ? "模型 ID" : "提供商 ID")}<input required maxLength={isModel ? 256 : 128} value={identity} disabled={model !== undefined || provider !== undefined} onChange={(event) => setIdentity(event.target.value)} /></label>
-      {Object.entries(labels).map(([key, label]) => <label key={key}>{t(label)}{key === "protocol"
-        ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select>
-        : key === "inputModalities" ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option><option value="text">{t("僅文字")}</option><option value="text,image">{t("文字與圖片")}</option>{values[key] === "image" ? <option value="image" disabled>{t("僅圖片（舊設定）")}</option> : null}</select>
-        : <input type={key === "contextWindow" || key === "maxTokens" ? "number" : "text"} min={1} step={1} maxLength={2048} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} />}</label>)}
-      <p className="muted">{t("留空以清除覆寫；未更改的欄位不會寫入。")}</p>
+      {!isModel && !existing ? <>
+        {["displayName", "baseURL", "protocol"].map(renderField)}
+        <details className="provider-advanced"><summary>{t("進階設定")}</summary>{["modelsURL", "catalog", "apiKeyEnv"].map(renderField)}</details>
+      </> : Object.keys(labels).map(renderField)}
+      <p className="muted">{t(existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>
       {error ? <p role="alert">{error}</p> : null}
       <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
     </fieldset>

@@ -33,9 +33,9 @@
 
 **Interfaces:** Add form uses `SettingsDialog` and the same `onSave(provider/create)` callback. Creation completion selects `command.id` before directory reload; editing/model changes retain their existing route.
 
-- [ ] Write failing tests for dialog, title/copy, advanced disclosure, save failure and created-provider selection.
-- [ ] Implement the smallest UI/state changes and retain backend validation.
-- [ ] Run Desktop suite/typecheck and commit the provider UI.
+- [x] Write failing tests for dialog, title/copy, advanced disclosure, save failure and created-provider selection.
+- [x] Implement the smallest UI/state changes and retain backend validation.
+- [x] Run Desktop suite/typecheck and commit the provider UI.
 
 ### Task 3: Electron review and delivery
 

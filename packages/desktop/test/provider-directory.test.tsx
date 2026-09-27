@@ -5,6 +5,65 @@ import { ProviderDirectory } from "../src/renderer/settings/ProviderDirectory.ts
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(cleanup)
+it("opens provider creation in a focused dialog and returns to the add button on Escape", async () => {
+  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/provider/directory" ? [{ id: "deepseek", displayName: "DeepSeek", configured: true, auth: { configured: true }, models: [] }] : {})
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  const trigger = screen.getByRole("button", { name: "新增提供商" })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "新增提供商" })
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("提供商 ID")))
+  expect(screen.getByRole("button", { name: /DeepSeek/ })).toBeTruthy()
+  fireEvent.keyDown(dialog, { key: "Escape" })
+  expect(screen.queryByRole("dialog")).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
+  expect(request.mock.calls.filter(([value]) => value.kind === "desktop/provider/mutate")).toHaveLength(0)
+})
+
+it("selects the newly created provider after saving rather than returning to the old one", async () => {
+  const old = { id: "deepseek", displayName: "DeepSeek", configured: true, auth: { configured: true }, models: [] }
+  const created = { id: "new-route", displayName: "New provider", configured: true, auth: { configured: false }, models: [] }
+  let exists = false
+  const request = vi.fn(async (value: { kind: string }) => {
+    if (value.kind === "desktop/provider/directory") return exists ? [old, created] : [old]
+    if (value.kind === "desktop/provider/mutate") exists = true
+    return {}
+  })
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增提供商" }))
+  fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "new-route" } })
+  fireEvent.change(screen.getByLabelText("顯示名稱"), { target: { value: "New provider" } })
+  fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
+  fireEvent.change(screen.getByLabelText("通訊協定"), { target: { value: "openai-completions" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  await waitFor(() => expect(screen.getByRole("button", { name: /New provider/ }).getAttribute("aria-current")).toBe("true"))
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/provider/mutate", workspaceId: "w", command: { action: "provider/create", id: "new-route", fields: { displayName: "New provider", baseURL: "https://new.example/v1", protocol: "openai-completions" } } })
+})
+
+it("keeps a failed creation inside the dialog with the entered values", async () => {
+  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/provider/directory" ? [] : Promise.reject(new Error("provider write failed")))
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增提供商" }))
+  fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "new-route" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  await waitFor(() => expect(screen.getByRole("dialog").textContent).toContain("provider write failed"))
+  expect((screen.getByLabelText("提供商 ID") as HTMLInputElement).value).toBe("new-route")
+})
+
+it("does not dismiss provider creation while its write is still pending", async () => {
+  let finish!: () => void
+  const pending = new Promise<void>((resolve) => { finish = resolve })
+  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/provider/directory" ? [] : pending)
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增提供商" }))
+  fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "new-route" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  await waitFor(() => expect(request.mock.calls.some(([value]) => value.kind === "desktop/provider/mutate")).toBe(true))
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })
+  expect(screen.getByRole("dialog")).toBeTruthy()
+  finish()
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+})
 it("loads real directory metadata and supports retry without discovering models", async () => {
   const request = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue([{
     id: "local-route", displayName: "My provider", auth: { configured: true },
