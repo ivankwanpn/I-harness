@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { SettingsPane } from "../src/renderer/settings/SettingsPane.tsx"
 import { useAppearance, usePreferences } from "../src/renderer/design/preferences.ts"
 import { useLocale } from "../src/renderer/design/i18n.ts"
+beforeEach(() => useLocale.getState().setLocale("zh-TW"))
 afterEach(() => { cleanup(); localStorage.removeItem("ih:settings-section"); usePreferences.getState().reset(); useLocale.getState().setLocale("zh-TW") })
 
 function View() { useAppearance(); return <SettingsPane onClose={() => {}} /> }

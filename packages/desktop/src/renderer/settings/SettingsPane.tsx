@@ -74,7 +74,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
       <h1>{t(current.label)}</h1>
       {tab === "general" ? <>
         <SettingsGroup>
-          <SettingsRow label={t("語言")} control={<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}><option value="zh-TW">繁體中文</option><option value="en">English</option></select>} />
+          <SettingsRow label={t("界面語言")} description={t("選擇應用界面的顯示語言。")} control={<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}><option value="zh-TW">繁體中文</option><option value="en">English</option></select>} />
         </SettingsGroup>
         {bridge ? <NativeSettings bridge={bridge} section="window" workspaceId={workspace?.id} /> : null}
       </> : tab === "appearance" ? <>

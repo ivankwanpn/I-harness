@@ -72,7 +72,7 @@ const english = {
   "圖片": "Image", "工具請求": "Tool request", "代理提出問題": "The agent has a question",
   "已選擇會話 {title}": "Selected conversation: {title}", "SDK 連線中斷：{message}": "SDK disconnected: {message}",
   "歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。": "Loaded {count} history events. Use conversation search to find other content.",
-  "設定": "Settings", "設定分類": "Settings categories", "一般": "General", "關於": "About", "外觀": "Appearance",
+  "設定": "Settings", "設定分類": "Settings categories", "一般": "General", "關於": "About", "外觀": "Appearance", "界面語言": "Interface language", "選擇應用界面的顯示語言。": "Choose the language used by the app interface.",
   "深色": "Dark", "淺色": "Light", "跟隨系統": "System", "文字大小": "Text size", "顯示側欄": "Show sidebar",
   "外觀偏好只儲存在此電腦。": "Appearance preferences are stored on this computer only.", "重設外觀偏好": "Reset appearance preferences",
   "本機 Agent 工作台；使用既有後端執行任務。": "A local agent workbench powered by the existing backend.",

@@ -41,11 +41,10 @@ export function NativeSettings({ bridge, section = "all", workspaceId }: { bridg
       }} />} /> : null}
     {section !== "notifications" ? <SettingsRow label={t("視窗位置與大小")} description={t("關閉時保存，下次啟動恢復。")}
       control={<button className="primary-button" disabled={busy} onClick={() => { setBusy(true); setError(undefined); void bridge.request({ kind: "window/reset-bounds" }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false)) }}>{t("重設視窗")}</button>} /> : null}
-    {section !== "notifications" && workspaceId ? <SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
+  </SettingsGroup>{section !== "notifications" && workspaceId ? <><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
       control={<select aria-label={t("整合終端 Shell")} value={selectedShell} disabled={busy || !value || shells.length === 0} onChange={(event) => {
         const terminalShell = event.target.value as TerminalShellChoice
         setBusy(true); setError(undefined)
         void bridge.request({ kind: "desktop/local/configure", terminalShell }).then((result) => setValue(result as NativeState)).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
-      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} /> : null}
-  </SettingsGroup>{error ? <p role="alert" className="error-text">{error}</p> : null}</>
+      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} /></SettingsGroup></> : null}{error ? <p role="alert" className="error-text">{error}</p> : null}</>
 }
