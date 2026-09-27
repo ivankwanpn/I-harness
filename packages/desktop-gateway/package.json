@@ -13,6 +13,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/credentials": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
+    "@i-harness/goal": "workspace:*",
     "@i-harness/hooks": "workspace:*",
     "@i-harness/interaction": "workspace:*",
     "@i-harness/mcp-client": "workspace:*",
@@ -32,6 +33,7 @@
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
     "@i-harness/terminal": "workspace:*",
+    "@i-harness/todo": "workspace:*",
     "koffi": "^3.1.0"
   }
 }

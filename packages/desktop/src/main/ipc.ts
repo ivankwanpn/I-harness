@@ -247,6 +247,14 @@ export async function dispatchDesktopRequest(
       }
       return runtime.client.request(value.kind, { sessionId, command: sanitized })
     }
+    case "desktop/session/work-state": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      if (sessionId.length > 128) throw new Error("invalid work state session")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      if (!runtime.info.capabilities["desktop-work-state"]?.includes("1")) throw new Error("Desktop work state unavailable")
+      return runtime.client.request(value.kind, { sessionId })
+    }
     case "desktop/plugins/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const command = requireRecord(value.command)

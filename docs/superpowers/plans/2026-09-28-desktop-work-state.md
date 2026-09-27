@@ -24,10 +24,10 @@
 
 **Interfaces:** `createDesktopWorkState(coordinator, service).read(sessionId)` returns `{ todos: TodoItem[] | null, goal: GoalView | null }`. `desktop/session/work-state` is a validated read-only RPC; `desktop-work-state` advertises support.
 
-- [ ] Write gateway and IPC tests for cold and live snapshots, last-wins/clear, missing session and known-workspace scoping.
-- [ ] Run focused tests to observe missing-method failures.
-- [ ] Implement only the read adapter and route; reuse `deriveTodoList` and `foldGoal`.
-- [ ] Run gateway/Desktop focused suites and typechecks; commit the read seam.
+- [x] Write gateway and IPC tests for cold and live snapshots, last-wins/clear, missing session and known-workspace scoping.
+- [x] Run focused tests to observe missing-method failures.
+- [x] Implement only the read adapter and route; reuse `deriveTodoList` and `foldGoal`.
+- [x] Run gateway/Desktop focused suites and typechecks; commit the read seam.
 
 ### Task 2: Selected conversation view
 

@@ -15,6 +15,25 @@ import {
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
 
+it("advertises a read-only work-state method only when wired and validates its session", async () => {
+  const sent: RpcMessage[] = []
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const read = vi.fn(async () => ({ todos: [{ content: "inspect", status: "pending" }], goal: null }))
+  const handlers: DesktopHandlers = { workState: { read } as unknown as NonNullable<DesktopHandlers["workState"]> }
+  const send = (frame: RpcMessage) => { sent.push(frame) }
+  const router = createDesktopRouter(createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) }), send, handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    expect(sent[0]).toMatchObject({ result: { capabilities: { "desktop-work-state": ["1"] } } })
+    await router.handleLine(encodeFrame(makeRequest(2, "desktop/session/work-state", { sessionId: "" })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true)
+    expect(read).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(3, "desktop/session/work-state", { sessionId: "s1" })))
+    expect(read).toHaveBeenCalledWith("s1")
+    expect(sent.at(-1)).toMatchObject({ result: { todos: [{ content: "inspect", status: "pending" }], goal: null } })
+  } finally { await router.close(); await service.close() }
+})
+
 it("advertises and validates session reminder methods only when the schedule handler is wired", async () => {
   const sent: RpcMessage[] = []
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [] })

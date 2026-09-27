@@ -142,6 +142,15 @@ describe("Desktop scoped IPC", () => {
     await dispatchDesktopRequest({ kind: "desktop/schedule/delete", workspaceId: ENTRY.id, sessionId: "s", id: "schedule-1" }, f.dependencies)
     expect(f.request).toHaveBeenLastCalledWith("desktop/schedule/delete", { sessionId: "s", id: "schedule-1" })
   })
+  it("reads work state only for a known workspace and advertised capability", async () => {
+    const f = fixture()
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/work-state", workspaceId: "unknown", sessionId: "s" }, f.dependencies)).rejects.toThrow(/workspace/i)
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/work-state", workspaceId: ENTRY.id, sessionId: "s" }, f.dependencies)).rejects.toThrow(/work state/i)
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { "desktop-work-state": ["1"] } }, sandbox: { wired: true, mode: "workspace-write", source: "settings" } })
+    await dispatchDesktopRequest({ kind: "desktop/session/work-state", workspaceId: ENTRY.id, sessionId: "s", command: "ignored" }, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("desktop/session/work-state", { sessionId: "s" })
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
   it("routes memory and compaction only to known workspaces after validating arguments", async () => {
     const f = fixture()
     await expect(dispatchDesktopRequest({ kind: "desktop/memory/search", workspaceId: "ws-1", query: "pnpm", limit: -1 }, f.dependencies)).rejects.toThrow(/limit/)

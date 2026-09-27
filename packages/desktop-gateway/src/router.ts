@@ -36,6 +36,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.schedules) capabilities["desktop-schedule"] = ["1"]
+    if (handlers.workState) capabilities["desktop-work-state"] = ["1"]
     if (handlers.plugins) capabilities["desktop-plugins"] = ["1"]
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
@@ -244,6 +245,16 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
             : error instanceof ModelUnavailableError || (error instanceof Error && error.message === "session is busy") ? INVALID_REQUEST : INTERNAL_ERROR
           send(makeFailure(message.id, code, error instanceof Error ? error.message : String(error)))
         } finally { if (message.method !== "desktop/schedule/list") modelSwitches.delete(sessionId) }
+        return
+      }
+      if (message.method === "desktop/session/work-state" && handlers.workState) {
+        const params = asRecord(message.params)
+        const sessionId = params?.sessionId
+        if (!params || Object.keys(params).some((key) => key !== "sessionId") || typeof sessionId !== "string" || !sessionId || sessionId.length > 128) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid work-state session")); return
+        }
+        try { send(makeSuccess(message.id, await handlers.workState.read(sessionId))) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }
       if (["desktop/plugins/state", "desktop/plugins/mutate", "desktop/plugins/commands", "desktop/plugins/refresh"].includes(message.method) && handlers.plugins) {
