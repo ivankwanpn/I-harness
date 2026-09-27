@@ -54,7 +54,11 @@ function shellProfiles(options: ShellEnvironment): ShellProfile[] {
   if (pwsh) profiles.push({ id: "pwsh", label: "PowerShell 7", command: pwsh, args: ["-NoLogo", "-NoProfile"] })
   if (options.exists(powerShell)) profiles.push({ id: "powershell", label: "Windows PowerShell", command: powerShell, args: ["-NoLogo", "-NoProfile"] })
   if (cmd) profiles.push({ id: "cmd", label: "CMD", command: cmd, args: [] })
-  const defaultProfile = profiles.find((profile) => profile.id === "powershell") ?? profiles.find((profile) => profile.id === "pwsh") ?? profiles[0]
+  const defaultProfile = profiles.find((profile) => profile.id === "git-bash")
+    ?? profiles.find((profile) => profile.id === "cmd")
+    ?? profiles.find((profile) => profile.id === "pwsh")
+    ?? profiles.find((profile) => profile.id === "powershell")
+    ?? profiles[0]
   return defaultProfile ? [{ ...defaultProfile, id: "auto", label: "自動選擇" }, ...profiles] : []
 }
 function integer(value: unknown, min: number, max: number, fallback?: number): number {

@@ -503,6 +503,20 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .marketplace-pane details { margin: 18px 0; }
 .marketplace-pane p { overflow-wrap: anywhere; }
 .terminal-pane { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 260px; padding: 8px; box-sizing: border-box; }
+.schedule-pane { display: grid; align-content: start; gap: 12px; height: calc(100vh - 130px); overflow: auto; padding: 18px; }
+.schedule-pane .review-title { margin: 0; }
+.schedule-pane .muted { margin: 0; }
+.schedule-notice { margin: 0; padding: 10px 12px; border: 1px solid var(--ih-divider); border-radius: 9px; color: var(--ih-muted); background: var(--ih-panel); font-size: 12px; line-height: 1.5; }
+.schedule-list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.schedule-card { display: flex; align-items: start; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--ih-divider); border-radius: 9px; background: var(--ih-panel); }
+.schedule-card div { min-width: 0; overflow-wrap: anywhere; }
+.schedule-card strong { display: block; font-weight: 500; }
+.schedule-card small { display: block; margin-top: 7px; color: var(--ih-muted); line-height: 1.4; }
+.schedule-form { display: grid; gap: 12px; padding-top: 16px; border-top: 1px solid var(--ih-divider); }
+.schedule-form label { display: grid; gap: 6px; color: var(--ih-muted); font-size: 12px; }
+.schedule-form :is(textarea, input, select) { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--ih-divider); border-radius: 7px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
+.schedule-form textarea { min-height: 76px; resize: vertical; }
+.schedule-form button { justify-self: end; }
 .terminal-pane > p { font-size: 12px; margin: 5px 0; overflow-wrap: anywhere; }
 .terminal-emulator { flex: 1; min-height: 120px; min-width: 0; overflow: hidden; background: #151515; }
 .browser-pane { display: flex; flex-direction: column; height: calc(100vh - 130px); min-height: 240px; min-width: 0; }

@@ -42,6 +42,19 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("shows conversation reminders only when the backend advertises schedule management", async () => {
+    useUiStore.setState({ reviewOpen: true })
+    const bridge = fakeBridge()
+    bridge.request = vi.fn(async (request) => request.kind === "desktop/schedule/list" ? { schedules: [] } : undefined)
+    const base = { bridge, workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, selectedSessionId: "s-1", onSelectWorkspace: () => {}, onSelectSession: () => {}, conversation: { rows: [], canSend: false, running: false, modelState: { status: "ready" as const, providerId: "deepseek", modelId: "deepseek-flash", label: "DeepSeek Flash" }, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } }
+    const rendered = render(<Workbench {...base} capabilities={{ "desktop-schedule": ["1"] }} />)
+    fireEvent.click(screen.getByRole("tab", { name: "此會話提醒" }))
+    await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/schedule/list", workspaceId: ENTRY.id, sessionId: "s-1" }))
+    expect(screen.getByText("此會話尚無提醒")).toBeTruthy()
+    rendered.rerender(<Workbench {...base} capabilities={{}} />)
+    expect(screen.queryByRole("tab", { name: "此會話提醒" })).toBeNull()
+    await waitFor(() => expect(screen.getByRole("tab", { name: "變更" }).getAttribute("aria-selected")).toBe("true"))
+  })
   it("shows a new-task composer without creating a session until typing, then preserves typed text", async () => {
     let finish!: (result: { sessionId: string }) => void
     const pending = new Promise<{ sessionId: string }>((resolve) => { finish = resolve })

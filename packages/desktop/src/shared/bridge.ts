@@ -33,6 +33,9 @@ export type DesktopRequest =
   | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }
   | { kind: "desktop/terminal/write"; workspaceId: string; id: string; data: string }
   | { kind: "desktop/terminal/resize"; workspaceId: string; id: string; cols: number; rows: number }
+  | { kind: "desktop/schedule/list"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/schedule/create"; workspaceId: string; sessionId: string; command: { prompt: string; after_seconds?: number; at?: string; every_seconds?: number } }
+  | { kind: "desktop/schedule/delete"; workspaceId: string; sessionId: string; id: string }
   | { kind: "desktop/plugins/state" | "desktop/plugins/commands" | "desktop/plugins/refresh"; workspaceId: string }
   | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }

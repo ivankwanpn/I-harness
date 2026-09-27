@@ -26,6 +26,7 @@ it("lists detected terminal shells and saves the selection for new terminals", a
     : { notifications: false, notificationsSupported: true, terminalShell: "auto" })
   render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" workspaceId="ws-1" />)
   const select = await screen.findByRole("combobox", { name: "整合終端 Shell" })
+  expect(screen.getByText(/Windows 自動優先 Git Bash/)).toBeTruthy()
   fireEvent.change(select, { target: { value: "git-bash" } })
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalShell: "git-bash" }))
 })

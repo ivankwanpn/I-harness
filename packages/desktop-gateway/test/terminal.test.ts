@@ -18,6 +18,20 @@ it("discovers installed shell profiles and opens only the selected profile", () 
   expect(() => terminals.request("desktop/terminal/open", { shell: "pwsh" })).toThrow(/unavailable/i)
   terminals.close()
 })
+it("automatically prefers Git Bash on Windows and falls back to CMD", () => {
+  const installed = new Set(["C:/Program Files/Git/bin/bash.exe", "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "C:/Windows/System32/cmd.exe"])
+  const options = { platform: "win32" as const, env: { SystemRoot: "C:\\Windows", PATH: "", ComSpec: "C:\\Windows\\System32\\cmd.exe" }, exists: (path: string) => installed.has(path.replaceAll("\\", "/")) }
+  const withGit = createDesktopTerminal("D:/workspace", options)
+  withGit.request("desktop/terminal/open", {})
+  expect(mock.open).toHaveBeenLastCalledWith(expect.objectContaining({ command: "C:\\Program Files\\Git\\bin\\bash.exe" }), { sessionId: "desktop-user" })
+  withGit.close()
+
+  installed.delete("C:/Program Files/Git/bin/bash.exe")
+  const withoutGit = createDesktopTerminal("D:/workspace", options)
+  withoutGit.request("desktop/terminal/open", {})
+  expect(mock.open).toHaveBeenLastCalledWith(expect.objectContaining({ command: "C:\\Windows\\System32\\cmd.exe" }), { sessionId: "desktop-user" })
+  withoutGit.close()
+})
 it("uses the execution host's login shell on Unix and lists only detected alternatives", () => {
   const terminals = createDesktopTerminal("/workspace", {
     platform: "linux",

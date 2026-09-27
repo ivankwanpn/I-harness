@@ -17,6 +17,7 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { Composer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
+import { SchedulePane } from "../session/SchedulePane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
 import { PendingPanel, type InteractionReply } from "../interaction/PendingPanel.tsx"
 import type { PendingInteraction } from "../interaction/pending.ts"
@@ -145,6 +146,9 @@ export function Workbench({
     return () => cancelAnimationFrame(frame)
   }, [selectedSessionId])
   const [workPaneTab, setWorkPaneTab] = useState("changes")
+  useEffect(() => {
+    if (workPaneTab === "reminders" && (!selectedSessionId || !capabilities["desktop-schedule"]?.includes("1"))) setWorkPaneTab("changes")
+  }, [workPaneTab, selectedSessionId, capabilities])
   const workPaneId = useId()
   const surface = useUiStore((state) => state.surface)
   const setSurface = useUiStore((state) => state.setSurface)
@@ -297,11 +301,12 @@ export function Workbench({
       </main>
       {reviewOpen ? <aside className="review-pane" aria-label={t("成果檢查")}>
         <ReviewResizeHandle width={reviewWidth} onResize={setReviewWidth} />
-        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "browser", label: t("瀏覽器") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
+        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "browser", label: t("瀏覽器") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("此會話提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
         {workPaneTab === "browser" && selectedWorkspaceId ? <BrowserPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} visible={!drawer.open} /> : null}
         {workPaneTab === "terminal" && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense> : null}
+        {workPaneTab === "reminders" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? <SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && conversation.operation?.busy !== true} /> : null}
         {workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
             changes={review.changes}
@@ -324,6 +329,7 @@ export function Workbench({
         )}
         {workPaneTab === "changes" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
         {workPaneTab === "tasks" && conversation === undefined ? <p className="notice">{t("尚未選擇會話")}</p> : null}
+        {workPaneTab === "reminders" && !selectedSessionId ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         </div>
       </aside> : null}
     </div>

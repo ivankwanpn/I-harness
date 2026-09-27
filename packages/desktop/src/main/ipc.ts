@@ -213,6 +213,40 @@ export async function dispatchDesktopRequest(
       }
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, params)
     }
+    case "desktop/schedule/list":
+    case "desktop/schedule/create":
+    case "desktop/schedule/delete": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      if (!runtime.info.capabilities["desktop-schedule"]?.includes("1")) throw new Error("Desktop schedule management unavailable")
+      if (value.kind === "desktop/schedule/list") return runtime.client.request(value.kind, { sessionId })
+      if (value.kind === "desktop/schedule/delete") {
+        if (typeof value.id !== "string" || !/^schedule-\d+$/.test(value.id)) throw new Error("invalid schedule id")
+        return runtime.client.request(value.kind, { sessionId, id: value.id })
+      }
+      const command = requireRecord(value.command)
+      const allowed = ["prompt", "after_seconds", "at", "every_seconds"]
+      if (Object.keys(command).some((key) => !allowed.includes(key))) throw new Error("invalid schedule command")
+      const prompt = requireNonEmpty(command.prompt, "schedule prompt").trim()
+      if (!prompt || prompt.length > 4096) throw new Error("invalid schedule prompt")
+      const selectors = [command.after_seconds, command.at, command.every_seconds].filter((entry) => entry !== undefined)
+      if (selectors.length !== 1) throw new Error("invalid schedule time selector")
+      const sanitized: { prompt: string; after_seconds?: number; at?: string; every_seconds?: number } = { prompt }
+      if (command.after_seconds !== undefined) {
+        if (typeof command.after_seconds !== "number" || !Number.isSafeInteger(command.after_seconds) || command.after_seconds < 1) throw new Error("invalid schedule delay")
+        sanitized.after_seconds = command.after_seconds
+      }
+      if (command.every_seconds !== undefined) {
+        if (typeof command.every_seconds !== "number" || !Number.isSafeInteger(command.every_seconds) || command.every_seconds < 300) throw new Error("invalid schedule interval")
+        sanitized.every_seconds = command.every_seconds
+      }
+      if (command.at !== undefined) {
+        if (typeof command.at !== "string" || Number.isNaN(Date.parse(command.at)) || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$/.test(command.at)) throw new Error("invalid schedule time")
+        sanitized.at = command.at
+      }
+      return runtime.client.request(value.kind, { sessionId, command: sanitized })
+    }
     case "desktop/plugins/mutate": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const command = requireRecord(value.command)
