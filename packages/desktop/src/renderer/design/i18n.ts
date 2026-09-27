@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "關閉對話框": "Close dialog",
   "關閉新增提供商": "Close add provider", "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。": "You can add models and an API key after creating the provider. Optional fields can be filled later.", "模型建成後仍可在列表編輯。": "You can edit the model after creating it.", "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。": "The first save creates custom settings for this built-in provider. You can edit them later.",
   "關閉角色設定": "Close role settings",
   "目前目標": "Current goal", "待辦": "Todo", "正在載入待辦…": "Loading Todo…", "尚未建立待辦清單": "No Todo list yet", "待辦清單已清空": "Todo list cleared", "已完成 {count}/{total}": "{count}/{total} completed", "第 {page} / {total} 頁": "Page {page} of {total}", "已暫停": "Paused", "進行中": "Active", "待開始": "Pending", "工作狀態讀取失敗": "Could not read work state",

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { ProviderEditor } from "../src/renderer/settings/ProviderEditor.tsx"
 import { ProviderCard } from "../src/renderer/settings/ProviderCard.tsx"
@@ -12,6 +12,31 @@ it("requires a second action before removing a model", async () => {
   expect(save).not.toHaveBeenCalled()
   fireEvent.click(screen.getByRole("button", { name: "確認移除模型" }))
   expect(save).toHaveBeenCalledWith({ action: "model/remove", id: "r", model: "m" })
+})
+it("edits model metadata in a focused dialog and returns to its pencil trigger", async () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderCard row={{ id: "deepseek", displayName: "DeepSeek", configured: true, auth: { configured: true }, models: [{ id: "flash", contextWindow: 272000, inputModalities: ["text", "image"] }] }} onSave={save} />)
+  const trigger = screen.getByRole("button", { name: "編輯模型" })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "編輯模型" })
+  await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText("上下文大小")))
+  expect(screen.getByText("flash")).toBeTruthy()
+  expect(within(dialog).getByLabelText("輸入類型")).toBeTruthy()
+  fireEvent.keyDown(dialog, { key: "Escape" })
+  expect(screen.queryByRole("dialog")).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
+  expect(save).not.toHaveBeenCalled()
+})
+
+it("opens adding a model with its ID focused and keeps the provider actions behind the dialog", async () => {
+  render(<ProviderCard row={{ id: "route", displayName: "Route", configured: true, auth: { configured: false }, models: [] }} onSave={vi.fn()} />)
+  const trigger = screen.getByRole("button", { name: "新增模型" })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "新增模型" })
+  await waitFor(() => expect(document.activeElement).toBe(within(dialog).getByLabelText("模型 ID")))
+  expect(screen.getByRole("button", { name: "編輯提供商" })).toBeTruthy()
+  fireEvent.click(within(dialog).getByRole("button", { name: "取消" }))
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
 })
 it("labels new provider creation honestly and keeps advanced fields folded", () => {
   const save = vi.fn().mockResolvedValue(undefined)
@@ -70,15 +95,21 @@ it("edits a custom provider connection in its detail card and retains failed cha
   render(<ProviderCard row={{ id: "p", displayName: "Provider", configured: true, auth: { configured: true },
     baseURL: "https://old.example/v1", protocol: "openai-completions", models: [] }} onSave={save} />)
   expect(screen.queryByLabelText("輸入類型")).toBeNull()
-  fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
-  fireEvent.change(screen.getByLabelText("通訊協定"), { target: { value: "anthropic-messages" } })
-  fireEvent.click(screen.getByRole("button", { name: "儲存連線" }))
-  expect(await screen.findByText("offline")).toBeTruthy()
-  expect((screen.getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://new.example/v1")
+  expect(screen.queryByLabelText("API 網址")).toBeNull()
+  const trigger = screen.getByRole("button", { name: "編輯提供商" })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "編輯提供商" })
+  fireEvent.change(within(dialog).getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
+  fireEvent.change(within(dialog).getByLabelText("通訊協定"), { target: { value: "anthropic-messages" } })
+  fireEvent.click(within(dialog).getByRole("button", { name: "儲存" }))
+  expect(await within(dialog).findByText("offline")).toBeTruthy()
+  expect((within(dialog).getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://new.example/v1")
   expect(save).toHaveBeenCalledWith({ action: "provider/edit", id: "p", fields: {
     baseURL: "https://new.example/v1", protocol: "anthropic-messages",
   } })
-  fireEvent.click(screen.getByRole("button", { name: "儲存連線" }))
+  fireEvent.click(within(dialog).getByRole("button", { name: "儲存" }))
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
   expect(save).toHaveBeenCalledTimes(2)
 })
 

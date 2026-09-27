@@ -92,11 +92,30 @@ it("shows one provider at a time and scopes connection drafts to that provider",
   expect(screen.queryByText("beta-model")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "編輯提供商" }))
   fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://draft.example" } })
+  fireEvent.click(screen.getByRole("dialog").querySelector("button[aria-label='關閉對話框']") as HTMLButtonElement)
   fireEvent.click(screen.getByRole("button", { name: /Beta/ }))
   expect(screen.queryByText("alpha-model")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "編輯提供商" }))
   expect((screen.getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://b.example")
   expect(request).toHaveBeenCalledTimes(1)
+})
+
+it("keeps the selected provider and restores focus after its connection save reloads the card", async () => {
+  const first = { id: "a", displayName: "Alpha", configured: true, baseURL: "https://a.example", protocol: "openai-completions", auth: { configured: true }, models: [] }
+  const second = { id: "b", displayName: "Beta", configured: true, baseURL: "https://b.example", protocol: "openai-completions", auth: { configured: true }, models: [] }
+  let saved = false
+  const request = vi.fn(async (input: { kind: string }) => input.kind === "desktop/provider/directory" ? [first, { ...second, baseURL: saved ? "https://new.example" : second.baseURL }] : (saved = true, {}))
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  await screen.findByRole("button", { name: /Alpha/ })
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜尋提供商" }), { target: { value: "beta" } })
+  const trigger = screen.getByRole("button", { name: "編輯提供商" })
+  fireEvent.click(trigger)
+  fireEvent.change(screen.getByRole("dialog").querySelector("input[value='https://b.example']") as HTMLInputElement, { target: { value: "https://new.example" } })
+  fireEvent.click(screen.getByRole("dialog").querySelector("button[type='submit']") as HTMLButtonElement)
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
+  await waitFor(() => expect(screen.getByRole("button", { name: /Beta/ }).getAttribute("aria-current")).toBe("true"))
+  await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "編輯提供商" })))
+  expect(screen.getByText("https://new.example")).toBeTruthy()
 })
 
 it("filters provider navigation locally while keeping the selected detail in sync", async () => {

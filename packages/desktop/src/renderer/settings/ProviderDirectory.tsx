@@ -36,7 +36,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
     useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 }))
     setSaved(true)
     setQuery("")
-    if (command.action === "provider/create") setSelectedId(command.id)
+    if (command.action !== "provider/remove") setSelectedId(command.id)
     if ("fields" in command && "inputModalities" in command.fields) setCapabilityNotice(true)
     setReload((value) => value + 1)
   }
@@ -69,7 +69,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
             <Server size={16} aria-hidden="true" /><span>{row.displayName}<small>{row.id}</small></span>
           </button>) : <p className="muted">{t("沒有符合的提供商")}</p>}
         </nav>
-        <div className="provider-detail">{selected ? <ProviderCard key={`${selected.id}:${selected.baseURL ?? ""}:${selected.protocol ?? ""}`} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
+        <div className="provider-detail">{selected ? <ProviderCard key={selected.id} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
       </div></>}
   </section>
 }

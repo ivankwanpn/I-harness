@@ -489,10 +489,6 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-card .zc-settings-row { padding-left: 0; padding-right: 0; }
 .provider-connection-summary { margin: 20px 0; }
 .provider-connection-summary code { overflow-wrap: anywhere; font-size: 12px; }
-.provider-connection-inline { display: grid; gap: 12px; margin: 20px 0; }
-.provider-connection-inline label { display: grid; gap: 6px; font-size: 12px; color: var(--ih-muted); }
-.provider-connection-inline :is(input, select) { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--ih-divider); border-radius: 7px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
-.provider-connection-inline :is(input, select):focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 1px; }
 .provider-models { border-top: 1px solid var(--ih-divider); padding-top: 20px; margin-top: 20px; }
 .provider-models h3 { font-size: 13px; font-weight: 600; }
 .provider-model-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--ih-divider); }

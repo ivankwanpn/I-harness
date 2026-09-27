@@ -44,3 +44,13 @@
 - [x] Build packaged Electron; verify normal/narrow dialog, focus, Escape and clean up a temporary playground provider.
 - [x] Request read-only code review, fix Important findings and rerun affected verification.
 - [x] Record exact tests, artifact hash, limitations and local commit. No GitHub push.
+
+### Task 4: Existing provider and model metadata editors
+
+**Files:** Update `packages/desktop/src/renderer/settings/ProviderCard.tsx`, `ProviderDirectory.tsx`, `design/i18n.ts`, `design/tokens.css`; test `provider-editor.test.tsx` and `provider-directory.test.tsx`. Record visual QA in `docs/audit/2026-09-28-desktop-provider-metadata-dialog-qa.md`.
+
+- [x] Move provider/model metadata editors to the shared dialog; focus model ID on add and context window on edit.
+- [x] Preserve existing backend mutations and remove the duplicate inline URL/protocol draft.
+- [x] Keep the provider card keyed by stable ID and retain the selected provider after writes; reproduce and fix focus/selection failures found in independent review.
+- [x] Run Desktop suite/typecheck, rebuild portable Electron and inspect real DeepSeek and temporary playground provider flows at normal/narrow widths.
+- [x] Record the review and verification evidence, then commit without staging the user Vite config.
