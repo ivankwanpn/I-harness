@@ -1,13 +1,29 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { SubagentSettings } from "../src/renderer/settings/SubagentSettings.tsx"
 afterEach(cleanup)
+it("opens a focused role dialog and restores its trigger on Escape", async () => {
+  const state = { enabled: true, effectiveEnabled: true, restartRequired: false, roles: [{ name: "explore" }] }
+  const request = vi.fn(async (input) => input.kind === "desktop/provider/directory" ? [{ id: "p", displayName: "Provider", protocol: "openai-completions", models: [{ id: "m" }] }] : state)
+  render(<SubagentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  const trigger = await screen.findByRole("button", { name: "設定角色模型" })
+  fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "設定角色模型" })
+  expect(dialog.getAttribute("aria-modal")).toBe("true")
+  await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
+  expect(document.activeElement).toBe(screen.getByLabelText("提供商 ID"))
+  fireEvent.keyDown(dialog, { key: "Escape" })
+  expect(screen.queryByRole("dialog")).toBeNull()
+  await waitFor(() => expect(document.activeElement).toBe(trigger))
+})
+
 it("edits a role mapping without silently enabling the global model gate", async () => {
   const state = { enabled: false, effectiveEnabled: false, restartRequired: false, roles: [{ name: "explore" }] }
   const request = vi.fn(async (request) => request.kind === "desktop/provider/directory" ? [{ id: "local", displayName: "Local", protocol: "openai-completions", models: [{ id: "small" }] }] : state)
   render(<SubagentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
   fireEvent.click(await screen.findByRole("button", { name: "設定角色模型" }))
+  expect(screen.getByRole("dialog", { name: "設定角色模型" })).toBeTruthy()
   fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "local" } })
   expect((screen.getByLabelText("模型 ID") as HTMLSelectElement).tagName).toBe("SELECT")
   fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "small" } })
@@ -34,7 +50,8 @@ it("does not let an older retry read replace a successfully saved mapping", asyn
   fireEvent.change(screen.getByLabelText("模型 ID"), { target: { value: "new-model" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   await screen.findByRole("alert")
-  fireEvent.click(screen.getByRole("button", { name: "重試" }))
+  expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toContain("save failed")
+  fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "重試" }))
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   await screen.findByText("p / new-model")
   await act(async () => release(initial))

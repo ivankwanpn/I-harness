@@ -1,5 +1,7 @@
 # Desktop 工具與終端驗收（2026-09-27）
 
+> 後續變更：Windows Auto 終端在 2026-09-28 改為 Git Bash 優先、找不到時使用 CMD；本報告下方記錄的是 09-27 當時的 PowerShell 優先行為。現行驗收見 `docs/audit/2026-09-28-desktop-reminders-terminal-qa.md`。
+
 範圍：`D:\frontend-test` 的 Desktop 分支；真實模型測試只在 `D:\agent-complete\playground`。參考樹 ZCode 與 DSH 只讀。以下把真實模型呼叫、程式測試和未驗證項目分開記錄。
 
 ## 真實 DeepSeek Max 工具流程
