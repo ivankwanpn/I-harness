@@ -47,7 +47,7 @@ export function createBrowserSurface(window: BrowserWindow) {
     tabs.clear(); active = undefined
   }
   window.on("resize", hide)
-  window.on("close", dispose)
+  window.on("closed", dispose)
   return {
     request(workspaceId: string, value: Record<string, unknown>) {
       if (disposed) throw new Error("Browser surface is closed")

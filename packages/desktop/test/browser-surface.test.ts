@@ -27,3 +27,16 @@ it("isolates web guests, validates workspace and URLs, and disposes all views", 
   browser.dispose()
   expect(f.views[0].webContents.close).toHaveBeenCalledOnce()
 })
+
+it("retains browser tabs when a close is cancelled and releases them after destruction", () => {
+  const handlers = new Map<string, () => void>()
+  const window = { id: 2, on: (name: string, handler: () => void) => { handlers.set(name, handler) }, isDestroyed: () => false,
+    contentView: { addChildView: vi.fn(), removeChildView: vi.fn() }, getContentBounds: () => ({ width: 800, height: 600 }), webContents: { getZoomFactor: () => 1 } } as unknown as BrowserWindow
+  const browser = createBrowserSurface(window)
+  browser.request("w", { kind: "browser/open" })
+  const view = f.views.at(-1)
+  handlers.get("close")?.()
+  expect(view.webContents.close).not.toHaveBeenCalled()
+  handlers.get("closed")?.()
+  expect(view.webContents.close).toHaveBeenCalledOnce()
+})
