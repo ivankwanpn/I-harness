@@ -77,3 +77,20 @@ it("refuses eleven images before creating a session", async () => {
     expect(service.liveSession("too-many")).toBeUndefined()
   } finally { await server.close(); await service.close() }
 })
+
+it("accepts ten images while keeping one durable copy of each", async () => {
+  const images = Array.from({ length: 10 }, (_, index) => ({ mediaType: "image/png" as const, dataBase64: Buffer.from(`unique-photo-${index}`).toString("base64"), name: `photo-${index}.png` }))
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock", mockScript: [{ role: "assistant", text: "seen" }] })
+  const server = createSdkServer(service)
+  try {
+    await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const reply = decodeFrame((await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "ten-images", prompt: "inspect", images }))))!)
+    expect(isRpcSuccess(reply)).toBe(true)
+    const session = service.liveSession("ten-images")!
+    const raw = JSON.stringify(session.events)
+    for (const image of images) expect(raw.split(image.dataBase64)).toHaveLength(2)
+    const history = decodeFrame((await server.handleLine(encodeFrame(makeRequest(3, "session/history", { sessionId: "ten-images", afterSeq: 0, limit: 100 }))))!)
+    const user = (history as { result: { events: Array<{ type: string; images?: unknown[] }> } }).result.events.find((event) => event.type === "user/message")!
+    expect(user.images).toHaveLength(10)
+  } finally { await server.close(); await service.close() }
+})

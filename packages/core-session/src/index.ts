@@ -10,7 +10,7 @@ export type SessionEvent =
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
-    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string }
+    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -209,6 +209,15 @@ export interface ImageInput {
   height?: number
 }
 
+/** Searchable/display metadata of a referenced image, without its base64. */
+interface ImageSummary {
+  mediaType: ImageMediaType
+  name?: string
+  width?: number
+  height?: number
+  bytes: number
+}
+
 /** Signed provider blocks are retained for a tool continuation. They are
  * opaque protocol data; the UI and search index use assistant text instead. */
 export type ProviderThinkingBlock =
@@ -356,6 +365,7 @@ export function append(session: Session, event: SessionEvent): void {
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
     throw new Error("assistant/message must originate from the log, not an external source")
   }
+  let imageSummaries: ImageSummary[] | undefined
   if (event.type === "user/message" && event.imageInputId !== undefined) {
     if (typeof event.imageInputId !== "string" || event.imageInputId.length === 0 || event.images !== undefined) {
       throw new Error("image reference: user/message needs one non-empty imageInputId and no inline images")
@@ -364,6 +374,13 @@ export function append(session: Session, event: SessionEvent): void {
     if (admission?.type !== "agent/input/admitted" || !admission.images?.length) {
       throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
     }
+    imageSummaries = admission.images.map(({ mediaType, name, width, height, dataBase64 }) => ({
+      mediaType,
+      ...(name !== undefined ? { name } : {}),
+      ...(width !== undefined ? { width } : {}),
+      ...(height !== undefined ? { height } : {}),
+      bytes: dataBase64.length * 3 / 4 - (dataBase64.match(/=+$/)?.[0].length ?? 0),
+    }))
   }
   // M14 image intake (fail-loud): images first attach to an event here, so this
   // is the boundary that validates them. deriveMessages stays a pure projection.
@@ -379,7 +396,7 @@ export function append(session: Session, event: SessionEvent): void {
     if (!Array.isArray(maybeOutputImages)) throw new Error("image attachment: images must be an array")
     validateImages(maybeOutputImages as ImageInput[], event.type)
   }
-  const ev = { ...event, seq: session.events.length }
+  const ev = { ...event, ...(imageSummaries !== undefined ? { imageSummaries } : {}), seq: session.events.length }
   session.events.push(ev)
   appendHooks.get(session)?.(ev)
   subscribers.get(session)?.forEach((l) => l(ev))
@@ -754,7 +771,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
 export function deriveSearchText(ev: SessionEvent): string {
   switch (ev.type) {
     case "user/message":
-      return ev.text + imageDescriptor((ev as { images?: ImageInput[] }).images)
+      return ev.text + (ev.imageSummaries?.length ? imageSummaryDescriptor(ev.imageSummaries) : imageDescriptor(ev.images))
     case "assistant/message":
       return ev.text
     case "tool/call":
@@ -853,6 +870,11 @@ function imageDescriptor(images: ImageInput[] | undefined): string {
     "\n" +
     images.map((i) => `image: ${i.name ?? "unnamed"} ${i.width ?? "?"}x${i.height ?? "?"} ${Math.ceil((i.dataBase64.length * 3) / 4)}B base64:${i.dataBase64.slice(0, 8)}`).join("\n")
   )
+}
+
+function imageSummaryDescriptor(images: ImageSummary[] | undefined): string {
+  if (!Array.isArray(images) || images.length === 0) return ""
+  return "\n" + images.map((image) => `image: ${image.name ?? "unnamed"} ${image.width ?? "?"}x${image.height ?? "?"} ${image.bytes}B`).join("\n")
 }
 
 export function toJSONL(session: Session): string {

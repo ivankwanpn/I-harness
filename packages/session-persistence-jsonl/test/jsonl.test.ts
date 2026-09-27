@@ -3,12 +3,30 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, truncateSync, existsS
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { createJsonlBackend } from "../src/index.ts"
+import { append, createSession, deriveMessages, deriveSearchText } from "@i-harness/core-session"
 
 let dir: string
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "jsonl-backend-")) })
 afterEach(() => { rmSync(dir, { recursive: true, force: true }) })
 
 describe("jsonl backend", () => {
+  it("stores an admitted prompt image once and restores its model-visible reference", async () => {
+    const backend = createJsonlBackend(dir)
+    const image = { mediaType: "image/png" as const, dataBase64: "AQIDBAUG", name: "once.png" }
+    await backend.create("image", { formatVersion: 1, sessionId: "image", createdAt: "2026-09-27T00:00:00.000Z" })
+    const session = createSession()
+    append(session, { type: "agent/input/admitted", version: 1, inputId: "photo", text: "inspect", delivery: "queue", intent: "user", images: [image] })
+    append(session, { type: "turn/start" })
+    append(session, { type: "user/message", text: "inspect", imageInputId: "photo" })
+    append(session, { type: "turn/end" })
+    await backend.append("image", session.events)
+    const raw = readFileSync(join(dir, "image.jsonl"), "utf8")
+    expect(raw.split(image.dataBase64)).toHaveLength(2)
+    const loaded = await backend.read("image")
+    expect(deriveMessages({ formatVersion: loaded.version, events: loaded.events })[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
+    expect(deriveSearchText(loaded.events[2]!)).toContain("once.png")
+    expect(deriveSearchText(loaded.events[2]!)).not.toContain(image.dataBase64)
+  })
   it("rejects traversal and absolute session ids at every artifact operation", async () => {
     const backend = createJsonlBackend(dir)
     const invalidIds = [

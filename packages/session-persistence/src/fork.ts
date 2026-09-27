@@ -1,6 +1,26 @@
 import { CURRENT_FORMAT_VERSION, rewindCuts, type SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "./index.ts"
 
+/** A turn-only fork can start after an image admission. In that child the
+ * reference has no target, so copy the image onto its retained user message.
+ * References whose admission is retained stay compact. Source objects and
+ * event order remain untouched; callers remap seqs after this pass. */
+export function materializeMissingImageAdmissions(source: readonly SessionEvent[], retained: readonly SessionEvent[]): SessionEvent[] {
+  const retainedSet = new Set(retained)
+  const admissions = new Map<string, Extract<SessionEvent, { type: "agent/input/admitted" }>>()
+  const replacements = new Map<SessionEvent, SessionEvent>()
+  for (const event of source) {
+    if (event.type === "agent/input/admitted") admissions.set(event.inputId, event)
+    if (event.type !== "user/message" || event.imageInputId === undefined || !retainedSet.has(event)) continue
+    const admission = admissions.get(event.imageInputId)
+    if (!admission?.images?.length) throw new Error(`image admission not found for forked user/message: ${event.imageInputId}`)
+    if (retainedSet.has(admission)) continue
+    const { imageInputId: _imageInputId, ...message } = event
+    replacements.set(event, { ...message, images: admission.images })
+  }
+  return retained.map((event) => replacements.get(event) ?? event)
+}
+
 export interface ForkSessionOptions {
   atSeq?: number
   title?: string
@@ -132,7 +152,7 @@ export function completedTurnPrefix(
   // into the dropped region disappear with the events they named.
   const cuts = rewindCuts({ formatVersion: CURRENT_FORMAT_VERSION, events: [...events] })
   const carriesMarker = prefix.some((event) => event.type === "rewind/point")
-  if (cuts.length === 0 && !carriesMarker) return prefix
+  if (cuts.length === 0 && !carriesMarker) return materializeMissingImageAdmissions(events, prefix)
   const hidden = new Set<number>()
   for (const window of cuts) {
     let from = window.cutFrom
@@ -151,12 +171,13 @@ export function completedTurnPrefix(
   const kept = prefix.filter((event) =>
     event.type !== "rewind/point"
     && (isCompactionMarker(event.type) || event.seq === undefined || !hidden.has(event.seq)))
-  if (kept.length === prefix.length) return prefix
+  if (kept.length === prefix.length) return materializeMissingImageAdmissions(events, prefix)
+  const materialized = materializeMissingImageAdmissions(events, kept)
   const renumbered = new Map<number, number>()
-  for (const [index, event] of kept.entries()) {
+  for (const [index, event] of materialized.entries()) {
     if (event.seq !== undefined) renumbered.set(event.seq, index)
   }
-  return kept.map((event, index) => remapSeedEvent(event, index, renumbered))
+  return materialized.map((event, index) => remapSeedEvent(event, index, renumbered))
 }
 
 // M54 A3: renumber one seed event into the child's coordinates, remapping the

@@ -48,8 +48,8 @@
 
 **Interfaces:** Raw JSONL has one base64 string per new prompt image. Cold load and forked model projection produce the same `LLMMessage` image part as the live session.
 
-- [ ] Add a failing persistence test that writes admission and reference events, reads the raw JSONL, requires one base64 occurrence, cold loads, then derives the image. Add a fork/rewind case that preserves a retained image turn.
-- [ ] Run the focused persistence tests and make only the minimal fork correction needed to keep the reference valid.
-- [ ] Run the full serial package suite (`pnpm -r --no-bail --workspace-concurrency=1 test`), `pnpm typecheck`, `pnpm e2e`, and `pnpm verify:reachability`.
-- [ ] Rebuild `pnpm --filter @i-harness/desktop dist`; in Electron, submit/reopen an image-bearing playground session and verify thumbnail plus model response, then inspect the raw session log for one base64 copy. Restore any test preferences and archive the new test session.
-- [ ] Request a read-only code review, repair Important findings, rerun affected tests, and commit without staging `packages/desktop/electron.vite.config.ts`.
+- [x] Add a failing persistence test that writes admission and reference events, reads the raw JSONL, requires one base64 occurrence, cold loads, then derives the image. Add a fork/rewind case that preserves a retained image turn.
+- [x] Run the focused persistence tests and make only the minimal fork correction needed to keep the reference valid.
+- [x] Run the full serial package suite (`pnpm -r --no-bail --workspace-concurrency=1 test`), `pnpm typecheck`, `pnpm e2e`, and `pnpm verify:reachability`.
+- [x] Rebuild `pnpm --filter @i-harness/desktop dist`; in Electron, submit/reopen an image-bearing playground session and verify thumbnail plus model response, then inspect the raw session log for one base64 copy. Restore any test preferences and archive the new test session.
+- [x] Request a read-only code review, repair Important findings, rerun affected tests, and commit without staging `packages/desktop/electron.vite.config.ts`.

@@ -22,6 +22,14 @@ describe("SessionExecutor", () => {
     expect(user).not.toHaveProperty("images")
     expect(deriveMessages(session)[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
   })
+  it("keeps direct Agent.run image input inline when there is no inbox admission", async () => {
+    const ctx = createContext(), session = createSession()
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model: createMockClient([{ role: "assistant", text: "seen" }]), systemPrompt: "p" })
+    const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+    await agent.run("inspect", undefined, [image])
+    expect(session.events.find((event) => event.type === "user/message")).toMatchObject({ images: [image] })
+    expect(deriveMessages(session)[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
+  })
   it("runs one turn per pending input, serially, in admission order", async () => {
     const ctx = createContext()
     const session = createSession()

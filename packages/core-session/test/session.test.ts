@@ -569,6 +569,8 @@ describe("M14 multimodal", () => {
     append(s, { type: "agent/input/admitted", version: 1, inputId: "input-1", text: "inspect", delivery: "queue", intent: "user", images: [image] })
     append(s, { type: "user/message", text: "inspect", imageInputId: "input-1" })
     expect(s.events[1]).not.toHaveProperty("images")
+    expect(deriveSearchText(s.events[1]!)).toContain("probe.png")
+    expect(deriveSearchText(s.events[1]!)).not.toContain(PNG)
     expect(deriveMessages(s)[0]).toEqual({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
     append(s, { type: "compaction/summary", text: "other history", shadowedSeqs: [0] })
     expect(deriveMessages(s)[0]).toEqual({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })

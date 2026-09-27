@@ -33,6 +33,49 @@ async function fixture(): Promise<{
 }
 
 describe("forkSession", () => {
+  it("keeps an image admission with its retained user turn", async () => {
+    const { coordinator, cleanup } = await fixture()
+    try {
+      const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+      await coordinator.create({ sessionId: "source" })
+      await coordinator.append("source", [
+        { type: "agent/input/admitted", version: 1, inputId: "photo", text: "inspect", delivery: "queue", intent: "user", images: [image], seq: 0 },
+        { type: "turn/start", seq: 1 },
+        { type: "user/message", text: "inspect", imageInputId: "photo", seq: 2 },
+        { type: "turn/end", seq: 3 },
+      ])
+      const forked = await forkSession(coordinator, "source")
+      const child = (await coordinator.load(forked.sessionId)).session
+      expect(deriveMessages(child)[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
+    } finally { await cleanup() }
+  })
+  it("keeps a visible image turn when forking past a rewound later turn", async () => {
+    const { coordinator, cleanup } = await fixture()
+    try {
+      const log = createSession()
+      const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+      append(log, { type: "agent/input/admitted", version: 1, inputId: "photo", text: "inspect", delivery: "queue", intent: "user", images: [image] }) // 0
+      append(log, { type: "turn/start" }) // 1
+      append(log, { type: "user/message", text: "inspect", imageInputId: "photo" }) // 2
+      append(log, { type: "turn/end" }) // 3
+      append(log, { type: "turn/start" }) // 4
+      append(log, { type: "user/message", text: "hide this" }) // 5
+      append(log, { type: "turn/end" }) // 6
+      append(log, { type: "rewind/point", version: 1, targetTurn: 2, anchorSeq: 5, mode: "all", fileOps: [] }) // 7
+      append(log, { type: "turn/start" }) // 8
+      append(log, { type: "user/message", text: "after rewind" }) // 9
+      append(log, { type: "turn/end" }) // 10
+      await coordinator.create({ sessionId: "source" })
+      await coordinator.append("source", log.events)
+      const forked = await forkSession(coordinator, "source")
+      const child = (await coordinator.load(forked.sessionId)).session
+      expect(deriveMessages(child)).toMatchObject([
+        { role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] },
+        { role: "user", content: "after rewind" },
+      ])
+      expect(child.events.some((event) => event.type === "user/message" && event.text === "hide this")).toBe(false)
+    } finally { await cleanup() }
+  })
   it("cannot read or copy an outside JSONL artifact through a traversal id", async () => {
     const outer = await mkdtemp(join(tmpdir(), "ih-session-fork-boundary-"))
     const root = join(outer, "store")

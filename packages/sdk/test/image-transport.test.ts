@@ -24,3 +24,21 @@ it("uses the latest earlier admission when an input id is reused", () => {
   expect(wire[0]).not.toHaveProperty("images")
   expect(wire[2]).not.toHaveProperty("images")
 })
+
+it("reuses an indexed long prefix across image-bearing history pages", () => {
+  const session = createSession()
+  const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+  session.events.push({ type: "agent/input/admitted", version: 1, inputId: "photo", text: "look", delivery: "queue", intent: "user", images: [image], seq: 0 })
+  for (let seq = 1; seq < 10_000; seq++) session.events.push({ type: "assistant/chunk", text: "x", seq })
+  const user = { type: "user/message" as const, text: "look", imageInputId: "photo", seq: 10_000 }
+  session.events.push(user)
+  let reads = 0
+  session.events = new Proxy(session.events, { get(target, property, receiver) {
+    if (typeof property === "string" && /^\d+$/.test(property)) reads++
+    return Reflect.get(target, property, receiver)
+  } })
+  expect(transportSessionEvents(session, [user])[0]).toMatchObject({ images: [image] })
+  reads = 0
+  expect(transportSessionEvents(session, [user])[0]).toMatchObject({ images: [image] })
+  expect(reads).toBeLessThan(50)
+})
