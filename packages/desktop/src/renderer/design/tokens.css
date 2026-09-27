@@ -310,10 +310,13 @@ button { font: inherit; color: inherit; }
 .resource-search input { min-width: 140px; flex: 1; border: 1px solid var(--ih-divider); border-radius: 8px; padding: 9px 12px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
 .resource-layout { display: grid; grid-template-columns: 210px minmax(0,1fr); border: 1px solid var(--ih-divider); border-radius: 12px; overflow: hidden; }
 .resource-list { padding: 8px; border-right: 1px solid var(--ih-divider); max-height: 65vh; overflow: auto; }
-.resource-list > button { display: block; width: 100%; padding: 10px; border-radius: 8px; text-align: left; overflow-wrap: anywhere; }
-.resource-list > button[aria-current="true"] { background: var(--ih-panel); }
-.resource-list strong { font-size: 13px; font-weight: 500; }
-.resource-list small, .resource-source { display: block; margin-top: 5px; color: var(--ih-muted); font-size: 11px; }
+.resource-list > button { display: block; width: 100%; padding: 9px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ih-text); text-align: left; cursor: pointer; }
+.resource-list > button + button { margin-top: 2px; }
+.resource-list > button[aria-current="true"] { background: var(--ih-divider); }
+.resource-list strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.resource-list small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; line-height: 1.4; }
+.resource-list small, .resource-source { margin-top: 4px; color: var(--ih-muted); font-size: 11px; }
+.resource-source { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .resource-detail { min-width: 0; padding: 20px; overflow-wrap: anywhere; }
 .resource-detail h2 { margin-top: 0; }
 .resource-body { max-height: 60vh; overflow: auto; line-height: 1.7; }
