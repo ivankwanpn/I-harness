@@ -4,6 +4,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { ToolActivity } from "../src/renderer/session/ToolActivity.tsx"
 afterEach(cleanup)
 
+it("reveals the actual invocation as well as its result", () => {
+  render(<ToolActivity name="bash" args={{ command: "pwd" }} output="D:/playground" />)
+  expect(screen.queryByText(/pwd/)).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "工具詳情 bash" }))
+  expect(screen.getByText(/pwd/)).toBeTruthy()
+  expect(screen.getByText("D:/playground")).toBeTruthy()
+})
+
 it("does not serialize tool output until details are expanded", () => {
   const toJSON = vi.fn(() => ({ detail: "readable result" }))
   render(<ToolActivity name="read_file" output={{ toJSON }} />)

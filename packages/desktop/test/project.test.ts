@@ -35,7 +35,7 @@ describe("projectTimeline", () => {
       { type: "tool/result", callId: "c1", name: "read", output: "contents", seq: 1 },
     ])
 
-    expect(rows).toEqual([{ id: "tool:c1", kind: "tool", name: "read", output: "contents" }])
+    expect(rows).toEqual([{ id: "tool:c1", kind: "tool", name: "read", args: { path: "a" }, output: "contents" }])
   })
 
   it("gives refused, truncated and empty step endings distinct labels", () => {

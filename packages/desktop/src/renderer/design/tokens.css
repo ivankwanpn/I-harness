@@ -207,6 +207,10 @@ button { font: inherit; color: inherit; }
 .timeline-tool { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-panel); }
 .tool-output { margin: 4px 0 0; max-height: 240px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
 .tool-activity { padding: 3px 0; color: var(--ih-muted); }
+.activity-group-children { margin: 8px 0 8px 9px; padding-left: 16px; border-left: 1px solid var(--ih-divider); }
+.tool-expanded-content { margin: 6px 0 12px 22px; }
+.tool-detail-label { margin: 10px 0 4px; font-size: 11px; color: var(--ih-muted); }
+.timeline-other summary { cursor: pointer; }
 .tool-summary { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 4px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; font-size: 12px; }
 .tool-summary:hover { background: #ffffff06; }
 .tool-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

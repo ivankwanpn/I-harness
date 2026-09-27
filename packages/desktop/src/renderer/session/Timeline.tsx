@@ -1,10 +1,12 @@
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import { ArrowDown } from "lucide-react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { activityLabel, outcomeLabel, type TimelineRow } from "./project.ts"
 import { ToolActivity } from "./ToolActivity.tsx"
+import { ActivityGroup } from "./ActivityGroup.tsx"
+import { groupActivities, type TimelineItem } from "./activity-groups.ts"
 import { useText } from "../design/i18n.ts"
 
 const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
@@ -15,8 +17,9 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
   }}>{text}</Markdown>
 })
 
-function RowView({ row }: { row: TimelineRow }) {
+function RowView({ row, open, toggle, page, setPage }: { row: TimelineItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void }) {
   const t = useText()
+  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
       {row.role === "assistant" ? <MarkdownMessage text={row.text} /> : row.text}
@@ -26,20 +29,31 @@ function RowView({ row }: { row: TimelineRow }) {
     return <p className="timeline-outcome">{outcomeLabel(row.flags, t)}</p>
   }
   if (row.kind === "other") {
-    return row.detail ? <details className="timeline-other muted"><summary>{activityLabel(row.label, t)}</summary><pre className="tool-output">{row.detail}</pre></details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
+    return row.detail ? <details className="timeline-other muted" open={open.get(row.id) === true} onToggle={(event) => { if (event.currentTarget.open !== (open.get(row.id) === true)) toggle(row.id) }}><summary>{activityLabel(row.label, t)}</summary><pre className="tool-output">{row.detail}</pre></details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} output={row.output} />
+  return <ToolActivity name={row.name} args={row.args} output={row.output} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
 export function Timeline({ rows }: { rows: TimelineRow[] }) {
   const t = useText()
+  const items = useMemo(() => groupActivities(rows), [rows])
+  const [open, setOpen] = useState(new Map<string, boolean>())
+  const [pages, setPages] = useState(new Map<string, number>())
+  const toggle = (id: string) => setOpen((previous) => {
+    const next = new Map(previous)
+    const group = items.find((item) => item.id === id)
+    const current = previous.get(id) ?? (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true))
+    next.set(id, !current)
+    if (next.size > 2000) next.delete(next.keys().next().value!)
+    return next
+  })
   const parentRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   const [showLatest, setShowLatest] = useState(false)
   const virtualizer = useVirtualizer({
-    count: rows.length,
-    getItemKey: (index) => rows[index]!.id,
+    count: items.length,
+    getItemKey: (index) => items[index]!.id,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 56,
     overscan: 8,
@@ -48,12 +62,12 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
   })
   const totalSize = virtualizer.getTotalSize()
   useEffect(() => {
-    if (!following.current || rows.length === 0) return
+    if (!following.current || items.length === 0) return
     const frame = requestAnimationFrame(() => {
-      if (following.current) virtualizer.scrollToIndex(rows.length - 1, { align: "end" })
+      if (following.current) virtualizer.scrollToIndex(items.length - 1, { align: "end" })
     })
     return () => cancelAnimationFrame(frame)
-  }, [rows, totalSize, virtualizer])
+  }, [items, totalSize, virtualizer])
   return (
     <div className="timeline-region">
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
@@ -66,7 +80,7 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
       }}>
       <div className="timeline-inner" style={{ height: `${totalSize}px` }}>
         {virtualizer.getVirtualItems().map((item) => {
-          const row = rows[item.index]!
+          const row = items[item.index]!
           return (
             <div
               key={row.id}
@@ -75,14 +89,18 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
               ref={virtualizer.measureElement}
               style={{ transform: `translateY(${item.start}px)` }}
             >
-              <RowView row={row} />
+              <RowView row={row} open={open} toggle={toggle} page={pages.get(row.id) ?? 0} setPage={(page) => setPages((previous) => {
+                const next = new Map(previous); next.set(row.id, page)
+                if (next.size > 2000) next.delete(next.keys().next().value!)
+                return next
+              })} />
             </div>
           )
         })}
       </div>
     </div>
     {showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
-      following.current = true; setShowLatest(false); virtualizer.scrollToIndex(rows.length - 1, { align: "end" })
+      following.current = true; setShowLatest(false); virtualizer.scrollToIndex(items.length - 1, { align: "end" })
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
     </div>
   )

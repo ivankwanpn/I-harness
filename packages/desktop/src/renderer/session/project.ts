@@ -5,7 +5,7 @@ export type WireEvent = HistoryRange["events"][number]
 
 export type TimelineRow =
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; transient?: true }
-  | { id: string; kind: "tool"; name: string; output?: unknown }
+  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; detail?: string }
 
@@ -14,12 +14,14 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = []
   const toolIndex = new Map<string, number>()
   let streamIndex: number | undefined
+  let groupScope: string | undefined
   for (const [index, event] of events.entries()) {
+    if (event.type === "turn/start") groupScope = `turn:${event.seq ?? index}`
     if (event.type === "user/message" && event.internal) continue
     if (event.type === "tool/dispatch" || event.type === "session/title") continue
     if (event.type === "tool/call") {
       toolIndex.set(event.callId, rows.length)
-      rows.push({ id: `tool:${event.callId}`, kind: "tool", name: event.name, output: undefined })
+      rows.push({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })
     } else if (event.type === "tool/result" && toolIndex.has(event.callId)) {
       const rowIndex = toolIndex.get(event.callId)!
       const previous = rows[rowIndex]
