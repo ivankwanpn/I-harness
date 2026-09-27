@@ -3,11 +3,12 @@ import type { Message } from "../design/i18n.ts"
 
 export type WireEvent = HistoryRange["events"][number]
 
-export type TimelineRow =
+export type TimelineRow = (
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; transient?: true }
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; detail?: string }
+) & { turn?: { id: string; complete: boolean } }
 
 /** Pure fold: durable rows only, with stable ids for every rendered row. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
@@ -15,19 +16,22 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const toolIndex = new Map<string, number>()
   let streamIndex: number | undefined
   let groupScope: string | undefined
+  let turn: TimelineRow["turn"]
+  const appendRow = (row: TimelineRow) => rows.push(turn ? { ...row, turn } : row)
   for (const [index, event] of events.entries()) {
-    if (event.type === "turn/start") groupScope = `turn:${event.seq ?? index}`
+    if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false } }
+    if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined }
     if (event.type === "user/message" && event.internal) continue
     if (event.type === "tool/dispatch" || event.type === "session/title") continue
     if (event.type === "tool/call") {
       toolIndex.set(event.callId, rows.length)
-      rows.push({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })
+      appendRow({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })
     } else if (event.type === "tool/result" && toolIndex.has(event.callId)) {
       const rowIndex = toolIndex.get(event.callId)!
       const previous = rows[rowIndex]
       if (previous?.kind === "tool") rows[rowIndex] = { ...previous, output: event.output }
     } else if (event.type === "step/end" && (event.refused === true || event.truncated === true || event.empty === true)) {
-      rows.push({
+      appendRow({
         id: `step:${event.seq ?? index}`,
         kind: "outcome",
         flags: {
@@ -42,14 +46,15 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         kind: "message",
         role: event.type === "user/message" ? "user" : "assistant",
         text: event.text,
+        ...(turn ? { turn } : {}),
       }
       if (event.type === "assistant/message" && streamIndex !== undefined) rows[streamIndex] = message
-      else rows.push(message)
+      else appendRow(message)
       streamIndex = undefined
     } else if (event.type === "assistant/chunk") {
       if (streamIndex === undefined) {
         streamIndex = rows.length
-        rows.push({ id: `chunk:${event.seq ?? index}`, kind: "message", role: "assistant", text: event.text, transient: true })
+        appendRow({ id: `chunk:${event.seq ?? index}`, kind: "message", role: "assistant", text: event.text, transient: true })
       } else {
         const previous = rows[streamIndex]!
         if (previous.kind === "message") rows[streamIndex] = { ...previous, text: previous.text + event.text }
@@ -60,7 +65,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       if (event.type !== "step/end") streamIndex = undefined
     } else {
       const detail = event.type === "reasoning" || event.type === "compaction/summary" ? event.text : undefined
-      rows.push({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
+      appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
     }
   }
   return rows

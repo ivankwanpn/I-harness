@@ -1,6 +1,6 @@
 import type { TimelineRow } from "./project.ts"
 export type ToolRow = Extract<TimelineRow, { kind: "tool" }>
-export interface ActivityGroupRow { id: string; kind: "activity-group"; family: "explore" | "execute" | "changes"; rows: ToolRow[] }
+export interface ActivityGroupRow { id: string; kind: "activity-group"; family: "explore" | "execute" | "changes"; rows: ToolRow[]; turn?: TimelineRow["turn"] }
 export type TimelineItem = TimelineRow | ActivityGroupRow
 function family(row: TimelineRow): ActivityGroupRow["family"] | undefined {
   if (row.kind !== "tool") return undefined
@@ -18,7 +18,7 @@ export function groupActivities(rows: readonly TimelineRow[]): TimelineItem[] {
     const kind = family(first)
     let end = index + 1
     if (kind && first.kind === "tool") while (end < rows.length && family(rows[end]!) === kind && (rows[end] as ToolRow).groupScope === first.groupScope) end++
-    if (kind && end - index > 1) result.push({ id: `activity:${first.id}`, kind: "activity-group", family: kind, rows: rows.slice(index, end) as ToolRow[] })
+    if (kind && end - index > 1) result.push({ id: `activity:${first.id}`, kind: "activity-group", family: kind, rows: rows.slice(index, end) as ToolRow[], ...(first.turn ? { turn: first.turn } : {}) })
     else result.push(first)
     index = end
   }

@@ -218,7 +218,7 @@ export function Workbench({
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
-                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} />}
+                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} navigation={review && capabilities["desktop-review"]?.includes("1") ? { workspacePath: workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.path ?? "", onOpenFile: (path) => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") } } : undefined} />}
                 <div className="conversation-dock">
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} pending={conversation.pending} onReply={conversation.onReply} />
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}

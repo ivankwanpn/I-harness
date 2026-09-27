@@ -1,10 +1,31 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
-const viewport = vi.hoisted(() => ({ visible: true }))
-vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => viewport.visible ? Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: () => {}, scrollToIndex: () => {} }) }))
+const viewport = vi.hoisted(() => ({ visible: true, scroll: vi.fn() }))
+vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => viewport.visible ? Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56 })) : [], measureElement: () => {}, scrollToIndex: viewport.scroll }) }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
-afterEach(() => { cleanup(); viewport.visible = true })
+import { projectTimeline } from "../src/renderer/session/project.ts"
+afterEach(() => { cleanup(); viewport.visible = true; viewport.scroll.mockClear(); vi.useRealTimers() })
+
+it("does not jump to the end when the reader opens tool details", () => {
+  vi.useFakeTimers()
+  render(<Timeline rows={[{ id: "r", kind: "tool", name: "read", output: "details" }]} />)
+  act(() => vi.runOnlyPendingTimers())
+  viewport.scroll.mockClear()
+  fireEvent.click(screen.getByRole("button", { name: "工具詳情 read" }))
+  act(() => vi.runOnlyPendingTimers())
+  expect(viewport.scroll).not.toHaveBeenCalled()
+})
+
+it("collapses intermediate work while keeping the final reply visible", () => {
+  const rows = projectTimeline([{ type: "turn/start", seq: 0 }, { type: "user/message", text: "Task", seq: 1 }, { type: "tool/call", callId: "r", name: "read", args: { path: "a.md" }, seq: 2 }, { type: "assistant/message", text: "Final reply", seq: 3 }, { type: "turn/end", seq: 4 }])
+  render(<Timeline rows={rows} />)
+  expect(screen.getByRole("button", { name: "工具詳情 read" })).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "工作過程" }))
+  expect(screen.queryByRole("button", { name: "工具詳情 read" })).toBeNull()
+  expect(screen.getByText("Final reply")).toBeTruthy()
+  expect(screen.getByText("Task")).toBeTruthy()
+})
 
 it("keeps inner and outer disclosure choices across growth and virtual unmount", () => {
   const a = { id: "a", kind: "tool" as const, name: "read", args: { path: "a.txt" }, output: "first contents" }

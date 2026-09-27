@@ -4,6 +4,14 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { ToolActivity } from "../src/renderer/session/ToolActivity.tsx"
 afterEach(cleanup)
 
+it("opens an explicit file target through the workspace review callback", () => {
+  const onOpenFile = vi.fn()
+  render(<ToolActivity name="read" args={{ path: "D:/repo/a.md" }} navigation={{ workspacePath: "D:/repo", onOpenFile }} />)
+  fireEvent.click(screen.getByRole("button", { name: "在成果面板開啟 a.md" }))
+  expect(onOpenFile).toHaveBeenCalledWith("a.md")
+  expect(screen.getByRole("button", { name: "工具詳情 read" }).getAttribute("aria-expanded")).toBe("false")
+})
+
 it("reveals the actual invocation as well as its result", () => {
   render(<ToolActivity name="bash" args={{ command: "pwd" }} output="D:/playground" />)
   expect(screen.queryByText(/pwd/)).toBeNull()

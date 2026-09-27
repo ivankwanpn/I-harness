@@ -114,6 +114,8 @@ const english = {
   "授權後，對應的 Hook 可在其宣告事件執行。已開始的操作可繼續完成。": "After approval, the hook may run for its declared events. Operations already started may finish.",
   "目前沒有已啟用插件宣告的 Hooks。": "No hooks are declared by enabled plugins.",
   "呼叫參數": "Invocation arguments", "執行輸出": "Output", "查閱": "Explore", "終端操作": "Terminal activity", "檔案變更": "File changes", "{count} 項工具": "{count} tools",
+  "在成果面板開啟 {path}": "Open {path} in review",
+  "工作過程": "Work details",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

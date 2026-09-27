@@ -6,8 +6,11 @@ import remarkGfm from "remark-gfm"
 import { activityLabel, outcomeLabel, type TimelineRow } from "./project.ts"
 import { ToolActivity } from "./ToolActivity.tsx"
 import { ActivityGroup } from "./ActivityGroup.tsx"
-import { groupActivities, type TimelineItem } from "./activity-groups.ts"
+import { groupActivities } from "./activity-groups.ts"
+import { workStages, type WorkItem } from "./work-stages.ts"
+import { ChevronRight } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import type { FileNavigation } from "./file-navigation.ts"
 
 const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
   const t = useText()
@@ -17,9 +20,10 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
   }}>{text}</Markdown>
 })
 
-function RowView({ row, open, toggle, page, setPage }: { row: TimelineItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void }) {
+function RowView({ row, open, toggle, page, setPage, navigation }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation }) {
   const t = useText()
-  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} />
+  if (row.kind === "work-stage") return <button type="button" className="work-stage-heading" aria-expanded={open.get(row.id) !== false} onClick={() => toggle(row.id)}>{t("工作過程")}<ChevronRight size={14} className={open.get(row.id) !== false ? "rotate-90" : ""} /></button>
+  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
       {row.role === "assistant" ? <MarkdownMessage text={row.text} /> : row.text}
@@ -31,23 +35,28 @@ function RowView({ row, open, toggle, page, setPage }: { row: TimelineItem; open
   if (row.kind === "other") {
     return row.detail ? <details className="timeline-other muted" open={open.get(row.id) === true} onToggle={(event) => { if (event.currentTarget.open !== (open.get(row.id) === true)) toggle(row.id) }}><summary>{activityLabel(row.label, t)}</summary><pre className="tool-output">{row.detail}</pre></details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} args={row.args} output={row.output} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} />
+  return <ToolActivity name={row.name} args={row.args} output={row.output} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export function Timeline({ rows }: { rows: TimelineRow[] }) {
+export function Timeline({ rows, navigation }: { rows: TimelineRow[]; navigation?: FileNavigation }) {
   const t = useText()
-  const items = useMemo(() => groupActivities(rows), [rows])
+  const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
+  const items = useMemo(() => workStages(grouped, open), [grouped, open])
   const [pages, setPages] = useState(new Map<string, number>())
-  const toggle = (id: string) => setOpen((previous) => {
+  const toggle = (id: string) => {
+    following.current = false
+    setShowLatest(true)
+    setOpen((previous) => {
     const next = new Map(previous)
     const group = items.find((item) => item.id === id)
-    const current = previous.get(id) ?? (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true))
+    const current = previous.get(id) ?? (group?.kind === "work-stage" || (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
     next.set(id, !current)
     if (next.size > 2000) next.delete(next.keys().next().value!)
     return next
-  })
+    })
+  }
   const parentRef = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   const [showLatest, setShowLatest] = useState(false)
@@ -89,11 +98,14 @@ export function Timeline({ rows }: { rows: TimelineRow[] }) {
               ref={virtualizer.measureElement}
               style={{ transform: `translateY(${item.start}px)` }}
             >
-              <RowView row={row} open={open} toggle={toggle} page={pages.get(row.id) ?? 0} setPage={(page) => setPages((previous) => {
+              <RowView row={row} open={open} toggle={toggle} navigation={navigation} page={pages.get(row.id) ?? 0} setPage={(page) => {
+                following.current = false; setShowLatest(true)
+                setPages((previous) => {
                 const next = new Map(previous); next.set(row.id, page)
                 if (next.size > 2000) next.delete(next.keys().next().value!)
                 return next
-              })} />
+                })
+              }} />
             </div>
           )
         })}
