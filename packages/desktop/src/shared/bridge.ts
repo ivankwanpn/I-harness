@@ -3,11 +3,14 @@ import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
 import type { SessionModelSelection } from "@i-harness/sdk"
 import type { AgentDefaults } from "@i-harness/desktop-gateway/src/agent-settings.ts"
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
+import type { HookSettingsCommand } from "@i-harness/desktop-gateway/src/hook-settings.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/hooks/state" | "desktop/hooks/refresh"; workspaceId: string }
+  | { kind: "desktop/hooks/mutate"; workspaceId: string; command: HookSettingsCommand }
   | { kind: "desktop/subagents/state"; workspaceId: string }
   | { kind: "desktop/subagents/mutate"; workspaceId: string; command: SubagentSettingsCommand }
   | { kind: "desktop/agent-settings/state"; workspaceId: string }

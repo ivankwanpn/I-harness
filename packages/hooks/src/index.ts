@@ -99,6 +99,9 @@ export interface LoadedHandler {
 }
 
 export interface HookRegistry {
+  /** Re-evaluate trust on the mounted registry, without replaying lifecycle
+   * hooks. Calls already running may finish; new gates fail closed while loading. */
+  refreshTrust(approvals: Pick<HookTrustStore, "isApproved">): Promise<void>
   /** Detach this registry's event handlers from a still-running context. */
   dispose(): Promise<void>
   /**
@@ -394,6 +397,7 @@ export async function createHookRegistry(
 
   const mountName = `hooks:${randomUUID()}`
   let disposed = false
+  let trustRevision = 0
   ctx.mount({ name: mountName, mount() {
   // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
   ctx.onCascade("tools/execute", async (input, next) => {
@@ -460,6 +464,15 @@ export async function createHookRegistry(
 
   } })
   return {
+    async refreshTrust(approvals) {
+      if (disposed) throw new HookConfigError("hooks registry is disposed")
+      const revision = ++trustRevision
+      registry.loaded = registry.loaded.map((row) => ({ ...row, valid: false, unapproved: false, trustError: "Hook trust refresh is in progress" }))
+      const loaded = await loadHooksConfig(configPath, configDir, approvals)
+      if (disposed || revision !== trustRevision) return
+      registry.loaded = loaded
+      registry.reportedUnapproved.clear()
+    },
     async dispose() { if (disposed) return; disposed = true; await ctx.unmount(mountName); registry.loaded = [] },
     async fire(event, input) {
       if (event === "session/start" || event === "session/end" || event === "subagent/stop") {

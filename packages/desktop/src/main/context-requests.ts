@@ -11,6 +11,15 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/hooks/state":
+    case "desktop/hooks/refresh": return {}
+    case "desktop/hooks/mutate": {
+      if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid hook command")
+      const command = value.command as Record<string, unknown>
+      if (!["approve", "revoke"].includes(String(command.action)) || typeof command.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(command.sha256)) throw new Error("invalid hook command")
+      if (command.action === "approve" && (typeof command.id !== "string" || !/^[a-f0-9]{64}$/.test(command.id))) throw new Error("invalid hook identity")
+      return { ...command }
+    }
     case "desktop/subagents/state": return {}
     case "desktop/subagents/mutate": {
       if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid subagent settings command")

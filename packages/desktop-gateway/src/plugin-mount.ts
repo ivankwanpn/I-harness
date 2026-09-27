@@ -8,7 +8,7 @@ import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-
 
 interface Mounted {
   commands: Map<string, { signature: string; dispose(): void }>
-  hooks: Map<string, { signature: string; registry: HookRegistry }>
+  hooks: Map<string, { signature: string; trustSignature: string; registry: HookRegistry }>
 }
 const live = new WeakMap<SessionAssembly, Mounted>()
 
@@ -32,21 +32,29 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         if (descriptor.unsupported?.length) messages.push(`Command ${name}: unsupported ${descriptor.unsupported.join(", ")}`)
       }
       const signatures = new Map<string, string>()
+      const approvals = createHookTrustStore(resolveHookTrustPath(configDir))
+      const trustSignature = JSON.stringify(approvals.list().map((entry) => entry.sha256).sort())
       for (const path of inputs.hookConfigs) {
         try { signatures.set(path, createHash("sha256").update(await readFile(path)).digest("hex")) }
         catch (error) { failures.push(error); messages.push(`Hooks ${path}: ${String(error)}`) }
       }
       for (const [path, old] of state.hooks) {
-        if (signatures.get(path) === old.signature) continue
-        try { await old.registry.endSession(sessionId) } catch (error) { messages.push(String(error)) }
+        if (signatures.get(path) === old.signature) {
+          // The artifact may have been restored without changing either the
+          // config or grant set. Explicit refresh must repair that cached verdict.
+          try { await old.registry.refreshTrust(approvals); old.trustSignature = trustSignature }
+          catch (error) { failures.push(error); messages.push(`Hook trust ${path}: ${String(error)}`) }
+          continue
+        }
+        // Do not run an old session/end handler after its grant was revoked.
+        if (old.trustSignature === trustSignature) try { await old.registry.endSession(sessionId) } catch (error) { messages.push(String(error)) }
         await old.registry.dispose(); state.hooks.delete(path)
       }
-      const approvals = createHookTrustStore(resolveHookTrustPath(configDir))
       for (const [configPath, signature] of signatures) {
         if (state.hooks.has(configPath)) continue
         try {
           const registry = await createHookRegistry(assembly.ctx, { configPath, configDir: dirname(configPath), approvals, report: (error) => { messages.push(String(error)); publish() } })
-          state.hooks.set(configPath, { signature, registry })
+          state.hooks.set(configPath, { signature, trustSignature, registry })
           for (const handler of registry.handlers()) if (!handler.valid) messages.push(`Hook ${configPath}: not granted or invalid`)
           await registry.beginSession(sessionId)
         } catch (error) {

@@ -17,6 +17,9 @@ import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
 import { createDesktopTerminal } from "./terminal.ts"
 import { createAgentSettings } from "./agent-settings.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
+import { createHookSettings } from "./hook-settings.ts"
+import { watchSettings } from "@i-harness/settings"
+import { resolveHookTrustPath } from "@i-harness/hooks"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -128,6 +131,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
     subagents,
     agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
     terminal,
@@ -189,9 +193,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const router = createDesktopRouter(base, options.onWrite, handlers, internalIds)
   let closing: Promise<void> | undefined
+  const trustWatcher = watchSettings(resolveHookTrustPath(dirname(settingsPath)), () => {
+    if (!closing) void plugins.refresh().catch(() => { /* Plugin state exposes live refresh failures. */ })
+  })
   return {
     handleLine: (line) => router.handleLine(line),
     close: () => closing ??= (async () => {
+      trustWatcher.dispose()
       interaction.close()
       await stopPluginObserver()
       terminal.close()

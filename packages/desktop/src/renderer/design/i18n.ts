@@ -109,6 +109,10 @@ const english = {
   "填入既有角色名稱；此設定不會建立新的角色或工具權限。": "Enter an existing role name. This setting does not create a role or grant tools.",
   "移除模型覆寫": "Remove model override",
   "未覆寫時沿用角色定義；內建角色預設繼承主會話。模型配置在下一次建立子代理時讀取，不會更換已執行中的子代理。": "Without an override, the role definition applies; built-in roles inherit the parent conversation by default. Model mappings are read for new subagents, without changing running ones.",
+  "Hooks 信任": "Hook trust", "重新套用 Hooks": "Refresh live hooks", "正在處理…": "Processing…", "確認授權此內容": "Confirm content approval", "已啟用插件的 Hooks": "Hooks from enabled plugins", "信任檢查通過": "Trust checks passed", "等待腳本授權": "Awaiting script approval", "腳本或設定無效": "Invalid script or configuration", "來源與診斷": "Source and diagnostics", "批准腳本": "Approve script", "已保存的腳本授權": "Saved script approvals", "撤銷授權": "Revoke approval", "沒有已保存的腳本授權": "No saved script approvals",
+  "插件啟用不等於腳本授權。授權依腳本內容雜湊共用；撤銷會影響使用相同內容的處理器。": "Enabling a plugin does not approve its scripts. Grants are shared by content hash; revocation affects handlers using the same content.",
+  "授權後，對應的 Hook 可在其宣告事件執行。已開始的操作可繼續完成。": "After approval, the hook may run for its declared events. Operations already started may finish.",
+  "目前沒有已啟用插件宣告的 Hooks。": "No hooks are declared by enabled plugins.",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore
