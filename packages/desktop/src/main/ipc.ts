@@ -4,6 +4,7 @@ import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest, ty
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import { contextRequestParams } from "./context-requests.ts"
+import { listDesktopTerminalShellOptions } from "@i-harness/desktop-gateway/src/terminal-shells.ts"
 import type { attachNativeWindow } from "./native-window.ts"
 import type { createBrowserSurface } from "./browser-surface.ts"
 
@@ -15,6 +16,8 @@ export interface DesktopIpcDependencies {
   pickFiles?: (workspacePath: string) => Promise<string[] | undefined>
   native?: ReturnType<typeof attachNativeWindow>
   browser?: ReturnType<typeof createBrowserSurface>
+  /** Discover local executable choices before a workspace is opened. */
+  shellOptions?: typeof listDesktopTerminalShellOptions
 }
 
 /**
@@ -196,6 +199,7 @@ export async function dispatchDesktopRequest(
     case "desktop/terminal/write":
     case "desktop/terminal/resize":
     case "desktop/terminal/close": {
+      if (value.kind === "desktop/terminal/options" && value.workspaceId === undefined) return (dependencies.shellOptions ?? listDesktopTerminalShellOptions)()
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const params: Record<string, unknown> = {}
       if (value.kind !== "desktop/terminal/list" && value.kind !== "desktop/terminal/options" && value.kind !== "desktop/terminal/open") params.id = requireNonEmpty(value.id, "terminal id")

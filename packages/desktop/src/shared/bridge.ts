@@ -28,7 +28,8 @@ export type DesktopRequest =
   | { kind: "browser/navigate"; workspaceId: string; id: string; url: string }
   | { kind: "browser/action"; workspaceId: string; id: string; action: "back" | "forward" | "reload" | "stop" }
   | { kind: "browser/show"; workspaceId: string; id: string; bounds: { x: number; y: number; width: number; height: number } }
-  | { kind: "desktop/terminal/list" | "desktop/terminal/open" | "desktop/terminal/options"; workspaceId: string }
+  | { kind: "desktop/terminal/list" | "desktop/terminal/open"; workspaceId: string }
+  | { kind: "desktop/terminal/options"; workspaceId?: string }
   | { kind: "desktop/terminal/close"; workspaceId: string; id: string }
   | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }
   | { kind: "desktop/terminal/write"; workspaceId: string; id: string; data: string }

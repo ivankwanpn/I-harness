@@ -129,6 +129,14 @@ describe("Desktop scoped IPC", () => {
     await dispatchDesktopRequest({ kind: "desktop/terminal/options", workspaceId: ENTRY.id }, f.dependencies)
     expect(f.request).toHaveBeenLastCalledWith("desktop/terminal/options", {})
   })
+  it("lists detected terminal shells without starting a workspace runtime", async () => {
+    const f = fixture()
+    const shellOptions = vi.fn(() => [{ id: "auto", label: "自動選擇", command: "C:\\Git\\bash.exe" }])
+    f.dependencies.shellOptions = shellOptions
+    await expect(dispatchDesktopRequest({ kind: "desktop/terminal/options" }, f.dependencies)).resolves.toEqual(shellOptions())
+    expect(f.get).not.toHaveBeenCalled()
+    expect(f.request).not.toHaveBeenCalled()
+  })
   it("validates and stores only a bounded local terminal font override", async () => {
     const f = fixture()
     const configure = vi.fn(() => ({ terminalFontFamily: "Cascadia Code, monospace" }))

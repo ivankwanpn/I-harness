@@ -5,7 +5,7 @@ import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import type { TerminalShellChoice } from "../../shared/bridge.ts"
 type NativeState = { notifications: boolean; notificationsSupported: boolean; terminalShell?: TerminalShellChoice; terminalFontFamily?: string }
 type ShellOption = { id: TerminalShellChoice; label: string; command?: string }
-export function NativeSettings({ bridge, section = "all", workspaceId }: { bridge: DesktopBridge; section?: "all" | "window" | "notifications"; workspaceId?: string }) {
+export function NativeSettings({ bridge, section = "all" }: { bridge: DesktopBridge; section?: "all" | "window" | "notifications" }) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
   const [value, setValue] = useState<NativeState>()
@@ -24,13 +24,14 @@ export function NativeSettings({ bridge, section = "all", workspaceId }: { bridg
     return () => { active = false }
   }, [bridge])
   useEffect(() => {
-    if (!workspaceId || section === "notifications") return
+    if (section === "notifications") return
     let active = true
-    void bridge.request({ kind: "desktop/terminal/options", workspaceId }).then((result) => {
+    void bridge.request({ kind: "desktop/terminal/options" }).then((result) => {
+      if (!Array.isArray(result)) throw new Error("Terminal shell options unavailable")
       if (active) setShells(result as ShellOption[])
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
     return () => { active = false }
-  }, [bridge, section, workspaceId])
+  }, [bridge, section])
   const selectedShell = value?.terminalShell ?? "auto"
   const visibleShells = shells.some((option) => option.id === selectedShell)
     ? shells
@@ -46,12 +47,12 @@ export function NativeSettings({ bridge, section = "all", workspaceId }: { bridg
       }} />} /> : null}
     {section !== "notifications" ? <SettingsRow label={t("視窗位置與大小")} description={t("關閉時保存，下次啟動恢復。")}
       control={<button className="primary-button" disabled={busy} onClick={() => { setBusy(true); setError(undefined); void bridge.request({ kind: "window/reset-bounds" }).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false)) }}>{t("重設視窗")}</button>} /> : null}
-  </SettingsGroup>{section !== "notifications" ? <><h2>{t("終端")}</h2><SettingsGroup>{workspaceId ? <><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
+  </SettingsGroup>{section !== "notifications" ? <><h2>{t("終端")}</h2><SettingsGroup><SettingsRow label={t("整合終端 Shell")} description={t("只影響新開的內建終端；Windows 自動優先 Git Bash，找不到則使用 CMD。既有終端保持目前 Shell；Agent 的 bash、pwsh 工具各自使用同名 Shell。")}
       control={<select aria-label={t("整合終端 Shell")} value={selectedShell} disabled={busy || !value || shells.length === 0} onChange={(event) => {
         const terminalShell = event.target.value as TerminalShellChoice
         setBusy(true); setError(undefined)
         void bridge.request({ kind: "desktop/local/configure", terminalShell }).then((result) => setValue(result as NativeState)).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
-      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} />{selectedCommand ? <p className="settings-shell-path" role="status">{t("目前執行檔")}：<code>{selectedCommand}</code></p> : null}</> : null}
+      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} />{selectedCommand ? <p className="settings-shell-path" role="status">{t("目前執行檔")}：<code>{selectedCommand}</code></p> : null}
       <SettingsRow label={t("終端字體")} description={t("留空使用內建預設字體；返回終端畫面後套用，不改變已啟動的 Shell。")}
         control={<button aria-label={t("儲存終端字體")} disabled={busy || !fontDirty} onClick={() => {
           setBusy(true); setError(undefined)
