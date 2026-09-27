@@ -27,6 +27,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.plugins) capabilities["desktop-plugins"] = ["1"]
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
@@ -139,6 +140,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if ((message.method === "desktop/agent-settings/state" || message.method === "desktop/agent-settings/configure") && handlers.agentSettings) {
+        try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentSettings.state() : await handlers.agentSettings.configure(message.params))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (message.method.startsWith("desktop/rewind/") && handlers.rewind) {
         const params = asRecord(message.params)
         const sessionId = params?.sessionId

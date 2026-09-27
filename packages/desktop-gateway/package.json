@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit", "gateway": "node --import tsx src/cli.ts" },
   "dependencies": {
+    "@i-harness/fs-lock": "workspace:*",
     "@i-harness/terminal": "workspace:*",
     "@i-harness/hooks": "workspace:*",
     "@i-harness/plugin-registry": "workspace:*",

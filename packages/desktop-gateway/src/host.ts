@@ -15,6 +15,7 @@ import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
 import { createDesktopTerminal } from "./terminal.ts"
+import { createAgentSettings } from "./agent-settings.ts"
 import type { RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
@@ -122,6 +123,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
   const handlers: DesktopHandlers = {
+    agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
     terminal,
     plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),

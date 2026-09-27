@@ -420,6 +420,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
       '@i-harness/hooks':
         specifier: workspace:*
         version: link:../hooks

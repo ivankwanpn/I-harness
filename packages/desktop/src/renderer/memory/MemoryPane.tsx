@@ -5,7 +5,7 @@ import { useText } from "../design/i18n.ts"
 interface Note { id: string; title: string; text?: string; snippet?: string }
 
 /** Workspace-scoped management; the gateway remains the memory authority. */
-export function MemoryPane({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
+export function MemoryPane({ bridge, workspaceId, embedded = false }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean }) {
   const t = useText()
   const [enabled, setEnabled] = useState<boolean>()
   const [notes, setNotes] = useState<Note[]>([])
@@ -50,8 +50,8 @@ export function MemoryPane({ bridge, workspaceId }: { bridge: DesktopBridge; wor
     setSummary(undefined)
   }
 
-  return <section className="memory-pane" aria-label={t("工作區記憶")}>
-    <h1>{t("工作區記憶")}</h1>
+  return <section className={embedded ? "memory-pane settings-embedded" : "memory-pane"} aria-label={t("工作區記憶")}>
+    {embedded ? null : <h1>{t("工作區記憶")}</h1>}
     <p className="muted">{t("筆記保存在此工作區，可供不同會話查找。目前不會自動生成記憶。")}</p>
     {error === undefined ? null : <p role="alert" className="error-text">{error}</p>}
     <label className="memory-switch"><input type="checkbox" checked={enabled === true} disabled={busy || enabled === undefined}

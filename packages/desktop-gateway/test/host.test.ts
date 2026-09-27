@@ -23,6 +23,27 @@ function fixture(mode: "read-only" | "workspace-write" | "danger-full-access") {
 }
 
 describe("Desktop host sandbox configuration", () => {
+  it("reports saved agent defaults separately until a real host restart", async () => {
+    const f = fixture("read-only")
+    let host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
+    let id = 300
+    const call = async (method: string, params = {}) => {
+      const requestId = ++id
+      await host.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+      const reply = f.frames.find((frame) => "id" in frame && frame.id === requestId)
+      if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
+      return reply.result
+    }
+    try {
+      const init = await call("initialize")
+      expect(init).toMatchObject({ capabilities: { "desktop-agent-settings": ["1"] } })
+      expect(await call("desktop/agent-settings/configure", { sandboxMode: "workspace-write", autoCompaction: false })).toMatchObject({ restartRequired: true, effective: { sandboxMode: "read-only", autoCompaction: true } })
+      await host.close()
+      host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
+      await call("initialize")
+      expect(await call("desktop/agent-settings/state")).toMatchObject({ restartRequired: false, effective: { sandboxMode: "workspace-write", autoCompaction: false } })
+    } finally { await host.close() }
+  })
   it("persists provider commands across a host restart without leaking the API key", async () => {
     const f = fixture("read-only")
     let host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })

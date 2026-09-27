@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { ArrowLeft, Settings, Palette, Bell, Server, Folder, Info } from "lucide-react"
+import { ArrowLeft, Settings, Palette, Bell, Server, Folder, Info, Brain, Puzzle, Shield } from "lucide-react"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { useLocale, useText } from "../design/i18n.ts"
 import { usePreferences, type Appearance } from "../design/preferences.ts"
@@ -10,12 +10,18 @@ import { NativeSettings } from "./NativeSettings.tsx"
 import { ProviderDirectory } from "./ProviderDirectory.tsx"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 import { TitleBar } from "../shell/TitleBar.tsx"
+import { AgentSettings } from "./AgentSettings.tsx"
+import { MemoryPane } from "../memory/MemoryPane.tsx"
+import { PluginMarketplace } from "./PluginMarketplace.tsx"
 
 const sections = [
   { id: "general", label: "一般", icon: Settings, group: "基本設定" },
   { id: "appearance", label: "外觀", icon: Palette, group: "基本設定" },
   { id: "notifications", label: "通知", icon: Bell, group: "基本設定" },
   { id: "models", label: "模型與提供商", icon: Server, group: "Agent 設定" },
+  { id: "execution", label: "執行與上下文", icon: Shield, group: "Agent 設定", capability: "desktop-agent-settings" },
+  { id: "memory", label: "記憶", icon: Brain, group: "Agent 設定", capability: "desktop-memory" },
+  { id: "plugins", label: "插件", icon: Puzzle, group: "Agent 設定", capability: "desktop-plugins" },
   { id: "workspace", label: "工作區", icon: Folder, group: "本機資料" },
   { id: "about", label: "關於", icon: Info, group: "本機資料" },
 ] as const
@@ -25,12 +31,14 @@ function readSection(): Section {
   catch { return "general" }
 }
 
-export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void }) {
+export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, capabilities = {} }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; capabilities?: Record<string, string[]> }) {
   const t = useText()
-  const [tab, setTab] = useState<Section>(readSection)
+  const [selectedTab, setTab] = useState<Section>(readSection)
   const [search, setSearch] = useState("")
-  const current = sections.find((section) => section.id === tab)!
-  const visible = sections.filter((section) => `${t(section.label)} ${t(section.group)}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
+  const available = sections.filter((section) => !("capability" in section) || (workspace && bridge && capabilities[section.capability]?.includes("1")))
+  const current = available.find((section) => section.id === selectedTab) ?? available[0]!
+  const tab = current.id
+  const visible = available.filter((section) => `${t(section.label)} ${t(section.group)}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
   const select = (section: Section) => {
     setTab(section)
     try { localStorage.setItem("ih:settings-section", section) } catch { /* The in-memory selection still works. */ }
@@ -70,6 +78,9 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
         <button className="primary-button" onClick={preferences.reset}>{t("重設外觀偏好")}</button>
       </> : tab === "notifications" ? bridge ? <NativeSettings bridge={bridge} section="notifications" /> : null
       : tab === "models" ? workspace && bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
+      : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
+      : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "workspace" ? <>
         {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} onRewindComplete={onRewindComplete} /> : null}
         {workspace ? <SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup> : <p className="muted">{t("尚未開啟工作區")}</p>}

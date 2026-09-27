@@ -280,8 +280,24 @@ button { font: inherit; color: inherit; }
 .settings-content { padding: 34px 32px 48px; max-width: 960px; margin: 0 auto; min-width: 0; }
 .settings-content h1 { font-size: 24px; margin: 0 0 24px; }
 .settings-content > .zc-settings-group + .zc-settings-group { margin-top: 20px; }
+.settings-description { color: var(--ih-muted); line-height: 1.7; margin: -8px 0 24px; }
+.settings-save-bar { display: flex; align-items: center; gap: 10px; padding: 16px 0; }
+.settings-content .settings-embedded { padding: 0; overflow: visible; }
+.settings-content h2 { font-size: 16px; font-weight: 600; margin: 24px 0 14px; }
 .settings-content select { max-width: 100%; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
-.settings-content input[type="checkbox"] { width: 18px; height: 18px; }
+.settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"] { appearance: none; position: relative; width: 32px; height: 19px; flex-shrink: 0; border-radius: 12px; border: 1px solid var(--ih-divider); background: var(--ih-sidebar); cursor: pointer; vertical-align: middle; }
+.settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--ih-muted); transition: transform 120ms ease; }
+.settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]:checked { background: var(--ih-text); border-color: var(--ih-text); }
+.settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]:checked::after { transform: translateX(13px); background: var(--ih-bg); }
+.settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]:disabled { opacity: .45; cursor: not-allowed; }
+.settings-pane :is(button, input, select, textarea):focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 3px; }
+.settings-content button:not(:disabled):hover { background: var(--ih-sidebar); }
+.settings-content button:disabled { opacity: .45; cursor: not-allowed; }
+@media (prefers-reduced-motion: reduce) { .settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]::after { transition: none; } }
+@media (forced-colors: active) {
+  .settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"] { appearance: auto; width: 20px; height: 20px; }
+  .settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]::after { display: none; }
+}
 .zc-settings-row .text-foreground-subtle { overflow-wrap: anywhere; }
 @media (max-width: 850px) { .settings-pane { grid-template-columns: 64px minmax(0,1fr); } .settings-content { padding: 24px 18px; } .settings-navigation .row-button { justify-content: center; min-height: 40px; padding: 8px; } .settings-navigation .row-button span, .settings-navigation h2, .settings-nav-group > p { display: none; } .settings-search { padding: 9px 4px; border-radius: 8px; } .settings-nav-group { margin-top: 16px; } }
 

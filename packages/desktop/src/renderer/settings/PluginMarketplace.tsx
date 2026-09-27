@@ -5,7 +5,7 @@ import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 interface Plugin { id: string; name: string; description?: string; installed: boolean; enabled: boolean; capabilities?: Record<string, boolean>; conflicts?: { name: string; reason: string }[] }
 interface State { sources: { name: string; source: string; error?: string }[]; plugins: Plugin[]; diagnostics?: Record<string, string[]>; refreshError?: string }
-export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
+export function PluginMarketplace({ bridge, workspaceId, embedded = false }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean }) {
   const t = useText()
   const [state, setState] = useState<State>()
   const [error, setError] = useState<string>()
@@ -35,8 +35,8 @@ export function PluginMarketplace({ bridge, workspaceId }: { bridge: DesktopBrid
   }
   const remove = (command: PluginCommand, key: string) => confirm === key ? void run(command) : setConfirm(key)
   const rows = state?.plugins.filter((row) => (!installed || row.installed) && `${row.id} ${row.name} ${row.description ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? []
-  return <section className="marketplace-pane" aria-label={t("插件市場")}>
-    <h1>{t("插件市場")}</h1>
+  return <section className={embedded ? "marketplace-pane settings-embedded" : "marketplace-pane"} aria-label={t("插件市場")}>
+    {embedded ? null : <h1>{t("插件市場")}</h1>}
     <p className="muted">{t("插件變更會即時套用到現有 Agent；已開始的操作會依原機制收尾。")}</p>
     {state?.refreshError ? <p role="alert">{state.refreshError}<button disabled={busy} onClick={() => {
       if (lock.current) return

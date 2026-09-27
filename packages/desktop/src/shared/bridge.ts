@@ -1,11 +1,14 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
 import type { SessionModelSelection } from "@i-harness/sdk"
+import type { AgentDefaults } from "@i-harness/desktop-gateway/src/agent-settings.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 
 export type DesktopRequest =
+  | { kind: "desktop/agent-settings/state"; workspaceId: string }
+  | { kind: "desktop/agent-settings/configure"; workspaceId: string; patch: Partial<AgentDefaults> }
   | { kind: "browser/list" | "browser/open" | "browser/hide"; workspaceId: string }
   | { kind: "browser/close"; workspaceId: string; id: string }
   | { kind: "browser/navigate"; workspaceId: string; id: string; url: string }

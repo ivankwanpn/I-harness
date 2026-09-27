@@ -51,6 +51,14 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("limits Agent settings patches to supported fields in a known workspace", async () => {
+    const f = fixture()
+    await dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: ENTRY.id, patch: { autoCompaction: false } }, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("desktop/agent-settings/configure", { autoCompaction: false }, 30000)
+    await expect(dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: ENTRY.id, patch: { sandboxMode: "anything" } }, f.dependencies)).rejects.toThrow()
+    await expect(dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: "unknown", patch: { autoCompaction: false } }, f.dependencies)).rejects.toThrow()
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
   it("keeps native browser operations outside the SDK and checks workspace identity", async () => {
     const f = fixture()
     const request = vi.fn(() => [])

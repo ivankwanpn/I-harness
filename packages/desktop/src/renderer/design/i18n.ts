@@ -95,6 +95,12 @@ const english = {
   "提示": "Prompt", "輸入提示…": "Describe a task…", "目前無法送出": "Cannot send right now",
   "送出": "Send", "停止": "Stop", "語言": "Language",
   "搜尋設定": "Search settings", "基本設定": "Basic settings", "Agent 設定": "Agent settings", "本機資料": "Local data", "通知": "Notifications",
+  "執行與上下文": "Execution and context", "自動壓縮上下文": "Automatic context compaction", "目前生效": "Currently effective", "已停用": "Disabled",
+  "這些預設值儲存在共用的本機設定，重啟 Desktop 後生效。": "These defaults are saved in shared local settings and take effect after restarting Desktop.",
+  "控制 Agent 工具可存取的範圍。": "Controls what Agent tools can access.",
+  "依模型的上下文大小自動整理內容；關閉後仍可手動壓縮。": "Automatically condenses context based on the model's context window. Manual compaction remains available when disabled.",
+  "重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。": "Restart Desktop to apply. Running Agents keep their current settings.",
+  "記憶": "Memory", "插件": "Plugins",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

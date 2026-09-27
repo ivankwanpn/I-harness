@@ -54,3 +54,12 @@ it("routes workspace memory using the real workspace context", () => {
   fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
   expect(onMemory).toHaveBeenCalledTimes(1)
 })
+
+it("mounts only advertised Agent pages with the selected workspace", async () => {
+  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/memory/state" ? { enabled: false } : { notes: [] })
+  render(<SettingsPane workspace={{ id: "play", label: "playground", path: "D:/agent-complete/playground" }} capabilities={{ "desktop-memory": ["1"] }} bridge={{ request, onEvent: () => () => {} }} onClose={() => {}} />)
+  expect(screen.queryByRole("button", { name: "執行與上下文" })).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "記憶" }))
+  await screen.findByRole("checkbox", { name: "啟用工作區記憶" })
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/memory/state", workspaceId: "play" })
+})

@@ -11,6 +11,15 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/agent-settings/state": return {}
+    case "desktop/agent-settings/configure": {
+      if (!value.patch || typeof value.patch !== "object" || Array.isArray(value.patch)) throw new Error("invalid agent settings patch")
+      const patch = value.patch as Record<string, unknown>
+      if (Object.keys(patch).some((key) => !["sandboxMode", "autoCompaction"].includes(key))) throw new Error("unknown agent setting")
+      if (patch.sandboxMode !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(String(patch.sandboxMode))) throw new Error("invalid sandbox mode")
+      if (patch.autoCompaction !== undefined && typeof patch.autoCompaction !== "boolean") throw new Error("invalid auto compaction")
+      return { ...patch }
+    }
     case "desktop/session/search":
       return { query: text("query", 4096), ...limit(), ...(value.sessionId === undefined ? {} : { sessionId: text("sessionId", 256) }) }
     case "desktop/session/compact":
