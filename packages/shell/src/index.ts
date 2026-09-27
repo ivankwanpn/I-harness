@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService, PromotedRun } from "@i-harness/exec"
@@ -13,12 +13,18 @@ export interface ResolvedShell {
   argv: string[] // shell executable + mode flag(s)
 }
 
-// Windows: prefer bash if it exists on PATH, else pwsh (user decision).
-// Detection is a synchronous PATH scan (bash.exe / bash). POSIX: bash.
-export function resolveShell(): ResolvedShell {
-  if (process.platform === "win32") {
-    if (bashAvailable()) return { name: "bash", argv: ["bash", "-c"] }
-    return { name: "pwsh", argv: [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
+// Windows: prefer a real Unix shell if one exists on PATH, else pwsh.
+// `System32/bash.exe` and `WindowsApps/bash.exe` launch WSL; they do not obey
+// the native cwd and `pwd -W` contract of this tool. Return the chosen absolute
+// executable so spawning cannot silently resolve the earlier launcher again.
+export function resolveShell(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): ResolvedShell {
+  if (platform === "win32") {
+    const bashExe = resolveBashExe(env, platform)
+    if (bashExe) return { name: "bash", argv: [bashExe, "-c"] }
+    return { name: "pwsh", argv: [resolvePwshExe(env, platform), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
   }
   return { name: "bash", argv: ["bash", "-c"] }
 }
@@ -27,21 +33,31 @@ export function resolveShell(): ResolvedShell {
  * run another shell — but a bare spawn-fail (exitCode -1, EMPTY stdout AND
  * stderr) left the model flailing across bash / pwsh / terminal_open on a
  * Windows box without Git Bash. The tool now answers legibly instead. */
+function resolveBashExe(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): string | undefined {
+  if (platform !== "win32") return "bash"
+  for (const pathEntry of env.PATH?.split(";") ?? []) {
+    const directory = pathEntry.trim().replace(/^"|"$/g, "")
+    if (!directory || ["system32", "windowsapps"].includes(basename(directory).toLowerCase())) continue
+    for (const name of ["bash.exe", "bash"]) {
+      try {
+        const candidate = join(directory, name)
+        if (existsSync(candidate)) return candidate
+      } catch {
+        // Ignore a malformed PATH entry and continue to the next one.
+      }
+    }
+  }
+  return undefined
+}
+
 export function bashAvailable(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): boolean {
-  if (platform !== "win32") return true
-  return (
-    env.PATH?.split(";").some((p) => {
-      if (!p) return false
-      try {
-        return existsSync(join(p, "bash.exe")) || existsSync(join(p, "bash"))
-      } catch {
-        return false
-      }
-    }) ?? false
-  )
+  return resolveBashExe(env, platform) !== undefined
 }
 
 /**
@@ -422,7 +438,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           exitCode: -1,
         }
       }
-      const argv = ["bash", "-c", args.command]
+      const argv = [resolveBashExe()!, "-c", args.command]
       // M62: the ladder runs BEFORE exec is called and AFTER the availability
       // check — asking a human to widen the sandbox for a command this host
       // cannot run at all would be a prompt with no possible outcome.

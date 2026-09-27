@@ -5,7 +5,7 @@ export type WireEvent = HistoryRange["events"][number]
 
 export type TimelineRow = (
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
-  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; groupScope?: string }
+  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; detail?: string }
 ) & { turn?: { id: string; complete: boolean } }
@@ -31,7 +31,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     } else if (event.type === "tool/result" && toolIndex.has(event.callId)) {
       const rowIndex = toolIndex.get(event.callId)!
       const previous = rows[rowIndex]
-      if (previous?.kind === "tool") rows[rowIndex] = { ...previous, output: event.output }
+      if (previous?.kind === "tool") rows[rowIndex] = { ...previous, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}) }
     } else if (event.type === "step/end" && (event.refused === true || event.truncated === true || event.empty === true)) {
       appendRow({
         id: `step:${event.seq ?? index}`,

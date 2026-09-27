@@ -6,6 +6,11 @@ import type { Tool } from "@i-harness/core-tools"
 // GLOB_VCS_EXCLUDES). Each is excluded twice: the bare form prunes during
 // traversal; the /** form covers a search root at/inside the directory.
 const GLOB_VCS_EXCLUDES = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const
+// Discovery should not spend its bounded result budget on installed packages.
+// An explicit search root inside node_modules still works because rg sees that
+// root as "."; only nested dependency trees are pruned.
+const SEARCH_EXCLUDES: readonly string[] = [...GLOB_VCS_EXCLUDES, "node_modules"]
+const excludeArgs = SEARCH_EXCLUDES.flatMap((name) => [`--glob=!**/${name}`, `--glob=!**/${name}/**`])
 const GLOB_MAX_RESULTS = 100
 const GREP_MAX_MATCHES = 250
 
@@ -69,7 +74,7 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
           "--sort=modified",
           "--no-ignore",
           "--hidden",
-          ...GLOB_VCS_EXCLUDES.flatMap((n) => [`--glob=!**/${n}`, `--glob=!**/${n}/**`]),
+          ...excludeArgs,
           "--",
           ".",
         ]
@@ -98,6 +103,7 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
           .map((l) => l.trimEnd())
           .filter((l) => l.length > 0)
           .map((l) => (l.startsWith("./") ? l.slice(2) : l.startsWith(".\\") ? l.slice(2) : l))
+          .map((l) => l.replaceAll("\\", "/"))
           .slice(0, GLOB_MAX_RESULTS)
         return { matches }
       } catch (err) {
@@ -128,6 +134,12 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
         const rgPath = await resolveRgPath()
         const parts = ["--json", `--regexp=${args.pattern}`]
         if (args.include !== undefined) parts.push(`--glob=${args.include}`)
+        // An explicit root inside an excluded tree is an intentional request
+        // to search that tree. Keep the default pruning for workspace-wide
+        // searches, but do not veto the caller's chosen subtree.
+        const explicitExcludedRoot = args.path?.replaceAll("\\", "/").split("/")
+          .some((segment) => SEARCH_EXCLUDES.includes(segment.toLowerCase())) ?? false
+        if (!explicitExcludedRoot) parts.push(...excludeArgs)
         parts.push("--", args.path ?? ".")
         // D1: run rg in the assembly workspace so "." and relative path args
         // resolve there (fs-tool parity); absent → exec's own process cwd.
@@ -145,7 +157,7 @@ export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
             const entry = JSON.parse(line) as { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } }
             if (entry.type === "match" && entry.data) {
               matches.push({
-                path: entry.data.path?.text ?? "",
+                path: (entry.data.path?.text ?? "").replaceAll("\\", "/").replace(/^\.\//, ""),
                 line: entry.data.line_number ?? 0,
                 text: (entry.data.lines?.text ?? "").trimEnd(),
               })

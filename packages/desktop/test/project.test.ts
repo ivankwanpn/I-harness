@@ -44,7 +44,22 @@ describe("projectTimeline", () => {
       { type: "tool/result", callId: "c1", name: "read", output: "contents", seq: 1 },
     ])
 
-    expect(rows).toEqual([{ id: "tool:c1", kind: "tool", name: "read", args: { path: "a" }, output: "contents" }])
+    expect(rows).toEqual([{ id: "tool:c1", kind: "tool", name: "read", args: { path: "a" }, output: "contents", resultReceived: true }])
+  })
+
+  it("keeps the durable error flag on the visible tool row", () => {
+    const rows = projectTimeline([
+      { type: "tool/call", callId: "c1", name: "read", args: { path: "missing" }, seq: 0 },
+      { type: "tool/result", callId: "c1", name: "read", output: { error: "missing" }, isError: true, seq: 1 },
+    ])
+    expect(rows[0]).toMatchObject({ kind: "tool", name: "read", isError: true })
+  })
+  it("marks a tool result as received even if the body returned no value", () => {
+    const rows = projectTimeline([
+      { type: "tool/call", callId: "c1", name: "plugin_noop", args: {}, seq: 0 },
+      { type: "tool/result", callId: "c1", name: "plugin_noop", output: undefined, isError: true, seq: 1 },
+    ])
+    expect(rows[0]).toMatchObject({ kind: "tool", resultReceived: true, isError: true })
   })
 
   it("gives refused, truncated and empty step endings distinct labels", () => {

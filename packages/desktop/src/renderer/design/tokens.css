@@ -224,6 +224,8 @@ button { font: inherit; color: inherit; }
 .timeline-other { margin: 0; padding: 4px 10px; font-size: 12px; }
 .timeline-tool { display: flex; flex-direction: column; gap: 4px; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-panel); }
 .tool-output { margin: 4px 0 0; max-height: 240px; overflow: auto; font-size: 12px; white-space: pre-wrap; }
+.tool-result-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.tool-result-images img { max-width: min(240px, 100%); max-height: 180px; object-fit: contain; border: 1px solid var(--ih-divider); border-radius: 8px; }
 .tool-activity { padding: 3px 0; color: var(--ih-muted); }
 .tool-activity-heading { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .work-stage-heading { display: flex; align-items: center; gap: 8px; width: 100%; padding: 12px 0; background: transparent; border: 0; border-bottom: 1px solid var(--ih-divider); color: var(--ih-muted); cursor: pointer; text-align: left; font-size: 12px; font-weight: 400; }

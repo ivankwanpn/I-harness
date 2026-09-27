@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolveShell, resolvePwshExe, bashAvailable, getArgv, createShellTools, registerShell } from "../src/index.ts"
@@ -41,6 +41,21 @@ describe("resolvePwshExe (M59)", () => {
 })
 
 describe("bashAvailable (M59)", () => {
+  it.skipIf(process.platform !== "win32")("skips Windows bash launchers and selects an actual Unix shell later on PATH", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ih-bash-selection-"))
+    const launcher = join(dir, "System32")
+    const real = join(dir, "usr", "bin")
+    try {
+      mkdirSync(launcher, { recursive: true })
+      mkdirSync(real, { recursive: true })
+      writeFileSync(join(launcher, "bash.exe"), "")
+      writeFileSync(join(real, "bash.exe"), "")
+      expect(resolveShell({ PATH: `${launcher};${real}` }, "win32").argv[0]).toBe(join(real, "bash.exe"))
+      expect(bashAvailable({ PATH: launcher }, "win32")).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
   it("non-Windows assumes bash", () => {
     expect(bashAvailable({ PATH: "" }, "linux")).toBe(true)
   })
@@ -112,7 +127,7 @@ describe("createShellTools", () => {
     expect(pwsh.getArgv?.({ command: 'echo "hi there"' })).toEqual(["echo", "hi there"])
   })
 
-  it("bash tool execute hardcodes ['bash', '-c', ...] (no silent pwsh fallback)", async () => {
+  it("bash tool executes the selected Unix shell, never a Windows launcher or pwsh", async () => {
     let captured: string[] = []
     const spyExec: ExecService = {
       run: async (cmd) => {
@@ -131,9 +146,7 @@ describe("createShellTools", () => {
     }
     expect(result.stdout).toBe("ok")
     expect(result.exitCode).toBe(0)
-    // Must be the exact bash form — NOT resolveShell()'s output (which can be
-    // pwsh on a Windows host without bash on PATH).
-    expect(captured).toEqual(["bash", "-c", "echo hi"])
+    expect(captured).toEqual([resolveShell().argv[0], "-c", "echo hi"])
   })
 
   it("pwsh tool execute constructs pwsh -Command argv", async () => {

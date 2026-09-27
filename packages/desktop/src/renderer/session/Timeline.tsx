@@ -43,7 +43,7 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
   if (row.kind === "other") {
     return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={open.get(row.id) === true} onToggle={(event) => { if (event.currentTarget.open !== (open.get(row.id) === true)) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} args={row.args} output={row.output} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} />
+  return <ToolActivity name={row.name} args={row.args} output={row.output} resultReceived={row.resultReceived} isError={row.isError} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */

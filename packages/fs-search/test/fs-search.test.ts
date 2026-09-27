@@ -36,6 +36,26 @@ function setupDir() {
 }
 
 describe("fs-search glob", () => {
+  it("keeps dependency trees out of bounded results and returns portable relative paths", async () => {
+    if (!rgAvailable) return
+    const dir = setupDir()
+    mkdirSync(join(dir, "node_modules", "package"), { recursive: true })
+    writeFileSync(join(dir, "node_modules", "package", "noise.txt"), "unique-search-marker\n")
+    try {
+      const [glob, grep] = createFsSearchTools({ exec: registerExec(createContext()), workspace: dir })
+      const files = await (glob as { execute(a: unknown, e: unknown): Promise<{ matches: string[] }> }).execute({ pattern: "**/*.txt" }, {})
+      expect(files.matches).toContain("sub/c.txt")
+      expect(files.matches.some((name) => name.includes("node_modules"))).toBe(false)
+      expect(files.matches.every((name) => !name.includes("\\"))).toBe(true)
+      const found = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string }[] }> }).execute({ pattern: "unique-search-marker" }, {})
+      expect(found.matches).toEqual([])
+      const explicit = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string }[] }> }).execute({ pattern: "unique-search-marker", path: "node_modules/package" }, {})
+      expect(explicit.matches).toEqual([{ path: "node_modules/package/noise.txt", line: 1, text: "unique-search-marker" }])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 20_000)
+
   it("finds files matching a glob pattern", async () => {
     if (!rgAvailable) return
     const dir = setupDir()

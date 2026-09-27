@@ -35,8 +35,24 @@ it("distinguishes pending output from a returned failure without inventing succe
   const view = render(<ToolActivity name="write_file" />)
   expect(screen.getByText("尚未回報結果")).toBeTruthy()
   view.rerender(<ToolActivity name="write_file" output={{ error: "permission denied" }} />)
-  expect(screen.getByText("已收到結果")).toBeTruthy()
+  expect(screen.getByText("執行失敗")).toBeTruthy()
   expect(screen.queryByText("成功")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "工具詳情 write_file" }))
   expect(screen.getByText(/permission denied/)).toBeTruthy()
+})
+
+it("shows an image result without rendering its base64 bytes as text", () => {
+  const dataBase64 = "aGVsbG8="
+  render(<ToolActivity name="read_image" output={{ images: [{ mediaType: "image/png", dataBase64, name: "probe.png" }] }} />)
+  fireEvent.click(screen.getByRole("button", { name: "工具詳情 read_image" }))
+  const image = screen.getByRole("img", { name: "probe.png" }) as HTMLImageElement
+  expect(image.getAttribute("src")).toBe(`data:image/png;base64,${dataBase64}`)
+  expect(screen.queryByText(/aGVsbG8=/)).toBeNull()
+  expect(screen.getByText(/image\/png/)).toBeTruthy()
+  expect(screen.getByText(/"bytes": 5/)).toBeTruthy()
+})
+
+it("shows a received failure even when its output is undefined", () => {
+  render(<ToolActivity name="plugin_noop" output={undefined} resultReceived isError />)
+  expect(screen.getByText("執行失敗")).toBeTruthy()
 })

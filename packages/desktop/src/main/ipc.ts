@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron"
 import { relative, isAbsolute, sep } from "node:path"
-import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest } from "../shared/bridge.ts"
+import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import { contextRequestParams } from "./context-requests.ts"
@@ -78,8 +78,9 @@ export async function dispatchDesktopRequest(
     case "desktop/local/configure":
       if (value.notifications !== undefined && typeof value.notifications !== "boolean") throw new Error("invalid notifications preference")
       if (value.locale !== undefined && value.locale !== "zh-TW" && value.locale !== "en") throw new Error("invalid locale")
+      if (value.terminalShell !== undefined && (typeof value.terminalShell !== "string" || !["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"].includes(value.terminalShell))) throw new Error("invalid terminal shell")
       if (!dependencies.native) throw new Error("native preferences unavailable")
-      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}) })
+      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
     case "workspace/open":
@@ -188,6 +189,7 @@ export async function dispatchDesktopRequest(
     case "desktop/plugins/refresh":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request(value.kind, {}, 120000)
     case "desktop/terminal/list":
+    case "desktop/terminal/options":
     case "desktop/terminal/open":
     case "desktop/terminal/read":
     case "desktop/terminal/write":
@@ -195,7 +197,8 @@ export async function dispatchDesktopRequest(
     case "desktop/terminal/close": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const params: Record<string, unknown> = {}
-      if (value.kind !== "desktop/terminal/list" && value.kind !== "desktop/terminal/open") params.id = requireNonEmpty(value.id, "terminal id")
+      if (value.kind !== "desktop/terminal/list" && value.kind !== "desktop/terminal/options" && value.kind !== "desktop/terminal/open") params.id = requireNonEmpty(value.id, "terminal id")
+      if (value.kind === "desktop/terminal/open") params.shell = dependencies.native?.state().terminalShell ?? "auto"
       if (value.kind === "desktop/terminal/read") params.offset = requireNonNegativeInteger(value.offset, "offset")
       if (value.kind === "desktop/terminal/write") {
         if (typeof value.data !== "string" || value.data.length > 32768) throw new Error("invalid terminal input")

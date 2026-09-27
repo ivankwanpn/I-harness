@@ -20,3 +20,12 @@ it("reads and updates notification preferences and can reset window bounds", asy
   fireEvent.click(screen.getByRole("button", { name: "重設視窗" }))
   expect(request).toHaveBeenCalledWith({ kind: "window/reset-bounds" })
 })
+it("lists detected terminal shells and saves the selection for new terminals", async () => {
+  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/terminal/options"
+    ? [{ id: "auto", label: "自動選擇" }, { id: "git-bash", label: "Git Bash" }]
+    : { notifications: false, notificationsSupported: true, terminalShell: "auto" })
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" workspaceId="ws-1" />)
+  const select = await screen.findByRole("combobox", { name: "整合終端 Shell" })
+  fireEvent.change(select, { target: { value: "git-bash" } })
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalShell: "git-bash" }))
+})

@@ -1,4 +1,6 @@
 import { spawn, type IPty } from "node-pty"
+import { existsSync } from "node:fs"
+import { basename, delimiter, extname, isAbsolute, join } from "node:path"
 
 // M27-H-2 (win32 ConPTY quirk): node-pty's fork()'d conpty_console_list_agent
 // agent writes "Error: AttachConsole failed" to its INHERITED stderr on every
@@ -68,6 +70,29 @@ const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 const DEFAULT_MAX_READ_BYTES = 64_000
 
+/** ConPTY does not reliably search PATH for extensionless command names (a
+ * bare `pwsh` can fail with `File not found: ` even when pwsh.exe is installed).
+ * Resolve one executable before calling node-pty, honoring the PTY's env.
+ * Keep paths and explicit relative commands untouched. */
+function resolvePtyExecutable(command: string, env: NodeJS.ProcessEnv): string {
+  if (process.platform !== "win32" || isAbsolute(command) || /[\\/]/.test(command)) return command
+  const pathKey = Object.keys(env).reverse().find((key) => key.toLowerCase() === "path")
+  const pathValue = pathKey === undefined ? undefined : env[pathKey]
+  const names = extname(command) ? [command] : [`${command}.exe`, command]
+  for (const entry of pathValue?.split(delimiter) ?? []) {
+    const directory = entry.trim().replace(/^"|"$/g, "")
+    if (!directory) continue
+    // The Windows launchers are WSL aliases, not native shells; ConPTY's cwd
+    // and native-path contract needs the later Git/MSYS/Rtools bash instead.
+    if (/^bash(?:\.exe)?$/i.test(command) && ["system32", "windowsapps"].includes(basename(directory).toLowerCase())) continue
+    for (const name of names) {
+      const candidate = join(directory, name)
+      try { if (existsSync(candidate)) return candidate } catch { /* malformed PATH entry */ }
+    }
+  }
+  return command
+}
+
 // 場沖模型：每 terminal 一個 chunks 序列（string[]），offset 以 UTF-16 code unit 計
 // （與 LSP position 慣例一致，文件化）。read(offset) 回傳 [offset, offset+max)：
 // 可重複、可以任意游標重讀——日誌視圖語意，非消耗型。
@@ -97,12 +122,13 @@ class PtySession {
   constructor(readonly spec: TerminalOpenSpec, readonly ownerSessionId?: string) {
     this.cols = spec.cols ?? DEFAULT_COLS
     this.rows = spec.rows ?? DEFAULT_ROWS
-    this.pty = spawn(spec.command, spec.args ?? [], {
+    const env = { ...process.env, ...(spec.env ?? {}) }
+    this.pty = spawn(resolvePtyExecutable(spec.command, env), spec.args ?? [], {
       name: "xterm-256color",
       cols: spec.cols ?? DEFAULT_COLS,
       rows: spec.rows ?? DEFAULT_ROWS,
       cwd: spec.cwd,
-      env: { ...process.env, ...(spec.env ?? {}) },
+      env,
     })
     this.pty.onData((d: string) => {
       // ConPTY ready 信號：首個 onData（未必是應用輸出——初始化 ESC 序也夠）。在 ready 前

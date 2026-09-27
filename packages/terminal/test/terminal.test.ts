@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { createTerminalService, type TerminalService } from "../src/service.ts"
 import { createTerminalTools, createProcessTools } from "../src/tool.ts"
+import { basename, delimiter, dirname } from "node:path"
+import { existsSync } from "node:fs"
 
 // 注意：Win32 上 node -e 引數含 `'\n'` 轉義序列會被解析器 reject（本機 node 24.15 實測），
 // 統統改用 String.fromCharCode(10) 產生 LF——零轉義、跨工具鏈穩定。
@@ -25,6 +27,22 @@ it("open + read: spawns a pty and exposes output (CRLF normalized)", async () =>
   const r = svc.read(t.id)
   expect(r.data).toContain("READY\n")
   expect(r.data).not.toContain("\r")
+})
+
+it.skipIf(process.platform !== "win32")("opens a bare executable found on PATH through ConPTY", async () => {
+  const t = svc.open({
+    command: basename(process.execPath),
+    args: ["-e", "console.log('BARE_PATH_OK')"],
+    env: { PATH: `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}` },
+  })
+  await waitFor(() => svc.read(t.id).data.includes("BARE_PATH_OK"))
+  expect(svc.read(t.id).data).toContain("BARE_PATH_OK")
+})
+
+it.skipIf(process.platform !== "win32" || !(process.env.PATH ?? "").split(";").some((part) => existsSync(`${part}\\pwsh.exe`)))("opens pwsh by its user-facing command name", async () => {
+  const t = svc.open({ command: "pwsh", args: ["-NoLogo", "-NoProfile", "-Command", "Get-Location"] })
+  await waitFor(() => svc.read(t.id).data.includes("Path"))
+  expect(svc.read(t.id).data).toContain("Path")
 })
 
 it("send: writes to stdin; terminal echo returns through read with offsets", async () => {

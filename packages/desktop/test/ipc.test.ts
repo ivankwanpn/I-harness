@@ -116,6 +116,19 @@ describe("Desktop scoped IPC", () => {
     expect(control).toHaveBeenCalledWith("minimize")
     expect(f.get).not.toHaveBeenCalled()
   })
+  it("uses the saved local shell for new terminals and ignores renderer executable fields", async () => {
+    const f = fixture()
+    const state = vi.fn(() => ({ terminalShell: "git-bash" }))
+    const configure = vi.fn(() => ({ terminalShell: "git-bash" }))
+    f.dependencies.native = { state, configure } as unknown as NonNullable<DesktopIpcDependencies["native"]>
+    await expect(dispatchDesktopRequest({ kind: "desktop/local/configure", terminalShell: "other" }, f.dependencies)).rejects.toThrow(/terminal shell/)
+    await dispatchDesktopRequest({ kind: "desktop/local/configure", terminalShell: "git-bash" }, f.dependencies)
+    expect(configure).toHaveBeenCalledWith({ terminalShell: "git-bash" })
+    await dispatchDesktopRequest({ kind: "desktop/terminal/open", workspaceId: ENTRY.id, command: "C:/untrusted.exe", shell: "cmd" }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/terminal/open", { shell: "git-bash" })
+    await dispatchDesktopRequest({ kind: "desktop/terminal/options", workspaceId: ENTRY.id }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/terminal/options", {})
+  })
   it("routes memory and compaction only to known workspaces after validating arguments", async () => {
     const f = fixture()
     await expect(dispatchDesktopRequest({ kind: "desktop/memory/search", workspaceId: "ws-1", query: "pnpm", limit: -1 }, f.dependencies)).rejects.toThrow(/limit/)

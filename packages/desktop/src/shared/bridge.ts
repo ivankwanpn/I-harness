@@ -9,6 +9,7 @@ import type { ResourceKind } from "@i-harness/desktop-gateway/src/resources.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
+export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
   | { kind: "workspace/files/pick"; workspaceId: string }
@@ -27,7 +28,7 @@ export type DesktopRequest =
   | { kind: "browser/navigate"; workspaceId: string; id: string; url: string }
   | { kind: "browser/action"; workspaceId: string; id: string; action: "back" | "forward" | "reload" | "stop" }
   | { kind: "browser/show"; workspaceId: string; id: string; bounds: { x: number; y: number; width: number; height: number } }
-  | { kind: "desktop/terminal/list" | "desktop/terminal/open"; workspaceId: string }
+  | { kind: "desktop/terminal/list" | "desktop/terminal/open" | "desktop/terminal/options"; workspaceId: string }
   | { kind: "desktop/terminal/close"; workspaceId: string; id: string }
   | { kind: "desktop/terminal/read"; workspaceId: string; id: string; offset: number }
   | { kind: "desktop/terminal/write"; workspaceId: string; id: string; data: string }
@@ -46,7 +47,7 @@ export type DesktopRequest =
   | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
-  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en" }
+  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
   | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
   | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }
