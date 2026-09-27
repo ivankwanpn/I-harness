@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "搜尋模型": "Search models", "自訂模型 ID": "Custom model ID", "沒有符合的模型": "No matching models",
+  "思考強度": "Reasoning effort", "思考強度：{effort}": "Reasoning effort: {effort}",
   "重試即時套用": "Retry live update",
   "可用命令": "Available commands", "沒有符合的已啟用命令": "No matching enabled commands",
   "瀏覽器": "Browser", "瀏覽器分頁": "Browser tabs", "新分頁": "New tab", "新增分頁": "New tab", "網址": "Address", "前往": "Go", "關閉分頁": "Close tab", "新增分頁並輸入網址以開始瀏覽。": "Create a tab and enter an address to browse.",

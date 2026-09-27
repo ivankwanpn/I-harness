@@ -12,6 +12,7 @@ import {
   resolveEffectiveModelContext,
   type ModelDescriptor,
   type ProviderProfile,
+  type ProviderProtocol,
   type ProviderRegistry,
 } from "@i-harness/provider"
 import {
@@ -69,7 +70,10 @@ export interface SessionModelBinding {
   providerId: string
   modelId: string
   label: string
+  protocol?: ProviderProtocol
   reasoningEffort?: ReasoningEffort
+  /** UI choices for this binding's effective protocol; model-specific rejection remains with the provider. */
+  reasoningEfforts?: ReasoningEffort[]
   contextWindow?: number
   /** M72 Ⅱ: the resolved output cap (user row > card). Absent → the adapter
    * sends nothing (anthropic falls back to its own constant). */
@@ -209,6 +213,16 @@ const REASONING_EFFORTS = new Set<ReasoningEffort>([
   "xhigh",
   "max",
 ])
+
+/** Kept per effective wire protocol, even while the canonical choices happen
+ * to match. Adapter translation and provider-level refusal remain authoritative. */
+const REASONING_EFFORTS_BY_PROTOCOL: Record<ProviderProtocol, readonly ReasoningEffort[]> = {
+  "openai-responses": ["off", "low", "medium", "high", "xhigh", "max"],
+  "openai-compatible": ["off", "low", "medium", "high", "xhigh", "max"],
+  "anthropic-messages": ["off", "low", "medium", "high", "xhigh", "max"],
+  gemini: ["off", "low", "medium", "high", "xhigh", "max"],
+  bedrock: ["off", "low", "medium", "high", "xhigh", "max"],
+}
 
 /** The refusal names the SET, not a placeholder: `--protocol P` copied
  * verbatim fails with `unknown protocol "P"` — a second error before the fix.
@@ -709,7 +723,9 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
             label: view.displayName === "" || view.displayName === providerId
               ? `${providerId}:${modelId}`
               : `${view.displayName} · ${modelId}`,
+            protocol: profile.protocol,
             ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+            reasoningEfforts: [...REASONING_EFFORTS_BY_PROTOCOL[profile.protocol]],
             ...(contextWindow !== undefined ? { contextWindow } : {}),
             ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
             ...(profile.inputModalities?.includes("image") ? { imageInput: true as const } : {}),

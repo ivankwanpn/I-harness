@@ -64,6 +64,7 @@ describe("createSessionService", () => {
         providerId: "deepseek",
         modelId: "deepseek-chat",
         label: "deepseek:deepseek-chat",
+        reasoningEffort: "high",
       })
       const assembly = await assemblyPromise
       // R-B1 (phase B): `assembly.model` is the assembly's ONE stable handle —
@@ -184,7 +185,7 @@ describe("createSessionService", () => {
       // the wire kept sending "low".
       modelBindingFor: async () => ({
         status: "ready",
-        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one", reasoningEffort: "low" },
+        binding: { model: first.model, providerId: "fixture", modelId: "one", label: "fixture:one", protocol: "anthropic-messages", reasoningEffort: "low", reasoningEfforts: ["off", "low", "high"] },
       }),
     })
 
@@ -195,6 +196,9 @@ describe("createSessionService", () => {
         providerId: "fixture",
         modelId: "one",
         label: "fixture:one",
+        protocol: "anthropic-messages",
+        reasoningEffort: "low",
+        reasoningEfforts: ["off", "low", "high"],
       })
 
       // true = an assembly WAS live and was retargeted in place. The reporting
@@ -206,6 +210,7 @@ describe("createSessionService", () => {
         providerId: "fixture",
         modelId: "two",
         label: "fixture:two",
+        reasoningEffort: "high",
       })
       expect(assembly.modelLabel).toBe("fixture:two")
 
@@ -236,6 +241,7 @@ describe("createSessionService", () => {
         providerId: "fixture",
         modelId: "two",
         label: "fixture:two",
+        reasoningEffort: "high",
       })
       await service.assemblyFor("s2")
       await service.submit("s2", "dormant", new AbortController().signal)

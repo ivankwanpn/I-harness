@@ -244,7 +244,9 @@ describe("model resolution", () => {
       status: "ready",
       binding: {
         modelId: "session-model",
+        protocol: "openai-compatible",
         reasoningEffort: "high",
+        reasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"],
         contextWindow: 96_000,
       },
     })
@@ -1642,21 +1644,25 @@ describe("a selection may carry its own protocol", () => {
 
   it("beats the ROUTE's protocol", async () => {
     const { runtime, builds } = await gwFixture()
-    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain", protocol: "anthropic-messages" } })
+    const state = await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain", protocol: "anthropic-messages" } })
     expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+    expect(state).toMatchObject({ status: "ready", binding: { protocol: "anthropic-messages", reasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"] } })
   })
 
   it("beats the model ROW's too — the selection is the most specific thing there is", async () => {
     const { runtime, builds } = await gwFixture()
-    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise", protocol: "anthropic-messages" } })
+    const state = await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise", protocol: "anthropic-messages" } })
     expect(builds[0]?.profile.protocol).toBe("anthropic-messages")
+    expect(state).toMatchObject({ status: "ready", binding: { protocol: "anthropic-messages" } })
   })
 
   it("absent → the row's, then the route's, exactly as before", async () => {
     const { runtime, builds } = await gwFixture()
-    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise" } })
-    await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain" } })
+    const row = await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "row-wins-otherwise" } })
+    const route = await runtime.resolveModel({ sessionSelection: { provider: "gw", model: "plain" } })
     expect(builds[0]?.profile.protocol).toBe("gemini")
     expect(builds[1]?.profile.protocol).toBe("openai-compatible")
+    expect(row).toMatchObject({ status: "ready", binding: { protocol: "gemini" } })
+    expect(route).toMatchObject({ status: "ready", binding: { protocol: "openai-compatible" } })
   })
 })

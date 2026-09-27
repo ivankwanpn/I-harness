@@ -953,6 +953,9 @@ function serializeModelState(state: SessionModelState): SessionModelState {
       providerId: state.providerId,
       modelId: state.modelId,
       label: state.label,
+      ...(typeof state.protocol === "string" ? { protocol: state.protocol } : {}),
+      ...(typeof state.reasoningEffort === "string" ? { reasoningEffort: state.reasoningEffort } : {}),
+      ...(Array.isArray(state.reasoningEfforts) && state.reasoningEfforts.every((value) => typeof value === "string") ? { reasoningEfforts: [...state.reasoningEfforts] } : {}),
       ...(state.imageInput === true ? { imageInput: true } : {}),
     }
   }

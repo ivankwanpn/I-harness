@@ -55,7 +55,9 @@ export type SessionModelBindingResult =
         providerId: string
         modelId: string
         label: string
+        protocol?: string
         reasoningEffort?: ReasoningEffort
+        reasoningEfforts?: ReasoningEffort[]
         contextWindow?: number
         /** M72 Ⅱ: the resolved output cap. Absent → nothing was resolved, and
          * nothing is defaulted in its place (the adapter sends none). */
@@ -84,7 +86,7 @@ export interface SessionQueueItem {
 
 type SessionModelState =
   | Exclude<SessionModelBindingResult, { status: "ready" }>
-  | { status: "ready"; providerId: string; modelId: string; label: string; imageInput?: true }
+  | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
 export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
@@ -310,6 +312,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       providerId: result.binding.providerId,
       modelId: result.binding.modelId,
       label: result.binding.label,
+      ...(result.binding.protocol ? { protocol: result.binding.protocol } : {}),
+      ...(result.binding.reasoningEffort ? { reasoningEffort: result.binding.reasoningEffort } : {}),
+      ...(result.binding.reasoningEfforts ? { reasoningEfforts: [...result.binding.reasoningEfforts] } : {}),
       ...(result.binding.imageInput ? { imageInput: true } : {}),
     }
   }

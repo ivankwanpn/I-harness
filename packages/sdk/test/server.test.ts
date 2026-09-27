@@ -539,7 +539,7 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
       forkSession: async (sessionId) => ({ sessionId: `${sessionId}-fork` }),
       modelState: async () => selection === undefined
         ? { status: "unconfigured", reason: "No model configured" }
-        : { status: "ready", providerId: selection.provider, modelId: selection.model, label: `${selection.provider}:${selection.model}` },
+        : { status: "ready", providerId: selection.provider, modelId: selection.model, label: `${selection.provider}:${selection.model}`, protocol: selection.protocol, reasoningEffort: selection.reasoningEffort, reasoningEfforts: ["off", "low", "high"] },
       setSessionModel: async (_sessionId, next) => { selection = next },
     })
     try {
@@ -559,6 +559,9 @@ describe("createSdkServer session lifecycle and model capabilities", () => {
         providerId: "deepseek",
         modelId: "deepseek-chat",
         label: "deepseek:deepseek-chat",
+        protocol: "anthropic-messages",
+        reasoningEffort: "high",
+        reasoningEfforts: ["off", "low", "high"],
       })
       // Task 4: the wire now CARRIES `protocol` through to the host seam — a
       // rebind cannot honor a protocol the parser drops. What must NOT carry it

@@ -468,12 +468,31 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-discovery-list { max-height: 260px; overflow: auto; margin: 10px 0; }
 .provider-discovery-list label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px; overflow-wrap: anywhere; }
 .provider-discovery-list small { opacity: .65; }
-.session-model-picker { position: relative; min-width: 0; }
+.session-model-picker { position: relative; min-width: 0; display: inline-flex; align-items: center; gap: 2px; }
 .composer-model { display: inline-flex; align-items: center; gap: 6px; max-width: 240px; padding: 6px 8px; border: 0; border-radius: 7px; background: transparent; color: var(--ih-muted); font: inherit; }
 button.composer-model { cursor: pointer; }
 button.composer-model:hover:not(:disabled) { background: var(--ih-divider); color: var(--ih-text); }
 button.composer-model:disabled { opacity: .5; cursor: not-allowed; }
-.model-picker-panel { position: fixed; margin: 0; width: min(340px, calc(100vw - 32px)); overflow: auto; z-index: 100; background: var(--ih-panel); box-shadow: 0 12px 36px #0005; }
+.composer-effort { flex: none; white-space: nowrap; }
+.model-picker-panel { position: fixed; margin: 0; width: min(310px, calc(100vw - 24px)); max-height: min(480px, calc(100vh - 36px)); overflow: auto; z-index: 100; padding: 6px; border: 1px solid var(--ih-divider); border-radius: 10px; background: var(--ih-panel); box-shadow: 0 14px 40px #0008; font-size: 12px; }
+.model-effort-panel { width: min(172px, calc(100vw - 24px)); }
+.model-picker-search { display: flex; align-items: center; gap: 7px; margin: 2px 2px 6px; padding: 5px 8px; border: 1px solid var(--ih-divider); border-radius: 7px; color: var(--ih-muted); }
+.model-picker-search input { min-width: 0; width: 100%; padding: 2px; border: 0; outline: 0; background: transparent; color: var(--ih-text); font: inherit; }
+.model-picker-search:focus-within { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+.model-picker-list { max-height: 285px; overflow: auto; }
+.model-picker-group + .model-picker-group { margin-top: 4px; }
+.model-picker-group-title { padding: 8px 9px 4px; color: var(--ih-muted); font-size: 11px; font-weight: 600; }
+.model-picker-option, .model-effort-options button, .model-picker-custom-toggle { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 7px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--ih-text); text-align: left; font: inherit; cursor: pointer; }
+.model-picker-option:hover:not(:disabled), .model-effort-options button:hover:not(:disabled), .model-picker-custom-toggle:hover:not(:disabled) { background: var(--ih-divider); }
+.model-picker-option[aria-pressed="true"], .model-effort-options button[aria-pressed="true"] { color: var(--ih-accent); }
+.model-picker-option span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.model-picker-custom-toggle { margin-top: 5px; border-top: 1px solid var(--ih-divider); border-radius: 0; color: var(--ih-muted); }
+.model-picker-custom { display: grid; gap: 7px; padding: 8px 5px; border-top: 1px solid var(--ih-divider); }
+.model-picker-custom label { display: grid; gap: 4px; color: var(--ih-muted); }
+.model-picker-custom input, .model-picker-custom select { width: 100%; min-width: 0; padding: 6px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
+.model-picker-custom > button { justify-self: end; padding: 6px 9px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-divider); color: var(--ih-text); cursor: pointer; }
+.model-picker-empty, .model-picker-error { margin: 8px; color: var(--ih-muted); overflow-wrap: anywhere; }
+.model-picker-error button { margin-left: 6px; }
 .context-usage-popover { position: fixed; z-index: 100; width: min(310px, calc(100vw - 32px)); padding: 14px; border: 1px solid var(--ih-divider); border-radius: 10px; background: var(--ih-panel); box-shadow: 0 12px 36px #0005; font-size: 12px; }
 .context-usage-popover strong { font-size: 13px; }
 .context-usage-popover p { margin: 10px 0; }

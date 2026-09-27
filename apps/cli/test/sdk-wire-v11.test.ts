@@ -138,6 +138,8 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
           providerId: "fixture",
           modelId: "fixture-model",
           label: "fixture:fixture-model",
+          protocol: "openai-compatible",
+          reasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"],
         })
         await expect(client.setSessionModel("s1", {
           provider: "fixture",
@@ -148,6 +150,9 @@ describe("i-harness sdk wire v1.1 end-to-end (real subprocess)", () => {
           providerId: "fixture",
           modelId: "alternate-model",
           label: "fixture:alternate-model",
+          protocol: "openai-compatible",
+          reasoningEffort: "high",
+          reasoningEfforts: ["off", "low", "medium", "high", "xhigh", "max"],
         })
         const header = JSON.parse(readFileSync(join(sessionDir, "s1.jsonl"), "utf8").split("\n")[0]!) as {
           modelSelection?: { provider: string; model: string; reasoningEffort?: string }
