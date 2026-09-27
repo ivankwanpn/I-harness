@@ -34,14 +34,14 @@
 
 **Interfaces:** Bridge requests carry only `workspaceId`, `sessionId`, and a validated schedule rule. Workbench mounts the pane only for a selected session with `desktop-schedule` capability.
 
-- [ ] Write failing UI and IPC tests for scope, form rule conversion, next-step notice, create/delete/refresh, and a session switch.
-- [ ] Run focused tests red, then implement the ZCode-style compact card/list using current settings primitives.
-- [ ] Run Desktop suite and typecheck; commit the UI.
+- [x] Write failing UI and IPC tests for scope, form rule conversion, next-step notice, create/delete/refresh, and a session switch.
+- [x] Run focused tests red, then implement the ZCode-style compact card/list using current settings primitives.
+- [x] Run Desktop suite and typecheck; commit the UI.
 
 ### Task 3: Packaged behavior and review
 
 **Files:** Update audit report under `docs/audit/`; no new package.
 
-- [ ] Run serial all-package tests, `pnpm typecheck`, `pnpm e2e`, and `pnpm verify:reachability`.
-- [ ] Build `pnpm --filter @i-harness/desktop dist`, then use packaged Electron in playground to create, list and delete a future session reminder without sending a prompt. Verify no workspace file change and leave no active test reminder.
-- [ ] Request read-only code review, fix Important findings, repeat affected verification, and commit. Do not stage the user's Vite config change.
+- [x] Run serial all-package tests, `pnpm typecheck`, `pnpm e2e`, and `pnpm verify:reachability`.
+- [x] Build `pnpm --filter @i-harness/desktop dist`, then use packaged Electron in playground to create, list and delete a future session reminder without sending a prompt. Verify no workspace file change and leave no active test reminder.
+- [x] Request read-only code review, fix Important findings, repeat affected verification, and commit. Do not stage the user's Vite config change.

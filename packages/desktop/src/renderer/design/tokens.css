@@ -504,6 +504,10 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .marketplace-pane p { overflow-wrap: anywhere; }
 .terminal-pane { display: flex; flex-direction: column; height: calc(100vh - 150px); min-height: 260px; padding: 8px; box-sizing: border-box; }
 .schedule-pane { display: grid; align-content: start; gap: 12px; height: calc(100vh - 130px); overflow: auto; padding: 18px; }
+.work-pane-header .zc-pane-tabs { overflow-x: auto; scrollbar-width: none; }
+.work-pane-header .zc-pane-tabs::-webkit-scrollbar { display: none; }
+.work-pane-header .zc-pane-tab { flex: 0 0 auto; min-width: 0; max-width: none; padding-inline: 8px; }
+.work-pane-header > .icon-button { flex: none; }
 .schedule-pane .review-title { margin: 0; }
 .schedule-pane .muted { margin: 0; }
 .schedule-notice { margin: 0; padding: 10px 12px; border: 1px solid var(--ih-divider); border-radius: 9px; color: var(--ih-muted); background: var(--ih-panel); font-size: 12px; line-height: 1.5; }

@@ -2,7 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
-  "此會話提醒": "Conversation reminders", "到期後在下一個 Agent 步驟處理；不會在閒置時自動喚醒會話。": "Due reminders are handled at the next Agent step; they do not wake an idle conversation.",
+  "此會話提醒": "Conversation reminders", "提醒": "Reminders", "到期後在下一個 Agent 步驟處理；不會在閒置時自動喚醒會話。": "Due reminders are handled at the next Agent step; they do not wake an idle conversation.",
+  "重新讀取提醒": "Reload reminders", "重新讀取提醒失敗，請先重試。": "Could not reload reminders. Retry before another change.",
   "正在讀取提醒…": "Loading reminders…", "此會話尚無提醒": "No reminders for this conversation", "提醒內容": "Reminder text", "提醒方式": "Reminder type",
   "延遲一次": "After a delay", "指定時間": "At a time", "定期重複": "Repeat", "日期與時間": "Date and time", "間隔分鐘": "Interval in minutes", "延遲分鐘": "Delay in minutes",
   "建立提醒": "Create reminder", "刪除提醒": "Delete reminder", "確認刪除提醒": "Confirm deletion", "重複": "Repeating", "單次": "One time", "已排定": "Scheduled", "已到期，等候下一步": "Due, waiting for next step",
