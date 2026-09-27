@@ -43,7 +43,7 @@ export function TaskPane({ queue, tasks, error, workStateEnabled = false, workSt
         {todos === undefined ? workStateError ? null : <p className="muted">{t("正在載入待辦…")}</p>
           : todos === null ? <p className="muted">{t("尚未建立待辦清單")}</p>
             : todos.length === 0 ? <p className="muted">{t("待辦清單已清空")}</p>
-              : <><ul className="todo-list">{visibleTodos?.map((item, index) => <li key={`${page * TODO_PAGE_SIZE + index}:${item.content}`} className="todo-row" data-status={item.status}>
+              : <><ul className="todo-list">{visibleTodos?.map((item, index) => <li key={`${page * TODO_PAGE_SIZE + index}:${item.content}`} className="todo-row" data-status={item.status} aria-label={`${item.content} · ${t(item.status === "completed" ? "已完成" : item.status === "in_progress" ? "進行中" : "待開始")}`}>
                 {item.status === "completed" ? <Check size={15} aria-hidden="true" /> : item.status === "in_progress" ? <CircleDot size={15} aria-hidden="true" /> : <Circle size={15} aria-hidden="true" />}
                 <span>{item.content}</span>
               </li>)}</ul>

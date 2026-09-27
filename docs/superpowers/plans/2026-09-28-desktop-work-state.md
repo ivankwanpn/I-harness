@@ -43,6 +43,6 @@
 
 **Files:** Add a dated report under `docs/audit/` and update this checklist.
 
-- [ ] Run serial workspace tests, typecheck, E2E and reachability gates.
-- [ ] Build portable Electron and inspect the work state in a real playground conversation; preserve and clean up test state.
-- [ ] Request read-only code review, fix Important findings, rerun affected checks and commit the report. Keep the user Vite config unstaged.
+- [x] Run serial workspace tests, typecheck, E2E and reachability gates.
+- [x] Build portable Electron and inspect the work state in a real playground conversation; preserve and clean up test state.
+- [x] Request read-only code review, fix Important findings, rerun affected checks and commit the report. Keep the user Vite config unstaged.

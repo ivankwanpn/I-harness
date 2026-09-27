@@ -48,6 +48,13 @@ describe("Desktop workbench shell", () => {
     expect(screen.getByText("Finish the workbench")).toBeTruthy()
     expect(screen.getByText("已暫停")).toBeTruthy()
   })
+  it("shows a work-state failure in the default conversation view and hides an unverified goal", () => {
+    render(<Workbench bridge={fakeBridge()} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="goal-1" capabilities={{ "desktop-work-state": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}}
+      conversation={{ rows: [], canSend: false, running: false, pending: [], workStateError: "fresh goal unavailable", workState: { todos: null, goal: { id: "g", revision: 1, objective: "Outdated goal", phase: "active" } }, onRetryWorkState() {}, onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+    expect(screen.getByRole("alert").textContent).toContain("fresh goal unavailable")
+    expect(screen.getByRole("button", { name: "重試" })).toBeTruthy()
+    expect(screen.queryByText("Outdated goal")).toBeNull()
+  })
   it("shows conversation reminders only when the backend advertises schedule management", async () => {
     useUiStore.setState({ reviewOpen: true })
     const bridge = fakeBridge()

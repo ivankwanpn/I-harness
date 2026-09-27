@@ -66,8 +66,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [taskError, setTaskError] = useState<string>()
   const [historyError, setHistoryError] = useState<string>()
   const [historyCount, setHistoryCount] = useState<number>()
-  const [workStateResult, setWorkStateResult] = useState<{ workspaceId: string; sessionId: string; view: DesktopWorkStateView }>()
-  const [workStateFailure, setWorkStateFailure] = useState<{ workspaceId: string; sessionId: string; message: string }>()
+  const [workStateResult, setWorkStateResult] = useState<{ scope: { workspaceId?: string; sessionId?: string }; view: DesktopWorkStateView }>()
+  const [workStateFailure, setWorkStateFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [running, setRunning] = useState(false)
   const operations = useSessionOperation(bridge)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
@@ -144,10 +144,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     try {
       const view = await bridge.request({ kind: "desktop/session/work-state", workspaceId, sessionId }) as DesktopWorkStateView
       if (selection.current !== scope || request !== workStateRequest.current) return
-      setWorkStateResult({ workspaceId, sessionId, view })
+      setWorkStateResult({ scope, view })
       setWorkStateFailure(undefined)
     } catch (reason) {
-      if (selection.current === scope && request === workStateRequest.current) setWorkStateFailure({ workspaceId, sessionId, message: reason instanceof Error ? reason.message : String(reason) })
+      if (selection.current === scope && request === workStateRequest.current) {
+        setWorkStateResult(undefined)
+        setWorkStateFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
+      }
     }
   }, [bridge])
 
@@ -433,8 +436,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
         queue,
         tasks,
-        workState: workStateResult?.workspaceId === selectedWorkspaceId && workStateResult.sessionId === selectedSessionId ? workStateResult.view : undefined,
-        workStateError: workStateFailure?.workspaceId === selectedWorkspaceId && workStateFailure.sessionId === selectedSessionId ? workStateFailure.message : undefined,
+        workState: workStateResult?.scope === selection.current ? workStateResult.view : undefined,
+        workStateError: workStateFailure?.scope === selection.current ? workStateFailure.message : undefined,
         onRetryWorkState: () => { void refreshWorkState(selectedWorkspaceId, selectedSessionId) },
         taskError,
         historyError,
