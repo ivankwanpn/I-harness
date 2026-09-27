@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "目前目標": "Current goal", "待辦": "Todo", "正在載入待辦…": "Loading Todo…", "尚未建立待辦清單": "No Todo list yet", "待辦清單已清空": "Todo list cleared", "已完成 {count}/{total}": "{count}/{total} completed", "第 {page} / {total} 頁": "Page {page} of {total}", "已暫停": "Paused", "進行中": "Active",
   "此會話提醒": "Conversation reminders", "提醒": "Reminders", "到期後在下一個 Agent 步驟處理；不會在閒置時自動喚醒會話。": "Due reminders are handled at the next Agent step; they do not wake an idle conversation.",
   "重新讀取提醒": "Reload reminders", "重新讀取提醒失敗，請先重試。": "Could not reload reminders. Retry before another change.",
   "正在讀取提醒…": "Loading reminders…", "此會話尚無提醒": "No reminders for this conversation", "提醒內容": "Reminder text", "提醒方式": "Reminder type",

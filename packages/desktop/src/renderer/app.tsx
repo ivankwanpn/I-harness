@@ -10,6 +10,7 @@ import type {
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
 import type { DesktopBridge } from "../shared/bridge.ts"
+import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import {
   applyHistory,
   applyNotification,
@@ -47,6 +48,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge, locale])
   const textRef = useRef(t)
   textRef.current = t
+  const workStateSupported = useRef(false)
   const [workspaces, setWorkspaces] = useState<WorkspaceEntry[]>([])
   const selectedWorkspaceId = useUiStore((state) => state.selectedWorkspaceId)
   const selectedSessionId = useUiStore((state) => state.selectedSessionId)
@@ -54,6 +56,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const setSelectedSessionId = useUiStore((state) => state.setSelectedSessionId)
   const [dashboard, setDashboard] = useState<SessionDashboardResult>()
   const [capabilities, setCapabilities] = useState<Record<string, string[]>>({})
+  workStateSupported.current = capabilities["desktop-work-state"]?.includes("1") === true
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
   const [eventWindow, setEventWindow] = useState<EventWindow>(() => emptyEventWindow())
@@ -63,6 +66,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [taskError, setTaskError] = useState<string>()
   const [historyError, setHistoryError] = useState<string>()
   const [historyCount, setHistoryCount] = useState<number>()
+  const [workStateResult, setWorkStateResult] = useState<{ workspaceId: string; sessionId: string; view: DesktopWorkStateView }>()
+  const [workStateFailure, setWorkStateFailure] = useState<{ workspaceId: string; sessionId: string; message: string }>()
   const [running, setRunning] = useState(false)
   const operations = useSessionOperation(bridge)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
@@ -89,6 +94,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
   const tasksRequest = useRef(0)
+  const workStateRequest = useRef(0)
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
   if (workspaceSelection.current.workspaceId !== selectedWorkspaceId) workspaceSelection.current = { workspaceId: selectedWorkspaceId }
 
@@ -128,6 +134,20 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       setTaskError(undefined)
     } catch (reason) {
       if (selection.current === scope && request === tasksRequest.current) setTaskError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [bridge])
+
+  const refreshWorkState = useCallback(async (workspaceId: string, sessionId: string): Promise<void> => {
+    const scope = selection.current
+    if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
+    const request = ++workStateRequest.current
+    try {
+      const view = await bridge.request({ kind: "desktop/session/work-state", workspaceId, sessionId }) as DesktopWorkStateView
+      if (selection.current !== scope || request !== workStateRequest.current) return
+      setWorkStateResult({ workspaceId, sessionId, view })
+      setWorkStateFailure(undefined)
+    } catch (reason) {
+      if (selection.current === scope && request === workStateRequest.current) setWorkStateFailure({ workspaceId, sessionId, message: reason instanceof Error ? reason.message : String(reason) })
     }
   }, [bridge])
 
@@ -272,6 +292,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         const params = event.params as { event?: unknown }
         if (params.event !== undefined) {
           setEventWindow((current) => applyNotification(current, params.event as WireEvent))
+          const type = (params.event as WireEvent).type
+          if ((type === "todo/write" || type === "goal/change") && workStateSupported.current) void refreshWorkState(selectedWorkspaceId, selectedSessionId)
         }
         refresh.schedule()
         return
@@ -280,7 +302,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       refresh.schedule()
     })
     return () => { unsubscribe(); refresh.dispose() }
-  }, [bridge, interactions.update, refreshDashboard, refreshTasks, selectedSessionId, selectedWorkspaceId])
+  }, [bridge, interactions.update, refreshDashboard, refreshTasks, refreshWorkState, selectedSessionId, selectedWorkspaceId])
+
+  const workStateEnabled = capabilities["desktop-work-state"]?.includes("1") === true
+  useEffect(() => {
+    if (!workStateEnabled || !selectedWorkspaceId || !selectedSessionId) return
+    void refreshWorkState(selectedWorkspaceId, selectedSessionId)
+  }, [workStateEnabled, selectedWorkspaceId, selectedSessionId, retryNonce, refreshWorkState])
 
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
@@ -405,6 +433,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
         queue,
         tasks,
+        workState: workStateResult?.workspaceId === selectedWorkspaceId && workStateResult.sessionId === selectedSessionId ? workStateResult.view : undefined,
+        workStateError: workStateFailure?.workspaceId === selectedWorkspaceId && workStateFailure.sessionId === selectedSessionId ? workStateFailure.message : undefined,
+        onRetryWorkState: () => { void refreshWorkState(selectedWorkspaceId, selectedSessionId) },
         taskError,
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),

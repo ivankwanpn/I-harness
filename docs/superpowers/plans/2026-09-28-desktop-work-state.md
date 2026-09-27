@@ -35,9 +35,9 @@
 
 **Interfaces:** `ConversationView.workState` is undefined until the selected session read completes. `App` refreshes only after `todo/write` or `goal/change` and guards selection/version; `TaskPane` shows the authoritative snapshots read-only.
 
-- [ ] Write failing renderer tests for live update, stale response, no snapshot versus empty snapshot, Todo focus/page controls, and goal phase.
-- [ ] Implement bounded Todo presentation and compact goal banner using existing UI styles.
-- [ ] Run Desktop suite and typecheck; commit the UI.
+- [x] Write failing renderer tests for live update, stale response, no snapshot versus empty snapshot, Todo focus/page controls, and goal phase.
+- [x] Implement bounded Todo presentation and compact goal banner using existing UI styles.
+- [x] Run Desktop suite and typecheck; commit the UI.
 
 ### Task 3: Packaged QA and review
 

@@ -20,6 +20,61 @@ it("recovers the selected unconfigured session after provider settings are saved
   act(() => useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 })))
   await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("Configured"))
 })
+it("loads work state for the selected session and refreshes it after a Todo event", async () => {
+  let readCount = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  const request = fixture((request) => request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-work-state": ["1"] })
+    : request.kind === "desktop/session/work-state" ? Promise.resolve({ todos: [{ content: ++readCount === 1 ? "First" : "Second", status: "in_progress" }], goal: null }) : undefined,
+  (listener) => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.capabilities["desktop-work-state"]).toEqual(["1"]))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation?.workState?.todos?.[0]?.content).toBe("First"))
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/event", params: { sessionId: "a", event: { type: "todo/write", version: 1, items: [{ content: "Second", status: "in_progress" }] } } }))
+  await waitFor(() => expect(captured.props!.conversation?.workState?.todos?.[0]?.content).toBe("Second"))
+  expect(request.mock.calls.filter(([value]) => value.kind === "desktop/session/work-state")).toHaveLength(2)
+})
+
+it("ignores a late work-state read from the previously selected session", async () => {
+  const old = defer()
+  fixture((request) => request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-work-state": ["1"] })
+    : request.kind === "desktop/session/work-state" ? request.sessionId === "a" ? old.promise : Promise.resolve({ todos: [{ content: "B only", status: "pending" }], goal: null }) : undefined)
+  await waitFor(() => expect(captured.props?.capabilities["desktop-work-state"]).toEqual(["1"]))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBe("a"))
+  act(() => captured.props!.onSelectSession("b"))
+  await waitFor(() => expect(captured.props!.conversation?.workState?.todos?.[0]?.content).toBe("B only"))
+  await act(async () => { old.resolve({ todos: [{ content: "A only", status: "pending" }], goal: null }); await old.promise })
+  expect(captured.props!.conversation?.workState?.todos?.[0]?.content).toBe("B only")
+})
+
+it("keeps a newer Goal projection when an older same-session read resolves last", async () => {
+  const old = defer()
+  let reads = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture((request) => request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-work-state": ["1"] })
+    : request.kind === "desktop/session/work-state" ? ++reads === 1 ? old.promise : Promise.resolve({ todos: null, goal: { id: "g", revision: 2, objective: "New goal", phase: "active" } }) : undefined,
+  (listener) => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.capabilities["desktop-work-state"]).toEqual(["1"]))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(reads).toBe(1))
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/event", params: { sessionId: "a", event: { type: "goal/change", version: 1, operation: "edit" } } }))
+  await waitFor(() => expect(captured.props!.conversation?.workState?.goal?.objective).toBe("New goal"))
+  await act(async () => { old.resolve({ todos: null, goal: { id: "g", revision: 1, objective: "Old goal", phase: "active" } }); await old.promise })
+  expect(captured.props!.conversation?.workState?.goal?.objective).toBe("New goal")
+})
+
+it("shows a work-state read failure and recovers through the retry action", async () => {
+  let reads = 0
+  fixture((request) => request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-work-state": ["1"] })
+    : request.kind === "desktop/session/work-state" ? ++reads === 1 ? Promise.reject(new Error("work state offline")) : Promise.resolve({ todos: [], goal: null }) : undefined)
+  await waitFor(() => expect(captured.props?.capabilities["desktop-work-state"]).toEqual(["1"]))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation?.workStateError).toContain("work state offline"))
+  expect(captured.props!.conversation?.workState).toBeUndefined()
+  act(() => captured.props!.conversation!.onRetryWorkState!())
+  await waitFor(() => expect(captured.props!.conversation?.workState?.todos).toEqual([]))
+  expect(captured.props!.conversation?.workStateError).toBeUndefined()
+})
 it("refreshes the model after leaving and returning during a pending switch", async () => {
   const pending = defer()
   let modelId = "old"

@@ -42,6 +42,12 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it("shows the durable goal objective and actual phase above the conversation", () => {
+    render(<Workbench bridge={fakeBridge()} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="goal-1" capabilities={{ "desktop-work-state": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}}
+      conversation={{ rows: [], canSend: false, running: false, pending: [], workState: { todos: null, goal: { id: "goal-1", revision: 2, objective: "Finish the workbench", phase: "paused" } }, onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+    expect(screen.getByText("Finish the workbench")).toBeTruthy()
+    expect(screen.getByText("已暫停")).toBeTruthy()
+  })
   it("shows conversation reminders only when the backend advertises schedule management", async () => {
     useUiStore.setState({ reviewOpen: true })
     const bridge = fakeBridge()

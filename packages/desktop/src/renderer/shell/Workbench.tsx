@@ -33,6 +33,7 @@ import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
 import type { ImageInput } from "@i-harness/sdk"
 import type { ManageSession } from "../session/SessionManager.tsx"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
+import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 
 export interface ConversationView {
   rows: TimelineRow[]
@@ -47,6 +48,9 @@ export interface ConversationView {
   onCompact?(instructions?: string): Promise<void>
   queue?: SessionQueueItem[]
   tasks?: AgentTaskView[]
+  workState?: DesktopWorkStateView
+  workStateError?: string
+  onRetryWorkState?(): void
   taskError?: string
   historyError?: string
   historyNotice?: string
@@ -248,6 +252,10 @@ export function Workbench({
               <>
                 {conversation.historyError ? <p role="alert" className="notice error-text">{conversation.historyError}<button type="button" className="link-button" onClick={onRetry}>{t("重試")}</button></p> : null}
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
+                {capabilities["desktop-work-state"]?.includes("1") && conversation.workState?.goal ? <div className="conversation-goal" title={conversation.workState.goal.objective}>
+                  <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>
+                  <span className="conversation-goal-phase">{t(conversation.workState.goal.phase === "paused" ? "已暫停" : conversation.workState.goal.phase === "complete" ? "已完成" : "進行中")}</span>
+                </div> : null}
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
                   : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={review && capabilities["desktop-review"]?.includes("1") ? { workspacePath: workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.path ?? "", onOpenFile: (path) => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") } } : undefined} />}
@@ -320,8 +328,13 @@ export function Workbench({
         )}
         {workPaneTab !== "tasks" || conversation === undefined ? null : (
           <TaskPane
+            key={`${selectedWorkspaceId ?? ""}:${selectedSessionId ?? ""}`}
             queue={conversation.queue}
             tasks={conversation.tasks}
+            workStateEnabled={capabilities["desktop-work-state"]?.includes("1") === true}
+            workState={conversation.workState}
+            workStateError={conversation.workStateError}
+            onRetryWorkState={conversation.onRetryWorkState}
             error={conversation.taskError}
             onCancelTask={conversation.onCancelTask}
             onCancelQueue={conversation.onCancelQueue}
