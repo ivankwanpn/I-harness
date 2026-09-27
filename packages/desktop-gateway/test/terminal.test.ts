@@ -10,8 +10,10 @@ it("discovers installed shell profiles and opens only the selected profile", () 
     env: { SystemRoot: "C:\\Windows", PATH: "C:\\bin", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
     exists: (path: string) => ["C:/Program Files/Git/bin/bash.exe", "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe", "C:/Windows/System32/cmd.exe"].includes(path.replaceAll("\\", "/")),
   })
-  const options = terminals.request("desktop/terminal/options", {}) as Array<{ id: string }>
+  const options = terminals.request("desktop/terminal/options", {}) as Array<{ id: string; command?: string }>
   expect(options.map((option) => option.id)).toContain("git-bash")
+  expect(options.find((option) => option.id === "auto")?.command).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
+  expect(options.find((option) => option.id === "git-bash")?.command).toBe("C:\\Program Files\\Git\\bin\\bash.exe")
   terminals.request("desktop/terminal/open", { shell: "git-bash", command: "C:/untrusted.exe" })
   expect(mock.open).toHaveBeenLastCalledWith(expect.objectContaining({ command: "C:\\Program Files\\Git\\bin\\bash.exe", cwd: "D:/agent-complete/playground" }), { sessionId: "desktop-user" })
   expect(() => terminals.request("desktop/terminal/open", { shell: "arbitrary" })).toThrow(/shell/i)
@@ -39,7 +41,7 @@ it("uses the execution host's login shell on Unix and lists only detected altern
     exists: (path: string) => ["/bin/zsh", "/bin/sh", "/usr/bin/bash"].includes(path),
   })
   expect(terminals.request("desktop/terminal/options", {})).toEqual([
-    { id: "auto", label: "自動選擇" }, { id: "bash", label: "bash" }, { id: "zsh", label: "zsh" }, { id: "sh", label: "sh" },
+    { id: "auto", label: "自動選擇", command: "/bin/zsh" }, { id: "bash", label: "bash", command: "/usr/bin/bash" }, { id: "zsh", label: "zsh", command: "/bin/zsh" }, { id: "sh", label: "sh", command: "/bin/sh" },
   ])
   terminals.request("desktop/terminal/open", {})
   expect(mock.open).toHaveBeenLastCalledWith(expect.objectContaining({ command: "/bin/zsh", cwd: "/workspace" }), { sessionId: "desktop-user" })
@@ -51,7 +53,7 @@ it("finds Git Bash beside a git.exe installed outside Program Files", () => {
     env: { SystemRoot: "C:\\Windows", PATH: "D:\\Tools\\Git\\cmd", ComSpec: "C:\\Windows\\System32\\cmd.exe" },
     exists: (path: string) => ["D:/Tools/Git/cmd/git.exe", "D:/Tools/Git/bin/bash.exe", "C:/Windows/System32/cmd.exe"].includes(path.replaceAll("\\", "/")),
   })
-  expect(terminals.request("desktop/terminal/options", {})).toContainEqual({ id: "git-bash", label: "Git Bash" })
+  expect(terminals.request("desktop/terminal/options", {})).toContainEqual({ id: "git-bash", label: "Git Bash", command: "D:\\Tools\\Git\\bin\\bash.exe" })
   terminals.close()
 })
 it("offers a real Bash on PATH while ignoring the Windows WSL launcher", () => {
@@ -60,7 +62,7 @@ it("offers a real Bash on PATH while ignoring the Windows WSL launcher", () => {
     env: { SystemRoot: "C:\\Windows", PATH: "C:\\Windows\\System32;D:\\Tools\\Rtools\\usr\\bin" },
     exists: (path: string) => ["C:/Windows/System32/bash.exe", "D:/Tools/Rtools/usr/bin/bash.exe", "C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"].includes(path.replaceAll("\\", "/")),
   })
-  expect(terminals.request("desktop/terminal/options", {})).toContainEqual({ id: "bash", label: "Bash (PATH)" })
+  expect(terminals.request("desktop/terminal/options", {})).toContainEqual({ id: "bash", label: "Bash (PATH)", command: "D:\\Tools\\Rtools\\usr\\bin\\bash.exe" })
   terminals.request("desktop/terminal/open", { shell: "bash" })
   expect(mock.open).toHaveBeenLastCalledWith(expect.objectContaining({ command: "D:\\Tools\\Rtools\\usr\\bin\\bash.exe" }), { sessionId: "desktop-user" })
   terminals.close()

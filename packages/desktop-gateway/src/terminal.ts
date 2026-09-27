@@ -75,7 +75,7 @@ export function createDesktopTerminal(workspace: string, environment: Partial<Sh
       if (closed) throw new Error("Terminal service is closed")
       const params = input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {}
       if (method === "desktop/terminal/list") return service.list()
-      if (method === "desktop/terminal/options") return shellProfiles(shellEnvironment).map(({ id, label }) => ({ id, label }))
+      if (method === "desktop/terminal/options") return shellProfiles(shellEnvironment).map(({ id, label, command }) => ({ id, label, command }))
       if (method === "desktop/terminal/open") {
         if (service.list().length >= 8) throw new Error("Close an existing terminal before opening another")
         const selected = params.shell === undefined ? "auto" : params.shell

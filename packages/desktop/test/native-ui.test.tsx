@@ -23,12 +23,15 @@ it("reads and updates notification preferences and can reset window bounds", asy
   expect(request).toHaveBeenCalledWith({ kind: "window/reset-bounds" })
 })
 it("lists detected terminal shells and saves the selection for new terminals", async () => {
-  const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/terminal/options"
-    ? [{ id: "auto", label: "自動選擇" }, { id: "git-bash", label: "Git Bash" }]
-    : { notifications: false, notificationsSupported: true, terminalShell: "auto" })
+  const request = vi.fn(async (value: { kind: string; terminalShell?: string }) => value.kind === "desktop/terminal/options"
+    ? [{ id: "auto", label: "自動選擇", command: "C:\\Program Files\\Git\\bin\\bash.exe" }, { id: "git-bash", label: "Git Bash", command: "C:\\Program Files\\Git\\bin\\bash.exe" }, { id: "cmd", label: "CMD", command: "C:\\Windows\\System32\\cmd.exe" }]
+    : { notifications: false, notificationsSupported: true, terminalShell: value.terminalShell ?? "auto" })
   render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" workspaceId="ws-1" />)
   const select = await screen.findByRole("combobox", { name: "整合終端 Shell" })
   expect(screen.getByText(/Windows 自動優先 Git Bash/)).toBeTruthy()
+  expect(screen.getByText("C:\\Program Files\\Git\\bin\\bash.exe")).toBeTruthy()
   fireEvent.change(select, { target: { value: "git-bash" } })
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalShell: "git-bash" }))
+  fireEvent.change(select, { target: { value: "cmd" } })
+  await waitFor(() => expect(screen.getByText("C:\\Windows\\System32\\cmd.exe")).toBeTruthy())
 })

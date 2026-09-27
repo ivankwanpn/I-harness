@@ -4,8 +4,13 @@ import { FitAddon } from "@xterm/addon-fit"
 import "@xterm/xterm/css/xterm.css"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
-interface Entry { id: string; status: "running" | "exited"; exitCode?: number }
+interface Entry { id: string; command?: string; status: "running" | "exited"; exitCode?: number }
 interface Output { data: string; nextOffset: number; truncated: boolean; dropped?: boolean; status: "running" | "exited"; exitCode?: number }
+
+function terminalLabel(entry: Entry): string {
+  const executable = entry.command?.split(/[\\/]/).at(-1)
+  return executable ? `${executable} · ${entry.id}` : entry.id
+}
 
 function Emulator({ bridge, workspaceId, id }: { bridge: DesktopBridge; workspaceId: string; id: string }) {
   const element = useRef<HTMLDivElement>(null)
@@ -83,7 +88,7 @@ export function TerminalPane({ bridge, workspaceId }: { bridge: DesktopBridge; w
     finally { locked.current = false; setBusy(false) }
   }
   return <section className="terminal-pane" aria-label={t("終端")}>
-    <div className="provider-actions"><select aria-label={t("選擇終端")} value={selected ?? ""} onChange={(event) => setSelected(event.target.value)}><option value="">{t("選擇終端")}</option>{entries.map((row) => <option key={row.id}>{row.id}</option>)}</select><button disabled={busy || entries.length >= 8} onClick={() => { void act(false) }}>{t("新增終端")}</button><button disabled={busy || !selected} onClick={() => { void act(true) }}>{t("關閉終端")}</button></div>
+    <div className="provider-actions"><select aria-label={t("選擇終端")} value={selected ?? ""} onChange={(event) => setSelected(event.target.value)}><option value="">{t("選擇終端")}</option>{entries.map((row) => <option key={row.id} value={row.id} title={row.command}>{terminalLabel(row)}</option>)}</select><button disabled={busy || entries.length >= 8} onClick={() => { void act(false) }}>{t("新增終端")}</button><button disabled={busy || !selected} onClick={() => { void act(true) }}>{t("關閉終端")}</button></div>
     <p className="muted">{t("此終端使用本機使用者權限，並非 Agent 沙箱。")}</p>
     {error ? <p role="alert">{error}<button disabled={busy} onClick={() => setReload(reload + 1)}>{t("重試")}</button></p> : null}
     {selected ? <Emulator key={selected} bridge={bridge} workspaceId={workspaceId} id={selected} /> : <p>{t("新增終端以開啟工作區 shell。")}</p>}

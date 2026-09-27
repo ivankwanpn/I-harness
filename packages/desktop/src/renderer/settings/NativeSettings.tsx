@@ -4,7 +4,7 @@ import { useLocale, useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import type { TerminalShellChoice } from "../../shared/bridge.ts"
 type NativeState = { notifications: boolean; notificationsSupported: boolean; terminalShell?: TerminalShellChoice }
-type ShellOption = { id: TerminalShellChoice; label: string }
+type ShellOption = { id: TerminalShellChoice; label: string; command?: string }
 export function NativeSettings({ bridge, section = "all", workspaceId }: { bridge: DesktopBridge; section?: "all" | "window" | "notifications"; workspaceId?: string }) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
@@ -33,6 +33,7 @@ export function NativeSettings({ bridge, section = "all", workspaceId }: { bridg
   const visibleShells = shells.some((option) => option.id === selectedShell)
     ? shells
     : [...shells, { id: selectedShell, label: t("已選擇的 Shell 目前不可用") }]
+  const selectedCommand = visibleShells.find((option) => option.id === selectedShell)?.command
   return <>{section === "all" ? <h2>{t("視窗與通知")}</h2> : null}<SettingsGroup>
     {section !== "window" ? <SettingsRow label={t("背景待處理通知")} description={t(value?.notificationsSupported === false ? "此系統不支援桌面通知。" : "視窗不在前景時，有審批或問題需要處理便通知。")}
       control={<input type="checkbox" aria-label={t("背景待處理通知")} checked={value?.notifications === true} disabled={busy || !value?.notificationsSupported} onChange={(event) => {
@@ -46,5 +47,5 @@ export function NativeSettings({ bridge, section = "all", workspaceId }: { bridg
         const terminalShell = event.target.value as TerminalShellChoice
         setBusy(true); setError(undefined)
         void bridge.request({ kind: "desktop/local/configure", terminalShell }).then((result) => setValue(result as NativeState)).catch((reason: unknown) => setError(String(reason))).finally(() => setBusy(false))
-      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} /></SettingsGroup></> : null}{error ? <p role="alert" className="error-text">{error}</p> : null}</>
+      }}>{visibleShells.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} />{selectedCommand ? <p className="settings-shell-path" role="status">{t("目前執行檔")}：<code>{selectedCommand}</code></p> : null}</SettingsGroup></> : null}{error ? <p role="alert" className="error-text">{error}</p> : null}</>
 }
