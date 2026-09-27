@@ -3,7 +3,7 @@
  * Modified: prop-only native group, responsive control width; no service imports.
  */
 import type { ReactNode } from "react"
-export function SettingsRow({ label, description, control }: { label: string; description?: string; control: ReactNode }) {
+export function SettingsRow({ label, description, control, detail }: { label: string; description?: string; control: ReactNode; detail?: ReactNode }) {
   return <div className="zc-settings-row border-t border-border px-4 py-3 first:border-t-0">
     <div className="zc-settings-row-grid grid items-center gap-4">
       <div className="min-w-0"><div className="text-ui-base font-medium text-foreground">{label}</div>
@@ -11,6 +11,7 @@ export function SettingsRow({ label, description, control }: { label: string; de
       </div>
       <div className="flex w-full flex-nowrap items-center justify-end gap-2">{control}</div>
     </div>
+    {detail ? <div className="mt-3 min-w-0">{detail}</div> : null}
   </div>
 }
 export function SettingsGroup({ children }: { children: ReactNode }) {

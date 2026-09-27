@@ -129,6 +129,16 @@ describe("Desktop scoped IPC", () => {
     await dispatchDesktopRequest({ kind: "desktop/terminal/options", workspaceId: ENTRY.id }, f.dependencies)
     expect(f.request).toHaveBeenLastCalledWith("desktop/terminal/options", {})
   })
+  it("validates and stores only a bounded local terminal font override", async () => {
+    const f = fixture()
+    const configure = vi.fn(() => ({ terminalFontFamily: "Cascadia Code, monospace" }))
+    f.dependencies.native = { configure } as unknown as NonNullable<DesktopIpcDependencies["native"]>
+    await expect(dispatchDesktopRequest({ kind: "desktop/local/configure", terminalFontFamily: "x".repeat(129) }, f.dependencies)).rejects.toThrow(/terminal font/i)
+    await expect(dispatchDesktopRequest({ kind: "desktop/local/configure", terminalFontFamily: "bad\nfont" }, f.dependencies)).rejects.toThrow(/terminal font/i)
+    await dispatchDesktopRequest({ kind: "desktop/local/configure", terminalFontFamily: "  Cascadia Code, monospace  " }, f.dependencies)
+    expect(configure).toHaveBeenCalledWith({ terminalFontFamily: "Cascadia Code, monospace" })
+    expect(f.get).not.toHaveBeenCalled()
+  })
   it("scopes reminder requests to a known workspace and removes extra renderer fields", async () => {
     const f = fixture()
     f.setRuntime({ client: { request: f.request }, info: { capabilities: { "desktop-schedule": ["1"] } }, sandbox: { wired: true, mode: "workspace-write", source: "settings" } })

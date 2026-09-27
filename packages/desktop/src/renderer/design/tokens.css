@@ -379,6 +379,7 @@ button { font: inherit; color: inherit; }
 .settings-content h2 { font-size: 16px; font-weight: 600; margin: 24px 0 14px; }
 .settings-shell-path { margin: 0; padding: 9px 16px 12px; border-top: 1px solid var(--ih-divider); color: var(--ih-muted); font-size: 12px; overflow-wrap: anywhere; }
 .settings-shell-path code { color: var(--ih-text); }
+.settings-terminal-font-input { width: min(100%, 520px); min-width: 0; padding: 8px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: 12px ui-monospace, Consolas, monospace; }
 .settings-content select { max-width: 100%; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
 .settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"] { appearance: none; position: relative; width: 32px; height: 19px; flex-shrink: 0; border-radius: 12px; border: 1px solid var(--ih-divider); background: var(--ih-sidebar); cursor: pointer; vertical-align: middle; }
 .settings-content :is(.zc-settings-row, .memory-switch) input[type="checkbox"]::after { content: ""; position: absolute; top: 2px; left: 2px; width: 13px; height: 13px; border-radius: 50%; background: var(--ih-muted); transition: transform 120ms ease; }

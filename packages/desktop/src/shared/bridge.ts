@@ -51,7 +51,7 @@ export type DesktopRequest =
   | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
-  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice }
+  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
   | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
   | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }

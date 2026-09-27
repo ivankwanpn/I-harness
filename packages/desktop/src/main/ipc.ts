@@ -79,8 +79,9 @@ export async function dispatchDesktopRequest(
       if (value.notifications !== undefined && typeof value.notifications !== "boolean") throw new Error("invalid notifications preference")
       if (value.locale !== undefined && value.locale !== "zh-TW" && value.locale !== "en") throw new Error("invalid locale")
       if (value.terminalShell !== undefined && (typeof value.terminalShell !== "string" || !["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"].includes(value.terminalShell))) throw new Error("invalid terminal shell")
+      if (value.terminalFontFamily !== undefined && (typeof value.terminalFontFamily !== "string" || value.terminalFontFamily.length > 128 || /[\u0000-\u001f\u007f]/.test(value.terminalFontFamily))) throw new Error("invalid terminal font")
       if (!dependencies.native) throw new Error("native preferences unavailable")
-      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}) })
+      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
     case "workspace/open":

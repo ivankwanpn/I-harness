@@ -35,3 +35,23 @@ it("lists detected terminal shells and saves the selection for new terminals", a
   fireEvent.change(select, { target: { value: "cmd" } })
   await waitFor(() => expect(screen.getByText("C:\\Windows\\System32\\cmd.exe")).toBeTruthy())
 })
+it("saves a terminal font override and allows clearing it back to the default", async () => {
+  const request = vi.fn(async (value: { kind: string; terminalFontFamily?: string }) => value.kind === "desktop/terminal/options"
+    ? [{ id: "auto", label: "自動選擇", command: "C:\\Program Files\\Git\\bin\\bash.exe" }]
+    : { notifications: false, notificationsSupported: true, terminalShell: "auto", terminalFontFamily: value.terminalFontFamily ?? "" })
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" workspaceId="ws-1" />)
+  const field = await screen.findByRole("textbox", { name: "終端字體" })
+  fireEvent.change(field, { target: { value: "Cascadia Code, monospace" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存終端字體" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalFontFamily: "Cascadia Code, monospace" }))
+  fireEvent.change(field, { target: { value: "" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存終端字體" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalFontFamily: "" }))
+})
+it("keeps the local terminal font setting available before a workspace is opened", async () => {
+  const request = vi.fn(async () => ({ notifications: false, notificationsSupported: true, terminalFontFamily: "" }))
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" />)
+  expect(await screen.findByRole("textbox", { name: "終端字體" })).toBeTruthy()
+  expect(screen.queryByRole("combobox", { name: "整合終端 Shell" })).toBeNull()
+  expect(request).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "desktop/terminal/options" }))
+})
