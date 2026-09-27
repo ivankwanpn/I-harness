@@ -33,6 +33,8 @@ export function drainChildStream(stream: NodeJS.ReadableStream | null | undefine
 export interface WorkspaceRuntimeManager {
   get(workspace: WorkspaceEntry): Promise<WorkspaceRuntime>
   onEvent(listener: (event: DesktopEvent) => void): () => void
+  /** Close-time SDK query. Unknown state retains the process. */
+  hasActiveWork(): Promise<boolean>
   close(): Promise<void>
 }
 
@@ -179,6 +181,37 @@ export function createWorkspaceRuntimeManager(options: {
     onEvent(listener) {
       listeners.add(listener)
       return () => { listeners.delete(listener) }
+    },
+    async hasActiveWork() {
+      if (pending.size > 0) return true
+      if (runtimes.size === 0) return false
+      const results = await Promise.all([...runtimes.values()].map(async (runtime) => {
+        const capabilities = runtime.info.capabilities
+        if (!capabilities["session-dashboard"]?.includes("1") || !capabilities["desktop-interaction"]?.includes("1")) return true
+        try {
+          const [dashboard, interactions] = await Promise.all([
+            runtime.client.request("session/dashboard", {}, 2_500),
+            runtime.client.request("desktop/interaction/pending", {}, 2_500),
+          ])
+          if (!dashboard || typeof dashboard !== "object" || !Array.isArray((dashboard as { sessions?: unknown }).sessions)
+            || (dashboard as { listingUnavailable?: unknown }).listingUnavailable === true || !Array.isArray(interactions)) return true
+          if (interactions.length > 0) return true
+          for (const row of (dashboard as { sessions: unknown[] }).sessions) {
+            if (!row || typeof row !== "object") return true
+            const value = row as Record<string, unknown>
+            if (typeof value.id !== "string" || value.id === "") return true
+            if (value.running === true) return true
+            if (value.running !== undefined && typeof value.running !== "boolean") return true
+            for (const field of ["queued", "tasks"] as const) {
+              const count = value[field]
+              if (count !== undefined && (!Number.isSafeInteger(count) || (count as number) < 0)) return true
+              if ((count as number | undefined) !== undefined && (count as number) > 0) return true
+            }
+          }
+          return false
+        } catch { return true }
+      }))
+      return results.some(Boolean)
     },
     async close() {
       if (closed) return

@@ -22,6 +22,10 @@ function tempRoot(): string {
 interface FakeClientOptions {
   info?: Partial<ServerInfo>
   sandbox?: unknown
+  dashboard?: unknown
+  pending?: unknown
+  failDashboard?: boolean
+  failPending?: boolean
 }
 
 function fakeClient(options: FakeClientOptions = {}) {
@@ -29,6 +33,14 @@ function fakeClient(options: FakeClientOptions = {}) {
   const close = vi.fn(async () => {})
   const request = vi.fn(async (method: string): Promise<unknown> => {
     if (method === "desktop/sandbox/state") return options.sandbox
+    if (method === "session/dashboard") {
+      if (options.failDashboard) throw new Error("dashboard offline")
+      return options.dashboard ?? { sessions: [] }
+    }
+    if (method === "desktop/interaction/pending") {
+      if (options.failPending) throw new Error("pending offline")
+      return options.pending ?? []
+    }
     throw new Error(`unexpected request: ${method}`)
   })
   const initialize = vi.fn(async (): Promise<ServerInfo> => ({
@@ -183,6 +195,72 @@ describe("Desktop SDK runtime manager", () => {
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/request", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/closed", params: { seq: 0 } },
     ])
+    await manager.close()
+  })
+})
+
+const workCapabilities = { "session-dashboard": ["1"], "desktop-interaction": ["1"] }
+
+describe("Desktop close-time active work", () => {
+  it("returns false before any SDK runtime has started", async () => {
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => { throw new Error("should not launch") } })
+    expect(await manager.hasActiveWork()).toBe(false)
+    await manager.close()
+  })
+
+  it("keeps a process during an in-flight SDK startup", async () => {
+    const host = fakeClient({ info: { capabilities: workCapabilities } })
+    let release!: (value: ServerInfo) => void
+    host.initialize.mockImplementationOnce(() => new Promise((resolve) => { release = resolve }))
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    const starting = manager.get(workspace())
+    expect(await manager.hasActiveWork()).toBe(true)
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+    release({ name: "test-host", version: "0.1.0", protocolVersion: 3, capabilities: workCapabilities })
+    await starting
+    await manager.close()
+  })
+
+  it.each([
+    { running: true }, { queued: 1 }, { tasks: 1 },
+  ])("keeps a host with active dashboard state %j", async (activity) => {
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, ...activity }] } })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    expect(await manager.hasActiveWork()).toBe(true)
+    await manager.close()
+  })
+
+  it("keeps a host waiting for an approval even when dashboard is idle", async () => {
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, running: false }] }, pending: [{ requestId: "p", sessionId: "s" }] })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    expect(await manager.hasActiveWork()).toBe(true)
+    expect(host.request).toHaveBeenCalledWith("desktop/interaction/pending", {}, 2_500)
+    await manager.close()
+  })
+
+  it("allows an idle host to exit only after both authoritative reads succeed", async () => {
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: { sessions: [{ id: "s", live: true, running: false }] } })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    expect(await manager.hasActiveWork()).toBe(false)
+    expect(host.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500)
+    expect(host.request).toHaveBeenCalledWith("desktop/interaction/pending", {}, 2_500)
+    await manager.close()
+  })
+
+  it.each([
+    { info: { capabilities: { "session-dashboard": ["1"] } } },
+    { dashboard: { sessions: [], listingUnavailable: true } },
+    { dashboard: { sessions: "bad" } },
+    { failDashboard: true },
+    { failPending: true },
+  ])("retains the host when close-time activity is unknown: %j", async (options) => {
+    const host = fakeClient({ info: { capabilities: workCapabilities }, ...options })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    expect(await manager.hasActiveWork()).toBe(true)
     await manager.close()
   })
 })
