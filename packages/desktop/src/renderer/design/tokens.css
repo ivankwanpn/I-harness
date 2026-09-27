@@ -394,6 +394,8 @@ button { font: inherit; color: inherit; }
 .memory-search input { flex: 1; }
 .memory-summary { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--ih-divider); }
 .memory-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px; }
+.memory-notes-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.memory-notes-header p { margin: 0; }
 .memory-columns > * { min-width: 0; }
 .memory-editor { display: flex; flex-direction: column; gap: 14px; }
 .memory-editor label { display: flex; flex-direction: column; gap: 8px; }

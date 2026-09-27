@@ -13,6 +13,7 @@ export function MemoryPane({ bridge, workspaceId, embedded = false }: { bridge: 
   const [query, setQuery] = useState("")
   const [title, setTitle] = useState("")
   const [text, setText] = useState("")
+  const [creating, setCreating] = useState(false)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState<string>()
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -77,7 +78,7 @@ export function MemoryPane({ bridge, workspaceId, embedded = false }: { bridge: 
       {summary === undefined ? null : <pre className="tool-output">{summary || t("沒有可顯示的摘要")}</pre>}
     </div>
     <div className="memory-columns">
-      <div><p className="muted">{t("最多顯示 100 筆；可搜尋其他筆記。")}</p>
+      <div><div className="memory-notes-header"><p className="muted">{t("最多顯示 100 筆；可搜尋其他筆記。")}</p>{enabled === true && !creating ? <button type="button" className="primary-button" disabled={busy} onClick={() => setCreating(true)}>{t("新增筆記")}</button> : null}</div>
         {!busy && notes.length === 0 ? <p className="muted">{t("沒有符合的筆記")}</p> : null}
         <ul className="session-list">{notes.map((note) => <li key={note.id}>
           <button className="row-button" disabled={busy} aria-current={selected?.id === note.id ? "true" : undefined} onClick={() => { void run(async () => {
@@ -97,17 +98,17 @@ export function MemoryPane({ bridge, workspaceId, embedded = false }: { bridge: 
           {confirmDelete ? <button className="link-button" onClick={() => setConfirmDelete(false)}>{t("取消")}</button> : null}
         </article>}
       </div>
-      <form className="memory-editor" onSubmit={(event) => { event.preventDefault(); void run(async () => {
+      {creating && enabled === true ? <form className="memory-editor" onSubmit={(event) => { event.preventDefault(); void run(async () => {
         if (!enabled || title.trim() === "" || text.trim() === "") return
         await bridge.request({ kind: "desktop/memory/note", workspaceId, title, text })
-        setTitle(""); setText(""); await refresh()
+        setTitle(""); setText(""); setCreating(false); await refresh()
       }) }}>
         <h2>{t("新增筆記")}</h2>
-        <label>{t("標題")}<input maxLength={200} disabled={busy} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
+        <label>{t("標題")}<input autoFocus maxLength={200} disabled={busy} value={title} onChange={(event) => setTitle(event.target.value)} /></label>
         <label>{t("內容")}<textarea rows={8} disabled={busy} value={text} onChange={(event) => setText(event.target.value)} /></label>
-        <button className="primary-button" disabled={busy || !enabled || title.trim() === "" || text.trim() === ""}>{t("儲存筆記")}</button>
-        {enabled === false ? <p className="muted">{t("啟用記憶後才可新增筆記；現有筆記仍可閱讀。")}</p> : null}
-      </form>
+        <div className="provider-actions"><button className="primary-button" disabled={busy || title.trim() === "" || text.trim() === ""}>{t("儲存筆記")}</button><button type="button" disabled={busy} onClick={() => setCreating(false)}>{t("取消")}</button></div>
+      </form> : null}
     </div>
+    {enabled === false ? <p className="muted">{t("啟用記憶後才可新增筆記；現有筆記仍可閱讀。")}</p> : null}
   </section>
 }
