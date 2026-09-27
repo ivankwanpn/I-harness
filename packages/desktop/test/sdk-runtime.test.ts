@@ -250,10 +250,41 @@ describe("Desktop close-time active work", () => {
     await manager.close()
   })
 
+  it("does not report idle if another workspace starts during the SDK reads", async () => {
+    let release!: (value: unknown) => void
+    const first = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise((resolve) => { release = resolve }) })
+    const second = fakeClient({ info: { capabilities: workCapabilities } })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: (entry) => ({ client: entry.id === "a" ? first.client : second.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace("a"))
+    const closing = manager.hasActiveWork()
+    await vi.waitFor(() => expect(first.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
+    const starting = manager.get(workspace("b"))
+    release({ sessions: [] })
+    expect(await closing).toBe(true)
+    await starting
+    await manager.close()
+  })
+
+  it("does not report idle when SDK activity arrives during close-time reads", async () => {
+    let release!: (value: unknown) => void
+    const host = fakeClient({ info: { capabilities: workCapabilities }, dashboard: new Promise((resolve) => { release = resolve }) })
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), launch: () => ({ client: host.client, exited: new Promise(() => {}) }) })
+    await manager.get(workspace())
+    const closing = manager.hasActiveWork()
+    await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("session/dashboard", {}, 2_500))
+    for (const listener of host.listeners) listener({ jsonrpc: "2.0", method: "session/status", params: { sessionId: "s", status: "queued" } })
+    release({ sessions: [{ id: "s", live: true, running: false }] })
+    expect(await closing).toBe(true)
+    await manager.close()
+  })
+
   it.each([
     { info: { capabilities: { "session-dashboard": ["1"] } } },
     { dashboard: { sessions: [], listingUnavailable: true } },
     { dashboard: { sessions: "bad" } },
+    { dashboard: { sessions: [{ id: "s" }] } },
+    { dashboard: { sessions: [{ id: "s", live: true }] } },
+    { dashboard: { sessions: [{ id: "s", live: "yes" }] } },
     { failDashboard: true },
     { failPending: true },
   ])("retains the host when close-time activity is unknown: %j", async (options) => {

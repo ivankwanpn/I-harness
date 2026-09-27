@@ -115,8 +115,10 @@ export function createWorkspaceRuntimeManager(options: {
   const pending = new Map<string, Promise<WorkspaceRuntime>>()
   const children = new Map<string, LaunchedRuntime>()
   let closed = false
+  let activityVersion = 0
 
   function emit(event: DesktopEvent): void {
+    activityVersion += 1
     for (const listener of [...listeners]) listener(event)
   }
 
@@ -161,6 +163,7 @@ export function createWorkspaceRuntimeManager(options: {
             throw new Error("runtime manager is closed")
           }
           runtimes.set(workspace.id, runtime)
+          activityVersion += 1
           const launched = children.get(workspace.id)
           if (launched !== undefined) {
             void launched.exited.then(() => {
@@ -176,6 +179,7 @@ export function createWorkspaceRuntimeManager(options: {
           if (pending.get(workspace.id) === started) pending.delete(workspace.id)
         })
       pending.set(workspace.id, started)
+      activityVersion += 1
       return started
     },
     onEvent(listener) {
@@ -185,6 +189,7 @@ export function createWorkspaceRuntimeManager(options: {
     async hasActiveWork() {
       if (pending.size > 0) return true
       if (runtimes.size === 0) return false
+      const version = activityVersion
       const results = await Promise.all([...runtimes.values()].map(async (runtime) => {
         const capabilities = runtime.info.capabilities
         if (!capabilities["session-dashboard"]?.includes("1") || !capabilities["desktop-interaction"]?.includes("1")) return true
@@ -200,6 +205,7 @@ export function createWorkspaceRuntimeManager(options: {
             if (!row || typeof row !== "object") return true
             const value = row as Record<string, unknown>
             if (typeof value.id !== "string" || value.id === "") return true
+            if (typeof value.live !== "boolean" || value.live && typeof value.running !== "boolean") return true
             if (value.running === true) return true
             if (value.running !== undefined && typeof value.running !== "boolean") return true
             for (const field of ["queued", "tasks"] as const) {
@@ -211,7 +217,7 @@ export function createWorkspaceRuntimeManager(options: {
           return false
         } catch { return true }
       }))
-      return results.some(Boolean)
+      return results.some(Boolean) || pending.size > 0 || activityVersion !== version
     },
     async close() {
       if (closed) return

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, type Tray } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
@@ -7,9 +7,12 @@ import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
 import { createLocalPreferences } from "./local-preferences.ts"
 import { attachNativeWindow } from "./native-window.ts"
 import { createBrowserSurface } from "./browser-surface.ts"
+import { attachCloseLifecycle } from "./close-lifecycle.ts"
+import { createDesktopTray } from "./tray.ts"
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
+let quitting = false
 
 /** Later main-process modules (the scoped IPC in the next task) read through these. */
 export function workspaceCatalog(): WorkspaceCatalog {
@@ -33,8 +36,16 @@ app.whenReady().then(() => {
   })
   catalog = workspaces
   runtimes = manager
+  let mainWindow: BrowserWindow | undefined
+  let tray: Tray | undefined
   const openWindow = (): void => {
     const window = createDesktopWindow(localPreferences.get())
+    mainWindow = window
+    attachCloseLifecycle(window, {
+      hasActiveWork: () => manager.hasActiveWork(),
+      trayAvailable: () => tray !== undefined,
+      isQuitting: () => quitting,
+    })
     const native = attachNativeWindow(window, localPreferences)
     const browser = createBrowserSurface(window)
     const unregister = registerDesktopIpc(window, {
@@ -51,9 +62,18 @@ app.whenReady().then(() => {
         return result.canceled ? undefined : result.filePaths[0]
       },
     }, ipcMain)
-    window.on("closed", unregister)
+    window.on("closed", () => { unregister(); if (mainWindow === window) mainWindow = undefined })
+  }
+  const showWindow = (): void => {
+    if (!mainWindow || mainWindow.isDestroyed()) { openWindow(); return }
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show(); mainWindow.focus()
   }
   openWindow()
+  if (process.platform === "win32") {
+    try { tray = createDesktopTray({ show: showWindow, quit: () => app.quit(), locale: () => localPreferences.get().locale }) }
+    catch (error) { console.warn("Desktop tray unavailable; active work will remain in the taskbar", error) }
+  }
   app.on("activate", () => {
     if (process.platform === "darwin" && BrowserWindow.getAllWindows().length === 0) openWindow()
   })
@@ -63,8 +83,6 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit()
 })
 
-let quitting = false
-
 // Every SDK child belongs to this process: close them before the app goes away.
 app.on("before-quit", (event) => {
   if (quitting || runtimes === undefined) return
@@ -72,3 +90,4 @@ app.on("before-quit", (event) => {
   quitting = true
   void runtimes.close().finally(() => app.quit())
 })
+
