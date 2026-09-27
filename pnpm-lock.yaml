@@ -462,6 +462,9 @@ importers:
       '@i-harness/session-query':
         specifier: workspace:*
         version: link:../session-query
+      '@i-harness/session-title':
+        specifier: workspace:*
+        version: link:../session-title
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings

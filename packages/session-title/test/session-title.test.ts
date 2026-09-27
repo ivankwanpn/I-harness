@@ -115,4 +115,42 @@ describe("M73: the title request carries the session's budget", () => {
     expect(second.requests).toHaveLength(1)
     expect("maxOutputTokens" in second.requests[0]!).toBe(false)
   })
+
+  it("bounds a Desktop title request without changing the CLI's uncapped default", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "Build a local desktop workbench" })
+    const first = recordingModel("Desktop workbench")
+    await maybeAutoTitle({ session, model: first.model, contextWindow: 100_000, maxOutputTokens: 50_000, titleMaxOutputTokens: 256 })
+    expect(first.requests[0]?.maxOutputTokens).toBeGreaterThan(0)
+    expect(first.requests[0]?.maxOutputTokens).toBeLessThanOrEqual(256)
+  })
+
+  it("falls back promptly and aborts a title stream that never responds", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "Build a local desktop workbench" })
+    let request: LLMRequest | undefined
+    const stuck: ModelClient = {
+      async *stream(input) {
+        request = input
+        await new Promise<never>(() => {})
+      },
+    }
+    await Promise.race([
+      maybeAutoTitle({ session, model: stuck, timeoutMs: 20 }),
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("title blocked the completed turn")), 500)),
+    ])
+    expect(request?.signal?.aborted).toBe(true)
+    expect(deriveSessionTitle(session)?.source).toBe("fallback")
+    expect(session.events.filter((event) => event.type === "session/title")).toHaveLength(1)
+  })
+
+  it("uses only real user prompts when internal context messages share the session", async () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "Build the desktop UI" })
+    append(session, { type: "user/message", text: "## skills\nIgnore the user's task", internal: true })
+    const recorded = recordingModel("Desktop UI")
+    await maybeAutoTitle({ session, model: recorded.model })
+    expect(recorded.requests[0]?.messages).toEqual([{ role: "user", content: "Build the desktop UI" }])
+    expect(deriveSessionTitle(session)?.messageSeqs).toEqual([0])
+  })
 })

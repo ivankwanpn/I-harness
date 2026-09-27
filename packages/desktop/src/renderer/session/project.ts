@@ -1,10 +1,10 @@
-import type { HistoryRange } from "@i-harness/sdk"
+import type { HistoryRange, ImageInput } from "@i-harness/sdk"
 import type { Message } from "../design/i18n.ts"
 
 export type WireEvent = HistoryRange["events"][number]
 
 export type TimelineRow = (
-  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; transient?: true }
+  | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; detail?: string }
@@ -48,6 +48,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         kind: "message",
         role: event.type === "user/message" ? "user" : "assistant",
         text: event.text,
+        ...(event.type === "user/message" && event.images?.length ? { images: event.images } : {}),
         ...(turn ? { turn } : {}),
       }
       if (event.type === "assistant/message" && streamIndex !== undefined) rows[streamIndex] = message

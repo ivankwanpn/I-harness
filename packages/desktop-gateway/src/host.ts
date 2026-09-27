@@ -1,6 +1,8 @@
 import { readFile, mkdir } from "node:fs/promises"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
+import { deriveSessionTitle } from "@i-harness/core-session"
+import { maybeAutoTitle } from "@i-harness/session-title"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
@@ -124,6 +126,26 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sandbox: mode,
     modelPolicy: "required",
     modelBindingFor,
+    afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
+      const { meta } = await coordinator.profile(sessionId)
+      if (meta.title?.trim()) return
+      await maybeAutoTitle({
+        session: assembly.session,
+        model: assembly.model,
+        coordinator,
+        sessionId,
+        ...limits,
+        // Some providers spend the first tokens on internal reasoning before
+        // emitting title text. This remains far below a full session budget.
+        titleMaxOutputTokens: 2_048,
+        timeoutMs: 8_000,
+      })
+      const title = deriveSessionTitle(assembly.session)?.title
+      if (!title) return
+      await coordinator.flush(sessionId)
+      const latest = await coordinator.profile(sessionId)
+      if (!latest.meta.title?.trim()) await coordinator.updateMeta(sessionId, { title })
+    },
     loadMeta: async (sessionId) => (await coordinator.profile(sessionId)).meta,
     coordinator,
     sessionFor: createDurableSessionLoader(coordinator),

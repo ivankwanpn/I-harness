@@ -47,7 +47,8 @@ it.each([true, false])("honors Desktop auto-compaction setting %s with the confi
     if (!isRpcSuccess(history)) throw new Error("history unavailable")
     const events = (history.result as { events: { type: string }[] }).events
     expect(events.some(e => e.type === "compaction/summary")).toBe(auto)
-    expect(calls).toBe(auto ? 2 : 1)
+    expect(events.some(e => e.type === "session/title")).toBe(true)
+    expect(calls).toBe(auto ? 3 : 2) // main turn, optional compaction, then one title request
     expect(isRpcSuccess(frames.find(f => "id" in f && f.id === 3))).toBe(true)
     if (!auto) {
       await request(5, "desktop/session/compact", { sessionId })

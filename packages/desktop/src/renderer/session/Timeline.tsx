@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { ArrowDown } from "lucide-react"
+import { createPortal } from "react-dom"
+import { ArrowDown, X } from "lucide-react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -20,13 +21,20 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
   }}>{text}</Markdown>
 })
 
-function RowView({ row, open, toggle, page, setPage, navigation }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation }) {
+function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
   if (row.kind === "work-stage") { const expanded = open.get(row.id) ?? row.active; return <button type="button" className="work-stage-heading" aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button> }
   if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
       {row.role === "assistant" ? <MarkdownMessage text={row.text} /> : row.text}
+      {row.role === "user" && row.images?.length ? <div className="timeline-user-images">{row.images.map((item, index) => {
+        const name = item.name || `${t("圖片")} ${index + 1}`
+        const src = `data:${item.mediaType};base64,${item.dataBase64}`
+        return <button key={index} type="button" className="timeline-image-button" aria-label={name} title={name} onClick={() => onPreview({ src, name })}>
+          <img src={src} alt={name} loading="lazy" decoding="async" />
+        </button>
+      })}</div> : null}
     </div>
   }
   if (row.kind === "outcome") {
@@ -41,6 +49,13 @@ function RowView({ row, open, toggle, page, setPage, navigation }: { row: WorkIt
 /** Only the visible rows are mounted, so a long session stays bounded. */
 export function Timeline({ rows, navigation, running = false }: { rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean }) {
   const t = useText()
+  const [preview, setPreview] = useState<{ src: string; name: string }>()
+  useEffect(() => {
+    if (!preview) return
+    const dismiss = (event: KeyboardEvent) => { if (event.key === "Escape") setPreview(undefined) }
+    document.addEventListener("keydown", dismiss)
+    return () => document.removeEventListener("keydown", dismiss)
+  }, [preview])
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
   const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
@@ -98,7 +113,7 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
               ref={virtualizer.measureElement}
               style={{ transform: `translateY(${item.start}px)` }}
             >
-              <RowView row={row} open={open} toggle={toggle} navigation={navigation} page={pages.get(row.id) ?? 0} setPage={(page) => {
+              <RowView row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
                 following.current = false; setShowLatest(true)
                 setPages((previous) => {
                 const next = new Map(previous); next.set(row.id, page)
@@ -114,6 +129,10 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
     {showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
       following.current = true; setShowLatest(false); virtualizer.scrollToIndex(items.length - 1, { align: "end" })
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
+    {preview ? createPortal(<div className="timeline-image-overlay" role="dialog" aria-modal="true" aria-label={preview.name}>
+      <button type="button" className="timeline-image-close icon-button" aria-label={t("關閉")} onClick={() => setPreview(undefined)}><X size={18} /></button>
+      <img src={preview.src} alt={preview.name} />
+    </div>, document.body) : null}
     </div>
   )
 }

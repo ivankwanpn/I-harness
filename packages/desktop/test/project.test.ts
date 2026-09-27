@@ -92,6 +92,15 @@ describe("projectTimeline", () => {
     ])
   })
 
+  it("keeps durable user image attachments on the visible message row", () => {
+    const image = { mediaType: "image/png" as const, dataBase64: "iVBORw0KGgo=", name: "probe.png" }
+    const rows = projectTimeline([
+      { type: "user/message", text: "What color?", images: [image], seq: 4 },
+    ])
+    expect(rows).toEqual([{ id: "message:4", kind: "message", role: "user", text: "What color?", images: [image] }])
+    expect(rows[0]?.kind === "message" && rows[0].images?.[0]).toBe(image)
+  })
+
   it("uses the array index as the id when an event carries no seq", () => {
     const rows = projectTimeline([
       { type: "user/message", text: "no seq" },

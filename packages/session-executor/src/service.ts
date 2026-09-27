@@ -90,6 +90,9 @@ type SessionModelState =
 
 export interface SessionServiceOptions extends AssemblyOptions {
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
+  /** Host-owned post-turn work runs within this session's submit lane. Failure
+   * is reported but never changes a successfully completed Agent turn. */
+  afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }) => Promise<void>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
     options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral">
@@ -556,7 +559,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // Lane drain: rejects on the first turn failure (A-plan semantics) —
         // the rejection becomes this submit's rejection (host error frame).
         lane.drain().then(
-          () => { settle() },
+          async () => {
+            if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
+              try {
+                const state = await bindingFor(sessionId)
+                await opts.afterSuccessfulSubmit(sessionId, assembly, state.status === "ready"
+                  ? { ...(state.binding.contextWindow !== undefined ? { contextWindow: state.binding.contextWindow } : {}), ...(state.binding.maxOutputTokens !== undefined ? { maxOutputTokens: state.binding.maxOutputTokens } : {}) }
+                  : {})
+              } catch (error) {
+                d.warn(`[i-harness] post-turn host callback failed for ${sessionId}: ${error instanceof Error ? error.message : String(error)}`)
+              }
+            }
+            settle()
+          },
           (error: unknown) => {
             if (!signal.aborted && !closed) {
               telemetry?.emit({

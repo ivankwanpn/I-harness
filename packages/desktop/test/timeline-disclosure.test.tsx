@@ -17,6 +17,23 @@ it("does not jump to the end when the reader opens tool details", () => {
   expect(viewport.scroll).not.toHaveBeenCalled()
 })
 
+it("shows an attached user image after sending and opens a larger preview", () => {
+  const rows = projectTimeline([{ type: "user/message", text: "What color?", images: [{ mediaType: "image/png", dataBase64: "iVBORw0KGgo=", name: "probe.png" }], seq: 0 }])
+  const view = render(<Timeline rows={rows} />)
+  expect(screen.getByText("What color?")).toBeTruthy()
+  const image = screen.getByRole("img", { name: "probe.png" }) as HTMLImageElement
+  expect(image.src).toBe("data:image/png;base64,iVBORw0KGgo=")
+  fireEvent.click(screen.getByRole("button", { name: "probe.png" }))
+  const dialog = screen.getByRole("dialog")
+  expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=")
+  expect(dialog.parentElement).toBe(document.body)
+  viewport.visible = false
+  view.rerender(<Timeline rows={[...rows]} />)
+  expect(screen.getByRole("dialog")).toBeTruthy()
+  fireEvent.keyDown(document, { key: "Escape" })
+  expect(screen.queryByRole("dialog")).toBeNull()
+})
+
 it("collapses intermediate work while keeping the final reply visible", () => {
   const rows = projectTimeline([{ type: "turn/start", seq: 0 }, { type: "user/message", text: "Task", seq: 1 }, { type: "tool/call", callId: "r", name: "read", args: { path: "a.md" }, seq: 2 }, { type: "assistant/message", text: "Final reply", seq: 3 }, { type: "turn/end", seq: 4 }])
   render(<Timeline rows={rows} />)

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -55,7 +55,7 @@ async function fixture(mode: "text" | "approval" = "text") {
   })
   const client = new HarnessClient(child.stdout, child.stdin, { child })
   return {
-    child, client, outsidePath,
+    child, client, outsidePath, sessionDir,
     async close() {
       await client.close()
       await new Promise<void>((resolve) => provider.close(() => resolve()))
@@ -66,6 +66,27 @@ async function fixture(mode: "text" | "approval" = "text") {
 }
 
 describe("desktop-gateway subprocess keeps SDK v3 compatible", () => {
+  it("creates one durable automatic title and preserves a manual title", async () => {
+    const f = await fixture()
+    try {
+      await f.client.initialize()
+      const first = await f.client.createSession()
+      await f.client.request("session/prompt", { sessionId: first.sessionId, prompt: "Design a small workbench" }, 30_000)
+      const listed = await f.client.listSessions()
+      expect(listed.sessions.find((row) => row.id === first.sessionId)?.title).toBe("fixture answer")
+      const history = await f.client.history(first.sessionId)
+      expect(history.events.filter((event) => event.type === "session/title")).toHaveLength(1)
+      const firstHeader = JSON.parse(readFileSync(join(f.sessionDir, `${first.sessionId}.jsonl`), "utf8").split("\n")[0]!)
+      expect(firstHeader.title).toBe("fixture answer")
+
+      const second = await f.client.createSession()
+      await f.client.request("desktop/session/manage", { sessionId: second.sessionId, action: "rename", title: "My title" })
+      await f.client.request("session/prompt", { sessionId: second.sessionId, prompt: "Another workbench" }, 30_000)
+      expect((await f.client.listSessions()).sessions.find((row) => row.id === second.sessionId)?.title).toBe("My title")
+      expect((await f.client.history(second.sessionId)).events.filter((event) => event.type === "session/title")).toHaveLength(0)
+    } finally { await f.close() }
+  }, 50_000)
+
   it("initializes, creates, prompts, replays and cancels through existing SDK methods", async () => {
     const f = await fixture()
     try {

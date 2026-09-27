@@ -19,6 +19,37 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it("runs a host completion hook with the live assembly and resolved limits before submit settles", async () => {
+    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const completed = vi.fn(async (_sessionId: string, assembly: unknown, limits: unknown) => {
+      expect(assembly).toBe(await service.assemblyFor("title-session"))
+      expect(limits).toEqual({ contextWindow: 100_000, maxOutputTokens: 512 })
+    })
+    const service = createSessionService({
+      workspace: process.cwd(), modelPolicy: "required",
+      modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "p", modelId: "m", label: "p:m", contextWindow: 100_000, maxOutputTokens: 512 } }),
+      afterSuccessfulSubmit: completed,
+    })
+    try {
+      await service.submit("title-session", "hello", new AbortController().signal)
+      expect(completed).toHaveBeenCalledOnce()
+      expect(completed.mock.calls[0]?.[0]).toBe("title-session")
+    } finally { await service.close() }
+  })
+
+  it("keeps a successful answer successful when a host completion hook fails", async () => {
+    const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
+    const completed = vi.fn(async () => { throw new Error("title service unavailable") })
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required",
+      modelBindingFor: async () => ({ status: "ready", binding: { model, providerId: "p", modelId: "m", label: "p:m" } }),
+      afterSuccessfulSubmit: completed,
+    })
+    try {
+      await expect(service.submit("title-session", "hello", new AbortController().signal)).resolves.toBeUndefined()
+      expect(completed).toHaveBeenCalledOnce()
+    } finally { await service.close() }
+  })
+
   it("uses one pending ready binding for state and assembly construction", async () => {
     let calls = 0
     let release!: () => void

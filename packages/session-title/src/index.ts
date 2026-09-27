@@ -38,6 +38,7 @@ function eligibleUserTexts(session: Session): { seq: number; text: string }[] {
   const out: { seq: number; text: string }[] = []
   for (const ev of session.events) {
     if (ev.type !== "user/message") continue
+    if (ev.internal === true) continue
     const src = (ev as { source?: unknown }).source
     if (src !== undefined) continue
     out.push({ seq: ev.seq ?? 0, text: ev.text })
@@ -56,11 +57,19 @@ export async function suggestTitle(deps: {
    * wire. Optional and never defaulted: absent ⇒ no key is written. */
   contextWindow?: number
   maxOutputTokens?: number
+  /** Optional cap for short background titles. Existing callers keep their resolved cap. */
+  titleMaxOutputTokens?: number
+  /** A background title must never hold a completed turn indefinitely. */
+  timeoutMs?: number
 }): Promise<{ title: string; source: "provider" | "fallback" }> {
   const inputs = eligibleUserTexts(deps.session)
   const first = inputs[0]?.text ?? ""
   try {
     const messages: LLMMessage[] = [{ role: "user", content: inputs.map((i) => i.text).join("\n\n").slice(0, 4000) || "(no messages)" }]
+    const requestedCap = deps.titleMaxOutputTokens === undefined
+      ? deps.maxOutputTokens
+      : Math.min(deps.maxOutputTokens ?? deps.titleMaxOutputTokens, deps.titleMaxOutputTokens)
+    const controller = deps.timeoutMs === undefined ? undefined : new AbortController()
     const request: LLMRequest = {
       messages,
       tools: [],
@@ -70,20 +79,39 @@ export async function suggestTitle(deps: {
       // Normally a no-op — the input is sliced to 4 000 chars and the answer is
       // a short line — and kept anyway, because a cap that reaches the wire
       // unclamped is the hazard, not the tokens the clamp saves.
-      ...(deps.maxOutputTokens !== undefined
-        ? { maxOutputTokens: clampOutputCap(deps.maxOutputTokens, deps.contextWindow, estimateContent(messages)) }
+      ...(requestedCap !== undefined
+        ? { maxOutputTokens: clampOutputCap(requestedCap, deps.contextWindow, estimateContent(messages)) }
         : {}),
+      ...(controller ? { signal: controller.signal } : {}),
     }
-    let out = ""
-    // M77: the provider can decline to produce a title (HTTP 200, no content,
-    // `end.refused`) — a different fact from "the provider answered with
-    // nothing", which is what the message below used to say.
-    let refused = false
-    for await (const ev of deps.model.stream(request)) {
-      if (ev.type === "text/chunk") out += ev.text
-      if (ev.type === "error") throw ev.error
-      if (ev.type === "end" && ev.refused === true) refused = true
+    const readTitle = async (): Promise<{ out: string; refused: boolean }> => {
+      let out = ""
+      let refused = false
+      for await (const ev of deps.model.stream(request)) {
+        if (ev.type === "text/chunk") out += ev.text
+        if (ev.type === "error") throw ev.error
+        if (ev.type === "end" && ev.refused === true) refused = true
+      }
+      return { out, refused }
     }
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let result: { out: string; refused: boolean }
+    try {
+      result = deps.timeoutMs === undefined
+        ? await readTitle()
+        : await Promise.race([
+            readTitle(),
+            new Promise<never>((_resolve, reject) => {
+              timer = setTimeout(() => {
+                controller?.abort()
+                reject(new Error("title request timed out"))
+              }, Math.max(1, deps.timeoutMs!))
+            }),
+          ])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    const { out, refused } = result
     const title = normalizeTitle(out)
     // M77: absent stays absent — without the bit this message is byte-identical
     // to pre-M77. NOTE: the throw is swallowed by this function's own catch two
@@ -113,6 +141,8 @@ export async function maybeAutoTitle(deps: {
    * session's model (run.ts), and the title request runs on that model. */
   contextWindow?: number
   maxOutputTokens?: number
+  titleMaxOutputTokens?: number
+  timeoutMs?: number
 }): Promise<void> {
   if (deps.coordinator && deps.sessionId) {
     // best-effort persisted mirror (list-screen fast path). The key is a
@@ -132,6 +162,8 @@ export async function maybeAutoTitle(deps: {
     model: deps.model,
     ...(deps.contextWindow !== undefined ? { contextWindow: deps.contextWindow } : {}),
     ...(deps.maxOutputTokens !== undefined ? { maxOutputTokens: deps.maxOutputTokens } : {}),
+    ...(deps.titleMaxOutputTokens !== undefined ? { titleMaxOutputTokens: deps.titleMaxOutputTokens } : {}),
+    ...(deps.timeoutMs !== undefined ? { timeoutMs: deps.timeoutMs } : {}),
   })
   applyTitle(deps.session, title, source, inputs.map((i) => i.seq))
   if (deps.coordinator && deps.sessionId) {
