@@ -415,6 +415,8 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-directory-heading, .provider-models > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .provider-directory-heading h2, .provider-models h3 { margin: 0; }
 .provider-directory-heading button, .provider-models > header button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; }
+.provider-directory-search { margin: 0 0 12px; }
+.provider-directory-search .zc-search-input { width: 100%; min-height: 36px; padding: 7px 34px; }
 .provider-directory-layout { display: grid; grid-template-columns: 180px minmax(0,1fr); border: 1px solid var(--ih-divider); border-radius: 14px; overflow: hidden; }
 .provider-list { padding: 8px; background: var(--ih-sidebar); border-right: 1px solid var(--ih-divider); }
 .provider-list button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border: 0; border-radius: 8px; background: transparent; text-align: left; cursor: pointer; }

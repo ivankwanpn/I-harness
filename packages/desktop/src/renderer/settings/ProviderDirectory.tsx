@@ -7,6 +7,7 @@ import { ProviderCard, type DirectoryRow } from "./ProviderCard.tsx"
 import { ProviderEditor } from "./ProviderEditor.tsx"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
+import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 
 /** Displays the backend directory; loading never probes a provider endpoint. */
 export function ProviderDirectory({ bridge, workspaceId, showHeading = true }: { bridge: DesktopBridge; workspaceId: string; showHeading?: boolean }) {
@@ -22,12 +23,16 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
   const [saved, setSaved] = useState(false)
   const [capabilityNotice, setCapabilityNotice] = useState(false)
   const [selectedId, setSelectedId] = useState<string>()
-  const selected = rows?.find((row) => row.id === selectedId) ?? rows?.find((row) => row.configured) ?? rows?.[0]
+  const [query, setQuery] = useState("")
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  const visibleRows = rows?.filter((row) => !normalizedQuery || `${row.displayName} ${row.id}`.toLocaleLowerCase().includes(normalizedQuery))
+  const selected = visibleRows?.find((row) => row.id === selectedId) ?? visibleRows?.find((row) => row.configured) ?? visibleRows?.[0]
   const save = async (command: ProviderCommand) => {
     setSaved(false)
     await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
     useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 }))
     setSaved(true)
+    setQuery("")
     if ("fields" in command && "inputModalities" in command.fields) setCapabilityNotice(true)
     setReload((value) => value + 1)
   }
@@ -50,13 +55,13 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
     {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
     {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
       : rows.length === 0 ? <p>{t("沒有可用的提供商")}</p>
-      : <div className="provider-directory-layout">
+      : <>{rows.length > 1 ? <div className="provider-directory-search"><SearchInput aria-label={t("搜尋提供商")} placeholder={t("搜尋提供商")} value={query} onChange={(event) => setQuery(event.target.value)} clearLabel={t("清除提供商搜尋")} onClear={() => setQuery("")} /></div> : null}<div className="provider-directory-layout">
         <nav className="provider-list" aria-label={t("模型與提供商")}>
-          {rows.map((row) => <button key={row.id} aria-current={selected?.id === row.id ? "true" : undefined} onClick={() => { setSelectedId(row.id); setSaved(false) }}>
+          {visibleRows?.length ? visibleRows.map((row) => <button key={row.id} aria-current={selected?.id === row.id ? "true" : undefined} onClick={() => { setSelectedId(row.id); setSaved(false) }}>
             <Server size={16} aria-hidden="true" /><span>{row.displayName}<small>{row.id}</small></span>
-          </button>)}
+          </button>) : <p className="muted">{t("沒有符合的提供商")}</p>}
         </nav>
         <div className="provider-detail">{selected ? <ProviderCard key={`${selected.id}:${selected.baseURL ?? ""}:${selected.protocol ?? ""}`} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
-      </div>}
+      </div></>}
   </section>
 }

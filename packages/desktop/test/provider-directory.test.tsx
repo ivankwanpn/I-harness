@@ -37,6 +37,23 @@ it("shows one provider at a time and scopes connection drafts to that provider",
   expect(request).toHaveBeenCalledTimes(1)
 })
 
+it("filters provider navigation locally while keeping the selected detail in sync", async () => {
+  const request = vi.fn().mockResolvedValue([
+    { id: "a", displayName: "Alpha", configured: true, auth: { configured: true }, models: [{ id: "alpha-model" }] },
+    { id: "b", displayName: "Beta", configured: true, auth: { configured: true }, models: [{ id: "beta-model" }] },
+  ])
+  render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  await screen.findByRole("button", { name: /Alpha/ })
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜尋提供商" }), { target: { value: "beta" } })
+  expect(screen.queryByRole("button", { name: /Alpha/ })).toBeNull()
+  expect(screen.getByRole("button", { name: /Beta/ })).toBeTruthy()
+  expect(screen.getByText("beta-model")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "清除提供商搜尋" }))
+  expect(screen.getByRole("button", { name: /Alpha/ })).toBeTruthy()
+  expect(screen.getByText("alpha-model")).toBeTruthy()
+  expect(request).toHaveBeenCalledTimes(1)
+})
+
 it("explains when model input changes take effect without leaving settings", async () => {
   useUiStore.getState().setSurface("settings")
   const row = { id: "p", displayName: "Provider", configured: true, auth: { configured: true }, models: [{ id: "m", inputModalities: ["text"] }] }
