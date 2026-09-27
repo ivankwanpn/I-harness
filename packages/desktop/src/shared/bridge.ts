@@ -1,6 +1,6 @@
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
-import type { SessionModelSelection } from "@i-harness/sdk"
+import type { ImageInput, SessionModelSelection } from "@i-harness/sdk"
 import type { AgentDefaults } from "@i-harness/desktop-gateway/src/agent-settings.ts"
 import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
 import type { HookSettingsCommand } from "@i-harness/desktop-gateway/src/hook-settings.ts"
@@ -64,13 +64,14 @@ export type DesktopRequest =
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
-  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string }
+  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[] }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
   | { kind: "session/queue"; workspaceId: string; sessionId: string }
   | { kind: "session/queue/cancel"; workspaceId: string; sessionId: string; id: string }
   | { kind: "session/tasks"; workspaceId: string; sessionId: string }
   | { kind: "session/tasks/cancel"; workspaceId: string; sessionId: string; id: string }
   | { kind: "session/model/state"; workspaceId: string; sessionId: string }
+  | { kind: "session/context"; workspaceId: string; sessionId: string }
   | { kind: "desktop/interaction/pending"; workspaceId: string; sessionId?: string }
   | {
       kind: "desktop/interaction/reply"

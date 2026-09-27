@@ -22,7 +22,7 @@ const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }
 
 function RowView({ row, open, toggle, page, setPage, navigation }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation }) {
   const t = useText()
-  if (row.kind === "work-stage") return <button type="button" className="work-stage-heading" aria-expanded={open.get(row.id) !== false} onClick={() => toggle(row.id)}>{t("工作過程")}<ChevronRight size={14} className={open.get(row.id) !== false ? "rotate-90" : ""} /></button>
+  if (row.kind === "work-stage") { const expanded = open.get(row.id) ?? row.active; return <button type="button" className="work-stage-heading" aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button> }
   if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
@@ -39,11 +39,11 @@ function RowView({ row, open, toggle, page, setPage, navigation }: { row: WorkIt
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export function Timeline({ rows, navigation }: { rows: TimelineRow[]; navigation?: FileNavigation }) {
+export function Timeline({ rows, navigation, running = false }: { rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean }) {
   const t = useText()
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
-  const items = useMemo(() => workStages(grouped, open), [grouped, open])
+  const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
   const [pages, setPages] = useState(new Map<string, number>())
   const toggle = (id: string) => {
     following.current = false
@@ -51,7 +51,7 @@ export function Timeline({ rows, navigation }: { rows: TimelineRow[]; navigation
     setOpen((previous) => {
     const next = new Map(previous)
     const group = items.find((item) => item.id === id)
-    const current = previous.get(id) ?? (group?.kind === "work-stage" || (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
+    const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
     next.set(id, !current)
     if (next.size > 2000) next.delete(next.keys().next().value!)
     return next

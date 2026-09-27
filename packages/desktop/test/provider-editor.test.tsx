@@ -29,3 +29,50 @@ it("uses explicit null to clear an existing context override", async () => {
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   expect(save).toHaveBeenCalledWith({ action: "model/edit", id: "route", model: "m", fields: { contextWindow: null } })
 })
+it("saves a model's image capability as a real input-modality override", async () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderEditor id="route" model={{ id: "vision", inputModalities: ["text"] }} onSave={save} onClose={() => {}} />)
+  fireEvent.change(screen.getByLabelText("輸入類型"), { target: { value: "text,image" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/edit", id: "route", model: "vision", fields: { inputModalities: ["text", "image"] } })
+})
+
+it("edits a custom provider connection in its detail card and retains failed changes", async () => {
+  const save = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined)
+  render(<ProviderCard row={{ id: "p", displayName: "Provider", configured: true, auth: { configured: true },
+    baseURL: "https://old.example/v1", protocol: "openai-completions", models: [] }} onSave={save} />)
+  expect(screen.queryByLabelText("輸入類型")).toBeNull()
+  fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
+  fireEvent.change(screen.getByLabelText("通訊協定"), { target: { value: "anthropic-messages" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存連線" }))
+  expect(await screen.findByText("offline")).toBeTruthy()
+  expect((screen.getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://new.example/v1")
+  expect(save).toHaveBeenCalledWith({ action: "provider/edit", id: "p", fields: {
+    baseURL: "https://new.example/v1", protocol: "anthropic-messages",
+  } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存連線" }))
+  expect(save).toHaveBeenCalledTimes(2)
+})
+
+it("keeps input types in the model editor and out of the provider editor", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const view = render(<ProviderEditor id="p" provider={{ id: "p", displayName: "P", configured: true }} onSave={save} onClose={() => {}} />)
+  expect(screen.queryByLabelText("輸入類型")).toBeNull()
+  view.unmount()
+  render(<ProviderEditor id="p" model={{ id: "m", inputModalities: ["text", "image"] }} onSave={save} onClose={() => {}} />)
+  expect((screen.getByLabelText("輸入類型") as HTMLSelectElement).value).toBe("text,image")
+})
+
+it("shows a legacy image-only model honestly while allowing a supported replacement", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderEditor id="p" model={{ id: "m", inputModalities: ["image"] }} onSave={save} onClose={() => {}} />)
+  expect((screen.getByLabelText("輸入類型") as HTMLSelectElement).value).toBe("image")
+  expect(screen.getByRole("option", { name: "僅圖片（舊設定）" })).toBeTruthy()
+})
+it("treats legacy reversed modality order as the same text-and-image model setting", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderEditor id="p" model={{ id: "m", inputModalities: ["image", "text"] }} onSave={save} onClose={() => {}} />)
+  expect((screen.getByLabelText("輸入類型") as HTMLSelectElement).value).toBe("text,image")
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/edit", id: "p", model: "m", fields: {} })
+})

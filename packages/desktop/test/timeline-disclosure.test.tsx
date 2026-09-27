@@ -20,9 +20,10 @@ it("does not jump to the end when the reader opens tool details", () => {
 it("collapses intermediate work while keeping the final reply visible", () => {
   const rows = projectTimeline([{ type: "turn/start", seq: 0 }, { type: "user/message", text: "Task", seq: 1 }, { type: "tool/call", callId: "r", name: "read", args: { path: "a.md" }, seq: 2 }, { type: "assistant/message", text: "Final reply", seq: 3 }, { type: "turn/end", seq: 4 }])
   render(<Timeline rows={rows} />)
-  expect(screen.getByRole("button", { name: "工具詳情 read" })).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "工作過程" }))
   expect(screen.queryByRole("button", { name: "工具詳情 read" })).toBeNull()
+  expect(screen.getByRole("button", { name: "工作過程" }).getAttribute("aria-expanded")).toBe("false")
+  fireEvent.click(screen.getByRole("button", { name: "工作過程" }))
+  expect(screen.getByRole("button", { name: "工具詳情 read" })).toBeTruthy()
   expect(screen.getByText("Final reply")).toBeTruthy()
   expect(screen.getByText("Task")).toBeTruthy()
 })

@@ -1,10 +1,10 @@
-import { useEffect, useId, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { SubagentSettingsCommand, SubagentSettingsState } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 type Row = SubagentSettingsState["roles"][number]
-interface Route { id: string; displayName: string; models: { id: string }[] }
+interface Route { id: string; displayName: string; auth?: { configured: boolean }; protocol?: string; models: { id: string; protocol?: string }[] }
 
 export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
   const t = useText()
@@ -53,23 +53,31 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
 }
 
 function RoleEditor({ row, routes, busy, onSave, onClose }: { row: Row; routes: Route[]; busy: boolean; onSave(command: SubagentSettingsCommand): Promise<void>; onClose(): void }) {
-  const t = useText(); const listId = useId()
+  const t = useText()
   const [name, setName] = useState(row.name)
   const [provider, setProvider] = useState(row.selection?.provider ?? "")
   const [model, setModel] = useState(row.selection?.model ?? "")
   const [effort, setEffort] = useState(row.selection?.reasoningEffort ?? "")
-  const [protocol, setProtocol] = useState(row.selection?.protocol ?? "")
+  const selectedRoute = routes.find((route) => route.id === provider)
+  const selectedModel = selectedRoute?.models.find((entry) => entry.id === model)
+  const modelListed = selectedModel !== undefined
+  const missingCredentials = selectedRoute?.auth?.configured === false
+  const sameModel = row.selection?.provider === provider && row.selection.model === model
+  const hasProtocol = Boolean(sameModel && row.selection?.protocol || selectedModel?.protocol || selectedRoute?.protocol)
   return <form className="provider-editor" onSubmit={(event) => {
     event.preventDefault()
-    void onSave({ action: "role/set", role: name, selection: { provider, model, ...(protocol ? { protocol: protocol as NonNullable<Row["selection"]>["protocol"] } : {}), ...(effort ? { reasoningEffort: effort } : {}) } })
+    if (!modelListed || missingCredentials || !hasProtocol) return
+    void onSave({ action: "role/set", role: name, selection: { provider, model,
+      ...(sameModel && row.selection?.protocol ? { protocol: row.selection.protocol } : {}),
+      ...(effort ? { reasoningEffort: effort } : {}) } })
   }}><fieldset disabled={busy}><legend>{t("設定角色模型")}</legend>
     <label>{t("角色名稱")}<input required maxLength={128} disabled={Boolean(row.name)} value={name} onChange={(event) => setName(event.target.value)} /></label>
     {!row.name ? <p className="muted">{t("填入既有角色名稱；此設定不會建立新的角色或工具權限。")}</p> : null}
-    <label>{t("提供商 ID")}<select required value={provider} onChange={(event) => { setProvider(event.target.value); setModel(""); setProtocol("") }}><option value="">{t("未指定")}</option>{provider && !routes.some((route) => route.id === provider) ? <option value={provider}>{provider}</option> : null}{routes.map((route) => <option key={route.id} value={route.id}>{route.displayName}</option>)}</select></label>
-    <label>{t("模型 ID")}<input required maxLength={256} list={listId} value={model} onChange={(event) => setModel(event.target.value)} /></label>
-    <datalist id={listId}>{routes.find((route) => route.id === provider)?.models.map((model) => <option key={model.id} value={model.id} />)}</datalist>
-    <label>{t("推理強度")}<input maxLength={64} value={effort} placeholder={t("未指定")} onChange={(event) => setEffort(event.target.value)} /></label>
-    <label>{t("通訊協定")}<select value={protocol} onChange={(event) => setProtocol(event.target.value)}><option value="">{t("未指定")}</option>{["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"].map((value) => <option key={value}>{value}</option>)}</select></label>
-    <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
+    <label>{t("提供商 ID")}<select required value={provider} onChange={(event) => { setProvider(event.target.value); setModel("") }}><option value="">{t("未指定")}</option>{provider && !selectedRoute ? <option value={provider} disabled>{provider} ({t("已不在提供商目錄")})</option> : null}{routes.map((route) => <option key={route.id} value={route.id}>{route.displayName}{route.auth?.configured === false ? ` · ${t("憑證未設定")}` : ""}</option>)}</select></label>
+    <label>{t("模型 ID")}<select required disabled={!selectedRoute} value={model} onChange={(event) => setModel(event.target.value)}><option value="">{t("未指定")}</option>{model && selectedRoute && !modelListed ? <option value={model} disabled>{model} ({t("已不在模型目錄")})</option> : null}{selectedRoute?.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}</select></label>
+    <label>{t("推理強度")}<select value={effort} onChange={(event) => setEffort(event.target.value)}><option value="">{t("未指定")}</option>{["off", "low", "medium", "high", "xhigh", "max"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+    {missingCredentials ? <p className="muted">{t("此提供商尚未設定憑證，無法供子代理使用。")}</p> : null}
+    {modelListed && !hasProtocol && !missingCredentials ? <p className="muted">{t("請先在模型與提供商設定通訊協定。")}</p> : null}
+    <div className="provider-actions"><button type="submit" className="primary-button" disabled={!modelListed || missingCredentials || !hasProtocol}>{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
   </fieldset></form>
 }

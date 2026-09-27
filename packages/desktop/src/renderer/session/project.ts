@@ -22,7 +22,9 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     if (event.type === "turn/start") { groupScope = `turn:${event.seq ?? index}`; turn = { id: groupScope, complete: false } }
     if (event.type === "turn/end") { if (turn) turn.complete = true; turn = undefined; groupScope = undefined }
     if (event.type === "user/message" && event.internal) continue
-    if (event.type === "tool/dispatch" || event.type === "session/title") continue
+    if (event.type === "tool/dispatch" || event.type === "session/title"
+      || event.type === "sandbox/mode" || event.type === "agent/input/admitted"
+      || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") continue
     if (event.type === "tool/call") {
       toolIndex.set(event.callId, rows.length)
       appendRow({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })

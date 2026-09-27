@@ -14,6 +14,10 @@ export interface DirectoryRow extends EditableProvider {
 }
 export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: DirectoryRow; onSave(command: ProviderCommand): Promise<void>; bridge?: DesktopBridge; workspaceId?: string }) {
   const t = useText()
+  const connection = () => ({ baseURL: row.baseURL ?? "", protocol: row.protocol ?? "" })
+  const [connectionDraft, setConnectionDraft] = useState(connection)
+  const [connectionSaved, setConnectionSaved] = useState(connection)
+  const connectionChanged = connectionDraft.baseURL !== connectionSaved.baseURL || connectionDraft.protocol !== connectionSaved.protocol
   const [editor, setEditor] = useState<"provider" | "new-model" | EditableModel>()
   const [key, setKey] = useState("")
   const [keyOpen, setKeyOpen] = useState(false)
@@ -39,10 +43,21 @@ export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: Direct
       <button disabled={busy || row.auth.writable === false} onClick={() => { setKeyOpen(!keyOpen); setKey("") }}>{t("設定 API key")}</button>
       {row.configured ? <button disabled={busy} onClick={() => remove("provider", { action: "provider/remove", id: row.id })}>{t(confirm === "provider" ? "確認移除提供商" : "移除提供商")}</button> : null}
     </div>
-    <div className="provider-connection-summary">
+    {editor !== undefined ? null : row.configured ? <form className="provider-connection-inline" onSubmit={(event) => {
+      event.preventDefault()
+      if (!connectionChanged) return
+      const fields: Extract<ProviderCommand, { action: "provider/edit" }>["fields"] = {}
+      if (connectionDraft.baseURL !== connectionSaved.baseURL) fields.baseURL = connectionDraft.baseURL.trim() || null
+      if (connectionDraft.protocol !== connectionSaved.protocol) fields.protocol = connectionDraft.protocol ? connectionDraft.protocol as NonNullable<typeof fields.protocol> : null
+      void save({ action: "provider/edit", id: row.id, fields }).then(() => setConnectionSaved(connectionDraft)).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
+    }}>
+      <label><span>{t("API 網址")}</span><input type="url" value={connectionDraft.baseURL} disabled={busy} onChange={(event) => setConnectionDraft({ ...connectionDraft, baseURL: event.target.value })} /></label>
+      <label><span>{t("通訊協定")}</span><select value={connectionDraft.protocol} disabled={busy} onChange={(event) => setConnectionDraft({ ...connectionDraft, protocol: event.target.value })}><option value="">{t("未指定")}</option>{["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"].map((value) => <option key={value}>{value}</option>)}</select></label>
+      {connectionChanged ? <div className="provider-actions"><button type="submit" className="primary-button" disabled={busy}>{t("儲存連線")}</button><button type="button" disabled={busy} onClick={() => setConnectionDraft(connectionSaved)}>{t("取消")}</button></div> : null}
+    </form> : <div className="provider-connection-summary">
       <SettingsRow label={t("API 網址")} control={<code>{row.baseURL || t("未指定")}</code>} />
       <SettingsRow label={t("通訊協定")} control={<span>{row.protocol || t("未指定")}</span>} />
-    </div>
+    </div>}
     {keyOpen ? <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); run({ action: "key/set", id: row.id, value: key }, () => { setKey(""); setKeyOpen(false) }) }}>
       <label>API key<input type="password" autoComplete="off" required maxLength={16384} value={key} disabled={busy} onChange={(event) => setKey(event.target.value)} /></label>
       <div className="provider-actions"><button disabled={busy} type="submit">{t("儲存")}</button><button type="button" disabled={busy || !row.auth.configured} onClick={() => remove("key", { action: "key/clear", id: row.id })}>{t(confirm === "key" ? "確認清除 API key" : "清除 API key")}</button></div>
@@ -54,7 +69,8 @@ export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: Direct
       <button disabled={busy} onClick={() => setEditor("new-model")}><Plus size={15} aria-hidden="true" />{t("新增模型")}</button></header>
       {row.models.map((model) => <div className="provider-model-row" key={model.id}>
         <div className="provider-model-name"><strong>{model.name || model.id}</strong>{model.name && model.name !== model.id ? <small>{model.id}</small> : null}</div>
-        <span className="provider-model-context" title={t("上下文大小")}>{model.contextWindow ?? t("未指定")}</span>
+        {model.inputModalities?.includes("image") ? <span className="provider-model-vision" title={t("輸入類型")}>{t("圖片")}</span> : null}
+        <span className="provider-model-context" title={`${t("上下文大小")}：${model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US").format(model.contextWindow)}`}>{model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(model.contextWindow)}</span>
         <div className="provider-model-actions"><button title={t("編輯模型")} aria-label={t("編輯模型")} disabled={busy} onClick={() => setEditor(model)}><Pencil size={15} /></button><button title={t("設為預設模型")} aria-label={t("設為預設模型")} aria-pressed={row.defaultModel === model.id} disabled={busy} onClick={() => run({ action: "default/set", id: row.id, model: model.id })}><Star size={15} /></button><button title={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} aria-label={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} disabled={busy} onClick={() => remove(`model:${model.id}`, { action: "model/remove", id: row.id, model: model.id })}>{confirm === `model:${model.id}` ? t("確認移除模型") : <Trash2 size={15} />}</button></div>
       </div>)}
       {bridge && workspaceId ? <ProviderDiscovery bridge={bridge} workspaceId={workspaceId} id={row.id} onSave={save} /> : null}

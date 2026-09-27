@@ -3,6 +3,12 @@ import { act, cleanup, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { SlashCommands } from "../src/renderer/session/SlashCommands.tsx"
 afterEach(() => { cleanup(); vi.useRealTimers() })
+it("lists the built-in compact command when the gateway supports it", async () => {
+  const select = vi.fn()
+  render(<SlashCommands bridge={{ request: vi.fn().mockResolvedValue([]), onEvent: () => () => {} }} workspaceId="w" text="/com" showCompact onSelect={select} />)
+  fireEvent.click(await screen.findByRole("button", { name: /compact/ }))
+  expect(select).toHaveBeenCalledWith("compact")
+})
 it("refreshes enabled commands while open and removes a disabled command", async () => {
   vi.useFakeTimers()
   let enabled = true

@@ -6,6 +6,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { ProviderCard, type DirectoryRow } from "./ProviderCard.tsx"
 import { ProviderEditor } from "./ProviderEditor.tsx"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 
 /** Displays the backend directory; loading never probes a provider endpoint. */
 export function ProviderDirectory({ bridge, workspaceId, showHeading = true }: { bridge: DesktopBridge; workspaceId: string; showHeading?: boolean }) {
@@ -19,6 +20,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
   const [reload, setReload] = useState(0)
   const [adding, setAdding] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [capabilityNotice, setCapabilityNotice] = useState(false)
   const [selectedId, setSelectedId] = useState<string>()
   const selected = rows?.find((row) => row.id === selectedId) ?? rows?.find((row) => row.configured) ?? rows?.[0]
   const save = async (command: ProviderCommand) => {
@@ -26,6 +28,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
     await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
     useUiStore.setState((state) => ({ providerRevision: state.providerRevision + 1 }))
     setSaved(true)
+    if ("fields" in command && "inputModalities" in command.fields) setCapabilityNotice(true)
     setReload((value) => value + 1)
   }
   useEffect(() => {
@@ -40,8 +43,9 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
   }, [bridge, workspaceId, reload])
   return <section className="provider-directory" aria-label={t("模型與提供商")}>
     <header className="provider-directory-heading">{showHeading ? <h2>{t("模型與提供商")}</h2> : <span />}
-    <button onClick={() => setAdding(true)}><Plus size={16} aria-hidden="true" />{t("新增提供商")}</button></header>
+    <Button variant="secondary" size="small" icon={<Plus size={16} />} onClick={() => setAdding(true)}>{t("新增提供商")}</Button></header>
     {saved ? <p role="status">{t("設定已儲存")}</p> : null}
+    {capabilityNotice ? <p className="provider-capability-notice" role="status">{t("輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。")}</p> : null}
     {adding ? <ProviderEditor onSave={save} onClose={() => setAdding(false)} /> : null}
     {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
     {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
@@ -52,7 +56,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
             <Server size={16} aria-hidden="true" /><span>{row.displayName}<small>{row.id}</small></span>
           </button>)}
         </nav>
-        <div className="provider-detail">{selected ? <ProviderCard key={selected.id} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
+        <div className="provider-detail">{selected ? <ProviderCard key={`${selected.id}:${selected.baseURL ?? ""}:${selected.protocol ?? ""}`} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
       </div>}
   </section>
 }

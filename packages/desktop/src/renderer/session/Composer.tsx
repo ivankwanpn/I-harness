@@ -1,10 +1,13 @@
 import { useEffect, useState, useSyncExternalStore, useRef, type ReactNode } from "react"
-import { ArrowUp, Square, Paperclip, X } from "lucide-react"
+import { ArrowUp, Square, Paperclip, ImagePlus, X } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SlashCommands } from "./SlashCommands.tsx"
 import { readFileReferences, writeFileReferences, subscribeFileReferences } from "./file-reference-drafts.ts"
+import { addImageFiles, readImageDrafts, subscribeImageDrafts, writeImageDrafts } from "./image-drafts.ts"
+import type { ImageInput } from "@i-harness/sdk"
+import { ContextUsage } from "./ContextUsage.tsx"
 
 const DRAFT_LIMIT_BYTES = 32 * 1024
 const memoryDrafts = new Map<string, string>()
@@ -81,7 +84,11 @@ export interface ComposerProps {
   modelLabel?: string
   modelControl?: ReactNode
   fileReferencesEnabled?: boolean
-  onPrompt(text: string, context?: string): Promise<void>
+  imageAttachmentsEnabled?: boolean
+  contextUsageEnabled?: boolean
+  canCompact?: boolean
+  onCompact?(instructions?: string): Promise<void>
+  onPrompt(text: string, context?: string, images?: ImageInput[]): Promise<void>
   onCancel(): void
 }
 
@@ -99,12 +106,27 @@ function SessionComposer({
   modelLabel,
   modelControl,
   fileReferencesEnabled = false,
+  imageAttachmentsEnabled = false,
+  contextUsageEnabled = false,
+  canCompact = false,
+  onCompact,
   onPrompt,
   onCancel,
 }: ComposerProps) {
   const t = useText()
   const editorRef = useRef<HTMLTextAreaElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
   const references = useSyncExternalStore(subscribeFileReferences, () => readFileReferences(workspaceId, sessionId))
+  const images = useSyncExternalStore(subscribeImageDrafts, () => readImageDrafts(workspaceId, sessionId))
+  const [imageError, setImageError] = useState<string>()
+  const [readingImages, setReadingImages] = useState(false)
+  async function attachImages(files: File[]): Promise<void> {
+    if (!files.length) return
+    setReadingImages(true); setImageError(undefined)
+    try { await addImageFiles(workspaceId, sessionId, files) }
+    catch (reason) { setImageError(reason instanceof Error ? t(reason.message as Parameters<typeof t>[0]) : String(reason)) }
+    finally { setReadingImages(false) }
+  }
   const [picking, setPicking] = useState(false)
   const [pickError, setPickError] = useState<string>()
   const pickLock = useRef(false)
@@ -133,17 +155,32 @@ function SessionComposer({
 
   async function send(): Promise<void> {
     const text = value
-    if (!canSend || (text.trim() === "" && references.length === 0) || sends.get(key)?.sending) return
+    if (!canSend || readingImages || (text.trim() === "" && references.length === 0 && images.length === 0) || sends.get(key)?.sending) return
     publishSend(key, { sending: true })
     try {
-      if (references.length) await onPrompt(text.trim() ? text : t("請查看引用的工作區檔案。"), `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references, null, 2)}`)
-      else await onPrompt(text)
+      const compact = /^\/compact(?:\s+([\s\S]*))?$/.exec(text.trim())
+      if (compact) {
+        if (!onCompact || !canCompact) throw new Error(t("目前無法壓縮上下文"))
+        const instructions = compact[1]?.trim()
+        if (instructions && new TextEncoder().encode(instructions).length > 4096) throw new Error(t("內容超過 4096 bytes，請縮短。"))
+        await onCompact(instructions || undefined)
+        if (readDraft(workspaceId, sessionId) === text) { clearDraft(workspaceId, sessionId); setValue("") }
+        publishSend(key, idleSend)
+        return
+      }
+      const prompt = text.trim() ? text : references.length ? t("請查看引用的工作區檔案。") : t("請查看附加的圖片。")
+      const context = references.length ? `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references, null, 2)}` : undefined
+      if (images.length) await onPrompt(prompt, context, images.map(({ id: _id, ...image }) => image))
+      else if (context !== undefined) await onPrompt(prompt, context)
+      else await onPrompt(prompt)
       // Only a confirmed send clears the draft.
       if (readDraft(workspaceId, sessionId) === text) {
         clearDraft(workspaceId, sessionId)
         setValue("")
       }
       if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
+      const sentIds = images.map((image) => image.id).join(",")
+      if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
       publishSend(key, idleSend)
     } catch (reason) {
       // The draft stays; the failure is visible.
@@ -156,8 +193,10 @@ function SessionComposer({
       editor={
       <>
       {references.length ? <div className="composer-file-references">{references.map((path) => <span key={path} className="composer-file-chip" title={path}><span>{path}</span><button type="button" aria-label={t("移除檔案引用 {path}", { path })} onClick={() => writeFileReferences(workspaceId, sessionId, references.filter((value) => value !== path))}><X size={12} /></button></span>)}</div> : null}
+      {images.length ? <div className="composer-images">{images.map((image) => <span key={image.id} className="composer-image-chip"><img alt="" src={`data:${image.mediaType};base64,${image.dataBase64}`} /><span title={image.name}>{image.name}</span><button type="button" aria-label={t("移除圖片 {name}", { name: image.name ?? "" })} onClick={() => writeImageDrafts(workspaceId, sessionId, images.filter((value) => value.id !== image.id))}><X size={12} /></button></span>)}</div> : null}
       {pickError ? <p role="alert" className="error-text">{pickError}</p> : null}
-      {bridge ? <SlashCommands bridge={bridge} workspaceId={workspaceId} text={value} onSelect={(name) => { const next = `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); editorRef.current?.focus() }} /> : null}
+      {imageError ? <p role="alert" className="error-text">{imageError}</p> : null}
+      {bridge ? <SlashCommands bridge={bridge} workspaceId={workspaceId} text={value} showCompact={onCompact !== undefined} onSelect={(name) => { const next = `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); editorRef.current?.focus() }} /> : null}
       <textarea
         ref={editorRef}
         aria-label={t("提示")}
@@ -169,6 +208,11 @@ function SessionComposer({
           event.preventDefault()
           void send()
         }}
+        onPaste={(event) => {
+          if (!imageAttachmentsEnabled) return
+          const pasted = Array.from(event.clipboardData.files).filter((file) => file.type.startsWith("image/"))
+          if (pasted.length) { event.preventDefault(); void attachImages(pasted) }
+        }}
         onChange={(event) => {
           const next = boundedDraft(event.target.value)
           setValue(next)
@@ -179,11 +223,12 @@ function SessionComposer({
       </>
       }
       leadingActions={
-        <>{bridge && fileReferencesEnabled ? <button type="button" className="icon-button" aria-label={t("引用工作區檔案")} title={t("引用工作區檔案")} disabled={picking} onClick={() => { void pickFiles() }}><Paperclip size={17} /></button> : null}<span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span></>
+        <>{bridge && fileReferencesEnabled ? <button type="button" className="icon-button" aria-label={t("引用工作區檔案")} title={t("引用工作區檔案")} disabled={picking} onClick={() => { void pickFiles() }}><Paperclip size={17} /></button> : null}{imageAttachmentsEnabled ? <><input ref={imageInputRef} className="visually-hidden" aria-label={t("選擇圖片")} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.target.value = "" }} /><button type="button" className="icon-button" aria-label={t("附加圖片")} disabled={readingImages} onClick={() => imageInputRef.current?.click()}><ImagePlus size={17} /></button></> : null}<span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span></>
       }
       trailingActions={<>
+        {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
-        <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || (value.trim() === "" && references.length === 0)}>
+        <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || readingImages || (value.trim() === "" && references.length === 0 && images.length === 0)}>
           <ArrowUp size={18} />
         </button>
         <button type="button" className="icon-button" aria-label={t("停止")} title={t("停止")} disabled={!running} onClick={onCancel}>

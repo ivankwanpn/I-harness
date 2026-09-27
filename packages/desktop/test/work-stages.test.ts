@@ -12,8 +12,17 @@ it("collapses a recorded turn's work without hiding the user, final answer or ou
     { type: "step/end", truncated: true, seq: 6 }, { type: "turn/end", seq: 7 },
   ])
   const grouped = groupActivities(rows)
-  const expanded = workStages(grouped, new Map())
+  const expanded = workStages(grouped, new Map([["work:turn:0", true]]))
   expect(expanded.map((row) => row.kind)).toEqual(["message", "work-stage", "message", "tool", "message", "outcome"])
-  const collapsed = workStages(grouped, new Map([["work:turn:0", false]]))
+  const collapsed = workStages(grouped, new Map())
   expect(collapsed.map((row) => row.id)).toEqual(["message:1", "work:turn:0", "message:5", "step:6"])
+})
+
+it("keeps a failed historical turn closed but expands the currently running turn", () => {
+  const rows = groupActivities(projectTimeline([
+    { type: "turn/start", seq: 0 }, { type: "user/message", text: "task", seq: 1 },
+    { type: "tool/call", callId: "c1", name: "read", args: {}, seq: 2 },
+  ]))
+  expect(workStages(rows, new Map()).map((row) => row.kind)).toEqual(["message", "work-stage"])
+  expect(workStages(rows, new Map(), true).map((row) => row.kind)).toEqual(["message", "work-stage", "tool"])
 })

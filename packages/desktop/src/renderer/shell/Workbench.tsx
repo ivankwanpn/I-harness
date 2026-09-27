@@ -9,7 +9,6 @@ import { SettingsPane } from "../settings/SettingsPane.tsx"
 import { PluginMarketplace } from "../settings/PluginMarketplace.tsx"
 const TerminalPane = lazy(() => import("../terminal/TerminalPane.tsx").then((module) => ({ default: module.TerminalPane })))
 import { useAppearance, usePreferences } from "../design/preferences.ts"
-import { CompactionPanel } from "../session/CompactionPanel.tsx"
 import type { SessionOperation } from "../session/use-session-operation.ts"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
@@ -29,6 +28,7 @@ import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
+import type { ImageInput } from "@i-harness/sdk"
 import type { ManageSession } from "../session/SessionManager.tsx"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 
@@ -49,7 +49,7 @@ export interface ConversationView {
   historyError?: string
   historyNotice?: string
   pending: PendingInteraction[]
-  onPrompt(text: string, context?: string): Promise<void>
+  onPrompt(text: string, context?: string, images?: ImageInput[]): Promise<void>
   onCancel(): void
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
@@ -125,7 +125,6 @@ export function Workbench({
   const createLock = useRef(false)
   const workspaceScope = useRef({ id: selectedWorkspaceId })
   if (workspaceScope.current.id !== selectedWorkspaceId) workspaceScope.current = { id: selectedWorkspaceId }
-  const [compactOpen, setCompactOpen] = useState(false)
   const [workPaneTab, setWorkPaneTab] = useState("changes")
   const workPaneId = useId()
   const surface = useUiStore((state) => state.surface)
@@ -212,10 +211,6 @@ export function Workbench({
             </p>
           )}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
-        {conversation?.onCompact && capabilities["desktop-compaction"]?.includes("1") ? <div className="compaction-entry">
-          <button type="button" className="link-button" aria-expanded={compactOpen} onClick={() => setCompactOpen((open) => !open)}>{t("壓縮上下文")}</button>
-          {compactOpen ? <CompactionPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} operation={conversation.operation} disabled={!conversation.canCompact} onCompact={conversation.onCompact} onCancel={conversation.onCancel} /> : null}
-        </div> : null}
         {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
@@ -224,13 +219,17 @@ export function Workbench({
                 {conversation.historyNotice ? <p className="notice history-notice">{conversation.historyNotice}</p> : null}
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
-                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} navigation={review && capabilities["desktop-review"]?.includes("1") ? { workspacePath: workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.path ?? "", onOpenFile: (path) => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") } } : undefined} />}
+                  : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={review && capabilities["desktop-review"]?.includes("1") ? { workspacePath: workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.path ?? "", onOpenFile: (path) => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") } } : undefined} />}
                 <div className="conversation-dock">
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} pending={conversation.pending} onReply={conversation.onReply} />
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 <Composer
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
+                  imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
+                  contextUsageEnabled={capabilities["session-context"]?.includes("1")}
+                  canCompact={conversation.canCompact}
+                  onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}
                   workspaceId={selectedWorkspaceId}
                   sessionId={selectedSessionId}

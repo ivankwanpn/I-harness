@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 interface Command { name: string; description?: string; argumentHints?: string }
-export function SlashCommands({ bridge, workspaceId, text, onSelect }: { bridge: DesktopBridge; workspaceId: string; text: string; onSelect(name: string): void }) {
+export function SlashCommands({ bridge, workspaceId, text, showCompact = false, onSelect }: { bridge: DesktopBridge; workspaceId: string; text: string; showCompact?: boolean; onSelect(name: string): void }) {
   const t = useText()
   const prefix = /^\/([a-z0-9_-]*)$/.exec(text)?.[1]
   const active = prefix !== undefined
@@ -22,7 +22,7 @@ export function SlashCommands({ bridge, workspaceId, text, onSelect }: { bridge:
     return () => { mounted = false; clearTimeout(timer) }
   }, [bridge, workspaceId, active])
   if (!active) return null
-  const matches = commands.filter((command) => command.name.startsWith(prefix))
+  const matches = [...(showCompact ? [{ name: "compact", description: t("壓縮目前會話上下文") }] : []), ...commands.filter((command) => command.name !== "compact")].filter((command) => command.name.startsWith(prefix))
   return <div className="slash-commands" aria-label={t("可用命令")}>
     {error ? <p role="alert">{error}</p> : matches.length === 0 ? <p className="muted">{t("沒有符合的已啟用命令")}</p> : matches.slice(0, 20).map((command) => <button type="button" key={command.name} onClick={() => onSelect(command.name)}><strong>/{command.name}</strong><span>{command.description}</span><small>{command.argumentHints}</small></button>)}
   </div>

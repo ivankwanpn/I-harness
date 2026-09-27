@@ -51,6 +51,16 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("forwards images only when the gateway advertises prompt-image support", async () => {
+    const f = fixture()
+    const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }
+    const payload = { kind: "session/prompt" as const, workspaceId: ENTRY.id, sessionId: "s", prompt: "inspect", images: [image] }
+    await expect(dispatchDesktopRequest(payload, f.dependencies)).rejects.toThrow("not supported")
+    expect(f.request).not.toHaveBeenCalled()
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { "prompt-images": ["1"] } }, sandbox: { wired: true, mode: "read-only", source: "settings" } })
+    await dispatchDesktopRequest(payload, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("session/prompt", { sessionId: "s", prompt: "inspect", images: [image] }, 24 * 60 * 60 * 1000)
+  })
   it("accepts file references only from the native picker and checks them through review", async () => {
     const f = fixture()
     f.dependencies.pickFiles = vi.fn(async () => [`${ENTRY.path}/a.md`])

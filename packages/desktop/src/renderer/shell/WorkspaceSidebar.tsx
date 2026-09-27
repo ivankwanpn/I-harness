@@ -2,6 +2,7 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { ReactNode } from "react"
 import { FolderOpen, Plus, ChevronDown } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
 
 export interface WorkspaceSidebarProps {
   workspaces: WorkspaceEntry[]
@@ -20,12 +21,10 @@ export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onC
   return (
     <nav className="sidebar" aria-label={t("工作區")}>
       <div className="brand">I-harness <span>Desktop</span></div>
-      <button type="button" className="sidebar-new" disabled={!canCreate} onClick={onCreate}><Plus size={18} />{t("新增會話")}</button>
-      {onPlugins ? <button type="button" className="row-button" onClick={onPlugins}>{t("插件市場")}</button> : null}
+      <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!canCreate} onClick={onCreate}>{t("新增會話")}</Button>
+      {onPlugins ? <Button variant="ghost" className="sidebar-open" onClick={onPlugins}>{t("插件市場")}</Button> : null}
       <h2 className="sidebar-title">{t("工作區")}</h2>
-      <button type="button" className="primary-button sidebar-open" onClick={onOpen}>
-        <FolderOpen size={16} />{t("開啟工作區")}
-      </button>
+      <Button variant="ghost" className="sidebar-open" icon={<FolderOpen size={16} />} onClick={onOpen}>{t("開啟工作區")}</Button>
       {workspaces.length === 0 ? (
         <p className="notice">{t("尚未開啟工作區")}</p>
       ) : (
@@ -46,7 +45,7 @@ export function WorkspaceSidebar({ workspaces, selectedId, onSelect, onOpen, onC
         </ul>
       )}
       <div className="sidebar-footer">
-        <button type="button" className="row-button" onClick={onSettings}>{t("設定")}</button>
+        <Button variant="ghost" className="sidebar-open" onClick={onSettings}>{t("設定")}</Button>
       </div>
     </nav>
   )

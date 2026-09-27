@@ -17,6 +17,16 @@ function textarea(): HTMLTextAreaElement {
 }
 
 describe("Composer", () => {
+  it("runs /compact through the compaction operation without submitting a prompt", async () => {
+    const onPrompt = vi.fn(async () => {})
+    const onCompact = vi.fn(async () => {})
+    render(<Composer {...base} canSend canCompact onCompact={onCompact} onPrompt={onPrompt} />)
+    fireEvent.change(textarea(), { target: { value: "/compact 保留關鍵決策" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    await waitFor(() => expect(onCompact).toHaveBeenCalledWith("保留關鍵決策"))
+    expect(onPrompt).not.toHaveBeenCalled()
+    await waitFor(() => expect(textarea().value).toBe(""))
+  })
   it("retains a pending send across A to B to A navigation", async () => {
     let finish!: () => void
     const onPrompt = vi.fn(() => new Promise<void>((resolve) => { finish = resolve }))

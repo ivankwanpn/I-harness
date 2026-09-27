@@ -15,6 +15,7 @@ const english = {
   "篩選模型": "Filter models", "上一頁": "Previous page", "下一頁": "Next page",
   "探測模型列表": "Discover models", "選取後才加入設定；已有模型的自訂值會保留。": "Select models to add. Existing model overrides are preserved.", "沒有找到模型": "No models found", "加入所選模型": "Add selected models", "已加入 {count} 個模型": "Added {count} models",
   "設定已儲存": "Settings saved",
+  "儲存連線": "Save connection",
   "操作進行中": "An operation is in progress", "設定 API key": "Set API key", "確認移除提供商": "Confirm provider removal", "移除提供商": "Remove provider", "確認清除 API key": "Confirm API key removal", "清除 API key": "Clear API key", "設為預設模型": "Set as default model", "確認移除模型": "Confirm model removal", "移除模型": "Remove model", "新增模型": "Add model", "新增提供商": "Add provider",
   "顯示名稱": "Display name", "最大輸出 Token": "Maximum output tokens", "通訊協定": "Protocol", "API 網址": "API URL", "模型列表網址": "Models URL", "模型規格來源": "Model card family", "API key 環境變數": "API key environment variable",
   "請輸入正整數": "Enter a positive integer", "編輯模型": "Edit model", "編輯提供商": "Edit provider", "模型 ID": "Model ID", "提供商 ID": "Provider ID", "留空以清除覆寫；未更改的欄位不會寫入。": "Leave blank to clear an override; unchanged fields are not written.", "儲存中…": "Saving…", "儲存": "Save",
@@ -102,6 +103,9 @@ const english = {
   "重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。": "Restart Desktop to apply. Running Agents keep their current settings.",
   "記憶": "Memory", "插件": "Plugins",
   "子代理": "Subagents", "角色模型": "Role models", "角色名稱": "Role name", "設定角色模型": "Set role model", "恢復繼承": "Inherit parent", "繼承主會話模型": "Inherits the parent conversation model", "新增角色配置": "Add role mapping",
+  "已不在提供商目錄": "Missing from provider directory", "已不在模型目錄": "Missing from model directory",
+  "此提供商尚未設定憑證，無法供子代理使用。": "This provider has no configured credentials and cannot be used by a subagent.",
+  "請先在模型與提供商設定通訊協定。": "Set a protocol for this model or provider first.",
   "允許角色使用獨立模型": "Allow separate role models",
   "未指定模型的角色繼承主會話。角色模型配置在下一次建立子代理時讀取，不會更換已執行中的子代理。": "Unconfigured roles inherit the parent conversation. Role mappings are read when creating a subagent; running subagents keep their model.",
   "這個開關重啟 Desktop 後生效。關閉時，後端會拒絕使用已指定模型的角色。": "This switch takes effect after restarting Desktop. When disabled, the backend refuses roles with a declared model.",
@@ -127,6 +131,14 @@ const english = {
   "後端尚未執行的宣告：{fields}": "Declarations not enforced by the backend: {fields}", "先選擇會話，再帶入輸入框。": "Select a conversation before inserting into the composer.", "草稿已達上限，請先整理內容。": "The draft is full. Shorten it before inserting more content.",
   "引用工作區檔案": "Reference workspace files", "最多引用 8 個工作區檔案。": "You can reference at most 8 workspace files.", "請查看引用的工作區檔案。": "Please inspect the referenced workspace files.", "引用的工作區檔案（請按需讀取）：": "Referenced workspace files (read as needed):", "移除檔案引用 {path}": "Remove file reference {path}",
   "尚未選擇模型，請在輸入框右下方選擇模型。": "No model selected. Choose a model at the bottom right of the composer.",
+  "選擇圖片": "Choose images", "附加圖片": "Attach images", "移除圖片 {name}": "Remove image {name}", "請查看附加的圖片。": "Please inspect the attached images.",
+  "最多附加 10 張圖片。": "You can attach at most 10 images.", "圖片須為 PNG、JPEG、WebP 或 GIF，且每張不超過 10 MB。": "Images must be PNG, JPEG, WebP or GIF and no larger than 10 MB each.", "附加圖片合計不能超過 20 MB。": "Attached images cannot exceed 20 MB in total.", "附加圖片已達上限。": "The image attachment limit has been reached.",
+  "輸入類型": "Input types", "僅文字": "Text only", "文字與圖片": "Text and images",
+  "僅圖片（舊設定）": "Image only (legacy setting)",
+  "輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。": "Input types updated. Reapply the model in an existing conversation's model picker to use the updated capability.",
+  "壓縮目前會話上下文": "Compact this conversation's context", "目前無法壓縮上下文": "Cannot compact context right now",
+  "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…",
+  "訊息來源": "Message sources", "使用者訊息": "User messages", "助手訊息": "Assistant messages", "工具訊息": "Tool messages",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

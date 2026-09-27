@@ -133,18 +133,28 @@ export async function dispatchDesktopRequest(
       const limit = requireHistoryLimit(value.limit)
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.history(sessionId, { afterSeq, limit })
     }
+    case "session/context": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      if (!runtime.info.capabilities["session-context"]?.includes("1")) throw new Error("Session context is unavailable")
+      return await runtime.client.request("session/context", { sessionId })
+    }
     case "session/prompt": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       const prompt = requireNonEmpty(value.prompt, "prompt")
       if (value.context !== undefined && (typeof value.context !== "string" || value.context.length > 131072)) throw new Error("Invalid prompt context")
+      if (value.images !== undefined && (!Array.isArray(value.images) || value.images.length > 10)) throw new Error("Invalid prompt images")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
       if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
+      if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
       return await runtime.client.request("session/prompt", {
         sessionId,
         prompt,
         ...(value.context !== undefined ? { context: value.context } : {}),
+        ...(value.images?.length ? { images: value.images } : {}),
       }, 24 * 60 * 60 * 1000)
     }
     case "session/cancel":

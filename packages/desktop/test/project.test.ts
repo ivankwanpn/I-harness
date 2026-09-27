@@ -6,6 +6,15 @@ type WireEvent = HistoryRange["events"][number]
 type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 
 describe("projectTimeline", () => {
+  it("keeps queue and sandbox bookkeeping out of the readable conversation", () => {
+    const rows = projectTimeline([
+      { type: "sandbox/mode", mode: "workspace-write", seq: 0 },
+      { type: "agent/input/admitted", version: 1, inputId: "q1", text: "task", delivery: "queue", intent: "user", seq: 1 },
+      { type: "agent/input/promoted", version: 1, inputId: "q1", seq: 2 },
+      { type: "user/message", text: "task", seq: 3 },
+    ])
+    expect(rows.map((row) => row.id)).toEqual(["message:3"])
+  })
   it("replaces streamed text even when another activity arrives before the final message", () => {
     const rows = projectTimeline([
       { type: "assistant/chunk", text: "Hel", seq: 0 },
