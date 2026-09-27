@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 
@@ -32,6 +32,7 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
 export interface BedrockConfig {
   /** Required by the Converse API (`modelId` — an ARN or the model id). */
   model: string
+  providerId?: string
   region?: string
   /** AWS credential-profile name (the SDK's credential chain resolves it). */
   profile?: string
@@ -135,6 +136,17 @@ function toolResultContent(content: string | LLMContentPart[]): unknown[] {
   return [{ text: raw }]
 }
 
+// Converse's ToolResultBlock.status is accepted only by Nova and Claude 3/4.
+// Other Bedrock models still receive the error text, without an unsupported field.
+function supportsToolResultStatus(model: string): boolean {
+  // Converse accepts both foundation-model IDs and inference-profile IDs,
+  // including regional/global prefixes and ARN resource suffixes.
+  const resource = model.split("/").at(-1) ?? model
+  const id = resource.replace(/^[a-z][a-z0-9-]*\.(?=(?:anthropic|amazon)\.)/, "")
+  return /^amazon\.nova(?:[-.]|$)/.test(id)
+    || /^anthropic\.claude-(?:3(?:-|$)|(?:haiku|sonnet|opus)-[34](?:-|$))/.test(id)
+}
+
 export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRuntimeFace): ModelClient {
   // One runtime client per adapter (credential chain resolved once at
   // construction); a test-injected fake skips both the chain and the network.
@@ -158,26 +170,35 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       const effectiveReasoning = legacyThinking && outputLimit !== undefined
         ? { ...reasoning, thinking: { type: "enabled" as const, budget_tokens: Math.min(legacyThinking.budget_tokens, outputLimit - 1) } }
         : reasoning
+      const wireMessages: { role: "user" | "assistant"; content: unknown[] }[] = []
+      let toolResults: unknown[] | undefined
+      for (const m of messages) {
+        if (m.role === "tool") {
+          if (toolResults === undefined) {
+            toolResults = []
+            wireMessages.push({ role: "user", content: toolResults })
+          }
+          toolResults.push({ toolResult: { toolUseId: m.toolCallId, content: toolResultContent(m.content), ...(m.isError === true && supportsToolResultStatus(config.model) ? { status: "error" } : {}) } })
+          continue
+        }
+        toolResults = undefined
+        if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+          const continuation = m.providerContinuation?.kind === "bedrock" && canReplayContinuation(m.providerContinuation, config)
+            ? m.providerContinuation : undefined
+          const blocks = continuation
+            ? continuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
+          const tools = m.toolCalls.map((c) => ({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } }))
+          const content: unknown[] = replayBlockOrder<unknown>(continuation?.contentOrder, m.content, blocks, tools, (text) => ({ text }))
+            ?? [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : []), ...tools]
+          wireMessages.push({ role: "assistant", content })
+          continue
+        }
+        wireMessages.push({ role: m.role, content: toConverseContent(m.content) })
+      }
       const body: ConverseStreamCommandInput = {
         modelId: config.model,
         ...(request.systemPrompt.trim() !== "" ? { system: [{ text: request.systemPrompt }] } : {}),
-        messages: messages.map((m) => {
-          if (m.role === "tool") {
-            return {
-              role: "user",
-              content: [{ toolResult: { toolUseId: m.toolCallId, content: toolResultContent(m.content) } }],
-            }
-          }
-          if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-            const blocks = m.providerContinuation?.kind === "bedrock" ? m.providerContinuation.reasoningBlocks.map((block) => "reasoningText" in block ? { reasoningContent: { reasoningText: block.reasoningText } } : { reasoningContent: { redactedContent: Buffer.from(block.redactedContentBase64, "base64") } }) : []
-            const content: unknown[] = [...blocks, ...(m.content.trim() !== "" ? [{ text: m.content }] : [])]
-            for (const c of m.toolCalls) {
-              content.push({ toolUse: { toolUseId: c.id, name: c.name, input: c.args as Record<string, unknown> } })
-            }
-            return { role: "assistant", content }
-          }
-          return { role: m.role, content: toConverseContent(m.content) }
-        }) as ConverseStreamCommandInput["messages"],
+        messages: wireMessages as ConverseStreamCommandInput["messages"],
         ...(request.tools.length > 0
           ? { toolConfig: { tools: request.tools.map((t) => ({ toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.inputSchema } } })) } as ConverseStreamCommandInput["toolConfig"] }
           : {}),
@@ -216,6 +237,8 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       const pendingReasoning = new Map<number, { text: string; signature: string }>()
       const pendingRedacted = new Map<number, Uint8Array[]>()
       const reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[] = []
+      const blockOrder = new Map<number, ProviderBlockOrderEntry>()
+      let toolOrdinal = 0
       // M72 Ⅱ: the wire's own truncation literal (`messageStop.stopReason:
       // "max_tokens"`) — set in `handleMember` below, read once at the ending.
       // Absent stays absent: only `true` writes the field.
@@ -248,6 +271,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         }
         if (m.contentBlockStart !== undefined && m.contentBlockStart.start?.toolUse !== undefined) {
           const toolUse = m.contentBlockStart.start.toolUse
+          blockOrder.set(m.contentBlockStart.contentBlockIndex ?? 0, { kind: "tool", index: toolOrdinal++ })
           pendingToolUses.set(m.contentBlockStart.contentBlockIndex ?? 0, {
             id: toolUse.toolUseId ?? "",
             name: toolUse.name ?? "",
@@ -259,6 +283,10 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
           const delta = m.contentBlockDelta.delta
           if (delta !== undefined) {
             if (typeof delta.text === "string" && delta.text.length > 0) {
+              const index = m.contentBlockDelta.contentBlockIndex ?? 0
+              const entry = blockOrder.get(index)
+              if (entry?.kind === "text") entry.text += delta.text
+              else blockOrder.set(index, { kind: "text", text: delta.text })
               return [{ type: "text/chunk", text: delta.text }]
             }
             if (delta.toolUse !== undefined) {
@@ -282,7 +310,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
                 pending.signature += block.signature ?? ""
                 pendingReasoning.set(index, pending)
               }
-              if (typeof block.text === "string") return [{ type: "reasoning", text: block.text }]
+              if (typeof block.text === "string") return [{ type: "reasoning", blockId: String(index), text: block.text }]
             }
           }
           return []
@@ -293,11 +321,15 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
           if (redacted) {
             pendingRedacted.delete(index)
             reasoningBlocks.push({ redactedContentBase64: Buffer.concat(redacted.map((bytes) => Buffer.from(bytes))).toString("base64") })
+            blockOrder.set(index, { kind: "reasoning", index: reasoningBlocks.length - 1 })
           }
           const reasoning = pendingReasoning.get(index)
           if (reasoning) {
             pendingReasoning.delete(m.contentBlockStop.contentBlockIndex ?? 0)
-            if (reasoning.signature) reasoningBlocks.push({ reasoningText: reasoning })
+            if (reasoning.signature) {
+              reasoningBlocks.push({ reasoningText: reasoning })
+              blockOrder.set(index, { kind: "reasoning", index: reasoningBlocks.length - 1 })
+            }
           }
           const pending = pendingToolUses.get(m.contentBlockStop.contentBlockIndex ?? 0)
           pendingToolUses.delete(m.contentBlockStop.contentBlockIndex ?? 0)
@@ -366,7 +398,16 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningBlocks.length ? { providerContinuation: { kind: "bedrock", reasoningBlocks } as const } : {}) }
+      const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)
+      const rank = { reasoning: 0, text: 1, tool: 2 } as const
+      let previousRank = -1
+      const interleaved = contentOrder.some((entry) => {
+        const current = rank[entry.kind]
+        const outOfOrder = current < previousRank
+        previousRank = Math.max(previousRank, current)
+        return outOfOrder
+      })
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningBlocks.length || interleaved ? { providerContinuation: { kind: "bedrock", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningBlocks, ...(interleaved ? { contentOrder } : {}) } as const } : {}) }
     },
   }
 }

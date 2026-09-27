@@ -65,7 +65,7 @@ export interface LLMUsage {
  */
 export type LLMStreamEvent =
   | { type: "text/chunk"; text: string }
-  | { type: "reasoning"; text: string }
+  | { type: "reasoning"; text: string; blockId?: string }
   | { type: "tool_call"; call: { id?: string; name: string; args: unknown } }
   | { type: "usage"; usage: LLMUsage }
   | { type: "end"; truncated?: true; refused?: true; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
@@ -73,7 +73,50 @@ export type LLMStreamEvent =
 
 // LLMMessage is owned by core-session (it is the audit seam for the session
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
-export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation } from "@i-harness/core-session"
+export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
+
+/** Native replay metadata belongs to the route that produced it. Older logs
+ * without provenance remain readable; new records reject a different model or
+ * provider profile before protocol serialization. */
+export function canReplayContinuation(
+  source: { model?: string; providerId?: string },
+  target: { model: string; providerId?: string },
+): boolean {
+  return (source.model === undefined || source.model === target.model)
+    && (source.providerId === undefined || source.providerId === target.providerId)
+}
+
+/** Rebuild a provider's assistant block order without trusting stale metadata.
+ * The neutral message remains authoritative for text and tool arguments; an
+ * invalid or rewritten order returns undefined for the adapter's legacy path. */
+export function replayBlockOrder<T>(
+  order: readonly import("@i-harness/core-session").ProviderBlockOrderEntry[] | undefined,
+  content: string,
+  reasoning: readonly T[],
+  tools: readonly T[],
+  textBlock: (text: string) => T,
+): T[] | undefined {
+  if (!order) return undefined
+  const result: T[] = []
+  const seenReasoning = new Set<number>()
+  const seenTools = new Set<number>()
+  let visibleText = ""
+  for (const entry of order) {
+    if (entry.kind === "text") {
+      visibleText += entry.text
+      result.push(textBlock(entry.text))
+    } else if (entry.kind === "reasoning") {
+      if (!Number.isSafeInteger(entry.index) || entry.index < 0 || seenReasoning.has(entry.index) || reasoning[entry.index] === undefined) return undefined
+      seenReasoning.add(entry.index)
+      result.push(reasoning[entry.index]!)
+    } else {
+      if (!Number.isSafeInteger(entry.index) || entry.index < 0 || seenTools.has(entry.index) || tools[entry.index] === undefined) return undefined
+      seenTools.add(entry.index)
+      result.push(tools[entry.index]!)
+    }
+  }
+  return visibleText === content && seenReasoning.size === reasoning.length && seenTools.size === tools.length ? result : undefined
+}
 
 export type RetryableErrorCode =
   | "RATE_LIMIT"

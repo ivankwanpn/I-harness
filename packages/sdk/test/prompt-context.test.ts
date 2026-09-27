@@ -26,10 +26,10 @@ it("retains context after prompt command expansion and in durable input events",
   const server = createSdkServer(service)
   try {
     await server.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
-    const reply = await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "context", prompt: "/hello", context: 'Workspace references: ["a.md"]' })))
+    const reply = await server.handleLine(encodeFrame(makeRequest(2, "session/prompt", { sessionId: "context", prompt: "/hello", context: 'Workspace references: ["a.md"]', clientToken: "desktop-request-1" })))
     expect(isRpcSuccess(decodeFrame(reply!))).toBe(true)
     expect(service.liveSession("context")?.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ type: "agent/input/admitted", text: 'Expanded command\n\nWorkspace references: ["a.md"]' }),
+      expect.objectContaining({ type: "agent/input/admitted", text: 'Expanded command\n\nWorkspace references: ["a.md"]', clientToken: "desktop-request-1" }),
       expect.objectContaining({ type: "user/message", text: 'Expanded command\n\nWorkspace references: ["a.md"]' }),
     ]))
   } finally { await server.close(); await service.close() }

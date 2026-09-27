@@ -156,7 +156,7 @@ export interface SessionService {
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[] }): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string }): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
@@ -463,9 +463,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[] }): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string }): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
+    const clientToken = options?.clientToken
+    if (clientToken !== undefined && (typeof clientToken !== "string" || clientToken.length < 8 || clientToken.length > 128)) return Promise.reject(new Error("Invalid prompt client token"))
     const images = options?.images?.map((image) => ({ ...image }))
     if (images !== undefined) {
       try { if (!Array.isArray(images)) throw new Error("images must be an array"); validateImages(images, "session/prompt") }
@@ -544,7 +546,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
           const text = context ? `${prepared}\n\n${context}` : prepared
-          lane.submit({ tier: "send", text, signal: controller.signal, ...(images?.length ? { images } : {}) }, id)
+          lane.submit({ tier: "send", text, signal: controller.signal, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }, id)
           record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.

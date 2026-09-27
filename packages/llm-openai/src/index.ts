@@ -1,9 +1,10 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  providerId?: string
   options?: Record<string, unknown>
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
@@ -59,12 +60,13 @@ function splitToolContent(content: string | LLMContentPart[]): { text: string; i
 /**
  * M32 openai-family translation table (Responses | Chat | DeepSeek — ONE
  * table, zero generation special-casing): the effort is passed through
- * verbatim and "off" maps to "none". DeepSeek uses the SAME table — its
- * server maps medium→high itself. Unset effort → undefined (don't send).
+ * verbatim and "off" maps to "none". A selected reasoning level also opts in
+ * to the official Responses summary stream, which is distinct from private
+ * model thoughts. Unset effort → undefined (don't send).
  */
-export function translateReasoning(_model: string, effort: ReasoningEffort | undefined): { reasoning: { effort: string } } | undefined {
+export function translateReasoning(_model: string, effort: ReasoningEffort | undefined): { reasoning: { effort: string; summary?: "auto" } } | undefined {
   if (effort === undefined) return undefined
-  return { reasoning: { effort: effort === "off" ? "none" : effort } }
+  return { reasoning: effort === "off" ? { effort: "none" } : { effort, summary: "auto" } }
 }
 
 export function parseSSE(text: string): Record<string, unknown>[] {
@@ -104,7 +106,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             }
             // assistant
             if (m.toolCalls && m.toolCalls.length > 0) {
-              const reasoningItems = m.providerContinuation?.kind === "openai-responses" ? m.providerContinuation.reasoningItems : []
+              const reasoningItems = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation.reasoningItems : []
               const calls = m.toolCalls.map((c) => ({
                 type: "function_call",
                 call_id: c.id,
@@ -116,7 +118,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
               // function_call items (dropping it lost the narration).
               return [...reasoningItems, ...(m.content.trim() !== "" ? [{ role: "assistant", content: m.content }] : []), ...calls]
             }
-            const reasoningItems = m.providerContinuation?.kind === "openai-responses" ? m.providerContinuation.reasoningItems : []
+            const reasoningItems = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation.reasoningItems : []
             return reasoningItems.length ? [...reasoningItems, { role: "assistant", content: m.content }] : { role: "assistant", content: m.content }
           })
           .flat(),
@@ -243,8 +245,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           }
           return []
         }
-        if (t === "response.reasoning_summary_text.delta") {
-          return [{ type: "reasoning", text: (event as { text: string }).text }]
+        if (t === "response.reasoning_summary_text.delta" || t === "response.reasoning_text.delta") {
+          const itemId = typeof event.item_id === "string" ? event.item_id : undefined
+          const index = t === "response.reasoning_summary_text.delta" ? event.summary_index : event.content_index
+          const blockId = itemId === undefined ? undefined : `${itemId}:${t === "response.reasoning_text.delta" ? "text:" : ""}${typeof index === "number" ? index : 0}`
+          return [{ type: "reasoning", ...(blockId === undefined ? {} : { blockId }), text: typeof event.delta === "string" ? event.delta : "" }]
         }
         // M72 Ⅱ: the Responses stream's truncation ending. `response.incomplete`
         // also fires for `content_filter` — a REFUSAL, not a truncation — so the
@@ -344,7 +349,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // M77: the two bits are independent — each is written on its own, so a
       // response that was both truncated and refused carries both. Both absent
       // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size ? { providerContinuation: { kind: "openai-responses", reasoningItems: [...reasoningItems.values()] } as const } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()] } as const } : {}) }
     },
   }
 }

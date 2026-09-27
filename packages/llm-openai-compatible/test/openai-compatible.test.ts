@@ -37,6 +37,52 @@ describe("llm-openai-compatible protocol", () => {
     await it.return?.()
   })
 
+  it("keeps two parallel Chat tool calls and their separate tool-role results", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const iterator = client.stream({ messages: [
+      { role: "user", content: "read both" },
+      { role: "assistant", content: "", toolCalls: [
+        { id: "call_a", name: "read", args: { path: "a" } },
+        { id: "call_b", name: "read", args: { path: "b" } },
+      ] },
+      { role: "tool", toolCallId: "call_a", content: "first" },
+      { role: "tool", toolCallId: "call_b", content: "second" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages).toEqual([
+      { role: "user", content: "read both" },
+      { role: "assistant", content: "", tool_calls: [
+        { id: "call_a", type: "function", function: { name: "read", arguments: '{"path":"a"}' } },
+        { id: "call_b", type: "function", function: { name: "read", arguments: '{"path":"b"}' } },
+      ] },
+      { role: "tool", tool_call_id: "call_a", content: "first" },
+      { role: "tool", tool_call_id: "call_b", content: "second" },
+    ])
+    await iterator.return?.()
+  })
+
+  it("emits both call IDs from parallel Chat tool-call deltas", async () => {
+    const sse = [
+      { choices: [{ delta: { tool_calls: [
+        { index: 0, id: "chat-a", function: { name: "read", arguments: '{"path":"a"}' } },
+        { index: 1, id: "chat-b", function: { name: "read", arguments: '{"path":"b"}' } },
+      ] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n") + "\n\ndata: [DONE]\n\n"
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const calls: Extract<LLMStreamEvent, { type: "tool_call" }>["call"][] = []
+    for await (const event of createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "tool_call") calls.push(event.call)
+    }
+    expect(calls).toEqual([
+      { id: "chat-a", name: "read", args: { path: "a" } },
+      { id: "chat-b", name: "read", args: { path: "b" } },
+    ])
+  })
+
   it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
@@ -104,11 +150,23 @@ describe("llm-openai-compatible protocol", () => {
     const client = createOpenAICompatibleClient({ apiKey: "k", model: "deepseek-flash" })
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-compatible", reasoningContent: "think more" } })
-    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", reasoningContent: "think more" } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-compatible", model: "deepseek-flash", reasoningContent: "think more" } })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", model: "deepseek-flash", reasoningContent: "think more" } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.messages[0].reasoning_content).toBe("think more")
+    await iterator.return?.()
+  })
+
+  it("does not replay another model's reasoning_content", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createOpenAICompatibleClient({ apiKey: "k", model: "new-model" }).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-compatible", model: "old-model", reasoningContent: "old thought" } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].reasoning_content).toBeUndefined()
     await iterator.return?.()
   })
 
@@ -682,7 +740,7 @@ describe("M72 Ⅲ: reasoning_content becomes a reasoning event (openai-compatibl
     expect(events).toEqual([
       { type: "reasoning", text: "weighing" },
       { type: "text/chunk", text: "done" },
-      { type: "end", providerContinuation: { kind: "openai-compatible", reasoningContent: "weighing" } },
+      { type: "end", providerContinuation: { kind: "openai-compatible", model: "m", reasoningContent: "weighing" } },
     ])
   })
 })

@@ -1,9 +1,10 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  providerId?: string
   options?: Record<string, unknown>
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping.
@@ -93,7 +94,8 @@ function toFunctionResponse(content: string | LLMContentPart[]): unknown {
   if (content.trim() !== "") {
     try {
       const parsed = JSON.parse(content) as unknown
-      if (typeof parsed === "object" && parsed !== null) return parsed
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) return parsed
+      return { output: parsed }
     } catch {
       // not JSON — wrap below
     }
@@ -153,51 +155,78 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           for (const c of m.toolCalls) namesByCallId.set(c.id, c.name)
         }
       }
-      const body = {
-        contents: messages.map((m) => {
+      const contents: { role: "user" | "model"; parts: unknown[] }[] = []
+      let functionResponses: unknown[] | undefined
+      for (const m of messages) {
           if (m.role === "tool") {
-            return {
-              role: "user",
-              parts: [{
-                functionResponse: {
-                  name: namesByCallId.get(m.toolCallId) ?? "",
-                  response: toFunctionResponse(m.content),
-                },
-              }],
+            if (functionResponses === undefined) {
+              functionResponses = []
+              contents.push({ role: "user", parts: functionResponses })
             }
+            functionResponses.push({ functionResponse: {
+              id: m.toolCallId,
+              name: namesByCallId.get(m.toolCallId) ?? "",
+              response: toFunctionResponse(m.content),
+            } })
+            continue
           }
+          functionResponses = undefined
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-            const parts: unknown[] = m.content.trim() !== "" ? [{ text: m.content }] : []
+            const continuation = m.providerContinuation?.kind === "gemini" && canReplayContinuation(m.providerContinuation, config)
+              ? m.providerContinuation : undefined
+            const parts: unknown[] = [
+              ...(continuation?.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
+              ...(m.content.trim() !== "" ? [{ text: m.content, ...(continuation?.textSignature ? { thoughtSignature: continuation.textSignature } : {}) }] : []),
+              ...(continuation?.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
+            ]
             for (const [index, c] of m.toolCalls.entries()) {
-              const signature = m.providerContinuation?.kind === "gemini" ? m.providerContinuation.callSignatures[index] : undefined
-              parts.push({ functionCall: { name: c.name, args: c.args }, ...(signature ? { thoughtSignature: signature } : {}) })
+              const signature = continuation?.callSignatures[index]
+              parts.push({ functionCall: { id: c.id, name: c.name, args: c.args }, ...(signature ? { thoughtSignature: signature } : {}) })
             }
-            return { role: "model", parts }
+            contents.push({ role: "model", parts })
+            continue
           }
-          return { role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) }
-        }),
+          if (m.role === "assistant" && m.providerContinuation?.kind === "gemini" && canReplayContinuation(m.providerContinuation, config)) {
+            const continuation = m.providerContinuation
+            contents.push({ role: "model", parts: [
+              ...(continuation.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
+              { text: m.content, ...(continuation.textSignature ? { thoughtSignature: continuation.textSignature } : {}) },
+              ...(continuation.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
+            ] })
+            continue
+          }
+          contents.push({ role: m.role === "assistant" ? "model" : "user", parts: toGeminiParts(m.content) })
+      }
+      const { thinkingConfig: legacyThinkingConfig, generationConfig: rawGenerationConfig, ...configuredOptions } = config.options ?? {}
+      const configuredGeneration = typeof rawGenerationConfig === "object" && rawGenerationConfig !== null && !Array.isArray(rawGenerationConfig)
+        ? rawGenerationConfig as Record<string, unknown> : {}
+      const configuredThinking = typeof configuredGeneration.thinkingConfig === "object" && configuredGeneration.thinkingConfig !== null && !Array.isArray(configuredGeneration.thinkingConfig)
+        ? configuredGeneration.thinkingConfig as Record<string, unknown>
+        : typeof legacyThinkingConfig === "object" && legacyThinkingConfig !== null && !Array.isArray(legacyThinkingConfig)
+          ? legacyThinkingConfig as Record<string, unknown> : undefined
+      const requestedThinking = translateReasoning(config.model, request.reasoningEffort)?.thinkingConfig
+      const generationConfig = {
+        ...configuredGeneration,
+        ...(configuredThinking || requestedThinking ? { thinkingConfig: {
+          ...(configuredThinking ?? {}),
+          ...(requestedThinking ?? {}),
+          ...(requestedThinking ? { includeThoughts: request.reasoningEffort !== "off" } : {}),
+        } } : {}),
+        ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
+      }
+      const body = {
+        contents,
         ...(request.systemPrompt.trim() !== "" ? { systemInstruction: { parts: [{ text: request.systemPrompt }] } } : {}),
         ...(request.tools.length > 0
           ? { tools: [{ functionDeclarations: request.tools.map((t) => ({ name: t.name, description: t.description, parameters: t.inputSchema })) }] }
           : {}),
-        ...(config.options ?? {}),
-        // M32: request-level effort wins over config.options (explicit per-request intent).
-        ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
-        // M72 Ⅱ: the parent object does not exist today — Gemini takes the cap
-        // at generationConfig.maxOutputTokens, and the parent is optional on the
-        // wire, so when there is no cap we do not build it at all. A route that
-        // already configures generation parameters through
-        // `options.generationConfig` keeps them: only the cap key is ours.
-        ...(request.maxOutputTokens !== undefined
-          ? {
-              generationConfig: {
-                ...(typeof config.options?.generationConfig === "object" && config.options.generationConfig !== null
-                  ? (config.options.generationConfig as Record<string, unknown>)
-                  : {}),
-                maxOutputTokens: request.maxOutputTokens,
-              },
-            }
-          : {}),
+        ...configuredOptions,
+        // GenerateContentRequest carries thinkingConfig inside generationConfig.
+        // Preserve configured generation fields while request-level choices win.
+        ...(Object.keys(generationConfig).length ? { generationConfig } : {}),
+        // Both thinkingConfig and maxOutputTokens belong to generationConfig.
+        // The parent stays absent when neither the route nor the request needs
+        // generation settings.
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -244,6 +273,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       // (two parallel calls of the same function are distinct calls); args-only
       // chunks continue the LAST pending call.
       interface PendingCall {
+        id?: string
         name: string
         argsJson: string
         rawArgs: Record<string, unknown>[]
@@ -251,22 +281,26 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const pendingCalls: PendingCall[] = []
       const callSignatures: (string | null)[] = []
+      const thoughtParts: { text: string; thoughtSignature?: string }[] = []
+      let activeThought: { index: number; part: { text: string; thoughtSignature?: string } } | undefined
+      let textSignature: string | undefined
+      const emptyTextSignatures: string[] = []
       const accumulateArgs = (call: PendingCall, args: unknown): void => {
         if (typeof args === "object" && args !== null) {
           call.rawArgs.push(args as Record<string, unknown>)
           call.argsJson += JSON.stringify(args)
         }
       }
-      const handleFunctionCall = (fc: { name?: string; args?: unknown }, signature?: string): void => {
+      const handleFunctionCall = (fc: { id?: string; name?: string; args?: unknown }, signature?: string): void => {
         if (fc.name !== undefined) {
           // A name always opens a new call — never fold into an existing
           // same-name pending call (parallel calls would lose their args).
-          const call: PendingCall = { name: fc.name, argsJson: "", rawArgs: [], ...(signature ? { signature } : {}) }
+          const call: PendingCall = { name: fc.name, argsJson: "", rawArgs: [], ...(fc.id ? { id: fc.id } : {}), ...(signature ? { signature } : {}) }
           pendingCalls.push(call)
           if (fc.args !== undefined) accumulateArgs(call, fc.args)
         } else if (fc.args !== undefined) {
           const call = pendingCalls[pendingCalls.length - 1]
-          if (call !== undefined) { accumulateArgs(call, fc.args); if (signature) call.signature = signature }
+          if (call !== undefined) { accumulateArgs(call, fc.args); if (fc.id) call.id = fc.id; if (signature) call.signature = signature }
         }
       }
       const finalizeCalls = function* (): Generator<LLMStreamEvent, boolean, unknown> {
@@ -281,7 +315,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
             // merge the pieces (docs' spread accumulation).
             args = call.rawArgs.length > 0 ? Object.assign({}, ...call.rawArgs) : {}
           }
-          if (yield { type: "tool_call", call: { name: call.name, args } }) return true
+          if (yield { type: "tool_call", call: { ...(call.id ? { id: call.id } : {}), name: call.name, args } }) return true
         }
         pendingCalls.length = 0
         return false
@@ -298,7 +332,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const handleChunk = (event: Record<string, unknown>): LLMStreamEvent[] => {
         const events: LLMStreamEvent[] = []
-        const candidates = event.candidates as { content?: { parts?: { text?: string; thoughtSignature?: string; functionCall?: { name?: string; args?: unknown } }[] } }[] | undefined
+        const candidates = event.candidates as { content?: { parts?: { text?: string; thought?: boolean; thoughtSignature?: string; functionCall?: { id?: string; name?: string; args?: unknown } }[] } }[] | undefined
         const finishReason = (candidates?.[0] as { finishReason?: string } | undefined)?.finishReason
         if (finishReason === "MAX_TOKENS") truncated = true
         // M77 (fix wave): the candidate-side carrier, over the WHOLE set of
@@ -329,11 +363,28 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         const blockReason = (event.promptFeedback as { blockReason?: unknown } | undefined)?.blockReason
         if (typeof blockReason === "string") refused = true
         const parts = candidates?.[0]?.content?.parts ?? []
-        for (const part of parts) {
+        for (const [index, part] of parts.entries()) {
+          if (part.thought === true) {
+            if (activeThought?.index !== index) {
+              const entry: { text: string; thoughtSignature?: string } = { text: "" }
+              thoughtParts.push(entry)
+              activeThought = { index, part: entry }
+            }
+            activeThought.part.text += part.text ?? ""
+            if (part.thoughtSignature) activeThought.part.thoughtSignature = part.thoughtSignature
+          } else {
+            activeThought = undefined
+            if (part.functionCall === undefined && part.thoughtSignature) {
+              if (part.text === "") emptyTextSignatures.push(part.thoughtSignature)
+              else textSignature = part.thoughtSignature
+            }
+          }
           if (part.functionCall !== undefined) {
             handleFunctionCall(part.functionCall, part.thoughtSignature)
           } else if (typeof part.text === "string" && part.text.length > 0) {
-            events.push({ type: "text/chunk", text: part.text })
+            events.push(part.thought === true
+              ? { type: "reasoning", blockId: String(index), text: part.text }
+              : { type: "text/chunk", text: part.text })
           }
         }
         // M72 Ⅲ: `usageMetadata` rides the LAST chunk — mapped here instead of
@@ -376,7 +427,12 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(callSignatures.some(Boolean) ? { providerContinuation: { kind: "gemini", callSignatures } as const } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(callSignatures.some(Boolean) || thoughtParts.length || textSignature || emptyTextSignatures.length ? { providerContinuation: {
+        kind: "gemini", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), callSignatures,
+        ...(thoughtParts.length ? { thoughtParts } : {}),
+        ...(textSignature ? { textSignature } : {}),
+        ...(emptyTextSignatures.length ? { emptyTextSignatures } : {}),
+      } as const } : {}) }
     },
   }
 }

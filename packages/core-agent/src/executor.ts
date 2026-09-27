@@ -7,9 +7,9 @@ export type InputSubmit =
   /** `signal` (M41b): the per-turn abort — the pump forwards it to
    * agent.run so an in-flight turn can be cancelled at step boundaries /
    * stream yields (not just the queued gate). */
-  | { tier: "send"; text: string; signal?: AbortSignal; images?: ImageInput[] }
-  | { tier: "followup"; text: string; signal?: AbortSignal; images?: ImageInput[] }
-  | { tier: "steer"; text: string; signal?: AbortSignal; images?: ImageInput[] }
+  | { tier: "send"; text: string; signal?: AbortSignal; images?: ImageInput[]; clientToken?: string }
+  | { tier: "followup"; text: string; signal?: AbortSignal; images?: ImageInput[]; clientToken?: string }
+  | { tier: "steer"; text: string; signal?: AbortSignal; images?: ImageInput[]; clientToken?: string }
   | { tier: "inject"; text: string; description: string; scope: "turn" | "session" }
 
 export interface AgentRunSurface {
@@ -51,9 +51,9 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   switch (input.tier) {
     case "send":
     case "followup":
-      return { inputId: randomUUID(), text: input.text, delivery: "queue", intent: "user", ...(input.images?.length ? { images: input.images } : {}) }
+      return { inputId: randomUUID(), text: input.text, delivery: "queue", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
     case "steer":
-      return { inputId: randomUUID(), text: input.text, delivery: "steer", intent: "user", ...(input.images?.length ? { images: input.images } : {}) }
+      return { inputId: randomUUID(), text: input.text, delivery: "steer", intent: "user", ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) }
     case "inject":
       return {
         inputId: randomUUID(),

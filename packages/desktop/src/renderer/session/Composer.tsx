@@ -88,7 +88,7 @@ export interface ComposerProps {
   contextUsageEnabled?: boolean
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
-  onPrompt(text: string, context?: string, images?: ImageInput[]): Promise<void>
+  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
   onCancel(): void
 }
 
@@ -170,17 +170,18 @@ function SessionComposer({
       }
       const prompt = text.trim() ? text : references.length ? t("請查看引用的工作區檔案。") : t("請查看附加的圖片。")
       const context = references.length ? `${t("引用的工作區檔案（請按需讀取）：")}\n${JSON.stringify(references, null, 2)}` : undefined
-      if (images.length) await onPrompt(prompt, context, images.map(({ id: _id, ...image }) => image))
-      else if (context !== undefined) await onPrompt(prompt, context)
-      else await onPrompt(prompt)
-      // Only a confirmed send clears the draft.
-      if (readDraft(workspaceId, sessionId) === text) {
-        clearDraft(workspaceId, sessionId)
-        setValue("")
+      let admitted = false
+      const clearAccepted = () => {
+        if (admitted) return
+        admitted = true
+        if (readDraft(workspaceId, sessionId) === text) { clearDraft(workspaceId, sessionId); setValue("") }
+        if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
+        const sentIds = images.map((image) => image.id).join(",")
+        if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
       }
-      if (JSON.stringify(readFileReferences(workspaceId, sessionId)) === JSON.stringify(references)) writeFileReferences(workspaceId, sessionId, [])
-      const sentIds = images.map((image) => image.id).join(",")
-      if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
+      await onPrompt(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
+      // A successful request is accepted even if its notification was missed.
+      clearAccepted()
       publishSend(key, idleSend)
     } catch (reason) {
       // The draft stays; the failure is visible.

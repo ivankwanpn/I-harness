@@ -19,7 +19,11 @@ export function workStages(items: readonly TimelineItem[], open: ReadonlyMap<str
       const last = segment.filter((row) => row.kind !== "outcome").at(-1)
       if (last?.kind === "message" && last.role === "assistant" && !last.transient) finalId = last.id
     }
-    const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome" && !(row.kind === "message" && row.role === "user")
+    // Reasoning has its own disclosure. Keep each provider block visible so a
+    // reader can find it without first opening the broader tool-work stage.
+    const work = (row: TimelineItem) => row.id !== finalId && row.kind !== "outcome"
+      && !(row.kind === "message" && row.role === "user")
+      && !(row.kind === "other" && row.label === "reasoning")
     const count = segment.filter(work).length
     const id = `work:${turn.id}`
     const active = running && !turn.complete && end === items.length

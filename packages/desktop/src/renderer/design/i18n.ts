@@ -34,7 +34,7 @@ const english = {
   "執行權限已更新": "Execution permissions updated", "協作成員已更新": "Team member updated", "協作任務已更新": "Team task updated",
   "協作訊息已排入佇列": "Team message queued", "協作訊息已送達": "Team message delivered", "子代理已啟動": "Subagent started", "子代理執行已結束": "Subagent run ended", "收到子代理訊息": "Subagent message received",
   "輸入已排入佇列": "Input queued", "正在處理佇列輸入": "Processing queued input", "佇列輸入已取消": "Queued input cancelled",
-  "計畫模式已更新": "Plan mode updated", "正在執行命令": "Running command", "命令執行已結束": "Command run ended", "排程已更新": "Schedule updated", "執行記錄已更新": "Run record updated", "會話已回復": "Conversation rewound", "會話狀態已更新": "Conversation state updated",
+  "計畫模式已更新": "Plan mode updated", "正在執行命令": "Running command", "命令執行已結束": "Command run ended", "排程已更新": "Schedule updated", "執行記錄已更新": "Run record updated", "會話已回復": "Conversation rewound", "模型回應已中斷": "Model response interrupted", "會話狀態已更新": "Conversation state updated",
   "關閉成果面板": "Close review pane",
   "調整成果面板寬度": "Resize review pane",
   "會話內容": "Conversation content", "回到最新內容": "Jump to latest", "關閉側欄": "Close sidebar",

@@ -20,12 +20,10 @@ import { estimateContent } from "@i-harness/token-meter"
  * carries the outstanding call ids — an `assistant` message adds its
  * `toolCalls`, a `tool` message removes its `toolCallId` — and a `user` message
  * is a candidate only while that set is empty. A `tool` message is normally
- * adjacent to the `assistant(toolCalls)` it belongs to, but the M14
- * tool-result-images shape puts a synthetic `user` message BETWEEN a block's
- * results (core-session's `deriveMessages`, the `tool/result` arm's
- * `Array.isArray(images)` branch), so without this the cut would
- * leave a piece carrying `tool` with its call behind — the orphan the provider
- * rejects. The guard comes from the same fold the pieces come from, so it cannot
+ * adjacent to the `assistant(toolCalls)` it belongs to. Synthetic image user
+ * messages now follow all results and can be safe cut candidates; a future
+ * projection or legacy history may still interleave messages within a block.
+ * The guard comes from the same fold the pieces come from, so it cannot
  * drift, and it is what aligns the PIECE boundaries: a cut it admits falls
  * between folded blocks. That is a different requirement from the one
  * `deriveMessagesUpTo` states for its own `maxSeq` (`core-session/src/index.ts:

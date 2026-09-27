@@ -76,6 +76,8 @@ export class SdkRunError extends Error {
 export interface RunInput {
   /** Additional user context, appended after any host prompt-command expansion. */
   context?: string
+  /** Optional caller correlation token returned only on the admitted event. */
+  clientToken?: string
   images?: Extract<SessionEvent, { type: "user/message" }>["images"]
   /** Existing session id; absent → one-shot run with a server-generated id. */
   sessionId?: string
@@ -235,7 +237,7 @@ export class HarnessClient {
       }
     })
     try {
-      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}) })
+      await this.request("session/prompt", { sessionId, prompt: input.prompt, ...(input.context !== undefined ? { context: input.context } : {}), ...(input.images?.length ? { images: input.images } : {}), ...(input.clientToken ? { clientToken: input.clientToken } : {}) })
     } catch (error) {
       if (error instanceof RpcError) {
         throw new SdkRunError(

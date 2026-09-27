@@ -50,7 +50,7 @@ export interface ConversationView {
   historyError?: string
   historyNotice?: string
   pending: PendingInteraction[]
-  onPrompt(text: string, context?: string, images?: ImageInput[]): Promise<void>
+  onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
   onCancel(): void
   onCancelTask(taskId: string): void
   onCancelQueue(queueId: string): void
@@ -155,6 +155,7 @@ export function Workbench({
   const setReviewWidth = useUiStore((state) => state.setReviewWidth)
   const toggleReview = useUiStore((state) => state.toggleReview)
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
+  const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
   async function createSession(seedEmptyPrompt = false): Promise<void> {
@@ -212,7 +213,7 @@ export function Workbench({
       </WorkspaceSidebar>
       </div>
       <main className="center-pane">
-        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? t("尚未選擇會話") : sessionTitle}
+        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={() => drawer.narrow ? drawer.setOpen(!drawer.open) : updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>}>
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={reviewOpen} onClick={toggleReview}>
             <PanelRight size={18} />

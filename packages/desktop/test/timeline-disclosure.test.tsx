@@ -45,6 +45,25 @@ it("collapses intermediate work while keeping the final reply visible", () => {
   expect(screen.getByText("Task")).toBeTruthy()
 })
 
+it("shows persisted model reasoning inside expandable work details", () => {
+  const rows = projectTimeline([
+    { type: "turn/start", seq: 0 },
+    { type: "user/message", text: "Task", seq: 1 },
+    { type: "reasoning", text: "**Inspect** the directory first", seq: 2 },
+    { type: "tool/call", callId: "r", name: "read", args: {}, seq: 3 },
+    { type: "assistant/message", text: "Done", seq: 4 },
+    { type: "turn/end", seq: 5 },
+  ])
+  render(<Timeline rows={rows} />)
+  expect(screen.queryByRole("button", { name: "工具詳情 read" })).toBeNull()
+  const disclosure = screen.getByText("思考過程").closest("details")
+  expect(disclosure).toBeTruthy()
+  expect(disclosure?.textContent).toContain("Inspect the directory first")
+  fireEvent.click(screen.getByText("思考過程"))
+  expect(disclosure?.open).toBe(true)
+  expect(screen.getByText("Inspect").tagName).toBe("STRONG")
+})
+
 it("keeps inner and outer disclosure choices across growth and virtual unmount", () => {
   const a = { id: "a", kind: "tool" as const, name: "read", args: { path: "a.txt" }, output: "first contents" }
   const b = { ...a, id: "b", name: "list_dir", output: "directory listing" }

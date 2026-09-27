@@ -175,14 +175,20 @@ export async function executeToolCalls(
         // M51 B3: an abort fill whose output is already decided — append only,
         // so the head-of-line cursor advances in model order without running
         // finalize (tools/post-execute) or agent/post-tool.
-        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: slot.output })
+        append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: slot.output, isError: true })
         committed += 1
         continue
       }
       // finalize runs in the ordered commit lane (post-execute + wrap) — the
       // parallel path must not skip the staged post-execute seam.
       const finalized = await tools.finalize(slot.prepared, slot.output)
-      append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output })
+      // Filesystem, terminal and timeout tools return expected failures as a
+      // typed {error, code} value so the model can retry without aborting the
+      // turn. Preserve that disposition for protocols with an error flag.
+      const outcome = finalized.output as { error?: unknown; code?: unknown } | null
+      const isError = outcome !== null && typeof outcome === "object" && !Array.isArray(outcome)
+        && typeof outcome.error === "string" && typeof outcome.code === "string"
+      append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output, ...(isError ? { isError: true } : {}) })
       // M25: tool/end beside the tool/result commit (model-order lane).
       opts.telemetry?.emit({ type: "tool/end", ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
       // M10a ordering ruling: post-tool only for completed dispatches and only
@@ -486,6 +492,7 @@ export async function executeToolCalls(
         type: "tool/result",
         callId: call.callId,
         name: call.name,
+        isError: true,
         output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH },
       })
     }
@@ -581,6 +588,7 @@ export async function executeToolCalls(
         type: "tool/result",
         callId: call.callId,
         name: call.name,
+        isError: true,
         output: {
           error: "tool call cancelled: a sibling call in the same batch failed",
           code: TOOL_CANCELLED_BY_SIBLING,

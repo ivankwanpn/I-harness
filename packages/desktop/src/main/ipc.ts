@@ -145,6 +145,7 @@ export async function dispatchDesktopRequest(
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       const prompt = requireNonEmpty(value.prompt, "prompt")
       if (value.context !== undefined && (typeof value.context !== "string" || value.context.length > 131072)) throw new Error("Invalid prompt context")
+      if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid prompt client token")
       if (value.images !== undefined && (!Array.isArray(value.images) || value.images.length > 10)) throw new Error("Invalid prompt images")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
@@ -154,6 +155,7 @@ export async function dispatchDesktopRequest(
         sessionId,
         prompt,
         ...(value.context !== undefined ? { context: value.context } : {}),
+        ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
         ...(value.images?.length ? { images: value.images } : {}),
       }, 24 * 60 * 60 * 1000)
     }

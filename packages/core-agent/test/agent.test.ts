@@ -82,6 +82,88 @@ describe("agent loop", () => {
     const result = await agent.run("task")
     expect(result.reasoning).toEqual(["think about the file", "decide to edit"])
     expect(result.finalText).toBe("edited")
+    expect(deps.session.events.filter((event) => event.type === "reasoning")).toEqual([
+      expect.objectContaining({ type: "reasoning", text: "think about the filedecide to edit" }),
+    ])
+    expect(deriveMessages(deps.session)).toEqual([
+      expect.objectContaining({ role: "user", content: "task" }),
+      expect.objectContaining({ role: "assistant", content: "edited" }),
+    ])
+  })
+
+  it("records reasoning before tool activity without writing every streamed chunk", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    let calls = 0
+    deps.model = { async *stream() {
+      if (++calls === 1) {
+        yield { type: "reasoning", text: "inspect " }
+        yield { type: "reasoning", text: "the file" }
+        yield { type: "tool_call", call: { id: "read-1", name: "read", args: { path: "a.txt" } } }
+        yield { type: "end" }
+      } else {
+        yield { type: "text/chunk", text: "done" }
+        yield { type: "end" }
+      }
+    } }
+    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("inspect")
+    const reasoningEvents = deps.session.events.filter((event) => event.type === "reasoning")
+    expect(reasoningEvents).toEqual([expect.objectContaining({ type: "reasoning", text: "inspect the file" })])
+    expect(deps.session.events.findIndex((event) => event.type === "reasoning"))
+      .toBeLessThan(deps.session.events.findIndex((event) => event.type === "tool/call"))
+  })
+
+  it("keeps adjacent provider reasoning blocks separate within one model step", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = { async *stream() {
+      yield { type: "reasoning", blockId: "0", text: "first " }
+      yield { type: "reasoning", blockId: "0", text: "thought" }
+      yield { type: "reasoning", blockId: "1", text: "second thought" }
+      yield { type: "text/chunk", text: "answer" }
+      yield { type: "end" }
+    } }
+    await createAgent(ctx, { ...deps, systemPrompt: "p" }).run("task")
+    expect(deps.session.events.filter((event) => event.type === "reasoning")).toEqual([
+      expect.objectContaining({ type: "reasoning", blockId: "0", text: "first thought" }),
+      expect.objectContaining({ type: "reasoning", blockId: "1", text: "second thought" }),
+    ])
+  })
+
+  it("keeps the last reasoning prefix when the provider stream fails", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = { async *stream() {
+      yield { type: "reasoning", blockId: "0", text: "partial thought" }
+      throw new Error("stream disconnected")
+    } }
+    await expect(createAgent(ctx, { ...deps, systemPrompt: "p" }).run("task")).rejects.toThrow("stream disconnected")
+    expect(deps.session.events.filter((event) => event.type === "reasoning")).toEqual([
+      expect.objectContaining({ type: "reasoning", blockId: "0", text: "partial thought" }),
+    ])
+  })
+
+  it("does not replay a tool call from a provider stream that failed before tool execution", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    let streams = 0
+    let retryMessages: ReturnType<typeof deriveMessages> = []
+    deps.model = { async *stream(request) {
+      if (++streams === 1) {
+        yield { type: "tool_call", call: { id: "partial-1", name: "read", args: { path: "a.txt" } } }
+        yield { type: "error", error: new Error("provider disconnected") }
+      } else {
+        retryMessages = request.messages
+        yield { type: "text/chunk", text: "recovered" }
+        yield { type: "end" }
+      }
+    } }
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    await expect(agent.run("read a.txt")).rejects.toThrow("provider disconnected")
+    expect(deps.session.events).toEqual(expect.arrayContaining([expect.objectContaining({ type: "step/failed" })]))
+    await agent.followup("continue")
+    expect(retryMessages.some((message) => message.role === "assistant" && message.toolCalls?.some((call) => call.id === "partial-1"))).toBe(false)
+    expect(retryMessages.some((message) => message.role === "tool" && message.toolCallId === "partial-1")).toBe(false)
   })
 
   it("retains signed thinking on the assistant tool message for the next provider call", async () => {

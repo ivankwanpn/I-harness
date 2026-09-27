@@ -1,4 +1,4 @@
-import { describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M72 Ⅲ: the wire's usage, under the seam's names.
@@ -31,6 +31,7 @@ export interface OpenAICompatibleConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  providerId?: string
   options?: Record<string, unknown>
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
@@ -114,10 +115,10 @@ function toWireMessage(m: {
   content: string | LLMContentPart[]
   toolCalls?: { id: string; name: string; args: unknown }[]
   toolCallId?: string
-  providerContinuation?: { kind: string; reasoningContent?: string }
-}): Record<string, unknown> {
+  providerContinuation?: { kind: string; reasoningContent?: string; model?: string; providerId?: string }
+}, target: { model: string; providerId?: string }): Record<string, unknown> {
   if (m.role === "tool") return { role: "tool", tool_call_id: m.toolCallId!, content: toContent(m.content) }
-  const reasoning = m.role === "assistant" && m.providerContinuation?.kind === "openai-compatible" && m.providerContinuation.reasoningContent
+  const reasoning = m.role === "assistant" && m.providerContinuation?.kind === "openai-compatible" && canReplayContinuation(m.providerContinuation, target) && m.providerContinuation.reasoningContent
     ? { reasoning_content: m.providerContinuation.reasoningContent } : {}
   if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
     return {
@@ -150,7 +151,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         // empty system turn is pure overhead.
         messages: [
           ...(request.systemPrompt.trim() !== "" ? [{ role: "system", content: request.systemPrompt }] : []),
-          ...messages.map(toWireMessage),
+          ...messages.map((message) => toWireMessage(message, config)),
         ],
         tools: request.tools.map((t) => ({
           type: "function",
@@ -373,7 +374,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningContent ? { providerContinuation: { kind: "openai-compatible", reasoningContent } as const } : {}) }
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningContent ? { providerContinuation: { kind: "openai-compatible", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningContent } as const } : {}) }
     },
   }
 }

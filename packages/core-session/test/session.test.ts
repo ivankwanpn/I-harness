@@ -21,11 +21,41 @@ describe("session log", () => {
     append(s, { type: "assistant/chunk", text: "lo" })
     append(s, { type: "assistant/message", text: "done" })
     const msgs = deriveMessages(s)
-    // orphaned tool/call (no tool/result) folds into an assistant toolCalls message
-    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant", "assistant"])
+    // An orphan tool/call never enters a later provider request.
+    expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"])
     expect(msgs[0]).toEqual({ role: "user", content: "hi" })
-    expect(msgs[1]).toEqual({ role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: {} }] })
-    expect(msgs[2]).toEqual({ role: "assistant", content: "done" })
+    expect(msgs[1]).toEqual({ role: "assistant", content: "done" })
+  })
+
+  it("omits calls and synthetic results from an explicitly failed model step", () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "first" })
+    append(session, { type: "step/start" })
+    append(session, { type: "tool/call", callId: "partial", name: "read", args: {} })
+    append(session, { type: "step/failed" })
+    append(session, { type: "tool/result", callId: "partial", name: "read", output: { error: "unknown", code: "TOOL_OUTCOME_UNKNOWN" }, isError: true })
+    append(session, { type: "turn/start" })
+    append(session, { type: "user/message", text: "continue" })
+    expect(deriveMessages(session)).toEqual([
+      { role: "user", content: "first" },
+      { role: "user", content: "continue" },
+    ])
+  })
+
+  it("omits an entire signed tool step when only one of two calls has a result", () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "first" })
+    append(session, { type: "step/start" })
+    append(session, { type: "tool/call", callId: "a", name: "read", args: {} })
+    append(session, { type: "tool/call", callId: "b", name: "read", args: {} })
+    append(session, { type: "assistant/message", text: "checking", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "signed" }] })
+    append(session, { type: "tool/result", callId: "a", name: "read", output: { content: "a" } })
+    append(session, { type: "turn/start" })
+    append(session, { type: "user/message", text: "continue" })
+    expect(deriveMessages(session)).toEqual([
+      { role: "user", content: "first" },
+      { role: "user", content: "continue" },
+    ])
   })
 
   it("folds tool/call + tool/result into model messages by callId", () => {
@@ -41,6 +71,13 @@ describe("session log", () => {
       { role: "tool", toolCallId: "call_1", content: '{"content":"data"}' },
       { role: "assistant", content: "done" },
     ])
+  })
+
+  it("keeps a failed tool result's error disposition through the neutral projection", () => {
+    const session = createSession()
+    append(session, { type: "tool/call", callId: "bad", name: "read", args: {} })
+    append(session, { type: "tool/result", callId: "bad", name: "read", output: { error: "missing" }, isError: true })
+    expect(deriveMessages(session).at(-1)).toEqual({ role: "tool", toolCallId: "bad", content: '{"error":"missing"}', isError: true })
   })
 
   it("keeps assistant toolCalls in order across multiple calls", () => {
@@ -549,6 +586,23 @@ describe("M14 multimodal", () => {
     const synthetic = results.find((m) => m.role === "user" && Array.isArray(m.content) && m.content.length === 2)! as { content: { type: string; text?: string; image?: unknown }[] }
     expect(synthetic.content[0]).toEqual({ type: "text", text: "Attached image(s) from tool result:" })
     expect(synthetic.content[1]).toMatchObject({ type: "image", image: { mediaType: "image/png" } })
+  })
+
+  it("keeps parallel tool results contiguous before any synthetic image message", () => {
+    const session = createSession()
+    append(session, { type: "user/message", text: "read two files" })
+    append(session, { type: "step/start" })
+    append(session, { type: "tool/call", callId: "c1", name: "read_image", args: {} })
+    append(session, { type: "tool/call", callId: "c2", name: "read", args: {} })
+    append(session, { type: "assistant/message", text: "checking" })
+    append(session, { type: "tool/result", callId: "c1", name: "read_image", output: { images: [{ mediaType: "image/png", dataBase64: PNG }] } })
+    append(session, { type: "tool/result", callId: "c2", name: "read", output: { text: "second" } })
+    append(session, { type: "step/end" })
+    const messages = deriveMessages(session)
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "tool", "tool", "user"])
+    expect(messages[2]).toMatchObject({ toolCallId: "c1" })
+    expect(messages[3]).toMatchObject({ toolCallId: "c2" })
+    expect(messages[4]?.content).toMatchObject([{ type: "text" }, { type: "image" }])
   })
 
   it("deriveSearchText emits an image descriptor, never base64", () => {

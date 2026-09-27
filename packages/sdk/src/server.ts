@@ -774,12 +774,13 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         catch (error) { return hostMethodFailure(id, "session/context", error) }
       }
       case "session/prompt": {
-        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown } | undefined
+        const p = params as { sessionId?: unknown; prompt?: unknown; context?: unknown; images?: unknown; clientToken?: unknown } | undefined
         if (typeof p?.sessionId !== "string" || p.sessionId === "") {
           return makeFailure(id, INVALID_PARAMS, "session/prompt requires a non-empty sessionId")
         }
         const prompt = typeof p.prompt === "string" ? p.prompt : ""
         if (p.context !== undefined && (typeof p.context !== "string" || p.context.length > 131072)) return makeFailure(id, INVALID_PARAMS, "Invalid prompt context")
+        if (p.clientToken !== undefined && (typeof p.clientToken !== "string" || p.clientToken.length < 8 || p.clientToken.length > 128)) return makeFailure(id, INVALID_PARAMS, "Invalid prompt client token")
         let images: ImageInput[] | undefined
         if (p.images !== undefined) {
           if (!Array.isArray(p.images) || p.images.length > 10) return makeFailure(id, INVALID_PARAMS, "Prompt accepts at most 10 images")
@@ -813,7 +814,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         submissions.add(submission)
         inflight.set(sessionId, submissions)
         try {
-          if (typeof p.context === "string" || images?.length) await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}) })
+          if (typeof p.context === "string" || images?.length || typeof p.clientToken === "string") await service.submit(sessionId, prompt, controller.signal, { ...(typeof p.context === "string" ? { context: p.context } : {}), ...(images?.length ? { images } : {}), ...(typeof p.clientToken === "string" ? { clientToken: p.clientToken } : {}) })
           else await service.submit(sessionId, prompt, controller.signal)
           statusNotify(sessionId, "idle")
           return makeSuccess(id, { sessionId, ok: true })

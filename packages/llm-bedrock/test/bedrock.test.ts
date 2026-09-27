@@ -60,15 +60,18 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     expect(input.additionalModelRequestFields).toEqual({ reasoning_effort: "high" })
   })
 
-  it("translates tool round-trip messages (assistant toolCalls → toolUse; tool result → toolResult)", async () => {
+  it("groups parallel Converse tool results after their matching tool uses", async () => {
     const { fake } = fakeRuntime([])
     const client = createBedrockClient({ model: "m" }, fake)
     const request: LLMRequest = {
       messages: [
         { role: "user", content: "read a.txt" },
-        { role: "assistant", content: "lets use the tool", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "assistant", content: "lets use the tool", toolCalls: [
+          { id: "call_1", name: "read", args: { path: "a.txt" } },
+          { id: "call_2", name: "read", args: { path: "b.txt" } },
+        ] },
         { role: "tool", toolCallId: "call_1", content: '{"content":"ok"}' },
-        { role: "tool", toolCallId: "call_1", content: "plain text" },
+        { role: "tool", toolCallId: "call_2", content: "plain text" },
       ],
       tools: [],
       systemPrompt: "sys",
@@ -84,11 +87,40 @@ describe("llm-bedrock protocol (Converse wire)", () => {
         content: [
           { text: "lets use the tool" },
           { toolUse: { toolUseId: "call_1", name: "read", input: { path: "a.txt" } } },
+          { toolUse: { toolUseId: "call_2", name: "read", input: { path: "b.txt" } } },
         ],
       },
-      { role: "user", content: [{ toolResult: { toolUseId: "call_1", content: [{ json: { content: "ok" } }] } }] },
-      { role: "user", content: [{ toolResult: { toolUseId: "call_1", content: [{ text: "plain text" }] } }] },
+      { role: "user", content: [
+        { toolResult: { toolUseId: "call_1", content: [{ json: { content: "ok" } }] } },
+        { toolResult: { toolUseId: "call_2", content: [{ text: "plain text" }] } },
+      ] },
     ])
+  })
+
+  it("marks a failed tool result for a Converse model that supports status", async () => {
+    const { fake } = fakeRuntime([])
+    const iterator = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "bad", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "bad", content: '{"error":"missing"}', isError: true },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const { input } = await lastCommandSent(fake)
+    expect((input.messages as { content: unknown[] }[])[1]!.content).toEqual([
+      { toolResult: { toolUseId: "bad", content: [{ json: { error: "missing" } }], status: "error" } },
+    ])
+    await iterator.return?.()
+  })
+
+  it("marks failed results on a regional Claude inference profile", async () => {
+    const { fake } = fakeRuntime([])
+    const iterator = createBedrockClient({ model: "us.anthropic.claude-3-5-sonnet-20240620-v1:0" }, fake).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "bad", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "bad", content: '{"error":"missing"}', isError: true },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const { input } = await lastCommandSent(fake)
+    expect((input.messages as { content: { toolResult?: { status?: string } }[] }[])[1]!.content[0]!.toolResult?.status).toBe("error")
+    await iterator.return?.()
   })
 
   it("maps the stream to events in order (text delta, toolUse accumulation, tool_call, end)", async () => {
@@ -113,6 +145,25 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     expect(args).toEqual({ path: "a.txt" })
   })
 
+  it("preserves IDs for two parallel Converse toolUse blocks", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockStart: { contentBlockIndex: 0, start: { toolUse: { toolUseId: "bedrock-a", name: "read" } } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"path":"a"}' } } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: "bedrock-b", name: "read" } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: '{"path":"b"}' } } } },
+      { contentBlockStop: { contentBlockIndex: 1 } },
+    ])
+    const calls: Extract<LLMStreamEvent, { type: "tool_call" }>["call"][] = []
+    for await (const event of createBedrockClient({ model: "m" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "tool_call") calls.push(event.call)
+    }
+    expect(calls).toEqual([
+      { id: "bedrock-a", name: "read", args: { path: "a" } },
+      { id: "bedrock-b", name: "read", args: { path: "b" } },
+    ])
+  })
+
   it("carries reasoning deltas as reasoning events", async () => {
     const { fake } = fakeRuntime([
       { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "pondering" } } } },
@@ -127,6 +178,23 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     expect(events).toEqual(["r:pondering", "end"])
   })
 
+  it("preserves distinct Converse reasoning block indices", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "first" } } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { reasoningContent: { text: "second" } } } },
+      { contentBlockStop: { contentBlockIndex: 1 } },
+    ])
+    const events: LLMStreamEvent[] = []
+    for await (const event of createBedrockClient({ model: "m" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "reasoning") events.push(event)
+    }
+    expect(events).toEqual([
+      { type: "reasoning", blockId: "0", text: "first" },
+      { type: "reasoning", blockId: "1", text: "second" },
+    ])
+  })
+
   it("round-trips signed Converse reasoning with a tool result", async () => {
     const { fake } = fakeRuntime([
       { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "plan" } } } },
@@ -139,11 +207,58 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake)
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } })
-    const replay = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "tool-7", name: "read", args: {} }], providerContinuation: { kind: "bedrock", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } })
+    const replay = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "tool-7", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ reasoningText: { text: "plan", signature: "signed" } }] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await replay.next()
     const { input } = await lastCommandSent(fake)
     expect((input.messages as { content: unknown[] }[])[0]!.content[0]).toEqual({ reasoningContent: { reasoningText: { text: "plan", signature: "signed" } } })
+    await replay.return?.()
+  })
+
+  it("does not replay a previous Bedrock model's reasoning signature", async () => {
+    const { fake } = fakeRuntime([])
+    const iterator = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-3-7", reasoningBlocks: [{ reasoningText: { text: "old", signature: "old-sig" } }] } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const { input } = await lastCommandSent(fake)
+    expect((input.messages as { content: unknown[] }[])[0]!.content).toEqual([{ toolUse: { toolUseId: "c1", name: "read", input: {} } }])
+    await iterator.return?.()
+  })
+
+  it("replays interleaved Converse reasoning and tool uses in original order", async () => {
+    const { fake } = fakeRuntime([
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { text: "first" } } } },
+      { contentBlockDelta: { contentBlockIndex: 0, delta: { reasoningContent: { signature: "sig-1" } } } },
+      { contentBlockStop: { contentBlockIndex: 0 } },
+      { contentBlockStart: { contentBlockIndex: 1, start: { toolUse: { toolUseId: "t1", name: "read" } } } },
+      { contentBlockDelta: { contentBlockIndex: 1, delta: { toolUse: { input: "{}" } } } },
+      { contentBlockStop: { contentBlockIndex: 1 } },
+      { contentBlockDelta: { contentBlockIndex: 2, delta: { reasoningContent: { text: "second" } } } },
+      { contentBlockDelta: { contentBlockIndex: 2, delta: { reasoningContent: { signature: "sig-2" } } } },
+      { contentBlockStop: { contentBlockIndex: 2 } },
+      { contentBlockStart: { contentBlockIndex: 3, start: { toolUse: { toolUseId: "t2", name: "read" } } } },
+      { contentBlockDelta: { contentBlockIndex: 3, delta: { toolUse: { input: "{}" } } } },
+      { contentBlockStop: { contentBlockIndex: 3 } },
+    ])
+    const client = createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake)
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    const end = events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    const calls = events.filter((event): event is Extract<LLMStreamEvent, { type: "tool_call" }> => event.type === "tool_call").map((event) => ({ ...event.call, id: event.call.id! }))
+    const replay = client.stream({ messages: [
+      { role: "assistant", content: "", toolCalls: calls, providerContinuation: end.providerContinuation },
+      { role: "tool", toolCallId: "t1", content: "one" },
+      { role: "tool", toolCallId: "t2", content: "two" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await replay.next()
+    const { input } = await lastCommandSent(fake)
+    expect((input.messages as { content: unknown[] }[])[0]!.content).toEqual([
+      { reasoningContent: { reasoningText: { text: "first", signature: "sig-1" } } },
+      { toolUse: { toolUseId: "t1", name: "read", input: {} } },
+      { reasoningContent: { reasoningText: { text: "second", signature: "sig-2" } } },
+      { toolUse: { toolUseId: "t2", name: "read", input: {} } },
+    ])
     await replay.return?.()
   })
 
@@ -155,7 +270,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     ])
     const events: LLMStreamEvent[] = []
     for await (const event of createBedrockClient({ model: "anthropic.claude-sonnet-4-5" }, fake).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", reasoningBlocks: [{ redactedContentBase64: "AQIDBA==" }] } })
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "bedrock", model: "anthropic.claude-sonnet-4-5", reasoningBlocks: [{ redactedContentBase64: "AQIDBA==" }] } })
   })
 
   it("yields an error event and stops on malformed tool args", async () => {

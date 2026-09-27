@@ -82,6 +82,72 @@ describe("llm-anthropic protocol", () => {
     await it.return?.()
   })
 
+  it("sends parallel tool results together in the immediately following user message", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const request: LLMRequest = {
+      messages: [
+        { role: "user", content: "read both" },
+        { role: "assistant", content: "", toolCalls: [
+          { id: "call_a", name: "read", args: { path: "a.txt" } },
+          { id: "call_b", name: "read", args: { path: "b.txt" } },
+        ] },
+        { role: "tool", toolCallId: "call_a", content: "first" },
+        { role: "tool", toolCallId: "call_b", content: "second" },
+      ],
+      tools: [], systemPrompt: "",
+    }
+    const iterator = client.stream(request)[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages).toEqual([
+      { role: "user", content: "read both" },
+      { role: "assistant", content: [
+        { type: "tool_use", id: "call_a", name: "read", input: { path: "a.txt" } },
+        { type: "tool_use", id: "call_b", name: "read", input: { path: "b.txt" } },
+      ] },
+      { role: "user", content: [
+        { type: "tool_result", tool_use_id: "call_a", content: "first" },
+        { type: "tool_result", tool_use_id: "call_b", content: "second" },
+      ] },
+    ])
+    await iterator.return?.()
+  })
+
+  it("marks a failed tool result with the Messages is_error flag", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const request: LLMRequest = { messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "bad", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "bad", content: '{"error":"missing"}', isError: true },
+    ], tools: [], systemPrompt: "" }
+    const iterator = createAnthropicClient({ apiKey: "k", model: "m" }).stream(request)[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[1].content).toEqual([{ type: "tool_result", tool_use_id: "bad", content: '{"error":"missing"}', is_error: true }])
+    await iterator.return?.()
+  })
+
+  it("preserves both provider IDs from a parallel tool_use response", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "provider-a", name: "read", input: { path: "a" } } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "provider-b", name: "read", input: { path: "b" } } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_stop" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const calls: Extract<LLMStreamEvent, { type: "tool_call" }>["call"][] = []
+    for await (const event of createAnthropicClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "tool_call") calls.push(event.call)
+    }
+    expect(calls).toEqual([
+      { id: "provider-a", name: "read", args: { path: "a" } },
+      { id: "provider-b", name: "read", args: { path: "b" } },
+    ])
+  })
+
   it("M51/B2: emits a text block before tool_use when the assistant message carries both", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)
@@ -114,13 +180,38 @@ describe("llm-anthropic protocol", () => {
     vi.stubGlobal("fetch", fetchMock)
     const client = createAnthropicClient({ apiKey: "k", model: "m" })
     const request: LLMRequest = { messages: [
-      { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "signed" }], toolCalls: [{ id: "c1", name: "read", args: {} }] },
+      { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "signed" }], providerContinuation: { kind: "anthropic", model: "m" }, toolCalls: [{ id: "c1", name: "read", args: {} }] },
       { role: "tool", toolCallId: "c1", content: "done" },
     ], tools: [], systemPrompt: "" }
     const iterator = client.stream(request)[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
     expect(body.messages[0].content).toEqual([{ type: "thinking", thinking: "plan", signature: "signed" }, { type: "tool_use", id: "c1", name: "read", input: {} }])
+    await iterator.return?.()
+  })
+
+  it("does not replay a previous model's signed thinking after a model switch", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createAnthropicClient({ apiKey: "k", model: "new-model" }).stream({ messages: [
+      { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "old-sig" }], providerContinuation: { kind: "anthropic", model: "old-model" }, toolCalls: [{ id: "c1", name: "read", args: {} }] },
+      { role: "tool", toolCallId: "c1", content: "done" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([{ type: "tool_use", id: "c1", name: "read", input: {} }])
+    await iterator.return?.()
+  })
+
+  it("does not replay signed thinking from another profile using the same model ID", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createAnthropicClient({ apiKey: "k", model: "m", providerId: "new-profile" }).stream({ messages: [
+      { role: "assistant", content: "", thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "old-sig" }], providerContinuation: { kind: "anthropic", model: "m", providerId: "old-profile" }, toolCalls: [{ id: "c1", name: "read", args: {} }] },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([{ type: "tool_use", id: "c1", name: "read", input: {} }])
     await iterator.return?.()
   })
 
@@ -161,6 +252,27 @@ describe("llm-anthropic protocol", () => {
     expect(events).toEqual(["r:ponder", "r:ing", "end"])
   })
 
+  it("retains separate reasoning block identities from consecutive thinking blocks", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "first" } },
+      { type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: " block" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "thinking", thinking: "second" } },
+      { type: "content_block_stop", index: 1 },
+      { type: "message_stop" },
+    ].map((item) => `data: ${JSON.stringify(item)}`).join("\n\n")
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const reasoning: LLMStreamEvent[] = []
+    for await (const event of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "reasoning") reasoning.push(event)
+    }
+    expect(reasoning).toEqual([
+      { type: "reasoning", blockId: "0", text: "first" },
+      { type: "reasoning", blockId: "0", text: " block" },
+      { type: "reasoning", blockId: "1", text: "second" },
+    ])
+  })
+
   it("returns complete signed thinking blocks for a tool continuation", async () => {
     const sse = [
       { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "first" } },
@@ -176,10 +288,47 @@ describe("llm-anthropic protocol", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
     const events: LLMStreamEvent[] = []
     for await (const ev of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(ev)
-    expect(events.at(-1)).toEqual({ type: "end", thinkingBlocks: [
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "anthropic", model: "m" }, thinkingBlocks: [
       { type: "thinking", thinking: "first second", signature: "signed" },
       { type: "redacted_thinking", data: "opaque" },
     ] })
+  })
+
+  it("replays interleaved signed thinking and tool uses in their original order", async () => {
+    const sse = [
+      { type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "first", signature: "sig-1" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "t1", name: "read", input: {} } },
+      { type: "content_block_stop", index: 1 },
+      { type: "content_block_start", index: 2, content_block: { type: "thinking", thinking: "second", signature: "sig-2" } },
+      { type: "content_block_stop", index: 2 },
+      { type: "content_block_start", index: 3, content_block: { type: "tool_use", id: "t2", name: "read", input: {} } },
+      { type: "content_block_stop", index: 3 },
+      { type: "message_stop" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(sse, { status: 200 }))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createAnthropicClient({ apiKey: "k", model: "m" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    const end = events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>
+    const calls = events.filter((event): event is Extract<LLMStreamEvent, { type: "tool_call" }> => event.type === "tool_call").map((event) => ({ ...event.call, id: event.call.id! }))
+    const iterator = client.stream({ messages: [
+      { role: "assistant", content: "", toolCalls: calls, thinkingBlocks: end.thinkingBlocks, providerContinuation: end.providerContinuation },
+      { role: "tool", toolCallId: "t1", content: "one" },
+      { role: "tool", toolCallId: "t2", content: "two" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.messages[0].content).toEqual([
+      { type: "thinking", thinking: "first", signature: "sig-1" },
+      { type: "tool_use", id: "t1", name: "read", input: {} },
+      { type: "thinking", thinking: "second", signature: "sig-2" },
+      { type: "tool_use", id: "t2", name: "read", input: {} },
+    ])
+    await iterator.return?.()
   })
 
   it("yields an error event and aborts on malformed tool args", async () => {

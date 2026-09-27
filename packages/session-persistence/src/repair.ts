@@ -214,6 +214,7 @@ export function repairTurnTail(events: SessionEvent[]): SessionEvent[] {
       type: "tool/result",
       callId: call.callId,
       name: call.name,
+      isError: true,
       // M4 + Q8: the verdict is READ from the log's own evidence, never guessed.
       // - this call is marked dispatched → the body started, outcome unknown;
       // - the log carries a marker SOMEWHERE → this call's absence is evidence:

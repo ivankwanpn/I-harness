@@ -27,3 +27,43 @@ it("records a failure and releases the session for retry", async () => {
   await act(async () => { await view.result.current.run("w", "a", "compact", "  ") })
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/session/compact", workspaceId: "w", sessionId: "a" })
 })
+
+it("reports prompt admission before a later model error without accepting another session's event", async () => {
+  let reject!: (reason: Error) => void
+  let emit!: (event: unknown) => void
+  const onAdmitted = vi.fn()
+  const request = vi.fn((_request: unknown) => new Promise((_resolve, fail) => { reject = fail }))
+  const bridge = { request, onEvent: (listener: (event: unknown) => void) => { emit = listener; return () => {} } }
+  const view = renderHook(() => useSessionOperation(bridge as never))
+  let pending!: Promise<unknown>
+  act(() => { pending = view.result.current.run("w", "a", "prompt", "read file", undefined, undefined, onAdmitted) })
+  const token = (request.mock.calls[0]![0] as { clientToken?: string }).clientToken
+  expect(typeof token).toBe("string")
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "b", event: { type: "agent/input/admitted", text: "read file", intent: "user", delivery: "queue" } } }))
+  expect(onAdmitted).not.toHaveBeenCalled()
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "a", event: { type: "agent/input/admitted", text: "system note", intent: "system", delivery: "queue" } } }))
+  expect(onAdmitted).not.toHaveBeenCalled()
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "a", event: { type: "agent/input/admitted", text: "other request", intent: "user", delivery: "queue", clientToken: "other-token" } } }))
+  expect(onAdmitted).not.toHaveBeenCalled()
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "a", event: { type: "agent/input/admitted", text: "read file", intent: "user", delivery: "queue", clientToken: token } } }))
+  expect(onAdmitted).toHaveBeenCalledOnce()
+  await act(async () => { reject(new Error("provider 400")); await expect(pending).rejects.toThrow("provider 400") })
+})
+
+it("acknowledges a prompt whose file context was appended before admission", async () => {
+  let reject!: (reason: Error) => void
+  let emit!: (event: unknown) => void
+  const onAdmitted = vi.fn()
+  const request = vi.fn((_request: unknown) => new Promise((_resolve, fail) => { reject = fail }))
+  const bridge = {
+    request,
+    onEvent: (listener: (event: unknown) => void) => { emit = listener; return () => {} },
+  }
+  const view = renderHook(() => useSessionOperation(bridge as never))
+  let pending!: Promise<unknown>
+  act(() => { pending = view.result.current.run("w", "a", "prompt", "read file", 'Workspace refs: ["a.md"]', undefined, onAdmitted) })
+  const token = (request.mock.calls[0]![0] as { clientToken?: string }).clientToken
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w", method: "session/event", params: { sessionId: "a", event: { type: "agent/input/admitted", text: 'read file\n\nWorkspace refs: ["a.md"]', intent: "user", delivery: "queue", clientToken: token } } }))
+  expect(onAdmitted).toHaveBeenCalledOnce()
+  await act(async () => { reject(new Error("provider 400")); await expect(pending).rejects.toThrow("provider 400") })
+})

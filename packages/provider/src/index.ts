@@ -902,18 +902,18 @@ function buildClient(profile: ProviderProfile, model: string, extra?: Record<str
   const headers = profile.headers
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":
-      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "gemini":
-      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
     case "bedrock":
       // No apiKey — the AWS credential chain (env / ~/.aws/credentials /
       // IMDS) resolves at the SDK client; region defaults from the env in the
       // adapter (AWS_REGION → us-east-1).
-      return createBedrockClient({ model, options: extra, inputModalities: profile.inputModalities })
+      return createBedrockClient({ model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities })
     default:
       throw new Error(`unknown provider protocol: ${String((profile as { protocol?: unknown }).protocol)}`)
   }

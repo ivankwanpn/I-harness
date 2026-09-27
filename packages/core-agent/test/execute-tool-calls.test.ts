@@ -239,6 +239,18 @@ describe("executeToolCalls scheduler", () => {
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output).toEqual({ ok: true })
     expect(results[1]!.output).toEqual({ error: "kaboom", code: TOOL_FAILED })
+    expect(session.events.filter((e) => e.type === "tool/result").map((e) => e.isError)).toEqual([undefined, true])
+  })
+
+  it("marks a returned filesystem-style failure as a failed tool result", async () => {
+    const ctx = createContext()
+    const session = createSession()
+    const tools = createToolRegistry(ctx)
+    tools.register({ name: "read", description: "read", inputSchema: {}, execute: async () => ({ error: "file missing", code: "FS_NOT_FOUND" }) })
+    await executeToolCalls(ctx, session, tools, [{ callId: "c1", name: "read", args: {} }], { maxParallel: 1 })
+    expect(session.events.find((event) => event.type === "tool/result")).toMatchObject({
+      type: "tool/result", callId: "c1", output: { error: "file missing", code: "FS_NOT_FOUND" }, isError: true,
+    })
   })
 
   it("a never-started call is CANCELLED, and says so — not the abort message", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, expectTypeOf, it } from "vitest"
-import { assertMessagesFromLog, clampOutputCap, describeTransportError } from "../src/index.ts"
+import { assertMessagesFromLog, canReplayContinuation, clampOutputCap, describeTransportError, replayBlockOrder } from "../src/index.ts"
 import type { LLMRequest, ReasoningEffort } from "../src/index.ts"
 import { createSession, append } from "@i-harness/core-session"
 
@@ -16,6 +16,24 @@ describe("llm-seam invariant (audit F01-3)", () => {
     const foreign = [{ role: "assistant" as const, content: "not in log" }]
     expect(() => assertMessagesFromLog(foreign, s)).toThrow(/log/i)
   })
+})
+
+it("replays opaque provider state only for the model and provider that produced it", () => {
+  expect(canReplayContinuation({ model: "m", providerId: "source" }, { model: "m", providerId: "source" })).toBe(true)
+  expect(canReplayContinuation({ model: "m", providerId: "source" }, { model: "m", providerId: "other" })).toBe(false)
+  expect(canReplayContinuation({ model: "m", providerId: "source" }, { model: "other", providerId: "source" })).toBe(false)
+  expect(canReplayContinuation({}, { model: "m", providerId: "other" })).toBe(true)
+})
+
+it("uses ordered replay only when every native block still matches neutral content", () => {
+  const order = [
+    { kind: "reasoning" as const, index: 0 },
+    { kind: "tool" as const, index: 0 },
+    { kind: "text" as const, text: "after" },
+  ]
+  expect(replayBlockOrder(order, "after", ["thought"], ["tool"], (text) => text)).toEqual(["thought", "tool", "after"])
+  expect(replayBlockOrder(order, "changed", ["thought"], ["tool"], (text) => text)).toBeUndefined()
+  expect(replayBlockOrder([...order, { kind: "tool" as const, index: 0 }], "after", ["thought"], ["tool"], (text) => text)).toBeUndefined()
 })
 
 import { projectImagesForTextModel } from "../src/index.ts"

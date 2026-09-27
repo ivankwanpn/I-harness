@@ -77,11 +77,23 @@ describe("llm-openai protocol", () => {
     const client = createOpenAIClient({ apiKey: "k", model: "gpt-test" })
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", reasoningItems: [item] } })
-    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", reasoningItems: [item] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [item] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
     expect(body.input).toEqual([item, { type: "function_call", call_id: "c1", name: "read", arguments: "{}" }])
+    await iterator.return?.()
+  })
+
+  it("does not replay another model's Responses reasoning item", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createOpenAIClient({ apiKey: "k", model: "new-model" }).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "openai-responses", model: "old-model", reasoningItems: [{ type: "reasoning", id: "rs_old" }] } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([{ type: "function_call", call_id: "c1", name: "read", arguments: "{}" }])
     await iterator.return?.()
   })
 
@@ -108,6 +120,49 @@ describe("llm-openai protocol", () => {
       { type: "function_call_output", call_id: "call_1", output: '{"content":"data"}' },
     ])
     await it.return?.()
+  })
+
+  it("keeps two parallel Responses calls, outputs and reasoning items in one ordered input", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
+    const reasoning = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "opaque" }
+    const iterator = client.stream({ messages: [
+      { role: "user", content: "read both" },
+      { role: "assistant", content: "", toolCalls: [
+        { id: "call_a", name: "read", args: { path: "a" } },
+        { id: "call_b", name: "read", args: { path: "b" } },
+      ], providerContinuation: { kind: "openai-responses", reasoningItems: [reasoning] } },
+      { role: "tool", toolCallId: "call_a", content: "first" },
+      { role: "tool", toolCallId: "call_b", content: "second" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([
+      { role: "user", content: "read both" }, reasoning,
+      { type: "function_call", call_id: "call_a", name: "read", arguments: '{"path":"a"}' },
+      { type: "function_call", call_id: "call_b", name: "read", arguments: '{"path":"b"}' },
+      { type: "function_call_output", call_id: "call_a", output: "first" },
+      { type: "function_call_output", call_id: "call_b", output: "second" },
+    ])
+    await iterator.return?.()
+  })
+
+  it("emits both provider call IDs from parallel Responses function items", async () => {
+    const sse = [
+      { type: "response.output_item.added", item: { type: "function_call", id: "item-a", call_id: "call-a", name: "read", arguments: '{"path":"a"}' } },
+      { type: "response.output_item.added", item: { type: "function_call", id: "item-b", call_id: "call-b", name: "read", arguments: '{"path":"b"}' } },
+      { type: "response.completed" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n")
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const calls: Extract<LLMStreamEvent, { type: "tool_call" }>["call"][] = []
+    for await (const event of createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "tool_call") calls.push(event.call)
+    }
+    expect(calls).toEqual([
+      { id: "call-a", name: "read", args: { path: "a" } },
+      { id: "call-b", name: "read", args: { path: "b" } },
+    ])
   })
 
   it("M51/B2: emits an assistant text item before function_call when the message carries both", async () => {
@@ -158,18 +213,32 @@ describe("llm-openai protocol", () => {
 
   it("forwards reasoning events and flushes before end", async () => {
     const sse = [
-      `data: ${JSON.stringify({ type: "response.reasoning_summary_text.delta", text: "think" })}`,
+      `data: ${JSON.stringify({ type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 0, delta: "think" })}`,
+      `data: ${JSON.stringify({ type: "response.reasoning_summary_text.delta", item_id: "rs_1", summary_index: 1, delta: "again" })}`,
       "data: [DONE]",
     ].join("\n\n")
     const fetchMock = vi.fn(async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } }))
     vi.stubGlobal("fetch", fetchMock)
     const client = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" })
-    const events: string[] = []
+    const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) {
-      if (ev.type === "reasoning") events.push(`r:${ev.text}`)
-      if (ev.type === "end") events.push("end")
+      if (ev.type === "reasoning" || ev.type === "end") events.push(ev)
     }
-    expect(events).toEqual(["r:think", "end"])
+    expect(events).toEqual([
+      { type: "reasoning", blockId: "rs_1:0", text: "think" },
+      { type: "reasoning", blockId: "rs_1:1", text: "again" },
+      { type: "end" },
+    ])
+  })
+
+  it("asks Responses for reasoning summaries when reasoning is selected", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createOpenAIClient({ apiKey: "k", model: "gpt-test" }).stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "high" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.reasoning).toEqual({ effort: "high", summary: "auto" })
+    await iterator.return?.()
   })
 
   it("second request includes the tool result when the model calls a tool then answers", async () => {
@@ -366,11 +435,11 @@ describe("M32 reasoning effort (openai-family Responses)", () => {
 
   it("maps off→none and passes the rest through verbatim", () => {
     expect(translateReasoning("gpt-5", "off")).toEqual({ reasoning: { effort: "none" } })
-    expect(translateReasoning("gpt-5", "low")).toEqual({ reasoning: { effort: "low" } })
-    expect(translateReasoning("gpt-5", "medium")).toEqual({ reasoning: { effort: "medium" } })
-    expect(translateReasoning("gpt-5", "high")).toEqual({ reasoning: { effort: "high" } })
-    expect(translateReasoning("gpt-5", "xhigh")).toEqual({ reasoning: { effort: "xhigh" } })
-    expect(translateReasoning("gpt-5", "max")).toEqual({ reasoning: { effort: "max" } })
+    expect(translateReasoning("gpt-5", "low")).toEqual({ reasoning: { effort: "low", summary: "auto" } })
+    expect(translateReasoning("gpt-5", "medium")).toEqual({ reasoning: { effort: "medium", summary: "auto" } })
+    expect(translateReasoning("gpt-5", "high")).toEqual({ reasoning: { effort: "high", summary: "auto" } })
+    expect(translateReasoning("gpt-5", "xhigh")).toEqual({ reasoning: { effort: "xhigh", summary: "auto" } })
+    expect(translateReasoning("gpt-5", "max")).toEqual({ reasoning: { effort: "max", summary: "auto" } })
   })
 
   it("sends nothing when effort is unset", () => {
@@ -378,7 +447,7 @@ describe("M32 reasoning effort (openai-family Responses)", () => {
   })
 
   it("uses the same table for DeepSeek (zero special-casing; its server maps medium→high)", () => {
-    expect(translateReasoning("deepseek-v4-pro", "medium")).toEqual({ reasoning: { effort: "medium" } })
+    expect(translateReasoning("deepseek-v4-pro", "medium")).toEqual({ reasoning: { effort: "medium", summary: "auto" } })
     expect(translateReasoning("deepseek-v4-pro", "off")).toEqual({ reasoning: { effort: "none" } })
   })
 
@@ -390,7 +459,7 @@ describe("M32 reasoning effort (openai-family Responses)", () => {
     await it.next()
     await it.return?.()
     const [, init] = fetchMock.mock.calls[0]!
-    expect((JSON.parse(init.body as string) as Record<string, unknown>).reasoning).toEqual({ effort: "high" })
+    expect((JSON.parse(init.body as string) as Record<string, unknown>).reasoning).toEqual({ effort: "high", summary: "auto" })
 
     const client2 = createOpenAIClient({ apiKey: "k", baseUrl: "https://api.test", model: "gpt-5" })
     const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()

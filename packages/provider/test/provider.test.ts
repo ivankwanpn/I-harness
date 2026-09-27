@@ -52,6 +52,18 @@ describe("provider registry", () => {
     await it.return?.()
   })
 
+  it("stamps the configured provider profile on native replay metadata", async () => {
+    const sse = `data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: "plan" } }] })}\n\ndata: [DONE]\n\n`
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const client = buildModelClient({ name: "my-deepseek", displayName: "My DeepSeek", protocol: "openai-compatible", apiKey: "k" }, "deepseek-flash")
+    const events = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: {
+      kind: "openai-compatible", model: "deepseek-flash", providerId: "my-deepseek", reasoningContent: "plan",
+    } })
+    vi.unstubAllGlobals()
+  })
+
   // M1 Phase B Task 4: the case that stood here called `buildWireClient` directly. That
   // dispatcher was a dead declaration -- nothing reached it on any production path -- so
   // it and this case were deleted together: the `openai-completions` arm and the

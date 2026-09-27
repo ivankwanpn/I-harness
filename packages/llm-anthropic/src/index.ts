@@ -1,4 +1,4 @@
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 /**
  * M5 T2: the wire's usage, under the seam's names.
@@ -30,6 +30,7 @@ export interface AnthropicConfig {
   apiKey: string
   baseUrl?: string
   model: string
+  providerId?: string
   options?: Record<string, unknown>
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
@@ -136,23 +137,37 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       const boundedReasoning = reasoning?.thinking.type === "enabled"
         ? { thinking: { type: "enabled" as const, budget_tokens: Math.min(reasoning.thinking.budget_tokens, maxTokens - 1) } }
         : reasoning
+      const wireMessages: { role: "user" | "assistant"; content: unknown }[] = []
+      let toolResults: unknown[] | undefined
+      for (const m of messages) {
+        if (m.role === "tool") {
+          if (toolResults === undefined) {
+            toolResults = []
+            wireMessages.push({ role: "user", content: toolResults })
+          }
+          toolResults.push({ type: "tool_result", tool_use_id: m.toolCallId, content: m.content, ...(m.isError === true ? { is_error: true } : {}) })
+          continue
+        }
+        toolResults = undefined
+        if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+          // New streams keep the provider's interleaved block order. Older
+          // sessions without that metadata retain the canonical fallback.
+          const replayThinking = m.providerContinuation?.kind === "anthropic" && !canReplayContinuation(m.providerContinuation, config)
+            ? [] : m.thinkingBlocks ?? []
+          const toolBlocks = m.toolCalls.map((c) => ({ type: "tool_use", id: c.id, name: c.name, input: c.args }))
+          const order = m.providerContinuation?.kind === "anthropic" && canReplayContinuation(m.providerContinuation, config)
+            ? m.providerContinuation.contentOrder : undefined
+          const content: unknown[] = replayBlockOrder<unknown>(order, m.content, replayThinking, toolBlocks, (text) => ({ type: "text", text }))
+            ?? [...replayThinking, ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : []), ...toolBlocks]
+          wireMessages.push({ role: "assistant", content })
+          continue
+        }
+        wireMessages.push({ role: m.role, content: toAnthropicContent(m.content) })
+      }
       const body = {
         model: config.model,
         system: request.systemPrompt,
-        messages: messages.map((m) => {
-          if (m.role === "tool") {
-            return { role: "user", content: [{ type: "tool_result", tool_use_id: m.toolCallId, content: m.content }] }
-          }
-          if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-            // M51/B2: a folded step message carries the step's text AND its
-            // tool calls — emit the text block before the tool_use blocks
-            // (dropping it made the model's pre-tool narration vanish).
-            const content: unknown[] = [...(m.thinkingBlocks ?? []), ...(m.content.trim() !== "" ? [{ type: "text", text: m.content }] : [])]
-            for (const c of m.toolCalls) content.push({ type: "tool_use", id: c.id, name: c.name, input: c.args })
-            return { role: "assistant", content }
-          }
-          return { role: m.role, content: toAnthropicContent(m.content) }
-        }),
+        messages: wireMessages,
         tools: request.tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
         stream: true,
         ...(config.options ?? {}),
@@ -200,6 +215,8 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       // independent — neither is the other's `else`. Only `true` is written.
       let refused = false
       const thinkingBlocks: ProviderThinkingBlock[] = []
+      const blockOrder = new Map<number, ProviderBlockOrderEntry>()
+      let toolOrdinal = 0
       const pendingThinking = new Map<number, { thinking: string; signature: string }>()
       const pendingToolUses = new Map<number, { id?: string; name: string; argsBuffer: string }>()
       const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
@@ -247,8 +264,9 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           return usage ? [{ type: "usage", usage }] : []
         }
         if (t === "content_block_start") {
-          const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; thinking?: string; signature?: string; data?: string }
+          const block = event.content_block as { type: string; id?: string; name?: string; input?: unknown; text?: string; thinking?: string; signature?: string; data?: string }
           if (block?.type === "tool_use") {
+            blockOrder.set(index, { kind: "tool", index: toolOrdinal++ })
             const input = block.input as Record<string, unknown> | undefined
             // Some streams send the full input inline on the start event; if
             // present (and non-empty) seed the args buffer with it.
@@ -260,15 +278,23 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
             })
           } else if (block?.type === "thinking") {
             pendingThinking.set(index, { thinking: block.thinking ?? "", signature: block.signature ?? "" })
-            return [{ type: "reasoning", text: block.thinking ?? "" }]
+            return [{ type: "reasoning", blockId: String(index), text: block.thinking ?? "" }]
           } else if (block?.type === "redacted_thinking" && typeof block.data === "string") {
             thinkingBlocks.push({ type: "redacted_thinking", data: block.data })
+            blockOrder.set(index, { kind: "reasoning", index: thinkingBlocks.length - 1 })
+          } else if (block?.type === "text") {
+            blockOrder.set(index, { kind: "text", text: block.text ?? "" })
+            return block.text ? [{ type: "text/chunk", text: block.text }] : []
           }
           return []
         }
         if (t === "content_block_delta") {
           const delta = event.delta as { type: string; text?: string; partial_json?: string; thinking?: string; signature?: string }
-          if (delta?.type === "text_delta") return [{ type: "text/chunk", text: delta.text ?? "" }]
+          if (delta?.type === "text_delta") {
+            const block = blockOrder.get(index)
+            if (block?.kind === "text") block.text += delta.text ?? ""
+            return [{ type: "text/chunk", text: delta.text ?? "" }]
+          }
           if (delta?.type === "input_json_delta") {
             const pending = pendingToolUses.get(index)
             if (pending) pending.argsBuffer += delta.partial_json ?? ""
@@ -277,7 +303,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           if (delta?.type === "thinking_delta") {
             const pending = pendingThinking.get(index)
             if (pending) pending.thinking += delta.thinking ?? ""
-            return [{ type: "reasoning", text: delta.thinking ?? "" }]
+            return [{ type: "reasoning", blockId: String(index), text: delta.thinking ?? "" }]
           }
           if (delta?.type === "signature_delta") {
             const pending = pendingThinking.get(index)
@@ -289,7 +315,10 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           const thinking = pendingThinking.get(index)
           if (thinking) {
             pendingThinking.delete(index)
-            if (thinking.signature) thinkingBlocks.push({ type: "thinking", thinking: thinking.thinking, signature: thinking.signature })
+            if (thinking.signature) {
+              thinkingBlocks.push({ type: "thinking", thinking: thinking.thinking, signature: thinking.signature })
+              blockOrder.set(index, { kind: "reasoning", index: thinkingBlocks.length - 1 })
+            }
           }
           const pending = pendingToolUses.get(index)
           if (pending) {
@@ -358,7 +387,16 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}) }
+      const contentOrder = [...blockOrder.entries()].sort(([left], [right]) => left - right).map(([, entry]) => entry)
+      const rank = { reasoning: 0, text: 1, tool: 2 } as const
+      let previousRank = -1
+      const interleaved = contentOrder.some((entry) => {
+        const current = rank[entry.kind]
+        const outOfOrder = current < previousRank
+        previousRank = Math.max(previousRank, current)
+        return outOfOrder
+      })
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(thinkingBlocks.length ? { thinkingBlocks } : {}), ...(thinkingBlocks.length || interleaved ? { providerContinuation: { kind: "anthropic", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), ...(interleaved ? { contentOrder } : {}) } as const } : {}) }
     },
   }
 }

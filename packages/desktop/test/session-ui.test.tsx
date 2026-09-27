@@ -49,7 +49,7 @@ describe("Composer", () => {
     fireEvent.keyDown(textarea(), { key: "Enter", isComposing: true })
     expect(onPrompt).not.toHaveBeenCalled()
     fireEvent.keyDown(textarea(), { key: "Enter" })
-    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("中文提示"))
+    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("中文提示", undefined, undefined, expect.any(Function)))
   })
 
   it("does not erase edits made while the previous send is pending", async () => {
@@ -92,7 +92,7 @@ describe("Composer", () => {
     expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it("keeps the draft when a send fails and clears it only after a confirmed send", async () => {
+  it("keeps the draft when submission fails before admission and clears a successful send", async () => {
     const failing = vi.fn(async () => { throw new Error("boom") })
     const first = render(<Composer {...base} canSend onPrompt={failing} />)
     fireEvent.change(textarea(), { target: { value: "keep me" } })
@@ -109,8 +109,21 @@ describe("Composer", () => {
     expect(textarea().value).toBe("keep me")
     fireEvent.click(screen.getByRole("button", { name: "送出" }))
 
-    await waitFor(() => { expect(succeeded).toHaveBeenCalledWith("keep me") })
+    await waitFor(() => { expect(succeeded).toHaveBeenCalledWith("keep me", undefined, undefined, expect.any(Function)) })
     await waitFor(() => { expect(textarea().value).toBe("") })
+    expect(window.localStorage.getItem("ih:draft:ws-1:s1")).toBeNull()
+  })
+
+  it("clears an admitted prompt even when the provider fails later", async () => {
+    const onPrompt = vi.fn(async (_text: string, _context?: string, _images?: unknown, onAdmitted?: () => void) => {
+      onAdmitted?.()
+      throw new Error("provider 400")
+    })
+    render(<Composer {...base} canSend onPrompt={onPrompt} />)
+    fireEvent.change(textarea(), { target: { value: "already in the conversation" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    await waitFor(() => expect(screen.getByText("provider 400")).toBeTruthy())
+    expect(textarea().value).toBe("")
     expect(window.localStorage.getItem("ih:draft:ws-1:s1")).toBeNull()
   })
 

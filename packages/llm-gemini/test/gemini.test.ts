@@ -95,6 +95,25 @@ describe("llm-gemini protocol", () => {
     expect(usage).toEqual({ inputTokens: 2, outputTokens: 5 })
   })
 
+  it("separates Gemini thought-summary parts from answer text and preserves their block positions", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => sseResponse([
+      { candidates: [{ content: { parts: [
+        { thought: true, text: "first thought" },
+        { thought: true, text: "second thought" },
+        { text: "answer" },
+      ] } }] },
+    ])))
+    const events: LLMStreamEvent[] = []
+    for await (const event of createGeminiClient({ apiKey: "k", model: "gemini-3-flash" }).stream({ messages: [], tools: [], systemPrompt: "", reasoningEffort: "high" })) {
+      if (event.type === "reasoning" || event.type === "text/chunk") events.push(event)
+    }
+    expect(events).toEqual([
+      { type: "reasoning", blockId: "0", text: "first thought" },
+      { type: "reasoning", blockId: "1", text: "second thought" },
+      { type: "text/chunk", text: "answer" },
+    ])
+  })
+
   it("replays Gemini thought signatures on the original function-call part", async () => {
     const sse = `data: ${JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" }] } }] })}\n\n`
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
@@ -102,11 +121,69 @@ describe("llm-gemini protocol", () => {
     const client = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" })
     const events: LLMStreamEvent[] = []
     for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
-    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "gemini", callSignatures: ["signed"] } })
+    expect(events.at(-1)).toEqual({ type: "end", providerContinuation: { kind: "gemini", model: "gemini-3-flash", callSignatures: ["signed"] } })
     const iterator = client.stream({ messages: [{ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], providerContinuation: { kind: "gemini", callSignatures: ["signed"] } }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
     await iterator.next()
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
-    expect(body.contents[0].parts[0]).toEqual({ functionCall: { name: "read", args: {} }, thoughtSignature: "signed" })
+    expect(body.contents[0].parts[0]).toEqual({ functionCall: { id: "c1", name: "read", args: {} }, thoughtSignature: "signed" })
+    await iterator.return?.()
+  })
+
+  it("replays signed thought and final text parts on the next GenerateContent request", async () => {
+    const first = sseResponse([{ candidates: [{ content: { parts: [
+      { thought: true, text: "inspect", thoughtSignature: "thought-sig" },
+      { text: "answer", thoughtSignature: "answer-sig" },
+    ] } }] }])
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(first)
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    const continuation = (events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
+    expect(continuation).toEqual({ kind: "gemini", callSignatures: [], model: "gemini-3-flash", thoughtParts: [{ text: "inspect", thoughtSignature: "thought-sig" }], textSignature: "answer-sig" })
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "answer", providerContinuation: continuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.contents).toEqual([{ role: "model", parts: [
+      { text: "inspect", thought: true, thoughtSignature: "thought-sig" },
+      { text: "answer", thoughtSignature: "answer-sig" },
+    ] }])
+    await iterator.return?.()
+  })
+
+  it("omits Gemini native signatures when replaying a different model", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createGeminiClient({ apiKey: "k", model: "gemini-3-pro" }).stream({ messages: [
+      { role: "assistant", content: "answer", providerContinuation: { kind: "gemini", model: "gemini-3-flash", callSignatures: [], textSignature: "foreign" } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.contents).toEqual([{ role: "model", parts: [{ text: "answer" }] }])
+    await iterator.return?.()
+  })
+
+  it("keeps an empty signed Gemini text part separate from the visible answer", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(sseResponse([
+        { candidates: [{ content: { parts: [{ text: "answer" }] } }] },
+        { candidates: [{ content: { parts: [{ text: "", thoughtSignature: "tail-sig" }] } }] },
+      ]))
+      .mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" })
+    const first: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) first.push(event)
+    const continuation = (first.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "answer", providerContinuation: continuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.contents).toEqual([{ role: "model", parts: [
+      { text: "answer" },
+      { text: "", thoughtSignature: "tail-sig" },
+    ] }])
     await iterator.return?.()
   })
 
@@ -157,6 +234,46 @@ describe("llm-gemini protocol", () => {
     ])
   })
 
+  it("preserves parallel Gemini function IDs and sends their results in one user content block", async () => {
+    const response = sseResponse([{ candidates: [{ content: { parts: [
+      { functionCall: { id: "provider-a", name: "read", args: { path: "a.txt" } }, thoughtSignature: "signed-first" },
+      { functionCall: { id: "provider-b", name: "read", args: { path: "b.txt" } } },
+    ] } }] }])
+    const fetchMock = vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "gemini-3-flash" })
+    const calls: Extract<LLMStreamEvent, { type: "tool_call" }>["call"][] = []
+    for await (const event of client.stream({ messages: [{ role: "user", content: "read both" }], tools: [], systemPrompt: "" })) {
+      if (event.type === "tool_call") calls.push(event.call)
+    }
+    expect(calls).toEqual([
+      { id: "provider-a", name: "read", args: { path: "a.txt" } },
+      { id: "provider-b", name: "read", args: { path: "b.txt" } },
+    ])
+    const request: LLMRequest = { messages: [
+      { role: "user", content: "read both" },
+      { role: "assistant", content: "", toolCalls: [
+        { id: "provider-a", name: "read", args: { path: "a.txt" } },
+        { id: "provider-b", name: "read", args: { path: "b.txt" } },
+      ], providerContinuation: { kind: "gemini", callSignatures: ["signed-first", null] } },
+      { role: "tool", toolCallId: "provider-a", content: "first" },
+      { role: "tool", toolCallId: "provider-b", content: "second" },
+    ], tools: [], systemPrompt: "" }
+    const iterator = client.stream(request)[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.contents[1].parts).toEqual([
+      { functionCall: { id: "provider-a", name: "read", args: { path: "a.txt" } }, thoughtSignature: "signed-first" },
+      { functionCall: { id: "provider-b", name: "read", args: { path: "b.txt" } } },
+    ])
+    expect(body.contents[2]).toEqual({ role: "user", parts: [
+      { functionResponse: { id: "provider-a", name: "read", response: { output: "first" } } },
+      { functionResponse: { id: "provider-b", name: "read", response: { output: "second" } } },
+    ] })
+    expect(body.contents).toHaveLength(3)
+    await iterator.return?.()
+  })
+
   it("keeps args-only chunks on the last pending call across several named calls", async () => {
     const fetchMock = vi.fn(async () => sseResponse([
       { candidates: [{ content: { parts: [{ functionCall: { name: "alpha", args: { x: 1 } } }] } }] },
@@ -183,9 +300,12 @@ describe("llm-gemini protocol", () => {
     const request: LLMRequest = {
       messages: [
         { role: "user", content: "read a.txt" },
-        { role: "assistant", content: "", toolCalls: [{ id: "call_1", name: "read", args: { path: "a.txt" } }] },
+        { role: "assistant", content: "", toolCalls: [
+          { id: "call_1", name: "read", args: { path: "a.txt" } },
+          { id: "call_2", name: "read", args: { path: "b.txt" } },
+        ] },
         { role: "tool", toolCallId: "call_1", content: '{"content":"ok"}' },
-        { role: "tool", toolCallId: "call_1", content: "plain text" },
+        { role: "tool", toolCallId: "call_2", content: "plain text" },
       ],
       tools: [],
       systemPrompt: "sys",
@@ -196,11 +316,29 @@ describe("llm-gemini protocol", () => {
     const body = JSON.parse(init.body as string)
     expect(body.contents).toEqual([
       { role: "user", parts: [{ text: "read a.txt" }] },
-      { role: "model", parts: [{ functionCall: { name: "read", args: { path: "a.txt" } } }] },
-      { role: "user", parts: [{ functionResponse: { name: "read", response: { content: "ok" } } }] },
-      { role: "user", parts: [{ functionResponse: { name: "read", response: { output: "plain text" } } }] },
+      { role: "model", parts: [
+        { functionCall: { id: "call_1", name: "read", args: { path: "a.txt" } } },
+        { functionCall: { id: "call_2", name: "read", args: { path: "b.txt" } } },
+      ] },
+      { role: "user", parts: [
+        { functionResponse: { id: "call_1", name: "read", response: { content: "ok" } } },
+        { functionResponse: { id: "call_2", name: "read", response: { output: "plain text" } } },
+      ] },
     ])
     await it.return?.()
+  })
+
+  it("wraps array-shaped tool output in a Gemini functionResponse object", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createGeminiClient({ apiKey: "k", model: "gemini-3-flash" }).stream({ messages: [
+      { role: "assistant", content: "", toolCalls: [{ id: "c1", name: "list_dir", args: {} }] },
+      { role: "tool", toolCallId: "c1", content: '[{"name":"a.txt"}]' },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.contents[1].parts).toEqual([{ functionResponse: { id: "c1", name: "list_dir", response: { output: [{ name: "a.txt" }] } } }])
+    await iterator.return?.()
   })
 
   it("yields an error event on a non-2xx response (no end)", async () => {
@@ -358,14 +496,18 @@ describe("M32 reasoning effort (gemini)", () => {
     await it.next()
     await it.return?.()
     const [, init] = fetchMock.mock.calls[0]!
-    expect((JSON.parse(init.body as string) as Record<string, unknown>).thinkingConfig).toEqual({ thinkingBudget: 16384 })
+    const body = JSON.parse(init.body as string) as { thinkingConfig?: unknown; generationConfig?: { thinkingConfig?: unknown } }
+    expect(body.thinkingConfig).toBeUndefined()
+    expect(body.generationConfig?.thinkingConfig).toEqual({ thinkingBudget: 16384, includeThoughts: true })
 
     const client2 = createGeminiClient({ apiKey: "k", baseUrl: "https://api.test", model: "gemini-2.5-pro" })
     const it2 = client2.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "" } as LLMRequest)[Symbol.asyncIterator]()
     await it2.next()
     await it2.return?.()
     const [, init2] = fetchMock.mock.calls[1]!
-    expect((JSON.parse(init2.body as string) as Record<string, unknown>).thinkingConfig).toBeUndefined()
+    const body2 = JSON.parse(init2.body as string) as { thinkingConfig?: unknown; generationConfig?: { thinkingConfig?: unknown } }
+    expect(body2.thinkingConfig).toBeUndefined()
+    expect(body2.generationConfig?.thinkingConfig).toBeUndefined()
   })
 })
 

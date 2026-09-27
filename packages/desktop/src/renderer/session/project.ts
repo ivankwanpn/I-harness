@@ -82,7 +82,7 @@ export function activityLabel(type: string, t: (message: Message) => string): st
     "team/message/queued": "協作訊息已排入佇列", "team/message/delivered": "協作訊息已送達",
     "subagent/start": "子代理已啟動", "subagent/end": "子代理執行已結束", "subagent/inbox": "收到子代理訊息",
     "agent/input/admitted": "輸入已排入佇列", "agent/input/promoted": "正在處理佇列輸入", "agent/input/cancelled": "佇列輸入已取消",
-    "plan/mode": "計畫模式已更新", "command/run": "正在執行命令", "command/done": "命令執行已結束", "schedule/change": "排程已更新", "operator/run-end": "執行記錄已更新", "rewind/point": "會話已回復",
+    "plan/mode": "計畫模式已更新", "command/run": "正在執行命令", "command/done": "命令執行已結束", "schedule/change": "排程已更新", "operator/run-end": "執行記錄已更新", "rewind/point": "會話已回復", "step/failed": "模型回應已中斷",
   }
   return t(labels[type] ?? "會話狀態已更新")
 }

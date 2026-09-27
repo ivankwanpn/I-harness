@@ -6,6 +6,7 @@ export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
+    | { type: "step/failed"; seq?: number }
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
@@ -21,7 +22,7 @@ export type SessionEvent =
     // `callId` is the identity; `eventSeq` is the durable seq of the `tool/call`
     // it belongs to, present when the caller knows it (the production path does).
     | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
-    | { type: "tool/result"; callId: string; name: string; output: unknown; seq?: number }
+    | { type: "tool/result"; callId: string; name: string; output: unknown; isError?: true; seq?: number }
     | { type: "step/end"; seq?: number; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true; /** M77: the provider REFUSED to produce content (HTTP 200, no content, a bare `end` at the seam). Written only as `true` — absent stays absent, exactly like `truncated`, and the two are INDEPENDENT: one step can be both. */ refused?: true; /** M80: the provider returned NO content at all — an empty success (HTTP 200, no text, no tool call, a bare `end`). Written only as `true`; absent stays absent. Excluded by construction from a step that was `truncated` or `refused` (those are the more specific facts about the same step), and a step whose only output was a tool call is NOT empty. */ empty?: true }
     | { type: "turn/end"; seq?: number }
     | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }
@@ -96,7 +97,7 @@ export type SessionEvent =
     // All three are log-only (never model-visible; the text enters the model
     // surface only through the promoted user/message). version 1 (M19/M21
     // convention for structured new event slots).
-    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; images?: ImageInput[]; seq?: number }
+    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; images?: ImageInput[]; clientToken?: string; seq?: number }
     | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
     | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
     // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).
@@ -117,7 +118,7 @@ export type SessionEvent =
     // branch) and deriveSearchText returns "" (unindexed). Additive event type;
     // format version stays 1. The PRODUCER is A/B-region (llm layer); the live
     // `reasoning` mux stream carries it.
-    | { type: "reasoning"; text: string; seq?: number }
+    | { type: "reasoning"; text: string; blockId?: string; seq?: number }
     // C-region port (R-C1 commands lifecycle, DSH commands parity): a slash
     // command's execution pair, appended by the executing host before/after the
     // handler. UI-plane (audit F05-6): the command never creates a model
@@ -215,11 +216,17 @@ export type ProviderThinkingBlock =
   | { type: "redacted_thinking"; data: string }
 
 /** Opaque state needed when a provider continues an assistant tool turn. */
+export type ProviderBlockOrderEntry =
+  | { kind: "reasoning"; index: number }
+  | { kind: "tool"; index: number }
+  | { kind: "text"; text: string }
+
 export type ProviderContinuation =
-  | { kind: "openai-compatible"; reasoningContent: string }
-  | { kind: "openai-responses"; reasoningItems: Record<string, unknown>[] }
-  | { kind: "gemini"; callSignatures: (string | null)[] }
-  | { kind: "bedrock"; reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[] }
+  | { kind: "anthropic"; model: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[] }
+  | { kind: "openai-compatible"; reasoningContent: string; model?: string; providerId?: string }
+  | { kind: "openai-responses"; reasoningItems: Record<string, unknown>[]; model?: string; providerId?: string }
+  | { kind: "gemini"; callSignatures: (string | null)[]; model?: string; providerId?: string; thoughtParts?: { text: string; thoughtSignature?: string }[]; textSignature?: string; emptyTextSignatures?: string[] }
+  | { kind: "bedrock"; reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[]; model?: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[] }
 
 export type LLMContentPart =
   | { type: "text"; text: string }
@@ -407,7 +414,7 @@ export function validateImages(images: ImageInput[], evType: string): void {
 export type LLMMessage =
   | { role: "user"; content: string | LLMContentPart[] }
   | { role: "assistant"; content: string; toolCalls?: { id: string; name: string; args: unknown }[]; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
-  | { role: "tool"; toolCallId: string; content: string | LLMContentPart[] }
+  | { role: "tool"; toolCallId: string; content: string | LLMContentPart[]; isError?: true }
 
 /** M5/D3: the three markers that share the shadow mechanism (see the pre-pass
  * inside deriveMessages). A rewrite of the model-visible projection is possible
@@ -508,6 +515,10 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // tool_result), regardless of how the session log interleaves them.
   let pendingCalls: { id: string; name: string; args: unknown }[] | undefined
   const pendingResults: LLMMessage[] = []
+  // Tool-result images are model-visible user content, but all results of a
+  // parallel tool block must remain adjacent for protocol adapters to return
+  // them together before any image/text user content.
+  const pendingToolImages: LLMMessage[] = []
   // M52/L3: user messages that land while the step's tool-call block is open
   // (guard-repeat-tool's reminder from agent/post-tool) are buffered and
   // emitted right AFTER that block — see the user/message branch. Without the
@@ -554,6 +565,38 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // M33 model-free prune pass: the substitute map is applied to the
   // tool/result projection ONLY (the raw log keeps the full output).
   const pruned = derivePruneSubstitutes(session)
+  // A provider stream may emit tool calls and then fail before any tool runs.
+  // Keep those raw events for diagnostics, but never replay them as unanswered
+  // tool_use blocks. A failed step also stays suppressed after cold-tail repair
+  // has inserted synthetic results for its outstanding calls.
+  const resolvedCallIds = new Set<string>()
+  for (const ev of session.events) {
+    if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
+    if (ev.type === "tool/result") resolvedCallIds.add(ev.callId)
+  }
+  const suppressedCallIds = new Set<string>()
+  const suppressedAssistantEvents = new Set<SessionEvent>()
+  let activeStep: { calls: string[]; assistants: SessionEvent[]; failed: boolean } | undefined
+  const closeStep = () => {
+    if (activeStep && (activeStep.failed || activeStep.calls.some((id) => !resolvedCallIds.has(id)))) {
+      for (const id of activeStep.calls) suppressedCallIds.add(id)
+      for (const event of activeStep.assistants) suppressedAssistantEvents.add(event)
+    }
+    activeStep = undefined
+  }
+  for (const ev of session.events) {
+    if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
+    if (ev.type === "step/start") {
+      closeStep()
+      activeStep = { calls: [], assistants: [], failed: false }
+    } else if (ev.type === "tool/call") activeStep?.calls.push(ev.callId)
+    else if (ev.type === "assistant/message") activeStep?.assistants.push(ev)
+    else if (ev.type === "step/failed") {
+      if (activeStep) activeStep.failed = true
+      closeStep()
+    } else if (ev.type === "step/end" || ev.type === "turn/start") closeStep()
+  }
+  closeStep()
   // M42 (G2): a seq is skipped when EITHER a compaction marker shadowed it OR
   // a rewind cut window contains it (union, not substitution — a rewind NEVER
   // un-shadows a compaction's removed seqs, inside or outside cut windows).
@@ -582,6 +625,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
         result.push(message)
       }
     } else if (ev.type === "assistant/message") {
+      if (suppressedAssistantEvents.has(ev)) continue
       // M51/B2 (M3 shape): when the step's tool block is still open, the
       // step's text belongs to the SAME assistant message as its tool calls —
       // `assistant(text + toolCalls)` — not a separate message after the
@@ -612,21 +656,23 @@ export function deriveMessages(session: Session): LLMMessage[] {
       flushToolBlock()
       result.push({ role: "user", content: ev.text })
     } else if (ev.type === "tool/call") {
+      if (!resolvedCallIds.has(ev.callId) || suppressedCallIds.has(ev.callId)) continue
       pendingCalls ??= []
       pendingCalls.push({ id: ev.callId, name: ev.name, args: ev.args })
     } else if (ev.type === "tool/result") {
+      if (suppressedCallIds.has(ev.callId)) continue
       const out = ev.output as { images?: ImageInput[] } | null | undefined
       const images = out?.images
       // M33: a pruned callId is projected as its substitute — the raw output
       // stays durably in the log; only the model-visible text narrows.
       const record = pruned.get(ev.callId)
-      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: record !== undefined ? renderPruneSubstitute(record) : toolResultText(ev.output) })
+      pendingResults.push({ role: "tool", toolCallId: ev.callId, content: record !== undefined ? renderPruneSubstitute(record) : toolResultText(ev.output), ...(ev.isError === true ? { isError: true } : {}) })
       // Defensive (M14 spec §8): persisted logs bypass append validation (CLI
       // resume merges via events.push; fromJSONL does not validate), so a
       // truthy non-array `output.images` must NOT throw — treat the output as
       // plain data and flush no synthetic user message.
       if (Array.isArray(images) && images.length > 0) {
-        pendingResults.push({
+        pendingToolImages.push({
           role: "user",
           content: [
             { type: "text", text: "Attached image(s) from tool result:" },
@@ -634,7 +680,7 @@ export function deriveMessages(session: Session): LLMMessage[] {
           ],
         })
       }
-    } else if (ev.type === "step/end") {
+    } else if (ev.type === "step/end" || ev.type === "step/failed") {
       // Each step is a self-contained [assistant toolCalls -> tool results]
       // unit; flushing at step/end keeps per-turn tool blocks separate so the
       // log never folds across steps into consecutive user/tool-result runs
@@ -667,6 +713,10 @@ export function deriveMessages(session: Session): LLMMessage[] {
     if (pendingResults.length > 0) {
       result.push(...pendingResults)
       pendingResults.length = 0
+    }
+    if (pendingToolImages.length > 0) {
+      result.push(...pendingToolImages)
+      pendingToolImages.length = 0
     }
     // M52/L3: the block is complete — the deferred mid-step user messages
     // follow it (they were logged after the results they interleaved with).

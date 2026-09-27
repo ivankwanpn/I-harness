@@ -10,6 +10,7 @@ export interface AdmittedInput {
   text: string
   delivery: InputDelivery
   intent: InputIntent
+  clientToken?: string
   synthetic?: InputSynthetic
   images?: ImageInput[]
 }
@@ -50,6 +51,7 @@ export class Inbox {
       intent: input.intent,
       ...(input.synthetic !== undefined ? { synthetic: input.synthetic } : {}),
       ...(input.images?.length ? { images: input.images } : {}),
+      ...(input.clientToken !== undefined ? { clientToken: input.clientToken } : {}),
     })
     return this.session.events.at(-1)!.seq!
   }
@@ -84,12 +86,13 @@ export class Inbox {
     for (const ev of this.session.events) {
       if (ev.type !== "agent/input/admitted") continue
       if ((ev.seq ?? 0) < this.fromSeq) continue
-      const a = ev as unknown as { inputId: string; text: string; delivery: InputDelivery; intent: InputIntent; synthetic?: InputSynthetic; images?: ImageInput[] }
+      const a = ev as unknown as { inputId: string; text: string; delivery: InputDelivery; intent: InputIntent; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string }
       if (consumed.has(a.inputId)) continue
       result.push({
         inputId: a.inputId, text: a.text, delivery: a.delivery, intent: a.intent,
         ...(a.synthetic !== undefined ? { synthetic: a.synthetic } : {}),
         ...(a.images?.length ? { images: a.images } : {}),
+        ...(a.clientToken !== undefined ? { clientToken: a.clientToken } : {}),
         admittedSeq: ev.seq ?? 0,
       })
     }
@@ -123,6 +126,7 @@ export class Inbox {
 
 function validateAdmitted(input: AdmittedInput): void {
   if (typeof input.inputId !== "string" || input.inputId.length === 0) throw new Error("agent/input admitted: inputId must be a non-empty string")
+  if (input.clientToken !== undefined && (typeof input.clientToken !== "string" || input.clientToken.length < 8 || input.clientToken.length > 128)) throw new Error("agent/input admitted: invalid clientToken")
   if (typeof input.text !== "string" || input.text.length === 0) throw new Error("agent/input admitted: text must be a non-empty string")
   if (input.delivery !== "queue" && input.delivery !== "steer") throw new Error(`agent/input admitted: invalid delivery '${String(input.delivery)}'`)
   if (input.intent !== "user" && input.intent !== "system") throw new Error(`agent/input admitted: invalid intent '${String(input.intent)}'`)

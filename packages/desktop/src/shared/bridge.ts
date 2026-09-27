@@ -64,7 +64,7 @@ export type DesktopRequest =
   | { kind: "session/dashboard"; workspaceId: string }
   | { kind: "session/create"; workspaceId: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
-  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[] }
+  | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
   | { kind: "session/queue"; workspaceId: string; sessionId: string }
   | { kind: "session/queue/cancel"; workspaceId: string; sessionId: string; id: string }

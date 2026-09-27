@@ -419,65 +419,87 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       let refusedThisStep = false
       let thinkingBlocks: Extract<LLMStreamEvent, { type: "end" }>["thinkingBlocks"]
       let providerContinuation: Extract<LLMStreamEvent, { type: "end" }>["providerContinuation"]
-      for await (const ev of deps.model.stream(request)) {
-        if (abort?.aborted) throw new Error("agent aborted")
-        switch (ev.type) {
-          case "text/chunk":
-            stepText += ev.text
-            break
-          case "reasoning":
-            reasoning.push(ev.text)
-            break
-          case "tool_call": {
-            callSeq += 1
-            let callId = ev.call.id
-            if (callId) {
-              if (usedCallIds.has(callId)) throw new Error(`duplicate provider tool call id: ${callId}`)
-            } else {
-              callId = `call_${callSeq}`
-              while (usedCallIds.has(callId)) callId = `call_${++callSeq}`
+      let pendingReasoning: string[] = []
+      let pendingReasoningBlockId: string | undefined
+      const flushReasoning = () => {
+        if (pendingReasoning.length === 0) return
+        append(deps.session, { type: "reasoning", text: pendingReasoning.join(""), ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) })
+        pendingReasoning = []
+        pendingReasoningBlockId = undefined
+      }
+      try {
+        for await (const ev of deps.model.stream(request)) {
+          if (abort?.aborted) throw new Error("agent aborted")
+          if (ev.type !== "reasoning") flushReasoning()
+          switch (ev.type) {
+            case "text/chunk":
+              stepText += ev.text
+              break
+            case "reasoning":
+              if (pendingReasoning.length > 0 && ev.blockId !== pendingReasoningBlockId) flushReasoning()
+              reasoning.push(ev.text)
+              if (ev.text) {
+                pendingReasoningBlockId = ev.blockId
+                pendingReasoning.push(ev.text)
+              }
+              break
+            case "tool_call": {
+              callSeq += 1
+              let callId = ev.call.id
+              if (callId) {
+                if (usedCallIds.has(callId)) throw new Error(`duplicate provider tool call id: ${callId}`)
+              } else {
+                callId = `call_${callSeq}`
+                while (usedCallIds.has(callId)) callId = `call_${++callSeq}`
+              }
+              usedCallIds.add(callId)
+              // M26 (R-D1): capture the seq BEFORE append — append assigns seq =
+              // events.length, so the value below IS the tool/call event's
+              // durable seq.
+              const eventSeq = deps.session.events.length
+              append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
+              // M13: collect the call; execution happens after the stream ends so
+              // the step's tool calls can run concurrently (bounded pool).
+              batch.push({ callId, name: ev.call.name, args: ev.call.args, eventSeq })
+              toolCallsThisStep += 1
+              break
             }
-            usedCallIds.add(callId)
-            // M26 (R-D1): capture the seq BEFORE append — append assigns seq =
-            // events.length, so the value below IS the tool/call event's
-            // durable seq.
-            const eventSeq = deps.session.events.length
-            append(deps.session, { type: "tool/call", callId, name: ev.call.name, args: ev.call.args })
-            // M13: collect the call; execution happens after the stream ends so
-            // the step's tool calls can run concurrently (bounded pool).
-            batch.push({ callId, name: ev.call.name, args: ev.call.args, eventSeq })
-            toolCallsThisStep += 1
-            break
+            case "usage":
+              // M5 T2. This `case` is the ONLY thing that turns a provider report
+              // into something the host can see: the switch has no default and no
+              // exhaustiveness assert, so without it the event is dropped in
+              // silence — the run looks perfect and the numbers are simply absent.
+              for (const [field, value] of Object.entries(ev.usage)) {
+                if (typeof value === "number") stepUsage[field] = value
+              }
+              break
+            case "error":
+              deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
+              throw new Error(`model stream error: ${ev.error.message}`)
+            case "end":
+              thinkingBlocks = ev.thinkingBlocks
+              providerContinuation = ev.providerContinuation
+              // M72 Ⅱ / M77. Recorded in TWO places on purpose: the durable log
+              // (what a reopen reads) and the host's telemetry (what an operator
+              // watches). Absent stays absent — a clean ending writes no field at
+              // all, and neither bit is ever written as `false`.
+              if (ev.truncated === true) {
+                truncatedThisStep = true
+                deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
+              }
+              if (ev.refused === true) {
+                refusedThisStep = true
+                deps.telemetry?.emit({ type: "provider/refused", ts: Date.now(), data: { step: steps } })
+              }
+              break
           }
-          case "usage":
-            // M5 T2. This `case` is the ONLY thing that turns a provider report
-            // into something the host can see: the switch has no default and no
-            // exhaustiveness assert, so without it the event is dropped in
-            // silence — the run looks perfect and the numbers are simply absent.
-            for (const [field, value] of Object.entries(ev.usage)) {
-              if (typeof value === "number") stepUsage[field] = value
-            }
-            break
-          case "error":
-            deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
-            throw new Error(`model stream error: ${ev.error.message}`)
-          case "end":
-            thinkingBlocks = ev.thinkingBlocks
-            providerContinuation = ev.providerContinuation
-            // M72 Ⅱ / M77. Recorded in TWO places on purpose: the durable log
-            // (what a reopen reads) and the host's telemetry (what an operator
-            // watches). Absent stays absent — a clean ending writes no field at
-            // all, and neither bit is ever written as `false`.
-            if (ev.truncated === true) {
-              truncatedThisStep = true
-              deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
-            }
-            if (ev.refused === true) {
-              refusedThisStep = true
-              deps.telemetry?.emit({ type: "provider/refused", ts: Date.now(), data: { step: steps } })
-            }
-            break
         }
+      } catch (error) {
+        flushReasoning()
+        append(deps.session, { type: "step/failed" })
+        throw error
+      } finally {
+        flushReasoning()
       }
 
       // M5 T2: emitted ONLY on a completed round-trip, and only if something was
