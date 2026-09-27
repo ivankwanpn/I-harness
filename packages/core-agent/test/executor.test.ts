@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { createSession, Inbox } from "@i-harness/core-session"
+import { createSession, deriveMessages, Inbox } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgent } from "../src/index.ts"
@@ -15,7 +15,12 @@ describe("SessionExecutor", () => {
     const lane = createSessionExecutor({ session, agent, inbox })
     lane.submit({ tier: "send", text: "inspect", images: [image] })
     await lane.drain()
-    expect(session.events.find((event) => event.type === "user/message")).toMatchObject({ images: [image] })
+    const admitted = session.events.find((event) => event.type === "agent/input/admitted")
+    const user = session.events.find((event) => event.type === "user/message")
+    expect(admitted).toMatchObject({ images: [image] })
+    expect(user).toMatchObject({ imageInputId: admitted?.type === "agent/input/admitted" ? admitted.inputId : "" })
+    expect(user).not.toHaveProperty("images")
+    expect(deriveMessages(session)[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
   })
   it("runs one turn per pending input, serially, in admission order", async () => {
     const ctx = createContext()

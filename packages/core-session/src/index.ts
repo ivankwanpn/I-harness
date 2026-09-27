@@ -10,7 +10,7 @@ export type SessionEvent =
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
-    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[] }
+    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -356,6 +356,11 @@ export function append(session: Session, event: SessionEvent): void {
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
     throw new Error("assistant/message must originate from the log, not an external source")
   }
+  if (event.type === "user/message" && event.imageInputId !== undefined) {
+    if (typeof event.imageInputId !== "string" || event.imageInputId.length === 0 || event.images !== undefined) {
+      throw new Error("image reference: user/message needs one non-empty imageInputId and no inline images")
+    }
+  }
   // M14 image intake (fail-loud): images first attach to an event here, so this
   // is the boundary that validates them. deriveMessages stays a pure projection.
   const maybeImages = (event as { images?: unknown }).images
@@ -508,6 +513,11 @@ export function deriveMessagesUpTo(session: Session, maxSeq: number): LLMMessage
 
 export function deriveMessages(session: Session): LLMMessage[] {
   const result: LLMMessage[] = []
+  // New inbox-backed prompts keep their bytes on the durable admission. Read
+  // admissions even when compaction or rewind hides them from model-visible
+  // history: the later user/message still needs its image payload. Walking in
+  // log order means a reused inputId resolves only to its latest EARLIER entry.
+  const admittedImages = new Map<string, ImageInput[]>()
   // A tool block is one step of assistant toolCalls followed by its tool
   // results. Both are buffered and flushed together (assistant toolCalls
   // FIRST, then tool results) so the model-visible order matches what the
@@ -606,9 +616,13 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // Unkeyed events (seq === undefined) are never hidden (compaction/reset
   // precedent).
   for (const ev of session.events) {
+    if (ev.type === "agent/input/admitted" && ev.images?.length) admittedImages.set(ev.inputId, ev.images)
     if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
     if (ev.type === "user/message") {
-      const images = ev.images as ImageInput[] | undefined
+      const images = ev.imageInputId === undefined ? ev.images : admittedImages.get(ev.imageInputId)
+      if (ev.imageInputId !== undefined && !images?.length) {
+        throw new Error(`image admission not found for user/message: ${ev.imageInputId}`)
+      }
       const message: LLMMessage = images && images.length > 0
         ? { role: "user", content: [{ type: "text", text: ev.text }, ...images.map((image) => ({ type: "image" as const, image }))] }
         : { role: "user", content: ev.text }

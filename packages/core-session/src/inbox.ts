@@ -115,7 +115,7 @@ export class Inbox {
       append(this.session, {
         type: "user/message",
         text: p.text,
-        ...(p.images?.length ? { images: p.images } : {}),
+        ...(p.images?.length ? { imageInputId: p.inputId } : {}),
         ...(p.intent === "system"
           ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } }
           : {}),

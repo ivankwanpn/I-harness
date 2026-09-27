@@ -563,6 +563,24 @@ describe("M14 multimodal", () => {
     })
   })
 
+  it("resolves a promoted image from its earlier admission without repeating bytes", () => {
+    const s = createSession()
+    const image = { mediaType: "image/png" as const, dataBase64: PNG, name: "probe.png" }
+    append(s, { type: "agent/input/admitted", version: 1, inputId: "input-1", text: "inspect", delivery: "queue", intent: "user", images: [image] })
+    append(s, { type: "user/message", text: "inspect", imageInputId: "input-1" })
+    expect(s.events[1]).not.toHaveProperty("images")
+    expect(deriveMessages(s)[0]).toEqual({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
+    append(s, { type: "compaction/summary", text: "other history", shadowedSeqs: [0] })
+    expect(deriveMessages(s)[0]).toEqual({ role: "user", content: [{ type: "text", text: "inspect" }, { type: "image", image }] })
+  })
+
+  it("refuses a missing image admission and an ambiguous inline/reference event", () => {
+    const s = createSession()
+    expect(() => append(s, { type: "user/message", text: "inspect", imageInputId: "missing", images: [{ mediaType: "image/png", dataBase64: PNG }] })).toThrow(/image.*reference/i)
+    append(s, { type: "user/message", text: "inspect", imageInputId: "missing" })
+    expect(() => deriveMessages(s)).toThrow(/image.*admission/i)
+  })
+
   it("keeps user/message content a plain string when no images", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hi" })

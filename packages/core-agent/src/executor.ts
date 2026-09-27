@@ -13,7 +13,7 @@ export type InputSubmit =
   | { tier: "inject"; text: string; description: string; scope: "turn" | "session" }
 
 export interface AgentRunSurface {
-  run(task: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult>
 }
 
 export interface SessionExecutorDeps {
@@ -103,7 +103,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           const sig = turnSignals.get(next.inputId) ?? deps.signal
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
-          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images)
+          await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId)
           lastError = undefined
         } catch (err) {
           lastError = err

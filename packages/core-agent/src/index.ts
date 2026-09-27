@@ -103,7 +103,7 @@ export interface AgentResult {
 }
 
 export interface Agent {
-  run(task: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult>
+  run(task: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult>
   followup(message: string, signal?: AbortSignal): Promise<AgentResult>
   // M11: explicit manual compaction. Optional because a registry may hold
   // agents that were never configured with a compact seam (no engine). With no
@@ -276,13 +276,13 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // resumed session has no predecessor to compare with and claims none.
   let prevFingerprints: string[] | undefined
 
-  async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[]): Promise<AgentResult> {
+  async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
     const abort = signal ?? deps.signal
     append(deps.session, { type: "turn/start" })
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
-    append(deps.session, { type: "user/message", text: message, ...(images?.length ? { images } : {}) })
+    append(deps.session, { type: "user/message", text: message, ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}) })
 
     let needsContinuation = true
     while (needsContinuation) {
@@ -610,7 +610,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       outputCap = config.maxOutputTokens
       compactEnabled = config.compact?.auto ?? true
     },
-    run: (task, signal, images) => track(() => runTurn(task, signal, images)),
+    run: (task, signal, images, inputId) => track(() => runTurn(task, signal, images, inputId)),
     followup: (message, signal) => track(() => runTurn(message, signal)),
     compact: (instructions?: string) => track(async () =>
       compactor ? compactor.compact(deps.session, instructions) : { compacted: false, shadowedSeqs: [] }),
