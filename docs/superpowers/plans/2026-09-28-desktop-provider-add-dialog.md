@@ -23,9 +23,9 @@
 
 **Interfaces:** `SettingsDialog` receives title, `busy`, `onClose`, optional initial-focus selector and children. It portals to `document.body`, guards Tab/Escape/backdrop and backgrounds the settings pane. Calling code owns restoration to its trigger.
 
-- [ ] Add a role-dialog regression test for focus/keyboard/save-error behavior that would fail if the wrapper loses it.
-- [ ] Extract the existing role modal into the shared component without changing its backend commands.
-- [ ] Run focused role tests and Desktop typecheck; commit the shared dialog.
+- [x] Add a role-dialog regression test for focus/keyboard/save-error behavior that would fail if the wrapper loses it.
+- [x] Extract the existing role modal into the shared component without changing its backend commands.
+- [x] Run focused role tests and Desktop typecheck; commit the shared dialog.
 
 ### Task 2: Provider creation flow
 

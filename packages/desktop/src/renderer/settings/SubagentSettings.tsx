@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react"
-import { createPortal } from "react-dom"
 import type { SubagentSettingsCommand, SubagentSettingsState } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import { SettingsDialog } from "./SettingsDialog.tsx"
 type Row = SubagentSettingsState["roles"][number]
 interface Route { id: string; displayName: string; auth?: { configured: boolean }; protocol?: string; models: { id: string; protocol?: string }[] }
 
@@ -65,14 +65,6 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
 
 function RoleEditor({ row, routes, busy, error, onRetry, onSave, onClose }: { row: Row; routes: Route[]; busy: boolean; error?: string; onRetry(): void; onSave(command: SubagentSettingsCommand): Promise<void>; onClose(): void }) {
   const t = useText()
-  const dialog = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const background = document.querySelector(".settings-pane")
-    const wasInert = background?.hasAttribute("inert") ?? false
-    background?.setAttribute("inert", "")
-    const frame = requestAnimationFrame(() => dialog.current?.querySelector<HTMLElement>(".role-editor-form input:not(:disabled), .role-editor-form select:not(:disabled)")?.focus())
-    return () => { cancelAnimationFrame(frame); if (!wasInert) background?.removeAttribute("inert") }
-  }, [])
   const [name, setName] = useState(row.name)
   const [provider, setProvider] = useState(row.selection?.provider ?? "")
   const [model, setModel] = useState(row.selection?.model ?? "")
@@ -83,16 +75,7 @@ function RoleEditor({ row, routes, busy, error, onRetry, onSave, onClose }: { ro
   const missingCredentials = selectedRoute?.auth?.configured === false
   const sameModel = row.selection?.provider === provider && row.selection.model === model
   const hasProtocol = Boolean(sameModel && row.selection?.protocol || selectedModel?.protocol || selectedRoute?.protocol)
-  return createPortal(<div className="role-editor-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose() }}>
-    <div ref={dialog} className="role-editor-dialog" role="dialog" aria-modal="true" aria-label={t("設定角色模型")} onKeyDown={(event) => {
-      if (event.key === "Escape") { event.preventDefault(); if (!busy) onClose(); return }
-      if (event.key !== "Tab") return
-      const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])") ?? [])
-      const first = focusable[0], last = focusable.at(-1)
-      if (event.shiftKey && document.activeElement === first && last) { event.preventDefault(); last.focus() }
-      else if (!event.shiftKey && document.activeElement === last && first) { event.preventDefault(); first.focus() }
-    }}>
-    <header className="role-editor-header"><h2>{t("設定角色模型")}</h2><button type="button" aria-label={t("關閉角色設定")} disabled={busy} onClick={onClose}>×</button></header>
+  return <SettingsDialog title={t("設定角色模型")} closeLabel={t("關閉角色設定")} busy={busy} onClose={onClose} initialFocusSelector=".role-editor-form input:not(:disabled), .role-editor-form select:not(:disabled)">
     {error ? <p role="alert" className="error-text">{error}<button type="button" className="link-button" disabled={busy} onClick={onRetry}>{t("重試")}</button></p> : null}
     <form className="provider-editor role-editor-form" onSubmit={(event) => {
     event.preventDefault()
@@ -110,6 +93,5 @@ function RoleEditor({ row, routes, busy, error, onRetry, onSave, onClose }: { ro
     {modelListed && !hasProtocol && !missingCredentials ? <p className="muted">{t("請先在模型與提供商設定通訊協定。")}</p> : null}
     <div className="provider-actions"><button type="submit" className="primary-button" disabled={!modelListed || missingCredentials || !hasProtocol}>{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>
   </fieldset></form>
-    </div>
-  </div>, document.body)
+  </SettingsDialog>
 }
