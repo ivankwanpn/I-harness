@@ -228,13 +228,13 @@ export type ProviderThinkingBlock =
 export type ProviderBlockOrderEntry =
   | { kind: "reasoning"; index: number }
   | { kind: "tool"; index: number }
-  | { kind: "text"; text: string; phase?: string | null }
+  | { kind: "text"; text: string; phase?: string | null; thoughtSignature?: string }
 
 export type ProviderContinuation =
   | { kind: "anthropic"; model: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[] }
   | { kind: "openai-compatible"; reasoningContent: string; model?: string; providerId?: string }
   | { kind: "openai-responses"; reasoningItems: Record<string, unknown>[]; model?: string; providerId?: string; outputOrder?: ProviderBlockOrderEntry[] }
-  | { kind: "gemini"; callSignatures: (string | null)[]; model?: string; providerId?: string; thoughtParts?: { text: string; thoughtSignature?: string }[]; textSignature?: string; emptyTextSignatures?: string[] }
+  | { kind: "gemini"; callSignatures: (string | null)[]; model?: string; providerId?: string; thoughtParts?: { text: string; thoughtSignature?: string }[]; textSignature?: string; emptyTextSignatures?: string[]; partOrder?: ProviderBlockOrderEntry[]; callBindings?: { id?: string; name: string; argsJson: string }[] }
   | { kind: "bedrock"; reasoningBlocks: ({ reasoningText: { text: string; signature: string } } | { redactedContentBase64: string })[]; model?: string; providerId?: string; contentOrder?: ProviderBlockOrderEntry[] }
 
 export type LLMContentPart =

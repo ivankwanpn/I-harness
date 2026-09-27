@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -138,6 +138,35 @@ const CONTENT_BLOCK_FINISH_REASONS: ReadonlySet<string> = new Set([
   "IMAGE_RECITATION",
 ])
 
+/** Keep Gemini's signed parts in the positions where the provider issued them.
+ * The neutral transcript remains authoritative for visible text and tool args;
+ * stale or incomplete native order falls back to an unsigned projection. */
+function replayGeminiParts(
+  continuation: Extract<ProviderContinuation, { kind: "gemini" }> | undefined,
+  content: string,
+  calls: readonly { id: string; name: string; args: unknown }[],
+): unknown[] | undefined {
+  if (!continuation?.partOrder) return undefined
+  if (!geminiCallsMatch(continuation, calls)) return undefined
+  const thoughts = (continuation.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) }))
+  const tools = calls.map((call, index) => ({ functionCall: { id: call.id, name: call.name, args: call.args }, ...(continuation.callSignatures[index] ? { thoughtSignature: continuation.callSignatures[index] } : {}) }))
+  return replayBlockOrder<unknown>(continuation.partOrder, content, thoughts, tools,
+    (text, _phase, thoughtSignature) => ({ text, ...(thoughtSignature ? { thoughtSignature } : {}) }))
+}
+
+function geminiCallsMatch(
+  continuation: Extract<ProviderContinuation, { kind: "gemini" }> | undefined,
+  calls: readonly { id: string; name: string; args: unknown }[],
+): boolean {
+  if (!continuation) return false
+  if (!continuation.callBindings) return calls.length === 0 || continuation.partOrder === undefined
+  return continuation.callBindings.length === calls.length && continuation.callBindings.every((binding, index) => {
+    const call = calls[index]
+    return call !== undefined && binding.name === call.name && binding.argsJson === JSON.stringify(call.args)
+      && (binding.id === undefined || binding.id === call.id)
+  })
+}
+
 export function createGeminiClient(config: GeminiConfig): ModelClient {
   const baseUrl = config.baseUrl ?? "https://generativelanguage.googleapis.com"
   return {
@@ -174,13 +203,17 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
             const continuation = m.providerContinuation?.kind === "gemini" && canReplayContinuation(m.providerContinuation, config)
               ? m.providerContinuation : undefined
+            const matchingContinuation = geminiCallsMatch(continuation, m.toolCalls) ? continuation : undefined
+            const ordered = replayGeminiParts(matchingContinuation, m.content, m.toolCalls)
+            if (ordered !== undefined) { contents.push({ role: "model", parts: ordered }); continue }
+            const safeContinuation = matchingContinuation?.partOrder ? undefined : matchingContinuation
             const parts: unknown[] = [
-              ...(continuation?.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
-              ...(m.content.trim() !== "" ? [{ text: m.content, ...(continuation?.textSignature ? { thoughtSignature: continuation.textSignature } : {}) }] : []),
-              ...(continuation?.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
+              ...(safeContinuation?.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
+              ...(m.content !== "" ? [{ text: m.content, ...(safeContinuation?.textSignature ? { thoughtSignature: safeContinuation.textSignature } : {}) }] : []),
+              ...(safeContinuation?.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
             ]
             for (const [index, c] of m.toolCalls.entries()) {
-              const signature = continuation?.callSignatures[index]
+              const signature = safeContinuation?.callSignatures[index]
               parts.push({ functionCall: { id: c.id, name: c.name, args: c.args }, ...(signature ? { thoughtSignature: signature } : {}) })
             }
             contents.push({ role: "model", parts })
@@ -188,9 +221,12 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
           }
           if (m.role === "assistant" && m.providerContinuation?.kind === "gemini" && canReplayContinuation(m.providerContinuation, config)) {
             const continuation = m.providerContinuation
+            const ordered = replayGeminiParts(continuation, m.content, [])
+            if (ordered !== undefined) { contents.push({ role: "model", parts: ordered }); continue }
+            if (continuation.partOrder) { contents.push({ role: "model", parts: [{ text: m.content }] }); continue }
             contents.push({ role: "model", parts: [
               ...(continuation.thoughtParts ?? []).map((part) => ({ text: part.text, thought: true, ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {}) })),
-              { text: m.content, ...(continuation.textSignature ? { thoughtSignature: continuation.textSignature } : {}) },
+              ...(m.content !== "" ? [{ text: m.content, ...(continuation.textSignature ? { thoughtSignature: continuation.textSignature } : {}) }] : []),
               ...(continuation.emptyTextSignatures ?? []).map((thoughtSignature) => ({ text: "", thoughtSignature })),
             ] })
             continue
@@ -281,8 +317,11 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       const pendingCalls: PendingCall[] = []
       const callSignatures: (string | null)[] = []
+      const callBindings: { id?: string; name: string; argsJson: string }[] = []
       const thoughtParts: { text: string; thoughtSignature?: string }[] = []
       let activeThought: { index: number; part: { text: string; thoughtSignature?: string } } | undefined
+      const partOrder: ProviderBlockOrderEntry[] = []
+      let activeText: { index: number; part: Extract<ProviderBlockOrderEntry, { kind: "text" }> } | undefined
       let textSignature: string | undefined
       const emptyTextSignatures: string[] = []
       const accumulateArgs = (call: PendingCall, args: unknown): void => {
@@ -315,6 +354,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
             // merge the pieces (docs' spread accumulation).
             args = call.rawArgs.length > 0 ? Object.assign({}, ...call.rawArgs) : {}
           }
+          callBindings.push({ ...(call.id ? { id: call.id } : {}), name: call.name, argsJson: JSON.stringify(args) })
           if (yield { type: "tool_call", call: { ...(call.id ? { id: call.id } : {}), name: call.name, args } }) return true
         }
         pendingCalls.length = 0
@@ -365,25 +405,45 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         const parts = candidates?.[0]?.content?.parts ?? []
         for (const [index, part] of parts.entries()) {
           if (part.thought === true) {
+            activeText = undefined
             if (activeThought?.index !== index) {
               const entry: { text: string; thoughtSignature?: string } = { text: "" }
+              partOrder.push({ kind: "reasoning", index: thoughtParts.length })
               thoughtParts.push(entry)
               activeThought = { index, part: entry }
             }
             activeThought.part.text += part.text ?? ""
-            if (part.thoughtSignature) activeThought.part.thoughtSignature = part.thoughtSignature
+            if (part.thoughtSignature) {
+              activeThought.part.thoughtSignature = part.thoughtSignature
+              activeThought = undefined
+            }
           } else {
             activeThought = undefined
             if (part.functionCall === undefined && part.thoughtSignature) {
               if (part.text === "") emptyTextSignatures.push(part.thoughtSignature)
               else textSignature = part.thoughtSignature
             }
+            if (part.functionCall !== undefined) {
+              activeText = undefined
+              if (part.functionCall.name !== undefined) partOrder.push({ kind: "tool", index: pendingCalls.length })
+            } else if (part.text === "" && part.thoughtSignature) {
+              activeText = undefined
+              partOrder.push({ kind: "text", text: "", thoughtSignature: part.thoughtSignature })
+            } else if (typeof part.text === "string" && part.text.length > 0) {
+              if (activeText?.index !== index) {
+                const entry: Extract<ProviderBlockOrderEntry, { kind: "text" }> = { kind: "text", text: "" }
+                partOrder.push(entry)
+                activeText = { index, part: entry }
+              }
+              activeText.part.text += part.text
+              if (part.thoughtSignature) { activeText.part.thoughtSignature = part.thoughtSignature; activeText = undefined }
+            }
           }
           if (part.functionCall !== undefined) {
             handleFunctionCall(part.functionCall, part.thoughtSignature)
           } else if (typeof part.text === "string" && part.text.length > 0) {
             events.push(part.thought === true
-              ? { type: "reasoning", blockId: String(index), text: part.text }
+              ? { type: "reasoning", blockId: String(thoughtParts.length - 1), text: part.text }
               : { type: "text/chunk", text: part.text })
           }
         }
@@ -427,11 +487,21 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       }
       // M77: each bit is written on its own (a response can be both), and both
       // absent ⇒ the byte-exact `{ type: "end" }` every clean ending returned.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(callSignatures.some(Boolean) || thoughtParts.length || textSignature || emptyTextSignatures.length ? { providerContinuation: {
+      const visibleText = partOrder.filter((part): part is Extract<ProviderBlockOrderEntry, { kind: "text" }> => part.kind === "text").map((part) => part.text).join("")
+      const canonicalOrder: ProviderBlockOrderEntry[] = [
+        ...thoughtParts.map((_, index) => ({ kind: "reasoning" as const, index })),
+        ...(visibleText ? [{ kind: "text" as const, text: visibleText, ...(textSignature ? { thoughtSignature: textSignature } : {}) }] : []),
+        ...emptyTextSignatures.map((thoughtSignature) => ({ kind: "text" as const, text: "", thoughtSignature })),
+        ...callSignatures.map((_, index) => ({ kind: "tool" as const, index })),
+      ]
+      const needsPartOrder = JSON.stringify(partOrder) !== JSON.stringify(canonicalOrder)
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(callSignatures.some(Boolean) || thoughtParts.length || textSignature || emptyTextSignatures.length || needsPartOrder ? { providerContinuation: {
         kind: "gemini", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), callSignatures,
         ...(thoughtParts.length ? { thoughtParts } : {}),
         ...(textSignature ? { textSignature } : {}),
         ...(emptyTextSignatures.length ? { emptyTextSignatures } : {}),
+        ...(needsPartOrder ? { partOrder } : {}),
+        ...(callBindings.length ? { callBindings } : {}),
       } as const } : {}) }
     },
   }
