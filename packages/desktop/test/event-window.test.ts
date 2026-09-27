@@ -20,6 +20,17 @@ function page(events: WireEvent[], nextSeq: number): HistoryRange {
 }
 
 describe("Desktop event window", () => {
+  it("keeps an old gateway's admission bytes out of the retained renderer window", () => {
+    const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }
+    const admission: WireEvent = { type: "agent/input/admitted", version: 1, inputId: "q1", text: "inspect", delivery: "queue", intent: "user", images: [image], seq: 0 }
+    const user: WireEvent = { type: "user/message", text: "inspect", images: [image], seq: 1 }
+    let state = applyNotification(emptyEventWindow(), admission)
+    expect(state.events[0]).not.toHaveProperty("images")
+    state = applyHistory(state, page([admission, user], 2))
+    expect(state.events[0]).not.toHaveProperty("images")
+    expect(state.events[1]).toMatchObject({ images: [image] })
+    expect(admission).toHaveProperty("images", [image])
+  })
   it("keeps seq 0 from the first page and advances the cursor to nextSeq", () => {
     const state = applyHistory(emptyEventWindow(), page([event(0, "a"), event(1, "b")], 2))
 

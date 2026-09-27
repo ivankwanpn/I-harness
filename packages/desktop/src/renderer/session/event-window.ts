@@ -31,16 +31,23 @@ function capEvents(events: WireEvent[]): WireEvent[] {
   return events.length > MAX_RETAINED_EVENTS ? events.slice(events.length - MAX_RETAINED_EVENTS) : events
 }
 
+function retainEvent(event: WireEvent): WireEvent {
+  if (event.type !== "agent/input/admitted" || event.images === undefined) return event
+  const { images: _images, ...rest } = event
+  return rest
+}
+
 export function applyHistory(state: EventWindow, page: HistoryRange): EventWindow {
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
-    events: capEvents(mergeBySeq(state.events, page.events)),
+    events: capEvents(mergeBySeq(state.events, page.events.map(retainEvent))),
     live: state.live.length > MAX_RETAINED_LIVE ? state.live.slice(state.live.length - MAX_RETAINED_LIVE) : [...state.live],
     connection: "online",
   }
 }
 
 export function applyNotification(state: EventWindow, event: WireEvent): EventWindow {
+  event = retainEvent(event)
   if (event.seq === undefined) {
     const live = [...state.live, event]
     return { ...state, live: live.length > MAX_RETAINED_LIVE ? live.slice(live.length - MAX_RETAINED_LIVE) : live }

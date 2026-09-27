@@ -71,6 +71,7 @@
 // Malformed lines are ignored; unknown methods get -32601; invalid params -32602;
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { append, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
+import { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -268,7 +269,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     // store unsubscribes the NEW closure — the inverted bug, measured.
     assemblyUnsubscribes.get(assembly.sessionId)?.()
     const unsubscribe = subscribe(assembly.session, (event) => {
-      emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event }))
+      try {
+        emitMessage(makeNotification("session/event", { sessionId: assembly.sessionId, event: transportSessionEvents(assembly.session, [event])[0]! }))
+      } catch (error) {
+        emitMessage(makeNotification("session/status", { sessionId: assembly.sessionId, status: "failed", error: error instanceof Error ? error.message : String(error) }))
+      }
     })
     assemblyUnsubscribes.set(assembly.sessionId, unsubscribe)
   })
@@ -624,7 +629,11 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
         // append), so the walk is a slice: [afterSeq exclusive, nextSeq).
         const start = Math.min(afterSeq, session.events.length)
         const end = Math.min(start + limit, session.events.length)
-        return makeSuccess(id, { events: session.events.slice(start, end), nextSeq: end })
+        try {
+          return makeSuccess(id, { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end })
+        } catch (error) {
+          return makeFailure(id, INTERNAL_ERROR, `session/history: ${error instanceof Error ? error.message : String(error)}`)
+        }
       }
       case "session/list": {
         // M41a v1: the listing source is an INJECTABLE server option — the

@@ -577,7 +577,10 @@ describe("M14 multimodal", () => {
   it("refuses a missing image admission and an ambiguous inline/reference event", () => {
     const s = createSession()
     expect(() => append(s, { type: "user/message", text: "inspect", imageInputId: "missing", images: [{ mediaType: "image/png", dataBase64: PNG }] })).toThrow(/image.*reference/i)
-    append(s, { type: "user/message", text: "inspect", imageInputId: "missing" })
+    expect(() => append(s, { type: "user/message", text: "inspect", imageInputId: "missing" })).toThrow(/image.*admission/i)
+    // A persisted log can bypass append validation; model projection must not
+    // turn its image request into a text-only success either.
+    s.events.push({ type: "user/message", text: "inspect", imageInputId: "missing", seq: 0 })
     expect(() => deriveMessages(s)).toThrow(/image.*admission/i)
   })
 

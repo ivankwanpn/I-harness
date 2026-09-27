@@ -36,11 +36,11 @@
 
 **Interfaces:** `transportEvent(session,event)` returns an admission event without `images` or a user event hydrated with the earlier admission image. It does not mutate `session.events`. `applyHistory` and `applyNotification` remove admission images before retaining old-gateway events.
 
-- [ ] Change the SDK prompt-image test to require raw admission bytes, raw user `imageInputId` without bytes, a hydrated `session/history` user event even when `afterSeq` skips admission, and a redacted admission notification.
-- [ ] Run `pnpm --filter @i-harness/sdk test -- prompt-context.test.ts`; confirm the new assertions fail.
-- [ ] Implement the transport projection at both `session/event` and `session/history`. Resolve a reference only from an earlier admission; on corruption return an explicit RPC failure rather than a text-only success.
-- [ ] Add and run an event-window test where the same base64 appears on an admission and a user message from an older gateway; require the retained admission to have no `images` while the user row keeps them.
-- [ ] Run SDK/Desktop suites and commit the independently testable wire/display behavior.
+- [x] Change the SDK prompt-image test to require raw admission bytes, raw user `imageInputId` without bytes, a hydrated `session/history` user event even when `afterSeq` skips admission, and a redacted admission notification.
+- [x] Run `pnpm --filter @i-harness/sdk test -- prompt-context.test.ts`; confirm the new assertions fail.
+- [x] Implement the transport projection at both `session/event` and `session/history`. Resolve a reference only from an earlier admission; on corruption return an explicit RPC failure rather than a text-only success.
+- [x] Add and run an event-window test where the same base64 appears on an admission and a user message from an older gateway; require the retained admission to have no `images` while the user row keeps them.
+- [x] Run SDK/Desktop suites and commit the independently testable wire/display behavior.
 
 ### Task 3: Cold storage, fork and packaged verification
 

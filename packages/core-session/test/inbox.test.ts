@@ -50,6 +50,17 @@ describe("Inbox", () => {
     expect(deriveMessages(s).filter((m) => m.role === "user").map((m) => m.content)).toEqual(["steer one", "steer two"])
   })
 
+  it("claims an image steer by reference while keeping it visible to the model", () => {
+    const session = createSession()
+    const inbox = new Inbox(session)
+    const image = { mediaType: "image/png" as const, dataBase64: "AQID" }
+    inbox.admit({ inputId: "photo", text: "look now", delivery: "steer", intent: "user", images: [image] })
+    inbox.claimAtStepBoundary()
+    expect(session.events.find((event) => event.type === "user/message")).toMatchObject({ imageInputId: "photo" })
+    expect(session.events.find((event) => event.type === "user/message")).not.toHaveProperty("images")
+    expect(deriveMessages(session)[0]).toMatchObject({ role: "user", content: [{ type: "text", text: "look now" }, { type: "image", image }] })
+  })
+
   it("system intent appends source-marked user/message at claim time", () => {
     const s = createSession()
     const inbox = new Inbox(s)

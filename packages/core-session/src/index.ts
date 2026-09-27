@@ -360,6 +360,10 @@ export function append(session: Session, event: SessionEvent): void {
     if (typeof event.imageInputId !== "string" || event.imageInputId.length === 0 || event.images !== undefined) {
       throw new Error("image reference: user/message needs one non-empty imageInputId and no inline images")
     }
+    const admission = session.events.findLast((prior) => prior.type === "agent/input/admitted" && prior.inputId === event.imageInputId)
+    if (admission?.type !== "agent/input/admitted" || !admission.images?.length) {
+      throw new Error(`image admission not found for user/message: ${event.imageInputId}`)
+    }
   }
   // M14 image intake (fail-loud): images first attach to an event here, so this
   // is the boundary that validates them. deriveMessages stays a pure projection.
@@ -616,7 +620,10 @@ export function deriveMessages(session: Session): LLMMessage[] {
   // Unkeyed events (seq === undefined) are never hidden (compaction/reset
   // precedent).
   for (const ev of session.events) {
-    if (ev.type === "agent/input/admitted" && ev.images?.length) admittedImages.set(ev.inputId, ev.images)
+    if (ev.type === "agent/input/admitted") {
+      if (ev.images?.length) admittedImages.set(ev.inputId, ev.images)
+      else admittedImages.delete(ev.inputId)
+    }
     if (ev.seq !== undefined && (shadowed.has(ev.seq) || hideByRewind(ev.seq))) continue
     if (ev.type === "user/message") {
       const images = ev.imageInputId === undefined ? ev.images : admittedImages.get(ev.imageInputId)
