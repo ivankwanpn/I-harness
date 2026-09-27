@@ -85,6 +85,78 @@ describe("llm-openai protocol", () => {
     await iterator.return?.()
   })
 
+  it("round-trips assistant phase and native item order across a tool result", async () => {
+    const reasoning = { type: "reasoning", id: "rs_phase", summary: [], encrypted_content: "opaque" }
+    const commentary = { type: "message", id: "msg_phase", status: "completed", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Checking the file." }] }
+    const sse = [
+      { type: "response.output_item.done", output_index: 0, item: reasoning },
+      { type: "response.output_text.delta", item_id: "msg_phase", output_index: 1, content_index: 0, delta: "Checking the file." },
+      { type: "response.output_item.done", output_index: 1, item: commentary },
+      { type: "response.output_item.added", output_index: 2, item: { type: "function_call", id: "fc_phase", call_id: "call_phase", name: "read", arguments: '{"path":"a.txt"}' } },
+      { type: "response.completed" },
+    ].map((event) => `data: ${JSON.stringify(event)}`).concat("data: [DONE]").join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "gpt-test", providerId: "openai-main" })
+    const first: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [{ role: "user", content: "read" }], tools: [], systemPrompt: "" })) first.push(event)
+    const continuation = (first.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
+    expect(continuation).toMatchObject({ kind: "openai-responses", model: "gpt-test", providerId: "openai-main", outputOrder: [
+      { kind: "reasoning", index: 0 },
+      { kind: "text", text: "Checking the file.", phase: "commentary" },
+      { kind: "tool", index: 0 },
+    ] })
+    const saved = JSON.parse(JSON.stringify(continuation))
+    const iterator = client.stream({ messages: [
+      { role: "assistant", content: "Checking the file.", toolCalls: [{ id: "call_phase", name: "read", args: { path: "a.txt" } }], providerContinuation: saved },
+      { role: "tool", toolCallId: "call_phase", content: "data" },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([
+      reasoning,
+      { role: "assistant", content: "Checking the file.", phase: "commentary" },
+      { type: "function_call", call_id: "call_phase", name: "read", arguments: '{"path":"a.txt"}' },
+      { type: "function_call_output", call_id: "call_phase", output: "data" },
+    ])
+    await iterator.return?.()
+  })
+
+  it("replays separate commentary and final_answer items instead of merging their phases", async () => {
+    const sse = [
+      { type: "response.output_text.delta", item_id: "msg_c", output_index: 0, delta: "Working." },
+      { type: "response.output_item.done", output_index: 0, item: { type: "message", id: "msg_c", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Working." }] } },
+      { type: "response.output_text.delta", item_id: "msg_f", output_index: 1, delta: "Done." },
+      { type: "response.output_item.done", output_index: 1, item: { type: "message", id: "msg_f", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Done." }] } },
+    ].map((event) => `data: ${JSON.stringify(event)}`).concat("data: [DONE]").join("\n\n")
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(sse, { status: 200 })).mockResolvedValueOnce(new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const client = createOpenAIClient({ apiKey: "k", model: "gpt-test" })
+    const events: LLMStreamEvent[] = []
+    for await (const event of client.stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    const continuation = (events.at(-1) as Extract<LLMStreamEvent, { type: "end" }>).providerContinuation
+    const iterator = client.stream({ messages: [{ role: "assistant", content: "Working.Done.", providerContinuation: continuation }], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([
+      { role: "assistant", content: "Working.", phase: "commentary" },
+      { role: "assistant", content: "Done.", phase: "final_answer" },
+    ])
+    await iterator.return?.()
+  })
+
+  it("ignores phased replay metadata after the visible text changes", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
+    vi.stubGlobal("fetch", fetchMock)
+    const iterator = createOpenAIClient({ apiKey: "k", model: "gpt-test" }).stream({ messages: [
+      { role: "assistant", content: "Edited answer", providerContinuation: { kind: "openai-responses", model: "gpt-test", reasoningItems: [{ type: "reasoning", id: "rs_stale" }], outputOrder: [{ kind: "reasoning", index: 0 }, { kind: "text", text: "Old answer", phase: "commentary" }] } },
+    ], tools: [], systemPrompt: "" })[Symbol.asyncIterator]()
+    await iterator.next()
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)
+    expect(body.input).toEqual([{ role: "assistant", content: "Edited answer" }])
+    await iterator.return?.()
+  })
+
   it("does not replay another model's Responses reasoning item", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)

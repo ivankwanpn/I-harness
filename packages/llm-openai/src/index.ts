@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -105,20 +105,27 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
               return [output, { role: "user", content: images.map((part) => ({ type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` })) }]
             }
             // assistant
+            const continuation = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation : undefined
+            const originalReasoningItems = continuation?.reasoningItems ?? []
+            const calls = m.toolCalls?.map((c) => ({
+              type: "function_call",
+              call_id: c.id,
+              name: c.name,
+              arguments: JSON.stringify(c.args),
+            })) ?? []
+            const ordered = replayBlockOrder<unknown>(continuation?.outputOrder, m.content, originalReasoningItems, calls,
+              (content, phase) => ({ role: "assistant", content, ...(phase !== undefined ? { phase } : {}) }))
+            if (ordered !== undefined) return ordered
+            // An order envelope that no longer matches the neutral message is
+            // stale. Its native reasoning belongs to that old assistant text.
+            // Old logs without an order envelope keep their historical replay.
+            const reasoningItems = continuation?.outputOrder ? [] : originalReasoningItems
             if (m.toolCalls && m.toolCalls.length > 0) {
-              const reasoningItems = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation.reasoningItems : []
-              const calls = m.toolCalls.map((c) => ({
-                type: "function_call",
-                call_id: c.id,
-                name: c.name,
-                arguments: JSON.stringify(c.args),
-              }))
               // M51/B2: a folded step message carries the step's text AND its
               // tool calls — emit the assistant text item before the
               // function_call items (dropping it lost the narration).
               return [...reasoningItems, ...(m.content.trim() !== "" ? [{ role: "assistant", content: m.content }] : []), ...calls]
             }
-            const reasoningItems = m.providerContinuation?.kind === "openai-responses" && canReplayContinuation(m.providerContinuation, config) ? m.providerContinuation.reasoningItems : []
             return reasoningItems.length ? [...reasoningItems, { role: "assistant", content: m.content }] : { role: "assistant", content: m.content }
           })
           .flat(),
@@ -170,7 +177,15 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // produced as the other's `else`. Only `true` is ever written.
       let refused = false
       const reasoningItems = new Map<string, Record<string, unknown>>()
-      const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string }>()
+      const outputItems = new Map<number, ProviderBlockOrderEntry>()
+      let outputOrderValid = true
+      let hasAssistantPhase = false
+      let toolCount = 0
+      const recordOutput = (index: unknown, entry: ProviderBlockOrderEntry): void => {
+        if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || outputItems.has(index)) { outputOrderValid = false; return }
+        outputItems.set(index, entry)
+      }
+      const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string; outputIndex?: number }>()
       const yieldedInline = new Set<string>()
       // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
       // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
@@ -203,7 +218,21 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         }
         if (t === "response.output_item.done") {
           const item = event.item as Record<string, unknown> | undefined
-          if (item?.type === "reasoning" && typeof item.id === "string") reasoningItems.set(item.id, item)
+          if (item?.type === "reasoning" && typeof item.id === "string") {
+            const index = reasoningItems.has(item.id) ? [...reasoningItems.keys()].indexOf(item.id) : reasoningItems.size
+            reasoningItems.set(item.id, item)
+            recordOutput(event.output_index, { kind: "reasoning", index })
+          } else if (item?.type === "message" && item.role === "assistant") {
+            const parts = item.content
+            if (!Array.isArray(parts) || parts.some((part) => (part as { type?: unknown })?.type !== "output_text" || typeof (part as { text?: unknown }).text !== "string")) outputOrderValid = false
+            else {
+              const phase = typeof item.phase === "string" || item.phase === null ? item.phase as string | null : undefined
+              if (phase !== undefined) hasAssistantPhase = true
+              recordOutput(event.output_index, { kind: "text", text: parts.map((part) => (part as { text: string }).text).join(""), ...(phase !== undefined ? { phase } : {}) })
+            }
+          } else if (item?.type === "function_call") {
+            if (!outputItems.has(event.output_index as number)) outputOrderValid = false
+          } else if (item !== undefined) outputOrderValid = false
           return []
         }
         if (t === "response.output_item.added") {
@@ -214,12 +243,13 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
               try {
                 const args = JSON.parse(item.arguments) as unknown
                 if (item.id) yieldedInline.add(item.id)
+                recordOutput(event.output_index, { kind: "tool", index: toolCount++ })
                 return [{ type: "tool_call", call: { ...(item.call_id ? { id: item.call_id } : {}), name: item.name!, args } }]
               } catch {
                 return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
               }
             }
-            if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "", ...(item.call_id ? { callId: item.call_id } : {}) })
+            if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "", ...(item.call_id ? { callId: item.call_id } : {}), ...(typeof event.output_index === "number" ? { outputIndex: event.output_index } : {}) })
           }
           return []
         }
@@ -237,6 +267,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
             if (!yieldedInline.has(ev.item_id)) {
               try {
                 const args = JSON.parse(pending.argsBuffer) as unknown
+                recordOutput(pending.outputIndex, { kind: "tool", index: toolCount++ })
                 return [{ type: "tool_call", call: { ...(pending.callId ? { id: pending.callId } : {}), name: pending.name, args } }]
               } catch {
                 return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
@@ -349,7 +380,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // M77: the two bits are independent — each is written on its own, so a
       // response that was both truncated and refused carries both. Both absent
       // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
-      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()] } as const } : {}) }
+      const indexedOutput = [...outputItems.entries()].sort(([a], [b]) => a - b)
+      const outputOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position) && (reasoningItems.size > 0 || hasAssistantPhase)
+        ? indexedOutput.map(([, entry]) => entry)
+        : undefined
+      yield { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
     },
   }
 }

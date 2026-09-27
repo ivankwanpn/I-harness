@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { afterEach, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { TitleBar } from "../src/renderer/shell/TitleBar.tsx"
 import { NativeSettings } from "../src/renderer/settings/NativeSettings.tsx"
+import { useLocale } from "../src/renderer/design/i18n.ts"
+beforeEach(() => useLocale.getState().setLocale("zh-TW"))
 afterEach(cleanup)
 it("sends only the selected native window action", () => {
   const request = vi.fn(async () => ({}))

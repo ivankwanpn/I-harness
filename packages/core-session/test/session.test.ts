@@ -697,6 +697,23 @@ it("keeps signed thinking ahead of tool calls in the resumed provider message", 
   expect(deriveMessages(s)[1]).toEqual({ role: "assistant", content: "", toolCalls: [{ id: "c1", name: "read", args: {} }], thinkingBlocks: [{ type: "thinking", thinking: "plan", signature: "sig" }] })
 })
 
+it("preserves Responses assistant phases and item order after a durable tool turn reload", () => {
+  const session = createSession()
+  const providerContinuation = { kind: "openai-responses" as const, model: "gpt-test", reasoningItems: [{ type: "reasoning", id: "rs_1" }], outputOrder: [
+    { kind: "reasoning" as const, index: 0 },
+    { kind: "text" as const, text: "Checking.", phase: "commentary" },
+    { kind: "tool" as const, index: 0 },
+  ] }
+  append(session, { type: "user/message", text: "read" })
+  append(session, { type: "step/start" })
+  append(session, { type: "tool/call", callId: "call_1", name: "read", args: {} })
+  append(session, { type: "assistant/message", text: "Checking.", providerContinuation })
+  append(session, { type: "tool/result", callId: "call_1", name: "read", output: "done" })
+  append(session, { type: "step/end" })
+  const restored = fromJSONL(toJSONL(session))
+  expect(deriveMessages(restored)[1]).toEqual({ role: "assistant", content: "Checking.", toolCalls: [{ id: "call_1", name: "read", args: {} }], providerContinuation })
+})
+
 it("defers a post-tool reminder until every parallel tool result after early assistant metadata", () => {
   const s = createSession()
   append(s, { type: "turn/start" })

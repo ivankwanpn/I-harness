@@ -94,7 +94,7 @@ export function replayBlockOrder<T>(
   content: string,
   reasoning: readonly T[],
   tools: readonly T[],
-  textBlock: (text: string) => T,
+  textBlock: (text: string, phase?: string | null) => T,
 ): T[] | undefined {
   if (!order) return undefined
   const result: T[] = []
@@ -104,7 +104,7 @@ export function replayBlockOrder<T>(
   for (const entry of order) {
     if (entry.kind === "text") {
       visibleText += entry.text
-      result.push(textBlock(entry.text))
+      result.push(textBlock(entry.text, entry.phase))
     } else if (entry.kind === "reasoning") {
       if (!Number.isSafeInteger(entry.index) || entry.index < 0 || seenReasoning.has(entry.index) || reasoning[entry.index] === undefined) return undefined
       seenReasoning.add(entry.index)
