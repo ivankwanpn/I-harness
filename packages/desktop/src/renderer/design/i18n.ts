@@ -94,6 +94,7 @@ const english = {
   "可寫入工作區": "Workspace write", "完整存取": "Full access",
   "提示": "Prompt", "輸入提示…": "Describe a task…", "目前無法送出": "Cannot send right now",
   "送出": "Send", "停止": "Stop", "語言": "Language",
+  "搜尋設定": "Search settings", "基本設定": "Basic settings", "Agent 設定": "Agent settings", "本機資料": "Local data", "通知": "Notifications",
 } as const
 export type Message = keyof typeof english
 export const useLocale = useUiStore

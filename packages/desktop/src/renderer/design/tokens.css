@@ -267,15 +267,23 @@ button { font: inherit; color: inherit; }
 .welcome-action { display: flex; align-items: center; gap: 8px; background: #ededed; color: #202020; border: 0; border-radius: 9px; padding: 10px 18px; cursor: pointer; }
 .welcome-action:disabled { opacity: .5; cursor: not-allowed; }
 .workspace-status { text-align: center; font-size: 11px; color: var(--ih-muted); padding: 5px 16px 10px; }
-.settings-pane { display: grid; grid-template-columns: 150px minmax(0,1fr); flex: 1; min-height: 0; }
-.settings-navigation { padding: 18px 8px; border-right: 1px solid var(--ih-divider); overflow-y: auto; }
+.settings-pane { display: grid; grid-template-columns: 268px minmax(0,1fr); width: 100%; height: 100%; flex: 1; min-height: 0; }
+.settings-navigation { padding: 12px 8px; background: var(--ih-sidebar); border-right: 1px solid var(--ih-divider); overflow-y: auto; }
+.settings-navigation h2 { padding: 8px 12px; margin: 4px 0 8px; font-size: 18px; }
+.settings-navigation .row-button { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 36px; border-radius: 10px; padding: 7px 12px; }
+.settings-navigation .row-button svg { flex-shrink: 0; }
+.settings-nav-group > p { padding: 0 12px; margin: 22px 0 7px; font-size: 12px; color: var(--ih-muted); }
+.settings-search { width: 100%; padding: 9px 12px; background: var(--ih-panel); color: var(--ih-text); border: 0; border-radius: 18px; font: inherit; }
 .settings-navigation [aria-current="page"] { background: var(--color-selected); }
-.settings-content { padding: 20px 28px; min-width: 0; overflow-y: auto; }
+.settings-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.settings-scroll { overflow-y: auto; flex: 1; }
+.settings-content { padding: 34px 32px 48px; max-width: 960px; margin: 0 auto; min-width: 0; }
 .settings-content h1 { font-size: 24px; margin: 0 0 24px; }
+.settings-content > .zc-settings-group + .zc-settings-group { margin-top: 20px; }
 .settings-content select { max-width: 100%; padding: 6px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; }
 .settings-content input[type="checkbox"] { width: 18px; height: 18px; }
 .zc-settings-row .text-foreground-subtle { overflow-wrap: anywhere; }
-@media (max-width: 1179px) { .settings-pane { grid-template-columns: 110px minmax(0,1fr); } .settings-content { padding: 20px 14px; } }
+@media (max-width: 850px) { .settings-pane { grid-template-columns: 64px minmax(0,1fr); } .settings-content { padding: 24px 18px; } .settings-navigation .row-button { justify-content: center; min-height: 40px; padding: 8px; } .settings-navigation .row-button span, .settings-navigation h2, .settings-nav-group > p { display: none; } .settings-search { padding: 9px 4px; border-radius: 8px; } .settings-nav-group { margin-top: 16px; } }
 
 :root[data-theme="light"] {
   color-scheme: light;
@@ -339,6 +347,38 @@ button:focus-visible, a:focus-visible { outline: 2px solid var(--ih-accent); out
 .provider-editor select option { background: var(--color-background); color: var(--ih-text); }
 .provider-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; }
 .provider-actions button { padding: 5px 9px; border-radius: 6px; }
+.provider-directory { min-width: 0; }
+.provider-directory-heading, .provider-models > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.provider-directory-heading h2, .provider-models h3 { margin: 0; }
+.provider-directory-heading button, .provider-models > header button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--ih-divider); border-radius: 8px; }
+.provider-directory-layout { display: grid; grid-template-columns: 180px minmax(0,1fr); border: 1px solid var(--ih-divider); border-radius: 14px; overflow: hidden; }
+.provider-list { padding: 8px; background: var(--ih-sidebar); border-right: 1px solid var(--ih-divider); }
+.provider-list button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px; border-radius: 8px; text-align: left; }
+.provider-list button > span { min-width: 0; overflow-wrap: anywhere; }
+.provider-list button > svg { flex-shrink: 0; }
+.provider-list button[aria-current="true"] { background: var(--ih-panel); color: var(--ih-text); }
+.provider-list small, .provider-model-name small { display: block; font-size: 11px; color: var(--ih-muted); margin-top: 3px; }
+.provider-detail { min-width: 0; padding: 22px; }
+.provider-card > .zc-settings-group { border: 0; background: transparent; border-radius: 0; overflow: visible; }
+.provider-card .zc-settings-row { padding-left: 0; padding-right: 0; }
+.provider-connection-summary { margin: 20px 0; }
+.provider-connection-summary code { overflow-wrap: anywhere; font-size: 12px; }
+.provider-models { border-top: 1px solid var(--ih-divider); padding-top: 20px; margin-top: 20px; }
+.provider-models h3 { font-size: 13px; font-weight: 600; }
+.provider-model-row { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-top: 1px solid var(--ih-divider); }
+.provider-model-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.provider-model-name strong { font-weight: 500; }
+.provider-model-context { color: var(--ih-muted); font-size: 11px; padding: 3px 6px; border-radius: 5px; background: var(--ih-sidebar); }
+.provider-model-actions { display: flex; gap: 3px; }
+.provider-model-actions button { display: flex; align-items: center; justify-content: center; min-width: 28px; min-height: 28px; border-radius: 6px; }
+.provider-model-actions button[aria-pressed="true"] { color: var(--ih-accent); background: var(--ih-sidebar); }
+@media (max-width: 1100px) {
+  .provider-directory-layout { grid-template-columns: minmax(0,1fr); }
+  .provider-list { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--ih-divider); }
+  .provider-list button { width: auto; flex-shrink: 0; }
+  .provider-detail { padding: 16px; }
+  .provider-model-row { flex-wrap: wrap; }
+}
 .provider-discovery { margin-top: 14px; }
 .marketplace-pane { overflow: auto; min-height: 0; padding: 28px clamp(16px, 5vw, 64px); }
 .marketplace-pane h1 { margin: 0 0 12px; font-size: 24px; }

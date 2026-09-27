@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Server, Plus } from "lucide-react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { useUiStore } from "../shell/ui-store.ts"
@@ -7,13 +8,19 @@ import { ProviderEditor } from "./ProviderEditor.tsx"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 
 /** Displays the backend directory; loading never probes a provider endpoint. */
-export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
+export function ProviderDirectory({ bridge, workspaceId, showHeading = true }: { bridge: DesktopBridge; workspaceId: string; showHeading?: boolean }) {
+  return <ProviderDirectoryContent key={workspaceId} bridge={bridge} workspaceId={workspaceId} showHeading={showHeading} />
+}
+
+function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge: DesktopBridge; workspaceId: string; showHeading: boolean }) {
   const t = useText()
   const [rows, setRows] = useState<DirectoryRow[]>()
   const [error, setError] = useState<string>()
   const [reload, setReload] = useState(0)
   const [adding, setAdding] = useState(false)
   const [saved, setSaved] = useState(false)
+  const [selectedId, setSelectedId] = useState<string>()
+  const selected = rows?.find((row) => row.id === selectedId) ?? rows?.find((row) => row.configured) ?? rows?.[0]
   const save = async (command: ProviderCommand) => {
     setSaved(false)
     await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
@@ -31,14 +38,21 @@ export function ProviderDirectory({ bridge, workspaceId }: { bridge: DesktopBrid
     })
     return () => { active = false }
   }, [bridge, workspaceId, reload])
-  return <section aria-label={t("模型與提供商")}>
-    <h2>{t("模型與提供商")}</h2>
-    <button onClick={() => setAdding(true)}>{t("新增提供商")}</button>
+  return <section className="provider-directory" aria-label={t("模型與提供商")}>
+    <header className="provider-directory-heading">{showHeading ? <h2>{t("模型與提供商")}</h2> : <span />}
+    <button onClick={() => setAdding(true)}><Plus size={16} aria-hidden="true" />{t("新增提供商")}</button></header>
     {saved ? <p role="status">{t("設定已儲存")}</p> : null}
     {adding ? <ProviderEditor onSave={save} onClose={() => setAdding(false)} /> : null}
     {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
     {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
       : rows.length === 0 ? <p>{t("沒有可用的提供商")}</p>
-      : rows.map((row) => <ProviderCard key={row.id} row={row} onSave={save} bridge={bridge} workspaceId={workspaceId} />)}
+      : <div className="provider-directory-layout">
+        <nav className="provider-list" aria-label={t("模型與提供商")}>
+          {rows.map((row) => <button key={row.id} aria-current={selected?.id === row.id ? "true" : undefined} onClick={() => { setSelectedId(row.id); setSaved(false) }}>
+            <Server size={16} aria-hidden="true" /><span>{row.displayName}<small>{row.id}</small></span>
+          </button>)}
+        </nav>
+        <div className="provider-detail">{selected ? <ProviderCard key={selected.id} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
+      </div>}
   </section>
 }

@@ -78,6 +78,7 @@ describe("Desktop workbench shell", () => {
   it("switches shell language while preserving workspace navigation", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "設定" }))
+    expect(screen.queryByRole("navigation", { name: "工作區" })).toBeNull()
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
     expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy()
