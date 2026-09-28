@@ -5,12 +5,16 @@ import { classifyDanger } from "./danger-class.ts"
 
 export interface ApprovalConfig {
   workspace: string
+  /** Desktop mode may be read live when the user changes settings. */
+  mode?: ApprovalMode | (() => ApprovalMode)
   dangerousCommands?: string[]
   dangerousFlags?: string[]
   askForNonReadOnly?: boolean
   // M22: 分類器判 ask 即達 deny-with-reason（headless 安全姿態）
   approvalPolicy?: "ask" | "never"
 }
+
+export type ApprovalMode = "dangerous" | "ask-all" | "delegate" | "full-access"
 
 // 匯出供測試與呼叫端重用/檢視（分類器對清單做 case-insensitive 比對）。
 export const DEFAULT_DANGEROUS_COMMANDS = [
@@ -54,6 +58,11 @@ export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 // as a guarantee about shells; it is a guarantee about every OTHER tool.
 
 const SHELL_TOOLS = new Set(["bash", "pwsh"])
+// Known low-risk built-ins: session planning/team controls remain under the
+// child's own approval policy, and resize changes only PTY dimensions.
+// terminal_open, terminal_send and process_spawn remain unclassified because
+// each can execute an arbitrary command or script.
+const ROUTINE_TOOLS = new Set(["todo_write", "spawn_agent", "send_message", "followup_task", "interrupt_agent", "close_agent", "resume_agent", "process_resize_pty"])
 // Layer 2 is a DIRECTORY WHITELIST: a tool named here is allowed silently when
 // its `path` is inside the workspace and asks when it is outside (or absent).
 //
@@ -115,6 +124,7 @@ function decide(
   dangerousCommands: string[],
   dangerousFlags: string[],
   askForNonReadOnly: boolean,
+  mode: ApprovalMode | undefined,
 ): ToolDecision | undefined {
   // Single-producer property: at most one policy seeds a decision per emit,
   // and the seeded value is the chain payload that reaches every waterfall
@@ -130,6 +140,13 @@ function decide(
 
   const name = call.name
   const tool = registry.get(name) as (Tool & { getArgv?(args: unknown): string[] }) | undefined
+
+  // A structured question already has its own user response channel; adding a
+  // tool approval would ask the same human twice in every mode.
+  if (name === "ask_user_input") return undefined
+  if (mode === "full-access") return undefined
+  if (mode === "ask-all" || mode === "delegate") return { kind: "ask", reason: `tool '${name}' requires approval in ${mode} mode` }
+  if (mode === "dangerous" && ROUTINE_TOOLS.has(name)) return undefined
 
   // Layer 1: readOnly tools need no approval.
   // Config can also opt out of asking for non-readOnly tools wholesale.
@@ -200,17 +217,18 @@ export function createApprovalPolicy(
   const dangerousCommands = config.dangerousCommands ?? DEFAULT_DANGEROUS_COMMANDS
   const dangerousFlags = config.dangerousFlags ?? DEFAULT_DANGEROUS_FLAGS
   const askForNonReadOnly = config.askForNonReadOnly ?? true
+  const modeNow = () => typeof config.mode === "function" ? config.mode() : config.mode
 
   ctx.on("tools/pre-execute", (payload) =>
     applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly),
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow()),
       config.approvalPolicy,
     ),
   )
 
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
     const decision = applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly),
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow()),
       config.approvalPolicy,
     )
     // Always release the chain; veto by returning our decision object.

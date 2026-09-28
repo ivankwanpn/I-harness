@@ -15,7 +15,7 @@ import { createApprovalPolicy } from "../src/index.ts"
  * @i-harness/subagent's child.test.ts. */
 const noRoleModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
-function makeSubagents(ctx: PluginContext, parentRegistry: ReturnType<typeof createToolRegistry>, parentSession: ReturnType<typeof createSession>, model: ReturnType<typeof createMockClient>) {
+function makeSubagents(ctx: PluginContext, parentRegistry: ReturnType<typeof createToolRegistry>, parentSession: ReturnType<typeof createSession>, model: ModelClient) {
   const exec = registerExec(createContext())
   const sub = registerSubagent(ctx, parentRegistry, {
     resolveModel: noRoleModel, exec, parentModel: model, parentSession,
@@ -24,6 +24,85 @@ function makeSubagents(ctx: PluginContext, parentRegistry: ReturnType<typeof cre
 }
 
 describe("guardian review", () => {
+  it("activates a mounted reviewer only while delegated approval is selected", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    const model = createMockClient([{ role: "assistant", text: '{"outcome":"approve","rationale":"safe","risk_level":"none"}' }])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    let enabled = false
+    await registerGuardian(ctx, { subagents: sub, parentRegistry, parentSession, parentCtx: ctx, resolveModel: noRoleModel, parentModel: model, enabled: () => enabled })
+    const review = ctx.services.get<(request: { name: string; reason: string; args: unknown }) => Promise<{ outcome: string }>>("approval/guardian")
+    expect((await review({ name: "read", reason: "ask-all", args: {} })).outcome).toBe("allow")
+    enabled = true
+    expect((await review({ name: "read", reason: "delegate", args: {} })).outcome).toBe("approve")
+  })
+  it("never gives the reviewer tools from a saved role override", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    let executed = 0
+    parentRegistry.register({ name: "read", description: "", inputSchema: {}, isReadOnly: true, execute: async () => { executed++; return { text: "secret" } } })
+    const model = createMockClient([
+      { role: "assistant", toolCalls: [{ name: "read", args: {} }] },
+      { role: "assistant", text: '{"outcome":"approve","rationale":"safe","risk_level":"none"}' },
+    ])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    sub.roles.register({ name: "reviewer", description: "overridden", systemPrompt: "custom", tools: ["read"] })
+    await runGuardianReview({ subagents: sub, parentRegistry, parentSession, parentCtx: ctx, resolveModel: noRoleModel, parentModel: model }, { name: "bash", reason: "review", args: {} })
+    expect(executed).toBe(0)
+  })
+  it("uses the host reviewer policy as the reviewer system prompt", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    const prompts: string[] = []
+    const model: ModelClient = { async *stream(request) {
+      prompts.push(String(request.systemPrompt))
+      yield { type: "text/chunk", text: '{"outcome":"allow","rationale":"human should decide","risk_level":"moderate"}' }
+      yield { type: "end" }
+    } }
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    const policyText = "When uncertain, ask the human by returning allow."
+    await runGuardianReview({ subagents: sub, parentRegistry, parentSession, parentCtx: ctx, resolveModel: noRoleModel, parentModel: model, policyText }, { name: "bash", reason: "review", args: {} })
+    expect(prompts[0]).toContain(policyText)
+    expect(prompts[0]).not.toContain("When uncertain, deny")
+  })
+  it("lets the human decide when a delegated reviewer returns malformed output", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    const model = createMockClient([{ role: "assistant", text: "not a verdict" }])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    await registerGuardian(ctx, { subagents: sub, parentRegistry, parentSession, parentCtx: ctx, resolveModel: noRoleModel, parentModel: model, fallbackToHumanOnFailure: true })
+    const review = ctx.services.get<(request: { name: string; reason: string; args: unknown }) => Promise<{ outcome: string }>>("approval/guardian")
+    expect((await review({ name: "bash", reason: "review", args: {} })).outcome).toBe("allow")
+  })
+  it("lets the human decide when the reviewer model fails", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    const model: ModelClient = { async *stream() { throw new Error("reviewer model offline") } }
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    await registerGuardian(ctx, { subagents: sub, parentRegistry, parentSession, parentCtx: ctx, resolveModel: noRoleModel, parentModel: model, fallbackToHumanOnFailure: true })
+    const review = ctx.services.get<(request: { name: string; reason: string; args: unknown }) => Promise<{ outcome: string }>>("approval/guardian")
+    expect((await review({ name: "bash", reason: "review", args: {} })).outcome).toBe("allow")
+  })
+  it("lets the human decide when reviewer model selection cannot start", async () => {
+    const ctx = createContext()
+    const parentRegistry = createToolRegistry(ctx)
+    const parentSession = createSession()
+    const model = createMockClient([{ role: "assistant", text: "unused" }])
+    const { sub } = makeSubagents(ctx, parentRegistry, parentSession, model)
+    await registerGuardian(ctx, {
+      subagents: sub, parentRegistry, parentSession, parentCtx: ctx, parentModel: model,
+      resolveModel: async () => { throw new Error("configured reviewer unavailable") },
+      roleSelectionFor: () => ({ provider: "missing", model: "reviewer" }), allowSubagentModelSelection: true,
+      fallbackToHumanOnFailure: true,
+    })
+    const review = ctx.services.get<(request: { name: string; reason: string; args: unknown }) => Promise<{ outcome: string }>>("approval/guardian")
+    expect((await review({ name: "bash", reason: "review", args: {} })).outcome).toBe("allow")
+  })
   it("registers the reviewer role once and keeps an existing one", () => {
     const ctx = createContext()
     const reg = createToolRegistry(ctx)

@@ -37,12 +37,47 @@ describe("Desktop host sandbox configuration", () => {
     try {
       const init = await call("initialize")
       expect(init).toMatchObject({ capabilities: { "desktop-agent-settings": ["1"] } })
-      expect(await call("desktop/agent-settings/configure", { sandboxMode: "workspace-write", autoCompaction: false })).toMatchObject({ restartRequired: true, effective: { sandboxMode: "read-only", autoCompaction: true } })
+      expect(await call("desktop/agent-settings/configure", { sandboxMode: "workspace-write", autoCompaction: false })).toMatchObject({ restartRequired: true, effective: { sandboxMode: "workspace-write", autoCompaction: true } })
+      expect(await call("desktop/sandbox/state")).toMatchObject({ mode: "workspace-write" })
+      expect(await call("desktop/agent-settings/configure", { approvalMode: "full-access" })).toMatchObject({ effective: { sandboxMode: "danger-full-access", approvalMode: "full-access" } })
+      expect(await call("desktop/sandbox/state")).toMatchObject({ mode: "danger-full-access" })
       await host.close()
       host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
       await call("initialize")
-      expect(await call("desktop/agent-settings/state")).toMatchObject({ restartRequired: false, effective: { sandboxMode: "workspace-write", autoCompaction: false } })
+      expect(await call("desktop/agent-settings/state")).toMatchObject({ restartRequired: false, effective: { sandboxMode: "danger-full-access", approvalMode: "full-access", autoCompaction: false } })
     } finally { await host.close() }
+  })
+  it("propagates sandbox and approval settings to another active workspace host", async () => {
+    const f = fixture("workspace-write")
+    const otherWorkspace = join(f.root, "other-workspace")
+    const otherSessions = join(f.root, "other-sessions")
+    mkdirSync(otherWorkspace)
+    mkdirSync(otherSessions)
+    const firstFrames: RpcMessage[] = []
+    const secondFrames: RpcMessage[] = []
+    const first = await createDesktopHost({ workspace: f.workspace, sessionDir: f.sessionDir, settingsPath: f.settingsPath, onWrite: (frame) => firstFrames.push(frame) })
+    const second = await createDesktopHost({ workspace: otherWorkspace, sessionDir: otherSessions, settingsPath: f.settingsPath, onWrite: (frame) => secondFrames.push(frame) })
+    let id = 500
+    const call = async (host: typeof first, frames: RpcMessage[], method: string, params = {}) => {
+      const requestId = ++id
+      await host.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+      const reply = frames.find((frame) => "id" in frame && frame.id === requestId)
+      if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
+      return reply.result
+    }
+    try {
+      await call(first, firstFrames, "initialize")
+      await call(second, secondFrames, "initialize")
+      await call(first, firstFrames, "desktop/agent-settings/configure", { sandboxMode: "read-only", approvalMode: "delegate" })
+      const deadline = Date.now() + 3500
+      while (Date.now() < deadline) {
+        const sandbox = await call(second, secondFrames, "desktop/sandbox/state") as { mode: string }
+        if (sandbox.mode === "read-only") break
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      expect(await call(second, secondFrames, "desktop/sandbox/state")).toMatchObject({ mode: "read-only" })
+      expect(await call(second, secondFrames, "desktop/agent-settings/state")).toMatchObject({ effective: { sandboxMode: "read-only", approvalMode: "delegate" }, restartRequired: false })
+    } finally { await first.close(); await second.close() }
   })
   it("persists provider commands across a host restart without leaking the API key", async () => {
     const f = fixture("read-only")

@@ -21,7 +21,7 @@ import { registerWeb } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
 import { createTodoTool } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
-import { createApprovalPolicy, registerGuardian } from "@i-harness/guard-approval"
+import { createApprovalPolicy, registerGuardian, type ApprovalMode } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
@@ -145,7 +145,11 @@ export interface AssemblyOptions {
    * the one-shot mock semantics. */
   mockCycles?: boolean
   approveAll?: boolean // true → auto-approve; false/unset → NO answerer (host wires the bridge; fail-closed)
+  approvalMode?: ApprovalMode | (() => ApprovalMode)
   sandbox?: SandboxMode
+  /** Host may switch the standing mode while this assembly is alive. Prepare a
+   * confinement backend even when the initial mode is full access. */
+  allowRuntimeSandboxChanges?: boolean
   shellTimeoutMs?: number // default 120_000
   /** W10: a FOREGROUND bash/pwsh command still running after this many ms is
    * handed back as a job id — and keeps running — instead of dying at
@@ -192,7 +196,7 @@ export interface AssemblyOptions {
   rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
-  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient } // R-A9
+  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean } // R-A9
   outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
   /** The session the sandbox policy resolution READS for `sandbox/mode` events.
@@ -532,12 +536,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // site keeps the raw backend and tears it down in dispose() — otherwise the
   // ACL temp grants would leak in composed use.
   let winSandbox: (SandboxProvider & { dispose(): void }) | undefined
-  if (process.platform === "win32" && opts.sandbox !== undefined && opts.sandbox !== "danger-full-access") {
+  if (process.platform === "win32" && opts.sandbox !== undefined && (opts.sandbox !== "danger-full-access" || opts.allowRuntimeSandboxChanges === true)) {
     const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
     winSandbox = createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
   }
   const sandboxProvider =
-    opts.sandbox === undefined || opts.sandbox === "danger-full-access"
+    opts.sandbox === undefined || (opts.sandbox === "danger-full-access" && opts.allowRuntimeSandboxChanges !== true)
       ? undefined
       : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
   // M16 final-review (C1) → M62: the SERVICE is built once, but the policy is
@@ -761,7 +765,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     escalationApprover,
   }
   for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
-  createApprovalPolicy(ctx, tools, { workspace: opts.workspace })
+  createApprovalPolicy(ctx, tools, { workspace: opts.workspace, ...(opts.approvalMode !== undefined ? { mode: opts.approvalMode } : {}) })
 
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
@@ -1150,6 +1154,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         ...(opts.guardian.model !== undefined ? { model: opts.guardian.model } : {}),
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
         ...(opts.guardian.timeoutMs !== undefined ? { timeoutMs: opts.guardian.timeoutMs } : {}),
+        ...(opts.guardian.enabled !== undefined ? { enabled: opts.guardian.enabled } : {}),
+        ...(opts.guardian.fallbackToHumanOnFailure !== undefined ? { fallbackToHumanOnFailure: opts.guardian.fallbackToHumanOnFailure } : {}),
         ...(opts.coordinator !== undefined && opts.sessionId !== undefined
           ? {
               breaker: { coordinator: opts.coordinator, sessionId: opts.sessionId },

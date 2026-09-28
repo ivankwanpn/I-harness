@@ -159,7 +159,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "提示" }), { target: { value: "保留此草稿" } })
     view.rerender(<Workbench {...props} conversation={{ ...conversation, pending: [{ requestId: "dock-approval", sessionId: "dock-test", kind: "approval", payload: { name: "write" }, openedAt: 1 }] }} />)
     expect(screen.queryByRole("textbox", { name: "提示" })).toBeNull()
-    expect(screen.getByRole("button", { name: "確認" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "批准" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "停止" })).toBeTruthy()
     view.rerender(<Workbench {...props} conversation={conversation} />)
     expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe("保留此草稿")

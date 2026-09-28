@@ -97,6 +97,7 @@ function makeStubService(): SessionService {
     tasks: vi.fn(() => []),
     cancelTask: vi.fn(() => "already-finished" as const),
     onAssembly: () => () => {},
+    updateSandboxMode: vi.fn(),
     closeSession: vi.fn(async () => {}),
     close: async () => {},
   }

@@ -3,6 +3,7 @@ import { registerApprovalAnswerer, registerQuestionProvider, type ApprovalReques
 import { makeNotification } from "@i-harness/sdk"
 import type { SessionAssembly } from "@i-harness/session-executor"
 import type { RpcNotification } from "@i-harness/sdk"
+import type { SettingsApprovalMode } from "@i-harness/settings"
 
 export type InteractionDecision =
   | { kind: "approval"; approved: boolean }
@@ -32,7 +33,7 @@ interface WaitingRequest {
 
 const REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000
 
-export function createInteractionBridge(emit: (frame: RpcNotification) => void): InteractionBridge {
+export function createInteractionBridge(emit: (frame: RpcNotification) => void, options: { approvalMode?: () => SettingsApprovalMode } = {}): InteractionBridge {
   const waiting = new Map<string, WaitingRequest>()
   let closed = false
 
@@ -79,6 +80,9 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void):
   }
 
   function waitForApproval(sessionId: string, request: ApprovalRequest): Promise<{ approved: boolean }> {
+    // Full access is an explicit saved user setting; it applies to the approval
+    // answerer as well as the tool guard, including per-call escalation asks.
+    if (options.approvalMode?.() === "full-access") return Promise.resolve({ approved: true })
     return new Promise((resolve) => enqueue(sessionId, "approval", request, (decision) => {
       resolve({ approved: decision?.kind === "approval" && decision.approved === true })
     }))

@@ -2,6 +2,7 @@ import type { BrowserWindow } from "electron"
 import { relative, isAbsolute, sep } from "node:path"
 import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
+import { validateSandboxState } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
 import { contextRequestParams } from "./context-requests.ts"
 import { listDesktopTerminalShellOptions } from "@i-harness/desktop-gateway/src/terminal-shells.ts"
@@ -94,7 +95,12 @@ export async function dispatchDesktopRequest(
       return picked === undefined ? undefined : await dependencies.catalog.open(picked)
     }
     case "workspace/sandbox/state":
-      return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).sandbox
+      {
+        const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+        return runtime.info.capabilities["desktop-sandbox"]?.includes("1")
+          ? validateSandboxState(await runtime.client.request("desktop/sandbox/state", {}))
+          : runtime.sandbox
+      }
     case "desktop/capabilities":
       return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities
     case "session/list":

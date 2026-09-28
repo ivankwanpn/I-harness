@@ -486,6 +486,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
 
   return (
     <Workbench
+      onSandboxChange={(mode) => { if (selectedWorkspaceId === workspaceSelection.current.workspaceId) setSandbox({ mode, source: "settings", wired: true }) }}
       bridge={bridge}
       workspaces={workspaces}
       dashboard={dashboard}

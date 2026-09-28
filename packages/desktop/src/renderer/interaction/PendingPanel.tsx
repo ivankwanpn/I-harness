@@ -21,6 +21,13 @@ function approvalText(payload: unknown, fallback: string): string {
   return reason === undefined ? name : `${name}：${reason}`
 }
 
+function approvalDetails(payload: unknown): string | undefined {
+  const record = payload !== null && typeof payload === "object" ? payload as { command?: unknown; argumentsSummary?: unknown; pathSummary?: unknown } : {}
+  if (typeof record.argumentsSummary === "string") return record.argumentsSummary
+  if (typeof record.command === "string") return record.command
+  return typeof record.pathSummary === "string" ? record.pathSummary : undefined
+}
+
 function questionShape(payload: unknown, fallback: string): { prompt: string; options: string[] } {
   const record = payload !== null && typeof payload === "object" ? payload as { prompt?: unknown; options?: unknown } : {}
   return {
@@ -60,7 +67,7 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
         {pending.map((row) => row.kind === "approval"
           ? (
             <li key={row.requestId} className="task-row">
-              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} busy={busy[row.requestId] === true}
+              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={busy[row.requestId] === true}
                 onConfirm={(approved) => { void reply(row, { kind: "approval", approved }) }} />
               {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
             </li>

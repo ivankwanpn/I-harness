@@ -187,13 +187,13 @@ describe("shell escalation ladder", () => {
     const { exec, policies } = recordingExec()
     const { approver, prompts } = approverSaying("allowed-once")
     const result = await escalatingPwsh(exec, approver).execute(
-      { command: "true", sandbox_permissions: "workspace-write", justification: "the command writes outside the workspace" },
+      { command: "echo APPROVAL_ACTION_42", sandbox_permissions: "workspace-write", justification: "the command writes outside the workspace" },
       { callId: "call-9" },
     )
     expect(result).toMatchObject({ stdout: "ran", exitCode: 0 })
     expect(prompts).toHaveLength(1)
     expect(prompts[0]!.toolName).toBe("pwsh")
-    expect(prompts[0]!.reason).toContain("run ") // the operation is named
+    expect(prompts[0]!.reason).toContain("echo APPROVAL_ACTION_42") // the concrete command is named
     // THE assertion: the policy exec receives is the GRANTED one. A fresh read of
     // the session thunk would carry `read-only` here and refuse the call the user
     // just approved.

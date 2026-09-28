@@ -46,6 +46,8 @@ export interface DesktopHost {
 }
 
 const SANDBOX_MODES = new Set(["read-only", "workspace-write", "danger-full-access"])
+const APPROVAL_MODES = new Set(["dangerous", "ask-all", "delegate", "full-access"])
+const DESKTOP_GUARDIAN_POLICY = "Review every Agent tool call. Approve only clearly safe, in-scope actions. Return allow when a person should decide because the action is risky or uncertain. Deny clearly malicious or out-of-scope actions. Never execute a tool yourself."
 
 /** SettingsStore intentionally falls back on corrupt JSON; a host claiming a
  * configured sandbox must distinguish a first run from a damaged document. */
@@ -70,6 +72,11 @@ async function validateSettingsDocument(path: string): Promise<void> {
   if (mode !== undefined && (typeof mode !== "string" || !SANDBOX_MODES.has(mode))) {
     throw new Error("invalid settings: unknown sandboxMode")
   }
+  const approval = (parsed as { approvalMode?: unknown }).approvalMode
+  if (approval !== undefined && (typeof approval !== "string" || !APPROVAL_MODES.has(approval))) throw new Error("invalid settings: unknown approvalMode")
+  if (approval === "full-access" && mode !== "danger-full-access") {
+    throw new Error("invalid settings: full access requires the full-access sandbox")
+  }
 }
 
 export async function createDesktopHost(options: DesktopHostOptions): Promise<DesktopHost> {
@@ -80,8 +87,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await validateSettingsDocument(settingsPath)
   const settings = new SettingsStore({ path: settingsPath })
   await settings.load()
-  const mode = settings.get().sandboxMode
-  const sandboxState: SandboxState = { mode, source: "settings", wired: true }
+  let mode = settings.get().sandboxMode
+  let approvalMode = settings.get().approvalMode
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json") })
   await mkdir(options.sessionDir, { recursive: true })
   const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
@@ -126,6 +133,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sessionQuery,
     workspace: options.workspace,
     sandbox: mode,
+    allowRuntimeSandboxChanges: true,
+    approvalMode: () => approvalMode,
+    guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true },
     modelPolicy: "required",
     modelBindingFor,
     afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
@@ -154,7 +164,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     outputSpill: {},
     compact: { auto: settings.get().compaction.auto },
   })
-  const interaction = createInteractionBridge(options.onWrite)
+  const interaction = createInteractionBridge(options.onWrite, { approvalMode: () => approvalMode })
+  const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
+    onSandboxModeChanged(next) { service.updateSandboxMode(next); mode = next },
+    onApprovalModeChanged(next) { approvalMode = next },
+  })
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
@@ -164,7 +178,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
     subagents,
-    agentSettings: createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto }),
+    agentSettings,
     terminal,
     schedules: createDesktopSchedules(coordinator, service),
     workState: createDesktopWorkState(coordinator, service),
@@ -188,7 +202,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       } finally { compactionSignals.delete(sessionId) }
     },
     sessionQuery,
-    sandboxState: () => sandboxState,
+    sandboxState: (): SandboxState => ({ mode, source: "settings", wired: true }),
     interaction,
     review,
   }
@@ -229,10 +243,20 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], () => {
     if (!closing) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   })
+  let syncingPolicy = false
+  const syncPolicy = () => {
+    if (closing || syncingPolicy) return
+    syncingPolicy = true
+    void agentSettings.sync().catch((error) => { console.warn(`[desktop] agent settings refresh failed: ${error instanceof Error ? error.message : String(error)}`) }).finally(() => { syncingPolicy = false })
+  }
+  const policyTimer = setInterval(syncPolicy, 1000)
+  policyTimer.unref?.()
+  syncPolicy()
   return {
     handleLine: (line) => router.handleLine(line),
     close: () => closing ??= (async () => {
       trustWatcher.dispose()
+      clearInterval(policyTimer)
       interaction.close()
       await stopPluginObserver()
       terminal.close()

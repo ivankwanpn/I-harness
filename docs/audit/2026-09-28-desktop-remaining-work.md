@@ -18,7 +18,7 @@ This is the stop-point inventory after the terminal-selector change in `D:\front
 
 ## Backend work needed for additional ZCode-like surfaces
 
-The current Desktop host does not provide durable job-status history, an Agent team roster/task board, Goal mutation, a Plan Mode switch or a global approval-default setting. The domain packages or event types alone are insufficient; each needs a real producer, authority/lifecycle contract and Desktop route before adding its control. Existing live `session/tasks` and Todo views are implemented. See `2026-09-28-desktop-workflow-capability-gaps.md` for source evidence.
+The current Desktop host does not provide durable job-status history, an Agent team roster/task board, Goal mutation or a Plan Mode switch. The domain packages or event types alone are insufficient; each needs a real producer, authority/lifecycle contract and Desktop route before adding its control. Existing live `session/tasks` and Todo views are implemented. Approval defaults were implemented on 2026-09-29; see `2026-09-29-desktop-approval-modes-qa.md`. See `2026-09-28-desktop-workflow-capability-gaps.md` for the older source snapshot.
 
 ## Deliberately deferred or external
 

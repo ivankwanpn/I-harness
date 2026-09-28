@@ -21,7 +21,8 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { randomUUID } from "node:crypto"
-import { validateImages, type ImageInput, type Session } from "@i-harness/core-session"
+import { append, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
+import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
@@ -210,6 +211,8 @@ export interface SessionService {
   /** Fires once per created assembly — the bridge attach point
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
+  /** Changes the standing sandbox on existing and future assemblies. */
+  updateSandboxMode(mode: SandboxMode): void
   /** Wait for this session's pending work/build/model resolution, remove its
    * cached state and assembly, and dispose only that assembly. A later
    * request resolves and builds it again. */
@@ -232,6 +235,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const closing = new Map<string, Promise<void>>()
   const telemetry = opts.telemetry
   let closed = false
+  let currentSandbox = opts.sandbox
 
   // M49 Task 11: the per-session queue projection state. ONE record per
   // submit (and per adopted lane-only steer), keyed by the STABLE public id
@@ -365,6 +369,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       pending = (async () => {
         const extensions = await opts.extensionsFor?.(sessionId)
         let assembly: SessionAssembly
+        let sandboxAtBuild: SandboxMode | undefined
         if (opts.modelBindingFor !== undefined) {
           const result = await bindingFor(sessionId)
           if (result.status !== "ready") throw new ModelUnavailableError(result.reason)
@@ -387,8 +392,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             )
           }
           const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
+          sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
             ...opts,
+            sandbox: sandboxAtBuild,
             ...extensions?.options,
             sessionId,
             session: resolvedSession,
@@ -417,8 +424,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           const reasoningEffort = opts.reasoningEffortFor === undefined
             ? opts.reasoningEffort
             : opts.reasoningEffortFor(sessionId, meta)
+          sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
             ...opts,
+            sandbox: sandboxAtBuild,
             ...extensions?.options,
             sessionId,
             session: resolvedSession,
@@ -444,6 +453,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             try { await current?.() } finally { await dispose() }
           })()
         }
+        // No await between this reconciliation and publication. A settings
+        // change during an asynchronous extension mount must not miss an
+        // assembly that was not yet present in the live map.
+        if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode: currentSandbox })
         assemblies.set(sessionId, assembly)
         assembly.ctx.on("agent/pre-step", async () => { await extensionRefreshes.get(sessionId)?.catch(() => undefined) })
         // The A-region serial lane over this assembly (tiers; send on submit).
@@ -819,6 +832,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     onAssembly: (hook) => {
       hooks.add(hook)
       return () => { hooks.delete(hook) }
+    },
+    updateSandboxMode: (mode) => {
+      if (closed || currentSandbox === undefined) throw new Error("sandbox mode is unavailable")
+      if (currentSandbox === mode) return
+      currentSandbox = mode
+      for (const assembly of assemblies.values()) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode })
     },
     closeSession,
     close,

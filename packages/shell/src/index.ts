@@ -442,7 +442,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       // M62: the ladder runs BEFORE exec is called and AFTER the availability
       // check — asking a human to widen the sandbox for a command this host
       // cannot run at all would be a prompt with no possible outcome.
-      const ladder = await resolveShellCall(deps, exec, "bash", args, `run ${argv[0]}`)
+      const ladder = await resolveShellCall(deps, exec, "bash", args, `run command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       // Per CALL, never cached: the assembly's resolver re-reads the session's
       // last `sandbox/mode` event, so a mode change a HOST appends mid-session
@@ -496,7 +496,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       // M62: the ladder runs once, before exec; `ladder.policy` is the granted
       // policy when this call carried an approved escalation, and the session's
       // per-call read otherwise — see the bash tool above.
-      const ladder = await resolveShellCall(deps, exec, "pwsh", args, `run ${argv[0]}`)
+      const ladder = await resolveShellCall(deps, exec, "pwsh", args, `run command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       const sandboxResolved = ladder.policy
       try {

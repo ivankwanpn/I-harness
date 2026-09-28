@@ -78,6 +78,23 @@ describe("Desktop scoped IPC", () => {
     await expect(dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: "unknown", patch: { autoCompaction: false } }, f.dependencies)).rejects.toThrow()
     expect(f.request).toHaveBeenCalledTimes(1)
   })
+  it("reads the current sandbox from the gateway after a live settings change", async () => {
+    const f = fixture()
+    const request = vi.fn(async () => ({ wired: true, source: "settings", mode: "danger-full-access" }))
+    f.setRuntime({
+      client: { request },
+      info: { capabilities: { "desktop-sandbox": ["1"] } },
+      sandbox: { wired: true, source: "settings", mode: "read-only" },
+    })
+    await expect(dispatchDesktopRequest({ kind: "workspace/sandbox/state", workspaceId: ENTRY.id }, f.dependencies)).resolves.toMatchObject({ mode: "danger-full-access" })
+    expect(request).toHaveBeenCalledWith("desktop/sandbox/state", {})
+  })
+  it("passes only a named approval mode to the known workspace gateway", async () => {
+    const f = fixture()
+    await expect(dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: ENTRY.id, patch: { approvalMode: "unrestricted" } }, f.dependencies)).rejects.toThrow(/approval mode/i)
+    await dispatchDesktopRequest({ kind: "desktop/agent-settings/configure", workspaceId: ENTRY.id, patch: { approvalMode: "delegate" } }, f.dependencies)
+    expect(f.request).toHaveBeenLastCalledWith("desktop/agent-settings/configure", { approvalMode: "delegate" }, 30000)
+  })
   it("keeps native browser operations outside the SDK and checks workspace identity", async () => {
     const f = fixture()
     const request = vi.fn(() => [])

@@ -40,7 +40,7 @@ function readSection(): Section {
   catch { return "general" }
 }
 
-export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, capabilities = {}, onUseResource }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; capabilities?: Record<string, string[]>; onUseResource?(prefix: string): void }) {
+export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, onSandboxChange, capabilities = {}, onUseResource }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; onSandboxChange?(mode: "read-only" | "workspace-write" | "danger-full-access"): void; capabilities?: Record<string, string[]>; onUseResource?(prefix: string): void }) {
   const t = useText()
   const [selectedTab, setTab] = useState<Section>(readSection)
   const [search, setSearch] = useState("")
@@ -88,7 +88,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
         <button className="primary-button" onClick={preferences.reset}>{t("重設外觀偏好")}</button>
       </> : tab === "notifications" ? bridge ? <NativeSettings bridge={bridge} section="notifications" /> : null
       : tab === "models" ? workspace && bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
-      : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} />
       : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "mcp" && workspace && bridge ? <McpSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />

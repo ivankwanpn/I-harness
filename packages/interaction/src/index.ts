@@ -10,6 +10,8 @@ export interface ApprovalRequest {
   argv?: string[]
   dangerClass?: "extreme" | "dangerous" | "none"
   pathSummary?: string
+  /** Bounded, redacted preview of the validated tool arguments. */
+  argumentsSummary?: string
 }
 
 export interface ApprovalDecision {

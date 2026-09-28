@@ -125,12 +125,11 @@ export function renderGuardianMessage(
 /** The reviewer's verdict plus a fail-closed cause. The outbound GuardianVerdict
  * contract (core-tools) stays unchanged; `cause` is the guard-approval-internal
  * distinction the breaker needs (M40 A7): a "deny" the MODEL produced vs a
- * deny the RUNNER fail-closed (timeout / strict-JSON malformed). */
+ * deny the RUNNER fail-closed (timeout / strict-JSON malformed / operational failure). */
 export interface GuardianReviewVerdict extends GuardianVerdict {
-  /** Present only when the runner fail-closed: "timeout" (the review race was
-   * lost) or "malformed" (strict JSON contract failed). Model-verdict paths
-   * (approve/allow/deny) never carry it. */
-  cause?: "timeout" | "malformed"
+  /** Present only when the runner fail-closed: timeout, malformed strict JSON,
+   * or an operational failure. Model-authored verdicts never carry it. */
+  cause?: "timeout" | "malformed" | "operational"
 }
 
 // R-A9 reviewer runner: spawns the dedicated reviewer subagent via the EXISTING
@@ -161,7 +160,10 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     parentRegistry: deps.parentRegistry,
     parentSession: deps.parentSession,
     parentCtx: deps.parentCtx,
-    role,
+    // A saved reviewer role may choose a model or prompt, but the approval
+    // reviewer itself must never inherit its declared tool list. Otherwise a
+    // role edit could make an approval check execute a tool before deciding.
+    role: { ...role, ...(deps.policyText !== undefined ? { systemPrompt: deps.policyText } : {}), tools: [] },
     parentModel: model,
     resolveModel: deps.resolveModel,
     // The role's model is decided the SAME way here as through
@@ -192,7 +194,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
 
   try {
     const entry = deps.subagents.table.get(path)
-    if (entry === undefined) return { outcome: "deny", rationale: "guardian review failed: reviewer entry missing" }
+    if (entry === undefined) return { outcome: "deny", rationale: "guardian review failed: reviewer entry missing", cause: "operational" }
     const settled = await Promise.race([
       entry.followupChain ?? Promise.resolve(),
       timeout,
@@ -203,7 +205,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     }
     const finalText = entry.finalText
     if (finalText === undefined) {
-      return { outcome: "deny", rationale: `guardian review failed: ${entry.error ?? "no output"}` }
+      return { outcome: "deny", rationale: `guardian review failed: ${entry.error ?? "no output"}`, cause: "operational" }
     }
     const parsed = parseGuardianAssessment(finalText)
     if (parsed === undefined) {

@@ -183,6 +183,17 @@ describe("execution pipeline", () => {
     expect(result.output).toEqual({})
     expect(bodyRan).toBe(true)
   })
+  it("shows the concrete command and bounded arguments in an approval request", async () => {
+    const ctx = makeCtx()
+    const reg = createToolRegistry(ctx)
+    reg.register({ name: "bash", description: "", inputSchema: { type: "object", properties: { command: { type: "string" }, api_key: { type: "string" } }, required: ["command"] }, execute: async () => ({ ok: true }) })
+    ctx.on("tools/pre-execute", () => ({ kind: "ask", reason: "approval needed" }))
+    const prompts: unknown[] = []
+    registerApprovalAnswerer(ctx, async (request) => { prompts.push(request); return { approved: true } })
+    await reg.execute({ name: "bash", args: { command: "pwd && echo APPROVAL_ACTION_42", api_key: "secret-value" } })
+    expect(prompts).toEqual([expect.objectContaining({ name: "bash", command: "pwd && echo APPROVAL_ACTION_42" })])
+    expect(JSON.stringify(prompts)).not.toContain("secret-value")
+  })
 
   it("treats non-object pre-execute returns as malformed decisions (audit F03-1)", async () => {
     for (const bad of ["deny", false, null] as const) {

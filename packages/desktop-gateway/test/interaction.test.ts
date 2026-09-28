@@ -18,6 +18,33 @@ function question(ctx: PluginContext): QuestionProvider {
 }
 
 describe("Desktop interaction bridge", () => {
+  it("auto-approves full-access requests without emitting a pending prompt and changes mode live", async () => {
+    let mode: "full-access" | "dangerous" = "full-access"
+    const bridge = createInteractionBridge(() => {}, { approvalMode: () => mode })
+    const owner = assembly("s1")
+    bridge.attach(owner)
+    expect(await approval(owner.ctx)({ name: "bash", reason: "explicit escalation" })).toBe(true)
+    expect(bridge.pending("s1")).toEqual([])
+    mode = "dangerous"
+    const waiting = approval(owner.ctx)({ name: "bash", reason: "explicit escalation" })
+    expect(bridge.pending("s1")).toHaveLength(1)
+    bridge.close()
+    expect(await waiting).toBe(false)
+  })
+  it("keeps already-pending approval requests explicit after switching to full access", async () => {
+    let mode: "dangerous" | "full-access" = "dangerous"
+    const bridge = createInteractionBridge(() => {}, { approvalMode: () => mode })
+    const owner = assembly("s1")
+    bridge.attach(owner)
+    const pendingDecision = approval(owner.ctx)({ name: "bash", reason: "old request" })
+    const row = bridge.pending("s1")[0]!
+    mode = "full-access"
+    expect(bridge.pending("s1")).toHaveLength(1)
+    bridge.reply({ requestId: row.requestId, sessionId: "s1", decision: { kind: "approval", approved: false } })
+    expect(await pendingDecision).toBe(false)
+    expect(await approval(owner.ctx)({ name: "bash", reason: "new request" })).toBe(true)
+    bridge.close()
+  })
   it("registers pending approval before notifying and keeps session ownership", async () => {
     const emitted: RpcNotification[] = []
     let pendingAtNotify = 0

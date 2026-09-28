@@ -8,6 +8,10 @@ export { runGuardianReview, ensureReviewerRole, renderGuardianMessage, renderRec
 export type { GuardianReviewDeps } from "./reviewer.ts"
 
 export interface GuardianConfig extends GuardianReviewDeps {
+  /** A mounted reviewer can be enabled without rebuilding an active Agent. */
+  enabled?: () => boolean
+  /** A failed reviewer may defer to the human instead of denying the tool. */
+  fallbackToHumanOnFailure?: boolean
   /** Durable breaker mirror (subagent state-doc pattern — coordinator documents). */
   breaker?: { coordinator: SessionCoordinator; sessionId: string }
 }
@@ -44,24 +48,34 @@ export async function registerGuardian(ctx: PluginContext, config: GuardianConfi
   }
 
   const review: ApprovalGuardian = async (request: GuardianRequest): Promise<GuardianVerdict> => {
+    if (config.enabled?.() === false) return { outcome: "allow", rationale: "Delegated approval is disabled" }
     if (breaker?.check() === "open") {
-      return { outcome: "deny", rationale: "guardian circuit breaker open (3+ denials in the last 10 reviews)" }
+      return config.fallbackToHumanOnFailure
+        ? { outcome: "allow", rationale: "guardian circuit breaker open; ask the human" }
+        : { outcome: "deny", rationale: "guardian circuit breaker open (3+ denials in the last 10 reviews)" }
     }
-    const verdict = await runGuardianReview(config, request)
+    let verdict: Awaited<ReturnType<typeof runGuardianReview>>
+    try { verdict = await runGuardianReview(config, request) }
+    catch (error) {
+      if (config.fallbackToHumanOnFailure) return { outcome: "allow", rationale: `guardian could not start: ${error instanceof Error ? error.message : String(error)}; ask the human` }
+      throw error
+    }
     if (isGuardianVerdict(verdict) && breaker && config.breaker) {
       // M40 A7: timeout/malformed fail-closed denials COUNT in the breaker too
       // (the runner tags them via `cause`); model verdicts record the plain
       // deny/allow kind as before.
       breaker.record(
         verdict.cause === "timeout" ? "timeout"
-          : verdict.cause === "malformed" ? "malformed"
+          : verdict.cause === "malformed" || verdict.cause === "operational" ? "malformed"
           : verdict.outcome === "deny" ? "deny" : "allow",
       )
       const key = BREAKER_STATE_PREFIX + config.breaker.sessionId
       // fail-soft doc mirror: putDocument reports internally and never rejects
       void config.breaker.coordinator.putDocument(key, breaker.snapshot())
     }
-    return verdict
+    return config.fallbackToHumanOnFailure && verdict.outcome === "deny" && verdict.cause !== undefined
+      ? { outcome: "allow", rationale: `guardian review ${verdict.cause}; ask the human` }
+      : verdict
   }
   ctx.services.register("approval/guardian", review)
 }

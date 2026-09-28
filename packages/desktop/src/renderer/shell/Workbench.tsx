@@ -92,6 +92,7 @@ export interface WorkbenchProps {
   onManageSession?: ManageSession
   onRewindComplete?: (workspaceId: string, sessionId: string) => void
   onSessionsChanged?(): void
+  onSandboxChange?(mode: SandboxState["mode"]): void
 }
 
 const SANDBOX_LABELS: Record<SandboxState["mode"], Message> = {
@@ -116,6 +117,7 @@ export function Workbench({
   onManageSession,
   onRewindComplete,
   onSessionsChanged,
+  onSandboxChange,
   conversation,
   review,
   onRetry,
@@ -194,7 +196,7 @@ export function Workbench({
     }
   }
 
-  if (surface === "settings") return <SettingsPane onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
+  if (surface === "settings") return <SettingsPane onSandboxChange={onSandboxChange} onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
     const draft = readDraft(selectedWorkspaceId, selectedSessionId)
     const next = draft.startsWith(prefix) ? draft : prefix + draft
     if (boundedDraft(next) !== next) throw new Error(t("草稿已達上限，請先整理內容。"))

@@ -24,7 +24,7 @@ it("localizes task and reply controls without translating backend content", () =
   expect(screen.getByText("Completed")).toBeTruthy()
   expect(screen.getByText("原始任務名")).toBeTruthy()
   expect(screen.getByText("Tool request")).toBeTruthy()
-  expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "Allow" })).toBeTruthy()
 })
 
 it("localizes the send gate while retaining its safety decision", () => {

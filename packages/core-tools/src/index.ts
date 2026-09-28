@@ -185,7 +185,16 @@ function isDecision(value: unknown): value is ToolDecision {
   return typeof value === "object" && value !== null && "kind" in value && DECISION_KINDS.has((value as ToolDecision).kind)
 }
 
-type ApprovalAnswerer = (req: { name: string; reason: string }) => Promise<boolean>
+type ApprovalAnswerer = (req: { name: string; reason: string; command?: string; pathSummary?: string; argumentsSummary?: string }) => Promise<boolean>
+
+function approvalArgumentsSummary(args: unknown): string {
+  try {
+    const serialized = JSON.stringify(args, (key, value) => /token|secret|password|authorization|api.?key/i.test(key) ? "[redacted]" : value) ?? "null"
+    return serialized.length > 4000 ? `${serialized.slice(0, 4000)}… [truncated]` : serialized
+  } catch {
+    return "[arguments unavailable]"
+  }
+}
 
 // R-A9: auto-approval guardian surface. The guardian is consulted BEFORE the
 // human answerer for `ask` decisions: deny ⇒ fail-closed throw; approve ⇒
@@ -362,7 +371,14 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       if (!answerer) {
         throw new Error(`approval required but no answerer registered (fail closed): ${reason}`)
       }
-      const ok = await answerer({ name: call.name, reason })
+      const args = call.args !== null && typeof call.args === "object" && !Array.isArray(call.args) ? call.args as Record<string, unknown> : {}
+      const command = typeof args.command === "string" ? args.command : undefined
+      const pathSummary = typeof args.path === "string" ? args.path : undefined
+      const ok = await answerer({ name: call.name, reason,
+        ...(command !== undefined ? { command: command.length > 4000 ? `${command.slice(0, 4000)}… [truncated]` : command } : {}),
+        ...(pathSummary !== undefined ? { pathSummary: pathSummary.slice(0, 1000) } : {}),
+        argumentsSummary: approvalArgumentsSummary(call.args),
+      })
       if (!ok) throw new Error(`denied by user: ${reason}`)
     }
     if (resolved.kind === "ask") {

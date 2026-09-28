@@ -171,7 +171,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     try { return await operation() }
     finally { activeOperations-- }
   }
-  const maxTurns = deps.maxTurns ?? 20
+  // Desktop turns have no arbitrary step ceiling. Explicit callers may still
+  // provide a finite limit for bounded automation and tests.
+  const maxTurns = deps.maxTurns
   const maxParallel = deps.maxParallelToolCalls ?? 10
   if (!Number.isInteger(maxParallel) || maxParallel < 1) {
     throw new Error(`maxParallelToolCalls must be a positive integer (got ${maxParallel})`)
@@ -288,9 +290,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     while (needsContinuation) {
       if (abort?.aborted) throw new Error("agent aborted")
       steps += 1
-      // Guard against an infinite tool-call loop: throw once steps exceed
-      // the configured maximum (default 20).
-      if (steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
+      if (maxTurns !== undefined && steps > maxTurns) throw new Error(`maxTurns exceeded: ${maxTurns}`)
       // R-A1: steer-tier inputs arrive at the provider boundary — claimed
       // before step/start so deriveMessages below already includes them.
       deps.stepInputs?.claimAtStepBoundary()

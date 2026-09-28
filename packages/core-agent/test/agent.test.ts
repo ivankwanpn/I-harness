@@ -67,6 +67,20 @@ describe("agent loop", () => {
     await expect(agent.run("loop")).rejects.toThrow(/maxTurns|max turns/i)
   })
 
+  it("does not stop a productive Desktop-style turn after twenty model steps by default", async () => {
+    const ctx = createContext()
+    const deps = makeDeps(ctx)
+    deps.model = createMockClient([
+      ...Array.from({ length: 21 }, () => ({ role: "assistant" as const, toolCalls: [{ name: "read", args: { path: "a.txt" } }] })),
+      { role: "assistant", text: "completed after the tool work" },
+    ])
+    const agent = createAgent(ctx, { ...deps, systemPrompt: "p" })
+    const result = await agent.run("inspect all files")
+    expect(result.turns).toBe(22)
+    expect(result.finalText).toBe("completed after the tool work")
+    expect(deps.session.events.filter((event) => event.type === "tool/result")).toHaveLength(21)
+  })
+
   it("accumulates reasoning stream events into the result", async () => {
     const ctx = createContext()
     const deps = makeDeps(ctx)

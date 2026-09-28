@@ -22,6 +22,13 @@ async function tmpRoot(): Promise<string> {
 const DEFAULTS = normalizeSettings(undefined)
 
 describe("normalizeSettings", () => {
+  it("defaults Desktop approval to dangerous-only and accepts only named modes", () => {
+    expect(DEFAULTS.approvalMode).toBe("dangerous")
+    expect(normalizeSettings({ approvalMode: "ask-all" }).approvalMode).toBe("ask-all")
+    expect(normalizeSettings({ approvalMode: "delegate" }).approvalMode).toBe("delegate")
+    expect(normalizeSettings({ approvalMode: "full-access" }).approvalMode).toBe("full-access")
+    expect(normalizeSettings({ approvalMode: "surprise" }).approvalMode).toBe("dangerous")
+  })
   it("falls back to defaults for a non-object / corrupt input", () => {
     // `undefined` is deliberately NOT asserted here: it IS the reference the
     // other three are compared against, so `expect(normalizeSettings(undefined))

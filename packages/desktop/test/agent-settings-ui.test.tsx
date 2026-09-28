@@ -1,16 +1,39 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { AgentSettings } from "../src/renderer/settings/AgentSettings.tsx"
 afterEach(cleanup)
 it("saves an explicit change and shows the still-effective runtime policy", async () => {
-  const initial = { saved: { sandboxMode: "read-only", autoCompaction: true }, effective: { sandboxMode: "read-only", autoCompaction: true }, restartRequired: false, source: "settings" }
+  const initial = { saved: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, effective: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, restartRequired: false, source: "settings" }
   const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, saved: { ...initial.saved, autoCompaction: false }, restartRequired: true })
   render(<AgentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
   const toggle = await screen.findByRole("checkbox", { name: "自動壓縮上下文" })
   fireEvent.click(toggle)
   expect(request).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
-  await screen.findByText("重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。")
+  await screen.findByText("自動壓縮仍需重啟 Desktop；請查看下方目前生效的設定。")
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/agent-settings/configure", workspaceId: "w", patch: { autoCompaction: false } })
+})
+
+it("saves a delegated approval choice", async () => {
+  const initial = { saved: { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, effective: { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, restartRequired: false, source: "settings" }
+  const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, saved: { ...initial.saved, approvalMode: "delegate" }, effective: { ...initial.effective, approvalMode: "delegate" } })
+  render(<AgentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
+  const select = await screen.findByRole("combobox", { name: "核準模式" })
+  fireEvent.change(select, { target: { value: "delegate" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(request).toHaveBeenLastCalledWith({ kind: "desktop/agent-settings/configure", workspaceId: "w", patch: { approvalMode: "delegate" } })
+})
+
+it("selecting full access pairs it with the full-access sandbox in one save", async () => {
+  const initial = { saved: { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, effective: { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, restartRequired: false, source: "settings" }
+  const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, saved: { ...initial.saved, sandboxMode: "danger-full-access", approvalMode: "full-access" }, effective: { ...initial.effective, sandboxMode: "danger-full-access", approvalMode: "full-access" } })
+  const onSandboxChange = vi.fn()
+  render(<AgentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} onSandboxChange={onSandboxChange} />)
+  const approval = await screen.findByRole("combobox", { name: "核準模式" })
+  fireEvent.change(approval, { target: { value: "full-access" } })
+  expect((screen.getByRole("combobox", { name: "沙箱" }) as HTMLSelectElement).value).toBe("danger-full-access")
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(request).toHaveBeenLastCalledWith({ kind: "desktop/agent-settings/configure", workspaceId: "w", patch: { approvalMode: "full-access", sandboxMode: "danger-full-access" } })
+  await waitFor(() => expect(onSandboxChange).toHaveBeenCalledWith("danger-full-access"))
 })

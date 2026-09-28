@@ -1,5 +1,7 @@
 # Desktop goal completion audit — 2026-09-28
 
+Update 2026-09-29: the approval-default limitation in this historical snapshot has been resolved by four persisted modes, one-click approval, live sandbox changes, and a current portable package. See `2026-09-29-desktop-approval-modes-qa.md` for current evidence; the 2026-09-28 test count and ZIP hash below describe the earlier build.
+
 The active goal is **not yet proven complete**. This audit uses the current `codex/desktop-workbench` tree and the latest portable Electron package. It keeps the full user scope: Desktop UI/settings backed by the actual runtime, ZCode-led visual polish, adapter and attachment correctness, real Electron acceptance, full verification and local packaging. Provider account usage/reset/OAuth remains deferred, as do Agent browser-control settings without a backend, keyboard-shortcut settings and data/statistics pages.
 
 | Requirement | Current evidence | Status |

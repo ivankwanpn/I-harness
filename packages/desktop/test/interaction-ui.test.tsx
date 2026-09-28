@@ -38,31 +38,38 @@ describe("PendingPanel", () => {
       else finishSecond = resolve
     }))
     render(<PendingPanel pending={[approval, { ...approval, requestId: "other" }]} onReply={onReply} />)
-    fireEvent.click(screen.getAllByRole("button", { name: "確認" })[0]!)
-    fireEvent.click(screen.getByRole("button", { name: "確認" }))
-    expect(screen.getAllByRole("button", { name: "正在送出…" })).toHaveLength(2)
+    fireEvent.click(screen.getAllByRole("button", { name: "批准" })[0]!)
+    fireEvent.click(screen.getAllByRole("button", { name: "批准" })[1]!)
+    expect(screen.getAllByRole("button", { name: "批准" }).every((button) => (button as HTMLButtonElement).disabled)).toBe(true)
     finishFirst()
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "正在送出…" })).toHaveLength(1))
-    expect((screen.getByRole("button", { name: "正在送出…" }) as HTMLButtonElement).disabled).toBe(true)
+    await waitFor(() => expect((screen.getAllByRole("button", { name: "批准" })[0] as HTMLButtonElement).disabled).toBe(false))
+    expect((screen.getAllByRole("button", { name: "批准" })[1] as HTMLButtonElement).disabled).toBe(true)
     finishSecond()
-    await waitFor(() => expect(screen.getAllByRole("button", { name: "確認" })).toHaveLength(2))
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "批准" }).every((button) => !(button as HTMLButtonElement).disabled)).toBe(true))
   })
   it("shows the approval reason and replies with an explicit decision", async () => {
     const onReply = vi.fn(async () => {})
     render(<PendingPanel pending={[approval]} onReply={onReply} />)
 
     expect(screen.getByText(/edit D:\/workspace\/notes\.md/)).toBeTruthy()
-    fireEvent.click(screen.getByRole("radio", { name: /批准/ }))
-    expect(onReply).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole("button", { name: "確認" }))
+    expect(screen.queryByRole("button", { name: "確認" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "批准" }))
     await waitFor(() => {
       expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: true } })
     })
-    fireEvent.click(screen.getByRole("radio", { name: /拒絕/ }))
-    fireEvent.click(screen.getByRole("button", { name: "確認" }))
+    fireEvent.click(screen.getByRole("button", { name: "拒絕" }))
     await waitFor(() => {
       expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: false } })
     })
+  })
+  it("shows the command itself before one-click approval", () => {
+    render(<PendingPanel pending={[{ ...approval, payload: { name: "bash", reason: "tool requires approval", command: "pwd && echo APPROVAL_ACTION_42" } }]} onReply={async () => {}} />)
+    expect(screen.getByText("pwd && echo APPROVAL_ACTION_42")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "批准" })).toBeTruthy()
+  })
+  it("shows executable arguments instead of only its name", () => {
+    render(<PendingPanel pending={[{ ...approval, payload: { name: "terminal_open", reason: "tool requires approval", command: "powershell.exe", argumentsSummary: '{"command":"powershell.exe","args":["-Command","Remove-Item outside"]}' } }]} onReply={async () => {}} />)
+    expect(screen.getByText(/Remove-Item outside/)).toBeTruthy()
   })
 
   it("answers a question with the selected option", async () => {
@@ -82,10 +89,10 @@ describe("PendingPanel", () => {
     const onReply = vi.fn(async () => { throw new Error("宿主拒絕") })
     render(<PendingPanel pending={[approval]} onReply={onReply} />)
 
-    fireEvent.click(screen.getByRole("button", { name: "確認" }))
+    fireEvent.click(screen.getByRole("button", { name: "批准" }))
 
     await waitFor(() => { expect(screen.getByText("宿主拒絕")).toBeTruthy() })
-    expect(screen.getByRole("button", { name: "確認" })).toBeTruthy()
+    expect(screen.getByRole("button", { name: "批准" })).toBeTruthy()
   })
 
   it("renders nothing when nothing is pending", () => {

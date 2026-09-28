@@ -30,6 +30,57 @@ const makeBashTool = (getArgv: (args: { command: string }) => string[]): Tool =>
 })
 
 describe("guard-approval policy", () => {
+  it("dangerous-only mode allows session bookkeeping but still asks for destructive shell calls", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
+    const approvals: string[] = []
+    registerApprovalAnswerer(ctx, async (request) => { approvals.push(request.name); return { approved: true } })
+    registry.register({ name: "todo_write", description: "", inputSchema: {}, isReadOnly: false, execute: async () => ({ ok: true }) })
+    registry.register(makeBashTool((args: { command: string }) => args.command.split(" ")))
+    await registry.execute({ name: "todo_write", args: {} })
+    await registry.execute({ name: "bash", args: { command: "pwd" } })
+    expect(approvals).toEqual([])
+    await registry.execute({ name: "bash", args: { command: "rm -rf outside" } })
+    expect(approvals).toEqual(["bash"])
+  })
+
+  it("ask-all and delegate modes ask for ordinary tools, while full-access allows them", async () => {
+    let mode: "ask-all" | "delegate" | "full-access" = "ask-all"
+    const ctx = createContext()
+    const registry = createToolRegistry(ctx)
+    createApprovalPolicy(ctx, registry, { workspace: process.cwd(), mode: () => mode })
+    registry.register(makeReadTool)
+    let requested = 0
+    registerApprovalAnswerer(ctx, async () => { requested++; return { approved: true } })
+    await registry.execute({ name: "read", args: {} })
+    mode = "delegate"
+    await registry.execute({ name: "read", args: {} })
+    mode = "full-access"
+    await registry.execute({ name: "read", args: {} })
+    expect(requested).toBe(2)
+  })
+  it("dangerous-only mode keeps unclassified side effects behind approval", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
+    registry.register({ name: "external_mutation", description: "", inputSchema: {}, isReadOnly: false, execute: async () => ({ ok: true }) })
+    let asked = 0
+    registerApprovalAnswerer(ctx, async () => { asked++; return { approved: true } })
+    await registry.execute({ name: "external_mutation", args: {} })
+    expect(asked).toBe(1)
+  })
+  it("dangerous-only mode runs routine terminal resizing without a human prompt", async () => {
+    const { registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
+    for (const name of ["process_resize_pty"]) {
+      registry.register({ name, description: "", inputSchema: {}, isReadOnly: false, execute: async () => ({ ok: true }) })
+      await expect(registry.execute({ name, args: {} })).resolves.toMatchObject({ output: { ok: true } })
+    }
+  })
+  it("dangerous-only mode asks before terminal_open executes an arbitrary command", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
+    registry.register({ name: "terminal_open", description: "", inputSchema: {}, isReadOnly: false, execute: async () => ({ ok: true }) })
+    let asked = 0
+    registerApprovalAnswerer(ctx, async () => { asked++; return { approved: true } })
+    await registry.execute({ name: "terminal_open", args: { command: "powershell.exe", args: ["-Command", "Remove-Item outside"] } })
+    expect(asked).toBe(1)
+  })
   it("Layer 1: isReadOnly tool executes without approval", async () => {
     const { registry } = setup({ workspace: process.cwd() })
     registry.register(makeReadTool)

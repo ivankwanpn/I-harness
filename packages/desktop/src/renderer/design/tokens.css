@@ -278,6 +278,7 @@ button { font: inherit; color: inherit; }
 .conversation-dock .pending-panel .task-row { padding: 4px 0; }
 .dock-cancel { display: block; margin: 4px 8px 10px auto; }
 .approval-description { margin: 0; overflow-wrap: anywhere; line-height: 1.6; }
+.approval-details { max-height: 10rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--ih-divider); border-radius: 8px; padding: 8px; font-size: 12px; }
 .pending-panel input { padding: 4px 8px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: inherit; font: inherit; }
 .question-answer { width: 100%; min-height: 70px; max-height: 180px; resize: vertical; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); color: var(--ih-text); font: inherit; padding: 8px; }
 .review-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
