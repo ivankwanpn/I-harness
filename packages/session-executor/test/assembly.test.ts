@@ -310,6 +310,28 @@ describe("createSessionAssembly", () => {
     }
   }, 30_000)
 
+  it("reads live automatic compaction without rebuilding the existing Agent", async () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "work ".repeat(400) })
+    let enabled = false
+    const assembly = await createSessionAssembly({
+      workspace: process.cwd(), session: s,
+      model: createMockClient([
+        { role: "assistant", text: "first done" },
+        { role: "assistant", text: "## Primary Request and Intent\n- " + "summary ".repeat(100) },
+        { role: "assistant", text: "second done" },
+      ]),
+      compact: { contextWindow: 100, auto: true }, autoCompactionEnabled: () => enabled,
+    })
+    try {
+      const executor = createSessionExecutor({ session: s, agent: assembly.agent, inbox: assembly.inbox })
+      executor.submit({ tier: "send", text: "first" }); await executor.drain()
+      expect(s.events.some((event) => event.type.startsWith("compaction/"))).toBe(false)
+      enabled = true
+      executor.submit({ tier: "send", text: "second" }); await executor.drain()
+      expect(s.events.some((event) => event.type === "compaction/summary")).toBe(true)
+    } finally { await assembly.dispose() }
+  }, 30_000)
   it("M34: a window carried in the compact config ENABLES auto-compaction (the CLI's shape)", async () => {
     // The positive direction, and it must go through the AUTO path: `compactNow`
     // deliberately bypasses the pressure gate (compaction/src/index.ts calls

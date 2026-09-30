@@ -2,6 +2,10 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "技能列表": "Skills", "命令列表": "Commands", "共 {count} 項": "{count} items", "選取以查看內容": "Select to view content", "關閉內容預覽": "Close content preview", "來源檔案": "Source file",
+  "設定儲存後即時生效：沙箱與核準模式套用到下一次工具呼叫，自動壓縮套用到下一個步驟；已顯示的核準仍須手動決定。": "Saved settings apply live: sandbox and approval mode at the next tool call, automatic compaction at the next step. Pending approvals still need a manual decision.",
+  "儲存後立即生效；關閉時會拒絕使用獨立模型的新子代理，已執行中的子代理保持原模型。": "Applies immediately after saving. When disabled, new subagents with independently selected models are refused. Running subagents keep their current model.",
+  "部分設定尚未套用，請重新讀取目前生效的設定。": "Some settings have not applied. Reload the effective settings.",
   "清除模型搜尋": "Clear model search",
   "模型探索": "Model discovery", "探索模型": "Discover models", "探索中…": "Discovering…",
   "從提供商取得可用模型，選取後加入列表。": "Get available models from the provider, then select models to add.",

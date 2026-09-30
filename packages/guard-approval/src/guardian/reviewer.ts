@@ -40,7 +40,7 @@ export interface GuardianReviewDeps {
    * selection collapses to the role's own `model` (undefined), the gate never
    * fires and the reviewer silently inherits the parent's client. */
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
-  allowSubagentModelSelection?: boolean
+  allowSubagentModelSelection?: SpawnOptions["allowSubagentModelSelection"]
   /** M73: the SESSION's own model's numbers (assembly's AssemblyOptions),
    * forwarded to `spawnChild` on the INHERITED arm only — see the gate at the
    * spawn below, which is deliberate and not symmetric with the two fields

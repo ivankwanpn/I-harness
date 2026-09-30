@@ -22,7 +22,8 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
       let reasoningEffort: import("@i-harness/llm-seam").ReasoningEffort | undefined
       const selection = deps.roleSelectionFor?.("reviewer")
       if (selection && deps.model === undefined) {
-        if (!deps.allowSubagentModelSelection) throw new Error("Independent reviewer model is disabled")
+        const allowed = typeof deps.allowSubagentModelSelection === "function" ? deps.allowSubagentModelSelection() : deps.allowSubagentModelSelection
+        if (allowed !== true) throw new Error("Independent reviewer model is disabled")
         const resolved = await deps.resolveModel(selection)
         if (resolved.status !== "ready") throw new Error(resolved.reason)
         model = resolved.binding.client

@@ -26,7 +26,7 @@ export function AgentSettings({ bridge, workspaceId, onSandboxChange }: { bridge
   const approvalLabels = { dangerous: "僅危險操作詢問", "ask-all": "逐項詢問", delegate: "代我審批", "full-access": "完整存取權" } as const
   const changed = state && draft && (state.saved.sandboxMode !== draft.sandboxMode || state.saved.autoCompaction !== draft.autoCompaction || state.saved.approvalMode !== draft.approvalMode)
   return <section aria-label={t("執行與上下文")}>
-    <p className="settings-description">{t("沙箱與核準模式會套用到現有 Agent 的下一次工具呼叫；已顯示的核準仍須手動決定。自動壓縮設定重啟後生效。")}</p>
+    <p className="settings-description">{t("設定儲存後即時生效：沙箱與核準模式套用到下一次工具呼叫，自動壓縮套用到下一個步驟；已顯示的核準仍須手動決定。")}</p>
     {error ? <p role="alert" className="error-text">{error}<button disabled={busy} onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></p> : null}
     {!state || !draft ? !error ? <p role="status">{t("正在讀取…")}</p> : null : <form onSubmit={(event) => {
       event.preventDefault()
@@ -50,7 +50,7 @@ export function AgentSettings({ bridge, workspaceId, onSandboxChange }: { bridge
           control={<input type="checkbox" aria-label={t("自動壓縮上下文")} disabled={busy} checked={draft.autoCompaction} onChange={(event) => setDraft({ ...draft, autoCompaction: event.target.checked })} />} />
       </SettingsGroup>
       <div className="settings-save-bar"><button type="submit" className="primary-button" disabled={busy || !changed}>{t(busy ? "儲存中…" : "儲存")}</button>{changed ? <button type="button" disabled={busy} onClick={() => setDraft(state.saved)}>{t("取消")}</button> : null}</div>
-      {state.restartRequired ? <p role="status" className="notice">{t("自動壓縮仍需重啟 Desktop；請查看下方目前生效的設定。")}</p> : null}
+      {state.restartRequired ? <p role="status" className="notice">{t("部分設定尚未套用，請重新讀取目前生效的設定。")}</p> : null}
       <h2>{t("目前生效")}</h2>
       <SettingsGroup><SettingsRow label={t("沙箱")} control={<span>{t(labels[state.effective.sandboxMode])}</span>} /><SettingsRow label={t("核準模式")} control={<span>{t(approvalLabels[state.effective.approvalMode])}</span>} /><SettingsRow label={t("自動壓縮上下文")} control={<span>{t(state.effective.autoCompaction ? "已啟用" : "已停用")}</span>} /></SettingsGroup>
     </form>}

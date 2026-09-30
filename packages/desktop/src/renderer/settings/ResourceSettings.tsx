@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react"
+import { BookOpen, Command, Puzzle, RefreshCw, ArrowRight } from "lucide-react"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import type { ResourceKind, ResourceList, ResourceDetail } from "@i-harness/desktop-gateway/src/resources.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
+import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
+import { SettingsDialog } from "./SettingsDialog.tsx"
 
 export function ResourceSettings({ bridge, workspaceId, resourceKind, onUse, onManagePlugins }: { bridge: DesktopBridge; workspaceId: string; resourceKind: ResourceKind; onUse?(prefix: string): void; onManagePlugins?(id?: string): void }) {
   const t = useText()
@@ -15,6 +19,7 @@ export function ResourceSettings({ bridge, workspaceId, resourceKind, onUse, onM
   const [error, setError] = useState<string>()
   const [loading, setLoading] = useState(false)
   const readVersion = useRef(0)
+  const returnFocus = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     let active = true
     ++readVersion.current; setList(undefined); setDetail(undefined); setSelected(undefined); setError(undefined); setLoading(false)
@@ -26,6 +31,10 @@ export function ResourceSettings({ bridge, workspaceId, resourceKind, onUse, onM
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
     return () => { active = false; ++readVersion.current }
   }, [bridge, workspaceId, resourceKind, search])
+  function closeDetail() {
+    ++readVersion.current; setSelected(undefined); setDetail(undefined); setLoading(false); setError(undefined)
+    setTimeout(() => { if (returnFocus.current?.isConnected) returnFocus.current.focus() }, 0)
+  }
   async function select(name: string) {
     const version = ++readVersion.current
     setSelected(name); setDetail(undefined); setLoading(true); setError(undefined)
@@ -38,25 +47,44 @@ export function ResourceSettings({ bridge, workspaceId, resourceKind, onUse, onM
     finally { if (version === readVersion.current) setLoading(false) }
   }
   const source = { workspace: "工作區", global: "全域", plugin: "插件" } as const
-  return <section aria-label={t(resourceKind === "skills" ? "技能" : "命令")}>
+  const Icon = resourceKind === "skills" ? BookOpen : Command
+  return <section className="resource-settings" aria-label={t(resourceKind === "skills" ? "技能" : "命令")}>
     <p className="settings-description">{t(resourceKind === "skills" ? "顯示後端有效技能；同名項目的優先順序為工作區、插件、全域。選取後才載入內容。" : "顯示已啟用插件提供的提示命令；帶入輸入框後由你送出。")}</p>
-    <form className="resource-search" onSubmit={(event) => { event.preventDefault(); setSearch({ query, offset: 0, revision: search.revision + 1 }) }}><input aria-label={t("搜尋名稱或描述")} placeholder={t("搜尋名稱或描述")} maxLength={512} value={query} onChange={(event) => setQuery(event.target.value)} /><button className="primary-button">{t("搜尋")}</button><button type="button" onClick={() => setSearch({ ...search, revision: search.revision + 1 })}>{t("重新整理")}</button>{onManagePlugins ? <button type="button" onClick={() => onManagePlugins()}>{t("管理插件")}</button> : null}</form>
-    {error ? <p role="alert" className="error-text">{error}</p> : null}
+    <form className="resource-search" onSubmit={(event) => { event.preventDefault(); setSearch({ query, offset: 0, revision: search.revision + 1 }) }}>
+      <SearchInput aria-label={t("搜尋名稱或描述")} placeholder={t("搜尋名稱或描述")} maxLength={512} value={query} onChange={(event) => setQuery(event.target.value)} clearLabel={t("清除搜尋")} onClear={() => { setQuery(""); setSearch({ query: "", offset: 0, revision: search.revision + 1 }) }} />
+      <Button type="submit" variant="secondary" size="small">{t("搜尋")}</Button>
+      <Button variant="ghost" size="small" icon={<RefreshCw size={15} />} onClick={() => setSearch({ ...search, revision: search.revision + 1 })}>{t("重新整理")}</Button>
+      {onManagePlugins ? <Button variant="secondary" size="small" icon={<Puzzle size={15} />} onClick={() => onManagePlugins()}>{t("管理插件")}</Button> : null}
+    </form>
+    {error && !selected ? <p role="alert" className="error-text">{error}</p> : null}
     {!list && !error ? <p role="status">{t("正在讀取…")}</p> : null}
-    {list?.diagnostics.length ? <details><summary>{t("載入診斷")}</summary>{list.diagnostics.map((message, index) => <p key={index}>{message}</p>)}</details> : null}
-    {list ? <div className="resource-layout">
-      <div className="resource-list">{list.items.length === 0 ? <p className="muted">{t("沒有符合的項目")}</p> : list.items.map((row) => <button key={row.name} type="button" aria-label={row.name} aria-current={selected === row.name ? "true" : undefined} onClick={() => { void select(row.name) }}><strong>{resourceKind === "commands" ? "/" : "$"}{row.name}</strong><small>{row.description}</small><span className="resource-source">{t(source[row.source])}{row.pluginId ? ` · ${row.pluginId}` : ""}</span></button>)}
-        {list.total > 50 ? <div className="provider-actions"><button disabled={search.offset === 0} onClick={() => setSearch({ ...search, offset: search.offset - 50 })}>{t("上一頁")}</button><span>{Math.floor(search.offset / 50) + 1} / {Math.ceil(list.total / 50)}</span><button disabled={search.offset + 50 >= list.total} onClick={() => setSearch({ ...search, offset: search.offset + 50 })}>{t("下一頁")}</button></div> : null}
+    {list?.diagnostics.length ? <details className="resource-diagnostics"><summary>{t("載入診斷")}</summary>{list.diagnostics.map((message, index) => <p key={index}>{message}</p>)}</details> : null}
+    {list ? <>
+      <div className="resource-list-heading"><h2>{t(resourceKind === "skills" ? "技能列表" : "命令列表")}</h2><span className="muted">{t("共 {count} 項", { count: list.total })}</span></div>
+      {list.items.length === 0 ? <div className="resource-empty"><Icon size={28} aria-hidden="true" /><p>{t("沒有符合的項目")}</p></div> : <ul className="resource-cards" aria-label={t(resourceKind === "skills" ? "技能列表" : "命令列表")}>
+        {list.items.map((row) => <li key={row.name}><button className="resource-card" type="button" aria-label={row.name} onClick={(event) => { returnFocus.current = event.currentTarget; void select(row.name) }}>
+          <div className="resource-card-top"><span className="resource-card-icon"><Icon size={18} aria-hidden="true" /></span><span className="resource-source-badge">{t(source[row.source])}</span></div>
+          <strong>{resourceKind === "commands" ? "/" : "$"}{row.name}</strong>
+          <p>{row.description || t("選取以查看內容")}</p>
+          <div className="resource-card-footer"><span title={row.pluginId}>{row.pluginId ?? t(source[row.source])}</span><ArrowRight size={15} aria-hidden="true" /></div>
+        </button></li>)}
+      </ul>}
+      {list.total > 50 ? <div className="resource-pagination"><Button size="small" disabled={search.offset === 0} onClick={() => setSearch({ ...search, offset: search.offset - 50 })}>{t("上一頁")}</Button><span>{Math.floor(search.offset / 50) + 1} / {Math.ceil(list.total / 50)}</span><Button size="small" disabled={search.offset + 50 >= list.total} onClick={() => setSearch({ ...search, offset: search.offset + 50 })}>{t("下一頁")}</Button></div> : null}
+    </> : null}
+    {selected ? <SettingsDialog title={selected} closeLabel={t("關閉內容預覽")} onClose={closeDetail} initialFocusSelector=".resource-detail button:not(:disabled)">
+      <div className="resource-detail">
+        {loading ? <p role="status">{t("正在讀取…")}</p> : error ? <p role="alert" className="error-text">{error}<Button variant="ghost" size="small" onClick={() => { void select(selected) }}>{t("重試")}</Button></p> : detail ? <>
+          <div className="resource-detail-meta"><span className="resource-source-badge">{t(source[detail.source])}</span>{detail.pluginId ? <span className="muted">{detail.pluginId}</span> : null}</div>
+          {detail.description ? <p className="muted">{detail.description}</p> : null}
+          {detail.path ? <details className="resource-path"><summary>{t("來源檔案")}</summary><code>{detail.path}</code></details> : null}
+          {detail.argumentHints ? <p><code>{detail.argumentHints}</code></p> : null}
+          {detail.unsupported?.length ? <p className="notice">{t("後端尚未執行的宣告：{fields}", { fields: detail.unsupported.join(", ") })}</p> : null}
+          <div className="provider-actions"><Button variant="primary" size="small" disabled={!onUse} onClick={() => { try { onUse?.(`${resourceKind === "skills" ? "$" : "/"}${detail.name} `) } catch (reason) { setError(String(reason)) } }}>{t(resourceKind === "skills" ? "使用此技能" : "帶入此命令")}</Button>{detail.pluginId && onManagePlugins ? <Button variant="secondary" size="small" onClick={() => onManagePlugins(detail.pluginId)}>{t("管理來源插件")}</Button> : null}</div>
+          {!onUse ? <p className="muted">{t("先選擇會話，再帶入輸入框。")}</p> : null}
+          {detail.truncated ? <p className="notice">{t("內容過長，預覽已截斷。")}</p> : null}
+          <div className="resource-body"><Markdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>[{alt}]</span>, a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{detail.body}</Markdown></div>
+        </> : null}
       </div>
-      <div className="resource-detail">{loading ? <p role="status">{t("正在讀取…")}</p> : detail ? <>
-        <h2>{detail.name}</h2><p className="muted">{t(source[detail.source])}{detail.path ? ` · ${detail.path}` : ""}{detail.pluginId ? ` · ${detail.pluginId}` : ""}</p>
-        {detail.argumentHints ? <p><code>{detail.argumentHints}</code></p> : null}
-        {detail.unsupported?.length ? <p className="notice">{t("後端尚未執行的宣告：{fields}", { fields: detail.unsupported.join(", ") })}</p> : null}
-        <div className="provider-actions"><button className="primary-button" disabled={!onUse} onClick={() => { try { onUse?.(`${resourceKind === "skills" ? "$" : "/"}${detail.name} `) } catch (reason) { setError(String(reason)) } }}>{t(resourceKind === "skills" ? "使用此技能" : "帶入此命令")}</button>{detail.pluginId && onManagePlugins ? <button onClick={() => onManagePlugins(detail.pluginId)}>{t("管理來源插件")}</button> : null}</div>
-        {!onUse ? <p className="muted">{t("先選擇會話，再帶入輸入框。")}</p> : null}
-        {detail.truncated ? <p className="notice">{t("內容過長，預覽已截斷。")}</p> : null}
-        <div className="resource-body"><Markdown remarkPlugins={[remarkGfm]} components={{ img: ({ alt }) => <span>[{alt}]</span>, a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a> }}>{detail.body}</Markdown></div>
-      </> : <p className="muted">{t("選擇項目以查看內容")}</p>}</div>
-    </div> : null}
+    </SettingsDialog> : null}
   </section>
 }

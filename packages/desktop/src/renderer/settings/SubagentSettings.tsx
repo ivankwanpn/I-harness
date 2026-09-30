@@ -55,10 +55,10 @@ export function SubagentSettings({ bridge, workspaceId }: { bridge: DesktopBridg
       <p className="muted">{t("代審模型獨立於任務子代理開關；未指定時沿用主會話模型。變更會在下一次核準檢查生效。")}</p>
       <RoleCard row={reviewer} title={t("代我審批")} description={t("檢查待核準的操作，無法執行工具。可選擇較便宜的模型。") } routes={routes} busy={busy} onSave={save} />
       <h2>{t("任務子代理")}</h2>
-      <SettingsGroup><SettingsRow label={t("允許角色使用獨立模型")} description={t("這個開關重啟 Desktop 後生效。關閉時，後端會拒絕使用已指定模型的角色。")}
+      <SettingsGroup><SettingsRow label={t("允許角色使用獨立模型")} description={t("儲存後立即生效；關閉時會拒絕使用獨立模型的新子代理，已執行中的子代理保持原模型。")}
         control={<input type="checkbox" aria-label={t("允許角色使用獨立模型")} checked={state.enabled} disabled={busy} onChange={(event) => { void save({ action: "enable", enabled: event.target.checked }) }} />} /></SettingsGroup>
       <p className="muted">{t("目前生效")}：{t(state.effectiveEnabled ? "已啟用" : "已停用")}</p>
-      {state.restartRequired ? <p role="status">{t("重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。")}</p> : null}
+      {state.restartRequired ? <p role="status">{t("部分設定尚未套用，請重新讀取目前生效的設定。")}</p> : null}
       <div className="provider-directory-heading"><h2>{t("角色模型")}</h2><button disabled={busy} onClick={() => setAdding((value) => !value)}>{t("新增角色配置")}</button></div>
       {adding ? <form className="role-add-form" onSubmit={(event) => {
         event.preventDefault()

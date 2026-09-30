@@ -185,6 +185,7 @@ export interface AssemblyOptions {
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
   compact?: CompactionRequest
+  autoCompactionEnabled?: () => boolean
   /** M42 G1: rewind engine — store root. When set (together with sessionId,
    * which keys the storage dir `rewind/<sessionId>/`) the assembly creates the
    * RewindStore + RewindRecorder, subscribes user/message → begin / turn/end →
@@ -255,7 +256,7 @@ export interface AssemblyOptions {
    * that never wired it has not enabled the feature. Off, a spawn of a role
    * with a declared model FAILS naming both fixes rather than running it on the
    * session's model in silence. */
-  allowSubagentModelSelection?: boolean
+  allowSubagentModelSelection?: boolean | (() => boolean)
   /** W11: how long a sub-agent may RUN before the `subagents` runtime-context
    * section names it to the main agent. Default 600_000 (10 min). It is a
    * threshold on the CURRENT run, not on the entry's age, and it starts no
@@ -1070,6 +1071,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // switch is OFF, never "enabled by omission".
       ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
       ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+      ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       // M73: the session's OWN model's numbers, on the same host shape as the
       // resolver they belong with (RoleModelHost). An inheriting child runs on
       // this very model, so its requests must be clamped and measured against
@@ -1183,6 +1185,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
           // options as the other spawn sites above.
           ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
           ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+          ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
           // M73: the session's numbers ride the same subagents branch as the
           // role-model fields above (agent-team mirrors SpawnOptions field by
           // field) — a teammate that inherits runs on the session's own model
@@ -1267,6 +1270,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }
 
     const agent = createAgent(ctx, {
+      ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       session, tools, model,
       systemPrompt: systemPromptNow,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),

@@ -121,12 +121,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const additionalTools = createMemoryTools(memory, () => memory.enabled())
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
-  const subagents = createSubagentSettings(settingsPath, settings.get().plugins.subagentModel)
+  let roleModelsEnabled = settings.get().plugins.subagentModel
+  let autoCompactionEnabled = settings.get().compaction.auto
+  const subagents = createSubagentSettings(settingsPath, roleModelsEnabled, { onEnabledChanged(next) { roleModelsEnabled = next } })
   const mcpPath = join(dirname(settingsPath), "mcp-servers.json")
   const mcp = createDesktopMcp(mcpPath)
   const service: SessionService = createSessionService({
     roleSelectionFor: subagents.selectionFor,
-    allowSubagentModelSelection: settings.get().plugins.subagentModel,
+    allowSubagentModelSelection: () => roleModelsEnabled,
+    autoCompactionEnabled: () => autoCompactionEnabled,
     resolveRoleModel: (selection) => runtime.resolveModel({ sessionSelection: selection }),
     extensionsFor: async (id) => pluginExtensions(await plugins.inputs(), dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active()),
     transformPrompt: expandPluginPrompt,
@@ -170,6 +173,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
     onSandboxModeChanged(next) { service.updateSandboxMode(next); mode = next },
     onApprovalModeChanged(next) { approvalMode = next },
+    onAutoCompactionChanged(next) { autoCompactionEnabled = next },
   })
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
@@ -249,7 +253,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const syncPolicy = () => {
     if (closing || syncingPolicy) return
     syncingPolicy = true
-    void agentSettings.sync().catch((error) => { console.warn(`[desktop] agent settings refresh failed: ${error instanceof Error ? error.message : String(error)}`) }).finally(() => { syncingPolicy = false })
+    void Promise.all([agentSettings.sync(), subagents.state()]).catch((error) => { console.warn(`[desktop] agent settings refresh failed: ${error instanceof Error ? error.message : String(error)}`) }).finally(() => { syncingPolicy = false })
   }
   const policyTimer = setInterval(syncPolicy, 1000)
   policyTimer.unref?.()

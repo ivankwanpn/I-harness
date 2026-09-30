@@ -46,6 +46,8 @@ export interface AgentConfig {
   maxTurns?: number
   signal?: AbortSignal
   compact?: CompactionConfig // M11: enable context-pressure auto-compaction (requires contextWindow)
+  /** Optional live host preference, read at each step; manual compaction is unaffected. */
+  autoCompactionEnabled?: () => boolean
   budget?: AgentBudgetConfig // M20: absolute context budget + overflow ladder (requires contextWindow)
   maxParallelToolCalls?: number // M13: bound on concurrent tool bodies per step (default 10; 1 = serial)
   // NOTE: `model?: string` from the task brief collides with `AgentDeps.model`
@@ -298,7 +300,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
 
       // M11 compaction: pressure check at the step boundary, before the model sees
       // the derived surface. Compaction only ever runs between steps.
-      if (compactor && compactEnabled) await compactor.maybeCompact(deps.session)
+      if (compactor && (deps.autoCompactionEnabled?.() ?? compactEnabled)) await compactor.maybeCompact(deps.session)
 
       // M20 budget enforcement: absolute-budget check (compact→reset→fail-closed)
       // at the same boundary, after the pressure check and before the model sees

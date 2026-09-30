@@ -138,7 +138,9 @@ export interface RoleModelHost {
   /** The switch. ABSENT MEANS OFF — the setting's own default is false, and a
    * host that never wired it has not enabled the feature. Off, a declared
    * selection is refused (`subagentModelSelectionGated`) rather than run. */
-  allowSubagentModelSelection?: boolean
+  allowSubagentModelSelection?: boolean | (() => boolean)
+  /** Shared live compaction preference for main and child Agents. */
+  autoCompactionEnabled?: () => boolean
   /** M73: the SESSION's own model's numbers — what an INHERITING child runs
    * under (no declared role model). They ride this host shape for the same
    * reason `roleSelectionFor` does: every spawn arm (the subagent tool, the
@@ -201,7 +203,8 @@ export function subagentModelSelectionDisabled(roleName: string): Error {
  * and a host that never wired the option has not enabled the feature. This is
  * the ONE place that rule is written. */
 export function subagentModelSelectionGated(host: RoleModelHost, declared: RoleModelSelection | undefined): boolean {
-  return declared !== undefined && host.allowSubagentModelSelection !== true
+  const enabled = typeof host.allowSubagentModelSelection === "function" ? host.allowSubagentModelSelection() : host.allowSubagentModelSelection
+  return declared !== undefined && enabled !== true
 }
 
 /** The resolver's answer, structurally: the `status` decides, and a `ready`
@@ -424,6 +427,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     tools: childReg,
     model,
@@ -457,9 +461,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // `requestShape` needs no wiring here: core-agent builds it from THIS
     // child's systemPrompt and tools, so the summarizer's call is a byte-prefix
     // of the child's own request (the provider cache serves it). `auto` is not
-    // written — it already defaults true, and a knob that can only be turned off
-    // would be a surface a child has no handle to use (`Agent.compact` is
-    // reachable only through a SessionAssembly).
+    // written — it defaults true. A live host preference, when supplied above,
+    // is read by core-agent at each step, including for this existing child.
     // M74 (final review) / M75: when the child's surface exceeds the window,
     // the summarizer's single request — the whole inherited surface plus the
     // directive, prompt and schemas, with `clampOutputCap` returning the raw cap

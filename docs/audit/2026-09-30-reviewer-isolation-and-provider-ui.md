@@ -1,5 +1,7 @@
 # Desktop reviewer isolation and provider UI — 2026-09-30
 
+The later removal of unnecessary setting restarts and Skills-page redesign are recorded in [2026-09-30-live-settings-and-skills-ui.md](2026-09-30-live-settings-and-skills-ui.md), which also contains the latest package hash and verification results.
+
 Worktree: `D:\frontend-test`, branch `codex/desktop-workbench`, starting commit `70341a06`. The QA workspace was `D:\agent-complete\playground`. Source changes were kept out of `D:\I-harness-main`; nothing was pushed. The user's pre-existing `packages/desktop/electron.vite.config.ts` change is excluded from the local implementation commit.
 
 ## Completed

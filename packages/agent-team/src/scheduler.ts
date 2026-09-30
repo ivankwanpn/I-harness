@@ -52,7 +52,8 @@ export interface TeamSubagentDeps {
    * wakeup rebuild (ensureResident, wired with the full deps) resolves the
    * declared one. One teammate, two models, no surface saying so. */
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
-  allowSubagentModelSelection?: boolean
+  allowSubagentModelSelection?: SpawnOptions["allowSubagentModelSelection"]
+  autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   /** M73: the session's own model's numbers, mirrored from SpawnOptions the way
    * the two fields above are. A teammate with no declared model runs on the
    * session's model, so its requests are clamped and measured against the same
@@ -216,6 +217,7 @@ export async function mountAgentTeams(
         // switch is OFF, never "enabled by omission".
         ...(sub.roleSelectionFor !== undefined ? { roleSelectionFor: sub.roleSelectionFor } : {}),
         ...(sub.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: sub.allowSubagentModelSelection } : {}),
+        ...(sub.autoCompactionEnabled ? { autoCompactionEnabled: sub.autoCompactionEnabled } : {}),
         // M73: same two options, same rule — the teammate's window and cap come
         // from the session the roster belongs to, and an absent one writes no key.
         ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),

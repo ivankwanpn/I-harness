@@ -7,6 +7,17 @@ import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { vi } from "vitest"
 
 const roots: string[] = []
+it("applies auto-compaction changes through the live host callback", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-compact-live-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const onAutoCompactionChanged = vi.fn()
+  const settings = createAgentSettings(path, { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, { onAutoCompactionChanged })
+  expect(await settings.configure({ autoCompaction: false })).toMatchObject({ effective: { autoCompaction: false }, restartRequired: false })
+  expect(onAutoCompactionChanged).toHaveBeenLastCalledWith(false)
+  await writeFile(path, JSON.stringify({ sandboxMode: "workspace-write", compaction: { auto: true } }))
+  expect(await settings.sync()).toMatchObject({ effective: { autoCompaction: true }, restartRequired: false })
+  expect(onAutoCompactionChanged).toHaveBeenLastCalledWith(true)
+})
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 it("persists only supported defaults without claiming the running sandbox changed", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-agent-settings-")); roots.push(root)

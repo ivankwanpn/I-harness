@@ -3,15 +3,16 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest"
 import { AgentSettings } from "../src/renderer/settings/AgentSettings.tsx"
 afterEach(cleanup)
-it("saves an explicit change and shows the still-effective runtime policy", async () => {
+it("saves automatic compaction live without a restart notice", async () => {
   const initial = { saved: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, effective: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, restartRequired: false, source: "settings" }
-  const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, saved: { ...initial.saved, autoCompaction: false }, restartRequired: true })
+  const request = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce({ ...initial, saved: { ...initial.saved, autoCompaction: false }, effective: { ...initial.effective, autoCompaction: false } })
   render(<AgentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
   const toggle = await screen.findByRole("checkbox", { name: "自動壓縮上下文" })
   fireEvent.click(toggle)
   expect(request).toHaveBeenCalledTimes(1)
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
-  await screen.findByText("自動壓縮仍需重啟 Desktop；請查看下方目前生效的設定。")
+  await screen.findByText("已停用")
+  expect(screen.queryByText(/重啟/)).toBeNull()
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/agent-settings/configure", workspaceId: "w", patch: { autoCompaction: false } })
 })
 

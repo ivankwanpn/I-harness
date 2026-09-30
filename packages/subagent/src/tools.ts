@@ -162,6 +162,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         // before the task record is written). See child.ts for the rule.
         roleSelectionFor: deps.roleSelectionFor,
         allowSubagentModelSelection: deps.allowSubagentModelSelection,
+        ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
         // M73: the session's own window and cap, forwarded to the spawn. Without
         // this hop the values reach SubagentToolDeps and stop — an inheriting
         // child of THIS tool would carry neither while every type still checks,
@@ -681,6 +682,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
     : estimateChildOverhead(childPrompt, childReg.schemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
     systemPrompt: childPrompt, signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),

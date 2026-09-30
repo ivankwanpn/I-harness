@@ -25,8 +25,12 @@ function selection(value: unknown): Selection {
   if (row.reasoningEffort !== undefined && (typeof row.reasoningEffort !== "string" || !row.reasoningEffort.trim() || row.reasoningEffort.length > 64)) throw new Error("Invalid reasoning effort")
   return { provider, model: row.model, ...(row.protocol === undefined ? {} : { protocol: row.protocol as Selection["protocol"] }), ...(row.reasoningEffort === undefined ? {} : { reasoningEffort: row.reasoningEffort as string }) }
 }
-export function createSubagentSettings(path: string, effectiveEnabled: boolean) {
+export function createSubagentSettings(path: string, effectiveEnabled: boolean, options: { onEnabledChanged?: (enabled: boolean) => void } = {}) {
   function stateOf(settings: Settings): SubagentSettingsState {
+    if (settings.plugins.subagentModel !== effectiveEnabled && options.onEnabledChanged) {
+      options.onEnabledChanged(settings.plugins.subagentModel)
+      effectiveEnabled = settings.plugins.subagentModel
+    }
     const builtins = [...builtinRoles(), { name: "reviewer", description: "Approval reviewer: assesses tool calls using its own selected model." }]
     const roles = settings.agents.roles
     return { enabled: settings.plugins.subagentModel, effectiveEnabled, restartRequired: settings.plugins.subagentModel !== effectiveEnabled,

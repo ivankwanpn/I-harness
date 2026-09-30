@@ -945,6 +945,16 @@ describe("the role's model: settings beats the role, and the toggle gates both",
       resolveModel, allowSubagentModelSelection: false,
     })).rejects.toThrow(/plugins\.subagentModel/)
   })
+  it("reads the live model gate at each spawn", async () => {
+    const f = spawnFixture()
+    const { calls, resolveModel } = spyResolver()
+    let enabled = false
+    const opts = { role: roleWith(f, { provider: "gw", model: "small" }), resolveModel, allowSubagentModelSelection: () => enabled }
+    await expect(spawnWith(f, opts)).rejects.toThrow(/disabled/)
+    enabled = true
+    await spawnWith(f, opts)
+    expect(calls).toHaveLength(1)
+  })
 
   it("toggle OFF + a role with NO model → inherit, unchanged from today", async () => {
     const f = spawnFixture()

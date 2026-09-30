@@ -11,7 +11,7 @@ export interface AgentSettingsState {
 
 /** Persist settings first, then apply the host's live policy callbacks. A host
  * without a callback keeps reporting its startup policy until rebuilt. */
-export function createAgentSettings(path: string, startup: AgentDefaults, options: { onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void } = {}) {
+export function createAgentSettings(path: string, startup: AgentDefaults, options: { onApprovalModeChanged?: (mode: SettingsApprovalMode) => void; onSandboxModeChanged?: (mode: SettingsSandboxMode) => void; onAutoCompactionChanged?: (enabled: boolean) => void } = {}) {
   const effective = { ...startup }
   const withStore = <T>(work: (store: SettingsStore) => Promise<T>) => withDesktopSettings(path, work)
   function snapshot(store: SettingsStore): AgentSettingsState {
@@ -20,6 +20,10 @@ export function createAgentSettings(path: string, startup: AgentDefaults, option
     return { saved, effective: { ...effective }, source: "settings", restartRequired: saved.sandboxMode !== effective.sandboxMode || saved.autoCompaction !== effective.autoCompaction || saved.approvalMode !== effective.approvalMode }
   }
   function applyEffective(saved: AgentDefaults): void {
+    if (saved.autoCompaction !== effective.autoCompaction && options.onAutoCompactionChanged) {
+      options.onAutoCompactionChanged(saved.autoCompaction)
+      effective.autoCompaction = saved.autoCompaction
+    }
     if (saved.sandboxMode !== effective.sandboxMode && options.onSandboxModeChanged !== undefined) {
       options.onSandboxModeChanged(saved.sandboxMode)
       effective.sandboxMode = saved.sandboxMode

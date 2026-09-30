@@ -23,7 +23,7 @@ function fixture(mode: "read-only" | "workspace-write" | "danger-full-access") {
 }
 
 describe("Desktop host sandbox configuration", () => {
-  it("reports saved agent defaults separately until a real host restart", async () => {
+  it("applies saved agent defaults live and retains them after restarting", async () => {
     const f = fixture("read-only")
     let host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })
     let id = 300
@@ -37,7 +37,7 @@ describe("Desktop host sandbox configuration", () => {
     try {
       const init = await call("initialize")
       expect(init).toMatchObject({ capabilities: { "desktop-agent-settings": ["1"] } })
-      expect(await call("desktop/agent-settings/configure", { sandboxMode: "workspace-write", autoCompaction: false })).toMatchObject({ restartRequired: true, effective: { sandboxMode: "workspace-write", autoCompaction: true } })
+      expect(await call("desktop/agent-settings/configure", { sandboxMode: "workspace-write", autoCompaction: false })).toMatchObject({ restartRequired: false, effective: { sandboxMode: "workspace-write", autoCompaction: false } })
       expect(await call("desktop/sandbox/state")).toMatchObject({ mode: "workspace-write" })
       expect(await call("desktop/agent-settings/configure", { approvalMode: "full-access" })).toMatchObject({ effective: { sandboxMode: "danger-full-access", approvalMode: "full-access" } })
       expect(await call("desktop/sandbox/state")).toMatchObject({ mode: "danger-full-access" })
@@ -68,7 +68,8 @@ describe("Desktop host sandbox configuration", () => {
     try {
       await call(first, firstFrames, "initialize")
       await call(second, secondFrames, "initialize")
-      await call(first, firstFrames, "desktop/agent-settings/configure", { sandboxMode: "read-only", approvalMode: "delegate" })
+      await call(first, firstFrames, "desktop/agent-settings/configure", { sandboxMode: "read-only", approvalMode: "delegate", autoCompaction: false })
+      await call(first, firstFrames, "desktop/subagents/mutate", { action: "enable", enabled: true })
       const deadline = Date.now() + 3500
       while (Date.now() < deadline) {
         const sandbox = await call(second, secondFrames, "desktop/sandbox/state") as { mode: string }
@@ -76,7 +77,8 @@ describe("Desktop host sandbox configuration", () => {
         await new Promise((resolve) => setTimeout(resolve, 100))
       }
       expect(await call(second, secondFrames, "desktop/sandbox/state")).toMatchObject({ mode: "read-only" })
-      expect(await call(second, secondFrames, "desktop/agent-settings/state")).toMatchObject({ effective: { sandboxMode: "read-only", approvalMode: "delegate" }, restartRequired: false })
+      expect(await call(second, secondFrames, "desktop/agent-settings/state")).toMatchObject({ effective: { sandboxMode: "read-only", approvalMode: "delegate", autoCompaction: false }, restartRequired: false })
+      expect(await call(second, secondFrames, "desktop/subagents/state")).toMatchObject({ effectiveEnabled: true, restartRequired: false })
     } finally { await first.close(); await second.close() }
   })
   it("persists provider commands across a host restart without leaking the API key", async () => {
