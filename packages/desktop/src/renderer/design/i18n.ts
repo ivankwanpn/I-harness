@@ -2,6 +2,9 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "工作流程": "Workflow",
+  "Agent Shell": "Agent Shell",
+  "儲存後套用到下一個 Agent 命令；正在執行或等候核準的命令保持原 Shell。使用所選 Shell 的命令語法。": "Saved changes apply to the next Agent command. Running commands and commands awaiting approval keep their original shell. Use the selected shell's command syntax.",
   "技能列表": "Skills", "命令列表": "Commands", "共 {count} 項": "{count} items", "選取以查看內容": "Select to view content", "關閉內容預覽": "Close content preview", "來源檔案": "Source file",
   "設定儲存後即時生效：沙箱與核準模式套用到下一次工具呼叫，自動壓縮套用到下一個步驟；已顯示的核準仍須手動決定。": "Saved settings apply live: sandbox and approval mode at the next tool call, automatic compaction at the next step. Pending approvals still need a manual decision.",
   "儲存後立即生效；關閉時會拒絕使用獨立模型的新子代理，已執行中的子代理保持原模型。": "Applies immediately after saving. When disabled, new subagents with independently selected models are refused. Running subagents keep their current model.",

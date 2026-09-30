@@ -6,6 +6,8 @@ import { OutputCollector } from "./spill.ts"
 
 export interface ExecCommand {
   argv: string[]
+  /** CMD /s /c needs its command string preserved rather than C-runtime quoting. */
+  windowsVerbatimArguments?: boolean
   cwd?: string
   env?: Record<string, string>
   timeoutMs?: number
@@ -171,6 +173,9 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
     cwd: cmd.cwd,
     env: { ...process.env, ...cmd.env },
     stdio: ["pipe", "pipe", "pipe"],
+    // A sandbox wrapper owns its own argv contract. CMD's verbatim request
+    // must never change how a replacement runner's arguments are quoted.
+    windowsVerbatimArguments: cmd.windowsVerbatimArguments === true && argv[0] === cmd.argv[0],
   })
   let stdout = ""
   let stderr = ""

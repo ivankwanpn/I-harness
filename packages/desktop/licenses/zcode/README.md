@@ -25,6 +25,8 @@ WindowControls.tsx adapts DesktopWindowControls.tsx's item-driven button group a
 DesktopWindowControls.tsx SHA256: 270C88A75AFA147C753E79582BF89E8FADCEA9D51693E59BC6BE0EE643AAB152.
 PaneTabs.tsx adapts tab presentation classes from app-shell/SidePaneTabTrigger.tsx. Native buttons and keyboard navigation replace Radix, drag/drop and service/store dependencies. Width dragging is independent I-harness UI code.
 SidePaneTabTrigger.tsx SHA256: 7949761BDB39AE9438407387465EC754D199F9C6EE63DBE3AAB902F6222A6B52.
+The Workflow pane reuses PaneTabs.tsx. src/renderer/session/WorkflowStatus.tsx adapts the paired status lamp and status word from components/workflow-timeline/WorkflowCardChrome.tsx's WorkflowRunStatus. I-harness supplies its own status vocabulary, scoped workflow commands, local labels, and native CSS; the ZCode run graph and runtime are omitted. The adaptation retains Apache-2.0 in its source header.
+WorkflowCardChrome.tsx SHA256: 119F92B3E6689FD167806BF2C73A5612CC274CB84E1674DB602835A79A4BAB32.
 - ToolCallBlocks/ToolSummaryRow.tsx: 81A0C2F954A73B81FF4ED113D56A3FB6B594D66E3A8358C910A2A25CEF922715
 - components/ui/lightweight-diff-preview.tsx: 7D1FF2A02815D988F5FFD2D6549848920C98488A4DBA43F67BA9D81A3DA49D01
 

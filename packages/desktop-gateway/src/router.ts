@@ -29,6 +29,8 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
+    if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
     if (handlers.resources) capabilities["desktop-resources"] = ["1"]
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
     if (handlers.hooks) capabilities["desktop-hooks"] = ["1"]
@@ -136,7 +138,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         await base.handleLine(line)
         if (message.method === "session/cancel") {
           const sessionId = asRecord(message.params)?.sessionId
-          if (typeof sessionId === "string" && sessionId !== "") handlers.interaction?.cancelSession?.(sessionId)
+          if (typeof sessionId === "string" && sessionId !== "") { handlers.interaction?.cancelSession?.(sessionId); await handlers.workflow?.cancel(sessionId) }
         }
         return
       }
@@ -148,6 +150,23 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if ((message.method === "desktop/agent-shell/state" || message.method === "desktop/agent-shell/configure") && handlers.agentShell) {
+        try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentShell.state() : await handlers.agentShell.configure(asRecord(message.params)?.patch))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/session/workflow/read", "desktop/session/workflow/mutate", "desktop/session/job/output"].includes(message.method) && handlers.workflow) {
+        const params = asRecord(message.params)
+        try {
+          const id = params?.sessionId
+          if (typeof id !== "string" || !id || id.length > 256) throw new Error("Invalid session id")
+          const result = message.method.endsWith("/read") ? await handlers.workflow.read(id)
+            : message.method.endsWith("/mutate") ? await handlers.workflow.mutate(id, params?.command)
+              : await handlers.workflow.output(id, String(params?.id ?? ""))
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/resources/list", "desktop/resources/read"].includes(message.method) && handlers.resources) {
         const params = asRecord(message.params)
         if ((params?.resourceKind !== "skills" && params?.resourceKind !== "commands") || (message.method.endsWith("/list")

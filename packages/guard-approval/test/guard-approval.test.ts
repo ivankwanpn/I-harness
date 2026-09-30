@@ -30,6 +30,16 @@ const makeBashTool = (getArgv: (args: { command: string }) => string[]): Tool =>
 })
 
 describe("guard-approval policy", () => {
+  it("classifies selected Agent shell commands with the tool's dialect parser", async () => {
+    const { ctx, registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
+    const approvals: string[] = []
+    registerApprovalAnswerer(ctx, async (request) => { approvals.push(request.name); return { approved: true } })
+    registry.register({ name: "shell", description: "", inputSchema: {}, getArgv: (args: { command: string }) => args.command.split(" "), execute: async () => ({ stdout: "ran" }) })
+    await registry.execute({ name: "shell", args: { command: "echo harmless" } })
+    expect(approvals).toEqual([])
+    await registry.execute({ name: "shell", args: { command: "Remove-Item outside -Force" } })
+    expect(approvals).toEqual(["shell"])
+  })
   it("dangerous-only mode allows session bookkeeping but still asks for destructive shell calls", async () => {
     const { ctx, registry } = setup({ workspace: process.cwd(), mode: "dangerous" })
     const approvals: string[] = []

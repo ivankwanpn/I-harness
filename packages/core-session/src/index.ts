@@ -118,7 +118,11 @@ export type SessionEvent =
     // branch) and deriveSearchText returns "" (unindexed). Additive event type;
     // format version stays 1. The PRODUCER is A/B-region (llm layer); the live
     // `reasoning` mux stream carries it.
-    | { type: "reasoning"; text: string; blockId?: string; seq?: number }
+    | { type: "reasoning"; text: string; blockId?: string; streamId?: string; seq?: number }
+    // Display-only deltas. `streamId` identifies one canonical reasoning
+    // record; offsets count UTF-16 characters, and atSeq positions this live
+    // block before the next durable record. Published, never appended.
+    | { type: "reasoning/chunk"; text: string; streamId: string; blockId?: string; offset: number; atSeq: number; seq?: number }
     // C-region port (R-C1 commands lifecycle, DSH commands parity): a slash
     // command's execution pair, appended by the executing host before/after the
     // handler. UI-plane (audit F05-6): the command never creates a model
@@ -341,10 +345,10 @@ export const CURRENT_FORMAT_VERSION = 1
 // WeakMap so the Session shape itself is unchanged.
 const appendHooks = new WeakMap<Session, (ev: SessionEvent) => void>()
 
-// M23 G1 streaming base: multi-listener append subscription. Subscribers
-// receive the SAME event object as the log (with seq) — no clone; clone
-// semantics are decided by the subscriber (matches onAppend semantics —
-// write-behind clones separately). Subscriptions take effect for appends
+// M23 G1 streaming base: multi-listener session subscription. Durable events
+// carry the SAME object as the log (with seq); transient chunks have no seq.
+// Clone semantics are decided by the subscriber (matches onAppend semantics —
+// write-behind clones separately). Subscriptions take effect for events
 // AFTER subscribe (no replay of past events); unsubscribe stops delivery.
 const subscribers = new WeakMap<Session, Set<(ev: SessionEvent) => void>>()
 
@@ -355,6 +359,13 @@ export function subscribe(session: Session, listener: (ev: SessionEvent) => void
   return () => { subscribers.get(session)?.delete(listener) }
 }
 
+/** Notify live consumers without invoking the durable append/persistence hook.
+ * A caller-supplied seq is stripped so a chunk can never move a replay cursor. */
+export function publishTransient(session: Session, event: Extract<SessionEvent, { type: "assistant/chunk" | "reasoning/chunk" }>): void {
+  const { seq: _seq, ...live } = event
+  subscribers.get(session)?.forEach((listener) => listener(live))
+}
+
 export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
   const session: Session = { formatVersion: CURRENT_FORMAT_VERSION, events: [] }
   if (onAppend) appendHooks.set(session, onAppend)
@@ -362,6 +373,7 @@ export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
 }
 
 export function append(session: Session, event: SessionEvent): void {
+  if (event.type === "reasoning/chunk") throw new Error("reasoning/chunk must be published as a transient event")
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
     throw new Error("assistant/message must originate from the log, not an external source")
   }

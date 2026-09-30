@@ -411,12 +411,18 @@ importers:
 
   packages/desktop-gateway:
     dependencies:
+      '@i-harness/agent-team':
+        specifier: workspace:*
+        version: link:../agent-team
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
       '@i-harness/core-session':
         specifier: workspace:*
         version: link:../core-session
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
@@ -426,18 +432,27 @@ importers:
       '@i-harness/goal':
         specifier: workspace:*
         version: link:../goal
+      '@i-harness/guard-approval':
+        specifier: workspace:*
+        version: link:../guard-approval
       '@i-harness/hooks':
         specifier: workspace:*
         version: link:../hooks
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
+      '@i-harness/jobs':
+        specifier: workspace:*
+        version: link:../jobs
       '@i-harness/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
       '@i-harness/memory':
         specifier: workspace:*
         version: link:../memory
+      '@i-harness/plan-mode':
+        specifier: workspace:*
+        version: link:../plan-mode
       '@i-harness/plugin-registry':
         specifier: workspace:*
         version: link:../plugin-registry

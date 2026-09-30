@@ -1,5 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import { assertSupportedJsonSchema, validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
+export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 
 // M27-R-A8: get_context_remaining — registered only when a contextWindow is
 // known (fail-closed); see context-remaining.ts.

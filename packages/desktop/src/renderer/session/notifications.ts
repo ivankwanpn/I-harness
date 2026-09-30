@@ -22,5 +22,5 @@ export function classifyNotification(method: string, params: unknown): Notificat
   if (method !== "session/event") return { kind: "ignore" }
   const event = record?.event
   const type = event !== null && typeof event === "object" ? (event as { type?: unknown }).type : undefined
-  return type === "assistant/chunk" ? { kind: "chunk", sessionId } : { kind: "durable", sessionId }
+  return type === "assistant/chunk" || type === "reasoning/chunk" ? { kind: "chunk", sessionId } : { kind: "durable", sessionId }
 }

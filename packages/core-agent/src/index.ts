@@ -1,7 +1,7 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ImageInput, Session } from "@i-harness/core-session"
-import { append, deriveMessages, deriveProjectionRewrite } from "@i-harness/core-session"
+import { append, deriveMessages, deriveProjectionRewrite, publishTransient } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
@@ -296,6 +296,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // R-A1: steer-tier inputs arrive at the provider boundary — claimed
       // before step/start so deriveMessages below already includes them.
       deps.stepInputs?.claimAtStepBoundary()
+      const stepStartSeq = deps.session.events.length
       append(deps.session, { type: "step/start" })
 
       // M11 compaction: pressure check at the step boundary, before the model sees
@@ -423,16 +424,42 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       let providerContinuation: Extract<LLMStreamEvent, { type: "end" }>["providerContinuation"]
       let pendingReasoning: string[] = []
       let pendingReasoningBlockId: string | undefined
+      let reasoningBlockIndex = 0
+      let reasoningStreamId: string | undefined
+      let reasoningAtSeq = 0
+      let reasoningOffset = 0
+      let reasoningDelta: string[] = []
+      let reasoningTimer: ReturnType<typeof setTimeout> | undefined
+      let reasoningPublishError: unknown
+      const clearReasoningTimer = () => {
+        if (reasoningTimer !== undefined) clearTimeout(reasoningTimer)
+        reasoningTimer = undefined
+      }
+      const publishReasoning = () => {
+        clearReasoningTimer()
+        if (reasoningDelta.length === 0 || reasoningStreamId === undefined) return
+        const text = reasoningDelta.join("")
+        const offset = reasoningOffset
+        reasoningDelta = []
+        reasoningOffset += text.length
+        publishTransient(deps.session, { type: "reasoning/chunk", streamId: reasoningStreamId, text, offset, atSeq: reasoningAtSeq, ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) })
+      }
       const flushReasoning = () => {
+        clearReasoningTimer()
         if (pendingReasoning.length === 0) return
-        append(deps.session, { type: "reasoning", text: pendingReasoning.join(""), ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) })
+        const event = { type: "reasoning" as const, text: pendingReasoning.join(""), streamId: reasoningStreamId!, ...(pendingReasoningBlockId === undefined ? {} : { blockId: pendingReasoningBlockId }) }
         pendingReasoning = []
         pendingReasoningBlockId = undefined
+        reasoningStreamId = undefined
+        reasoningDelta = []
+        reasoningOffset = 0
+        append(deps.session, event)
       }
       try {
         for await (const ev of deps.model.stream(request)) {
+          if (reasoningPublishError !== undefined) throw reasoningPublishError
           if (abort?.aborted) throw new Error("agent aborted")
-          if (ev.type !== "reasoning") flushReasoning()
+          if (ev.type !== "reasoning" && ev.type !== "usage") flushReasoning()
           switch (ev.type) {
             case "text/chunk":
               stepText += ev.text
@@ -441,8 +468,21 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
               if (pendingReasoning.length > 0 && ev.blockId !== pendingReasoningBlockId) flushReasoning()
               reasoning.push(ev.text)
               if (ev.text) {
+                if (reasoningStreamId === undefined) {
+                  reasoningStreamId = `${stepStartSeq}:${reasoningBlockIndex++}`
+                  reasoningAtSeq = deps.session.events.length
+                }
                 pendingReasoningBlockId = ev.blockId
                 pendingReasoning.push(ev.text)
+                reasoningDelta.push(ev.text)
+                // First content appears immediately. Further deltas flush even
+                // while the provider is awaiting its next token in this block.
+                if (reasoningOffset === 0) publishReasoning()
+                else if (reasoningTimer === undefined) reasoningTimer = setTimeout(() => {
+                  if (abort?.aborted) { clearReasoningTimer(); return }
+                  try { publishReasoning() }
+                  catch (error) { reasoningPublishError = error }
+                }, 50)
               }
               break
             case "tool_call": {

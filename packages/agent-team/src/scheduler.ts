@@ -24,7 +24,7 @@ import {
   type SubagentRole,
 } from "@i-harness/subagent"
 import { validateTeamConfig, type TeamConfig, type TeamEvent, type TeamCaller } from "./types.ts"
-import { foldTeam } from "./fold.ts"
+import { foldTeam, teamLedger } from "./fold.ts"
 import { createTeamTransact, type TeamLead } from "./transact.ts"
 import { createRoster } from "./roster.ts"
 import { createMailbox } from "./mailbox.ts"
@@ -77,6 +77,9 @@ export interface TeamSubagentDeps {
 }
 
 export interface TeamDeps {
+  /** Desktop sessions own independent team tool registries and ledgers. */
+  allowConcurrentTeams?: boolean
+  preserveSubagentTools?: boolean
   // lead session (the team's parent/main session; its event log is the team
   // log — every team/* event is appended here)
   parentSession: Session
@@ -132,7 +135,7 @@ export async function mountAgentTeams(
   }
   validateTeamConfig(cfg)
 
-  if (liveTeams.size > 0) {
+  if (liveTeams.size > 0 && !deps.allowConcurrentTeams) {
     throw new Error("agent-team: only one team per run is supported (M19)")
   }
 
@@ -144,7 +147,7 @@ export async function mountAgentTeams(
   // teamId is derived from the log: on restore the first team/* event's
   // teamId is authoritative (member ids and old-lead-targeted queued message
   // keys are stable; only a freshly minted lead id would strand them).
-  const ledger = deps.parentSession.events as unknown as TeamEvent[]
+  const ledger = teamLedger(deps.parentSession)
   const state = foldTeam(ledger).state
   let canonicalTeamId: string | undefined
   for (const e of ledger) {
@@ -155,6 +158,7 @@ export async function mountAgentTeams(
     }
   }
   const teamId = canonicalTeamId ?? `lead-${randomUUID()}`
+  if (liveTeams.has(teamId)) throw new Error("agent-team: this team is already mounted")
   liveTeams.add(teamId)
   let unmounted = false
   // Every failure path below must release the reservation — the idempotent
@@ -166,7 +170,7 @@ export async function mountAgentTeams(
     // (Ruling 19 discipline) minus the Lead-only ones; populated right after
     // createTeamTools below — spawns only ever happen post-mount, so the
     // closure reads the final value.
-    let teamRoleTools: string[] = [...TEAMMATE_BASE_TOOLS]
+    let teamRoleTools: string[] = [...TEAMMATE_BASE_TOOLS, ...(tools.get("shell") ? ["shell"] : [])]
     const activity = createActivity({ waitMinMs: cfg.waitMinMs, waitMaxMs: cfg.waitMaxMs, waitDefaultMs: cfg.waitDefaultMs })
     const lead: TeamLead = {
       // every team event is appended into the parent session log; the parent's
@@ -432,14 +436,16 @@ export async function mountAgentTeams(
       taskBoard,
       activity,
     }
-    const teamTools = createTeamTools(toolDeps)
+    const collisions = new Set(["send_message", "followup_task", "wait_agent", "interrupt_agent"])
+    const teamTools = createTeamTools(toolDeps).map((tool) => deps.preserveSubagentTools && collisions.has(tool.name)
+      ? { ...tool, name: `team_${tool.name}` } : tool)
     // Tool names DERIVED from the created tools (Ruling 19) — mount and
     // unmount can never drift from each other or from Task 9's surface.
     teamToolNames = teamTools.map((t) => t.name)
     // Minor 5: the teammate role's tool surface derives from the SAME tool
     // list — all team tools minus the two Lead-only ones (spawn_teammate /
     // interrupt_agent). Never hardcode the 10 names in two places.
-    teamRoleTools = [...TEAMMATE_BASE_TOOLS, ...teamToolNames.filter((n) => n !== "spawn_teammate" && n !== "interrupt_agent")]
+    teamRoleTools = [...TEAMMATE_BASE_TOOLS, ...(tools.get("shell") ? ["shell"] : []), ...teamToolNames.filter((n) => n !== "spawn_teammate" && n !== "interrupt_agent" && n !== "team_interrupt_agent")]
 
     // ---- recovery (crash restore), BEFORE the tools are live ----
     // (a) reconcile stuck provisioning members (provisioning→active if the

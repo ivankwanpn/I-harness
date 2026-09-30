@@ -11,6 +11,7 @@ import {
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { GuardianRequest, GuardianVerdict } from "@i-harness/core-tools"
 import { GUARDIAN_JSON_CONTRACT, parseGuardianAssessment } from "./verdict.ts"
+import type { GuardianIsolatedConfig } from "./review-record.ts"
 
 export const GUARDIAN_REVIEW_TIMEOUT_MS = 90_000
 export const GUARDIAN_REVIEWER_ROLE_NAME = "reviewer"
@@ -22,6 +23,7 @@ export const BUNDLED_GUARDIAN_POLICY =
   "Approve only clearly safe, in-scope, low-risk actions. When uncertain, deny."
 
 export interface GuardianReviewDeps {
+  isolated?: GuardianIsolatedConfig
   subagents: {
     roles: RoleRegistry
     jobs: JobRegistry

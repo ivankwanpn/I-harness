@@ -64,6 +64,21 @@ it("shows persisted model reasoning inside expandable work details", () => {
   expect(screen.getByText("Inspect").tagName).toBe("STRONG")
 })
 
+it("opens incoming reasoning immediately and preserves a reader's collapse choice as the block grows and settles", () => {
+  const chunk = { type: "reasoning/chunk" as const, streamId: "a", text: "Inspect ", offset: 0, atSeq: 0 }
+  const view = render(<Timeline rows={projectTimeline([chunk])} running />)
+  let disclosure = screen.getByText("思考過程").closest("details")!
+  expect(disclosure.open).toBe(true)
+  fireEvent.click(screen.getByText("思考過程"))
+  expect(disclosure.open).toBe(false)
+  view.rerender(<Timeline rows={projectTimeline([chunk, { ...chunk, text: "files", offset: 8 }])} running />)
+  disclosure = screen.getByText("思考過程").closest("details")!
+  expect(disclosure.open).toBe(false)
+  expect(disclosure.textContent).toContain("Inspect files")
+  view.rerender(<Timeline rows={projectTimeline([{ type: "reasoning", streamId: "a", text: "Inspect files", seq: 0 }])} />)
+  expect(screen.getByText("思考過程").closest("details")!.open).toBe(false)
+})
+
 it("keeps inner and outer disclosure choices across growth and virtual unmount", () => {
   const a = { id: "a", kind: "tool" as const, name: "read", args: { path: "a.txt" }, output: "first contents" }
   const b = { ...a, id: "b", name: "list_dir", output: "directory listing" }

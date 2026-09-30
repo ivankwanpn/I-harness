@@ -47,6 +47,9 @@ export type SettingsSearchBackend = "jsonl" | "sqlite"
 /** Language of the UI. v0 ships zh only — the field is durable and forward-compatible. */
 export type SettingsLanguage = "zh"
 
+export const AGENT_SHELL_CHOICES = ["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"] as const
+export type SettingsAgentShell = typeof AGENT_SHELL_CHOICES[number]
+
 export interface SettingsPluginToggles {
   agentLoop: boolean
   bash: boolean
@@ -278,6 +281,8 @@ export interface SettingsOnboarding {
  * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
   sandboxMode: SettingsSandboxMode
+  /** Executable preference for new Agent shell commands. */
+  agentShell: SettingsAgentShell
   /** Desktop tool approvals; legacy files default to dangerous-only. */
   approvalMode: SettingsApprovalMode
   model: string
@@ -317,6 +322,7 @@ export interface SettingsCompaction {
 // docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
 const SETTINGS_DEFAULTS: Settings = {
   sandboxMode: "workspace-write",
+  agentShell: "auto",
   approvalMode: "dangerous",
   // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
   // and its designed ladder: layer 1 is pressure compaction at 80% of the window,
@@ -682,6 +688,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),
     approvalMode: oneOf(raw.approvalMode, APPROVAL_MODES, base.approvalMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,
     language: oneOf(raw.language, LANGUAGES, base.language),

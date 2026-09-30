@@ -13,6 +13,55 @@ export interface ResolvedShell {
   argv: string[] // shell executable + mode flag(s)
 }
 
+type AgentShellDialect = "posix" | "powershell" | "cmd"
+export interface ResolvedAgentShell {
+  id: string
+  label: string
+  command: string
+  dialect: AgentShellDialect
+  /** Revalidate the approved executable before launch without reading a new preference. */
+  validate?(): void
+}
+
+export function agentShellPrompt(shell: ResolvedAgentShell): string {
+  const syntax = shell.dialect === "powershell" ? "PowerShell syntax (cmdlets, $variables, backtick escaping)"
+    : shell.dialect === "cmd" ? "Windows CMD syntax (%VARIABLES%, caret escaping)"
+      : "POSIX shell syntax"
+  return `Agent Shell: ${shell.label} (${shell.command}). Use the shell tool for command execution with ${syntax}. ` +
+    "The bash and pwsh tools remain explicit alternatives for their own dialects. New commands read the current preference; a command already prepared or running retains its executable."
+}
+
+/** Advisory approval tokens. Windows dialects preserve path backslashes; they
+ * must never pass through the POSIX backslash parser. Dynamic expansion and
+ * invocation stay conservative so the danger classifier requires approval. */
+function getAgentArgv(command: string, dialect: AgentShellDialect): string[] {
+  if (dialect === "posix") return getArgv(command)
+  const argv: string[] = []
+  let token = "", quoted: "'" | '"' | undefined, started = false
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i]!
+    if (quoted === undefined && /\s/.test(char)) {
+      if (started) argv.push(token)
+      token = ""; started = false
+    } else if (char === quoted) {
+      if (dialect === "powershell" && command[i + 1] === quoted) { token += char; i++ }
+      else quoted = undefined
+    } else if (quoted === undefined && (char === '"' || (dialect === "powershell" && char === "'"))) {
+      quoted = char; started = true
+    } else if ((dialect === "powershell" && char === "`" && quoted !== "'") || (dialect === "cmd" && char === "^" && quoted === undefined)) {
+      token += command[++i] ?? ""; started = true
+    } else {
+      token += char; started = true
+    }
+  }
+  if (started) argv.push(token)
+  // The shared classifier has no expansion evaluator. Never allow an expanded
+  // executable/target, script block or single-& invocation as a harmless argv.
+  if (quoted !== undefined || /[\r\n&]/.test(command)
+    || (dialect === "cmd" ? /[%!]/.test(command) : /[$`{}]/.test(command))) argv.push(";")
+  return argv
+}
+
 // Windows: prefer a real Unix shell if one exists on PATH, else pwsh.
 // `System32/bash.exe` and `WindowsApps/bash.exe` launch WSL; they do not obey
 // the native cwd and `pwd -W` contract of this tool. Return the chosen absolute
@@ -153,6 +202,8 @@ export interface ShellRetentionOptions {
 
 export interface ShellToolDeps {
   exec: ExecService
+  /** Live host preference. Only the generic shell tool uses this resolver. */
+  agentShell?: () => ResolvedAgentShell
   timeoutMs?: number // declared on bash/pwsh tools; drives guard-timeout
   /** W10: a FOREGROUND bash/pwsh command still running after this many ms is
    * handed back as a background job id (the command keeps running) instead of
@@ -217,7 +268,7 @@ export interface ShellToolDeps {
 async function resolveShellCall(
   deps: ShellToolDeps,
   exec: ToolExec,
-  toolName: "bash" | "pwsh",
+  toolName: "bash" | "pwsh" | "shell",
   args: { sandbox_permissions?: string; justification?: string },
   subject: string,
 ): Promise<
@@ -280,7 +331,7 @@ async function resolveShellCall(
  * nothing after the throwing call already read a confined policy.
  */
 function sandboxUnavailableFailure(
-  tool: "bash" | "pwsh",
+  tool: "bash" | "pwsh" | "shell",
   surface: SandboxSurface,
   policy: SandboxExecutionPolicy | undefined,
 ): { stdout: string; stderr: string; exitCode: number } {
@@ -314,7 +365,7 @@ function sandboxUnavailableFailure(
  */
 function promotedResult(
   promoted: PromotedRun,
-  tool: "bash" | "pwsh",
+  tool: "bash" | "pwsh" | "shell",
   deadlineMs: number | undefined,
 ): { stdout: string; job_id: string; promoted: true; ran_foreground_ms: number } {
   // The deadline is named only when the host declared one: a mount without
@@ -518,13 +569,64 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       }
     },
   }
-  return [bash, pwsh]
+  if (!deps.agentShell) return [bash, pwsh]
+  type Args = { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }
+  type Binding = { shell: ResolvedAgentShell } | { error: string }
+  const bindings = new WeakMap<Args, Binding>()
+  function bindingFor(args: Args): Binding {
+    const existing = bindings.get(args)
+    if (existing) return existing
+    let binding: Binding
+    try { binding = { shell: { ...deps.agentShell!() } } }
+    catch (error) { binding = { error: error instanceof Error ? error.message : String(error) } }
+    bindings.set(args, binding)
+    return binding
+  }
+  const shell: Tool<Args> = {
+    name: "shell",
+    get description() {
+      try { return `Run a command in the selected Agent Shell. ${agentShellPrompt(deps.agentShell!())} background: true returns a job id.` }
+      catch (error) { return `The selected Agent Shell is unavailable: ${error instanceof Error ? error.message : String(error)}. Change Agent Shell in settings before executing commands.` }
+    },
+    inputSchema: bash.inputSchema,
+    timeoutMs: deps.timeoutMs,
+    getArgv: (args) => {
+      const binding = bindingFor(args)
+      return "error" in binding ? [] : getAgentArgv(args.command, binding.shell.dialect)
+    },
+    execute: async (args, exec) => {
+      const binding = bindingFor(args)
+      bindings.delete(args)
+      if ("error" in binding) return { stdout: "", stderr: binding.error, exitCode: -1 }
+      const selected = binding.shell
+      try { selected.validate?.() }
+      catch (error) { return { stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: -1 } }
+      const flags = selected.dialect === "powershell" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+        : selected.dialect === "cmd" ? ["/d", "/s", "/c"] : ["-c"]
+      const argv = [selected.command, ...flags, selected.dialect === "cmd" ? `"${args.command}"` : args.command]
+      const ladder = await resolveShellCall(deps, exec, "shell", args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
+      if (ladder.kind === "refused") return ladder.refusal
+      const sandbox = ladder.policy
+      const spec = { argv, ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
+      try {
+        if (args.background === true) return { job_id: deps.exec.runBackground(spec).jobId }
+        const command = { ...spec, abortSignal: exec.abortSignal }
+        const result = deps.backgroundAfterMs === undefined ? await deps.exec.run(command) : await deps.exec.run(command, { backgroundAfterMs: deps.backgroundAfterMs })
+        return "promoted" in result ? promotedResult(result, "shell", deps.timeoutMs) : retainedRunResult(result, "shell-stdout")
+      } catch (error) {
+        if (error instanceof SandboxUnavailableError) return sandboxUnavailableFailure("shell", "shell", sandbox)
+        throw error
+      }
+    },
+  }
+  return [bash, pwsh, shell]
 }
 
 export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
   opts?: {
+    agentShell?: () => ResolvedAgentShell
     timeoutMs?: number
     /** W10: the foreground promotion threshold, forwarded to both tools — see
      * ShellToolDeps.backgroundAfterMs. It MUST stay well under `timeoutMs`; the
@@ -545,13 +647,25 @@ export function registerShell(
 ): void {
   registerExec(ctx, { sandbox: opts?.sandbox })
   const exec = ctx.services.get<ExecService>("exec/service")
-  for (const tool of createShellTools({
+  const tools = createShellTools({
     exec,
+    ...(opts?.agentShell !== undefined ? { agentShell: opts.agentShell } : {}),
     timeoutMs: opts?.timeoutMs,
     backgroundAfterMs: opts?.backgroundAfterMs,
     retention: opts?.retention,
     sandboxPolicy: opts?.sandboxPolicy,
     ...(opts?.escalationApprover !== undefined ? { escalationApprover: opts.escalationApprover } : {}),
     ...(opts?.cwd !== undefined ? { cwd: opts.cwd } : {}),
-  })) registry.register(tool)
+  })
+  for (const tool of tools) registry.register(tool)
+  const selectedShell = tools.find((tool) => tool.name === "shell")
+  if (selectedShell) {
+    // Pin before any approval policy suspends the call. getArgv is otherwise
+    // skipped by ask-all/delegate/full-access policies; execution still uses
+    // the same argument object carried by core-tools prepare/dispatch.
+    ctx.on("tools/pre-execute", (payload) => {
+      const call = payload as { name?: string; args?: { command: string } }
+      if (call?.name === "shell" && call.args && typeof call.args === "object") selectedShell.getArgv?.(call.args)
+    })
+  }
 }

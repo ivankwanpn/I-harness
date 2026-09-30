@@ -7,6 +7,7 @@ import {
   MAX_RETAINED_EVENTS,
   MAX_RETAINED_LIVE,
   markDisconnected,
+  timelineEvents,
 } from "../src/renderer/session/event-window.ts"
 
 type WireEvent = HistoryRange["events"][number]
@@ -20,6 +21,43 @@ function page(events: WireEvent[], nextSeq: number): HistoryRange {
 }
 
 describe("Desktop event window", () => {
+  it("coalesces long live reasoning blocks without losing their prefix or advancing the durable cursor", () => {
+    let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 0 }], 1))
+    for (let offset = 0; offset < MAX_RETAINED_LIVE + 25; offset++) {
+      state = applyNotification(state, { type: "reasoning/chunk", streamId: "a", blockId: "0", text: "x", offset, atSeq: 1 })
+    }
+    expect(state.live).toEqual([{ type: "reasoning/chunk", streamId: "a", blockId: "0", text: "x".repeat(225), offset: 0, atSeq: 1 }])
+    expect(state.events).toEqual([{ type: "step/start", seq: 0 }])
+    expect(state.cursor).toBe(1)
+  })
+
+  it("settles live reasoning on replay and ignores a late animation-frame chunk for that completed stream", () => {
+    let state = applyNotification(emptyEventWindow(), { type: "reasoning/chunk", streamId: "a", text: "partial", offset: 0, atSeq: 0 })
+    const completed: WireEvent = { type: "reasoning", streamId: "a", text: "partial thought", seq: 0 }
+    state = applyHistory(state, page([completed], 1))
+    expect(state.live).toEqual([])
+    state = applyNotification(state, { type: "reasoning/chunk", streamId: "a", text: " thought", offset: 7, atSeq: 0 })
+    expect(state.live).toEqual([])
+    expect(state.events).toEqual([completed])
+  })
+
+  it("settles only the canonical block and orders a later live block before tools received after it", () => {
+    let state = applyHistory(emptyEventWindow(), page([{ type: "step/start", seq: 0 }], 1))
+    state = applyNotification(state, { type: "reasoning/chunk", streamId: "a", text: "first", offset: 0, atSeq: 1 })
+    state = applyNotification(state, { type: "reasoning", streamId: "a", text: "first", seq: 1 })
+    state = applyNotification(state, { type: "reasoning/chunk", streamId: "b", text: "second", offset: 0, atSeq: 2 })
+    state = applyNotification(state, { type: "tool/call", callId: "r", name: "read", args: {}, seq: 2 })
+    expect(state.live).toHaveLength(1)
+    expect(timelineEvents(state).map((event) => event.type)).toEqual(["step/start", "reasoning", "reasoning/chunk", "tool/call"])
+  })
+
+  it("deduplicates overlapping progress delivery using the text offset", () => {
+    let state = applyNotification(emptyEventWindow(), { type: "reasoning/chunk", streamId: "a", text: "Inspect ", offset: 0, atSeq: 0 })
+    state = applyNotification(state, { type: "reasoning/chunk", streamId: "a", text: "Inspect ", offset: 0, atSeq: 0 })
+    state = applyNotification(state, { type: "reasoning/chunk", streamId: "a", text: "files", offset: 8, atSeq: 0 })
+    expect(state.live).toEqual([{ type: "reasoning/chunk", streamId: "a", text: "Inspect files", offset: 0, atSeq: 0 }])
+  })
+
   it("keeps an old gateway's admission bytes out of the retained renderer window", () => {
     const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }
     const admission: WireEvent = { type: "agent/input/admitted", version: 1, inputId: "q1", text: "inspect", delivery: "queue", intent: "user", images: [image], seq: 0 }

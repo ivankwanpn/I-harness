@@ -1,0 +1,53 @@
+/* Status lamps and compact workflow headings follow ZCode WorkflowCardChrome;
+ * the session PaneTabs use the existing Apache-2.0 ZCode adaptation. */
+.workflow-pane { display: flex; flex: 1; flex-direction: column; min-height: 0; overflow: hidden; color: var(--ih-text); }
+.workflow-pane-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 22px 10px; }
+.workflow-pane h1 { font-size: 17px; font-weight: 600; margin: 0; }
+.workflow-pane h2 { font-size: 14px; font-weight: 600; margin: 0; }
+.workflow-pane h3 { font-size: 13px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
+.workflow-pane h4 { font-size: 12px; font-weight: 500; margin: 14px 0 6px; }
+.workflow-pane > .zc-pane-tabs { margin: 0 18px 8px; flex-shrink: 0; }
+.workflow-tab-body { min-height: 0; flex: 1; overflow-y: auto; padding: 10px 22px 24px; }
+.workflow-goal-plan, .workflow-team, .workflow-list { display: flex; flex-direction: column; gap: 14px; max-width: 860px; margin: 0 auto; }
+.workflow-section { max-width: 860px; margin: 0 auto; }
+.workflow-section > h2 { margin-bottom: 12px; }
+.workflow-card { border: 1px solid var(--ih-divider); border-radius: 10px; padding: 14px 16px; background: color-mix(in srgb, var(--ih-panel) 35%, transparent); min-width: 0; }
+.workflow-heading { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.workflow-card p { margin: 7px 0; overflow-wrap: anywhere; white-space: pre-wrap; line-height: 1.55; }
+.workflow-objective { font-size: 14px; }
+.workflow-meta, .workflow-hint { color: var(--ih-muted); font-size: 11px; line-height: 1.5; }
+.workflow-status { display: inline-flex; align-items: center; flex-shrink: 0; gap: 6px; color: var(--ih-muted); font-size: 11px; }
+.workflow-status-lamp { width: 7px; height: 7px; flex-shrink: 0; border: 1px solid currentColor; border-radius: 50%; }
+.workflow-status[data-status="active"], .workflow-status[data-status="running"], .workflow-status[data-status="in_progress"] { color: var(--ih-accent); }
+.workflow-status[data-status="active"] .workflow-status-lamp, .workflow-status[data-status="running"] .workflow-status-lamp, .workflow-status[data-status="in_progress"] .workflow-status-lamp { background: currentColor; }
+.workflow-status[data-status="complete"], .workflow-status[data-status="completed"], .workflow-status[data-status="approve"] { color: #81b995; }
+.workflow-status[data-status="failed"], .workflow-status[data-status="error"], .workflow-status[data-status="deny"], .workflow-status[data-status="timeout"] { color: #e99890; }
+.workflow-status[data-confirmed="false"] { color: var(--ih-muted); }
+.workflow-status[data-confirmed="false"] .workflow-status-lamp { background: transparent; }
+.workflow-pane label { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; font-size: 12px; color: var(--ih-muted); }
+.workflow-pane input, .workflow-pane textarea, .workflow-pane select { width: 100%; border: 1px solid var(--ih-divider); border-radius: 7px; background: var(--ih-bg); color: var(--ih-text); font: inherit; padding: 8px 10px; min-width: 0; }
+.workflow-pane textarea { resize: vertical; line-height: 1.55; }
+.workflow-pane input:focus-visible, .workflow-pane textarea:focus-visible, .workflow-pane select:focus-visible, .workflow-pane button:focus-visible, .workflow-pane summary:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+.workflow-pane .workflow-checkbox { flex-direction: row; align-items: center; color: var(--ih-text); }
+.workflow-checkbox input { width: 15px; height: 15px; accent-color: var(--ih-accent); }
+.workflow-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.workflow-pane button:not([role="tab"]) { border: 1px solid var(--ih-divider); border-radius: 7px; background: transparent; padding: 6px 10px; font-size: 12px; cursor: pointer; }
+.workflow-pane button:not([role="tab"]):hover:not(:disabled) { background: color-mix(in srgb, var(--ih-text) 6%, transparent); }
+.workflow-pane button.workflow-primary { background: var(--ih-text); color: var(--ih-bg); }
+.workflow-pane button:disabled, .workflow-pane input:disabled, .workflow-pane textarea:disabled, .workflow-pane select:disabled { opacity: .45; cursor: not-allowed; }
+.workflow-empty { color: var(--ih-muted); padding: 8px 0; font-size: 12px; }
+.workflow-error, .workflow-progress { margin: 6px 22px; font-size: 12px; flex-shrink: 0; }
+.workflow-error { color: #e99890; overflow-wrap: anywhere; }.workflow-error button { margin-left: 10px; }
+.workflow-progress { color: var(--ih-muted); }
+.workflow-create { margin-top: 14px; }
+.workflow-lead { margin-bottom: 14px; }.workflow-lead .workflow-heading { margin-bottom: 0; }
+.workflow-create summary, .workflow-review summary { cursor: pointer; font-size: 13px; }
+.workflow-review summary { display: flex; align-items: center; gap: 10px; list-style: none; }
+.workflow-review summary::before { content: "›"; color: var(--ih-muted); font-size: 17px; }.workflow-review[open] summary::before { transform: rotate(90deg); }
+.workflow-review-name { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 500; }
+.workflow-review dl { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 10px; font-size: 12px; line-height: 1.55; }
+.workflow-review dt { color: var(--ih-muted); }.workflow-review dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-pane pre { max-height: 360px; overflow: auto; border: 1px solid var(--ih-divider); border-radius: 8px; background: var(--ih-bg); padding: 12px; font: 12px/1.6 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.workflow-output { margin-top: 16px; }.workflow-two-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.workflow-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 12px; margin-bottom: 14px; }
+@media (max-width: 680px) { .workflow-tab-body { padding: 10px 12px 18px; }.workflow-pane-header { padding: 12px; }.workflow-two-columns { grid-template-columns: 1fr; gap: 0; }.workflow-review summary > .workflow-meta { display: none; }.workflow-review dl { grid-template-columns: 1fr; gap: 4px; }.workflow-review dd { margin-bottom: 6px; } }

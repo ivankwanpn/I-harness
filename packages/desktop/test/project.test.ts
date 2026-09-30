@@ -6,6 +6,31 @@ type WireEvent = HistoryRange["events"][number]
 type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 
 describe("projectTimeline", () => {
+  it("shows a live reasoning block and replaces it with its canonical record using a stable row id", () => {
+    const chunks: WireEvent[] = [
+      { type: "reasoning/chunk", streamId: "step-3:0", blockId: "0", text: "Inspect ", offset: 0, atSeq: 3 },
+      { type: "reasoning/chunk", streamId: "step-3:0", blockId: "0", text: "files", offset: 8, atSeq: 3 },
+    ]
+    const live = projectTimeline(chunks)
+    expect(live).toEqual([{ id: "reasoning:step-3:0", kind: "other", label: "reasoning", detail: "Inspect files", transient: true }])
+    const complete = projectTimeline([...chunks, { type: "reasoning", streamId: "step-3:0", blockId: "0", text: "Inspect files", seq: 3 }])
+    expect(complete).toEqual([{ id: "reasoning:step-3:0", kind: "other", label: "reasoning", detail: "Inspect files" }])
+    expect(projectTimeline([{ type: "reasoning", streamId: "step-3:0", blockId: "0", text: "Inspect files", seq: 3 }])).toEqual(complete)
+  })
+
+  it("keeps distinct reasoning blocks in provider order around tools and later rounds", () => {
+    const rows = projectTimeline([
+      { type: "reasoning/chunk", streamId: "a", blockId: "0", text: "first", offset: 0, atSeq: 0 },
+      { type: "reasoning", streamId: "a", blockId: "0", text: "first", seq: 0 },
+      { type: "reasoning/chunk", streamId: "b", blockId: "1", text: "second", offset: 0, atSeq: 1 },
+      { type: "reasoning", streamId: "b", blockId: "1", text: "second", seq: 1 },
+      { type: "tool/call", callId: "r", name: "read", args: {}, seq: 2 },
+      { type: "reasoning/chunk", streamId: "c", blockId: "0", text: "next round", offset: 0, atSeq: 3 },
+    ])
+    expect(rows.map((row) => row.id)).toEqual(["reasoning:a", "reasoning:b", "tool:r", "reasoning:c"])
+    expect(rows.filter((row) => row.kind === "other").map((row) => row.detail)).toEqual(["first", "second", "next round"])
+  })
+
   it("keeps queue and sandbox bookkeeping out of the readable conversation", () => {
     const rows = projectTimeline([
       { type: "sandbox/mode", mode: "workspace-write", seq: 0 },

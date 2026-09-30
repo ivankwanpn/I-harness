@@ -258,6 +258,20 @@ export async function dispatchDesktopRequest(
       }
       return runtime.client.request(value.kind, { sessionId, command: sanitized })
     }
+    case "desktop/agent-shell/state":
+    case "desktop/agent-shell/configure":
+    case "desktop/session/workflow/read":
+    case "desktop/session/workflow/mutate":
+    case "desktop/session/job/output": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const params: Record<string, unknown> = {}
+      if (value.kind.startsWith("desktop/session/")) params.sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      if (value.kind === "desktop/agent-shell/configure") params.patch = requireRecord(value.patch)
+      if (value.kind === "desktop/session/workflow/mutate") params.command = requireRecord(value.command)
+      if (value.kind === "desktop/session/job/output") params.id = requireNonEmpty(value.id, "id")
+      return runtime.client.request(value.kind, params, 600000)
+    }
     case "desktop/session/work-state": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")

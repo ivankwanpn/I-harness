@@ -1,7 +1,10 @@
 import { readFile, mkdir } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { deriveSessionTitle } from "@i-harness/core-session"
+import { foldGoal } from "@i-harness/goal"
+import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
@@ -25,9 +28,12 @@ import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
 import { createDesktopMcp } from "./mcp-settings.ts"
 import { createDesktopResources } from "./resources.ts"
+import { createDesktopWorkflow, createDesktopGoalTools } from "./workflow.ts"
+import { createDesktopApprovalHistory } from "./approval-history.ts"
+import { createAgentShellSettings } from "./agent-shell.ts"
 import { watchSettings } from "@i-harness/settings"
 import { resolveHookTrustPath } from "@i-harness/hooks"
-import type { RpcMessage } from "@i-harness/sdk"
+import { makeNotification, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
 import { createWorkspaceReview } from "./review.ts"
@@ -97,6 +103,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
+  const approvals = createDesktopApprovalHistory(coordinator)
+  const reviewerPool = createIsolatedReviewerPool()
+  const agentShell = createAgentShellSettings(settingsPath)
+  const notifyWorkflow = (sessionId: string) => options.onWrite(makeNotification("desktop/workflow/changed", { sessionId }))
   const modelBindingFor: NonNullable<SessionServiceOptions["modelBindingFor"]> = async (sessionId, meta) => {
     const state = await runtime.resolveModel(meta?.modelSelection === undefined
       ? {}
@@ -118,7 +128,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // process. Never call global query cleanup when closing an individual host.
   const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
-  const additionalTools = createMemoryTools(memory, () => memory.enabled())
+  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow)]
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
@@ -127,6 +137,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const mcpPath = join(dirname(settingsPath), "mcp-servers.json")
   const mcp = createDesktopMcp(mcpPath)
   const service: SessionService = createSessionService({
+    agentShell: agentShell.resolve,
+    team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
+    additionalSystemPrompt(session) {
+      const goal = foldGoal(session.events)
+      return goal ? `Current goal (${goal.phase}, id ${goal.id}, revision ${goal.revision}): ${goal.objective}. ${goal.phase === "active" ? "Continue until fully achieved and verified, then call goal_complete with its current id/revision." : "Do not continue a paused or completed goal unless the user explicitly asks."}` : ""
+    },
     roleSelectionFor: subagents.selectionFor,
     allowSubagentModelSelection: () => roleModelsEnabled,
     autoCompactionEnabled: () => autoCompactionEnabled,
@@ -140,7 +156,23 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sandbox: mode,
     allowRuntimeSandboxChanges: true,
     approvalMode: () => approvalMode,
-    guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true, allowModelSelection: true, execution: "isolated" },
+    guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true, allowModelSelection: true, execution: "isolated", isolated: (sessionId) => ({
+      pool: reviewerPool,
+      permissionContext: () => `${options.workspace}\n${mode}\n${approvalMode}`,
+      resolveBinding: async (selection) => {
+        const fingerprint = async () => createHash("sha256").update(await readFile(settingsPath, "utf8").catch(() => "")).update(await readFile(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), "utf8").catch(() => "")).digest("hex")
+        const before = await fingerprint()
+        const chosen = selection ?? (await coordinator.profile(sessionId)).meta.modelSelection
+        const state = await runtime.resolveModel(chosen ? { sessionSelection: chosen } : {})
+        if (state.status !== "ready") throw new Error(state.reason)
+        const after = await fingerprint()
+        return { client: state.binding.client, contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens,
+          reasoningEffort: selection ? state.binding.reasoningEffort : undefined,
+          identity: { provider: state.binding.providerId, model: state.binding.modelId, protocol: state.binding.protocol,
+            ...(selection?.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}), ...(before === after ? { configurationKey: after } : {}) } }
+      },
+      onReview: async (record) => { await approvals.append(sessionId, record); notifyWorkflow(sessionId) },
+    }) },
     modelPolicy: "required",
     modelBindingFor,
     afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
@@ -179,7 +211,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const review = createWorkspaceReview(options.workspace)
+  const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
+    onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const handlers: DesktopHandlers = {
+    workflow, agentShell,
     resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
@@ -269,7 +304,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       offInteraction()
       await router.close()
       await review.close()
+      await workflow.close()
       await service.close()
+      await approvals.flush()
       await plugins.close()
       memory.close()
       await coordinator.close()

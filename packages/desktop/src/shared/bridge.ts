@@ -12,6 +12,11 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | { kind: "desktop/agent-shell/state"; workspaceId: string }
+  | { kind: "desktop/agent-shell/configure"; workspaceId: string; patch: { shell: import("@i-harness/desktop-gateway/src/agent-shell.ts").AgentShellOption["id"] } }
+  | { kind: "desktop/session/workflow/read"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/session/workflow/mutate"; workspaceId: string; sessionId: string; command: import("@i-harness/desktop-gateway/src/workflow.ts").WorkflowCommand }
+  | { kind: "desktop/session/job/output"; workspaceId: string; sessionId: string; id: string }
   | { kind: "workspace/files/pick"; workspaceId: string }
   | { kind: "desktop/resources/list"; workspaceId: string; resourceKind: ResourceKind; query: string; offset: number }
   | { kind: "desktop/resources/read"; workspaceId: string; resourceKind: ResourceKind; name: string }
@@ -94,7 +99,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed"
+      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed"
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string }

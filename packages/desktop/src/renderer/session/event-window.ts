@@ -1,4 +1,5 @@
 import type { HistoryRange } from "@i-harness/sdk"
+import { mergeReasoningChunks } from "./reasoning-progress.ts"
 
 export type WireEvent = HistoryRange["events"][number]
 
@@ -37,28 +38,56 @@ function retainEvent(event: WireEvent): WireEvent {
   return rest
 }
 
+function settleLive(live: WireEvent[], incoming: readonly WireEvent[]): WireEvent[] {
+  const completed = new Set(incoming.flatMap((event) => event.type === "reasoning" && event.streamId ? [event.streamId] : []))
+  return live.filter((event) => event.type !== "reasoning/chunk" || !completed.has(event.streamId)).slice(-MAX_RETAINED_LIVE)
+}
+
+/** Transient block positions are measured against the durable sequence so a
+ * delayed UI frame still places reasoning before later tool or message rows. */
+export function timelineEvents(state: EventWindow): WireEvent[] {
+  if (state.live.length === 0) return state.events
+  const position = (event: WireEvent) => event.type === "reasoning/chunk" ? event.atSeq : event.seq ?? Number.POSITIVE_INFINITY
+  return [...state.live, ...state.events].sort((a, b) => position(a) - position(b))
+}
+
 export function applyHistory(state: EventWindow, page: HistoryRange): EventWindow {
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
     events: capEvents(mergeBySeq(state.events, page.events.map(retainEvent))),
-    live: state.live.length > MAX_RETAINED_LIVE ? state.live.slice(state.live.length - MAX_RETAINED_LIVE) : [...state.live],
+    live: settleLive(state.live, page.events),
     connection: "online",
   }
 }
 
 export function applyNotification(state: EventWindow, event: WireEvent): EventWindow {
   event = retainEvent(event)
+  if (event.type === "reasoning/chunk") {
+    // The canonical notification may reach React before its buffered chunks.
+    if (state.events.some((item) => item.type === "reasoning" && item.streamId === event.streamId)) return state
+    let combined = event
+    const live: WireEvent[] = []
+    let insertAt: number | undefined
+    for (const item of state.live) {
+      const merged = item.type === "reasoning/chunk" ? mergeReasoningChunks(combined, item) : undefined
+      if (merged) { combined = merged; insertAt ??= live.length }
+      else live.push(item)
+    }
+    live.splice(insertAt ?? live.length, 0, combined)
+    return { ...state, live: live.slice(-MAX_RETAINED_LIVE) }
+  }
   if (event.seq === undefined) {
     const live = [...state.live, event]
     return { ...state, live: live.length > MAX_RETAINED_LIVE ? live.slice(live.length - MAX_RETAINED_LIVE) : live }
   }
+  const live = settleLive(state.live, [event])
   const last = state.events[state.events.length - 1]
   // Streaming appends are the hot path: a strictly newer seq needs neither a
   // rebuild nor a sort, only the new array React needs to re-render.
   if (last?.seq === undefined || event.seq > last.seq) {
-    return { ...state, events: capEvents([...state.events, event]) }
+    return { ...state, live, events: capEvents([...state.events, event]) }
   }
-  return { ...state, events: capEvents(mergeBySeq(state.events, [event])) }
+  return { ...state, live, events: capEvents(mergeBySeq(state.events, [event])) }
 }
 
 export function markDisconnected(state: EventWindow): EventWindow {

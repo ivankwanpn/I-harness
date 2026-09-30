@@ -7,21 +7,21 @@
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
-import { append, createSession, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
-import { createToolRegistry, registerContextRemaining, type Tool } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { registerShell, type ShellRetentionOptions } from "@i-harness/shell"
+import { agentShellPrompt, registerShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
 import { registerWeb } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
 import { createTodoTool } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
-import { createApprovalPolicy, registerGuardian, type ApprovalMode } from "@i-harness/guard-approval"
+import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
@@ -179,6 +179,9 @@ export interface AssemblyOptions {
   lsp?: LspServerConfig[] // M18: LSP servers to mount
   skills?: { extraDirs?: string[] } // plugin overlay skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
+  concurrentSessionTeams?: boolean
+  agentShell?: () => ResolvedAgentShell
+  additionalSystemPrompt?: (session: Session) => string
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
   /** Host-owned tools participate in the same validation and approval pipeline. */
   additionalTools?: Tool[]
@@ -197,7 +200,7 @@ export interface AssemblyOptions {
   rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
-  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean; allowModelSelection?: boolean; execution?: "subagent" | "isolated" } // R-A9
+  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean; allowModelSelection?: boolean; execution?: "subagent" | "isolated"; isolated?: GuardianIsolatedConfig | ((sessionId: string, session: Session) => GuardianIsolatedConfig) } // R-A9
   outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
   /** The session the sandbox policy resolution READS for `sandbox/mode` events.
@@ -298,6 +301,7 @@ interface RewindAssemblyHandle {
 }
 
 export interface SessionAssembly {
+  tools: ToolRegistry
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
   session: Session // the live session — the source of truth
@@ -636,6 +640,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // standing mode (spec §3.3 point 1). It reaches a tool through its own
   // arguments and the approver below, not through this resolver.
   registerShell(ctx, tools, {
+    ...(opts.agentShell ? { agentShell: opts.agentShell } : {}),
     timeoutMs: shellTimeoutMs,
     // W10: the pair travels together — the shell layer needs both to keep the
     // threshold under the deadline it declares to guard-timeout.
@@ -1062,6 +1067,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const subagent = registerSubagent(ctx, tools, {
+      includeAgentShell: opts.agentShell !== undefined,
       resolveModel: resolveRoleModel,
       // The gate travels with the resolver it gates, into THIS chain:
       // RegisterSubagentOptions → SubagentToolDeps → spawnChild. The guardian
@@ -1158,6 +1164,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         ...(opts.guardian.timeoutMs !== undefined ? { timeoutMs: opts.guardian.timeoutMs } : {}),
         ...(opts.guardian.enabled !== undefined ? { enabled: opts.guardian.enabled } : {}),
         ...(opts.guardian.execution !== undefined ? { execution: opts.guardian.execution } : {}),
+        ...(opts.guardian.isolated ? { isolated: typeof opts.guardian.isolated === "function" ? opts.guardian.isolated(opts.sessionId ?? "", session) : opts.guardian.isolated } : {}),
         ...(opts.guardian.fallbackToHumanOnFailure !== undefined ? { fallbackToHumanOnFailure: opts.guardian.fallbackToHumanOnFailure } : {}),
         ...(opts.coordinator !== undefined && opts.sessionId !== undefined
           ? {
@@ -1172,6 +1179,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await subagent.ready
     if (opts.team !== undefined) {
       teamHandles.push(await mountAgentTeams(ctx, tools, {
+        allowConcurrentTeams: opts.concurrentSessionTeams,
+        preserveSubagentTools: opts.concurrentSessionTeams,
         parentSession: session,
         parentRegistry: tools,
         subagents: {
@@ -1211,7 +1220,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     let baseSystemPrompt = opts.preset !== undefined
       ? parsePreset(opts.preset).systemPrompt
       : DEFAULT_AGENT_PRESET.systemPrompt
-    if (opts.planMode) baseSystemPrompt = `${baseSystemPrompt}\n\n${PLAN_MODE_SYSTEM_PROMPT}`
     // The fragment says "Current", so it must BE current. Both the guards and
     // this prompt read `sandboxPolicyNow()`, but the guards read it per CALL and
     // the prompt is re-read per STEP — so a mid-session mode change moves both,
@@ -1220,16 +1228,24 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     // The resolution happens ONCE per call here: one local, read for both the
     // memo comparison and the render, so a mode that flipped between two reads
     // could never be memoised under the wrong key.
-    let promptCache: { mode: SandboxMode | undefined; text: string } | undefined
     const systemPromptNow = (): string => {
       const policy = sandboxPolicyNow()
-      const mode = policy?.mode
-      if (promptCache !== undefined && promptCache.mode === mode) return promptCache.text
-      const text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
-      promptCache = { mode, text }
+      let text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
+      if (derivePlanMode(session).active || opts.planMode && !session.events.some((event) => event.type === "plan/mode")) text += `\n\n${PLAN_MODE_SYSTEM_PROMPT}`
+      if (opts.agentShell) { try { text += `\n\n${agentShellPrompt(opts.agentShell())}` } catch { text += "\n\nThe selected Agent shell is unavailable. Ask the user to repair its setting before shell execution." } }
+      if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
       return text
     }
 
+    if (opts.planMode && !session.events.some((event) => event.type === "plan/mode")) append(session, { type: "plan/mode", mode: "on" })
+    ensurePlanModeTool(tools, session)
+    ctx.on("tools/pre-execute", (call) => {
+      const name = (call as { name?: string })?.name
+      if (derivePlanMode(session).active && (!name || tools.get(name)?.isReadOnly !== true)) {
+        throw Object.assign(new Error("Plan Mode permits only read-only tools"), { policyRefusal: true })
+      }
+      return call
+    })
     // M33 §3.2: when the window is resolved and the host did not supply an
     // overhead, the assembly supplies the estimate into BOTH count surfaces
     // (M11 compact config — host's explicit overheadTokens always wins — and
@@ -1319,10 +1335,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // R-A1: steer-tier claims at the step boundary (mid-turn injection).
       stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
     })
-    if (opts.planMode) ensurePlanModeTool(tools, session)
 
     return {
       ctx,
+      tools,
       agent,
       session,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),

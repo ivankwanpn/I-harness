@@ -9,6 +9,11 @@
     "gateway": "node --import tsx src/cli.ts"
   },
   "dependencies": {
+    "@i-harness/agent-team": "workspace:*",
+    "@i-harness/core-tools": "workspace:*",
+    "@i-harness/guard-approval": "workspace:*",
+    "@i-harness/jobs": "workspace:*",
+    "@i-harness/plan-mode": "workspace:*",
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-session": "workspace:*",
     "@i-harness/credentials": "workspace:*",

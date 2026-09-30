@@ -1,12 +1,17 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import { randomUUID } from "node:crypto"
 import type { ApprovalGuardian, GuardianRequest, GuardianVerdict } from "@i-harness/core-tools"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { GuardianBreaker, isGuardianBreakerState } from "./breaker.ts"
 import { runGuardianReview, type GuardianReviewDeps } from "./reviewer.ts"
 import { runIsolatedGuardianReview } from "./isolated-reviewer.ts"
+import { captureGuardianRequest, publicReviewerIdentity, type GuardianReviewerIdentity, type GuardianReviewStatus } from "./review-record.ts"
 
 export { runGuardianReview, ensureReviewerRole, renderGuardianMessage, renderRecentContext, BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, GUARDIAN_REVIEWER_ROLE_NAME } from "./reviewer.ts"
 export type { GuardianReviewDeps } from "./reviewer.ts"
+export { createIsolatedReviewerPool } from "./reviewer-pool.ts"
+export type { IsolatedReviewerPool } from "./reviewer-pool.ts"
+export type { GuardianIsolatedConfig, GuardianIsolatedBinding, GuardianReviewerIdentity, GuardianReviewRecord, GuardianReviewStatus } from "./review-record.ts"
 
 export interface GuardianConfig extends GuardianReviewDeps {
   execution?: "subagent" | "isolated"
@@ -51,16 +56,38 @@ export async function registerGuardian(ctx: PluginContext, config: GuardianConfi
 
   const review: ApprovalGuardian = async (request: GuardianRequest): Promise<GuardianVerdict> => {
     if (config.enabled?.() === false) return { outcome: "allow", rationale: "Delegated approval is disabled" }
+    const startedAt = Date.now()
+    const recordedRequest = captureGuardianRequest(request)
+    let model: GuardianReviewerIdentity | undefined
+    let reusedContext = false
+    const report = async (status: GuardianReviewStatus, rationale: string, outcome?: GuardianVerdict["outcome"], reviewer?: Awaited<ReturnType<typeof runGuardianReview>>) => {
+      if (!config.isolated?.onReview) return
+      try {
+        await config.isolated.onReview({ id: randomUUID(), startedAt, durationMs: Math.max(0, Date.now() - startedAt), status,
+          request: recordedRequest, reusedContext, rationale: rationale.slice(0, 2000),
+          ...(model ? { model: publicReviewerIdentity(model) } : {}), ...(outcome ? { outcome } : {}),
+          ...(reviewer ? { reviewerOutcome: reviewer.outcome, reviewerRationale: reviewer.rationale.slice(0, 2000), ...(reviewer.cause ? { cause: reviewer.cause } : {}) } : {}),
+        })
+      } catch (error) { console.warn(`[guardian] approval history could not be saved: ${error instanceof Error ? error.message : String(error)}`) }
+    }
     if (breaker?.check() === "open") {
-      return config.fallbackToHumanOnFailure
+      const verdict: GuardianVerdict = config.fallbackToHumanOnFailure
         ? { outcome: "allow", rationale: "guardian circuit breaker open; ask the human" }
         : { outcome: "deny", rationale: "guardian circuit breaker open (3+ denials in the last 10 reviews)" }
+      await report("breaker", verdict.rationale, verdict.outcome)
+      return verdict
     }
     let verdict: Awaited<ReturnType<typeof runGuardianReview>>
-    try { verdict = await (config.execution === "isolated" ? runIsolatedGuardianReview(config, request) : runGuardianReview(config, request)) }
+    try { verdict = await (config.execution === "isolated" ? runIsolatedGuardianReview(config, request, (identity, reused) => { model = identity; reusedContext = reused }) : runGuardianReview(config, request)) }
     catch (error) {
-      if (request.signal?.aborted) throw error
-      if (config.fallbackToHumanOnFailure) return { outcome: "allow", rationale: `guardian could not start: ${error instanceof Error ? error.message : String(error)}; ask the human` }
+      const rationale = error instanceof Error ? error.message : String(error)
+      if (request.signal?.aborted) { await report("cancelled", rationale); throw error }
+      if (config.fallbackToHumanOnFailure) {
+        const fallback: GuardianVerdict = { outcome: "allow", rationale: `guardian could not start: ${rationale}; ask the human` }
+        await report("operational", fallback.rationale, fallback.outcome)
+        return fallback
+      }
+      await report("operational", rationale)
       throw error
     }
     if (isGuardianVerdict(verdict) && breaker && config.breaker) {
@@ -76,9 +103,11 @@ export async function registerGuardian(ctx: PluginContext, config: GuardianConfi
       // fail-soft doc mirror: putDocument reports internally and never rejects
       void config.breaker.coordinator.putDocument(key, breaker.snapshot())
     }
-    return config.fallbackToHumanOnFailure && verdict.outcome === "deny" && verdict.cause !== undefined
+    const effective: GuardianVerdict = config.fallbackToHumanOnFailure && verdict.outcome === "deny" && verdict.cause !== undefined
       ? { outcome: "allow", rationale: `guardian review ${verdict.cause}; ask the human` }
       : verdict
+    await report(verdict.cause ?? "completed", effective.rationale, effective.outcome, verdict)
+    return effective
   }
   ctx.services.register("approval/guardian", review)
 }

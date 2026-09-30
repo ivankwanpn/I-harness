@@ -139,7 +139,8 @@ export function createWorkspaceRuntimeManager(options: {
         if (frame.method !== "session/event"
           && frame.method !== "session/status"
           && frame.method !== "desktop/interaction/request"
-          && frame.method !== "desktop/interaction/closed") return
+          && frame.method !== "desktop/interaction/closed"
+          && frame.method !== "desktop/workflow/changed") return
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params: frame.params })
       })
       return { client: launched.client, info, sandbox }

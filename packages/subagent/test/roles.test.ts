@@ -2,6 +2,13 @@ import { describe, expect, it } from "vitest"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 
 describe("role registry", () => {
+  it("makes selected shell available only to implementation roles when the host mounts it", () => {
+    const roles = builtinRoles({ agentShell: true })
+    expect(roles.find((role) => role.name === "general")!.tools).toContain("shell")
+    expect(roles.find((role) => role.name === "worker")!.tools).toContain("shell")
+    expect(roles.find((role) => role.name === "explore")!.tools).not.toContain("shell")
+    expect(builtinRoles().flatMap((role) => role.tools)).not.toContain("shell")
+  })
   it("seeds four built-in roles", () => {
     const roles = createRoleRegistry()
     for (const r of builtinRoles()) roles.register(r)

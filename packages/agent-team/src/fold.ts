@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { Session } from "@i-harness/core-session"
 import type { TeamEvent, TeamMemberSnapshot, TeamTaskSnapshot, TeamMessageSnapshot } from "./types.ts"
 
 export interface TeamFoldState {
@@ -10,6 +11,13 @@ export interface TeamFoldState {
 }
 export function createFoldState(): TeamFoldState {
   return { members: new Map(), tasks: new Map(), queued: new Map(), delivered: new Set(), nextTaskNumber: 1 }
+}
+/** Forked conversation history does not grant ownership of its source team's
+ * child sessions. The new conversation starts a new team ledger after its seed. */
+export function teamLedger(session: Session): TeamEvent[] {
+  const header = session.header
+  const fork = Boolean(header?.parentSession && header.origin !== "subagent" && header.origin !== "approval-review")
+  return (fork ? session.events.slice(header?.seedLength ?? session.events.length) : session.events) as unknown as TeamEvent[]
 }
 
 // Spec §4.5 structure validation: strict zod schemas for the 4 team event

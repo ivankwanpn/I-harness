@@ -1,5 +1,6 @@
 import type { HistoryRange, ImageInput } from "@i-harness/sdk"
 import type { Message } from "../design/i18n.ts"
+import { mergeReasoningChunks, type ReasoningChunk } from "./reasoning-progress.ts"
 
 export type WireEvent = HistoryRange["events"][number]
 
@@ -7,13 +8,16 @@ export type TimelineRow = (
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
-  | { id: string; kind: "other"; label: string; detail?: string }
+  | { id: string; kind: "other"; label: string; detail?: string; transient?: true }
 ) & { turn?: { id: string; complete: boolean } }
 
-/** Pure fold: durable rows only, with stable ids for every rendered row. */
+/** Pure fold of durable records and live chunks, with stable rendered ids. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = []
   const toolIndex = new Map<string, number>()
+  const reasoningIndex = new Map<string, number>()
+  const reasoningChunks = new Map<string, ReasoningChunk>()
+  const completedReasoning = new Set<string>()
   let streamIndex: number | undefined
   let groupScope: string | undefined
   let turn: TimelineRow["turn"]
@@ -25,7 +29,26 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     if (event.type === "tool/dispatch" || event.type === "session/title"
       || event.type === "sandbox/mode" || event.type === "agent/input/admitted"
       || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") continue
-    if (event.type === "tool/call") {
+    if (event.type === "reasoning" || event.type === "reasoning/chunk") {
+      const streamId = event.streamId
+      if (event.type === "reasoning/chunk" && completedReasoning.has(event.streamId)) continue
+      const rowIndex = streamId === undefined ? undefined : reasoningIndex.get(streamId)
+      let detail = event.text
+      if (event.type === "reasoning/chunk") {
+        const previous = reasoningChunks.get(event.streamId)
+        const chunk = previous ? mergeReasoningChunks(previous, event) ?? event : event
+        reasoningChunks.set(event.streamId, chunk)
+        detail = chunk.text
+      } else if (streamId !== undefined) {
+        completedReasoning.add(streamId)
+        reasoningChunks.delete(streamId)
+      }
+      const row: TimelineRow = { id: streamId === undefined ? `event:${event.seq ?? index}` : `reasoning:${streamId}`, kind: "other", label: "reasoning", ...(detail ? { detail } : {}), ...(event.type === "reasoning/chunk" ? { transient: true as const } : {}), ...(turn ? { turn } : {}) }
+      if (rowIndex === undefined) {
+        if (streamId !== undefined) reasoningIndex.set(streamId, rows.length)
+        appendRow(row)
+      } else rows[rowIndex] = row
+    } else if (event.type === "tool/call") {
       toolIndex.set(event.callId, rows.length)
       appendRow({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })
     } else if (event.type === "tool/result" && toolIndex.has(event.callId)) {
@@ -67,7 +90,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
       // Structural markers carry no readable content.
       if (event.type !== "step/end") streamIndex = undefined
     } else {
-      const detail = event.type === "reasoning" || event.type === "compaction/summary" ? event.text : undefined
+      const detail = event.type === "compaction/summary" ? event.text : undefined
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
     }
   }

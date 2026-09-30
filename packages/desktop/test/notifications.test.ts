@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest"
 import { classifyNotification } from "../src/renderer/session/notifications.ts"
 
 describe("classifyNotification", () => {
+  it("batches reasoning deltas through the cheap chunk path", () => {
+    expect(classifyNotification("session/event", { sessionId: "s1", event: { type: "reasoning/chunk", streamId: "a", text: "thinking", offset: 0, atSeq: 3 } }))
+      .toEqual({ kind: "chunk", sessionId: "s1" })
+  })
+
   it("marks a streamed assistant chunk as transient-only", () => {
     expect(classifyNotification("session/event", { sessionId: "s1", event: { type: "assistant/chunk", text: "x", seq: 3 } }))
       .toEqual({ kind: "chunk", sessionId: "s1" })

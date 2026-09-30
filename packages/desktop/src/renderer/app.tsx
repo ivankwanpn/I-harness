@@ -15,6 +15,7 @@ import {
   applyHistory,
   applyNotification,
   emptyEventWindow,
+  timelineEvents,
   markDisconnected,
   MAX_RETAINED_EVENTS,
   type EventWindow,
@@ -430,7 +431,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const conversation = selectedWorkspaceId === undefined || selectedSessionId === undefined
     ? undefined
     : {
-        rows: projectTimeline(eventWindow.events),
+        rows: projectTimeline(timelineEvents(eventWindow)),
         canSend: gate.canSend && !(operation?.busy && operation.kind !== "prompt"),
         sendReason: operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         running: running || sending,

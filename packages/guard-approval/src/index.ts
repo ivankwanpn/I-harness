@@ -57,7 +57,7 @@ export const DEFAULT_DANGEROUS_FLAGS = ["-rf", "-Recurse", "-Force"]
 // whose every basename is harmless, e.g. `echo a; echo b`). Do not read Layer 1
 // as a guarantee about shells; it is a guarantee about every OTHER tool.
 
-const SHELL_TOOLS = new Set(["bash", "pwsh"])
+const SHELL_TOOLS = new Set(["bash", "pwsh", "shell"])
 // Known low-risk built-ins: session planning/team controls remain under the
 // child's own approval policy, and resize changes only PTY dimensions.
 // terminal_open, terminal_send and process_spawn remain unclassified because
@@ -94,6 +94,8 @@ export { GuardianBreaker, isGuardianBreakerState, GUARDIAN_BREAKER_WINDOW, GUARD
 export type { GuardianBreakerState } from "./guardian/breaker.ts"
 export { registerGuardian } from "./guardian/index.ts"
 export type { GuardianConfig, GuardianReviewDeps } from "./guardian/index.ts"
+export { createIsolatedReviewerPool } from "./guardian/index.ts"
+export type { IsolatedReviewerPool, GuardianIsolatedConfig, GuardianIsolatedBinding, GuardianReviewerIdentity, GuardianReviewRecord, GuardianReviewStatus } from "./guardian/index.ts"
 export { runGuardianReview, ensureReviewerRole, renderGuardianMessage, renderRecentContext, BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, GUARDIAN_REVIEWER_ROLE_NAME } from "./guardian/index.ts"
 
 // M22: 'never' policy — an ask-decision (danger classifier or whitelist) is
