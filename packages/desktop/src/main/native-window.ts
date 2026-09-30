@@ -1,6 +1,6 @@
 import { Notification, screen, type BrowserWindow } from "electron"
 import type { DesktopEvent } from "../shared/bridge.ts"
-import { createLocalPreferences, restoreBounds } from "./local-preferences.ts"
+import { createLocalPreferences, restoreBounds, type FollowupDelivery } from "./local-preferences.ts"
 import type { TerminalShellChoice } from "../shared/bridge.ts"
 
 export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>) {
@@ -10,8 +10,8 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
   })
   const seen = new Set<string>()
   return {
-    state() { const value = preferences.get(); return { notifications: value.notifications, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily } },
-    configure(patch: { notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string }) { preferences.update(patch); return this.state() },
+    state() { const value = preferences.get(); return { notifications: value.notifications, notificationsSupported: Notification.isSupported(), locale: value.locale, terminalShell: value.terminalShell, terminalFontFamily: value.terminalFontFamily, followupDelivery: value.followupDelivery } },
+    configure(patch: { notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: FollowupDelivery }) { preferences.update(patch); return this.state() },
     control(action: "minimize" | "toggle-maximize" | "close") {
       if (action === "minimize") window.minimize()
       else if (action === "toggle-maximize") { if (window.isMaximized()) window.unmaximize(); else window.maximize() }

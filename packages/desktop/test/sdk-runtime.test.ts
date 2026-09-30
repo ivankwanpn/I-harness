@@ -6,6 +6,7 @@ import type { HarnessClient, RpcNotification, ServerInfo } from "@i-harness/sdk"
 import { createWorkspaceRuntimeManager } from "../src/main/sdk-runtime.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
+import type { DesktopProjectContext } from "../src/main/project-runtime.ts"
 
 const roots: string[] = []
 
@@ -31,7 +32,7 @@ interface FakeClientOptions {
 function fakeClient(options: FakeClientOptions = {}) {
   const listeners = new Set<(notification: RpcNotification) => void>()
   const close = vi.fn(async () => {})
-  const request = vi.fn(async (method: string): Promise<unknown> => {
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     if (method === "desktop/sandbox/state") return options.sandbox
     if (method === "session/dashboard") {
       if (options.failDashboard) throw new Error("dashboard offline")
@@ -196,6 +197,128 @@ describe("Desktop SDK runtime manager", () => {
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/closed", params: { seq: 0 } },
     ])
     await manager.close()
+  })
+})
+
+describe("project scope publication", () => {
+  function deferred() {
+    let resolve!: () => void
+    const promise = new Promise<void>((done) => { resolve = done })
+    return { promise, resolve }
+  }
+
+  it("fences a starting gateway until it has the latest folders after a concurrent save", async () => {
+    const host = fakeClient({ info: { capabilities: { "desktop-project-scope": ["1"] } } })
+    const entered = deferred()
+    const release = deferred()
+    let scopes: DesktopProjectContext[] = [{ id: "p", name: "Project", roots: ["D:/a", "D:/removed"] }]
+    let authority: DesktopProjectContext[] = []
+    let first = true
+    host.request.mockImplementation(async (method, params) => {
+      if (method !== "desktop/project/sync") throw new Error(`unexpected request: ${method}`)
+      if (first) { first = false; entered.resolve(); await release.promise }
+      authority = (params as { projects: DesktopProjectContext[] }).projects
+      return {}
+    })
+    const manager = createWorkspaceRuntimeManager({
+      sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => scopes,
+      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+    })
+    const starting = manager.get(workspace())
+    await entered.promise
+    scopes = [{ id: "p", name: "Project", roots: ["D:/a"] }]
+    const refresh = manager.refreshProjectContexts?.()
+    release.resolve()
+    await starting
+    // A workflow awaiting get() must never observe the revoked root, even
+    // before the save's publication promise completes.
+    expect(authority).toEqual(scopes)
+    await refresh
+    expect(authority).toEqual(scopes)
+    await manager.close()
+  })
+
+  it("invalidates an owned starting child and never publishes it as ready", async () => {
+    const first = fakeClient()
+    const next = fakeClient()
+    const entered = deferred()
+    const release = deferred()
+    first.initialize.mockImplementationOnce(async () => {
+      entered.resolve()
+      await release.promise
+      return { name: "old", version: "1", protocolVersion: 3, capabilities: {} }
+    })
+    let launches = 0
+    const manager = createWorkspaceRuntimeManager({
+      sessionsRoot: join(tempRoot(), "sessions"),
+      launch: () => ({ client: launches++ === 0 ? first.client : next.client, exited: new Promise(() => {}) }),
+    })
+    const starting = manager.get(workspace())
+    const outcome = starting.then(() => "published", () => "invalidated")
+    await entered.promise
+    const invalidating = manager.invalidate!(workspace().id)
+    release.resolve()
+    await invalidating
+    expect(await outcome).toBe("invalidated")
+    expect(manager.peek!(workspace().id)).toBeUndefined()
+    expect(first.close).toHaveBeenCalledTimes(1)
+    expect((await manager.get(workspace())).client).toBe(next.client)
+    await manager.close()
+  })
+
+  it("serializes folder publications and closes a ready gateway when publication fails", async () => {
+    const host = fakeClient({ info: { capabilities: { "desktop-project-scope": ["1"] } } })
+    let scopes: DesktopProjectContext[] = [{ id: "p", name: "P", roots: ["D:/a", "D:/b"] }]
+    let authority: DesktopProjectContext[] = []
+    const entered = deferred()
+    const release = deferred()
+    let hold = false
+    let fail = false
+    host.request.mockImplementation(async (_method, params) => {
+      if (hold) { hold = false; entered.resolve(); await release.promise }
+      if (fail) throw new Error("scope rejected")
+      authority = (params as { projects: DesktopProjectContext[] }).projects
+      return {}
+    })
+    const launch = vi.fn(() => ({ client: host.client, exited: new Promise<void>(() => {}) }))
+    const manager = createWorkspaceRuntimeManager({ sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => scopes, launch })
+    await manager.get(workspace())
+    hold = true
+    const first = manager.refreshProjectContexts!()
+    await entered.promise
+    scopes = [{ id: "p", name: "P", roots: [] }]
+    const latest = manager.refreshProjectContexts!()
+    release.resolve()
+    await Promise.all([first, latest])
+    expect(authority).toEqual(scopes)
+    expect(launch).toHaveBeenCalledTimes(1)
+    fail = true
+    await expect(manager.refreshProjectContexts!()).rejects.toThrow("Project scope update failed")
+    expect(manager.peek!(workspace().id)).toBeUndefined()
+    expect(host.close).toHaveBeenCalledTimes(1)
+    await manager.close()
+  })
+
+  it("drains a held startup during shutdown and rejects future gets", async () => {
+    const host = fakeClient({ info: { capabilities: { "desktop-project-scope": ["1"] } } })
+    const entered = deferred()
+    const release = deferred()
+    host.request.mockImplementation(async () => { entered.resolve(); await release.promise; return {} })
+    const manager = createWorkspaceRuntimeManager({
+      sessionsRoot: join(tempRoot(), "sessions"), projectContexts: async () => [],
+      launch: () => ({ client: host.client, exited: new Promise(() => {}) }),
+    })
+    const startup = manager.get(workspace()).then(() => "published", () => "closed")
+    await entered.promise
+    let done = false
+    const closing = manager.close().then(() => { done = true })
+    await Promise.resolve()
+    expect(done).toBe(false)
+    release.resolve()
+    await closing
+    expect(await startup).toBe("closed")
+    expect(host.close).toHaveBeenCalledTimes(1)
+    await expect(manager.get(workspace())).rejects.toThrow("closed")
   })
 })
 

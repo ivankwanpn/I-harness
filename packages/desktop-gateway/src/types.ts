@@ -18,6 +18,7 @@ import type { createDesktopResources } from "./resources.ts"
 import type { createDesktopWorkflow } from "./workflow.ts"
 import type { createAgentShellSettings } from "./agent-shell.ts"
 import type { createDesktopInput } from "./input.ts"
+import type { createProjectScopeBroker } from "./project-scope.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -26,6 +27,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  projects?: ReturnType<typeof createProjectScopeBroker>
   input?: ReturnType<typeof createDesktopInput>
   workflow?: ReturnType<typeof createDesktopWorkflow>
   agentShell?: ReturnType<typeof createAgentShellSettings>

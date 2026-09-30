@@ -5,6 +5,8 @@ export type SandboxEnforcement = "full" | "partial"
 export interface SandboxExecutionPolicy {
   mode: SandboxMode
   workspaceRoot: string
+  /** Full approved project folder set. The default workspaceRoot is always included. */
+  workspaceRoots?: readonly string[]
   sessionId?: string
   // M22 enforcement gate: when true, this policy demands a read-isolated
   // backend. default false — opting in is what turns capability absence into
@@ -71,7 +73,7 @@ export function assertSandboxCapable(policy: SandboxExecutionPolicy, provider: S
 }
 
 export { classifyRunnerFailure, matchesSignature, type ShellLikeResult } from "./runner-failures.ts"
-export { canonicalPath, writableRoots } from "./roots.ts"
+export { canonicalPath, workspaceRoots, writableRoots } from "./roots.ts"
 export {
   WIDER_MODES,
   ESCALATION_TARGETS,

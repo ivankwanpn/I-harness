@@ -1,4 +1,7 @@
 import { expect, it, vi } from "vitest"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import type { BrowserWindow } from "electron"
 import { createLocalPreferences } from "../src/main/local-preferences.ts"
 const emitted = vi.hoisted(() => ({ values: [] as { title: string; body: string }[] }))
@@ -27,4 +30,19 @@ it("notifies only opted-in background requests, deduplicates, and excludes reque
   focused = false
   native.onEvent(event); native.onEvent(event)
   expect(emitted.values).toEqual([{ title: "I-harness Desktop", body: "A conversation needs your attention." }])
+})
+
+it("returns the accepted follow-up delivery in native state and restores it after restart", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-native-followup-"))
+  try {
+    const file = join(root, "prefs.json")
+    const window = { on: vi.fn() } as unknown as BrowserWindow
+    const native = attachNativeWindow(window, createLocalPreferences(file))
+    expect(native.state().followupDelivery).toBe("queue")
+    expect(native.configure({ followupDelivery: "steer" }).followupDelivery).toBe("steer")
+    const restored = attachNativeWindow(window, createLocalPreferences(file))
+    expect(restored.state().followupDelivery).toBe("steer")
+    expect(() => restored.configure({ followupDelivery: "other" } as never)).toThrow(/follow.*delivery/i)
+    expect(restored.state().followupDelivery).toBe("steer")
+  } finally { rmSync(root, { recursive: true, force: true }) }
 })

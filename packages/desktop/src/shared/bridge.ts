@@ -12,6 +12,13 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | { kind: "projects/list" }
+  | { kind: "projects/save"; input: { id?: string; name: string; workspaceIds: string[]; primaryWorkspaceId?: string; pinned?: boolean; expectedUpdatedAt?: string } }
+  | { kind: "projects/remove"; id: string }
+  | { kind: "workspace/reveal"; workspaceId: string }
+  | { kind: "desktop/session/navigation/state"; workspaceId: string }
+  | { kind: "desktop/session/project/bind"; workspaceId: string; sessionId: string; projectId?: string }
+  | { kind: "desktop/session/project/state"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/input/submit"; workspaceId: string; sessionId: string; text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "desktop/session/input/state" | "desktop/session/input/resume"; workspaceId: string; sessionId: string }
   | { kind: "desktop/session/input/cancel"; workspaceId: string; sessionId: string; inputId: string }
@@ -21,6 +28,7 @@ export type DesktopRequest =
   | { kind: "desktop/session/workflow/mutate"; workspaceId: string; sessionId: string; command: import("@i-harness/desktop-gateway/src/workflow.ts").WorkflowCommand }
   | { kind: "desktop/session/job/output"; workspaceId: string; sessionId: string; id: string }
   | { kind: "workspace/files/pick"; workspaceId: string }
+  | { kind: "workspace/attachments/pick"; workspaceId: string; allowImages: boolean }
   | { kind: "desktop/resources/list"; workspaceId: string; resourceKind: ResourceKind; query: string; offset: number }
   | { kind: "desktop/resources/read"; workspaceId: string; resourceKind: ResourceKind; name: string }
   | { kind: "desktop/mcp/state" | "desktop/mcp/refresh"; workspaceId: string }
@@ -53,7 +61,7 @@ export type DesktopRequest =
   | { kind: "desktop/rewind/plan"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation" }
   | { kind: "desktop/rewind/execute"; workspaceId: string; sessionId: string; target: number; mode: "all" | "files" | "conversation"; fingerprint: string }
   | { kind: "desktop/session/archived"; workspaceId: string }
-  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "fork"; title?: string }
+  | { kind: "desktop/session/manage"; workspaceId: string; sessionId: string; action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread"; title?: string }
   | { kind: "session/model/set"; workspaceId: string; sessionId: string; selection: SessionModelSelection }
   | { kind: "desktop/provider/directory"; workspaceId: string }
   | { kind: "desktop/provider/probe"; workspaceId: string; id: string; token: string }
@@ -61,7 +69,7 @@ export type DesktopRequest =
   | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
-  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string }
+  | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: "queue" | "steer" }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
   | { kind: "desktop/session/compact"; workspaceId: string; sessionId: string; instructions?: string }
   | { kind: "desktop/memory/state" | "desktop/memory/summary"; workspaceId: string }
@@ -77,7 +85,7 @@ export type DesktopRequest =
   | { kind: "desktop/capabilities"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }
-  | { kind: "session/create"; workspaceId: string }
+  | { kind: "session/create"; workspaceId: string; projectId?: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
   | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }
@@ -106,7 +114,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed"
+      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed"
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string }

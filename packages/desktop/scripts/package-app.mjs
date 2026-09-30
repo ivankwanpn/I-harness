@@ -3,7 +3,8 @@
 //   release/I-harness Desktop/               unpacked app (exe + resources/app + resources/gateway)
 //   release/I-harness-Desktop-<version>.zip  the same folder, zipped
 //
-// Usage (from packages/desktop): node scripts/package-app.mjs
+// Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
+// sibling release folder when an earlier portable app is still open.
 // Assumes `electron-vite build` and `scripts/build-gateway.mjs` already ran.
 import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -15,7 +16,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
 const outDir = join(packageRoot, "out")
 const gatewayDir = join(packageRoot, ".gateway-dist")
-const releaseDir = join(packageRoot, "release")
+const releaseLabel = process.env.IH_DESKTOP_RELEASE_LABEL ?? "release"
+if (!/^release(?:-[a-z0-9-]+)?$/.test(releaseLabel)) throw new Error("invalid release folder label")
+const releaseDir = resolve(packageRoot, releaseLabel)
+if (dirname(releaseDir) !== packageRoot) throw new Error("release folder escaped the Desktop package")
 const appName = "I-harness Desktop"
 const appDir = join(releaseDir, appName)
 
@@ -28,7 +32,7 @@ const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("e
 const electronExe = join(electronDist, "electron.exe")
 if (!existsSync(electronExe)) throw new Error(`electron.exe not found at ${electronExe}`)
 
-rmSync(releaseDir, { recursive: true, force: true })
+rmSync(releaseDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
 cpSync(electronDist, appDir, { recursive: true, dereference: true })
 renameSync(join(appDir, "electron.exe"), join(appDir, `${appName}.exe`))
 

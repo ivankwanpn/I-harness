@@ -1,6 +1,6 @@
 import { existsSync, realpathSync } from "node:fs"
 import { dirname, isAbsolute, relative, resolve } from "node:path"
-import type { SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
+import { workspaceRoots, type SandboxExecutionPolicy, type SandboxMode } from "@i-harness/sandbox"
 
 /**
  * WRITE confinement for the in-process file tools.
@@ -91,7 +91,7 @@ function inside(root: string, target: string): boolean {
  *
  * Mirrors what the OS backends actually do for `shell`, so the two agree:
  *   - `danger-full-access` — no restriction
- *   - `workspace-write`    — the workspace only
+ *   - `workspace-write`    — every approved project workspace root
  *   - `read-only`          — no write at all
  *
  * NO TEMP-DIRECTORY EXCEPTION, deliberately. `renderPolicyContext` says "some
@@ -108,7 +108,8 @@ export function checkWrite(policy: SandboxExecutionPolicy, target: string): Path
   if (policy.mode === "danger-full-access") return { ok: true }
 
   const real = realTarget(target)
-  const root = realTarget(policy.workspaceRoot)
+  const roots = workspaceRoots(policy).map(realTarget)
+  const allowed = roots.some((root) => inside(root, real))
 
   if (policy.mode === "read-only") {
     return {
@@ -117,14 +118,14 @@ export function checkWrite(policy: SandboxExecutionPolicy, target: string): Path
       // the target is: an in-workspace path is lifted by `workspace-write`, an
       // outside one is not. `real`/`root` are already resolved above, so this
       // costs one containment test rather than a second traversal.
-      sufficientMode: inside(root, real) ? "workspace-write" : "danger-full-access",
+      sufficientMode: allowed ? "workspace-write" : "danger-full-access",
       reason:
         `read-only sandbox: refusing to modify ${target}. ` +
         `The session is in read-only mode, so no file may be written.`,
     }
   }
 
-  if (inside(root, real)) return { ok: true }
+  if (allowed) return { ok: true }
 
   return {
     ok: false,
@@ -133,7 +134,7 @@ export function checkWrite(policy: SandboxExecutionPolicy, target: string): Path
     // here, and naming one would send the model to a retry that fails the same way.
     sufficientMode: "danger-full-access",
     reason:
-      `workspace-write sandbox: refusing to modify ${target} because it resolves outside the session workspace ${policy.workspaceRoot}. ` +
-      `Writes are confined to the workspace, which is the same boundary the shell sandbox enforces.`,
+      `workspace-write sandbox: refusing to modify ${target} because it resolves outside the session workspace roots ${JSON.stringify(roots)}. ` +
+      `Writes are confined to the approved project folders, which are the same boundaries the shell sandbox enforces.`,
   }
 }

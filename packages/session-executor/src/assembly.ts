@@ -7,6 +7,7 @@
 // is the source of truth and sinks here verbatim).
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
+import { createScopedExec } from "./scoped-exec.ts"
 import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type Tool, type ToolRegistry } from "@i-harness/core-tools"
@@ -83,6 +84,14 @@ const d = diagnosticsFor("mount")
 
 export type ModelPolicy = "required" | "test-mock"
 
+/** Trusted host project membership, read live rather than copied at startup. */
+export interface SessionProjectContext { id: string; name: string; roots: string[]; primaryRoot: string }
+
+function renderProjectContext(project: SessionProjectContext | undefined, workspace: string, rewindEnabled: boolean): string {
+  if (!project) return ""
+  return `Current project: ${JSON.stringify({ id: project.id, name: project.name, roots: project.roots, primaryRoot: project.primaryRoot })}.\nThe session's default working directory remains ${JSON.stringify(workspace)}. Use absolute paths to access the other project folders. Read and follow the applicable AGENTS.md instructions in each target folder before modifying it.${project.roots.includes(workspace) ? "" : " The default working directory is no longer a project member; use absolute paths under the listed project folders for modifications."}${rewindEnabled ? " File rewind records only the default working directory; modifications in other project folders are outside its restore coverage." : ""}`
+}
+
 export class ModelUnavailableError extends Error {
   constructor(message = "No model configured") {
     super(message)
@@ -133,6 +142,7 @@ export interface AssemblyOptions {
    * run may have none. */
   sessionId?: string
   workspace: string
+  projectContext?: () => SessionProjectContext | undefined
   /** Explicit clients always win. Under `required`, absence rejects instead
    * of constructing a mock. Omitted policy is production-safe `required`;
    * tests must opt into `test-mock` explicitly. */
@@ -596,8 +606,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // mode. The ladder is still forbidden from producing this event (call-policy.ts
   // documents that; sandbox-escalation.test.ts pins it).
   if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })
-  const sandboxPolicyNow = () =>
-    sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) } })
+  const sandboxPolicyNow = () => {
+    const project = opts.projectContext?.()
+    return sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) },
+      workspaceRoot: project?.primaryRoot ?? opts.workspace,
+      workspaceRoots: project?.roots ?? [opts.workspace],
+    })
+  }
+  const projectContextNow = () => renderProjectContext(opts.projectContext?.(), opts.workspace, opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined)
   // M62: the terminal is mounted HERE, not at the top of the environment,
   // because its tools resolve the sandbox policy PER CALL and the resolver is
   // defined just above. Mount order does not affect disposal — `dispose()`
@@ -771,7 +787,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     escalationApprover,
   }
   for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
-  createApprovalPolicy(ctx, tools, { workspace: opts.workspace, ...(opts.approvalMode !== undefined ? { mode: opts.approvalMode } : {}) })
+  createApprovalPolicy(ctx, tools, { workspace: opts.workspace, workspaceRoots: () => opts.projectContext?.()?.roots ?? [opts.workspace], ...(opts.approvalMode !== undefined ? { mode: opts.approvalMode } : {}) })
 
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
@@ -797,7 +813,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     workspace: opts.workspace,
     extraDirs: pluginSkillDirs,
   })
-  const execService = ctx.services.get<ExecService>("exec/service")
+  const execService = createScopedExec(ctx.services.get<ExecService>("exec/service"), opts.workspace, sandboxPolicyNow)
   for (const tool of createFsSearchTools({ exec: execService, workspace: opts.workspace })) tools.register(tool)
   if (opts.sessionQuery) {
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
@@ -1067,6 +1083,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const subagent = registerSubagent(ctx, tools, {
+      ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
       includeAgentShell: opts.agentShell !== undefined,
       resolveModel: resolveRoleModel,
       // The gate travels with the resolver it gates, into THIS chain:
@@ -1136,6 +1153,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await pluginCapabilities.update(opts, false)
     if (opts.guardian) {
       await registerGuardian(ctx, {
+        ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
         subagents: {
           roles: subagent.roles,
           jobs: subagent.jobs,
@@ -1184,6 +1202,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session,
         parentRegistry: tools,
         subagents: {
+          ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
           table: subagent.table,
           jobs: subagent.jobs,
           roles: subagent.roles,
@@ -1235,6 +1254,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       if (opts.agentShell) { try { text += `\n\n${agentShellPrompt(opts.agentShell())}` } catch { text += "\n\nThe selected Agent shell is unavailable. Ask the user to repair its setting before shell execution." } }
       const todoContext = renderTodoContext(session)
       if (todoContext) text += `\n\n${todoContext}`
+      const projectContext = projectContextNow()
+      if (projectContext) text += `\n\n${projectContext}`
       if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
       return text
     }

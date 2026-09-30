@@ -69,7 +69,8 @@ export async function runIsolatedGuardianReview(deps: GuardianReviewDeps, reques
         reasoningEffort = identity.reasoningEffort as import("@i-harness/llm-seam").ReasoningEffort
       }
       const policy = deps.policyText ?? BUNDLED_GUARDIAN_POLICY
-      const systemPrompt = `${policy}\n\n${FRESH_REVIEW_POLICY}\n\n${GUARDIAN_JSON_CONTRACT}`
+      const inherited = deps.inheritedSystemContext?.()
+      const systemPrompt = `${policy}\n\n${FRESH_REVIEW_POLICY}\n\n${GUARDIAN_JSON_CONTRACT}${inherited ? `\n\n${inherited}` : ""}`
       const prompt = renderGuardianMessage(request, renderRecentContext(deps.parentSession), policy)
       const permission = deps.isolated?.permissionContext?.()
       if (deps.isolated && identity.provider && identity.model && identity.protocol && identity.configurationKey && permission) {

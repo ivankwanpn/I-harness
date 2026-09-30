@@ -23,3 +23,24 @@ it("persists UI-only preferences and tolerates a damaged file", () => {
   expect(createLocalPreferences(file).get()).toMatchObject({ notifications: true, locale: "en", terminalShell: "git-bash", terminalFontFamily: "Cascadia Code, monospace", bounds: { x: 10 } })
   expect(JSON.parse(readFileSync(file, "utf8")).notifications).toBe(true)
 })
+
+it.each(["queue", "steer"] as const)("persists follow-up delivery %s across a preference reload", (followupDelivery) => {
+  const dir = mkdtempSync(join(tmpdir(), "ih-followup-pref-")); directories.push(dir)
+  const file = join(dir, "prefs.json")
+  const prefs = createLocalPreferences(file)
+  expect(prefs.get().followupDelivery).toBe("queue")
+  prefs.update({ followupDelivery })
+  expect(createLocalPreferences(file).get().followupDelivery).toBe(followupDelivery)
+})
+
+it("defaults legacy or invalid saved follow-up settings to queue and rejects invalid updates without persisting them", () => {
+  const dir = mkdtempSync(join(tmpdir(), "ih-followup-invalid-")); directories.push(dir)
+  const file = join(dir, "prefs.json")
+  writeFileSync(file, JSON.stringify({ notifications: true, followupDelivery: "other" }))
+  const prefs = createLocalPreferences(file)
+  expect(prefs.get()).toMatchObject({ notifications: true, followupDelivery: "queue" })
+  expect(() => prefs.update({ followupDelivery: "other" } as never)).toThrow(/follow.*delivery/i)
+  expect(JSON.parse(readFileSync(file, "utf8")).followupDelivery).toBe("other")
+  writeFileSync(file, JSON.stringify({ locale: "en" }))
+  expect(createLocalPreferences(file).get()).toMatchObject({ locale: "en", followupDelivery: "queue" })
+})

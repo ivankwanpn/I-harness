@@ -13,6 +13,10 @@ import type { SessionOperation } from "../session/use-session-operation.ts"
 import type { AgentTaskView, SessionDashboardResult, SessionQueueItem } from "@i-harness/sdk"
 import type { SandboxState } from "../../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
+import type { ProjectEntry } from "../../main/projects.ts"
+import { ProjectSidebar } from "./ProjectSidebar.tsx"
+import { ProjectManager } from "../projects/ProjectManager.tsx"
+import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { Composer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
@@ -32,13 +36,14 @@ import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
 import type { ImageInput } from "@i-harness/sdk"
-import type { ManageSession } from "../session/SessionManager.tsx"
+import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 
 export interface ConversationView {
   rows: TimelineRow[]
   canSend: boolean
+  projectReady?: boolean
   sendReason?: string
   executionError?: string
   running: boolean
@@ -85,6 +90,12 @@ export interface ReviewView {
 export interface WorkbenchProps {
   bridge: DesktopBridge
   workspaces: WorkspaceEntry[]
+  projects?: ProjectEntry[]
+  selectedProjectId?: string
+  onProjectsChanged?(): Promise<void>
+  onSelectProject?(id: string): void
+  onSelectSessionInWorkspace?(workspaceId: string, sessionId: string, projectId?: string): void
+  onManageSessionInWorkspace?(workspaceId: string, sessionId: string, action: Parameters<ManageSession>[1], title?: string): Promise<void>
   dashboard?: SessionDashboardResult
   attentionBySession?: Record<string, number>
   connection?: "online" | "offline" | "connecting" | "reconnecting"
@@ -97,7 +108,7 @@ export interface WorkbenchProps {
   review?: ReviewView
   onRetry?(): void
   onOpenWorkspace?(): void
-  onSelectWorkspace(workspaceId: string): void
+  onSelectWorkspace(workspaceId: string, projectId?: string): void
   onSelectSession(sessionId: string): void
   onManageSession?: ManageSession
   onRewindComplete?: (workspaceId: string, sessionId: string) => void
@@ -114,6 +125,12 @@ const SANDBOX_LABELS: Record<SandboxState["mode"], Message> = {
 export function Workbench({
   bridge,
   workspaces,
+  projects,
+  selectedProjectId,
+  onProjectsChanged,
+  onSelectProject,
+  onSelectSessionInWorkspace,
+  onManageSessionInWorkspace,
   dashboard,
   attentionBySession,
   connection,
@@ -145,6 +162,7 @@ export function Workbench({
   const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
   const updatePreferences = usePreferences((state) => state.update)
   const [createError, setCreateError] = useState<string>()
+  const [archivedWorkspaceId, setArchivedWorkspaceId] = useState<string>()
   const [creating, setCreating] = useState(false)
   const createLock = useRef(false)
   const [emptyPrompt, setEmptyPrompt] = useState("")
@@ -176,6 +194,7 @@ export function Workbench({
   const toggleReview = useUiStore((state) => state.toggleReview)
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
   const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
+  const selectedProject = projects?.find((project) => project.id === selectedProjectId)
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
   async function createSession(seedEmptyPrompt = false): Promise<void> {
@@ -186,7 +205,7 @@ export function Workbench({
     setCreating(true)
     setCreateError(undefined)
     try {
-      const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId })
+      const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId, ...(selectedProjectId ? { projectId: selectedProjectId } : {}) })
       if (workspaceScope.current !== scope) return
       const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
       if (typeof sessionId === "string") {
@@ -214,12 +233,25 @@ export function Workbench({
     setSurface("conversation")
   } : undefined} capabilities={capabilities} onRewindComplete={selectedWorkspaceId && capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? (sessionId) => onRewindComplete(selectedWorkspaceId, sessionId) : undefined} onManageSession={capabilities["desktop-sessions"]?.includes("1") ? onManageSession : undefined} bridge={bridge} workspace={workspaces.find((row) => row.id === selectedWorkspaceId)} onMemory={capabilities["desktop-memory"]?.includes("1") ? () => setSurface("memory") : undefined} onClose={() => setSurface("conversation")} />
 
+  if (surface === "projects" && onProjectsChanged) return <ProjectManager bridge={bridge} projects={projects ?? []} workspaces={workspaces} onChanged={onProjectsChanged} onOpen={(project) => onSelectProject?.(project.id)} onClose={() => setSurface("conversation")} />
+
   return (
     <div className={reviewOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>
       {drawer.narrow && drawer.open ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={() => drawer.setOpen(false)} /> : null}
       <div ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : "sidebar-container"} hidden={drawer.narrow ? !drawer.open : sidebarCollapsed} role={drawer.narrow && drawer.open ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open ? true : undefined} aria-label={drawer.narrow ? t("工作區") : undefined}>
       {drawer.narrow ? <button type="button" className="drawer-close primary-button" onClick={() => drawer.setOpen(false)}>{t("關閉側欄")}</button> : null}
-      <WorkspaceSidebar
+      {projects && onManageSessionInWorkspace ? <ProjectSidebar
+        bridge={bridge} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
+        dashboard={dashboard} attentionBySession={attentionBySession}
+        onSelectProject={(id) => { drawer.setOpen(false); onSelectProject?.(id) }}
+        onSelectWorkspace={(id, projectId) => { drawer.setOpen(false); setSurface("conversation"); onSelectWorkspace(id, projectId) }}
+        onSelectSession={(workspaceId, sessionId, projectId) => { drawer.setOpen(false); setMemoryOpen(false); setSurface("conversation"); onSelectSessionInWorkspace?.(workspaceId, sessionId, projectId) }}
+        onManageSession={onManageSessionInWorkspace} onManageArchived={setArchivedWorkspaceId}
+        onProjects={() => { drawer.setOpen(false); setSurface("projects") }}
+        onOpenWorkspace={() => onOpenWorkspace?.()} onCreate={() => { void createSession() }} canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
+        onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
+        onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => { drawer.setOpen(false); setSurface("plugins") } : undefined}
+      /> : <WorkspaceSidebar
         workspaces={workspaces}
         selectedId={selectedWorkspaceId}
         onSelect={(id) => { drawer.setOpen(false); setSurface("conversation"); onSelectWorkspace(id) }}
@@ -229,11 +261,11 @@ export function Workbench({
         onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
         onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => { drawer.setOpen(false); setSurface("plugins") } : undefined}
       >
-        {dashboard === undefined ? null : <TaskList attentionCounts={attentionBySession} dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
-      </WorkspaceSidebar>
+        {dashboard === undefined ? null : <TaskList workspaceId={selectedWorkspaceId} onManage={onManageSession} onCopyId={async (id) => { await navigator.clipboard.writeText(id) }} onOpenFolder={selectedWorkspaceId ? async () => { await bridge.request({ kind: "workspace/reveal", workspaceId: selectedWorkspaceId }) } : undefined} onManageArchived={selectedWorkspaceId ? () => setArchivedWorkspaceId(selectedWorkspaceId) : undefined} attentionCounts={attentionBySession} dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
+      </WorkspaceSidebar>}
       </div>
       <main className="center-pane">
-        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? workspaceTitle : sessionTitle}
+        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? selectedProject ? `${selectedProject.name} · ${workspaceTitle}` : workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={() => drawer.narrow ? drawer.setOpen(!drawer.open) : updatePreferences({ sidebarCollapsed: !sidebarCollapsed })}><PanelLeft size={18} /></button>}>
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={reviewOpen} onClick={toggleReview}>
             <PanelRight size={18} />
@@ -328,7 +360,7 @@ export function Workbench({
         <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[{ id: "browser", label: t("瀏覽器") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
-        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId ? <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
+        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId ? conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
         {workPaneTab === "browser" && selectedWorkspaceId ? <BrowserPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} visible={!drawer.open} /> : null}
         {workPaneTab === "terminal" && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense> : null}
         {workPaneTab === "reminders" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? <SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && !conversation.queue?.length && conversation.operation?.busy !== true} /> : null}
@@ -362,7 +394,7 @@ export function Workbench({
             onCancelTask={conversation.onCancelTask}
             onCancelQueue={conversation.onCancelQueue}
             queueResumable={conversation.queueResumable}
-            onResumeQueue={conversation.onResumeQueue}
+            onResumeQueue={conversation.projectReady === false ? undefined : conversation.onResumeQueue}
           />
         )}
         {workPaneTab === "changes" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
@@ -370,6 +402,7 @@ export function Workbench({
         {workPaneTab === "reminders" && !selectedSessionId ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         </div>
       </aside> : null}
+      {archivedWorkspaceId && onManageSessionInWorkspace ? <SettingsDialog title={t("管理已封存會話")} closeLabel={t("關閉")} initialFocusSelector="button" onClose={() => setArchivedWorkspaceId(undefined)}><SessionManager key={archivedWorkspaceId} bridge={bridge} workspaceId={archivedWorkspaceId} initialArchived onManage={(id, action, title) => onManageSessionInWorkspace(archivedWorkspaceId, id, action, title)} /></SettingsDialog> : null}
     </div>
   )
 }

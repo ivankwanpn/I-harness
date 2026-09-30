@@ -46,6 +46,16 @@ describe("effectiveSandboxMode", () => {
 })
 
 describe("createSandboxPolicy", () => {
+  it("replaces the configured project roots per request and detaches caller arrays", () => {
+    const roots = ["/project/other"]
+    const policy = createSandboxPolicy({ workspaceRoot: "/project/main", workspaceRoots: roots })
+    roots.push("/unexpected")
+    expect(policy.resolve().workspaceRoots).toEqual([resolvePath("/project/main"), resolvePath("/project/other")])
+    const changed = policy.resolve({ workspaceRoots: ["/project/new"] })
+    expect(changed.workspaceRoots).toEqual([resolvePath("/project/main"), resolvePath("/project/new")])
+    expect(policy.resolve({ workspaceRoots: [] }).workspaceRoots).toEqual([resolvePath("/project/main")])
+    expect(policy.resolve({ workspaceRoot: "/different/project" }).workspaceRoots ?? []).not.toContain(resolvePath("/project/other"))
+  })
   it("defaults to read-only and process.cwd()", () => {
     const policy = createSandboxPolicy({})
     expect(policy.defaultMode).toBe("read-only")
@@ -69,6 +79,11 @@ describe("createSandboxPolicy", () => {
 })
 
 describe("renderPolicyContext", () => {
+  it("tells the conversation every permitted project root", () => {
+    const text = renderPolicyContext({ mode: "workspace-write", workspaceRoot: "/project/main", workspaceRoots: ["/project/main", "/project/other"] })
+    expect(text).toContain("/project/main")
+    expect(text).toContain("/project/other")
+  })
   it("renders each mode", () => {
     expect(renderPolicyContext({ mode: "read-only", workspaceRoot: "/x" })).toContain("read-only")
     expect(renderPolicyContext({ mode: "workspace-write", workspaceRoot: "/x" })).toContain("/x")

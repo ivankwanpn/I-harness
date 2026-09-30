@@ -132,6 +132,8 @@ export interface RoleModelSelection {
  * and `RegisterSubagentOptions` all carry this shape, so it is written here
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
+  /** Trusted parent context, rendered afresh for each child model request. */
+  inheritedSystemContext?: () => string
   /** Settings' `agents.roles.<name>` (or any host's equivalent): the model the
    * host declares for a role. Absent → the role's own `model`, then inherit. */
   roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined
@@ -416,6 +418,10 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
   // estimate below prices it.
   const childPrompt = composeSubagentPrompt(opts.role.systemPrompt)
+  const systemPrompt = opts.inheritedSystemContext ? () => {
+    const inherited = opts.inheritedSystemContext!()
+    return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
+  } : childPrompt
   // The charge the child's log never carries but the model sees on every
   // request: its composed prompt and its tool schemas' JSON — priced the way the
   // session's own assembly prices the same pair (assembly.ts's
@@ -423,7 +429,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // Absent window → absent overhead: `budget` needs a window anyway.
   const overheadTokens = contextWindow === undefined
     ? undefined
-    : estimateChildOverhead(childPrompt, childReg.schemas())
+    : estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, childReg.schemas())
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
@@ -434,7 +440,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
     // delegation/changed-files+test reporting/result delivery). Human and
     // project instructions remain higher priority (the contract says so).
-    systemPrompt: childPrompt,
+    systemPrompt,
     signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     // M73: the budget this child's requests carry. Before this, a child ran

@@ -54,6 +54,7 @@ export interface TeamSubagentDeps {
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
   allowSubagentModelSelection?: SpawnOptions["allowSubagentModelSelection"]
   autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
+  inheritedSystemContext?: SpawnOptions["inheritedSystemContext"]
   /** M73: the session's own model's numbers, mirrored from SpawnOptions the way
    * the two fields above are. A teammate with no declared model runs on the
    * session's model, so its requests are clamped and measured against the same
@@ -222,6 +223,7 @@ export async function mountAgentTeams(
         ...(sub.roleSelectionFor !== undefined ? { roleSelectionFor: sub.roleSelectionFor } : {}),
         ...(sub.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: sub.allowSubagentModelSelection } : {}),
         ...(sub.autoCompactionEnabled ? { autoCompactionEnabled: sub.autoCompactionEnabled } : {}),
+        ...(sub.inheritedSystemContext ? { inheritedSystemContext: sub.inheritedSystemContext } : {}),
         // M73: same two options, same rule — the teammate's window and cap come
         // from the session the roster belongs to, and an absent one writes no key.
         ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),

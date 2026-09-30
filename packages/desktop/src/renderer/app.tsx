@@ -9,6 +9,7 @@ import type {
 } from "@i-harness/sdk"
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
+import type { ProjectEntry } from "../main/projects.ts"
 import type { DesktopBridge } from "../shared/bridge.ts"
 import type { DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import {
@@ -56,6 +57,10 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const setSelectedWorkspaceId = useUiStore((state) => state.setSelectedWorkspaceId)
   const setSelectedSessionId = useUiStore((state) => state.setSelectedSessionId)
   const [dashboard, setDashboard] = useState<SessionDashboardResult>()
+  const [projects, setProjects] = useState<ProjectEntry[]>()
+  const [projectError, setProjectError] = useState<string>()
+  const [selectedProjectId, setSelectedProjectId] = useState<string>()
+  const [projectBinding, setProjectBinding] = useState<{ workspaceId: string; sessionId: string; projectId?: string; error?: string }>()
   const [capabilities, setCapabilities] = useState<Record<string, string[]>>({})
   const durableInputSupported = useRef(false)
   durableInputSupported.current = capabilities["desktop-input"]?.includes("1") === true
@@ -95,6 +100,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
   }
   const reviewRequest = useRef(0)
+  const navigationVersion = useRef(0)
   const reviewChangesRequest = useRef(0)
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
@@ -115,6 +121,41 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setWorkspaces(list)
     return list
   }, [bridge])
+
+  const refreshProjects = useCallback(async (): Promise<ProjectEntry[]> => {
+    try {
+      const value = await bridge.request({ kind: "projects/list" })
+      const rows = Array.isArray(value) ? value as ProjectEntry[] : []
+      setProjects(rows); setProjectError(undefined)
+      return rows
+    } catch (error) { setProjectError(error instanceof Error ? error.message : String(error)); throw error }
+  }, [bridge])
+
+  useEffect(() => { void refreshProjects().catch(() => undefined) }, [refreshProjects])
+  useEffect(() => {
+    let active = true
+    void bridge.request({ kind: "desktop/local/state" }).then((value) => {
+      if (active && value && typeof value === "object") useUiStore.getState().setFollowupDelivery((value as { followupDelivery?: unknown }).followupDelivery === "steer" ? "steer" : "queue")
+    }).catch(() => undefined)
+    return () => { active = false }
+  }, [bridge])
+
+  const activeProjectId = selectedWorkspaceId
+    ? projects?.find((project) => project.id === selectedProjectId && project.workspaceIds.includes(selectedWorkspaceId))?.id
+      ?? projects?.find((project) => project.workspaceIds.includes(selectedWorkspaceId))?.id
+    : projects?.find((project) => project.id === selectedProjectId)?.id
+  const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
+  const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && projectBinding.projectId === activeProjectId && !projectBinding.error)
+  useEffect(() => {
+    if (!projectScopeSupported || !selectedWorkspaceId || !selectedSessionId) return
+    let active = true
+    const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId, projectId = activeProjectId
+    setProjectBinding(undefined)
+    void bridge.request({ kind: "desktop/session/project/bind", workspaceId, sessionId, ...(projectId ? { projectId } : {}) }).then(() => {
+      if (active) setProjectBinding({ workspaceId, sessionId, projectId })
+    }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, projectId, error: error instanceof Error ? error.message : String(error) }) })
+    return () => { active = false }
+  }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, activeProjectId, retryNonce])
 
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
@@ -442,8 +483,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     ? undefined
     : {
         rows: projectTimeline(timelineEvents(eventWindow)),
-        canSend: gate.canSend && !(operation?.busy && operation.kind !== "prompt"),
-        sendReason: operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
+        canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
+        projectReady,
+        sendReason: !projectReady ? projectBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
         executionError,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
@@ -468,6 +510,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           await refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
         onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/bind", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, ...(activeProjectId ? { projectId: activeProjectId } : {}) })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
@@ -488,6 +531,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void): Promise<void> => {
           const scope = selection.current
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/bind", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, ...(activeProjectId ? { projectId: activeProjectId } : {}) })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted)
           if (selection.current !== scope) return
           if (connection === "online") {
@@ -535,11 +579,38 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       onSandboxChange={(mode) => { if (selectedWorkspaceId === workspaceSelection.current.workspaceId) setSandbox({ mode, source: "settings", wired: true }) }}
       bridge={bridge}
       workspaces={workspaces}
+      projects={projects}
+      selectedProjectId={activeProjectId}
+      onProjectsChanged={async () => { await Promise.all([refreshProjects(), refreshWorkspaces()]) }}
+      onSelectProject={(id) => {
+        navigationVersion.current++
+        setSelectedProjectId(id)
+        const project = projects?.find((row) => row.id === id)
+        const workspaceId = project?.primaryWorkspaceId ?? project?.workspaceIds[0]
+        if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+        setSelectedWorkspaceId(workspaceId); setSelectedSessionId(undefined)
+        useUiStore.getState().setSurface(workspaceId ? "conversation" : "projects")
+      }}
+      onSelectSessionInWorkspace={(workspaceId, sessionId, projectId) => {
+        navigationVersion.current++
+        if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+        setSelectedProjectId(projectId)
+        setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
+      }}
+      onManageSessionInWorkspace={async (workspaceId, sessionId, action, title) => {
+        const scope = selection.current
+        const result = await bridge.request({ kind: "desktop/session/manage", workspaceId, sessionId, action, ...(title !== undefined ? { title } : {}) }) as { sessionId: string }
+        if (selection.current.workspaceId === workspaceId) {
+          await refreshDashboard(workspaceId)
+          if (action === "archive" && selection.current.workspaceId === workspaceId && selection.current.sessionId === sessionId) setSelectedSessionId(undefined)
+        }
+        if (action === "fork" && selection.current === scope) { if (workspaceId !== selection.current.workspaceId) setDashboard(undefined); setSelectedWorkspaceId(workspaceId); setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
+      }}
       dashboard={dashboard}
       attentionBySession={pending.reduce<Record<string, number>>((counts, row) => { counts[row.sessionId] = (counts[row.sessionId] ?? 0) + 1; return counts }, {})}
       capabilities={capabilities}
       sandbox={sandbox}
-      error={error}
+      error={error ?? projectError}
       selectedWorkspaceId={selectedWorkspaceId}
       selectedSessionId={selectedSessionId}
       connection={selectedWorkspaceId ? connection : undefined}
@@ -594,7 +665,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           })
         },
       }}
-      onSelectWorkspace={(workspaceId) => {
+      onSelectWorkspace={(workspaceId, projectId) => {
+        navigationVersion.current++
+        setSelectedProjectId(projectId)
         if (workspaceId !== selectedWorkspaceId) {
           setConnection("connecting")
           setSelectedWorkspaceId(workspaceId)
@@ -602,7 +675,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         setSelectedSessionId(undefined)
       }}
-      onSelectSession={setSelectedSessionId}
+      onSelectSession={(id) => { navigationVersion.current++; setSelectedSessionId(id) }}
       onRewindComplete={(workspaceId, sessionId) => {
         if (selection.current.workspaceId !== workspaceId) return
         void refreshDashboard(workspaceId)
@@ -619,17 +692,27 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (action === "fork") { setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
       }}
       onOpenWorkspace={() => {
+        const scope = selection.current
+        const version = ++navigationVersion.current
         void (async () => {
           try {
             const opened = await bridge.request({ kind: "workspace/pick" })
             if (opened === undefined) return
             const entry = opened as WorkspaceEntry
             await refreshWorkspaces()
+            const projectRows = await refreshProjects()
+            let project = projectRows.find((row) => row.workspaceIds.includes(entry.id))
+            if (!project) {
+              project = await bridge.request({ kind: "projects/save", input: { name: entry.label, workspaceIds: [entry.id], primaryWorkspaceId: entry.id } }) as ProjectEntry
+              await refreshProjects()
+            }
+            if (selection.current !== scope || navigationVersion.current !== version) return
+            setSelectedProjectId(project.id)
             setSelectedWorkspaceId(entry.id)
             if (entry.id !== selectedWorkspaceId) setConnection("connecting")
             setSelectedSessionId(undefined)
           } catch (reason) {
-            setError(reason instanceof Error ? reason.message : String(reason))
+            if (selection.current === scope && navigationVersion.current === version) setError(reason instanceof Error ? reason.message : String(reason))
           }
         })()
       }}

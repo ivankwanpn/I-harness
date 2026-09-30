@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { boundedDraft, Composer } from "../src/renderer/session/Composer.tsx"
 import { sendGate } from "../src/renderer/session/send-gate.ts"
 import { TaskPane } from "../src/renderer/session/TaskPane.tsx"
+import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(() => {
   cleanup()
   window.localStorage.clear()
+  useUiStore.setState({ followupDelivery: "queue" } as never)
 })
 
 const base = { workspaceId: "ws-1", sessionId: "s1", running: false, onCancel: vi.fn() }
@@ -17,6 +19,55 @@ function textarea(): HTMLTextAreaElement {
 }
 
 describe("Composer", () => {
+  it.each([
+    { defaultDelivery: "queue" as const, inverse: "steer" },
+    { defaultDelivery: "steer" as const, inverse: "queue" },
+  ])("uses Ctrl+Enter for $inverse when running with default $defaultDelivery", async ({ defaultDelivery, inverse }) => {
+    useUiStore.setState({ followupDelivery: defaultDelivery } as never)
+    const onPrompt = vi.fn(async () => {})
+    const onSteer = vi.fn(async () => {})
+    render(<Composer {...base} running canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} />)
+    fireEvent.change(textarea(), { target: { value: "opposite follow-up" } })
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true, shiftKey: true })
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true, isComposing: true })
+    expect(onPrompt).not.toHaveBeenCalled()
+    expect(onSteer).not.toHaveBeenCalled()
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true })
+    await waitFor(() => expect(inverse === "steer" ? onSteer : onPrompt).toHaveBeenCalledWith("opposite follow-up", undefined, undefined, expect.any(Function)))
+    expect(inverse === "steer" ? onPrompt : onSteer).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByRole("button", { name: "停止" })).toBeTruthy())
+    expect(screen.getAllByRole("button")).toHaveLength(1)
+  })
+
+  it("uses live defaults while a per-message override stays local and clears after admission", async () => {
+    const onPrompt = vi.fn(async () => {})
+    const onSteer = vi.fn(async () => {})
+    render(<Composer {...base} running canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} />)
+    act(() => useUiStore.getState().setFollowupDelivery("steer"))
+    const delivery = screen.getByRole("combobox", { name: "輸入處理方式" }) as HTMLSelectElement
+    expect(delivery.value).toBe("steer")
+    fireEvent.change(delivery, { target: { value: "queue" } })
+    expect(useUiStore.getState().followupDelivery).toBe("steer")
+    fireEvent.change(textarea(), { target: { value: "one queue override" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("one queue override", undefined, undefined, expect.any(Function)))
+    await waitFor(() => expect(delivery.value).toBe("steer"))
+    fireEvent.change(textarea(), { target: { value: "next default steer" } })
+    fireEvent.keyDown(textarea(), { key: "Enter" })
+    await waitFor(() => expect(onSteer).toHaveBeenCalledWith("next default steer", undefined, undefined, expect.any(Function)))
+  })
+
+  it("starts idle work normally even when the saved follow-up default is steer", async () => {
+    useUiStore.setState({ followupDelivery: "steer" } as never)
+    const onPrompt = vi.fn(async () => {})
+    const onSteer = vi.fn(async () => {})
+    render(<Composer {...base} canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} />)
+    fireEvent.change(textarea(), { target: { value: "start idle work" } })
+    fireEvent.keyDown(textarea(), { key: "Enter", ctrlKey: true })
+    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("start idle work", undefined, undefined, expect.any(Function)))
+    expect(onSteer).not.toHaveBeenCalled()
+  })
+
   it("runs /compact through the compaction operation without submitting a prompt", async () => {
     const onPrompt = vi.fn(async () => {})
     const onCompact = vi.fn(async () => {})
@@ -83,13 +134,61 @@ describe("Composer", () => {
     expect(screen.getByText("模型尚未設定")).toBeTruthy()
   })
 
-  it("enables Stop only while a prompt is running and keeps Send behind the gate", () => {
-    const running = render(<Composer {...base} running canSend onPrompt={async () => {}} />)
-    expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(false)
-    running.unmount()
-
+  it("omits Stop in an idle new conversation even after entering a draft", () => {
     render(<Composer {...base} canSend onPrompt={async () => {}} />)
-    expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+    fireEvent.change(textarea(), { target: { value: "new task" } })
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+  })
+
+  it("uses one primary Stop while executing with no draft and returns to an idle disabled Send", () => {
+    const onCancel = vi.fn()
+    const onPrompt = vi.fn(async () => {})
+    const view = render(<Composer {...base} running canSend onPrompt={onPrompt} onCancel={onCancel} />)
+    expect(screen.getAllByRole("button")).toHaveLength(1)
+    fireEvent.keyDown(textarea(), { key: "Enter" })
+    expect(onCancel).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "停止" }))
+    expect(onCancel).toHaveBeenCalledOnce()
+    expect(onPrompt).not.toHaveBeenCalled()
+    expect(textarea().value).toBe("")
+    view.rerender(<Composer {...base} canSend onPrompt={onPrompt} onCancel={onCancel} />)
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it("changes the same primary control to queue a draft while running then restores Stop after admission", async () => {
+    const onPrompt = vi.fn(async () => {})
+    const onSteer = vi.fn(async () => {})
+    render(<Composer {...base} running canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} />)
+    const primary = screen.getByRole("button", { name: "停止" })
+    fireEvent.change(textarea(), { target: { value: "next queued step" } })
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+    expect(screen.getByRole("button", { name: "送出" })).toBe(primary)
+    expect(screen.getAllByRole("button")).toHaveLength(1)
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("next queued step", undefined, undefined, expect.any(Function)))
+    expect(onSteer).not.toHaveBeenCalled()
+    await waitFor(() => expect(textarea().value).toBe(""))
+    expect(screen.getByRole("button", { name: "停止" })).toBe(primary)
+  })
+
+  it("disables the one primary control while admission is pending and keeps the failed draft sendable", async () => {
+    let fail!: (error: Error) => void
+    const onPrompt = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject }))
+    render(<Composer {...base} running canSend onPrompt={onPrompt} />)
+    fireEvent.change(textarea(), { target: { value: "keep failed queued draft" } })
+    fireEvent.click(screen.getByRole("button", { name: "送出" }))
+    expect(screen.getAllByRole("button")).toHaveLength(1)
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.keyDown(textarea(), { key: "Enter" })
+    expect(onPrompt).toHaveBeenCalledOnce()
+    fail(new Error("admission failed"))
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("admission failed"))
+    expect(textarea().value).toBe("keep failed queued draft")
+    expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
   })
 
   it("keeps the draft when submission fails before admission and clears a successful send", async () => {

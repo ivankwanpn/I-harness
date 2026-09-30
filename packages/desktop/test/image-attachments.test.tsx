@@ -18,9 +18,10 @@ it("accepts ten small images and rejects an eleventh without changing the draft"
 
 it("sends a selected image as model input and retains it after a failed send", async () => {
   const onPrompt = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined)
-  render(<Composer workspaceId="image-w" sessionId="image-s" canSend running={false} imageAttachmentsEnabled onPrompt={onPrompt} onCancel={() => {}} />)
-  const file = new File([new Uint8Array([1, 2, 3])], "sample.png", { type: "image/png" })
-  fireEvent.change(screen.getByLabelText("選擇圖片"), { target: { files: [file] } })
+  const request = vi.fn(async () => ({ paths: [], images: [{ mediaType: "image/png", dataBase64: "AQID", name: "sample.png" }], texts: [] }))
+  render(<Composer workspaceId="image-w" sessionId="image-s" bridge={{ request, onEvent: () => () => {} }} canSend running={false} imageAttachmentsEnabled onPrompt={onPrompt} onCancel={() => {}} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增附件" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "workspace/attachments/pick", workspaceId: "image-w", allowImages: true }))
   await screen.findByText("sample.png")
   const sendButton = screen.getByRole("button", { name: "送出" }) as HTMLButtonElement
   await waitFor(() => expect(sendButton.disabled).toBe(false))
@@ -31,4 +32,16 @@ it("sends a selected image as model input and retains it after a failed send", a
   await waitFor(() => expect(sendButton.disabled).toBe(false))
   fireEvent.click(sendButton)
   await waitFor(() => expect(screen.queryByText("sample.png")).toBeNull())
+})
+
+it("keeps image paste and removal available with the unified attachment chooser", async () => {
+  const scope = ["image-paste-menu", "image-paste-menu"] as const
+  render(<Composer workspaceId={scope[0]} sessionId={scope[1]} canSend running={false} imageAttachmentsEnabled onPrompt={async () => {}} onCancel={() => {}} />)
+  const file = new File([new Uint8Array([4, 5, 6])], "pasted.png", { type: "image/png" })
+  fireEvent.paste(screen.getByRole("textbox", { name: "提示" }), { clipboardData: { files: [file] } })
+  await screen.findByText("pasted.png")
+  fireEvent.click(screen.getByRole("button", { name: "移除圖片 pasted.png" }))
+  expect(screen.queryByText("pasted.png")).toBeNull()
+  expect(readImageDrafts(...scope)).toEqual([])
+  expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
 })

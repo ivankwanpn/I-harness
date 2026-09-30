@@ -34,6 +34,14 @@ describe("sandbox roots", () => {
   it("writableRoots: read-only is empty", () => {
     expect(writableRoots({ mode: "read-only", workspaceRoot: "/" })).toEqual([])
   })
+
+  it("includes every approved project root and always retains the default workspace", () => {
+    const roots = writableRoots({ mode: "workspace-write", workspaceRoot: "/project/main", workspaceRoots: ["/project/other", "/project/other"] })
+    expect(roots).toContain(canonicalPath("/project/main"))
+    expect(roots).toContain(canonicalPath("/project/other"))
+    expect(roots.filter((root) => root === canonicalPath("/project/other"))).toHaveLength(1)
+    expect(writableRoots({ mode: "read-only", workspaceRoot: "/project/main", workspaceRoots: ["/project/other"] })).toEqual([])
+  })
 })
 
 describe("sandbox escalation vocabulary", () => {

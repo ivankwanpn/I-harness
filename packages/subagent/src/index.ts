@@ -170,6 +170,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
     ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
+    ...(opts.inheritedSystemContext ? { inheritedSystemContext: opts.inheritedSystemContext } : {}),
     // M73: the session's numbers ride the SAME chain one hop further. The host
     // shape (RoleModelHost) reaches registerSubagent with them, and stopping
     // here would leave the tool arm — the main spawn path — empty-handed: the

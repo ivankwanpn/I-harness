@@ -5,6 +5,8 @@ import { classifyDanger } from "./danger-class.ts"
 
 export interface ApprovalConfig {
   workspace: string
+  /** Full current project membership; cwd is not added to an explicit list. */
+  workspaceRoots?: () => readonly string[]
   /** Desktop mode may be read live when the user changes settings. */
   mode?: ApprovalMode | (() => ApprovalMode)
   dangerousCommands?: string[]
@@ -106,13 +108,13 @@ function applyNever(decision: ToolDecision | undefined, approvalPolicy: "ask" | 
   return { kind: "deny", reason: `approval policy is 'never'; ${decision.reason}` }
 }
 
-function isInsideWorkspace(workspace: string, p: string): boolean {
+function isInsideWorkspace(workspace: string, p: string, roots: readonly string[]): boolean {
   const abs = p.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(p) ? resolve(p) : resolve(workspace, p)
-  const rel = relative(workspace, abs)
-  // rel === "" ⇒ the target IS the workspace root. Anything absolute
-  // (cross-drive / UNC on Windows, root-relative on POSIX) or `..`-prefixed
-  // is outside — fail closed.
-  return rel === "" || (!isAbsolute(rel) && !rel.startsWith(".."))
+  return roots.some((root) => {
+    const rel = relative(resolve(root), abs)
+    // An absolute or parent-relative result is outside this approved root.
+    return rel === "" || (!isAbsolute(rel) && !rel.startsWith(".."))
+  })
 }
 
 // Computes the three-layer approval decision for a pre-execute payload.
@@ -127,6 +129,7 @@ function decide(
   dangerousFlags: string[],
   askForNonReadOnly: boolean,
   mode: ApprovalMode | undefined,
+  workspaceRoots: readonly string[],
 ): ToolDecision | undefined {
   // Single-producer property: at most one policy seeds a decision per emit,
   // and the seeded value is the chain payload that reaches every waterfall
@@ -185,7 +188,7 @@ function decide(
       if (pathArg === undefined) {
         return { kind: "ask", reason: "write target path not specified; approval required" }
       }
-      if (!isInsideWorkspace(workspace, pathArg)) {
+      if (!isInsideWorkspace(workspace, pathArg, workspaceRoots)) {
         return { kind: "ask", reason: `write target outside workspace requires approval: ${pathArg}` }
       }
     } else {
@@ -223,14 +226,14 @@ export function createApprovalPolicy(
 
   ctx.on("tools/pre-execute", (payload) =>
     applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow()),
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow(), config.workspaceRoots?.() ?? [workspace]),
       config.approvalPolicy,
     ),
   )
 
   ctx.waterfall("tools/pre-execute", async (payload, next) => {
     const decision = applyNever(
-      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow()),
+      decide(payload, registry, workspace, dangerousCommands, dangerousFlags, askForNonReadOnly, modeNow(), config.workspaceRoots?.() ?? [workspace]),
       config.approvalPolicy,
     )
     // Always release the chain; veto by returning our decision object.

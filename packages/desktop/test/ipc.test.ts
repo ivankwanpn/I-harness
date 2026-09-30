@@ -51,6 +51,21 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("routes project metadata locally, preserves revision checks and rejects unknown folder reveals", async () => {
+    const f = fixture()
+    const save = vi.fn(async (input: import("../src/main/projects.ts").ProjectInput) => ({ id: input.id ?? "p", name: input.name, workspaceIds: input.workspaceIds, primaryWorkspaceId: input.primaryWorkspaceId, pinned: input.pinned, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" }))
+    const revealWorkspace = vi.fn(async () => {})
+    f.dependencies.projects = { list: async () => [], save, remove: async () => {}, unassigned: async () => [] }
+    f.dependencies.revealWorkspace = revealWorkspace
+    await dispatchDesktopRequest({ kind: "projects/save", input: { name: "App", workspaceIds: [ENTRY.id], primaryWorkspaceId: ENTRY.id, expectedUpdatedAt: "2026-10-01T00:00:00.000Z" } }, f.dependencies)
+    expect(save).toHaveBeenCalledWith({ name: "App", workspaceIds: [ENTRY.id], primaryWorkspaceId: ENTRY.id, expectedUpdatedAt: "2026-10-01T00:00:00.000Z" })
+    expect(f.runtimes.get).not.toHaveBeenCalled()
+    await expect(dispatchDesktopRequest({ kind: "workspace/reveal", workspaceId: "unknown" }, f.dependencies)).rejects.toThrow("Unknown workspace")
+    expect(revealWorkspace).not.toHaveBeenCalled()
+    await dispatchDesktopRequest({ kind: "workspace/reveal", workspaceId: ENTRY.id }, f.dependencies)
+    expect(revealWorkspace).toHaveBeenCalledWith(ENTRY.path)
+    await expect(dispatchDesktopRequest({ kind: "projects/save", input: { name: "", workspaceIds: [ENTRY.id] } }, f.dependencies)).rejects.toThrow("Invalid project")
+  })
   it("forwards images only when the gateway advertises prompt-image support", async () => {
     const f = fixture()
     const image = { mediaType: "image/png" as const, dataBase64: "aGVsbG8=" }

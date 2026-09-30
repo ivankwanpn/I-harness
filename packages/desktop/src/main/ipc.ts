@@ -4,6 +4,9 @@ import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest, ty
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { validateSandboxState } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
+import type { ProjectCatalog } from "./projects.ts"
+import { readPickedAttachments } from "./file-attachments.ts"
+import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
 import { contextRequestParams } from "./context-requests.ts"
 import { listDesktopTerminalShellOptions } from "@i-harness/desktop-gateway/src/terminal-shells.ts"
 import type { attachNativeWindow } from "./native-window.ts"
@@ -11,6 +14,8 @@ import type { createBrowserSurface } from "./browser-surface.ts"
 
 export interface DesktopIpcDependencies {
   catalog: WorkspaceCatalog
+  projects?: ProjectCatalog
+  revealWorkspace?: (path: string) => Promise<void>
   runtimes: WorkspaceRuntimeManager
   /** Native folder picker; injected so the dispatcher stays testable. */
   pickFolder?: () => Promise<string | undefined>
@@ -50,6 +55,62 @@ export async function dispatchDesktopRequest(
   }
 
   switch (value.kind as DesktopRequest["kind"]) {
+    case "workspace/attachments/pick": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const workspace = dependencies.catalog.get(workspaceId)
+      if (!workspace) throw new Error("Unknown workspace")
+      if (typeof value.allowImages !== "boolean") throw new Error("Invalid attachment image setting")
+      const selected = await dependencies.pickFiles?.(workspace.path)
+      if (!selected?.length) return { paths: [], images: [], texts: [] }
+      return await readPickedAttachments(workspace.path, selected, value.allowImages)
+    }
+    case "projects/list": {
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      return await dependencies.projects.list()
+    }
+    case "projects/save": {
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      const input = requireRecord(value.input)
+      if (typeof input.name !== "string" || !input.name.trim() || input.name.trim().length > 256 || !Array.isArray(input.workspaceIds) || input.workspaceIds.length > 100 || input.workspaceIds.some((id) => typeof id !== "string" || !id)) throw new Error("Invalid project")
+      if (input.id !== undefined && (typeof input.id !== "string" || !input.id)) throw new Error("Invalid project id")
+      if (input.primaryWorkspaceId !== undefined && typeof input.primaryWorkspaceId !== "string") throw new Error("Invalid primary workspace")
+      if (input.pinned !== undefined && typeof input.pinned !== "boolean") throw new Error("Invalid project pin")
+      if (input.expectedUpdatedAt !== undefined && (typeof input.expectedUpdatedAt !== "string" || !input.expectedUpdatedAt || input.expectedUpdatedAt.length > 64)) throw new Error("Invalid project revision")
+      const saved = await dependencies.projects.save({ name: input.name, workspaceIds: input.workspaceIds as string[], ...(typeof input.id === "string" ? { id: input.id } : {}), ...(typeof input.primaryWorkspaceId === "string" ? { primaryWorkspaceId: input.primaryWorkspaceId } : {}), ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}), ...(typeof input.expectedUpdatedAt === "string" ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}) })
+      try { await syncLiveProjectContexts(dependencies.projects, dependencies.catalog, dependencies.runtimes); return saved }
+      catch (error) { return { ...saved, runtimeSyncError: error instanceof Error ? error.message : String(error) } }
+    }
+    case "projects/remove": {
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      await dependencies.projects.remove(requireNonEmpty(value.id, "project id"))
+      try { await syncLiveProjectContexts(dependencies.projects, dependencies.catalog, dependencies.runtimes); return { removed: true } }
+      catch (error) { return { removed: true, runtimeSyncError: error instanceof Error ? error.message : String(error) } }
+    }
+    case "workspace/reveal": {
+      const workspace = dependencies.catalog.get(requireNonEmpty(value.workspaceId, "workspaceId"))
+      if (!workspace) throw new Error("Unknown workspace")
+      if (!dependencies.revealWorkspace) throw new Error("Folder opening is unavailable")
+      await dependencies.revealWorkspace(workspace.path)
+      return { opened: true }
+    }
+    case "desktop/session/navigation/state": {
+      const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+      if (!runtime.info.capabilities["desktop-sessions"]?.includes("1")) throw new Error("Session management unavailable")
+      return await runtime.client.request(value.kind, {})
+    }
+    case "desktop/session/project/bind":
+    case "desktop/session/project/state": {
+      const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      if (!runtime.info.capabilities["desktop-project-scope"]?.includes("1")) throw new Error("Project execution scopes are unavailable")
+      if (value.kind.endsWith("/state")) return await runtime.client.request(value.kind, { sessionId })
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog)
+      const projectId = value.projectId === undefined ? undefined : requireNonEmpty(value.projectId, "projectId")
+      if (projectId && !scopes.some((scope) => scope.id === projectId && scope.roots.length > 0)) throw new Error("Unknown or empty project")
+      await runtime.client.request("desktop/project/sync", { projects: scopes })
+      return await runtime.client.request(value.kind, { sessionId, ...(projectId ? { projectId } : {}) })
+    }
     case "workspace/files/pick": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const workspace = dependencies.catalog.get(workspaceId)
@@ -80,12 +141,13 @@ export async function dispatchDesktopRequest(
       if (!dependencies.native) throw new Error("native preferences unavailable")
       return dependencies.native.state()
     case "desktop/local/configure":
+      if (value.followupDelivery !== undefined && value.followupDelivery !== "queue" && value.followupDelivery !== "steer") throw new Error("invalid follow-up delivery")
       if (value.notifications !== undefined && typeof value.notifications !== "boolean") throw new Error("invalid notifications preference")
       if (value.locale !== undefined && value.locale !== "zh-TW" && value.locale !== "en") throw new Error("invalid locale")
       if (value.terminalShell !== undefined && (typeof value.terminalShell !== "string" || !["auto", "git-bash", "pwsh", "powershell", "cmd", "bash", "zsh", "sh"].includes(value.terminalShell))) throw new Error("invalid terminal shell")
       if (value.terminalFontFamily !== undefined && (typeof value.terminalFontFamily !== "string" || value.terminalFontFamily.length > 128 || /[\u0000-\u001f\u007f]/.test(value.terminalFontFamily))) throw new Error("invalid terminal font")
       if (!dependencies.native) throw new Error("native preferences unavailable")
-      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}) })
+      return dependencies.native.configure({ ...(typeof value.notifications === "boolean" ? { notifications: value.notifications } : {}), ...(value.locale === "en" || value.locale === "zh-TW" ? { locale: value.locale } : {}), ...(typeof value.terminalShell === "string" ? { terminalShell: value.terminalShell as TerminalShellChoice } : {}), ...(typeof value.terminalFontFamily === "string" ? { terminalFontFamily: value.terminalFontFamily.trim() } : {}), ...(value.followupDelivery === "queue" || value.followupDelivery === "steer" ? { followupDelivery: value.followupDelivery } : {}) })
     case "workspace/list":
       return await dependencies.catalog.list()
     case "workspace/open":
@@ -127,15 +189,28 @@ export async function dispatchDesktopRequest(
     case "desktop/session/manage": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
-      if (!["rename", "archive", "restore", "fork"].includes(String(value.action))) throw new Error("invalid session action")
+      if (!["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(value.action))) throw new Error("invalid session action")
       const title = value.action === "rename" ? requireNonEmpty(value.title, "title") : undefined
       if (title && title.length > 256) throw new Error("title is too long")
       return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request(value.kind, { sessionId, action: value.action, ...(title ? { title } : {}) })
     }
     case "session/dashboard":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.dashboard()
-    case "session/create":
-      return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.createSession()
+    case "session/create": {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      let projectId: string | undefined
+      if (value.projectId !== undefined) {
+        projectId = requireNonEmpty(value.projectId, "projectId")
+        if (!dependencies.projects || !(await dependencies.projects.list()).some((project) => project.id === projectId && project.workspaceIds.includes(workspaceId))) throw new Error("Project does not contain the selected folder")
+      }
+      const created = await runtime.client.createSession()
+      if (projectId) {
+        await runtime.client.request("desktop/project/sync", { projects: await projectRuntimeContexts(dependencies.projects!, dependencies.catalog) })
+        await runtime.client.request("desktop/session/project/bind", { sessionId: created.sessionId, projectId })
+      }
+      return created
+    }
     case "session/history": {
       // Validate every field BEFORE any runtime side effect.
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")

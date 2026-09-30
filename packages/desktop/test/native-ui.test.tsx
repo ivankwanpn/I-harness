@@ -4,8 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { TitleBar } from "../src/renderer/shell/TitleBar.tsx"
 import { NativeSettings } from "../src/renderer/settings/NativeSettings.tsx"
 import { useLocale } from "../src/renderer/design/i18n.ts"
+import { useUiStore } from "../src/renderer/shell/ui-store.ts"
+import { Composer } from "../src/renderer/session/Composer.tsx"
 beforeEach(() => useLocale.getState().setLocale("zh-TW"))
-afterEach(cleanup)
+afterEach(() => { cleanup(); useUiStore.setState({ followupDelivery: "queue" } as never) })
 it("sends only the selected native window action", () => {
   const request = vi.fn(async () => ({}))
   render(<TitleBar bridge={{ request, onEvent: () => () => {} }} />)
@@ -61,4 +63,37 @@ it("keeps shell and font settings available before a workspace is opened", async
   expect(request).toHaveBeenCalledWith({ kind: "desktop/terminal/options" })
   fireEvent.change(select, { target: { value: "git-bash" } })
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", terminalShell: "git-bash" }))
+})
+
+it("saves the General follow-up default and applies it to a mounted composer's next send", async () => {
+  const onPrompt = vi.fn(async () => {})
+  const onSteer = vi.fn(async () => {})
+  const request = vi.fn(async (value: { kind: string; followupDelivery?: "queue" | "steer" }) => value.kind === "desktop/terminal/options"
+    ? [{ id: "auto", label: "Auto" }]
+    : { notifications: false, notificationsSupported: true, followupDelivery: value.followupDelivery ?? "queue" })
+  render(<><NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" /><Composer workspaceId="native-followup" sessionId="live" running canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} onCancel={() => {}} /></>)
+  const setting = await screen.findByRole("combobox", { name: "後續訊息處理方式" })
+  await waitFor(() => expect((setting as HTMLSelectElement).disabled).toBe(false))
+  fireEvent.change(setting, { target: { value: "steer" } })
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/local/configure", followupDelivery: "steer" }))
+  await waitFor(() => expect(useUiStore.getState().followupDelivery).toBe("steer"))
+  fireEvent.change(screen.getByRole("textbox", { name: "提示" }), { target: { value: "guide active work" } })
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => expect(onSteer).toHaveBeenCalledWith("guide active work", undefined, undefined, expect.any(Function)))
+  expect(onPrompt).not.toHaveBeenCalled()
+})
+
+it("retains the accepted follow-up default when saving a different setting fails", async () => {
+  const request = vi.fn(async (value: { kind: string }) => {
+    if (value.kind === "desktop/terminal/options") return [{ id: "auto", label: "Auto" }]
+    if (value.kind === "desktop/local/configure") throw new Error("preferences write failed")
+    return { notifications: false, notificationsSupported: true, followupDelivery: "steer" }
+  })
+  render(<NativeSettings bridge={{ request, onEvent: () => () => {} }} section="window" />)
+  const setting = await screen.findByRole("combobox", { name: "後續訊息處理方式" })
+  await waitFor(() => expect(useUiStore.getState().followupDelivery).toBe("steer"))
+  fireEvent.change(setting, { target: { value: "queue" } })
+  await screen.findByRole("alert")
+  expect((setting as HTMLSelectElement).value).toBe("steer")
+  expect(useUiStore.getState().followupDelivery).toBe("steer")
 })

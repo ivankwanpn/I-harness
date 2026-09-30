@@ -14,5 +14,10 @@ export function canonicalPath(path: string): string {
 
 export function writableRoots(policy: SandboxExecutionPolicy): string[] {
   if (policy.mode !== "workspace-write") return []
-  return [...new Set([policy.workspaceRoot, "/tmp", tmpdir()].map(canonicalPath))]
+  return [...new Set([...workspaceRoots(policy), "/tmp", tmpdir()].map(canonicalPath))]
+}
+
+/** Every project folder for this call, without retaining a previous call's roots. */
+export function workspaceRoots(policy: SandboxExecutionPolicy): string[] {
+  return [...new Set([policy.workspaceRoot, ...(policy.workspaceRoots ?? [])].map(canonicalPath))]
 }

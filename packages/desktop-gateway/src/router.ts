@@ -29,6 +29,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.projects) capabilities["desktop-project-scope"] = ["1"]
     if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
@@ -171,6 +172,18 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/project/sync", "desktop/project/configure", "desktop/project/revoke", "desktop/session/project/bind", "desktop/session/project/state"].includes(message.method) && handlers.projects) {
+        const params = asRecord(message.params)
+        try {
+          const result = message.method === "desktop/project/sync" ? await handlers.projects.sync(params?.projects)
+            : message.method === "desktop/project/configure" ? await handlers.projects.configure(params?.project)
+              : message.method === "desktop/project/revoke" ? await handlers.projects.revoke(String(params?.projectId ?? ""))
+                : message.method.endsWith("/state") ? await handlers.projects.state(String(params?.sessionId ?? ""))
+                  : await handlers.projects.bind(String(params?.sessionId ?? ""), params?.projectId as string | undefined)
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if ((message.method === "desktop/agent-shell/state" || message.method === "desktop/agent-shell/configure") && handlers.agentShell) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentShell.state() : await handlers.agentShell.configure(asRecord(message.params)?.patch))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
@@ -305,6 +318,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }
+      if (message.method === "desktop/session/navigation/state" && handlers.sessions) {
+        try { send(makeSuccess(message.id, await handlers.sessions.navigation())) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (message.method === "desktop/session/archived" && handlers.sessions) {
         try { send(makeSuccess(message.id, await handlers.sessions.archived())) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "Archived sessions unavailable")) }
@@ -314,18 +332,19 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         const params = asRecord(message.params)
         const sessionId = params?.sessionId
         const action = params?.action
-        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "fork"].includes(String(action))
+        const navigationOnly = ["pin", "unpin", "read", "unread"].includes(String(action))
+        if (typeof sessionId !== "string" || !sessionId || !["rename", "archive", "restore", "fork", "pin", "unpin", "read", "unread"].includes(String(action))
           || (action === "rename" && (typeof params?.title !== "string" || !params.title.trim() || params.title.length > 256))) {
           send(makeFailure(message.id, INVALID_PARAMS, "Invalid session management request")); return
         }
-        if (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId)) {
+        if (!navigationOnly && (activePrompts.has(sessionId) || compacting.has(sessionId) || modelSwitches.has(sessionId))) {
           send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return
         }
-        const job = handlers.sessions.mutate(sessionId, action as "rename" | "archive" | "restore" | "fork", params?.title as string | undefined)
-        modelSwitches.set(sessionId, job)
+        const job = handlers.sessions.mutate(sessionId, action as import("./session-management.ts").SessionManagementAction, params?.title as string | undefined)
+        if (!navigationOnly) modelSwitches.set(sessionId, job)
         try { send(makeSuccess(message.id, await job)) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
-        finally { modelSwitches.delete(sessionId) }
+        finally { if (!navigationOnly) modelSwitches.delete(sessionId) }
         return
       }
       if ((message.method === "desktop/provider/probe" || message.method === "desktop/provider/probe/cancel") && probes) {

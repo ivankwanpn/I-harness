@@ -36,6 +36,7 @@ import { resolveHookTrustPath } from "@i-harness/hooks"
 import { makeNotification, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
+import { createProjectScopeBroker } from "./project-scope.ts"
 import { createDesktopInput } from "./input.ts"
 import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
@@ -105,6 +106,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
+  const projects = createProjectScopeBroker(coordinator, options.workspace, isConversation)
   const approvals = createDesktopApprovalHistory(coordinator)
   const reviewerPool = createIsolatedReviewerPool()
   const agentShell = createAgentShellSettings(settingsPath)
@@ -139,6 +141,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const mcpPath = join(dirname(settingsPath), "mcp-servers.json")
   const mcp = createDesktopMcp(mcpPath)
   const service: SessionService = createSessionService({
+    projectContextFor: projects.forSession,
     agentShell: agentShell.resolve,
     team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
     additionalSystemPrompt(session) {
@@ -229,7 +232,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const handlers: DesktopHandlers = {
-    workflow, agentShell, input,
+    workflow, agentShell, input, projects,
     resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
@@ -243,7 +246,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     } }),
     plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
-    sessions: createSessionManagement(coordinator, service, isConversation),
+    sessions: createSessionManagement(coordinator, service, isConversation, { projectFor: projects.projectFor, onFork: projects.inherit }),
     provider: runtime,
     memory,
     compact: async (sessionId, instructions, signal) => {
@@ -288,7 +291,9 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         try {
           const { meta } = await coordinator.profile(id)
           if (meta.archived || !await isConversation(id, meta)) return undefined
-          return { id, ...(meta.title === undefined ? {} : { title: meta.title }) }
+          const session = service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
+          const turnCount = session.events.filter((event) => event.type === "turn/end").length
+          return { id, turnCount, ...(meta.title === undefined ? {} : { title: meta.title }) }
         } catch {
           return { id }
         }
@@ -302,11 +307,17 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], () => {
     if (!closing) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   })
-  let syncingPolicy = false
+  let policySync: Promise<void> | undefined
   const syncPolicy = () => {
-    if (closing || syncingPolicy) return
-    syncingPolicy = true
-    void Promise.all([agentSettings.sync(), subagents.state()]).catch((error) => { console.warn(`[desktop] agent settings refresh failed: ${error instanceof Error ? error.message : String(error)}`) }).finally(() => { syncingPolicy = false })
+    if (closing || policySync) return
+    // Both reads own settings file leases. An early failure must not release
+    // shutdown's ownership of the other read while it can still create a lock.
+    const job = Promise.allSettled([agentSettings.sync(), subagents.state()]).then((results) => {
+      const failure = results.find((result) => result.status === "rejected")
+      if (failure?.status === "rejected") console.warn(`[desktop] agent settings refresh failed: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`)
+    })
+    policySync = job
+    void job.finally(() => { if (policySync === job) policySync = undefined })
   }
   const policyTimer = setInterval(syncPolicy, 1000)
   policyTimer.unref?.()
@@ -322,11 +333,13 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       offInteraction()
       await input.close()
       await router.close()
+      await projects.close()
       await review.close()
       await workflow.close()
       await service.close()
       await approvals.flush()
       await plugins.close()
+      await policySync
       memory.close()
       await coordinator.close()
     })(),

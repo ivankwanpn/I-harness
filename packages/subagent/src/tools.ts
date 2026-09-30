@@ -163,6 +163,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         roleSelectionFor: deps.roleSelectionFor,
         allowSubagentModelSelection: deps.allowSubagentModelSelection,
         ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
+        ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
         // M73: the session's own window and cap, forwarded to the spawn. Without
         // this hop the values reach SubagentToolDeps and stop — an inheriting
         // child of THIS tool would carry neither while every type still checks,
@@ -673,18 +674,22 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // (scope / delegation / result-delivery), which child.ts's own comment says
   // rides "every child agent". Same composer, same place, one call site each.
   const childPrompt = composeSubagentPrompt(role.systemPrompt)
+  const systemPrompt = deps.inheritedSystemContext ? () => {
+    const inherited = deps.inheritedSystemContext!()
+    return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
+  } : childPrompt
   // M73: the charge the child's log never carries but the model sees on every
   // request — priced by child.ts's ONE definition (imported, not copied: two
   // copies of that rule are two places to drift). Absent window → absent
   // overhead: `budget` needs a window anyway.
   const overheadTokens = contextWindow === undefined
     ? undefined
-    : estimateChildOverhead(childPrompt, childReg.schemas())
+    : estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, childReg.schemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
-    systemPrompt: childPrompt, signal: controller.signal,
+    systemPrompt, signal: controller.signal,
     ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
     // M73: the cap and the window the rebuilt child's requests carry, from the
     // same two sources the model decision above read. Absent stays absent — a

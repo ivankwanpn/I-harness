@@ -43,6 +43,7 @@ export interface GuardianReviewDeps {
    * fires and the reviewer silently inherits the parent's client. */
   roleSelectionFor?: SpawnOptions["roleSelectionFor"]
   allowSubagentModelSelection?: SpawnOptions["allowSubagentModelSelection"]
+  inheritedSystemContext?: SpawnOptions["inheritedSystemContext"]
   /** M73: the SESSION's own model's numbers (assembly's AssemblyOptions),
    * forwarded to `spawnChild` on the INHERITED arm only — see the gate at the
    * spawn below, which is deliberate and not symmetric with the two fields
@@ -174,6 +175,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     // OFF, never "enabled by omission".
     ...(deps.roleSelectionFor !== undefined ? { roleSelectionFor: deps.roleSelectionFor } : {}),
     ...(deps.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: deps.allowSubagentModelSelection } : {}),
+    ...(deps.inheritedSystemContext ? { inheritedSystemContext: deps.inheritedSystemContext } : {}),
     // M73: the session's numbers are the numbers of THE SESSION'S MODEL. When a
     // guardian model is configured, this child runs on a different endpoint
     // whose window we do not know here — passing the session's would be a

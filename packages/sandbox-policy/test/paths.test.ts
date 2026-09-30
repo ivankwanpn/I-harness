@@ -36,6 +36,26 @@ afterEach(() => {
 const policy = (mode: SandboxExecutionPolicy["mode"]): SandboxExecutionPolicy => ({ mode, workspaceRoot: workspace })
 
 describe("checkWrite", () => {
+  it("permits another project folder and revokes it from the next policy", () => {
+    const multiple = { mode: "workspace-write" as const, workspaceRoot: workspace, workspaceRoots: [workspace, outside] }
+    expect(checkWrite(multiple, join(outside, "nested/new.txt"))).toEqual({ ok: true })
+    expect(checkWrite({ ...multiple, workspaceRoots: [workspace] }, join(outside, "nested/new.txt")).ok).toBe(false)
+    expect(checkWrite({ ...multiple, mode: "read-only" }, join(outside, "new.txt"))).toMatchObject({ ok: false, sufficientMode: "workspace-write" })
+    expect(checkWrite({ ...multiple, mode: "danger-full-access", workspaceRoots: [] }, join(outside, "new.txt"))).toEqual({ ok: true })
+  })
+
+  it("uses actual symlink targets across all roots and denies an unapproved escape", () => {
+    const second = join(workspace, "..", "second")
+    mkdirSync(second)
+    const allowed = join(workspace, "second-link")
+    const escaped = join(second, "escape-link")
+    symlinkSync(second, allowed, "junction")
+    symlinkSync(outside, escaped, "junction")
+    const multiple = { mode: "workspace-write" as const, workspaceRoot: workspace, workspaceRoots: [workspace, second] }
+    expect(checkWrite(multiple, join(allowed, "new.txt"))).toEqual({ ok: true })
+    expect(checkWrite(multiple, join(escaped, "new.txt")).ok).toBe(false)
+    expect(checkWrite({ ...multiple, workspaceRoots: [workspace] }, join(allowed, "new.txt")).ok).toBe(false)
+  })
   it("read-only refuses every write, inside the workspace as well as outside", () => {
     // Inside matters: "read-only" is not "workspace-write but quieter". The shell
     // sandbox denies both, and a divergence here would be a hole.

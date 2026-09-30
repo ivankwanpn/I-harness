@@ -8,6 +8,14 @@ const readOnly: SandboxPolicy = { mode: "read-only", workspaceRoot: "/" }
 const workspaceWrite: SandboxPolicy = { mode: "workspace-write", workspaceRoot: "/proj" }
 
 describe("bwrapProfileArgs", () => {
+  it("binds each project root and removes a revoked root from the next profile", () => {
+    const policy = { mode: "workspace-write" as const, workspaceRoot: "/project/main", workspaceRoots: ["/project/main", "/project/other"] }
+    const args = bwrapProfileArgs(policy)
+    const binds = args.flatMap((arg, index) => arg === "--bind" ? [args.slice(index + 1, index + 3)] : [])
+    expect(binds).toEqual([["/project/main", "/project/main"], ["/project/other", "/project/other"]])
+    expect(bwrapProfileArgs({ ...policy, workspaceRoots: [] })).not.toContain("/project/other")
+    expect(bwrapProfileArgs({ ...policy, mode: "read-only" })).not.toContain("--bind")
+  })
   it("read-only: ro-bind /, dev, unshare-pid, proc, die-with-parent", () => {
     expect(bwrapProfileArgs(readOnly)).toEqual([
       "--ro-bind", "/", "/",

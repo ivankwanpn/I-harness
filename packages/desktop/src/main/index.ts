@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, type Tray } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { createDesktopWindow } from "./window.ts"
 import { createWorkspaceCatalog, type WorkspaceCatalog } from "./workspaces.ts"
+import { createProjectCatalog } from "./projects.ts"
+import { projectRuntimeContexts } from "./project-runtime.ts"
 import { createLocalPreferences } from "./local-preferences.ts"
 import { attachNativeWindow } from "./native-window.ts"
 import { createBrowserSurface } from "./browser-surface.ts"
@@ -28,7 +30,9 @@ export function workspaceRuntimes(): WorkspaceRuntimeManager {
 app.whenReady().then(() => {
   const localPreferences = createLocalPreferences(join(app.getPath("userData"), "desktop-preferences.json"))
   const workspaces = createWorkspaceCatalog(join(app.getPath("userData"), "workspaces.json"))
+  const projects = createProjectCatalog(join(app.getPath("userData"), "projects.json"), workspaces)
   const manager = createWorkspaceRuntimeManager({
+    projectContexts: () => projectRuntimeContexts(projects, workspaces),
     sessionsRoot: join(app.getPath("userData"), "sessions"),
     ...(app.isPackaged
       ? { launch: (workspace, sessionDir) => launchBundledGateway(process.resourcesPath, workspace, sessionDir) }
@@ -50,6 +54,8 @@ app.whenReady().then(() => {
     const browser = createBrowserSurface(window)
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
+      projects,
+      revealWorkspace: async (path) => { const failure = await shell.openPath(path); if (failure) throw new Error(failure) },
       runtimes: manager,
       native,
       browser,

@@ -223,7 +223,7 @@ describe("Desktop workbench shell", () => {
     )
 
     expect(screen.getByTestId("session-header").textContent).toContain("workspace")
-    fireEvent.click(screen.getByRole("button", { name: /第二個/ }))
+    fireEvent.click(screen.getByRole("button", { name: /^第二個/ }))
 
     expect(screen.getByTestId("session-header").textContent).toContain("第二個")
     expect(screen.getByTestId("session-announcer").textContent).toContain("第二個")

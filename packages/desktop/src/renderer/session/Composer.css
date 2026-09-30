@@ -1,0 +1,59 @@
+.session-composer {
+  width: 100%;
+  min-width: 0;
+  container: session-composer / inline-size;
+}
+
+.session-composer [data-composer-trailing-actions] {
+  min-width: 0;
+  max-width: 100%;
+  flex-shrink: 1;
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+.session-composer [data-composer-leading-actions] { flex: 0 0 auto; }
+.session-composer .composer-add { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; }
+.session-composer .composer-add:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+
+.composer-delivery-control {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  max-width: 160px;
+}
+
+.composer-delivery {
+  appearance: none;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 25px 6px 8px;
+  border: 1px solid var(--ih-divider);
+  border-radius: 7px;
+  background: var(--ih-panel);
+  color: var(--ih-muted);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.composer-delivery:hover { border-color: var(--ih-accent); color: var(--ih-text); }
+.composer-delivery option { background: var(--ih-panel); color: var(--ih-text); }
+.composer-delivery-control > svg { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--ih-muted); pointer-events: none; }
+
+.session-composer .composer-send { flex: none; border-radius: 50%; }
+.session-composer .composer-send:focus-visible, .composer-delivery:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+.composer-spinner { animation: composer-spin 1s linear infinite; }
+@keyframes composer-spin { to { transform: rotate(360deg); } }
+
+@container session-composer (max-width: 620px) {
+  .session-composer .composer-model { min-width: 0; max-width: 200px; font-size: 12px; }
+  .session-composer .composer-send { margin-left: auto; }
+}
+
+@container session-composer (max-width: 420px) {
+  .session-composer .composer-model { max-width: 140px; }
+  .composer-delivery-control { max-width: 140px; }
+}

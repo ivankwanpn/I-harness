@@ -1,8 +1,9 @@
 import { create } from "zustand"
 import { resolveLocale, type Locale } from "../design/locale.ts"
+import type { FollowupDelivery } from "../../main/local-preferences.ts"
 
 export type Appearance = "dark" | "light" | "system"
-export type Surface = "conversation" | "memory" | "search" | "settings" | "plugins"
+export type Surface = "conversation" | "memory" | "search" | "settings" | "plugins" | "projects"
 interface Preferences { appearance: Appearance; fontSize: number; sidebarCollapsed: boolean }
 const defaults: Preferences = { appearance: "dark", fontSize: 14, sidebarCollapsed: false }
 function readPreferences(): Preferences {
@@ -21,6 +22,8 @@ function readLocale(): Locale {
 // UI state only. SDK state remains owned by the renderer data layer.
 export const useUiStore = create<Preferences & {
   providerRevision: number
+  followupDelivery: FollowupDelivery
+  setFollowupDelivery(value: FollowupDelivery): void
   selectedWorkspaceId?: string
   selectedSessionId?: string
   setSelectedWorkspaceId(value: string | undefined | ((current: string | undefined) => string | undefined)): void
@@ -37,6 +40,9 @@ export const useUiStore = create<Preferences & {
   toggleReview(): void
 }>((set, get) => ({
   ...readPreferences(),
+  // Native local preferences own persistence; this is the renderer's live mirror.
+  followupDelivery: "queue",
+  setFollowupDelivery: (followupDelivery) => set({ followupDelivery }),
   selectedWorkspaceId: undefined,
   selectedSessionId: undefined,
   setSelectedWorkspaceId: (value) => set((state) => ({ selectedWorkspaceId: typeof value === "function" ? value(state.selectedWorkspaceId) : value })),

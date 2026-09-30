@@ -44,6 +44,7 @@ import {
   ModelUnavailableError,
   type AssemblyOptions,
   type SessionAssembly,
+  type SessionProjectContext,
 } from "./assembly.ts"
 
 export type SessionModelBindingResult =
@@ -90,6 +91,8 @@ type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Bind the session once; its returned getter follows current membership. */
+  projectContextFor?: (sessionId: string) => Promise<() => SessionProjectContext | undefined>
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
@@ -369,6 +372,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (pending === undefined) {
       pending = (async () => {
         const extensions = await opts.extensionsFor?.(sessionId)
+        const projectContext = opts.projectContextFor ? await opts.projectContextFor(sessionId) : opts.projectContext
         let assembly: SessionAssembly
         let sandboxAtBuild: SandboxMode | undefined
         if (opts.modelBindingFor !== undefined) {
@@ -398,6 +402,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
+            projectContext,
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -430,6 +435,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             ...opts,
             sandbox: sandboxAtBuild,
             ...extensions?.options,
+            projectContext,
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),

@@ -3,11 +3,11 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { RewindPanel } from "./RewindPanel.tsx"
-export type ManageSession = (sessionId: string, action: "rename" | "archive" | "restore" | "fork", title?: string) => Promise<void>
+export type ManageSession = (sessionId: string, action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread", title?: string) => Promise<void>
 interface Row { id: string; title?: string }
-export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete }: { bridge: DesktopBridge; workspaceId: string; onManage: ManageSession; onRewindComplete?: (sessionId: string) => void }) {
+export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete, initialArchived = false }: { bridge: DesktopBridge; workspaceId: string; onManage: ManageSession; onRewindComplete?: (sessionId: string) => void; initialArchived?: boolean }) {
   const t = useText()
-  const [archived, setArchived] = useState(false)
+  const [archived, setArchived] = useState(initialArchived)
   const [rows, setRows] = useState<Row[]>()
   const [refresh, setRefresh] = useState(0)
   const [error, setError] = useState<string>()

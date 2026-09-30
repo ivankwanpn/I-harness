@@ -4,6 +4,7 @@ export {
   type AssemblyOptions,
   type ModelPolicy,
   type SessionAssembly,
+  type SessionProjectContext,
 } from "./assembly.ts"
 export { createDurableSessionLoader } from "./durable-session.ts"
 export {

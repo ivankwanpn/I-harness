@@ -1,0 +1,29 @@
+.session-list .session-list-row { position: relative; display: flex; align-items: center; min-width: 0; }
+.session-list-row > .row-button { min-width: 0; flex: 1; padding-right: 32px; }
+.session-list-row .row-title { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.session-list-row .row-title svg { flex-shrink: 0; color: var(--ih-muted); }
+.session-unread-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--ih-accent); }
+.session-row-more { position: absolute; right: 4px; top: 8px; width: 26px; height: 26px; display: grid; place-items: center; border: 0; border-radius: 5px; color: var(--ih-muted); background: transparent; cursor: pointer; opacity: 0; }
+.session-list-row:hover .session-row-more, .session-list-row:focus-within .session-row-more, .session-row-more[aria-expanded="true"] { opacity: 1; }
+.session-row-more:hover { color: var(--ih-text); background: var(--ih-panel); }
+.session-row-more:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 1px; }
+.session-action-menu { position: fixed; z-index: 120; width: 242px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; padding: 5px; border: 1px solid var(--ih-divider); border-radius: 9px; background: var(--ih-panel); box-shadow: 0 12px 34px #0006; }
+.session-action-menu > button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 8px 9px; border: 0; border-radius: 5px; text-align: left; background: transparent; color: var(--ih-text); cursor: pointer; font-size: 12px; }
+.session-action-menu > button:hover:not(:disabled), .session-action-menu > button:focus-visible { outline: none; background: color-mix(in srgb, var(--ih-text) 8%, transparent); }
+.session-action-menu > button:disabled { opacity: .45; cursor: not-allowed; }
+.session-menu-separator { margin: 4px 6px; border-top: 1px solid var(--ih-divider); }
+.session-action-menu > p { padding: 4px 9px; margin: 3px 0; font-size: 12px; overflow-wrap: anywhere; }
+.session-archived-button { border: 0; background: transparent; color: var(--ih-muted); padding: 5px 10px; cursor: pointer; text-align: left; font-size: 12px; }
+.session-archived-button:hover { color: var(--ih-text); }
+.session-rename-backdrop { position: fixed; inset: 0; z-index: 125; display: grid; place-items: center; padding: 16px; background: #0008; }
+.session-rename-dialog { width: min(380px, calc(100vw - 32px)); padding: 20px; border: 1px solid var(--ih-divider); border-radius: 12px; background: var(--ih-bg); box-shadow: 0 16px 48px #0008; }
+.session-rename-dialog h2 { margin: 0 0 16px; font-size: 16px; }
+.session-rename-dialog label { display: grid; gap: 7px; color: var(--ih-muted); font-size: 12px; }
+.session-rename-dialog input { width: 100%; padding: 8px 10px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
+.session-rename-dialog input:focus { outline: 2px solid var(--ih-accent); outline-offset: 1px; }
+.session-rename-dialog .error-text { margin: 12px 0 0; overflow-wrap: anywhere; font-size: 12px; }
+.session-rename-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.session-rename-actions button { padding: 6px 12px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); cursor: pointer; font-size: 12px; }
+.session-rename-actions button:last-child { background: var(--ih-text); color: var(--ih-bg); }
+.session-rename-actions button:disabled { opacity: .45; cursor: not-allowed; }
+@media (hover: none) { .session-row-more { opacity: 1; } }
