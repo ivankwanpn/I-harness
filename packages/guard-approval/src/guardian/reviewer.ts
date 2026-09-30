@@ -183,7 +183,7 @@ export async function runGuardianReview(deps: GuardianReviewDeps, request: Guard
     table: deps.subagents.table,
     agents: deps.subagents.agents,
     forkTurns: "none",
-    ...(deps.childSessions !== undefined ? { childSessions: deps.childSessions } : {}),
+    ...(deps.childSessions !== undefined ? { childSessions: { ...deps.childSessions, origin: "approval-review" as const } } : {}),
   })
 
   let timer: ReturnType<typeof setTimeout> | undefined

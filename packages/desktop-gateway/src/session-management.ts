@@ -1,12 +1,12 @@
-import { forkSession, type SessionCoordinator } from "@i-harness/session-persistence"
+import { forkSession, type SessionCoordinator, type SessionMeta } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 
-export function createSessionManagement(coordinator: SessionCoordinator, service: SessionService) {
+export function createSessionManagement(coordinator: SessionCoordinator, service: SessionService, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async () => true) {
   return {
     async archived() {
       const rows = await Promise.all((await coordinator.list()).map(async (id) => {
         const profile = await coordinator.profile(id)
-        return profile.meta.archived ? { id, title: profile.meta.title, updatedAt: profile.updatedAt } : undefined
+        return profile.meta.archived && await visible(id, profile.meta) ? { id, title: profile.meta.title, updatedAt: profile.updatedAt } : undefined
       }))
       return rows.filter((row) => row !== undefined)
     },

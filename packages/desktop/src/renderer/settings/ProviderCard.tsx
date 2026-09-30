@@ -7,6 +7,7 @@ import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { ProviderDiscovery } from "./ProviderDiscovery.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SettingsDialog } from "./SettingsDialog.tsx"
+import { Button } from "../vendor/opencode/Button.tsx"
 
 export interface DirectoryRow extends EditableProvider {
   auth: { configured: boolean; writable?: boolean; source?: string }
@@ -46,7 +47,7 @@ export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: Direct
     else setConfirm(target)
   }
   return <div className="provider-card"><SettingsGroup>
-    <SettingsRow label={row.displayName} description={[row.id, row.protocol].filter(Boolean).join(" · ")} control={<span>{t(row.auth.configured ? "憑證已設定" : "憑證未設定")}</span>} />
+    <header className="provider-card-heading"><div><h3>{row.displayName}</h3><p className="muted">{row.id}</p></div><span className="provider-auth-badge" data-configured={row.auth.configured}>{t(row.auth.configured ? "憑證已設定" : "憑證未設定")}</span></header>
     <div className="provider-actions">
       <button disabled={busy} onClick={(event) => openEditor("provider", event.currentTarget)}>{t("編輯提供商")}</button>
       <button disabled={busy || row.auth.writable === false} onClick={() => { setKeyOpen(!keyOpen); setKey("") }}>{t("設定 API key")}</button>
@@ -54,7 +55,6 @@ export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: Direct
     </div>
     <div className="provider-connection-summary">
       <SettingsRow label={t("API 網址")} control={<code>{row.baseURL || t("未指定")}</code>} />
-      <SettingsRow label={t("通訊協定")} control={<span>{row.protocol || t("未指定")}</span>} />
     </div>
     {keyOpen ? <form className="provider-editor" onSubmit={(event) => { event.preventDefault(); run({ action: "key/set", id: row.id, value: key }, () => { setKey(""); setKeyOpen(false) }) }}>
       <label>API key<input type="password" autoComplete="off" required maxLength={16384} value={key} disabled={busy} onChange={(event) => setKey(event.target.value)} /></label>
@@ -66,9 +66,10 @@ export function ProviderCard({ row, onSave, bridge, workspaceId }: { row: Direct
       <ProviderEditor key={typeof editor === "string" ? editor : editor.id} id={row.id} provider={editor === "provider" ? row : undefined} model={typeof editor === "object" ? editor : undefined} newModel={editor === "new-model"} onSave={save} onClose={closeEditor} onBusyChange={setEditorBusy} />
     </SettingsDialog> : null}
     <section className="provider-models"><header><h3>{t("模型數量：{count}", { count: row.models.length })}</h3>
-      <button disabled={busy} onClick={(event) => openEditor("new-model", event.currentTarget)}><Plus size={15} aria-hidden="true" />{t("新增模型")}</button></header>
+      <Button variant="secondary" size="small" icon={<Plus size={15} />} disabled={busy} onClick={(event) => openEditor("new-model", event.currentTarget)}>{t("新增模型")}</Button></header>
       {row.models.map((model) => <div className="provider-model-row" key={model.id}>
         <div className="provider-model-name"><strong>{model.name || model.id}</strong>{model.name && model.name !== model.id ? <small>{model.id}</small> : null}</div>
+        {model.protocol || row.protocol ? <span className="provider-model-protocol" title={t("通訊協定")}>{model.protocol || row.protocol}</span> : null}
         {model.inputModalities?.includes("image") ? <span className="provider-model-vision" title={t("輸入類型")}>{t("圖片")}</span> : null}
         <span className="provider-model-context" title={`${t("上下文大小")}：${model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US").format(model.contextWindow)}`}>{model.contextWindow === undefined ? t("未指定") : new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 }).format(model.contextWindow)}</span>
         <div className="provider-model-actions"><button title={t("編輯模型")} aria-label={t("編輯模型")} disabled={busy} onClick={(event) => openEditor(model, event.currentTarget)}><Pencil size={15} /></button><button title={t("設為預設模型")} aria-label={t("設為預設模型")} aria-pressed={row.defaultModel === model.id} disabled={busy} onClick={() => run({ action: "default/set", id: row.id, model: model.id })}><Star size={15} /></button><button title={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} aria-label={t(confirm === `model:${model.id}` ? "確認移除模型" : "移除模型")} disabled={busy} onClick={() => remove(`model:${model.id}`, { action: "model/remove", id: row.id, model: model.id })}>{confirm === `model:${model.id}` ? t("確認移除模型") : <Trash2 size={15} />}</button></div>

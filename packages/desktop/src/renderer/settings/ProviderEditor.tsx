@@ -2,11 +2,12 @@ import { useRef, useState } from "react"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import { useText, type Message } from "../design/i18n.ts"
 
-export interface EditableModel { id: string; name?: string; contextWindow?: number; maxTokens?: number; protocol?: string; inputModalities?: ("text" | "image")[] }
+type ModelProtocol = NonNullable<Extract<ProviderCommand, { model: string; fields: unknown }>["fields"]["protocol"]>
+export interface EditableModel { id: string; name?: string; contextWindow?: number; maxTokens?: number; protocol?: ModelProtocol; inputModalities?: ("text" | "image")[] }
 export interface EditableProvider { id: string; displayName: string; baseURL?: string; modelsURL?: string; catalog?: string; apiKeyEnv?: string; protocol?: string; configured?: boolean }
 const protocols = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"]
 const modelFields = { name: "顯示名稱", contextWindow: "上下文大小", maxTokens: "最大輸出 Token", protocol: "通訊協定", inputModalities: "輸入類型" } as const
-const providerFields = { displayName: "顯示名稱", baseURL: "API 網址", modelsURL: "模型列表網址", catalog: "模型規格來源", apiKeyEnv: "API key 環境變數", protocol: "通訊協定" } as const
+const providerFields = { displayName: "顯示名稱", baseURL: "API 網址", modelsURL: "模型列表網址", catalog: "模型規格來源", apiKeyEnv: "API key 環境變數" } as const
 function fieldValue(key: string, value: unknown): string {
   if (key === "inputModalities" && Array.isArray(value)) {
     if (value.includes("text") && value.includes("image")) return "text,image"
@@ -36,7 +37,7 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
   const renderField = (key: string) => {
     const label = labels[key]!
     return <label key={key}>{t(label)}{key === "protocol"
-      ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select>
+      ? <select required={newModel} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select>
       : key === "inputModalities" ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option><option value="text">{t("僅文字")}</option><option value="text,image">{t("文字與圖片")}</option>{values[key] === "image" ? <option value="image" disabled>{t("僅圖片（舊設定）")}</option> : null}</select>
       : <input type={key === "contextWindow" || key === "maxTokens" ? "number" : "text"} min={1} step={1} maxLength={2048} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })} />}</label>
   }
@@ -64,7 +65,7 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
       <legend>{t(isModel ? existing ? "編輯模型" : "新增模型" : creatingProvider ? "新增提供商" : "編輯提供商")}</legend>
       <label>{t(isModel ? "模型 ID" : "提供商 ID")}<input required maxLength={isModel ? 256 : 128} value={identity} disabled={model !== undefined || provider !== undefined} onChange={(event) => setIdentity(event.target.value)} /></label>
       {creatingProvider ? <>
-        {["displayName", "baseURL", "protocol"].map(renderField)}
+        {["displayName", "baseURL"].map(renderField)}
         <details className="provider-advanced"><summary>{t("進階設定")}</summary>{["modelsURL", "catalog", "apiKeyEnv"].map(renderField)}</details>
       </> : Object.keys(labels).map(renderField)}
       <p className="muted">{t(editingBuiltIn ? "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。" : existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>

@@ -196,7 +196,7 @@ export interface AssemblyOptions {
   rewindStoreRoot?: string
   preset?: string // JSON AgentPreset text (@i-harness/preset): overrides the base system prompt
   planMode?: boolean // R-A7: plan-mode prompt fragment + exit_plan_mode tool
-  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean } // R-A9
+  guardian?: { policy?: string; timeoutMs?: number; model?: ModelClient; enabled?: () => boolean; fallbackToHumanOnFailure?: boolean; allowModelSelection?: boolean; execution?: "subagent" | "isolated" } // R-A9
   outputSpill?: OutputSpillGuardConfig // M26-B7: registry-level output spill
   session?: Session // M14: host-pre-seeded session (host owns durability)
   /** The session the sandbox policy resolution READS for `sandbox/mode` events.
@@ -1141,7 +1141,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // The gate travels with the resolver it gates (rule stated at the
         // registerSubagent chain above): THIS spawn site is role-carrying too.
         ...(opts.roleSelectionFor !== undefined ? { roleSelectionFor: opts.roleSelectionFor } : {}),
-        ...(opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.allowSubagentModelSelection } : {}),
+        ...(opts.guardian.allowModelSelection !== undefined || opts.allowSubagentModelSelection !== undefined ? { allowSubagentModelSelection: opts.guardian.allowModelSelection ?? opts.allowSubagentModelSelection } : {}),
         // M73: the same two numbers, with the same absent-stays-absent rule —
         // but this site passes them WITHOUT judging whether they apply: the
         // reviewer knows its own model precedence (`deps.model ??
@@ -1155,6 +1155,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         ...(opts.guardian.policy !== undefined ? { policyText: opts.guardian.policy } : {}),
         ...(opts.guardian.timeoutMs !== undefined ? { timeoutMs: opts.guardian.timeoutMs } : {}),
         ...(opts.guardian.enabled !== undefined ? { enabled: opts.guardian.enabled } : {}),
+        ...(opts.guardian.execution !== undefined ? { execution: opts.guardian.execution } : {}),
         ...(opts.guardian.fallbackToHumanOnFailure !== undefined ? { fallbackToHumanOnFailure: opts.guardian.fallbackToHumanOnFailure } : {}),
         ...(opts.coordinator !== undefined && opts.sessionId !== undefined
           ? {

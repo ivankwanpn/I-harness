@@ -200,7 +200,7 @@ function approvalArgumentsSummary(args: unknown): string {
 // human answerer for `ask` decisions: deny ⇒ fail-closed throw; approve ⇒
 // auto-approve (answerer skipped); allow ⇒ human answerer as before. Absent
 // service ⇒ behavior byte-identical to pre-R-A9.
-export interface GuardianRequest { name: string; reason: string; args: unknown }
+export interface GuardianRequest { name: string; reason: string; args: unknown; signal?: AbortSignal }
 export interface GuardianVerdict { outcome: "approve" | "allow" | "deny"; rationale: string }
 export type ApprovalGuardian = (req: GuardianRequest) => Promise<GuardianVerdict>
 
@@ -392,7 +392,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
         guardian = undefined
       }
       if (guardian) {
-        const verdict = await guardian({ name: call.name, reason: resolved.reason, args: call.args })
+        const verdict = await guardian({ name: call.name, reason: resolved.reason, args: call.args, ...(signal !== undefined ? { signal } : {}) })
         if (verdict.outcome === "deny") throw new Error(`guardian denied: ${verdict.rationale}`)
         if (verdict.outcome === "allow") await askHuman(resolved.reason)
       } else {

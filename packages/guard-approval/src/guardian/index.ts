@@ -3,11 +3,13 @@ import type { ApprovalGuardian, GuardianRequest, GuardianVerdict } from "@i-harn
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { GuardianBreaker, isGuardianBreakerState } from "./breaker.ts"
 import { runGuardianReview, type GuardianReviewDeps } from "./reviewer.ts"
+import { runIsolatedGuardianReview } from "./isolated-reviewer.ts"
 
 export { runGuardianReview, ensureReviewerRole, renderGuardianMessage, renderRecentContext, BUNDLED_GUARDIAN_POLICY, GUARDIAN_REVIEW_TIMEOUT_MS, GUARDIAN_REVIEWER_ROLE_NAME } from "./reviewer.ts"
 export type { GuardianReviewDeps } from "./reviewer.ts"
 
 export interface GuardianConfig extends GuardianReviewDeps {
+  execution?: "subagent" | "isolated"
   /** A mounted reviewer can be enabled without rebuilding an active Agent. */
   enabled?: () => boolean
   /** A failed reviewer may defer to the human instead of denying the tool. */
@@ -55,8 +57,9 @@ export async function registerGuardian(ctx: PluginContext, config: GuardianConfi
         : { outcome: "deny", rationale: "guardian circuit breaker open (3+ denials in the last 10 reviews)" }
     }
     let verdict: Awaited<ReturnType<typeof runGuardianReview>>
-    try { verdict = await runGuardianReview(config, request) }
+    try { verdict = await (config.execution === "isolated" ? runIsolatedGuardianReview(config, request) : runGuardianReview(config, request)) }
     catch (error) {
+      if (request.signal?.aborted) throw error
       if (config.fallbackToHumanOnFailure) return { outcome: "allow", rationale: `guardian could not start: ${error instanceof Error ? error.message : String(error)}; ask the human` }
       throw error
     }

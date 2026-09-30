@@ -1,5 +1,13 @@
 import { expect, it, vi } from "vitest"
 import { createProviderProbes } from "../src/provider-probes.ts"
+it("discovers with a model's declared protocol when the provider has no default", async () => {
+  const probeModels = vi.fn(async () => [{ id: "found" }])
+  const probes = createProviderProbes({ probeModels, directory: async () => [{ id: "p", displayName: "P", configured: true, auth: { configured: true, writable: true }, models: [{ id: "m", protocol: "anthropic-messages" }], discovery: "available", cardFamily: "p" }] })
+  try {
+    expect(await probes.start("p", "first")).toEqual([{ id: "found", protocol: "anthropic-messages" }])
+    expect(probeModels).toHaveBeenCalledWith("p", expect.objectContaining({ protocol: "anthropic-messages" }))
+  } finally { await probes.close() }
+})
 it("cancels only the matching attempt and drains probes on close", async () => {
   const probeModels = vi.fn((_id, options) => new Promise<never>((_resolve, reject) => {
     options.signal.addEventListener("abort", () => reject(new Error("cancelled")), { once: true })

@@ -2,6 +2,15 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "清除模型搜尋": "Clear model search",
+  "模型探索": "Model discovery", "探索模型": "Discover models", "探索中…": "Discovering…",
+  "從提供商取得可用模型，選取後加入列表。": "Get available models from the provider, then select models to add.",
+  "也可以使用新增模型，手動設定模型 ID 與協議。": "You can also add a model manually with its ID and protocol.",
+  "模型": "Model",
+  "任務子代理": "Task subagents",
+  "代審模型獨立於任務子代理開關；未指定時沿用主會話模型。變更會在下一次核準檢查生效。": "The reviewer model is independent of the task subagent switch. Unspecified uses the main conversation model. Changes apply at the next approval check.",
+  "檢查待核準的操作，無法執行工具。可選擇較便宜的模型。": "Reviews pending operations without executing tools. You can choose a cheaper model.",
+  "代審模型已儲存，下一次核準檢查會使用此設定。": "Reviewer model saved. The next approval check will use this setting.",
   "關閉對話框": "Close dialog",
   "關閉新增提供商": "Close add provider", "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。": "You can add models and an API key after creating the provider. Optional fields can be filled later.", "模型建成後仍可在列表編輯。": "You can edit the model after creating it.", "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。": "The first save creates custom settings for this built-in provider. You can edit them later.",
   "關閉角色設定": "Close role settings",

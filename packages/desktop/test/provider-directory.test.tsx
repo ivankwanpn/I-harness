@@ -33,11 +33,11 @@ it("selects the newly created provider after saving rather than returning to the
   fireEvent.change(screen.getByLabelText("提供商 ID"), { target: { value: "new-route" } })
   fireEvent.change(screen.getByLabelText("顯示名稱"), { target: { value: "New provider" } })
   fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
-  fireEvent.change(screen.getByLabelText("通訊協定"), { target: { value: "openai-completions" } })
+  expect(screen.queryByLabelText("通訊協定")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
   await waitFor(() => expect(screen.getByRole("button", { name: /New provider/ }).getAttribute("aria-current")).toBe("true"))
-  expect(request).toHaveBeenCalledWith({ kind: "desktop/provider/mutate", workspaceId: "w", command: { action: "provider/create", id: "new-route", fields: { displayName: "New provider", baseURL: "https://new.example/v1", protocol: "openai-completions" } } })
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/provider/mutate", workspaceId: "w", command: { action: "provider/create", id: "new-route", fields: { displayName: "New provider", baseURL: "https://new.example/v1" } } })
 })
 
 it("keeps a failed creation inside the dialog with the entered values", async () => {

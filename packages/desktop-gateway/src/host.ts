@@ -13,6 +13,7 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createConversationVisibility } from "./session-visibility.ts"
 import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
@@ -95,6 +96,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     lock: { enabled: true, lockRoot: options.sessionDir },
   })
   const compactionSignals = new Map<string, AbortSignal>()
+  const isConversation = createConversationVisibility(coordinator)
   const modelBindingFor: NonNullable<SessionServiceOptions["modelBindingFor"]> = async (sessionId, meta) => {
     const state = await runtime.resolveModel(meta?.modelSelection === undefined
       ? {}
@@ -135,7 +137,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sandbox: mode,
     allowRuntimeSandboxChanges: true,
     approvalMode: () => approvalMode,
-    guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true },
+    guardian: { policy: DESKTOP_GUARDIAN_POLICY, enabled: () => approvalMode === "delegate", fallbackToHumanOnFailure: true, allowModelSelection: true, execution: "isolated" },
     modelPolicy: "required",
     modelBindingFor,
     afterSuccessfulSubmit: async (sessionId, assembly, limits) => {
@@ -184,7 +186,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     workState: createDesktopWorkState(coordinator, service),
     plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
-    sessions: createSessionManagement(coordinator, service),
+    sessions: createSessionManagement(coordinator, service, isConversation),
     provider: runtime,
     memory,
     compact: async (sessionId, instructions, signal) => {
@@ -228,7 +230,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       const sessions = await Promise.all(ids.map(async (id) => {
         try {
           const { meta } = await coordinator.profile(id)
-          if (meta.archived) return undefined
+          if (meta.archived || !await isConversation(id, meta)) return undefined
           return { id, ...(meta.title === undefined ? {} : { title: meta.title }) }
         } catch {
           return { id }

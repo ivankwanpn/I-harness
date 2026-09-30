@@ -100,12 +100,12 @@ it("edits a custom provider connection in its detail card and retains failed cha
   fireEvent.click(trigger)
   const dialog = screen.getByRole("dialog", { name: "編輯提供商" })
   fireEvent.change(within(dialog).getByLabelText("API 網址"), { target: { value: "https://new.example/v1" } })
-  fireEvent.change(within(dialog).getByLabelText("通訊協定"), { target: { value: "anthropic-messages" } })
+  expect(within(dialog).queryByLabelText("通訊協定")).toBeNull()
   fireEvent.click(within(dialog).getByRole("button", { name: "儲存" }))
   expect(await within(dialog).findByText("offline")).toBeTruthy()
   expect((within(dialog).getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://new.example/v1")
   expect(save).toHaveBeenCalledWith({ action: "provider/edit", id: "p", fields: {
-    baseURL: "https://new.example/v1", protocol: "anthropic-messages",
+    baseURL: "https://new.example/v1",
   } })
   fireEvent.click(within(dialog).getByRole("button", { name: "儲存" }))
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
@@ -117,9 +117,11 @@ it("keeps input types in the model editor and out of the provider editor", () =>
   const save = vi.fn().mockResolvedValue(undefined)
   const view = render(<ProviderEditor id="p" provider={{ id: "p", displayName: "P", configured: true }} onSave={save} onClose={() => {}} />)
   expect(screen.queryByLabelText("輸入類型")).toBeNull()
+  expect(screen.queryByLabelText("通訊協定")).toBeNull()
   view.unmount()
   render(<ProviderEditor id="p" model={{ id: "m", inputModalities: ["text", "image"] }} onSave={save} onClose={() => {}} />)
   expect((screen.getByLabelText("輸入類型") as HTMLSelectElement).value).toBe("text,image")
+  expect(screen.getByLabelText("通訊協定")).toBeTruthy()
 })
 
 it("shows a legacy image-only model honestly while allowing a supported replacement", () => {

@@ -245,7 +245,7 @@ export interface SpawnOptions extends RoleModelHost {
   // M8: when present, the child session is durable — minted as child-<uuid>,
   // created through the coordinator with the lineage header, and mirrored to
   // the parent's write-behind coordinator.
-  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string }
+  childSessions?: { coordinator: SessionCoordinator; parentSessionId: string; origin?: "approval-review" }
   // M26-D1: settle callback — fires once when the initial run settles (the
   // task protocol's spawn record transitions on it). Additive: absent = today.
   onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void
@@ -325,7 +325,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       sessionId,
       parentSession: opts.childSessions.parentSessionId,
       seedLength: seedEvents.length,
-      origin: "subagent",
+      origin: opts.childSessions.origin ?? "subagent",
       // dsh: resolveChildDepth = delegationDepthOf(parent) + 1 — a child of a
       // top-level (depth 0) session is depth 1.
       delegationDepth: childDepth,
@@ -338,7 +338,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // with the inherited context (dsh: seed events live in the child log).
     for (const ev of seedEvents) append(childSession, { ...ev })
     // dsh parent+1 rule: same depth as the coordinator.create lineage above.
-    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
+    childSession.header = { parentSession: opts.childSessions.parentSessionId, seedLength: seedEvents.length, origin: opts.childSessions.origin ?? "subagent", delegationDepth: childDepth }
   } else {
     childSession = createSession()
     for (const ev of seedEvents) childSession.events.push({ ...ev })

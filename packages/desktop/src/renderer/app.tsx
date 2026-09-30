@@ -85,6 +85,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const chunkBuffer = useRef<WireEvent[]>([])
   const chunkFrame = useRef<number | undefined>(undefined)
   const selection = useRef({ workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+  const restoredSelections = useRef(new Map<string, { workspaceId: string | undefined; sessionId: string | undefined }>())
   if (selection.current.workspaceId !== selectedWorkspaceId || selection.current.sessionId !== selectedSessionId) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
   }
@@ -93,6 +94,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const modelRequest = useRef(0)
   const dashboardRequest = useRef(0)
   const dashboardApplied = useRef(0)
+  const reconciledWorkspaces = useRef(new Set<string>())
   const tasksRequest = useRef(0)
   const workStateRequest = useRef(0)
   const workspaceSelection = useRef({ workspaceId: selectedWorkspaceId })
@@ -214,6 +216,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setCapabilities({})
     setSandbox(undefined)
     setConnection((current) => current === "reconnecting" ? "reconnecting" : "connecting")
+    // Keep the first selection across failed bootstrap attempts and StrictMode
+    // effect replay. A retry may reconcile that restored selection, never a
+    // newer selection made by the user after the original attempt started.
+    const restoredSelection = restoredSelections.current.get(selectedWorkspaceId) ?? selection.current
+    restoredSelections.current.set(selectedWorkspaceId, restoredSelection)
     const dashboardVersion = ++dashboardRequest.current
     void (async () => {
       try {
@@ -225,7 +232,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (!active) return
         if (dashboardVersion >= dashboardApplied.current) {
           dashboardApplied.current = dashboardVersion
-          setDashboard(dashboardResult as SessionDashboardResult)
+          const initialDashboard = dashboardResult as SessionDashboardResult
+          setDashboard(initialDashboard)
+          if (!reconciledWorkspaces.current.has(selectedWorkspaceId)
+            && selection.current === restoredSelection && restoredSelection.sessionId
+            && !initialDashboard.listingUnavailable
+            && !initialDashboard.sessions.some((row) => row.id === restoredSelection.sessionId)) {
+            setSelectedSessionId(undefined)
+          }
+          if (!initialDashboard.listingUnavailable) reconciledWorkspaces.current.add(selectedWorkspaceId)
         }
         setCapabilities((capabilitiesResult ?? {}) as Record<string, string[]>)
         setSandbox(sandboxResult as SandboxState | undefined)

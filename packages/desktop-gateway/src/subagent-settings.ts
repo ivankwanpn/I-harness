@@ -27,7 +27,7 @@ function selection(value: unknown): Selection {
 }
 export function createSubagentSettings(path: string, effectiveEnabled: boolean) {
   function stateOf(settings: Settings): SubagentSettingsState {
-    const builtins = builtinRoles()
+    const builtins = [...builtinRoles(), { name: "reviewer", description: "Approval reviewer: assesses tool calls using its own selected model." }]
     const roles = settings.agents.roles
     return { enabled: settings.plugins.subagentModel, effectiveEnabled, restartRequired: settings.plugins.subagentModel !== effectiveEnabled,
       roles: [...new Set([...builtins.map((role) => role.name), ...Object.keys(roles)])].map((name) => ({ name, description: builtins.find((role) => role.name === name)?.description, ...(Object.hasOwn(roles, name) ? { selection: roles[name] } : {}) })) }

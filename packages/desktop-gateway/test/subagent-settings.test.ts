@@ -11,6 +11,7 @@ it("preserves independent role mappings and reads edits at the next selection", 
   const path = join(root, "settings.json")
   await writeFile(path, JSON.stringify({ plugins: { bash: false }, agents: { roles: { worker: { provider: "p", model: "worker" } } } }))
   const roles = createSubagentSettings(path, false)
+  expect((await roles.state()).roles).toContainEqual(expect.objectContaining({ name: "reviewer" }))
   await roles.mutate({ action: "role/set", role: "explore", selection: { provider: "p", model: "small", reasoningEffort: "low" } })
   expect(roles.selectionFor("explore")).toEqual({ provider: "p", model: "small", reasoningEffort: "low" })
   await roles.mutate({ action: "enable", enabled: true })

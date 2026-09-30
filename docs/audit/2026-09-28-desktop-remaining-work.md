@@ -1,5 +1,7 @@
 # Desktop remaining work inventory — 2026-09-28
 
+Reviewer isolation, independent reviewer model selection and the latest provider/subagent UI changes are recorded in [2026-09-30-reviewer-isolation-and-provider-ui.md](2026-09-30-reviewer-isolation-and-provider-ui.md). Its stop-point inventory supplements this older snapshot.
+
 This is the stop-point inventory after the terminal-selector change in `D:\frontend-test` on `codex/desktop-workbench`. The packaged Electron app and `D:\agent-complete\playground` were used for acceptance. `D:\I-harness-main` was not edited and nothing was pushed.
 
 ## Completed in the current local build

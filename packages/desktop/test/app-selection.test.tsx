@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, waitFor } from "@testing-library/react"
+import { StrictMode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 import type { WorkbenchProps } from "../src/renderer/shell/Workbench.tsx"
 import type { DesktopBridge, DesktopRequest } from "../src/shared/bridge.ts"
@@ -10,6 +11,35 @@ import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0 }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("clears a persisted selection that is no longer in the conversation list", async () => {
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
+  fixture(() => undefined)
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBeUndefined())
+})
+it("reconciles the restored selection when StrictMode replays the initial effect", async () => {
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
+  fixture(() => undefined, undefined, true)
+  await waitFor(() => expect(captured.props?.selectedSessionId).toBeUndefined())
+})
+it("does not clear a newer selection while the initial list was still loading", async () => {
+  const dashboard = defer()
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
+  fixture((request) => request.kind === "session/dashboard" ? dashboard.promise : undefined)
+  act(() => captured.props!.onSelectSession("a"))
+  await act(async () => { dashboard.resolve({ sessions: [] }); await dashboard.promise })
+  expect(captured.props?.selectedSessionId).toBe("a")
+})
+it("does not reconcile a later user selection when retrying an unavailable initial listing", async () => {
+  let reads = 0
+  useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
+  fixture((request) => request.kind === "session/dashboard" ? Promise.resolve(++reads === 1 ? { sessions: [], listingUnavailable: true } : { sessions: [] }) : undefined)
+  await waitFor(() => expect(captured.props?.connection).toBe("online"))
+  act(() => captured.props!.onSelectSession("a"))
+  act(() => captured.props!.onRetry!())
+  await waitFor(() => expect(reads).toBe(2))
+  await waitFor(() => expect(captured.props?.connection).toBe("online"))
+  expect(captured.props?.selectedSessionId).toBe("a")
+})
 it("recovers the selected unconfigured session after provider settings are saved", async () => {
   let configured = false
   fixture((request) => request.kind === "session/model/state" ? Promise.resolve(configured ? { status: "ready", providerId: "p", modelId: "m", label: "Configured" } : { status: "unconfigured", reason: "missing key" }) : undefined)
@@ -130,7 +160,7 @@ it("refreshes the model after leaving and returning during a pending switch", as
   await act(async () => { pending.resolve({ status: "ready", providerId: "p", modelId, label: modelId }); await switchJob })
   await waitFor(() => expect(captured.props!.conversation!.modelLabel).toBe("new"))
 })
-function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined, onEvent: DesktopBridge["onEvent"] = () => () => {}) {
+function fixture(override: (request: DesktopRequest) => Promise<unknown> | undefined, onEvent: DesktopBridge["onEvent"] = () => () => {}, strict = false) {
   const request = vi.fn(async (request: DesktopRequest): Promise<unknown> => {
     const custom = override(request)
     if (custom) return custom
@@ -146,7 +176,7 @@ function fixture(override: (request: DesktopRequest) => Promise<unknown> | undef
     }
   })
   const bridge: DesktopBridge = { request, onEvent }
-  render(<App bridge={bridge} />)
+  render(strict ? <StrictMode><App bridge={bridge} /></StrictMode> : <App bridge={bridge} />)
   return request
 }
 
