@@ -1,0 +1,26 @@
+.review-source-open { display: flex; gap: 6px; margin: 12px 0; }
+.review-source-open input { min-width: 0; flex: 1; }
+.review-source-open input, .review-commit textarea { box-sizing: border-box; border: 1px solid var(--ih-divider); border-radius: 7px; padding: 8px 10px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
+.review-source-open input:focus-visible, .review-commit textarea:focus-visible { outline: 1px solid var(--ih-accent); outline-offset: 1px; }
+.review-source-open button, .review-commit > button { border: 1px solid var(--ih-divider); border-radius: 7px; padding: 7px 10px; background: var(--ih-panel); color: var(--ih-text); font: inherit; cursor: pointer; }
+.review-source-open button:hover, .review-commit > button:hover { background: var(--ih-selected); }
+.review-commit > button { justify-self: end; }
+.review-view button:disabled { opacity: .45; cursor: default; }
+.review-file-actions { display: flex; justify-content: flex-end; gap: 10px; align-items: center; padding: 0 6px 4px; }
+.review-file-actions .row-meta { margin-right: auto; }
+.review-files .task-row { display: block; padding: 2px 0; }
+.review-mode-tabs { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+.review-mode-tabs .link-button { padding: 4px 8px; border-radius: 5px; }
+.review-mode-tabs [aria-current="true"] { background: var(--color-selected, var(--ih-surface-raised)); color: var(--ih-text); }
+.review-commit { display: grid; gap: 8px; border-top: 1px solid var(--ih-divider); padding-top: 12px; margin-top: 12px; }
+.review-commit label { display: grid; gap: 6px; font-size: 12px; }
+.review-commit textarea { min-height: 72px; resize: vertical; }
+.source-editor { min-width: 0; }
+.source-editor-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 6px 0; }
+.source-editor-toolbar .row-meta { margin-right: auto; }
+.source-editor-toolbar button { display: inline-flex; align-items: center; gap: 4px; }
+.source-editor-body { display: flex; overflow: hidden; height: 360px; max-height: 640px; min-height: 240px; resize: vertical; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-surface, transparent); }
+.source-editor-lines { flex-shrink: 0; overflow: hidden; height: 100%; padding: 8px 10px; color: var(--ih-muted); text-align: right; user-select: none; font: 12px/20px Consolas, monospace; border-right: 1px solid var(--ih-divider); box-sizing: border-box; }
+.source-editor-lines span { display: block; }
+.source-editor-body textarea { flex: 1; min-width: 0; height: 100%; border: 0; border-radius: 0; resize: none; padding: 8px; margin: 0; background: transparent; color: var(--ih-text); font: 12px/20px Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; box-sizing: border-box; }
+.source-editor-body textarea:focus-visible { outline: 1px solid var(--ih-accent); outline-offset: -1px; }

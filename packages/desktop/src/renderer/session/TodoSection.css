@@ -1,0 +1,16 @@
+.todo-heading .todo-add-button { display: inline-flex; align-items: center; gap: 3px; padding: 3px 5px; margin-left: auto; border: 0; border-radius: 5px; color: var(--ih-muted); background: transparent; font-size: 11px; cursor: pointer; }
+.todo-heading .todo-add-button:hover { color: var(--ih-text); background: var(--ih-panel); }
+.todo-row-editable { display: grid; grid-template-columns: 15px minmax(0, 1fr); column-gap: 8px; row-gap: 5px; }
+.todo-row-editable .todo-item-content { min-width: 0; }
+.todo-row-actions { display: flex; align-items: center; gap: 5px; grid-column: 2; }
+.todo-row-actions select { padding: 2px 4px; border: 1px solid var(--ih-divider); border-radius: 4px; color: var(--ih-muted); background: var(--ih-panel); font-size: 11px; }
+.todo-row-actions button { display: grid; place-items: center; padding: 4px; border: 0; border-radius: 4px; color: var(--ih-muted); background: transparent; cursor: pointer; }
+.todo-row-actions button:hover { color: var(--ih-text); background: var(--ih-panel); }
+.todo-row .todo-row-actions svg { margin: 0; color: inherit; }
+.todo-edit-form { display: grid; gap: 6px; margin-top: 10px; font-size: 12px; }
+.todo-edit-form label { color: var(--ih-muted); }
+.todo-edit-input { box-sizing: border-box; width: 100%; min-width: 0; padding: 7px 8px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: var(--ih-text); font: inherit; }
+.todo-edit-input:focus { outline: 1px solid var(--ih-accent); outline-offset: 1px; }
+.todo-edit-actions { display: flex; align-items: center; gap: 9px; }
+.todo-save-button { padding: 5px 8px; border: 1px solid var(--ih-divider); border-radius: 5px; color: var(--ih-text); background: var(--ih-panel); font: inherit; cursor: pointer; }
+.todo-section button:disabled, .todo-section select:disabled { opacity: .45; cursor: default; }

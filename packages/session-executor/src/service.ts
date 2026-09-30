@@ -157,7 +157,7 @@ export interface SessionService {
    * cross-session parallel. An aborted QUEUED submit never runs. REJECTS when
    * the session's turn lane failed (drain rejection → the host maps it to an
    * error frame). */
-  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string }): Promise<void>
+  submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void>
   assemblyFor(sessionId: string): Promise<SessionAssembly>
   /** Resolve serializable model state without constructing an assembly. */
   modelState(sessionId: string): Promise<SessionModelState>
@@ -252,6 +252,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     order: number
     controller: AbortController
     state: "wait" | "queued" | "running" | "cancelled"
+    scheduled?: boolean
   }
   interface SessionQueueState {
     byId: Map<string, QueueRowRecord>
@@ -476,7 +477,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
 
-  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string }): Promise<void> {
+  function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken
@@ -494,7 +495,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // semantics flow through: abort the caller's signal → controller aborts →
     // the queued gate settles, the in-flight engine copies abort).
     const st = sessionQueueState(sessionId)
-    const id = randomUUID()
+    const id = options?.admittedInputId ?? randomUUID()
+    if (st.byId.get(id)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === id) return Promise.reject(new Error("Input is already scheduled"))
     const controller = new AbortController()
     const record: QueueRowRecord = {
       id,
@@ -504,6 +506,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       order: st.nextOrder++,
       controller,
       state: "wait",
+      scheduled: true,
     }
     st.byId.set(id, record)
     const markFromCaller = (): void => {
@@ -549,9 +552,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           return
         }
         const lane = lanes.get(sessionId)!
+        let execution: Promise<void>
         try {
           await extensionRefreshes.get(sessionId)?.catch(() => undefined)
-          const prepared = opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
+          const prepared = !options?.admittedInputId && opts.transformPrompt ? await opts.transformPrompt(assembly, prompt) : prompt
           if (controller.signal.aborted || closed) { settle(); return }
           // M41b: the submit signal now rides INTO the lane — the agent's
           // run() gets it and aborts at step boundaries/yields (in-flight
@@ -559,7 +563,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // the row id is RETAINED through the lane (public id == lane input
           // id) so the projection merges service-front + lane rows by id.
           const text = context ? `${prepared}\n\n${context}` : prepared
-          lane.submit({ tier: "send", text, signal: controller.signal, ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) }, id)
+          if (options?.admittedInputId) {
+            const pending = assembly.inbox.pending().find((input) => input.inputId === id)
+            if (!pending) { settle(); return }
+            if (pending.text !== text) throw new Error("Admitted input does not match submitted text")
+            execution = lane.runAdmitted(id, controller.signal)
+          } else {
+            assembly.inbox.admit({ inputId: id, text, delivery: "queue", intent: "user", ...(images?.length ? { images } : {}), ...(clientToken ? { clientToken } : {}) })
+            execution = lane.runAdmitted(id, controller.signal)
+          }
           record.state = "queued"
         } catch (error) {
           // A synchronous lane failure still settles this turn.
@@ -573,7 +585,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         }
         // Lane drain: rejects on the first turn failure (A-plan semantics) —
         // the rejection becomes this submit's rejection (host error frame).
-        lane.drain().then(
+        execution.then(
           async () => {
             if (!closed && !controller.signal.aborted && opts.afterSuccessfulSubmit) {
               try {

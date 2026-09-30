@@ -15,12 +15,36 @@ export interface PendingInteraction {
   kind: InteractionDecision["kind"]
   payload: unknown
   openedAt: number
+  expiresAt?: number
+  /** Only a fresh live request owns a resolver. Restored cards save new input. */
+  state?: "interrupted"
+}
+
+export interface InteractionPersistence {
+  read(): PendingInteraction[]
+  write(rows: PendingInteraction[]): void
+}
+
+export interface InteractionRecoveryInput {
+  request: PendingInteraction
+  decision: InteractionDecision
+  inputId: string
+  text: string
+  signal: AbortSignal
+}
+
+export interface InteractionBridgeOptions {
+  approvalMode?: () => SettingsApprovalMode
+  persistence?: InteractionPersistence
+  /** Resolve only after idempotently admitting this stable inputId durably.
+   * This callback must not execute the old tool call or grant its permission. */
+  recover?: (input: InteractionRecoveryInput) => Promise<void>
 }
 
 export interface InteractionBridge {
   attach(assembly: SessionAssembly): void
   pending(sessionId?: string): PendingInteraction[]
-  reply(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true }
+  reply(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true } | Promise<{ accepted: true }>
   cancelSession(sessionId: string): void
   close(): void
 }
@@ -28,49 +52,96 @@ export interface InteractionBridge {
 interface WaitingRequest {
   view: PendingInteraction
   timer: ReturnType<typeof setTimeout>
-  settle: (decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed" | "cancelled") => void
+  settle?: (decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed" | "cancelled") => void
+  recovering?: AbortController
 }
 
 const REQUEST_LIFETIME_MS = 24 * 60 * 60 * 1000
 
-export function createInteractionBridge(emit: (frame: RpcNotification) => void, options: { approvalMode?: () => SettingsApprovalMode } = {}): InteractionBridge {
+export function createInteractionBridge(emit: (frame: RpcNotification) => void, options: InteractionBridgeOptions = {}): InteractionBridge {
   const waiting = new Map<string, WaitingRequest>()
   let closed = false
 
+  function snapshot(): PendingInteraction[] {
+    return [...waiting.values()].map((row) => structuredClone(row.view))
+  }
+
   function finish(row: WaitingRequest, decision: InteractionDecision | undefined, reason: "reply" | "expired" | "closed" | "cancelled"): void {
     if (waiting.get(row.view.requestId) !== row) return
+    // A successful reply/cancel is durable before its resolver or notification.
+    // Closing preserves snapshots: their async resolvers cannot survive restart.
+    if (reason !== "closed") options.persistence?.write(snapshot().filter((view) => view.requestId !== row.view.requestId))
     waiting.delete(row.view.requestId)
     clearTimeout(row.timer)
-    row.settle(decision, reason)
+    if (reason !== "reply") row.recovering?.abort(new Error(`interaction ${reason}`))
+    row.settle?.(decision, reason)
     try {
-      emit(makeNotification("desktop/interaction/closed", {
-        requestId: row.view.requestId,
-        sessionId: row.view.sessionId,
-        reason,
-      }))
+      if (reason === "closed" && options.persistence) {
+        // A saved card is still actionable as a new input. Keeping it visible
+        // also avoids a renderer closed-id tombstone hiding it on reconnect.
+        emit(makeNotification("desktop/interaction/request", { ...structuredClone(row.view), state: "interrupted" }))
+      } else {
+        emit(makeNotification("desktop/interaction/closed", {
+          requestId: row.view.requestId,
+          sessionId: row.view.sessionId,
+          reason,
+        }))
+      }
     } catch {
       // The decision has already settled. A broken client cannot reopen it.
     }
   }
 
+  function expiryTimer(row: WaitingRequest): ReturnType<typeof setTimeout> {
+    const timer = setTimeout(() => {
+      try { finish(row, undefined, "expired") }
+      catch (error) {
+        // Disk failure cannot extend a live permission request. The stored
+        // deadline also makes the leftover snapshot expire on next open.
+        waiting.delete(row.view.requestId)
+        row.recovering?.abort(new Error("interaction expired"))
+        row.settle?.(undefined, "expired")
+        console.warn("[desktop] interaction expiry could not be saved", error)
+      }
+    }, Math.max(0, (row.view.expiresAt ?? row.view.openedAt + REQUEST_LIFETIME_MS) - Date.now()))
+    timer.unref?.()
+    return timer
+  }
+
+  const saved = options.persistence?.read() ?? []
+  for (const view of saved) {
+    const expiresAt = view.expiresAt ?? view.openedAt + REQUEST_LIFETIME_MS
+    if (expiresAt <= Date.now()) continue
+    const row: WaitingRequest = {
+      view: { ...structuredClone(view), expiresAt, state: "interrupted" },
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
+    }
+    row.timer = expiryTimer(row)
+    waiting.set(view.requestId, row)
+  }
+  if (saved.length !== waiting.size) options.persistence?.write(snapshot())
+
   function enqueue(
     sessionId: string,
     kind: PendingInteraction["kind"],
     payload: ApprovalRequest | UserQuestion,
-    settle: WaitingRequest["settle"],
+    settle: NonNullable<WaitingRequest["settle"]>,
   ): void {
     if (closed) {
       settle(undefined, "closed")
       return
     }
-    const view: PendingInteraction = {
-      requestId: randomUUID(), sessionId, kind, payload: { ...payload }, openedAt: Date.now(),
-    }
+    const openedAt = Date.now()
+    const view: PendingInteraction = { requestId: randomUUID(), sessionId, kind, payload: structuredClone(payload), openedAt, expiresAt: openedAt + REQUEST_LIFETIME_MS }
     const row: WaitingRequest = {
       view,
-      timer: setTimeout(() => finish(row, undefined, "expired"), REQUEST_LIFETIME_MS),
+      timer: undefined as unknown as ReturnType<typeof setTimeout>,
       settle,
     }
+    // A failed write denies/rejects the request before anything is presented.
+    try { options.persistence?.write([...snapshot(), structuredClone(view)]) }
+    catch { settle(undefined, "closed"); return }
+    row.timer = expiryTimer(row)
     waiting.set(view.requestId, row)
     try {
       emit(makeNotification("desktop/interaction/request", view))
@@ -80,6 +151,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
   }
 
   function waitForApproval(sessionId: string, request: ApprovalRequest): Promise<{ approved: boolean }> {
+    if (closed) return Promise.resolve({ approved: false })
     // Full access is an explicit saved user setting; it applies to the approval
     // answerer as well as the tool guard, including per-call escalation asks.
     if (options.approvalMode?.() === "full-access") return Promise.resolve({ approved: true })
@@ -105,7 +177,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
     pending(sessionId) {
       return [...waiting.values()]
         .filter((row) => sessionId === undefined || row.view.sessionId === sessionId)
-        .map((row) => ({ ...row.view, payload: { ...(row.view.payload as object) } }))
+        .map((row) => structuredClone(row.view))
     },
     reply(input) {
       if (closed) throw new Error("interaction bridge closed")
@@ -118,6 +190,36 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       }
       if (input.decision.kind === "question" && typeof input.decision.answer !== "string") {
         throw new Error("question answer must be text")
+      }
+      if ((row.view.expiresAt ?? row.view.openedAt + REQUEST_LIFETIME_MS) <= Date.now()) {
+        finish(row, undefined, "expired")
+        throw new Error("interaction request expired")
+      }
+      if (row.view.state === "interrupted") {
+        if (row.recovering) throw new Error("interaction recovery already in progress")
+        if (input.decision.kind === "approval" && !input.decision.approved) {
+          finish(row, undefined, "cancelled")
+          return { accepted: true }
+        }
+        if (!options.recover) throw new Error("interrupted interaction recovery is unavailable")
+        const controller = new AbortController()
+        row.recovering = controller
+        let recovery: Promise<void>
+        try {
+          recovery = options.recover({
+            request: structuredClone(row.view), decision: { ...input.decision },
+            inputId: `interaction-recovery-${row.view.requestId}`,
+            text: recoveryText(row.view, input.decision), signal: controller.signal,
+          })
+        } catch (error) {
+          delete row.recovering
+          return Promise.reject(error)
+        }
+        return recovery.then(() => {
+          controller.signal.throwIfAborted()
+          finish(row, undefined, "reply")
+          return { accepted: true as const }
+        }).finally(() => { if (row.recovering === controller) delete row.recovering })
       }
       finish(row, input.decision, "reply")
       return { accepted: true }
@@ -133,4 +235,13 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       for (const row of [...waiting.values()]) finish(row, undefined, "closed")
     },
   }
+}
+
+function recoveryText(request: PendingInteraction, decision: InteractionDecision): string {
+  if (decision.kind === "question") {
+    const payload = request.payload as { prompt?: unknown }
+    const prompt = typeof payload?.prompt === "string" ? payload.prompt : "Interrupted question"
+    return `The conversation stopped while waiting for my answer. Continue using this answer to the interrupted question.\nQuestion: ${prompt}\nMy answer: ${decision.answer}`
+  }
+  return `The conversation stopped while waiting for permission for the operation below. Reassess whether it is still needed using the current workspace and permission settings. This request does not grant permission or authorize replay of the old tool call. Request fresh approval if the current policy requires it.\nInterrupted operation: ${JSON.stringify(request.payload)}`
 }

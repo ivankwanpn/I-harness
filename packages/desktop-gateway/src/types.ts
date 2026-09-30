@@ -17,6 +17,7 @@ import type { createDesktopMcp } from "./mcp-settings.ts"
 import type { createDesktopResources } from "./resources.ts"
 import type { createDesktopWorkflow } from "./workflow.ts"
 import type { createAgentShellSettings } from "./agent-shell.ts"
+import type { createDesktopInput } from "./input.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -25,6 +26,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  input?: ReturnType<typeof createDesktopInput>
   workflow?: ReturnType<typeof createDesktopWorkflow>
   agentShell?: ReturnType<typeof createAgentShellSettings>
   resources?: ReturnType<typeof createDesktopResources>

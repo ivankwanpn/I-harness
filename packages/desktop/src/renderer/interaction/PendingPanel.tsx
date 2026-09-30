@@ -67,7 +67,7 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
         {pending.map((row) => row.kind === "approval"
           ? (
             <li key={row.requestId} className="task-row">
-              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={busy[row.requestId] === true}
+              <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={busy[row.requestId] === true} interrupted={row.state === "interrupted"}
                 onConfirm={(approved) => { void reply(row, { kind: "approval", approved }) }} />
               {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
             </li>
@@ -76,7 +76,7 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
               const { prompt, options } = questionShape(row.payload, t("代理提出問題"))
               return (
                 <li key={row.requestId} className="task-row">
-                  <QuestionCard requestId={row.requestId} prompt={prompt} options={options} busy={busy[row.requestId] === true} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} />
+                  <QuestionCard requestId={row.requestId} prompt={prompt} options={options} busy={busy[row.requestId] === true} interrupted={row.state === "interrupted"} onAnswer={(answer) => { void reply(row, { kind: "question", answer }) }} />
                   {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
                 </li>
               )

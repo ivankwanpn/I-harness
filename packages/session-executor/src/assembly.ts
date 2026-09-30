@@ -19,7 +19,7 @@ import { agentShellPrompt, registerShell, type ShellRetentionOptions, type Resol
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
 import { registerWeb } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
-import { createTodoTool } from "@i-harness/todo"
+import { createTodoTool, renderTodoContext } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
 import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
@@ -1233,6 +1233,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       let text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
       if (derivePlanMode(session).active || opts.planMode && !session.events.some((event) => event.type === "plan/mode")) text += `\n\n${PLAN_MODE_SYSTEM_PROMPT}`
       if (opts.agentShell) { try { text += `\n\n${agentShellPrompt(opts.agentShell())}` } catch { text += "\n\nThe selected Agent shell is unavailable. Ask the user to repair its setting before shell execution." } }
+      const todoContext = renderTodoContext(session)
+      if (todoContext) text += `\n\n${todoContext}`
       if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
       return text
     }

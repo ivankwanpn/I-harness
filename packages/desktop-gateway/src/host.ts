@@ -36,6 +36,8 @@ import { resolveHookTrustPath } from "@i-harness/hooks"
 import { makeNotification, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
+import { createDesktopInput } from "./input.ts"
+import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
 
@@ -201,7 +203,20 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     outputSpill: {},
     compact: { auto: settings.get().compaction.auto },
   })
-  const interaction = createInteractionBridge(options.onWrite, { approvalMode: () => approvalMode })
+  const input = createDesktopInput(coordinator, service, {
+    prepare: async (id, text) => expandPluginPrompt(await service.assemblyFor(id), text),
+    onStatus: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })),
+  })
+  const interaction = createInteractionBridge(options.onWrite, {
+    approvalMode: () => approvalMode,
+    persistence: await openInteractionPersistence(options.sessionDir, options.workspace),
+    recover: async ({ request, inputId, text, signal }) => {
+      signal.throwIfAborted()
+      const admission = await input.admit(request.sessionId, { inputId, text, delivery: "queue", start: false })
+      if (signal.aborted) await input.cancel(request.sessionId, admission.inputId)
+      signal.throwIfAborted()
+    },
+  })
   const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
     onSandboxModeChanged(next) { service.updateSandboxMode(next); mode = next },
     onApprovalModeChanged(next) { approvalMode = next },
@@ -214,7 +229,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const handlers: DesktopHandlers = {
-    workflow, agentShell,
+    workflow, agentShell, input,
     resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
@@ -222,7 +237,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     agentSettings,
     terminal,
     schedules: createDesktopSchedules(coordinator, service),
-    workState: createDesktopWorkState(coordinator, service),
+    workState: createDesktopWorkState(coordinator, service, { sessionFor: async (id) => {
+      const state = await service.modelState(id)
+      return state.status === "ready" ? (await service.assemblyFor(id)).session : await createDurableSessionLoader(coordinator)(id)
+    } }),
     plugins,
     rewind: createDesktopRewind(options.sessionDir, options.workspace, coordinator, service),
     sessions: createSessionManagement(coordinator, service, isConversation),
@@ -302,6 +320,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       await stopPluginObserver()
       terminal.close()
       offInteraction()
+      await input.close()
       await router.close()
       await review.close()
       await workflow.close()

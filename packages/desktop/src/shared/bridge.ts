@@ -12,6 +12,9 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | { kind: "desktop/session/input/submit"; workspaceId: string; sessionId: string; text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string }
+  | { kind: "desktop/session/input/state" | "desktop/session/input/resume"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/session/input/cancel"; workspaceId: string; sessionId: string; inputId: string }
   | { kind: "desktop/agent-shell/state"; workspaceId: string }
   | { kind: "desktop/agent-shell/configure"; workspaceId: string; patch: { shell: import("@i-harness/desktop-gateway/src/agent-shell.ts").AgentShellOption["id"] } }
   | { kind: "desktop/session/workflow/read"; workspaceId: string; sessionId: string }
@@ -43,6 +46,7 @@ export type DesktopRequest =
   | { kind: "desktop/schedule/create"; workspaceId: string; sessionId: string; command: { prompt: string; after_seconds?: number; at?: string; every_seconds?: number } }
   | { kind: "desktop/schedule/delete"; workspaceId: string; sessionId: string; id: string }
   | { kind: "desktop/session/work-state"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/session/todo/write"; workspaceId: string; sessionId: string; input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput }
   | { kind: "desktop/plugins/state" | "desktop/plugins/commands" | "desktop/plugins/refresh"; workspaceId: string }
   | { kind: "desktop/plugins/mutate"; workspaceId: string; command: PluginCommand }
   | { kind: "desktop/rewind/points"; workspaceId: string; sessionId: string }
@@ -94,6 +98,9 @@ export type DesktopRequest =
   | { kind: "desktop/review/changes"; workspaceId: string }
   | { kind: "desktop/review/diff"; workspaceId: string; path: string; maxBytes?: number }
   | { kind: "desktop/review/file"; workspaceId: string; path: string; maxBytes?: number }
+  | { kind: "desktop/review/file/save"; workspaceId: string; path: string; text: string; expectedRevision: string }
+  | { kind: "desktop/review/stage" | "desktop/review/unstage"; workspaceId: string; path: string }
+  | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
 export type DesktopEvent =
   | {

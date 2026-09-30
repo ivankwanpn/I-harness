@@ -40,6 +40,7 @@ export interface ConversationView {
   rows: TimelineRow[]
   canSend: boolean
   sendReason?: string
+  executionError?: string
   running: boolean
   modelLabel?: string
   modelState?: SessionModelState
@@ -48,10 +49,14 @@ export interface ConversationView {
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
   queue?: SessionQueueItem[]
+  queueResumable?: boolean
+  onResumeQueue?(): Promise<void>
+  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
   tasks?: AgentTaskView[]
   workState?: DesktopWorkStateView
   workStateError?: string
   onRetryWorkState?(): void
+  onWriteTodos?(input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput): Promise<void>
   taskError?: string
   historyError?: string
   historyNotice?: string
@@ -64,6 +69,10 @@ export interface ConversationView {
 }
 
 export interface ReviewView {
+  onSaveFile?: import("../review/ReviewPane.tsx").ReviewPaneProps["onSaveFile"]
+  onStage?: import("../review/ReviewPane.tsx").ReviewPaneProps["onStage"]
+  onUnstage?: import("../review/ReviewPane.tsx").ReviewPaneProps["onUnstage"]
+  onCommit?: import("../review/ReviewPane.tsx").ReviewPaneProps["onCommit"]
   changes?: ReviewChanges
   error?: string
   selected?: { path: string; mode: "diff" | "preview" }
@@ -278,10 +287,13 @@ export function Workbench({
                   sessionId={selectedSessionId}
                   canSend={conversation.canSend}
                   sendReason={conversation.sendReason}
+                  executionError={conversation.executionError}
                   running={conversation.running}
                   modelLabel={conversation.modelLabel}
                   modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={conversation.onSetModel} /> : undefined}
                   onPrompt={conversation.onPrompt}
+                  steeringEnabled={capabilities["desktop-input"]?.includes("1")}
+                  onSteer={conversation.onSteer}
                   onCancel={conversation.onCancel}
                 />
                 </div>
@@ -322,6 +334,7 @@ export function Workbench({
         {workPaneTab === "reminders" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? <SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && !conversation.queue?.length && conversation.operation?.busy !== true} /> : null}
         {workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
+            key={selectedWorkspaceId}
             changes={review.changes}
             error={review.error}
             selected={review.selected}
@@ -329,6 +342,10 @@ export function Workbench({
             preview={review.preview}
             onSelect={review.onSelect}
             onRefresh={review.onRefresh}
+            onSaveFile={review.onSaveFile}
+            onStage={review.onStage}
+            onUnstage={review.onUnstage}
+            onCommit={review.onCommit}
           />
         )}
         {workPaneTab !== "tasks" || conversation === undefined ? null : (
@@ -340,9 +357,12 @@ export function Workbench({
             workState={conversation.workState}
             workStateError={conversation.workStateError}
             onRetryWorkState={conversation.onRetryWorkState}
+            onWriteTodos={conversation.onWriteTodos}
             error={conversation.taskError}
             onCancelTask={conversation.onCancelTask}
             onCancelQueue={conversation.onCancelQueue}
+            queueResumable={conversation.queueResumable}
+            onResumeQueue={conversation.onResumeQueue}
           />
         )}
         {workPaneTab === "changes" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}

@@ -5,6 +5,8 @@ export interface PendingInteraction {
   kind: "approval" | "question"
   payload: unknown
   openedAt: number
+  expiresAt?: number
+  state?: "interrupted"
 }
 
 export function upsertPending(list: PendingInteraction[], view: PendingInteraction): PendingInteraction[] {

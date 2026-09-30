@@ -29,6 +29,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
     if (handlers.resources) capabilities["desktop-resources"] = ["1"]
@@ -150,6 +151,26 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (message.method.startsWith("desktop/session/input/") && handlers.input) {
+        const params = asRecord(message.params)
+        const sessionId = params?.sessionId
+        if (typeof sessionId !== "string" || !sessionId || sessionId.length > 128) { send(makeFailure(message.id, INVALID_PARAMS, "Invalid session")); return }
+        if (compacting.has(sessionId) || modelSwitches.has(sessionId)) { send(makeFailure(message.id, INVALID_REQUEST, "Session is busy")); return }
+        try {
+          const operation = message.method.slice("desktop/session/input/".length)
+          let result: unknown
+          if (operation === "submit") {
+            if (typeof params?.text !== "string" || !["queue", "steer"].includes(String(params.delivery))) throw new Error("Invalid input")
+            result = await handlers.input.admit(sessionId, { text: params.text, delivery: params.delivery as "queue" | "steer", ...(params.context !== undefined ? { context: params.context as string } : {}), ...(params.images !== undefined ? { images: params.images as never } : {}), ...(params.clientToken !== undefined ? { clientToken: params.clientToken as string } : {}) })
+          } else if (operation === "state") result = await handlers.input.state(sessionId)
+          else if (operation === "resume") result = await handlers.input.resume(sessionId)
+          else if (operation === "cancel" && typeof params?.inputId === "string") result = await handlers.input.cancel(sessionId, params.inputId)
+          else throw new Error("Invalid input operation")
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+
       if ((message.method === "desktop/agent-shell/state" || message.method === "desktop/agent-shell/configure") && handlers.agentShell) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentShell.state() : await handlers.agentShell.configure(asRecord(message.params)?.patch))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
@@ -266,13 +287,13 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         } finally { if (message.method !== "desktop/schedule/list") modelSwitches.delete(sessionId) }
         return
       }
-      if (message.method === "desktop/session/work-state" && handlers.workState) {
+      if ((message.method === "desktop/session/work-state" || message.method === "desktop/session/todo/write") && handlers.workState) {
         const params = asRecord(message.params)
         const sessionId = params?.sessionId
-        if (!params || Object.keys(params).some((key) => key !== "sessionId") || typeof sessionId !== "string" || !sessionId || sessionId.length > 128) {
+        if (!params || Object.keys(params).some((key) => !["sessionId", ...(message.method.endsWith("/write") ? ["input"] : [])].includes(key)) || typeof sessionId !== "string" || !sessionId || sessionId.length > 128) {
           send(makeFailure(message.id, INVALID_PARAMS, "Invalid work-state session")); return
         }
-        try { send(makeSuccess(message.id, await handlers.workState.read(sessionId))) }
+        try { send(makeSuccess(message.id, message.method.endsWith("/write") ? await handlers.workState.writeTodos(sessionId, params.input as never) : await handlers.workState.read(sessionId))) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
         return
       }
@@ -412,7 +433,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           return
         }
         try {
-          const reply = handlers.interaction.reply({
+          const reply = await handlers.interaction.reply({
             requestId: params.requestId,
             sessionId: params.sessionId,
             decision: decision.kind === "approval"
@@ -426,6 +447,24 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/review/file/save", "desktop/review/stage", "desktop/review/unstage", "desktop/review/commit"].includes(message.method) && handlers.review) {
+        const params = asRecord(message.params)
+        try {
+          let result: unknown
+          if (message.method.endsWith("/commit")) {
+            if (typeof params?.message !== "string" || !params.message.trim() || params.message.length > 4096) throw new Error("Invalid commit message")
+            result = await handlers.review.commit(params.message)
+          } else {
+            if (typeof params?.path !== "string" || !params.path) throw new Error("Invalid file path")
+            if (message.method.endsWith("/save")) {
+              if (typeof params.text !== "string" || typeof params.expectedRevision !== "string") throw new Error("Invalid file edit")
+              result = await handlers.review.saveFile(params.path, params.text, params.expectedRevision)
+            } else result = message.method.endsWith("/unstage") ? await handlers.review.unstage(params.path) : await handlers.review.stage(params.path)
+          }
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (message.method === "desktop/review/changes" && handlers.review !== undefined) {
         try {
           send(makeSuccess(message.id, await handlers.review.changes()))

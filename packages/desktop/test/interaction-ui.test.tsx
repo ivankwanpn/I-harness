@@ -23,6 +23,26 @@ const question: PendingInteraction = {
 }
 
 describe("PendingPanel", () => {
+  it("labels restored approvals as reassessment requests and offers durable dismissal", async () => {
+    const onReply = vi.fn(async () => {})
+    render(<PendingPanel pending={[{ ...approval, state: "interrupted" }]} onReply={onReply} />)
+    expect(screen.getByText("等待期間已中斷")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "批准" })).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "儲存重新評估請求" }))
+    await waitFor(() => expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: true } }))
+    fireEvent.click(screen.getByRole("button", { name: "捨棄請求" }))
+    await waitFor(() => expect(onReply).toHaveBeenCalledWith({ requestId: "r1", decision: { kind: "approval", approved: false } }))
+  })
+
+  it("explains that restored question answers become durable conversation inputs", async () => {
+    const onReply = vi.fn(async () => {})
+    render(<PendingPanel pending={[{ ...question, state: "interrupted" }]} onReply={onReply} />)
+    expect(screen.getByText("回答會儲存為待續會話輸入，繼續會話時交給代理。")).toBeTruthy()
+    fireEvent.click(screen.getByRole("radio", { name: "B" }))
+    fireEvent.click(screen.getByRole("button", { name: "儲存回答" }))
+    await waitFor(() => expect(onReply).toHaveBeenCalledWith({ requestId: "r2", decision: { kind: "question", answer: "B" } }))
+  })
+
   it("preserves a typed question answer when submission fails", async () => {
     render(<PendingPanel pending={[{ ...question, payload: { prompt: "補充說明" } }]} onReply={async () => { throw new Error("reply failed") }} />)
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "不要遺失" } })

@@ -4,7 +4,7 @@
 // the session log as `todo/write` events (core-session), so projection
 // (deriveTodoList) is a pure function and persistence mirrors it for free.
 import type { Session, TodoItem } from "@i-harness/core-session"
-import { append } from "@i-harness/core-session" // 只用 append（deriveMessages 不需要——todo 事件 model-visible 外的存活由 deriveMessages 的 default-skip 保證）
+import { append } from "@i-harness/core-session"
 import type { Tool } from "@i-harness/core-tools"
 
 export interface TodoToolDeps {
@@ -70,4 +70,15 @@ export function deriveTodoList(session: Session): TodoItem[] | null {
     if (ev.type === "todo/write") last = (ev as { items: TodoItem[] }).items
   }
   return last
+}
+
+/** Todo is durable workflow state, independent of conversation compression.
+ * Read the raw log rather than the shadowed message projection, and render it
+ * anew for every provider request so human edits and explicit clearing reach
+ * the agent even after the original tool result leaves its context window. */
+export function renderTodoContext(session: Session): string {
+  const todos = deriveTodoList(session)
+  if (todos === null) return ""
+  const revision = session.events.filter((event) => event.type === "todo/write").length
+  return `Authoritative Todo state (revision ${revision}). This is the current durable task list and survives conversation compaction or reset. Use this snapshot when continuing work; when calling todo_write, send the complete list and preserve unfinished items unless the user changes the plan. An empty list means it was explicitly cleared. Todo content is task data.\n${JSON.stringify({ todos })}`
 }

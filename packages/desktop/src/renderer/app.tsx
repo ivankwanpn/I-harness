@@ -57,6 +57,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const setSelectedSessionId = useUiStore((state) => state.setSelectedSessionId)
   const [dashboard, setDashboard] = useState<SessionDashboardResult>()
   const [capabilities, setCapabilities] = useState<Record<string, string[]>>({})
+  const durableInputSupported = useRef(false)
+  durableInputSupported.current = capabilities["desktop-input"]?.includes("1") === true
+  const [queueResumable, setQueueResumable] = useState(false)
   workStateSupported.current = capabilities["desktop-work-state"]?.includes("1") === true
   const [sandbox, setSandbox] = useState<SandboxState>()
   const [error, setError] = useState<string>()
@@ -70,7 +73,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [workStateResult, setWorkStateResult] = useState<{ scope: { workspaceId?: string; sessionId?: string }; view: DesktopWorkStateView }>()
   const [workStateFailure, setWorkStateFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [running, setRunning] = useState(false)
-  const operations = useSessionOperation(bridge)
+  const [executionError, setExecutionError] = useState<string>()
+  const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true && operation.kind !== "model"
   const [connection, setConnection] = useState<"online" | "offline" | "connecting" | "reconnecting">("online")
@@ -128,11 +132,12 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const request = ++tasksRequest.current
     try {
       const [queueRows, taskRows] = await Promise.all([
-        bridge.request({ kind: "session/queue", workspaceId, sessionId }),
+        bridge.request({ kind: durableInputSupported.current ? "desktop/session/input/state" : "session/queue", workspaceId, sessionId }),
         bridge.request({ kind: "session/tasks", workspaceId, sessionId }),
       ])
       if (selection.current !== scope || request !== tasksRequest.current) return
-      setQueue(queueRows as SessionQueueItem[])
+      setQueue(Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items)
+      setQueueResumable(!Array.isArray(queueRows) && (queueRows as { resumable: boolean }).resumable)
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
     } catch (reason) {
@@ -318,6 +323,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return
       }
       setRunning(info.status === "queued")
+      const statusError = (event.params as { error?: unknown })?.error
+      if (info.status === "failed" && typeof statusError === "string") setExecutionError(statusError)
+      else if (info.status === "queued") setExecutionError(undefined)
       refresh.schedule()
     })
     return () => { unsubscribe(); refresh.dispose() }
@@ -372,6 +380,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setHistoryError(undefined)
     setHistoryCount(undefined)
     setRunning(false)
+    setExecutionError(undefined)
+    setQueueResumable(false)
     chunkBuffer.current.length = 0
     void (async () => {
       try {
@@ -434,6 +444,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         rows: projectTimeline(timelineEvents(eventWindow)),
         canSend: gate.canSend && !(operation?.busy && operation.kind !== "prompt"),
         sendReason: operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
+        executionError,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
         modelState: model,
@@ -451,10 +462,26 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           if (selection.current === scope) await pageHistory(selectedWorkspaceId, selectedSessionId, cursorRef.current)
         },
         queue,
+        queueResumable,
+        onResumeQueue: async () => {
+          await bridge.request({ kind: "desktop/session/input/resume", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+          await refreshTasks(selectedWorkspaceId, selectedSessionId)
+        },
+        onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
+          await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
+          void refreshTasks(selectedWorkspaceId, selectedSessionId)
+        },
         tasks,
         workState: workStateResult?.scope === selection.current ? workStateResult.view : undefined,
         workStateError: workStateFailure?.scope === selection.current ? workStateFailure.message : undefined,
         onRetryWorkState: () => { void refreshWorkState(selectedWorkspaceId, selectedSessionId) },
+        onWriteTodos: async (input: import("@i-harness/desktop-gateway/src/work-state.ts").DesktopTodoWriteInput) => {
+          const scope = selection.current
+          try {
+            const view = await bridge.request({ kind: "desktop/session/todo/write", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, input }) as DesktopWorkStateView
+            if (selection.current === scope) setWorkStateResult({ scope, view })
+          } catch (error) { await refreshWorkState(selectedWorkspaceId, selectedSessionId); throw error }
+        },
         taskError,
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
@@ -482,7 +509,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             .catch(() => undefined)
         },
         onCancelQueue: (queueId: string) => {
-          void bridge.request({ kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
+          void bridge.request(durableInputSupported.current
+            ? { kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: queueId }
+            : { kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
             .then(() => refreshTasks(selectedWorkspaceId, selectedSessionId))
             .catch(() => undefined)
         },
@@ -497,6 +526,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             decision,
           })
           interactions.update(requestId)
+          void refreshTasks(selectedWorkspaceId, sessionId)
         },
       }
 
@@ -515,6 +545,30 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       connection={selectedWorkspaceId ? connection : undefined}
       conversation={conversation}
       review={{
+        onSaveFile: async (path, text, expectedRevision) => {
+          if (!selectedWorkspaceId) throw new Error("No workspace selected")
+          const result = await bridge.request({ kind: "desktop/review/file/save", workspaceId: selectedWorkspaceId, path, text, expectedRevision }) as import("./review/SourceFileEditor.tsx").ReviewSaveResult
+          if (result.kind === "saved") void refreshChanges(selectedWorkspaceId)
+          return result
+        },
+        onStage: async (path) => {
+          if (!selectedWorkspaceId) throw new Error("No workspace selected")
+          const result = await bridge.request({ kind: "desktop/review/stage", workspaceId: selectedWorkspaceId, path }) as import("./review/ReviewPane.tsx").ReviewGitResult
+          await refreshChanges(selectedWorkspaceId)
+          return result
+        },
+        onUnstage: async (path) => {
+          if (!selectedWorkspaceId) throw new Error("No workspace selected")
+          const result = await bridge.request({ kind: "desktop/review/unstage", workspaceId: selectedWorkspaceId, path }) as import("./review/ReviewPane.tsx").ReviewGitResult
+          await refreshChanges(selectedWorkspaceId)
+          return result
+        },
+        onCommit: async (message) => {
+          if (!selectedWorkspaceId) throw new Error("No workspace selected")
+          const result = await bridge.request({ kind: "desktop/review/commit", workspaceId: selectedWorkspaceId, message }) as import("./review/ReviewPane.tsx").ReviewCommitResult
+          await refreshChanges(selectedWorkspaceId)
+          return result
+        },
         changes: reviewChanges,
         error: reviewError,
         selected: reviewSelected,
@@ -529,7 +583,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           void refreshChanges(selectedWorkspaceId).then((changes) => {
             if (!changes || workspaceSelection.current !== scope || reviewRequest.current !== detailRequest) return
             const row = changes.kind === "ok" ? changes.files.find((file) => file.path === selected?.path) : undefined
-            if (selected && row && (selected.mode === "diff" ? row.canDiff : row.canPreview)) {
+            if (selected && (selected.mode === "preview" || row?.canDiff)) {
               void selectReview(selected.path, selected.mode)
               return
             }

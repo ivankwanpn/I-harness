@@ -151,10 +151,12 @@ export async function dispatchDesktopRequest(
       if (!runtime.info.capabilities["session-context"]?.includes("1")) throw new Error("Session context is unavailable")
       return await runtime.client.request("session/context", { sessionId })
     }
+    case "desktop/session/input/submit":
     case "session/prompt": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
-      const prompt = requireNonEmpty(value.prompt, "prompt")
+      const prompt = requireNonEmpty(value.kind === "session/prompt" ? value.prompt : value.text, "prompt")
+      if (value.kind === "desktop/session/input/submit" && value.delivery !== "queue" && value.delivery !== "steer") throw new Error("Invalid input delivery")
       if (value.context !== undefined && (typeof value.context !== "string" || value.context.length > 131072)) throw new Error("Invalid prompt context")
       if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid prompt client token")
       if (value.images !== undefined && (!Array.isArray(value.images) || value.images.length > 10)) throw new Error("Invalid prompt images")
@@ -162,13 +164,20 @@ export async function dispatchDesktopRequest(
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
       if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
       if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
-      return await runtime.client.request("session/prompt", {
+      return await runtime.client.request(value.kind === "session/prompt" ? "session/prompt" : "desktop/session/input/submit", {
         sessionId,
-        prompt,
+        ...(value.kind === "session/prompt" ? { prompt } : { text: prompt, delivery: value.delivery }),
         ...(value.context !== undefined ? { context: value.context } : {}),
         ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
         ...(value.images?.length ? { images: value.images } : {}),
       }, 24 * 60 * 60 * 1000)
+    }
+    case "desktop/session/input/state":
+    case "desktop/session/input/resume":
+    case "desktop/session/input/cancel": {
+      const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+      if (!runtime.info.capabilities["desktop-input"]?.includes("1")) throw new Error("Durable input is not supported by this gateway")
+      return await runtime.client.request(value.kind, { sessionId: requireNonEmpty(value.sessionId, "sessionId"), ...(value.kind === "desktop/session/input/cancel" ? { inputId: requireNonEmpty(value.inputId, "inputId") } : {}) })
     }
     case "session/cancel":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.cancel(requireNonEmpty(value.sessionId, "sessionId"))
@@ -272,12 +281,22 @@ export async function dispatchDesktopRequest(
       if (value.kind === "desktop/session/job/output") params.id = requireNonEmpty(value.id, "id")
       return runtime.client.request(value.kind, params, 600000)
     }
+    case "desktop/session/todo/write":
     case "desktop/session/work-state": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const sessionId = requireNonEmpty(value.sessionId, "sessionId")
       if (sessionId.length > 128) throw new Error("invalid work state session")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       if (!runtime.info.capabilities["desktop-work-state"]?.includes("1")) throw new Error("Desktop work state unavailable")
+      if (value.kind === "desktop/session/todo/write") {
+        const input = requireRecord(value.input)
+        if (!Number.isSafeInteger(input.expectedRevision) || Number(input.expectedRevision) < 0 || !Array.isArray(input.items) || input.items.length > 200) throw new Error("Invalid Todo snapshot")
+        for (const row of input.items) {
+          const item = requireRecord(row)
+          if (typeof item.content !== "string" || !item.content.trim() || item.content.length > 4096 || !["pending", "in_progress", "completed"].includes(String(item.status))) throw new Error("Invalid Todo item")
+        }
+        return runtime.client.request(value.kind, { sessionId, input })
+      }
       return runtime.client.request(value.kind, { sessionId })
     }
     case "desktop/plugins/mutate": {
@@ -331,6 +350,24 @@ export async function dispatchDesktopRequest(
           ? { kind: "approval", approved: record.approved as boolean }
           : { kind: "question", answer: record.answer as string },
       })
+    }
+    case "desktop/review/file/save":
+    case "desktop/review/stage":
+    case "desktop/review/unstage":
+    case "desktop/review/commit": {
+      const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+      if (!runtime.info.capabilities["desktop-review"]?.includes("1")) throw new Error("Review is unavailable")
+      if (value.kind === "desktop/review/commit") {
+        const message = requireNonEmpty(value.message, "commit message")
+        if (message.length > 4096 || message.includes("\0")) throw new Error("Invalid commit message")
+        return await runtime.client.request(value.kind, { message }, 120000)
+      }
+      const path = requireNonEmpty(value.path, "path")
+      if (value.kind === "desktop/review/file/save") {
+        if (typeof value.text !== "string" || Buffer.byteLength(value.text, "utf8") > 1024 * 1024 || typeof value.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedRevision)) throw new Error("Invalid file edit")
+        return await runtime.client.request(value.kind, { path, text: value.text, expectedRevision: value.expectedRevision })
+      }
+      return await runtime.client.request(value.kind, { path })
     }
     case "desktop/review/changes":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.request("desktop/review/changes", {})

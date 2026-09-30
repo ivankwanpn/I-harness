@@ -80,6 +80,7 @@ export interface ComposerProps {
   sessionId: string
   canSend: boolean
   sendReason?: string
+  executionError?: string
   running: boolean
   modelLabel?: string
   modelControl?: ReactNode
@@ -89,6 +90,8 @@ export interface ComposerProps {
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
   onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
+  steeringEnabled?: boolean
+  onSteer?(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
   onCancel(): void
 }
 
@@ -102,9 +105,12 @@ function SessionComposer({
   sessionId,
   canSend,
   sendReason,
+  executionError,
   running,
   modelLabel,
   modelControl,
+  steeringEnabled = false,
+  onSteer,
   fileReferencesEnabled = false,
   imageAttachmentsEnabled = false,
   contextUsageEnabled = false,
@@ -153,6 +159,7 @@ function SessionComposer({
     if (!sending) setValue(readDraft(workspaceId, sessionId))
   }, [sending, workspaceId, sessionId])
 
+  const [delivery, setDelivery] = useState<"queue" | "steer">("queue")
   async function send(): Promise<void> {
     const text = value
     if (!canSend || readingImages || (text.trim() === "" && references.length === 0 && images.length === 0) || sends.get(key)?.sending) return
@@ -179,7 +186,8 @@ function SessionComposer({
         const sentIds = images.map((image) => image.id).join(",")
         if (readImageDrafts(workspaceId, sessionId).map((image) => image.id).join(",") === sentIds) writeImageDrafts(workspaceId, sessionId, [])
       }
-      await onPrompt(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
+      const dispatch = delivery === "steer" && onSteer ? onSteer : onPrompt
+      await dispatch(prompt, context, images.length ? images.map(({ id: _id, ...image }) => image) : undefined, clearAccepted)
       // A successful request is accepted even if its notification was missed.
       clearAccepted()
       publishSend(key, idleSend)
@@ -190,7 +198,7 @@ function SessionComposer({
   }
 
   return (
-    <ComposerSurface onSubmit={() => { void send() }} error={error ?? (!canSend ? sendReason : undefined)}
+    <ComposerSurface onSubmit={() => { void send() }} error={error ?? executionError ?? (!canSend ? sendReason : undefined)}
       editor={
       <>
       {references.length ? <div className="composer-file-references">{references.map((path) => <span key={path} className="composer-file-chip" title={path}><span>{path}</span><button type="button" aria-label={t("移除檔案引用 {path}", { path })} onClick={() => writeFileReferences(workspaceId, sessionId, references.filter((value) => value !== path))}><X size={12} /></button></span>)}</div> : null}
@@ -227,6 +235,7 @@ function SessionComposer({
         <>{bridge && fileReferencesEnabled ? <button type="button" className="icon-button" aria-label={t("引用工作區檔案")} title={t("引用工作區檔案")} disabled={picking} onClick={() => { void pickFiles() }}><Paperclip size={17} /></button> : null}{imageAttachmentsEnabled ? <><input ref={imageInputRef} className="visually-hidden" aria-label={t("選擇圖片")} type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.target.value = "" }} /><button type="button" className="icon-button" aria-label={t("附加圖片")} disabled={readingImages} onClick={() => imageInputRef.current?.click()}><ImagePlus size={17} /></button></> : null}<span className="composer-hint">{t("Enter 送出，Shift+Enter 換行")}</span></>
       }
       trailingActions={<>
+        {steeringEnabled && running ? <select aria-label={t("輸入處理方式")} value={delivery} onChange={(event) => setDelivery(event.target.value as "queue" | "steer")}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("補充本輪")}</option></select> : null}
         {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
         <button type="submit" className="composer-send" aria-label={t("送出")} title={t("送出")} disabled={!canSend || sending || readingImages || (value.trim() === "" && references.length === 0 && images.length === 0)}>

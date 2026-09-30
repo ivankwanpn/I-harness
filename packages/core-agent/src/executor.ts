@@ -30,6 +30,8 @@ export interface SessionExecutor {
    * and lane rows by the same public id and cancel by it. Absent → a fresh id
    * is generated (pre-M49 behavior). */
   submit(input: InputSubmit, inputId?: string): { inputId: string }
+  /** Execute exactly one durable pending input; no duplicate admission. */
+  runAdmitted(inputId: string, signal?: AbortSignal): Promise<void>
   cancel(inputId: string): { cancelled: boolean }
   cancelCurrent?(): { cancelled: boolean }
   pending(): PendingInput[]
@@ -88,19 +90,25 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   // M41b: per-submit signals ride in by inputId (the FIFO may hold several).
   const turnSignals = new Map<string, AbortSignal>()
 
-  function pump(): Promise<void> {
+  function pump(onlyId?: string): Promise<void> {
     chain = chain.then(async () => {
       for (;;) {
         if (disposed || (deps.signal?.aborted ?? false)) return
-        const next = deps.inbox.pending()[0]
+        const next = onlyId === undefined ? deps.inbox.pending()[0] : deps.inbox.pending().find((input) => input.inputId === onlyId)
         if (next === undefined) return
+        const sig = turnSignals.get(next.inputId) ?? deps.signal
+        if (sig?.aborted) {
+          turnSignals.delete(next.inputId)
+          if (onlyId !== undefined) return // durable input remains available for explicit resume
+          deps.inbox.cancel(next.inputId, "aborted")
+          continue
+        }
         running = true
         current = next
         try {
           deps.inbox.promote(next.inputId)
           // turn/start + user/message are appended BY the agent loop here
           // (agent.run), so the promoted marker immediately precedes them.
-          const sig = turnSignals.get(next.inputId) ?? deps.signal
           turnSignals.delete(next.inputId)
           currentAbort = new AbortController()
           await deps.agent.run(next.text, sig ? AbortSignal.any([sig, currentAbort.signal]) : currentAbort.signal, next.images, next.inputId)
@@ -114,6 +122,7 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
           current = undefined
           currentAbort = undefined
         }
+        if (onlyId !== undefined) return
       }
     }).catch(() => {
       // Hardening: an unexpected pump rejection must never unwrap the lane
@@ -123,6 +132,12 @@ export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecuto
   }
 
   return {
+    runAdmitted(inputId, signal) {
+      if (disposed) return Promise.reject(new Error("session executor disposed"))
+      if (!deps.inbox.isPending(inputId)) return Promise.reject(new Error("Input is no longer pending"))
+      if (signal) turnSignals.set(inputId, signal)
+      return pump(inputId).then(() => { if (lastError !== undefined) throw lastError })
+    },
     submit(input: InputSubmit, inputId?: string) {
       const admission = mapSubmitToAdmission(input)
       // Task 11: the caller-supplied public id is retained THROUGH the lane so
