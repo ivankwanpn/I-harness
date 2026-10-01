@@ -50,6 +50,20 @@ describe("task notification outbox", () => {
     expect(wake).not.toHaveBeenCalled()
   })
 
+  it("does not retry an explicit stopped-parent rejection, while keeping the task result", async () => {
+    const tasks = createTaskRegistry()
+    tasks.submit({ identity: { parentSessionId: "s-main", callEventSeq: 1 }, agentPath: "root/h", description: "h", prompt: "p", agent: "general", delivery: "parent" })
+    tasks.terminalize({ taskId: "task-1", outcome: "completed", resultText: "retained result" })
+    const wake = vi.fn()
+    const admit = vi.fn(async () => { throw Object.assign(new Error("parent stopped"), { code: "PARENT_NOTIFICATION_STOPPED" }) })
+    const drain = createNotificationDrain({ tasks, admit: { admit, wake } })
+    expect(await drain.drain()).toBe(0)
+    expect(tasks.notifications()[0]).toMatchObject({ status: "suppressed", text: "retained result" })
+    expect(await drain.drain()).toBe(0)
+    expect(admit).toHaveBeenCalledTimes(1)
+    expect(wake).not.toHaveBeenCalled()
+  })
+
   it("absent admit (no A-plan yet) keeps rows pending — durable-only delivery", async () => {
     const tasks = createTaskRegistry()
     tasks.submit({ identity: { parentSessionId: "s-main", callEventSeq: 1 }, agentPath: "root/h", description: "h", prompt: "p", agent: "general", delivery: "parent" })

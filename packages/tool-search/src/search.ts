@@ -139,7 +139,7 @@ export function search(query: string, tools: Searchable[], opts?: SearchOptions)
   // +term required semantics: a tool must contain every required term in its
   // search text; the remaining terms rank by BM25.
   const terms = q.split(/\s+/).filter(Boolean)
-  const required = terms.filter((t) => t.startsWith("+")).map((t) => t.slice(1))
+  const required = terms.filter((t) => t.startsWith("+")).flatMap((t) => tokenize(t.slice(1)))
   const optional = terms.filter((t) => !t.startsWith("+"))
   const allTerms = [...required, ...optional]
   const documents = tools.map((tool) => {

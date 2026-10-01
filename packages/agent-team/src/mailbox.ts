@@ -81,8 +81,9 @@ export function createMailbox(deps: MailboxDeps) {
   // delivered, skip quiet-on-inactive (quiet never wakes inactive), attempt
   // delivery to the rest; on success ack via a pure-read transact fn. A crash
   // between deliver success and the ack replays the entry (at-least-once).
-  async function recoverRoot(): Promise<void> {
+  async function recoverRoot(onlyTargetId?: string): Promise<void> {
     for (const [targetId, msgs] of [...deps.state.queued.entries()]) {
+      if (onlyTargetId !== undefined && targetId !== onlyTargetId) continue
       // Snapshot the array: a concurrent sendMessage pushes into the live
       // array mid-sweep (while we await deliver), and iterating it live would
       // double-process the new entry in this pass.

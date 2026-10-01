@@ -16,6 +16,17 @@ export interface ParentInputAdmission {
   wake(sessionId: string): void
 }
 
+/** Permanent refusal after Stop/disposal. A temporary admission failure must
+ * remain retryable; a stopped parent must retain the result without waking. */
+export class ParentNotificationStoppedError extends Error {
+  readonly code = "PARENT_NOTIFICATION_STOPPED"
+  constructor(message = "parent notification admission stopped") { super(message); this.name = "ParentNotificationStoppedError" }
+}
+
+export function isParentNotificationStopped(error: unknown): boolean {
+  return error instanceof Error && "code" in error && error.code === "PARENT_NOTIFICATION_STOPPED"
+}
+
 export function renderTaskNotification(state: TaskOutcome, taskId: string, description: string, text: string): string {
   const tag = state === "completed" ? "task_result" : "task_error"
   return [
@@ -68,7 +79,7 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
           opts.admit.wake(n.parentSessionId)
           delivered += 1
         } catch (err) {
-          opts.tasks.updateNotification(n.id, { status: "error", error: err instanceof Error ? err.message : String(err) })
+          opts.tasks.updateNotification(n.id, { status: isParentNotificationStopped(err) ? "suppressed" : "error", error: err instanceof Error ? err.message : String(err), ...(isParentNotificationStopped(err) ? { timeWoken: Date.now() } : {}) })
         }
       }
       // ADAPTATION (M26-D1, plan §written "await save()" unconditionally): a

@@ -1,7 +1,12 @@
 import { afterEach, expect, it } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, win32 } from "node:path"
+import { existsSync } from "node:fs"
+import { spawnSync } from "node:child_process"
+import { registerShell } from "@i-harness/shell"
+import type { Tool } from "@i-harness/core-tools"
+import { createContext } from "@i-harness/core-plugin"
 import { createAgentShellSettings } from "../src/agent-shell.ts"
 
 const roots: string[] = []
@@ -40,3 +45,20 @@ it("does not silently normalize an invalid on-disk Agent shell to auto", async (
   await writeFile(path, JSON.stringify({ agentShell: "surprise" }))
   expect(() => settings.resolve()).toThrow(/invalid.*shell/i)
 })
+
+const nativeAlias = win32.join(process.env.LOCALAPPDATA ?? "C:\\missing", "Microsoft", "WindowsApps", "pwsh.exe")
+const hasNativeAlias = process.platform === "win32" && !existsSync(nativeAlias)
+  && spawnSync(nativeAlias, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true }).stdout?.startsWith("PowerShell 7")
+it.skipIf(!hasNativeAlias)("detects and validates a runnable PowerShell alias through the actual Agent Shell settings", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-alias-")); roots.push(root)
+  const settings = createAgentShellSettings(join(root, "settings.json"), { env: { Path: win32.dirname(nativeAlias), SystemRoot: process.env.SystemRoot }, platform: "win32" })
+  expect(await settings.configure({ shell: "pwsh" })).toMatchObject({ resolved: { command: nativeAlias, dialect: "powershell" } })
+  const selected = settings.resolve()
+  expect(() => selected.validate()).not.toThrow()
+  const tools: Tool[] = []
+  registerShell(createContext(), { register: (tool) => tools.push(tool) }, { agentShell: () => selected, cwd: root })
+  const tool = tools.find((tool) => tool.name === "shell")!
+  const result = await tool.execute({ command: "$PSVersionTable.PSVersion.Major" }, {}) as { stdout: string; stderr: string; exitCode: number }
+  expect(result.exitCode, result.stderr).toBe(0)
+  expect(result.stdout.trim()).toBe("7")
+}, 15000)

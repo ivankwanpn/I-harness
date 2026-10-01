@@ -90,4 +90,15 @@ describe("tool_search registration", () => {
     expect(output.matches.map((m) => m.name)).toContain("grep")
     expect(reg.schemas().map((s) => s.name)).toContain("grep") // promoted
   })
+
+  it("discovers and promotes a deferred tool from an uppercase required query", async () => {
+    const ctx = createContext()
+    const reg = createToolRegistry(ctx)
+    reg.register(makeDeferred("grep", "search text in files", "find patterns"))
+    reg.register(makeDeferred("glob", "find files by path pattern"))
+    registerToolSearch(ctx, reg)
+    const result = await reg.execute({ name: toolSearchName, args: { query: "+TEXT" } })
+    expect(result.output).toMatchObject({ matches: [{ name: "grep" }], totalDeferred: 2 })
+    expect(reg.schemas().map((tool) => tool.name)).toEqual([toolSearchName, "grep"])
+  })
 })

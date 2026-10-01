@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
+import { powerShellExecutableAvailable } from "@i-harness/shell"
 import { AGENT_SHELL_CHOICES, type SettingsAgentShell } from "@i-harness/settings"
 import { shellProfiles, type ShellEnvironment } from "./terminal-shells.ts"
 import { withDesktopSettings } from "./settings-file.ts"
@@ -35,7 +36,8 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
   function options(): AgentShellOption[] {
     return shellProfiles(env).flatMap((profile) => {
       const kind = dialect(profile.command)
-      return kind && env.exists(profile.command) ? [{ id: choice(profile.id), label: profile.label, command: profile.command, dialect: kind }] : []
+      const available = kind === "powershell" ? powerShellExecutableAvailable(profile.command, env.exists) : env.exists(profile.command)
+      return kind && available ? [{ id: choice(profile.id), label: profile.label, command: profile.command, dialect: kind }] : []
     })
   }
   function selected(): SettingsAgentShell {
@@ -60,7 +62,7 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
     resolve: (): AgentShellOption & { validate(): void } => {
       const resolved = resolveChoice(selected(), options())
       return { ...resolved, validate() {
-        if (!env.exists(resolved.command)) throw new Error(`Agent Shell '${resolved.id}' is unavailable on this host. Choose an installed shell in settings.`)
+        if (!(resolved.dialect === "powershell" ? powerShellExecutableAvailable(resolved.command, env.exists) : env.exists(resolved.command))) throw new Error(`Agent Shell '${resolved.id}' is unavailable on this host. Choose an installed shell in settings.`)
       } }
     },
     async configure(value: unknown): Promise<AgentShellSettingsState> {

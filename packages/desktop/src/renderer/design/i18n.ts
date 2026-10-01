@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "待辦進度": "Todo progress", "收合待辦清單": "Collapse Todo list", "展開待辦清單": "Expand Todo list", "開啟待辦編輯": "Open Todo editor",
   "正在套用專案資料夾…": "Applying project folder scope…", "檔案附件合計不能超過 8 個。": "File attachments cannot exceed 8 in total.",
   "完成一輪後才能建立分支": "Complete one turn before forking this conversation.",
   "每個會話可存取專案內全部資料夾；主要資料夾作為新會話的預設起點。": "Each conversation can access all project folders; the primary folder is the default starting point for new conversations.",

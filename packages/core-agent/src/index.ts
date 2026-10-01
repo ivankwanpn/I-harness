@@ -1,7 +1,7 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ImageInput, Session } from "@i-harness/core-session"
-import { append, deriveMessages, deriveProjectionRewrite, publishTransient } from "@i-harness/core-session"
+import { append, deriveMessages, deriveProjectionRewrite, publishTransient, SYSTEM_INPUT_PLUGIN } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient, LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
 import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
@@ -286,7 +286,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
-    append(deps.session, { type: "user/message", text: message, ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}) })
+    const admitted = inputId ? deps.session.events.findLast((event) => event.type === "agent/input/admitted" && event.inputId === inputId) : undefined
+    append(deps.session, { type: "user/message", text: message, ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}), ...(admitted?.type === "agent/input/admitted" && admitted.intent === "system" ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } } : {}) })
 
     let needsContinuation = true
     while (needsContinuation) {

@@ -14,11 +14,13 @@ import type { AgentRegistry } from "@i-harness/core-agent"
 import type { ExecService } from "@i-harness/exec"
 import {
   driveFollowups,
+  isParentNotificationStopped,
   spawnChild,
   type AgentTable,
   type ChildAgentEntry,
   type FollowupDeps,
   type JobRegistry,
+  type ParentInputAdmission,
   type RoleRegistry,
   type SpawnOptions,
   type SubagentRole,
@@ -78,6 +80,7 @@ export interface TeamSubagentDeps {
 }
 
 export interface TeamDeps {
+  parentNotify?: ParentInputAdmission
   /** Desktop sessions own independent team tool registries and ledgers. */
   allowConcurrentTeams?: boolean
   preserveSubagentTools?: boolean
@@ -102,6 +105,7 @@ export interface TeamDeps {
 export interface TeamMountHandle {
   teamName: string
   unmount(): Promise<void>
+  drainLeadMessages?(): Promise<void>
 }
 
 // Module-level reservation (M17/M18 pattern): one team per run. A second mount
@@ -166,6 +170,40 @@ export async function mountAgentTeams(
   // unmount flag plus this catch keeps a mid-mount throw from leaking it.
   try {
     const sub = deps.subagents
+    const completionJobs = new Set<Promise<unknown>>()
+    const completionCounts = new Map<string, number>()
+    const teamJobs: JobRegistry = { ...sub.jobs, updateJob(id, patch) {
+      let wasRunning = false
+      try { wasRunning = sub.jobs.read(id).status === "running" } catch { /* preserve unknown-job semantics */ }
+      const updated = sub.jobs.updateJob(id, patch)
+      if (!updated || !wasRunning || unmounted || (patch.status !== "completed" && patch.status !== "error")) return updated
+      const entry = [...sub.table.entries()].find(([path, row]) => path.startsWith("lead/") && row.jobId === id)
+      if (!entry || entry[1].controller.signal.aborted) return updated
+      const name = entry[0].slice("lead/".length)
+      const member = state.members.get(name)
+      if (!member || member.phase === "failed") return updated
+      const count = (completionCounts.get(id) ?? 0) + 1
+      completionCounts.set(id, count)
+      const turn = entry[1].session.events.findLast((event) => event.type === "turn/end")?.seq ?? count
+      const header = `Team result <${entry[1].sessionId ?? id}:${turn}> from <${name}> (${patch.status}):\n`
+      // Mailbox framing uses a fixed-length UUID. Bound only the notification;
+      // the complete job output remains available through job_output.
+      const framingBytes = Buffer.byteLength(`Team message <msg-${"0".repeat(36)}> from <${name}>:\n`, "utf8")
+      const output = patch.output ?? ""
+      let content = `${header}${output}`
+      if (framingBytes + Buffer.byteLength(content, "utf8") > cfg.maxMessageBytes) {
+        const footer = `\n[Result truncated; full output: job_output({job_id:${JSON.stringify(id)}})]`
+        const budget = Math.max(0, cfg.maxMessageBytes - framingBytes - Buffer.byteLength(header + footer, "utf8"))
+        const bytes = Buffer.from(output, "utf8")
+        let end = Math.min(budget, bytes.length)
+        while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--
+        content = `${header}${bytes.subarray(0, end).toString("utf8")}${footer}`
+      }
+      const job = mailbox.sendMessage({ id: member.id, name, role: "teammate" }, "lead", content, "quiet")
+      completionJobs.add(job)
+      void job.catch(() => { /* Delivery failures retain the full job result; an admitted mailbox entry remains recoverable. */ }).finally(() => { completionJobs.delete(job); activity.notify() })
+      return updated
+    } }
     let teamToolNames: string[] = []
     // Teammate role tool surface (Minor 5): derived from the CREATED team tools
     // (Ruling 19 discipline) minus the Lead-only ones; populated right after
@@ -228,7 +266,7 @@ export async function mountAgentTeams(
         // from the session the roster belongs to, and an absent one writes no key.
         ...(sub.contextWindow !== undefined ? { contextWindow: sub.contextWindow } : {}),
         ...(sub.maxOutputTokens !== undefined ? { maxOutputTokens: sub.maxOutputTokens } : {}),
-        jobs: sub.jobs,
+        jobs: teamJobs,
         table: sub.table,
         agents: sub.agents,
         forkTurns,
@@ -280,6 +318,7 @@ export async function mountAgentTeams(
       const entry = sub.table.get(path)
       if (!entry) return
       entry.controller.abort()
+      await entry.followupChain?.catch(() => {})
       entry.unmount?.()
       if (entry.jobId) sub.jobs.kill(entry.jobId)
       sub.table.remove(path)
@@ -315,7 +354,7 @@ export async function mountAgentTeams(
         // Lead is always live: durably record the message in the parent session
         // log (subagent/inbox-style event; the parent's mirror persists it).
         // Flush the parent's write-behind so the ack means on-disk.
-        append(deps.parentSession, { type: "subagent/inbox", messageId, message: content })
+        if (!deps.parentSession.events.some((event) => event.type === "subagent/inbox" && event.messageId === messageId)) append(deps.parentSession, { type: "subagent/inbox", messageId, message: content })
         if (sub.childSessions) {
           try {
             await sub.childSessions.coordinator.flush(sub.childSessions.parentSessionId)
@@ -326,6 +365,17 @@ export async function mountAgentTeams(
             // delivered and recoverRoot skip this id forever. False keeps it
             // queued (at-least-once) for a recoverRoot retry.
             return false
+          }
+        }
+        if (deps.parentNotify) {
+          const sender = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)?.senderName ?? "teammate"
+          try {
+            await deps.parentNotify.admit({ sessionId: sub.childSessions?.parentSessionId ?? teamId, text: `Team message <${messageId}> from <${sender}>:\n${content}`, description: `Team message from ${sender}` })
+            if (!unmounted) deps.parentNotify.wake(sub.childSessions?.parentSessionId ?? teamId)
+          } catch (error) {
+            // Explicit Stop/disposal keeps the durable inbox audit but consumes
+            // this notification so restart cannot silently reawaken the Lead.
+            return isParentNotificationStopped(error)
           }
         }
         activity.notify()
@@ -377,9 +427,7 @@ export async function mountAgentTeams(
         // even when the gate above did not rebuild (e.g. a waiting entry whose
         // registry entry was dropped). Without the seam this is the unchanged
         // sub object (structural FollowupDeps).
-        const wakeDeps: FollowupDeps = sub.ensureResident
-          ? { ...sub, rebuild: (e: ChildAgentEntry) => sub.ensureResident!(e) }
-          : sub
+        const wakeDeps: FollowupDeps = { ...sub, jobs: teamJobs, ...(sub.ensureResident ? { rebuild: (e: ChildAgentEntry) => sub.ensureResident!(e) } : {}) }
         const chain = driveFollowups(wakeDeps, entry, entry.sessionId)
         // M19 Ruling 26: the followup drain flips the child's status
         // (waiting→running→waiting); a wait_agent waiter must wake on that
@@ -480,6 +528,7 @@ export async function mountAgentTeams(
       try {
         // release every waiter first (wait_agent must not hang past unmount)
         activity.close()
+        await Promise.allSettled([...completionJobs])
         // tear down live teammate children best-effort: abort + unmount scope
         // + kill job + drop from table/agents (mirrors subagent close_agent).
         // Only lead/* entries belong to this team — regular subagents (root/*)
@@ -488,6 +537,7 @@ export async function mountAgentTeams(
           if (!path.startsWith("lead/")) continue
           try {
             entry.controller.abort()
+            await entry.followupChain?.catch(() => {})
             entry.unmount?.()
             if (entry.jobId) sub.jobs.kill(entry.jobId)
             sub.table.remove(path)
@@ -503,7 +553,7 @@ export async function mountAgentTeams(
         liveTeams.delete(teamId)
       }
     }
-    return { teamName: teamId, unmount }
+    return { teamName: teamId, unmount, drainLeadMessages: async () => { if (!unmounted) await mailbox.recoverRoot(teamId) } }
   } catch (err) {
     liveTeams.delete(teamId)
     throw err

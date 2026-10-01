@@ -20,13 +20,13 @@
 // queued turns. A's `drain()` REJECTS on the first turn failure (CLI
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { append, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { OutputSpillGuardConfig } from "@i-harness/output-retention"
-import type { AgentTaskView } from "@i-harness/subagent"
+import { ParentNotificationStoppedError, type AgentTaskView } from "@i-harness/subagent"
 import type { SessionMeta } from "@i-harness/session-persistence"
 import type { Telemetry } from "@i-harness/telemetry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -239,6 +239,69 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const telemetry = opts.telemetry
   let closed = false
   let currentSandbox = opts.sandbox
+  const cancelledParents = new Set<string>()
+  const notificationAdmissions = new Map<string, Promise<void>>()
+  const notificationInputs = new Map<string, Set<string>>()
+  const notificationControllers = new Map<string, Map<string, AbortController>>()
+  const notificationStops = new Set<Promise<void>>()
+  function stopNotifications(id: string): void {
+    cancelledParents.add(id)
+    for (const controller of notificationControllers.get(id)?.values() ?? []) controller.abort()
+    const assembly = assemblies.get(id)
+    let cancelled = false
+    for (const input of assembly?.inbox.pending() ?? []) {
+      if (input.intent === "system" && input.inputId.startsWith("parent-notify-")) cancelled = assembly!.inbox.cancel(input.inputId, "parent stopped") || cancelled
+    }
+    if (cancelled && opts.coordinator) {
+      const job = opts.coordinator.flush(id)
+      notificationStops.add(job)
+      void job.catch((error) => d.warn(`[i-harness] parent notification cancellation flush failed: ${error instanceof Error ? error.message : String(error)}`)).finally(() => notificationStops.delete(job))
+    }
+  }
+  function parentNotifyFor(id: string, owner: () => SessionAssembly | undefined): NonNullable<AssemblyOptions["parentNotify"]> {
+    if (opts.parentNotify) return opts.parentNotify
+    return {
+      admit(input) {
+        const job = (notificationAdmissions.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+          const assembly = assemblies.get(id)
+          if (closed || closing.has(id) || cancelledParents.has(id)) throw new ParentNotificationStoppedError()
+          if (input.sessionId !== id || !assembly || assembly !== owner()) throw new Error("parent notification admission unavailable")
+          const inputId = `parent-notify-${createHash("sha256").update(input.text).update(input.description).digest("hex")}`
+          if (!assembly.session.events.some((event) => event.type === "agent/input/admitted" && event.inputId === inputId)) {
+            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", synthetic: { description: input.description, scope: "turn" } })
+          }
+          await opts.coordinator?.flush(id)
+          if (closed || closing.has(id) || cancelledParents.has(id)) {
+            assembly.inbox.cancel(inputId, "parent stopped during admission")
+            await opts.coordinator?.flush(id)
+            throw new ParentNotificationStoppedError()
+          }
+          let inputs = notificationInputs.get(id)
+          if (!inputs) { inputs = new Set(); notificationInputs.set(id, inputs) }
+          inputs.add(inputId)
+        })
+        notificationAdmissions.set(id, job)
+        void job.finally(() => { if (notificationAdmissions.get(id) === job) notificationAdmissions.delete(id) }).catch(() => undefined)
+        return job
+      },
+      wake(sessionId) {
+        if (sessionId !== id || closed || closing.has(id) || cancelledParents.has(id)) return
+        const assembly = assemblies.get(id)
+        if (!assembly || assembly !== owner()) return
+        let controllers = notificationControllers.get(id)
+        if (!controllers) { controllers = new Map(); notificationControllers.set(id, controllers) }
+        for (const inputId of notificationInputs.get(id) ?? []) {
+          const input = assembly.inbox.pending().find((row) => row.inputId === inputId)
+          if (!input || controllers.has(inputId)) continue
+          const controller = new AbortController()
+          controllers.set(inputId, controller)
+          void submit(id, input.text, controller.signal, { admittedInputId: inputId }).catch(() => {
+            // The service already emits its execution error; never re-admit.
+          }).finally(() => { controllers!.delete(inputId); notificationInputs.get(id)?.delete(inputId) })
+        }
+      },
+    }
+  }
 
   // M49 Task 11: the per-session queue projection state. ONE record per
   // submit (and per adopted lane-only steer), keyed by the STABLE public id
@@ -403,6 +466,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
+            parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             model: binding.model,
@@ -436,6 +500,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
+            parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
             ...(model !== undefined ? { model } : {}),
@@ -476,6 +541,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
         // registers its answerer per ctx; a double attach would register twice).
         for (const hook of [...hooks]) hook(assembly)
+        // Recovery admission needs the exact published parent and its lane.
+        // Waking schedules through submit without awaiting that turn here.
+        try { await assembly.drainParentNotifications?.() }
+        catch (error) { d.warn(`[i-harness] parent notification recovery failed: ${error instanceof Error ? error.message : String(error)}`) }
         return assembly
       })().finally(() => { creating.delete(sessionId) })
       creating.set(sessionId, pending)
@@ -502,13 +571,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     // the queued gate settles, the in-flight engine copies abort).
     const st = sessionQueueState(sessionId)
     const id = options?.admittedInputId ?? randomUUID()
+    const admitted = options?.admittedInputId ? assemblies.get(sessionId)?.inbox.pending().find((input) => input.inputId === id) : undefined
     if (st.byId.get(id)?.scheduled || lanes.get(sessionId)?.currentInput()?.inputId === id) return Promise.reject(new Error("Input is already scheduled"))
+    if (admitted?.intent !== "system" && !signal.aborted) cancelledParents.delete(sessionId)
     const controller = new AbortController()
     const record: QueueRowRecord = {
       id,
       text: prompt,
-      delivery: "queue",
-      intent: "user",
+      delivery: admitted?.delivery ?? "queue",
+      intent: admitted?.intent ?? "user",
       order: st.nextOrder++,
       controller,
       state: "wait",
@@ -731,13 +802,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
 
   function cancelRunning(sessionId: string): { cancelled: boolean } {
     const current = lanes.get(sessionId)?.currentInput()
-    if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) return lanes.get(sessionId)!.cancelCurrent!()
+    if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) {
+      const result = lanes.get(sessionId)!.cancelCurrent!()
+      if (result.cancelled) stopNotifications(sessionId)
+      return result
+    }
     const records = queues.get(sessionId)?.byId
     const record = current === undefined
       ? [...(records?.values() ?? [])].filter(r => r.state === "wait").sort((a, b) => a.order - b.order)[0]
       : records?.get(current.inputId)
     if (record === undefined || record.controller.signal.aborted) return { cancelled: false }
     record.controller.abort()
+    stopNotifications(sessionId)
     if (current === undefined) record.state = "cancelled"
     return { cancelled: true }
   }
@@ -745,11 +821,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   async function close(): Promise<void> {
     if (closed) return
     closed = true
+    for (const id of assemblies.keys()) stopNotifications(id)
     await Promise.allSettled([
       ...active,
       ...creating.values(),
       ...modelBindings.values(),
       ...closing.values(),
+      ...notificationAdmissions.values(),
+      ...notificationStops,
     ])
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
@@ -764,6 +843,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function closeSession(sessionId: string): Promise<void> {
+    stopNotifications(sessionId)
     const existing = closing.get(sessionId)
     if (existing !== undefined) return existing
     let pending!: Promise<void>
@@ -774,6 +854,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (build !== undefined) await build.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
+      await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
       const handle = assemblies.get(sessionId)
       assemblies.delete(sessionId)
       lanes.delete(sessionId)

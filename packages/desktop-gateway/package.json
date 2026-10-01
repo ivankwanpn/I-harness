@@ -35,6 +35,7 @@
     "@i-harness/session-query": "workspace:*",
     "@i-harness/session-title": "workspace:*",
     "@i-harness/settings": "workspace:*",
+    "@i-harness/shell": "workspace:*",
     "@i-harness/skills": "workspace:*",
     "@i-harness/subagent": "workspace:*",
     "@i-harness/terminal": "workspace:*",

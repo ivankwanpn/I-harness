@@ -2,6 +2,8 @@
 
 ## Scope and evidence
 
+Latest addition on 2026-10-01: [environment remediation and Todo progress acceptance](2026-10-01-ih-environment-tooling-remediation.md), **4,011 passed, 10 skipped, 0 failed, 70/70 projects**. Native Bash/Pwsh discovery and teammate completion delivery were repaired. The [24-item UI gap checklist](2026-10-01-desktop-ui-gap-checklist.md) distinguishes missing controls, partial flows, hidden entrypoints and previously deferred work.
+
 Updated on 2026-10-01: [project/navigation acceptance](2026-10-01-desktop-project-navigation-qa.md), **3,983 passed, 10 skipped, 0 failed, 70/70 projects**. Projects with actual multi-folder Agent access, sidebar conversation management, one Send/Stop button, persisted follow-up delivery and unified attachments are delivered. [The preceding follow-up acceptance](2026-10-01-desktop-followup-controls-qa.md) covers Todo after compaction, durable queue/steering, interrupted interactions, source editing and local Git. Reminders are deferred. The initial audit and prior gates below remain historical evidence.
 
 This audit inspects the working tree in `D:/frontend-test`, based on commit `03a88b0ffb022759dc2f0a1bc9b4c0ba757dafbb`. It records the producer, transport, actual human UI, persistence behavior, and remaining limits for each requested capability. It excludes the user's existing `packages/desktop/electron.vite.config.ts` change.

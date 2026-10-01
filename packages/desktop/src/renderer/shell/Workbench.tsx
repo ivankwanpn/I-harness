@@ -21,6 +21,7 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { Composer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
+import { TodoProgress } from "../session/TodoProgress.tsx"
 import { WorkflowPane } from "../session/WorkflowPane.tsx"
 import { SchedulePane } from "../session/SchedulePane.tsx"
 import { Timeline } from "../session/Timeline.tsx"
@@ -192,6 +193,24 @@ export function Workbench({
   const reviewWidth = useUiStore((state) => state.reviewWidth)
   const setReviewWidth = useUiStore((state) => state.setReviewWidth)
   const toggleReview = useUiStore((state) => state.toggleReview)
+  const todoFocusScope = useRef<{ workspaceId?: string; sessionId?: string } | undefined>(undefined)
+  function focusTodoEditor() {
+    const panel = document.getElementById(`${workPaneId}-panel`)
+    const target = panel?.querySelector<HTMLElement>(".todo-edit-input") ?? panel?.querySelector<HTMLElement>(".todo-add-button:not(:disabled)") ?? panel?.querySelector<HTMLElement>(".task-pane button:not(:disabled)")
+    target?.focus()
+  }
+  function openTodoEditor() {
+    if (reviewOpen && workPaneTab === "tasks") { focusTodoEditor(); return }
+    todoFocusScope.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
+    if (!reviewOpen) toggleReview()
+    setWorkPaneTab("tasks")
+  }
+  useEffect(() => {
+    const requested = todoFocusScope.current
+    if (!requested) return
+    if (requested.workspaceId !== selectedWorkspaceId || requested.sessionId !== selectedSessionId) { todoFocusScope.current = undefined; return }
+    if (reviewOpen && workPaneTab === "tasks") { todoFocusScope.current = undefined; focusTodoEditor() }
+  }, [reviewOpen, workPaneTab, selectedWorkspaceId, selectedSessionId])
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
   const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
@@ -290,7 +309,7 @@ export function Workbench({
             </p>
           )}
         {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
-        {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body" aria-label={t("會話")}>
+        {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body todo-progress-host" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
               <>
@@ -301,6 +320,7 @@ export function Workbench({
                   <span className="conversation-goal-label">{t("目前目標")}</span><span className="conversation-goal-objective">{conversation.workState.goal.objective}</span>
                   <span className="conversation-goal-phase">{t(conversation.workState.goal.phase === "paused" ? "已暫停" : conversation.workState.goal.phase === "complete" ? "已完成" : "進行中")}</span>
                 </div> : null}
+                {capabilities["desktop-work-state"]?.includes("1") ? <TodoProgress key={`todos:${selectedWorkspaceId}:${selectedSessionId}`} todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
                 {conversation.rows.length === 0
                   ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
                   : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={review && capabilities["desktop-review"]?.includes("1") ? { workspacePath: workspaces.find((workspace) => workspace.id === selectedWorkspaceId)?.path ?? "", onOpenFile: (path) => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") } } : undefined} />}

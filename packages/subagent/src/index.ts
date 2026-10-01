@@ -23,7 +23,7 @@ export { restoreState, wireSubagentPersistence } from "./persist.ts"
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
-export { createNotificationDrain } from "./task-notification.ts"
+export { createNotificationDrain, ParentNotificationStoppedError, isParentNotificationStopped } from "./task-notification.ts"
 export type { ParentInputAdmission, NotificationDrainOptions } from "./task-notification.ts"
 
 import type { PluginContext } from "@i-harness/core-plugin"

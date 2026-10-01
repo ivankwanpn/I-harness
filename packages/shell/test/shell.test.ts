@@ -25,7 +25,7 @@ describe("resolvePwshExe (M59)", () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-pwsh-"))
     try {
       writeFileSync(join(dir, "pwsh.exe"), "")
-      expect(resolvePwshExe({ PATH: dir, SystemRoot: "C:\\Windows" }, "win32")).toBe("pwsh")
+      expect(resolvePwshExe({ PATH: dir, SystemRoot: "C:\\Windows" }, "win32")).toBe(join(dir, "pwsh.exe"))
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -34,7 +34,8 @@ describe("resolvePwshExe (M59)", () => {
   it.skipIf(process.platform !== "win32")("falls back to Windows PowerShell 5.1 when pwsh is absent", () => {
     // Hardcoding `pwsh` spawn-failed (exitCode -1, empty output) on machines
     // without PowerShell 7 — powershell.exe ships with every supported Windows.
-    const exe = resolvePwshExe({ PATH: "", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }, "win32")
+    const classic = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    const exe = resolvePwshExe({ PATH: "", SystemRoot: process.env.SystemRoot ?? "C:\\Windows" }, "win32", (candidate) => candidate === classic && existsSync(candidate))
     expect(exe.toLowerCase()).toContain("powershell.exe")
     expect(existsSync(exe)).toBe(true)
   })
@@ -50,8 +51,9 @@ describe("bashAvailable (M59)", () => {
       mkdirSync(real, { recursive: true })
       writeFileSync(join(launcher, "bash.exe"), "")
       writeFileSync(join(real, "bash.exe"), "")
-      expect(resolveShell({ PATH: `${launcher};${real}` }, "win32").argv[0]).toBe(join(real, "bash.exe"))
-      expect(bashAvailable({ PATH: launcher }, "win32")).toBe(false)
+      const env = { ProgramFiles: dir, "ProgramFiles(x86)": dir }
+      expect(resolveShell({ ...env, PATH: `${launcher};${real}` }, "win32").argv[0]).toBe(join(real, "bash.exe"))
+      expect(bashAvailable({ ...env, PATH: launcher }, "win32")).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -63,9 +65,10 @@ describe("bashAvailable (M59)", () => {
   it.skipIf(process.platform !== "win32")("detects bash(.exe) on PATH", () => {
     const dir = mkdtempSync(join(tmpdir(), "ih-bash-"))
     try {
-      expect(bashAvailable({ PATH: "" }, "win32")).toBe(false)
+      const env = { ProgramFiles: dir, "ProgramFiles(x86)": dir }
+      expect(bashAvailable({ ...env, PATH: "" }, "win32")).toBe(false)
       writeFileSync(join(dir, "bash.exe"), "")
-      expect(bashAvailable({ PATH: dir }, "win32")).toBe(true)
+      expect(bashAvailable({ ...env, PATH: dir }, "win32")).toBe(true)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -80,7 +83,11 @@ describe("bashAvailable (M59)", () => {
       listJobs: () => [],
     }
     const prev = process.env.PATH
+    const prevPrograms = process.env.ProgramFiles
+    const prevPrograms32 = process.env["ProgramFiles(x86)"]
     process.env.PATH = ""
+    process.env.ProgramFiles = "C:\\ih-no-installed-git-test"
+    process.env["ProgramFiles(x86)"] = "C:\\ih-no-installed-git-test"
     try {
       const [bash] = createShellTools({ exec: spyExec })
       const res = (await bash!.execute({ command: "pwd" }, {})) as { stdout: string; stderr?: string; exitCode?: number }
@@ -89,6 +96,8 @@ describe("bashAvailable (M59)", () => {
       expect(res.stderr).toContain("pwsh")
     } finally {
       process.env.PATH = prev
+      if (prevPrograms === undefined) delete process.env.ProgramFiles; else process.env.ProgramFiles = prevPrograms
+      if (prevPrograms32 === undefined) delete process.env["ProgramFiles(x86)"]; else process.env["ProgramFiles(x86)"] = prevPrograms32
     }
   })
 })

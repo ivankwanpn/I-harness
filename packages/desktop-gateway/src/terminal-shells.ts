@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs"
 import { basename, posix, win32 } from "node:path"
+import { resolvePwshExe } from "@i-harness/shell"
 
 export type ShellProfile = { id: string; label: string; command: string; args: string[] }
 export type ShellEnvironment = { env: NodeJS.ProcessEnv; platform: NodeJS.Platform; exists: (path: string) => boolean }
@@ -33,7 +34,8 @@ export function shellProfiles(options: ShellEnvironment): ShellProfile[] {
   }
   const root = envValue(options.env, "SystemRoot") ?? "C:\\Windows"
   const powerShell = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  const pwsh = onPath("pwsh.exe", options)
+  const resolvedPowerShell = resolvePwshExe(options.env, options.platform, options.exists)
+  const pwsh = win32.basename(resolvedPowerShell).toLowerCase() === "pwsh.exe" ? resolvedPowerShell : undefined
   const gitExe = onPath("git.exe", options)
   const gitBash = [
     win32.join(envValue(options.env, "ProgramFiles") ?? "C:\\Program Files", "Git", "bin", "bash.exe"),

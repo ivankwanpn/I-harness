@@ -311,6 +311,8 @@ interface RewindAssemblyHandle {
 }
 
 export interface SessionAssembly {
+  /** Retry durable parent messages only after the host publishes its lane. */
+  drainParentNotifications?(): Promise<void>
   tools: ToolRegistry
   ctx: PluginContext // host wires approval/question answerers here (via onAssembly)
   agent: Agent // the per-session agent; tier-1 turns flow through it
@@ -1197,6 +1199,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await subagent.ready
     if (opts.team !== undefined) {
       teamHandles.push(await mountAgentTeams(ctx, tools, {
+        ...(opts.parentNotify ? { parentNotify: opts.parentNotify } : {}),
         allowConcurrentTeams: opts.concurrentSessionTeams,
         preserveSubagentTools: opts.concurrentSessionTeams,
         parentSession: session,
@@ -1401,6 +1404,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       setReasoningEffort: (effort) => { currentReasoningEffort = effort },
       ...(opts.modelLabel !== undefined ? { modelLabel: opts.modelLabel } : {}),
       inbox,
+      drainParentNotifications: async () => { for (const handle of teamHandles) await handle.drainLeadMessages?.() },
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       // M49 Task 12: the projection owns NO registry object — rows only. The

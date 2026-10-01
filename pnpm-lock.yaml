@@ -489,6 +489,9 @@ importers:
       '@i-harness/settings':
         specifier: workspace:*
         version: link:../settings
+      '@i-harness/shell':
+        specifier: workspace:*
+        version: link:../shell
       '@i-harness/skills':
         specifier: workspace:*
         version: link:../skills

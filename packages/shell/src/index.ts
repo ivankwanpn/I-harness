@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs"
-import { basename, join } from "node:path"
+import { win32 } from "node:path"
+import { spawnSync } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { ExecService, PromotedRun } from "@i-harness/exec"
@@ -62,18 +63,45 @@ function getAgentArgv(command: string, dialect: AgentShellDialect): string[] {
   return argv
 }
 
-// Windows: prefer a real Unix shell if one exists on PATH, else pwsh.
+function environmentValue(env: NodeJS.ProcessEnv, name: string): string | undefined {
+  const key = Object.keys(env).find((key) => key.toLowerCase() === name.toLowerCase())
+  return key ? env[key] : undefined
+}
+
+function onWindowsPath(name: string, env: NodeJS.ProcessEnv, exists: (path: string) => boolean): string | undefined {
+  for (const entry of environmentValue(env, "PATH")?.split(";") ?? []) {
+    const directory = entry.trim().replace(/^"|"$/g, "")
+    if (!directory || name === "bash.exe" && ["system32", "windowsapps"].includes(win32.basename(directory).toLowerCase())) continue
+    const candidate = win32.join(directory, name)
+    try { if (exists(candidate)) return candidate } catch { /* continue past inaccessible PATH entries */ }
+  }
+  return undefined
+}
+
+function probePowerShellAlias(path: string): boolean {
+  // App Execution Aliases may be launchable while Node's existsSync is false.
+  // Probe only the known pwsh alias, never arbitrary executables from the model.
+  const result = spawnSync(path, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true })
+  return result.status === 0 && /^PowerShell 7(?:\.|\s|$)/.test(result.stdout.trim())
+}
+
+export function powerShellExecutableAvailable(path: string, exists: (path: string) => boolean = existsSync, probe = exists === existsSync ? probePowerShellAlias : () => false): boolean {
+  return exists(path) || /[\\/]Microsoft[\\/]WindowsApps[\\/]pwsh\.exe$/i.test(path) && probe(path)
+}
+
+// Windows: prefer installed Git Bash, then another native Bash, else pwsh.
 // `System32/bash.exe` and `WindowsApps/bash.exe` launch WSL; they do not obey
 // the native cwd and `pwd -W` contract of this tool. Return the chosen absolute
 // executable so spawning cannot silently resolve the earlier launcher again.
 export function resolveShell(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
 ): ResolvedShell {
   if (platform === "win32") {
-    const bashExe = resolveBashExe(env, platform)
+    const bashExe = resolveBashExe(env, platform, exists)
     if (bashExe) return { name: "bash", argv: [bashExe, "-c"] }
-    return { name: "pwsh", argv: [resolvePwshExe(env, platform), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
+    return { name: "pwsh", argv: [resolvePwshExe(env, platform, exists), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"] }
   }
   return { name: "bash", argv: ["bash", "-c"] }
 }
@@ -85,28 +113,24 @@ export function resolveShell(
 function resolveBashExe(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
 ): string | undefined {
   if (platform !== "win32") return "bash"
-  for (const pathEntry of env.PATH?.split(";") ?? []) {
-    const directory = pathEntry.trim().replace(/^"|"$/g, "")
-    if (!directory || ["system32", "windowsapps"].includes(basename(directory).toLowerCase())) continue
-    for (const name of ["bash.exe", "bash"]) {
-      try {
-        const candidate = join(directory, name)
-        if (existsSync(candidate)) return candidate
-      } catch {
-        // Ignore a malformed PATH entry and continue to the next one.
-      }
-    }
-  }
-  return undefined
+  const git = onWindowsPath("git.exe", env, exists)
+  const candidates = [
+    win32.join(environmentValue(env, "ProgramFiles") ?? "C:\\Program Files", "Git", "bin", "bash.exe"),
+    win32.join(environmentValue(env, "ProgramFiles(x86)") ?? "C:\\Program Files (x86)", "Git", "bin", "bash.exe"),
+    ...(git ? [win32.resolve(win32.dirname(git), "..", "bin", "bash.exe"), win32.resolve(win32.dirname(git), "..", "..", "bin", "bash.exe")] : []),
+  ]
+  return candidates.find(exists) ?? onWindowsPath("bash.exe", env, exists) ?? onWindowsPath("bash", env, exists)
 }
 
 export function bashAvailable(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
 ): boolean {
-  return resolveBashExe(env, platform) !== undefined
+  return resolveBashExe(env, platform, exists) !== undefined
 }
 
 /**
@@ -125,21 +149,25 @@ export function bashAvailable(
 export function resolvePwshExe(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
+  exists: (path: string) => boolean = existsSync,
+  probe: (path: string) => boolean = exists === existsSync ? probePowerShellAlias : () => false,
 ): string {
   if (platform !== "win32") return "pwsh"
-  const onPath = (exe: string): boolean =>
-    env.PATH?.split(";").some((p) => {
-      if (!p) return false
-      try {
-        return existsSync(join(p, exe))
-      } catch {
-        return false
-      }
-    }) ?? false
-  if (onPath("pwsh.exe")) return "pwsh"
-  const root = env.SystemRoot ?? env.windir ?? "C:\\Windows"
-  const windowsPowerShell = join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  return existsSync(windowsPowerShell) ? windowsPowerShell : "powershell"
+  const onPath = onWindowsPath("pwsh.exe", env, (path) => powerShellExecutableAvailable(path, exists, probe))
+  if (onPath) return onPath
+  const installed = win32.join(environmentValue(env, "ProgramFiles") ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe")
+  if (exists(installed)) return installed
+  const root = environmentValue(env, "SystemRoot") ?? environmentValue(env, "windir") ?? "C:\\Windows"
+  const windowsPowerShell = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+  return exists(windowsPowerShell) ? windowsPowerShell : "powershell"
+}
+
+/** Keep nested #!/usr/bin/env bash scripts in the same native runtime.
+ * This changes only the launched command's environment, never global PATH. */
+function bashCommandEnvironment(executable: string): { env?: Record<string, string> } {
+  if (process.platform !== "win32" || win32.basename(executable).toLowerCase() !== "bash.exe") return {}
+  const key = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH"
+  return { env: { [key]: `${win32.dirname(executable)};${process.env[key] ?? ""}` } }
 }
 
 // Minimal shell-quote parser: splits on whitespace, honors single/double
@@ -503,14 +531,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = deps.exec.runBackground({ argv, ...bashCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10: the command spec is built ONCE — the promotion overload takes
         // the very same ExecCommand, so the two calls below differ in nothing
         // but the threshold. The overload (not a second code path) is what
         // keeps a non-promoting call's result shape untouched.
-        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const cmd = { argv, ...bashCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const result = deps.backgroundAfterMs === undefined
           ? await deps.exec.run(cmd)
           : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
@@ -607,7 +635,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const ladder = await resolveShellCall(deps, exec, "shell", args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       const sandbox = ladder.policy
-      const spec = { argv, ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
+      const spec = { argv, ...bashCommandEnvironment(selected.command), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
         if (args.background === true) return { job_id: deps.exec.runBackground(spec).jobId }
         const command = { ...spec, abortSignal: exec.abortSignal }

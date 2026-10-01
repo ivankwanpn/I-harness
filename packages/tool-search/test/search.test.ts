@@ -57,6 +57,16 @@ describe("tool-search BM25 core", () => {
     expect(result.map((t) => t.name)).toEqual(["grep"])
   })
 
+  it("normalizes required-term case using the same tokens as keyword search", () => {
+    const result = search("+FILE", [...TOOLS], { defaultLimit: 8 })
+    expect(result.map((tool) => tool.name)).toEqual(["read", "write"])
+  })
+
+  it("requires every normalized component of a compound tool-name term", () => {
+    const result = search("+LIST_DIR", [...TOOLS], { defaultLimit: 8 })
+    expect(result.map((tool) => tool.name)).toEqual(["list_dir"])
+  })
+
   it("empty query throws", () => {
     expect(() => search("   ", TOOLS as unknown as Parameters<typeof search>[1], { defaultLimit: 8 })).toThrow(/empty/i)
   })

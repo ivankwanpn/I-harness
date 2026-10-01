@@ -8,7 +8,9 @@ import type { ProjectCatalog } from "./projects.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
 import { contextRequestParams } from "./context-requests.ts"
-import { listDesktopTerminalShellOptions } from "@i-harness/desktop-gateway/src/terminal-shells.ts"
+// This native helper must be bundled into Electron main. An externalized
+// workspace-package import would require raw gateway TypeScript at app boot.
+import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
 import type { attachNativeWindow } from "./native-window.ts"
 import type { createBrowserSurface } from "./browser-surface.ts"
 

@@ -49,7 +49,7 @@ export function createRoster(deps: RosterDeps) {
   function liveStatus(id: string): TeamMemberView["status"] {
     const raw = deps.memberStatus?.(id)
     if (raw === "running") return "running"
-    if (raw === "waiting") return "idle"
+    if (raw === "waiting" || raw === "idle") return "idle"
     return "inactive"
   }
 
