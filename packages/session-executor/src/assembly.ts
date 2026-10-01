@@ -40,7 +40,7 @@ import { createScheduleTools } from "@i-harness/schedule/tools"
 // session-query package itself (a module side effect that evaluates before
 // its node:sqlite import) — the assembly needs no explicit wiring.
 import { createSessionQueryTools, type SessionQuery } from "@i-harness/session-query"
-import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
+import { registerSubagent, createStaleSubagentsSection, projectWorkflowRows, snapshotState, type AgentTaskView, type ParentInputAdmission, type SubagentRole, type SubagentStateSnapshot } from "@i-harness/subagent"
 import { createSkillsSection, registerSkills, scanMentionedSkillNames, SKILL_MENTION_PLUGIN } from "@i-harness/skills"
 import { registerWorkflow, type WorkflowMountHandle } from "@i-harness/workflow"
 import {
@@ -347,6 +347,8 @@ export interface SessionAssembly {
    * workflow rows ONLY when this assembly's workflow executor owns them.
    * Never fabricated: an empty list means literally nothing running. */
   tasks(): AgentTaskView[]
+  /** Synchronous copied metadata from this assembly's owning child registry. */
+  subagentState(): SubagentStateSnapshot
   /** M49 Task 12: cancel ONE task by its stable id THROUGH THE OWNING
    * registry — an agent path aborts the live entry + kills its job (the
    * interrupt_agent/job_kill machinery); a `workflow-` id routes to the
@@ -1029,6 +1031,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let pluginCapabilities: ReturnType<typeof createPluginCapabilities> | undefined
   const lspHandles: LspMountHandle[] = []
   const teamHandles: TeamMountHandle[] = []
+  let flushSubagentPersistence: (() => Promise<void>) | undefined
   let workflowMount: WorkflowMountHandle | undefined
 
   try {
@@ -1123,6 +1126,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.restoredState !== undefined ? { restoredState: opts.restoredState } : {}),
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
+    flushSubagentPersistence = () => subagent.flushPersistence()
     // W11 — the unasked path, registered HERE because this is the first point
     // that holds both the runtime-context service and the agent table the
     // section reads (`subagent.table`, which is the persistence-wrapped table
@@ -1407,6 +1411,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       drainParentNotifications: async () => { for (const handle of teamHandles) await handle.drainLeadMessages?.() },
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
+      subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
       // M49 Task 12: the projection owns NO registry object — rows only. The
       // workflow group comes from THIS workflow executor's real store rows
       // (mounted unconditionally above — the non-null claim is the mount
@@ -1487,6 +1492,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     } catch {
       // cleanup failure on teardown: disposal continues
     }
+    // Task documents have their own save chain above the coordinator queue.
+    // Join that producer before the owner performs its final store close.
+    try { await flushSubagentPersistence?.() }
+    catch (error) { d.warn(`Subagent persistence drain failed: ${String(error)}`) }
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —
     // the owner (run.ts / createSessionService) owns their lifecycle.
   }

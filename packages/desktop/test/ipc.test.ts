@@ -51,6 +51,16 @@ function fixture() {
 }
 
 describe("Desktop scoped IPC", () => {
+  it("rejects unsupported subagent catalog hosts and validates lineage/paging arguments before routing", async () => {
+    const f = fixture()
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/subagents/list", workspaceId: ENTRY.id, sessionId: "parent" }, f.dependencies)).rejects.toThrow(/Subagent catalog/i)
+    f.setRuntime({ client: { request: f.request }, info: { capabilities: { "desktop-subagent-catalog": ["1"] } } })
+    await dispatchDesktopRequest({ kind: "desktop/session/subagents/history", workspaceId: ENTRY.id, sessionId: "parent", childSessionId: "child", afterSeq: 4, limit: 200 }, f.dependencies)
+    expect(f.request).toHaveBeenCalledWith("desktop/session/subagents/history", { sessionId: "parent", childSessionId: "child", afterSeq: 4, limit: 200 }, 30000)
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/subagents/history", workspaceId: ENTRY.id, sessionId: "parent", childSessionId: "child", limit: 1001 }, f.dependencies)).rejects.toThrow(/limit/)
+    await expect(dispatchDesktopRequest({ kind: "desktop/session/subagents/control", workspaceId: ENTRY.id, sessionId: "parent", childSessionId: "child", action: "followup", text: "" }, f.dependencies)).rejects.toThrow(/text/)
+    expect(f.request).toHaveBeenCalledTimes(1)
+  })
   it("routes project metadata locally, preserves revision checks and rejects unknown folder reveals", async () => {
     const f = fixture()
     const save = vi.fn(async (input: import("../src/main/projects.ts").ProjectInput) => ({ id: input.id ?? "p", name: input.name, workspaceIds: input.workspaceIds, primaryWorkspaceId: input.primaryWorkspaceId, pinned: input.pinned, createdAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z" }))

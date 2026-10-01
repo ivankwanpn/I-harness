@@ -90,6 +90,7 @@ function makeStubService(): SessionService {
     // only to satisfy the interface the stub stands in for.
     rebindModel: vi.fn(() => true),
     liveSession: () => undefined,
+    liveAssembly: () => undefined,
     hasAssembly: () => false,
     queueState: vi.fn(() => ({ running: false, queued: 0 })),
     queue: vi.fn(() => []),

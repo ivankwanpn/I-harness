@@ -11,6 +11,33 @@ import { registerSubagent } from "../src/index.ts"
 const resolveModel = async () => ({ status: "unconfigured" as const, reason: "unused" })
 
 describe("registerSubagent", () => {
+  it("awaits an in-flight parent notification and its final task document before persistence teardown", async () => {
+    const entered = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const saved: unknown[] = []
+    const ctx = createContext(), parentReg = createToolRegistry(ctx)
+    const mounted = registerSubagent(ctx, parentReg, {
+      resolveModel, exec: registerExec(createContext()), parentModel: createMockClient([]), parentSession: createSession(),
+      persist: { parentSessionId: "parent", stateId: "parent", coordinator: {
+        getDocument: async () => undefined,
+        putDocument: async (_key: string, value: unknown) => { saved.push(structuredClone(value)) },
+      } as never },
+      parentNotify: { admit: async () => { entered.resolve(); await release.promise }, wake: () => {} },
+    })
+    await mounted.ready
+    const task = mounted.tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", description: "helper", prompt: "work", agent: "general", delivery: "parent" })
+    mounted.tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: "done" })
+    let drained = false
+    try {
+      const flushing = mounted.flushPersistence().then(() => { drained = true })
+      await entered.promise
+      expect(drained).toBe(false)
+      release.resolve()
+      await flushing
+      expect(saved.at(-1)).toMatchObject({ notifications: [expect.objectContaining({ status: "woken" })] })
+    } finally { release.resolve() }
+  })
+
   it("seeds built-in roles, mounts the 13 tools, and returns the registries", () => {
     const ctx = createContext()
     const parentReg = createToolRegistry(ctx)

@@ -19,6 +19,7 @@ import type { createDesktopWorkflow } from "./workflow.ts"
 import type { createAgentShellSettings } from "./agent-shell.ts"
 import type { createDesktopInput } from "./input.ts"
 import type { createProjectScopeBroker } from "./project-scope.ts"
+import type { createDesktopSubagents } from "./session-subagents.ts"
 
 export interface SandboxState {
   mode: "read-only" | "workspace-write" | "danger-full-access"
@@ -35,6 +36,7 @@ export interface DesktopHandlers {
   mcp?: ReturnType<typeof createDesktopMcp>
   hooks?: ReturnType<typeof createHookSettings>
   subagents?: ReturnType<typeof createSubagentSettings>
+  sessionSubagents?: ReturnType<typeof createDesktopSubagents>
   agentSettings?: ReturnType<typeof createAgentSettings>
   terminal?: ReturnType<typeof createDesktopTerminal>
   schedules?: ReturnType<typeof createDesktopSchedules>

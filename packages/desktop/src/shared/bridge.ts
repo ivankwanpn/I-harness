@@ -37,6 +37,9 @@ export type DesktopRequest =
   | { kind: "desktop/hooks/mutate"; workspaceId: string; command: HookSettingsCommand }
   | { kind: "desktop/subagents/state"; workspaceId: string }
   | { kind: "desktop/subagents/mutate"; workspaceId: string; command: SubagentSettingsCommand }
+  | { kind: "desktop/session/subagents/list"; workspaceId: string; sessionId: string }
+  | { kind: "desktop/session/subagents/history"; workspaceId: string; sessionId: string; childSessionId: string; afterSeq?: number; limit?: number }
+  | { kind: "desktop/session/subagents/control"; workspaceId: string; sessionId: string; childSessionId: string; action: "followup" | "message" | "interrupt" | "close"; text?: string }
   | { kind: "desktop/agent-settings/state"; workspaceId: string }
   | { kind: "desktop/agent-settings/configure"; workspaceId: string; patch: Partial<AgentDefaults> }
   | { kind: "browser/list" | "browser/open" | "browser/hide"; workspaceId: string }

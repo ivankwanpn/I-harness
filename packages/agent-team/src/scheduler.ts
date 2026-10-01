@@ -166,6 +166,10 @@ export async function mountAgentTeams(
   if (liveTeams.has(teamId)) throw new Error("agent-team: this team is already mounted")
   liveTeams.add(teamId)
   let unmounted = false
+  let generatedRole: SubagentRole | undefined
+  const removeGeneratedRole = () => {
+    if (generatedRole && deps.subagents.roles.get(TEAMMATE_ROLE_NAME) === generatedRole) deps.subagents.roles.remove(TEAMMATE_ROLE_NAME)
+  }
   // Every failure path below must release the reservation — the idempotent
   // unmount flag plus this catch keeps a mid-mount throw from leaking it.
   try {
@@ -287,7 +291,7 @@ export async function mountAgentTeams(
 
     // childSessionHoldsPrompt / childSessionIsDurable: the child's DURABLE log
     // must hold the initial user/message (from the spawn prompt). Probe via the
-    // coordinator: load(sessionId) succeeds AND a user/message (or
+    // coordinator: snapshot(sessionId) succeeds AND a user/message (or
     // subagent/inbox) event is present. Any failure (unknown session, lost
     // log, truncated prompt, absent childSessions) returns false (fail closed).
     // The spawn checkpoint (holdsPrompt) FLUSHES first — the spawn returns
@@ -496,6 +500,13 @@ export async function mountAgentTeams(
     // list — all team tools minus the two Lead-only ones (spawn_teammate /
     // interrupt_agent). Never hardcode the 10 names in two places.
     teamRoleTools = [...TEAMMATE_BASE_TOOLS, ...(tools.get("shell") ? ["shell"] : []), ...teamToolNames.filter((n) => n !== "spawn_teammate" && n !== "interrupt_agent" && n !== "team_interrupt_agent")]
+    // A restored child retains roleName="teammate" and rebuilds through the
+    // shared registry. Publish the generated live role without saving it as a
+    // user role; an existing custom definition remains authoritative.
+    if (!sub.roles.get(TEAMMATE_ROLE_NAME)) {
+      generatedRole = teammateRole(teamRoleTools)
+      sub.roles.register(generatedRole)
+    }
 
     // ---- recovery (crash restore), BEFORE the tools are live ----
     // (a) reconcile stuck provisioning members (provisioning→active if the
@@ -550,21 +561,23 @@ export async function mountAgentTeams(
         // reverse of the collision replacement: restore the pre-mount tool
         for (const tool of replaced.values()) tools.register(tool)
       } finally {
+        removeGeneratedRole()
         liveTeams.delete(teamId)
       }
     }
     return { teamName: teamId, unmount, drainLeadMessages: async () => { if (!unmounted) await mailbox.recoverRoot(teamId) } }
   } catch (err) {
+    removeGeneratedRole()
     liveTeams.delete(teamId)
     throw err
   }
 }
 
-// Default teammate role (synthesized, NOT registered — the shared role
-// registry stays untouched): working tools + the team tool surface derived at
-// mount (Minor 5), resolved from the parent registry at spawnChild time.
+// Default live teammate role: reconstructed at mount for spawn and cold
+// resident rebuild; never persisted as a user-defined role.
 function teammateRole(teamToolNames: string[]): SubagentRole {
   return {
+    ephemeral: true,
     name: TEAMMATE_ROLE_NAME,
     description: "Team member with the team tools (no spawn/interrupt authority — the domain layer enforces Lead-only).",
     systemPrompt: "You are a teammate in an agent team. Work on the assigned task, keep the shared task board current, and communicate with the Lead or other members through the team send/followup tools.",
@@ -576,7 +589,7 @@ function teammateRole(teamToolNames: string[]): SubagentRole {
 // user/message (the spawn prompt was written to the mirror) or an inbox event?
 // A missing/corrupt log → false (fail closed); pre-aborted signal → false.
 // flushFirst drains the live write-behind to the backend (the durability
-// barrier) before loading — the spawn checkpoint happens immediately after
+// barrier) before reading — the spawn checkpoint happens immediately after
 // spawnChild returns, before the 200 ms write-behind deadline.
 async function probeChildDurable(
   childSessions: TeamSubagentDeps["childSessions"],
@@ -586,9 +599,13 @@ async function probeChildDurable(
 ): Promise<boolean> {
   if (!childSessions) return false // no durable child sessions → cannot prove durability
   if (signal?.aborted) return false
+  // A durability probe observes a potentially RUNNING child. load() performs
+  // crash repair and commits closers, which would shift the durable sequence
+  // underneath its live mirror. Never substitute recovery for this read.
+  if (!childSessions.coordinator.snapshot) return false
   try {
     if (opts?.flushFirst) await childSessions.coordinator.flush(sessionId)
-    const { session } = await childSessions.coordinator.load(sessionId)
+    const { session } = await childSessions.coordinator.snapshot(sessionId)
     if (signal?.aborted) return false
     const events = session.events
     if (events.some((e) => e.type === "user/message")) return true

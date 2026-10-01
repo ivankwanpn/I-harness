@@ -24,7 +24,7 @@
 
 | 編號 | 狀態 | 缺口 / 目前狀況 | 建議補法與後端影響 | 來源 |
 | --- | --- | --- | --- | --- |
-| U08 | 部分完成 | **一般 subagent 的管理介面**。任務投影可看狀態／取消；角色模型設定與 Team 頁存在，但一般子代理沒有完整名單、對話檢視和續派工作介面。 | 分清一般子代理與團隊成員；接入名單、工作輸出、訊息、續派、關閉等可用工具的 Desktop 路由。 | [TaskPane](../../packages/desktop/src/renderer/session/TaskPane.tsx)、[WorkflowTeam](../../packages/desktop/src/renderer/session/WorkflowTeam.tsx) |
+| U08 | 檢視與即時操作已做；冷啟動續派未做 | **獨立 subagent 介面已接通**。頂部「子代理」入口與右側專用頁列出父會話所屬一般／Team／巢狀子代理；可查看唯讀記錄、結果、模型與狀態，即時 owner 有效時可訊息／續派／中斷／關閉。主會話列表、搜尋與封存列表隱藏子代理及代審記錄。 | 冷啟動保存記錄只可讀；未提供冷啟動重建與續派。尚需評估角色建立、額度／耗時展示等管理能力；不能把保存記錄當成活躍執行權限。 | [SubagentPane](../../packages/desktop/src/renderer/session/SubagentPane.tsx)、[session-subagents](../../packages/desktop-gateway/src/session-subagents.ts)、[DSH 實際操作](2026-10-01-dsh-desktop-observation.md) |
 | U09 | 部分完成 | **會話搜尋結果的歷史定位**。搜尋命中可開會話，但不會跳到該筆 seq，沒有歷史分頁控制。 | 命中定位、載入該區段、定位標記與下一頁；需配合虛擬 transcript window。 | [SessionSearch](../../packages/desktop/src/renderer/session/SessionSearch.tsx)、[event-window](../../packages/desktop/src/renderer/session/event-window.ts) |
 | U10 | 缺少 | **永久刪除、批次管理、移動會話至其他專案**。目前有封存／還原及單筆選單。 | 永久刪除和批次管理需明確資料刪除契約；移動專案需處理固定 project owner、檔案範圍和原有會話儲存位置。 | [SessionActions](../../packages/desktop/src/renderer/shell/SessionActions.tsx)、[session-management](../../packages/desktop-gateway/src/session-management.ts)、[project-scope](../../packages/desktop-gateway/src/project-scope.ts) |
 | U11 | 缺少 | **獨立工具／環境診斷頁**。目前工具能力、實際可執行 Shell、Python alias、SDK 缺失主要由 Agent 跑命令才知道。 | 顯示有效工具、延後工具、角色 allowlist、實際執行檔及版本；診斷結果分清未設定、未安裝、不可用與未測。 | [SettingsPane](../../packages/desktop/src/renderer/settings/SettingsPane.tsx)、使用者環境實測報告 |

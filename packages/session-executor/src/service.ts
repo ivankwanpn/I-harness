@@ -182,6 +182,8 @@ export interface SessionService {
    * sessions and active agent tasks reject rebind rather than mixing models. */
   rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
+  /** Synchronous observation only; never resolves a model or constructs an Agent. */
+  liveAssembly(sessionId: string): SessionAssembly | undefined
   hasAssembly(sessionId: string): boolean
   /** Per-session lane observation for the jobs/queue surface:
    * running = a turn is executing; queued = registered submit turns not yet
@@ -904,6 +906,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     contextState,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
+    liveAssembly: (sessionId) => closed || closing.has(sessionId) ? undefined : assemblies.get(sessionId),
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {
       // Count-only compatibility surface (session/status) — derived from the

@@ -19,6 +19,19 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it("peeks only published live assemblies without resolving a model or rebuilding disposed sessions", async () => {
+    const resolve = vi.fn(async () => ({ status: "ready" as const, binding: { model: createMockClient([]), providerId: "local", modelId: "fixture", label: "local:fixture" } }))
+    const service = createSessionService({ workspace: process.cwd(), modelBindingFor: resolve })
+    try {
+      expect(service.liveAssembly("cold")).toBeUndefined()
+      expect(resolve).not.toHaveBeenCalled()
+      const assembly = await service.assemblyFor("live")
+      expect(service.liveAssembly("live")).toBe(assembly)
+      await service.closeSession("live")
+      expect(service.liveAssembly("live")).toBeUndefined()
+      expect(resolve).toHaveBeenCalledTimes(1)
+    } finally { await service.close() }
+  })
   it("runs a host completion hook with the live assembly and resolved limits before submit settles", async () => {
     const model: ModelClient = { async *stream() { yield { type: "text/chunk", text: "answer" }; yield { type: "end" } } }
     const completed = vi.fn(async (_sessionId: string, assembly: unknown, limits: unknown) => {

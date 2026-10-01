@@ -72,6 +72,7 @@
 // a request sent before `initialize` gets -32600 (M68 batch B, v3).
 import { append, subscribe, IMAGE_MEDIA_TYPES, validateImages, type ImageInput, type Session, type SessionEvent } from "@i-harness/core-session"
 import { transportSessionEvents } from "./image-transport.ts"
+export { transportSessionEvents } from "./image-transport.ts"
 import type { SessionService } from "@i-harness/session-executor"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"

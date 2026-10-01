@@ -15,6 +15,32 @@ import {
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
 
+it("gates the parent-scoped subagent catalog separately from role settings and validates request scope fields", async () => {
+  const sent: RpcMessage[] = []
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const catalog = { list: vi.fn(async (parentSessionId: string) => ({ parentSessionId, agents: [] })), history: vi.fn(async () => ({ events: [], nextSeq: 0 })), control: vi.fn(async () => ({ result: { delivered: true } })) } as unknown as NonNullable<DesktopHandlers["sessionSubagents"]>
+  const handlers: DesktopHandlers = { sessionSubagents: catalog }
+  const send = (frame: RpcMessage) => sent.push(frame)
+  const router = createDesktopRouter(createSdkServer(service, { onWrite: createGatewayWrite(send, handlers) }), send, handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    expect(sent[0]).toMatchObject({ result: { capabilities: { "desktop-subagent-catalog": ["1"] } } })
+    expect((sent[0] as { result: { capabilities: Record<string, unknown> } }).result.capabilities).not.toHaveProperty("desktop-subagents")
+    await router.handleLine(encodeFrame(makeRequest(2, "desktop/session/subagents/list", { sessionId: "" })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true); expect(catalog.list).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(3, "desktop/session/subagents/list", { sessionId: "parent" })))
+    expect(catalog.list).toHaveBeenCalledWith("parent")
+    await router.handleLine(encodeFrame(makeRequest(4, "desktop/session/subagents/history", { sessionId: "parent", childSessionId: "child", afterSeq: -1 })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true); expect(catalog.history).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(5, "desktop/session/subagents/history", { sessionId: "parent", childSessionId: "child", afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })))
+    expect(catalog.history).toHaveBeenCalledWith("parent", "child", { afterSeq: Number.MAX_SAFE_INTEGER, limit: 1 })
+    await router.handleLine(encodeFrame(makeRequest(6, "desktop/session/subagents/control", { sessionId: "parent", childSessionId: "child", action: "delete" })))
+    expect(isRpcFailure(sent.at(-1))).toBe(true); expect(catalog.control).not.toHaveBeenCalled()
+    await router.handleLine(encodeFrame(makeRequest(7, "desktop/session/subagents/control", { sessionId: "parent", childSessionId: "child", action: "followup", text: "continue" })))
+    expect(catalog.control).toHaveBeenCalledWith("parent", "child", { action: "followup", text: "continue" })
+  } finally { await router.close(); await service.close() }
+})
+
 it("advertises a read-only work-state method only when wired and validates its session", async () => {
   const sent: RpcMessage[] = []
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })

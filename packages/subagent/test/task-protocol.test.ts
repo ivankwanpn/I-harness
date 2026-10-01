@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createTaskRegistry, taskDocKey, notificationMessageId, TaskIdentityConflictError, TaskConcurrencyLimitError, type TaskSubmissionInput } from "../src/task-protocol.ts"
 
 function fakePersist(records: unknown[] = []) {
@@ -13,6 +13,33 @@ function fakePersist(records: unknown[] = []) {
 }
 
 describe("task protocol store", () => {
+  it("drains queued task document saves before owner teardown without creating an empty document", async () => {
+    const firstWrite = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const saved: unknown[] = []
+    const putDocument = vi.fn(async (_key: string, value: unknown) => {
+      if (saved.length === 0) { firstWrite.resolve(); await release.promise }
+      saved.push(structuredClone(value))
+    })
+    const tasks = createTaskRegistry({ coordinator: { putDocument } as never, stateId: "parent" })
+    const row = tasks.submit({ identity: { parentSessionId: "parent" }, agentPath: "root/helper", description: "helper", prompt: "work", agent: "general", delivery: "tool" })
+    tasks.claim(row.id, "child")
+    tasks.terminalize({ taskId: row.id, outcome: "completed", resultText: "done" })
+    let drained = false
+    try {
+      const flush = tasks.flushPersistence().then(() => { drained = true })
+      await firstWrite.promise
+      expect(drained).toBe(false)
+      release.resolve()
+      await flush
+      expect(putDocument).toHaveBeenCalledTimes(3)
+      expect(saved.at(-1)).toMatchObject({ tasks: [expect.objectContaining({ outcome: "completed", childSessionId: "child" })] })
+      const empty = createTaskRegistry({ coordinator: { putDocument } as never, stateId: "empty" })
+      await empty.flushPersistence()
+      expect(putDocument).toHaveBeenCalledTimes(3)
+    } finally { release.resolve() }
+  })
+
   it("taskDocKey namespaces by stateId", () => {
     expect(taskDocKey("sess-main")).toBe("task-sess-main")
   })

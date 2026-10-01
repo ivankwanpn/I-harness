@@ -52,6 +52,7 @@ export async function dispatchDesktopRequest(
   const contextParams = contextRequestParams(value)
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
+    if (value.kind.startsWith("desktop/session/subagents/") && !runtime.info.capabilities["desktop-subagent-catalog"]?.includes("1")) throw new Error("Subagent catalog unavailable")
     const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh"].includes(value.kind)
     return runtime.client.request(value.kind, contextParams, longOperation ? 600000 : 30000)
   }

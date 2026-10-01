@@ -112,6 +112,16 @@ The user authorized those follow-ups. Fresh verification and actual packaged acc
 
 ## Verification record
 
+### 2026-10-01 子代理介面與持久化收尾
+
+父會話頂部與右側面板已提供獨立子代理名單、一般／Team／巢狀歸屬、唯讀 transcript、結果與模型資訊；即時 owner 有效時可訊息、續派、中斷及關閉。普通會話导航、搜尋、封存與 dashboard 排除子代理／代審記錄，保留普通使用者會話與 fork。冷啟動保存記錄只可讀，尚無冷啟動續派。
+
+修復 Team 在活躍子會話上呼叫具修復副作用的 load 所造成的 sequence 損壞：改為唯讀 snapshot，沒有放寬序號檢查或改寫使用者原始損壞 log。另修復 task document 上游存檔佇列未在 CLI shutdown 前排空的競態，及背景命令測試尚未等待程序真正關閉就刪除 cwd 的問題。
+
+本輪完整驗證為 **4,039 通過、10 略過、0 失敗、70/70 專案**，型別、5 個 E2E 檔案及 reachability 通過。紀錄：`D:/frontend-research/ih-cli-shutdown-final-verify-2026-10-01.log`。DSH Desktop 已實際啟動、自測與點擊觀察，參見 [DSH 實際操作報告](2026-10-01-dsh-desktop-observation.md)。其他提供商真實協議驗收仍需相應設定，沒有以 DSH 自測替代 IH 驗收。
+
+### 先前驗證
+
 The initial inventory was source inspection only. Subsequent integrated verification passed **3,792 tests, 9 skipped, 0 failed, 70/70 projects**, all typechecks, five E2E files and reachability. Log: `D:/frontend-research/desktop-workflow-completion-portable-verify-2026-09-30.log`. Package creation also succeeded.
 
 Actual packaged acceptance used real configured DeepSeek Anthropic Messages and OpenAI Responses at Max with an independently configured Low reviewer. Both completed list_dir/read calls with live reasoning and review reuse. CMD shell execution, Goal completion, one team member/task, one durable completed job and six durable review records passed. After restart the saved state/history remained, and cold jobs had no fake cancellation authority. The three conversations were exactly two main QA conversations plus the explicitly created teammate; no reviewer conversation appeared. The final Gateway was also copied to a temporary directory outside the repository, with NODE_PATH cleared, and started successfully. See the completion acceptance report for exact logs/screenshots and remaining limits.

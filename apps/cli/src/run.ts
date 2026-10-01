@@ -966,5 +966,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // The assembly owns every mount's reverse-order unmount + the win32 ACL
     // sandbox teardown (dispose never throws) — never the coordinator.
     await assembly?.dispose().catch(() => {})
+    // Disposal joins task/notification save queues and may schedule registry
+    // metadata writes. The final store barrier must follow those producers.
+    if (opts.coordinator) await opts.coordinator.close().catch((error: unknown) => {
+      d.warn(`Persistence shutdown failed: ${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 }

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createProjectScopeBroker } from "../src/project-scope.ts"
-import { createConversationVisibility } from "../src/session-visibility.ts"
+import { createSessionRuntimeVisibility } from "../src/session-visibility.ts"
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
@@ -16,7 +16,7 @@ async function setup() {
   const sessionDir = join(root, "sessions")
   const coordinator = createSessionCoordinator(createJsonlBackend(sessionDir))
   await coordinator.create({ sessionId: "s1" })
-  const broker = createProjectScopeBroker(coordinator, workspace, createConversationVisibility(coordinator))
+  const broker = createProjectScopeBroker(coordinator, workspace, createSessionRuntimeVisibility(coordinator))
   const project = { id: "p1", name: "Project", roots: [workspace, second], primaryRoot: workspace }
   return { root, workspace, second, third, sessionDir, coordinator, broker, project }
 }

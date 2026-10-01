@@ -16,7 +16,8 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
-import { createConversationVisibility } from "./session-visibility.ts"
+import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
+import { createDesktopSubagents } from "./session-subagents.ts"
 import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
@@ -106,7 +107,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const compactionSignals = new Map<string, AbortSignal>()
   const isConversation = createConversationVisibility(coordinator)
-  const projects = createProjectScopeBroker(coordinator, options.workspace, isConversation)
+  const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator))
   const approvals = createDesktopApprovalHistory(coordinator)
   const reviewerPool = createIsolatedReviewerPool()
   const agentShell = createAgentShellSettings(settingsPath)
@@ -228,6 +229,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
+  const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: notifyWorkflow })
   const review = createWorkspaceReview(options.workspace)
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
@@ -236,7 +238,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await plugins.inputs()).hookConfigs, () => plugins.refresh()),
-    subagents,
+    subagents, sessionSubagents,
     agentSettings,
     terminal,
     schedules: createDesktopSchedules(coordinator, service),
@@ -263,7 +265,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         return result
       } finally { compactionSignals.delete(sessionId) }
     },
-    sessionQuery,
+    sessionQuery: createConversationQuery(coordinator, sessionQuery),
     sandboxState: (): SandboxState => ({ mode, source: "settings", wired: true }),
     interaction,
     review,
@@ -288,14 +290,17 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     listSessions: async () => {
       const ids = await coordinator.list()
       const sessions = await Promise.all(ids.map(async (id) => {
+        let conversation = false
+        let title: string | undefined
         try {
           const { meta } = await coordinator.profile(id)
           if (meta.archived || !await isConversation(id, meta)) return undefined
+          conversation = true; title = meta.title
           const session = service.liveSession(id) ?? (await (coordinator.snapshot?.(id) ?? coordinator.load(id))).session
           const turnCount = session.events.filter((event) => event.type === "turn/end").length
           return { id, turnCount, ...(meta.title === undefined ? {} : { title: meta.title }) }
         } catch {
-          return { id }
+          return conversation ? { id, ...(title ? { title } : {}) } : undefined
         }
       }))
       return { sessions: sessions.filter((row) => row !== undefined) }
@@ -333,6 +338,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       offInteraction()
       await input.close()
       await router.close()
+      await sessionSubagents.close()
       await projects.close()
       await review.close()
       await workflow.close()

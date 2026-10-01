@@ -16,6 +16,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createSession, type SessionEvent } from "@i-harness/core-session"
 import { createAgentTable, createJobRegistry, createRoleRegistry } from "@i-harness/subagent"
+import { snapshotState } from "../../subagent/src/persist.ts"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import { registerExec } from "@i-harness/exec"
 /** The seam is required; the teammate role carries no model, so it is never
@@ -55,6 +56,27 @@ function makeDeps(overrides?: Partial<TeamDeps>): TeamDeps {
 }
 
 describe("mountAgentTeams lifecycle", () => {
+  it("makes the generated teammate role available for resident rebuild without persisting it or replacing a custom role", async () => {
+    const deps = makeDeps()
+    const ctx = createContext()
+    const handle = await mountAgentTeams(ctx, createToolRegistry(ctx), deps)
+    try {
+      expect(deps.subagents.roles.get("teammate")).toMatchObject({ name: "teammate", ephemeral: true })
+      expect(snapshotState(deps.subagents).roles.some((role) => role.name === "teammate")).toBe(false)
+    } finally { await handle.unmount() }
+    expect(deps.subagents.roles.get("teammate")).toBeUndefined()
+
+    const custom = { name: "teammate", description: "custom", systemPrompt: "custom prompt", tools: ["read"], model: { provider: "local", model: "custom" } }
+    deps.subagents.roles.register(custom)
+    const customCtx = createContext()
+    const customHandle = await mountAgentTeams(customCtx, createToolRegistry(customCtx), deps)
+    try {
+      expect(deps.subagents.roles.get("teammate")).toBe(custom)
+      expect(snapshotState(deps.subagents).roles).toContain(custom)
+    } finally { await customHandle.unmount() }
+    expect(deps.subagents.roles.get("teammate")).toBe(custom)
+  })
+
   it("mount registers the 10 team tools; unmount unregisters them (idempotent)", async () => {
     const ctx = createContext()
     const tools = createToolRegistry(ctx)
@@ -339,7 +361,7 @@ describe("mountAgentTeams lifecycle", () => {
         list.push(...events)
         memSessions.set(sessionId, list)
       },
-      load: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
+      snapshot: async (sessionId: string) => ({ session: { formatVersion: 1, events: [...(memSessions.get(sessionId) ?? [])] } }),
       list: async () => [...memSessions.keys()],
       flush: async () => {},
       close: async () => {},

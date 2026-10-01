@@ -37,6 +37,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
     if (handlers.hooks) capabilities["desktop-hooks"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
+    if (handlers.sessionSubagents) capabilities["desktop-subagent-catalog"] = ["1"]
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
     if (handlers.terminal) capabilities["desktop-terminal"] = ["1"]
     if (handlers.schedules) capabilities["desktop-schedule"] = ["1"]
@@ -149,6 +150,28 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         send(makeFailure(message.id, INVALID_REQUEST, "not initialized: send initialize first", {
           reason: "not_initialized",
         }))
+        return
+      }
+
+      if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
+        const params = asRecord(message.params)
+        try {
+          if (typeof params?.sessionId !== "string" || !params.sessionId || params.sessionId.length > 256) throw new Error("Invalid parent session")
+          let result: unknown
+          if (message.method.endsWith("/list")) result = await handlers.sessionSubagents.list(params.sessionId)
+          else {
+            if (typeof params.childSessionId !== "string" || !params.childSessionId || params.childSessionId.length > 256) throw new Error("Invalid child session")
+            if (message.method.endsWith("/history")) {
+              if (params.afterSeq !== undefined && (typeof params.afterSeq !== "number" || !Number.isSafeInteger(params.afterSeq) || params.afterSeq < 0)) throw new Error("Invalid history cursor")
+              if (params.limit !== undefined && (typeof params.limit !== "number" || !Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > 1000)) throw new Error("Invalid history limit")
+              result = await handlers.sessionSubagents.history(params.sessionId, params.childSessionId, { ...(params.afterSeq !== undefined ? { afterSeq: params.afterSeq as number } : {}), ...(params.limit !== undefined ? { limit: params.limit as number } : {}) })
+            } else {
+              if (!["followup", "message", "interrupt", "close"].includes(String(params.action)) || (params.text !== undefined && typeof params.text !== "string")) throw new Error("Invalid subagent control")
+              result = await handlers.sessionSubagents.control(params.sessionId, params.childSessionId, { action: params.action as "followup" | "message" | "interrupt" | "close", ...(params.text !== undefined ? { text: params.text as string } : {}) })
+            }
+          }
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
 

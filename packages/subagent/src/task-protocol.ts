@@ -108,6 +108,8 @@ export interface TaskRegistry {
   wait(taskId: string, timeoutMs: number): Promise<TaskRecord | undefined>
   restore(doc: TaskProtocolDocument): void
   save(): Promise<void>
+  /** Drain already-scheduled saves without creating another document write. */
+  flushPersistence(): Promise<void>
 }
 
 export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry {
@@ -301,6 +303,13 @@ export function createTaskRegistry(opts: TaskRegistryOptions = {}): TaskRegistry
       }
     },
     save,
+    async flushPersistence() {
+      for (;;) {
+        const pending = saveChain
+        await pending
+        if (pending === saveChain) return
+      }
+    },
   }
 
   function runningCountUnsafe(): number {

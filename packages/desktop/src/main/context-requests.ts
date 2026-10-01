@@ -36,6 +36,16 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
       return { ...command }
     }
     case "desktop/subagents/state": return {}
+    case "desktop/session/subagents/list": return { sessionId: text("sessionId", 256) }
+    case "desktop/session/subagents/history": {
+      if (value.afterSeq !== undefined && (typeof value.afterSeq !== "number" || !Number.isSafeInteger(value.afterSeq) || value.afterSeq < 0)) throw new Error("invalid afterSeq")
+      if (value.limit !== undefined && (typeof value.limit !== "number" || !Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 1000)) throw new Error("invalid history limit")
+      return { sessionId: text("sessionId", 256), childSessionId: text("childSessionId", 256), ...(value.afterSeq === undefined ? {} : { afterSeq: value.afterSeq }), ...(value.limit === undefined ? {} : { limit: value.limit }) }
+    }
+    case "desktop/session/subagents/control": {
+      if (!["followup", "message", "interrupt", "close"].includes(String(value.action))) throw new Error("invalid subagent action")
+      return { sessionId: text("sessionId", 256), childSessionId: text("childSessionId", 256), action: value.action, ...(["followup", "message"].includes(String(value.action)) ? { text: text("text", 65536) } : {}) }
+    }
     case "desktop/subagents/mutate": {
       if (!value.command || typeof value.command !== "object" || Array.isArray(value.command)) throw new Error("invalid subagent settings command")
       const command = value.command as Record<string, unknown>

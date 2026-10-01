@@ -22,6 +22,7 @@ import { resolveShell, type ShellRetentionOptions } from "@i-harness/shell"
 import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { probeBwrap } from "@i-harness/sandbox-local"
+import type { ExecService } from "@i-harness/exec"
 
 let canonicalConfigDir: string
 let closeFixtureModel: (() => Promise<void>) | undefined
@@ -124,6 +125,21 @@ vi.mock("@i-harness/session-query", async (importOriginal) => {
     createFileBackedSessionQuery: (...args: unknown[]) => {
       fileBackedCalls.list.push(args)
       return real(...args)
+    },
+  }
+})
+
+// Observe the real mounted exec service so promotion teardown can wait for
+// its process-close outcome rather than a file written before process exit.
+const mountedExecServices = vi.hoisted(() => ({ list: [] as ExecService[] }))
+vi.mock("@i-harness/exec", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@i-harness/exec")>()
+  return {
+    ...actual,
+    registerExec: (...args: Parameters<typeof actual.registerExec>) => {
+      const service = actual.registerExec(...args)
+      mountedExecServices.list.push(service)
+      return service
     },
   }
 })
@@ -908,8 +924,9 @@ describe("headless CLI persistence (M5, M29: JSONL only)", () => {
 describe("headless CLI subagent state persistence (M6)", () => {
   it("persists subagent state via the coordinator document API on a run", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-m6-"))
+    const failures = vi.fn()
+    const coordinator = createSessionCoordinator(createJsonlBackend(dir), { reportBackgroundFailure: failures })
     try {
-      const coordinator = createSessionCoordinator(createJsonlBackend(dir))
       const { id } = await coordinator.create()
       // Deterministic spawn driver: a SHARED mock cassette would be consumed by
       // the spawned child (destructive-cassette race, M3-C), exhausting the main
@@ -936,18 +953,18 @@ describe("headless CLI subagent state persistence (M6)", () => {
         model: spawnModel,
       })
       expect(result.exitCode).toBe(0)
-      // Wrapper saves are fire-and-forget (Task 2 design), so durability is
-      // eventual: poll until the document shows a settled job. This also proves
-      // the child's terminal save completed before teardown (no ENOENT race).
-      const state = await pollUntil(async () => {
-        const doc = await coordinator.getDocument(id)
-        if (!doc) return undefined
-        const jobs = (doc as { jobs: { status: string }[] }).jobs
-        return jobs.length > 0 && jobs.every((j) => j.status !== "running") ? doc : undefined
-      })
+      // The completed run owns the shutdown barrier: both registry snapshots
+      // and the nested task/notification save queue must already be durable.
+      const state = await coordinator.getDocument(id) as { jobs: { status: string }[] }
       expect(state).toBeDefined()
-      expect((state as { jobs: unknown[] }).jobs.length).toBeGreaterThan(0)
+      expect(state.jobs.length).toBeGreaterThan(0)
+      expect(state.jobs.every((job) => job.status !== "running")).toBe(true)
+      const tasks = await coordinator.getDocument(`task-${id}`) as { tasks: { outcome?: string }[]; notifications: { status: string }[] }
+      expect(tasks.tasks.every((task) => task.outcome === "completed")).toBe(true)
+      expect(tasks.notifications).toEqual([expect.objectContaining({ status: "woken" })])
+      expect(failures).not.toHaveBeenCalled()
     } finally {
+      await coordinator.close()
       rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
@@ -1324,9 +1341,11 @@ describe("headless CLI W10 foreground promotion", () => {
   // shell tool, the guard and exec's job registry, in one pass.
   it("a shell call that outlives shellBackgroundAfterMs returns a job id, and the command outlives the run to finish its work", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-w10-cli-"))
+    const release = join(dir, "release")
+    const servicesBefore = mountedExecServices.list.length
+    let jobId: string | undefined
     try {
       const shell = resolveShell().name
-      const release = join(dir, "release")
       const donePath = join(dir, "done.txt")
       const fwd = (p: string): string => p.replace(/\\/g, "/")
       // The command WAITS for the release file, so "still running" at the point
@@ -1355,6 +1374,7 @@ describe("headless CLI W10 foreground promotion", () => {
       expect(shellResult!.output.promoted).toBe(true)
       expect(shellResult!.output.ran_foreground_ms).toBeGreaterThanOrEqual(300)
       expect(shellResult!.output.job_id).toMatch(/^bash-\d+$/)
+      jobId = shellResult!.output.job_id
       expect(shellResult!.output.code).toBeUndefined()
       // The job surface the model reads agrees: the promoted command is a live
       // bash job while the run is still going.
@@ -1367,10 +1387,21 @@ describe("headless CLI W10 foreground promotion", () => {
       writeFileSync(release, "go")
       const finished = await pollUntil(async () => (existsSync(donePath) ? true : undefined), 10_000)
       expect(finished).toBe(true)
+      const exec = mountedExecServices.list[servicesBefore]!
+      const closed = await pollUntil(async () => {
+        const job = exec.getOutput(jobId!)
+        return job.status === "running" ? undefined : job
+      }, 10_000)
+      expect(closed).toMatchObject({ status: "completed", exitCode: 0 })
     } finally {
-      // The completion marker precedes the background process releasing its
-      // Windows cwd handle. Retry cleanup without weakening any job assertions.
-      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
+      // Release even after an assertion failure, and await the real close
+      // callback before deleting the process's Windows working directory.
+      if (jobId && existsSync(dir)) {
+        writeFileSync(release, "go")
+        const exec = mountedExecServices.list[servicesBefore]!
+        await pollUntil(async () => exec.getOutput(jobId!).status === "running" ? undefined : true, 10_000)
+      }
+      rmSync(dir, { recursive: true, force: true })
     }
   }, 20_000)
 })

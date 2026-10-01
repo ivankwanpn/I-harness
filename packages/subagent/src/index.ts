@@ -19,7 +19,7 @@ export type { SpawnOptions } from "./child.ts"
 export { createSubagentTools } from "./tools.ts"
 export { driveFollowups, ensureResidentAgent, sweepPendingInbox, type FollowupDeps } from "./tools.ts"
 export type { SubagentToolDeps } from "./tools.ts"
-export { restoreState, wireSubagentPersistence } from "./persist.ts"
+export { restoreState, wireSubagentPersistence, snapshotState } from "./persist.ts"
 export type { SubagentPersistence, SubagentStateSnapshot } from "./persist.ts"
 export { createTaskRegistry, taskDocKey, notificationMessageId, classifyRestoredTasks, isSessionCancelledChain, TaskIdentityConflictError, TaskConcurrencyLimitError } from "./task-protocol.ts"
 export type { TaskRegistry, TaskRecord, TaskStatus, TaskOutcome, TaskDelivery, TaskIdentity, TaskNotificationRecord, TaskProtocolDocument, OutboxStatus, RecoveryReason } from "./task-protocol.ts"
@@ -106,6 +106,8 @@ export interface RegisterSubagentResult {
   // mirror by then) and before the main agent can touch the tools. Resolves
   // immediately (no-op) when there is no restored state.
   ready: Promise<void>
+  /** Wait for notification admissions and their queued task-document saves. */
+  flushPersistence(): Promise<void>
   // M26-D1: the durable task protocol registry (records + notification
   // outbox) behind this mount. With persistence the ready chain already
   // restored + classified the records from `task:<stateId>`.
@@ -205,7 +207,12 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     admit: opts.parentNotify,
     isSessionCancelled: (sessionId) => isSessionCancelledChain(tasks, sessionId),
   })
-  notifDrainHook = () => { void notifDrain.drain().catch(() => {}) }
+  const notificationDrains = new Set<Promise<number>>()
+  notifDrainHook = () => {
+    const job = notifDrain.drain()
+    notificationDrains.add(job)
+    void job.catch(() => {}).finally(() => { notificationDrains.delete(job) })
+  }
   if (opts.restoredState && opts.persist) {
     // Task 4.4 (fix round 1): restoreState mapped each mid-flight job
     // running→"error" PRE-wiring, so the observer-wrapped registry never saw
@@ -226,6 +233,14 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     roles, jobs, table, agents,
     ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
     ready, tasks,
+    async flushPersistence() {
+      await ready
+      for (;;) {
+        await Promise.allSettled([...notificationDrains])
+        await tasks.flushPersistence()
+        if (notificationDrains.size === 0) return
+      }
+    },
     projectTasks: () => projectAgentTasks({ table, jobs, roles, tasks }),
   }
 }

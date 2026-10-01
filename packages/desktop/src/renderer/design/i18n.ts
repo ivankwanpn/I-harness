@@ -2,6 +2,10 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "子代理列表": "Subagents", "正在讀取子代理…": "Loading subagents…", "尚無子代理": "No subagents yet", "主會話": "Parent conversation", "返回子代理列表": "Back to subagents", "子代理執行記錄": "Subagent transcript",
+  "子會話為唯讀；可用操作由父會話管理。": "This child conversation is read-only. Available actions are managed through its parent.", "子代理輸入": "Subagent input", "派發後續任務": "Send follow-up task", "傳送訊息": "Send message", "中斷子代理": "Interrupt subagent", "關閉子代理": "Close subagent", "確認關閉子代理": "Confirm close",
+  "等待中": "Waiting", "不可用": "Unavailable", "模型資訊未提供": "Model information unavailable", "讀取子代理記錄失敗": "Could not read subagent transcript", "沒有可顯示的子代理記錄": "No subagent transcript available", "已送出子代理操作": "Subagent action submitted", "重新讀取失敗，請重試後再操作。": "Readback failed. Retry before another action.", "顯示最近 {count} 筆記錄": "Showing the latest {count} events",
+  "已保存的子代理記錄": "Saved subagent record", "查看子代理 {name}": "View subagent {name}", "子代理暫時不可用": "Subagent temporarily unavailable", "部分子代理資料無法讀取，請重新整理。": "Some subagent data could not be read. Refresh the list.", "最終結果": "Final result",
   "待辦進度": "Todo progress", "收合待辦清單": "Collapse Todo list", "展開待辦清單": "Expand Todo list", "開啟待辦編輯": "Open Todo editor",
   "正在套用專案資料夾…": "Applying project folder scope…", "檔案附件合計不能超過 8 個。": "File attachments cannot exceed 8 in total.",
   "完成一輪後才能建立分支": "Complete one turn before forking this conversation.",

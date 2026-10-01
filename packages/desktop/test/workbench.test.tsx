@@ -14,6 +14,16 @@ const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "worksp
 
 afterEach(() => { cleanup(); useUiStore.setState({ reviewOpen: false, surface: "conversation" }); useLocale.getState().setLocale("zh-TW") })
 
+it("opens delegated work in its own pane while retaining the selected parent conversation", async () => {
+  const request = vi.fn(async (input: { kind: string }) => input.kind === "desktop/session/subagents/list" ? { parentSessionId: "parent", agents: [] } : undefined)
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="parent" capabilities={{ "desktop-subagent-catalog": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => { throw new Error("Subagent pane must not select a main chat") }}
+    conversation={{ rows: [], canSend: false, running: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)
+  fireEvent.click(screen.getByRole("button", { name: "子代理" }))
+  await waitFor(() => expect(screen.getByRole("tab", { name: "子代理" }).getAttribute("aria-selected")).toBe("true"))
+  await waitFor(() => expect(screen.getByText("尚無子代理")).toBeTruthy())
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/session/subagents/list", workspaceId: ENTRY.id, sessionId: "parent" })
+})
+
 function fakeBridge(): DesktopBridge {
   return {
     request: vi.fn(async () => undefined),
