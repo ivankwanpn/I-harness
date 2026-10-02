@@ -74,7 +74,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--code-mode off|mixed|only] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
@@ -229,8 +229,8 @@ export async function main(argv: string[]): Promise<number> {
   // out again, and a flag missing from EITHER chain there leaks into the prompt
   // (the `--no-compact` defect: `run "do x" --no-compact` sent the model
   // `do x --no-compact`).
-  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact", "--protocol"])
-  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--protocol"])
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact", "--protocol", "--code-mode"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--protocol", "--code-mode"])
   const runArgs = args.slice(1)
   for (let i = 0; i < runArgs.length; i += 1) {
     const a = runArgs[i]!
@@ -271,6 +271,16 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const yes = args.includes("--yes")
+  if (args.filter(arg => arg === "--code-mode").length > 1) {
+    d.error("--code-mode may only be specified once")
+    return Promise.resolve(1)
+  }
+  const codeModeIdx = args.indexOf("--code-mode")
+  const codeModeValue = codeModeIdx === -1 ? undefined : args[codeModeIdx + 1]
+  if (codeModeIdx !== -1 && !["off", "mixed", "only"].includes(codeModeValue ?? "")) {
+    d.error("--code-mode requires one of: off | mixed | only")
+    return Promise.resolve(1)
+  }
   // M62: `--sandbox` is the headless face of `settings.sandboxMode`. Measured
   // gap this closes: HeadlessOptions.sandbox was read from the caller and the
   // CLI could not supply it, so `i-harness run` — the ONLY remaining interface
@@ -410,9 +420,9 @@ export async function main(argv: string[]): Promise<number> {
   // reaches the model as task text (the `--no-compact` defect this test file
   // pins), and one missing from chain 2 leaks its VALUE.
   const taskArgs = args.slice(1).filter((a, i) => {
-    if (a === "--model" || a === "--api-key" || a === "--yes" || a === "--session-dir" || a === "--resume" || a === "--telemetry" || a === "--sandbox" || a === "--no-compact" || a === "--protocol") return false
+    if (RUN_FLAGS.has(a)) return false
     const prev = args.slice(1)[i - 1]
-    return prev !== "--model" && prev !== "--api-key" && prev !== "--session-dir" && prev !== "--resume" && prev !== "--sandbox" && prev !== "--protocol"
+    return prev === undefined || !RUN_VALUE_FLAGS.has(prev)
   })
   const task = taskArgs.join(" ")
   if (!task) {
@@ -421,6 +431,7 @@ export async function main(argv: string[]): Promise<number> {
   }
 
   const opts: HeadlessOptions = {
+    codeMode: { ...settings.get().codeMode, ...(codeModeValue === undefined ? {} : { mode: codeModeValue as "off" | "mixed" | "only" }) },
     workspace: process.cwd(),
     approveAll: yes,
     modelPolicy: "required",
@@ -596,6 +607,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   // validation), so no record is being missed.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),
@@ -846,6 +858,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   // W6 T4: same seam as the sdk path above, same reason — see there.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",
     modelBindingFor: providerModelBindingFor(runtime),

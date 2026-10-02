@@ -57,6 +57,8 @@ export interface TeamSubagentDeps {
   allowSubagentModelSelection?: SpawnOptions["allowSubagentModelSelection"]
   autoCompactionEnabled?: SpawnOptions["autoCompactionEnabled"]
   inheritedSystemContext?: SpawnOptions["inheritedSystemContext"]
+  codeMode?: SpawnOptions["codeMode"]
+  codeModeFactory?: SpawnOptions["codeModeFactory"]
   /** M73: the session's own model's numbers, mirrored from SpawnOptions the way
    * the two fields above are. A teammate with no declared model runs on the
    * session's model, so its requests are clamped and measured against the same
@@ -249,6 +251,7 @@ export async function mountAgentTeams(
       else if (opts?.forkTurns === undefined || opts.forkTurns === "all") forkTurns = "all"
       else forkTurns = opts.forkTurns
       return spawnChild({
+        codeMode: sub.codeMode, codeModeFactory: sub.codeModeFactory,
         taskName: name,
         message: prompt,
         parentPath: "lead",
@@ -313,6 +316,7 @@ export async function mountAgentTeams(
       if (!entry) return "inactive"
       const previous = entry.status
       entry.controller.abort()
+      await entry.cancel?.("Teammate interrupted")
       // M19 Ruling 26 (status edge): the aborted turn rejects and flips the
       // child's status → waiting without a team event; wake wait_agent waiters.
       if (entry.followupChain) void entry.followupChain.then(() => activity.notify()).catch(() => {})
@@ -322,8 +326,8 @@ export async function mountAgentTeams(
       const entry = sub.table.get(path)
       if (!entry) return
       entry.controller.abort()
-      await entry.followupChain?.catch(() => {})
-      entry.unmount?.()
+      if (entry.dispose) await entry.dispose()
+      else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
       if (entry.jobId) sub.jobs.kill(entry.jobId)
       sub.table.remove(path)
       if (entry.sessionId) sub.agents.remove(entry.sessionId)
@@ -548,8 +552,8 @@ export async function mountAgentTeams(
           if (!path.startsWith("lead/")) continue
           try {
             entry.controller.abort()
-            await entry.followupChain?.catch(() => {})
-            entry.unmount?.()
+            if (entry.dispose) await entry.dispose()
+            else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
             if (entry.jobId) sub.jobs.kill(entry.jobId)
             sub.table.remove(path)
             if (entry.sessionId) sub.agents.remove(entry.sessionId)

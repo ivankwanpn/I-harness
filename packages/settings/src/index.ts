@@ -280,6 +280,7 @@ export interface SettingsOnboarding {
 /** The full, durable settings document. Every field has a default so an
  * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
+  codeMode: SettingsCodeMode
   sandboxMode: SettingsSandboxMode
   /** Executable preference for new Agent shell commands. */
   agentShell: SettingsAgentShell
@@ -315,12 +316,41 @@ export interface SettingsCompaction {
   auto: boolean
 }
 
+/** Backend Code Mode preference. Omitted limits use the runtime defaults. */
+export interface SettingsCodeMode {
+  mode: "off" | "mixed" | "only"
+  memoryLimitMb?: number
+  cpuTimeMs?: number
+  maxActiveCells?: number
+  maxPendingCalls?: number
+  maxSourceBytes?: number
+  maxResultBytes?: number
+  maxStoreBytes?: number
+  defaultYieldTimeMs?: number
+  defaultOutputTokens?: number
+}
+
+export function normalizeCodeMode(raw: unknown): SettingsCodeMode {
+  const value = isRecord(raw) ? raw : {}
+  const result: SettingsCodeMode = { mode: oneOf(value.mode, ["off", "mixed", "only"] as const, "off") }
+  const bounds = { memoryLimitMb: [8, 256], cpuTimeMs: [10, 10_000], maxActiveCells: [1, 16], maxPendingCalls: [1, 256], maxSourceBytes: [1, 1024 * 1024], maxResultBytes: [1, 16 * 1024 * 1024], maxStoreBytes: [1, 4 * 1024 * 1024], defaultYieldTimeMs: [0, 60_000], defaultOutputTokens: [0, 4096] } as const
+  for (const key of Object.keys(bounds) as (keyof typeof bounds)[]) {
+    const input = value[key]
+    if (typeof input === "number" && Number.isFinite(input)) {
+      const [min, max] = bounds[key]
+      result[key] = Math.min(max, Math.max(min, Math.floor(input)))
+    }
+  }
+  return result
+}
+
 // NOT exported (2026-09-18): nothing outside this module names it, and
 // `normalizeSettings` is the public way to obtain the same values — which is
 // what the three test files that used it as an oracle now do. The row this
 // retires was blocked for months by a mis-stated reason; see the correction in
 // docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
 const SETTINGS_DEFAULTS: Settings = {
+  codeMode: { mode: "off" },
   sandboxMode: "workspace-write",
   agentShell: "auto",
   approvalMode: "dangerous",
@@ -680,6 +710,7 @@ export function normalizeSettings(raw: unknown): Settings {
       llm: normalizeLlm(undefined, base.llm),
       onboarding: { ...base.onboarding },
       compaction: { ...base.compaction },
+      codeMode: { ...base.codeMode },
       tui: normalizeTui(undefined, base.tui),
     }
   }
@@ -688,6 +719,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    codeMode: normalizeCodeMode(raw.codeMode),
     agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),
     approvalMode: oneOf(raw.approvalMode, APPROVAL_MODES, base.approvalMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,

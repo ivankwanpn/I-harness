@@ -100,11 +100,18 @@ export function createCompactionEngine(deps: {
    * post-hoc character slice of the accepted summary — see summarizeWithModel's
    * `limits` note. */
   maxOutputTokens?: number
+  /** Current system/tool overhead when the model-facing catalog is live. */
+  overheadTokens?: () => number
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
   // provider/modelId → resolveConfig → pre-M34 behavior exactly.
   const config = resolveCompactSpec(deps.config, deps.provider, deps.modelId)
+  function overheadNow(): number {
+    const value = deps.overheadTokens?.() ?? config.overheadTokens
+    if (!Number.isInteger(value) || value < 0) throw new Error("compaction overhead must be a non-negative integer")
+    return value
+  }
   // M15: catalog-first (profile.modelContexts[modelId] → profile.contextWindow
   // → config.contextWindow). No profile/modelId → config → M11/M14 behavior.
   const contextWindow = resolveContextWindow(deps.profile, deps.modelId, config)
@@ -241,7 +248,7 @@ export function createCompactionEngine(deps: {
         // `estimateContent(messages) + overheadTokens`). The summarizer's
         // request carries the system prompt and tool schemas too. Resolved
         // (default 0), so it is passed as a value, not as a spread.
-        overheadTokens: config.overheadTokens,
+        overheadTokens: overheadNow(),
       },
       // M75: and the region itself, RAW — the summarizer slices it for itself
       // when the single request cannot fit the window. Pre-slicing here would
@@ -304,7 +311,7 @@ export function createCompactionEngine(deps: {
     async maybeCompact(session: Session): Promise<CompactionResult> {
       // M33 §3.1: the host-known charge the session log does not carry
       // (system prompt + tool schemas — CompactionConfig.overheadTokens).
-      if (activeTokens(session) + config.overheadTokens < contextWindow * config.thresholdRatio) {
+      if (activeTokens(session) + overheadNow() < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
       // M34 ⑦d — the auto-path gate stack (documented state machine):
@@ -366,7 +373,7 @@ export function createCompactionEngine(deps: {
         // M34 ⑦d sticky arm: success that still leaves the surface over the
         // gate → suppress auto re-compaction until new content/manual success.
         const after = safeActiveTokens(session)
-        if (after !== undefined && after + config.overheadTokens >= contextWindow * config.thresholdRatio) {
+        if (after !== undefined && after + overheadNow() >= contextWindow * config.thresholdRatio) {
           stickyFromSeq.set(session, lastEventSeq(session))
         } else {
           stickyFromSeq.delete(session)

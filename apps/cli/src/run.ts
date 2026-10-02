@@ -117,6 +117,7 @@ export async function handleSessionCompactCommand(
 }
 
 export interface HeadlessOptions {
+  codeMode?: import("@i-harness/settings").SettingsCodeMode
   workspace: string
   mockScript?: MockStep[]
   model?: ModelClient
@@ -594,6 +595,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
 
     assembly = await createSessionAssembly({
+      ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
       workspace: opts.workspace,
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
       modelPolicy,

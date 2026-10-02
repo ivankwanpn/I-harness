@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
+    "@i-harness/code-mode": "workspace:*",
     "@i-harness/agent-team": "workspace:*",
     "@i-harness/attachment": "workspace:*",
     "@i-harness/compaction": "workspace:*",

@@ -64,6 +64,33 @@ afterEach(() => {
 })
 
 describe("run argv routing", () => {
+  it.each(["off", "mixed", "only"])("routes --code-mode %s without leaking it into the task", async (mode) => {
+    expect(await main(["node", "i-harness", "run", "hello", "--code-mode", mode])).toBe(0)
+    expect(calls[0]).toMatchObject({ task: "hello", opts: { codeMode: { mode } } })
+  })
+  it.each([undefined, "typo", "--yes"])("refuses an invalid Code Mode flag value %s", async (value) => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      expect(await main(["node", "i-harness", "run", "hello", "--code-mode", ...(value === undefined ? [] : [value])])).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.flat().join(" ")).toContain("--code-mode requires one of: off | mixed | only")
+    } finally { err.mockRestore() }
+  })
+  it("uses saved Code Mode limits and lets an explicit mode override the saved mode", async () => {
+    writeFileSync(join(configDir, "settings.json"), JSON.stringify({ codeMode: { mode: "only", maxActiveCells: 2 } }))
+    await main(["node", "i-harness", "run", "hello"])
+    expect(calls[0]?.opts.codeMode).toEqual({ mode: "only", maxActiveCells: 2 })
+    await main(["node", "i-harness", "run", "hello", "--code-mode", "mixed"])
+    expect(calls[1]?.opts.codeMode).toEqual({ mode: "mixed", maxActiveCells: 2 })
+  })
+  it("rejects duplicate Code Mode flags instead of silently choosing one", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {})
+    try {
+      expect(await main(["node", "i-harness", "run", "hello", "--code-mode", "mixed", "--code-mode", "only"])).toBe(1)
+      expect(calls).toHaveLength(0)
+      expect(err.mock.calls.flat().join(" ")).toContain("--code-mode may only be specified once")
+    } finally { err.mockRestore() }
+  })
   it("refuses a stray flag instead of sending it as the prompt", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {})
     try {

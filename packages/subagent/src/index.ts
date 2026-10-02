@@ -108,6 +108,7 @@ export interface RegisterSubagentResult {
   ready: Promise<void>
   /** Wait for notification admissions and their queued task-document saves. */
   flushPersistence(): Promise<void>
+  dispose(): Promise<void>
   // M26-D1: the durable task protocol registry (records + notification
   // outbox) behind this mount. With persistence the ready chain already
   // restored + classified the records from `task:<stateId>`.
@@ -165,6 +166,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     table, jobs, roles, parentRegistry, parentSession: opts.parentSession, parentCtx: ctx,
     parentModel: opts.parentModel, resolveModel: opts.resolveModel, exec: opts.exec,
     agents,
+    codeMode: opts.codeMode, codeModeFactory: opts.codeModeFactory,
     // The role-model gate travels with the resolver it gates: both ride
     // RegisterSubagentOptions → SubagentToolDeps → spawnChild's opts.
     // Omitted when the host passed none — an unset switch is OFF, and the
@@ -233,6 +235,17 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     roles, jobs, table, agents,
     ensureResident: (entry: ChildAgentEntry) => ensureResidentAgent(subagentDeps, entry),
     ready, tasks,
+    async dispose() {
+      await ready
+      const entries = [...table.entries().values()]
+      for (const entry of entries) { entry.closing = true; entry.controller.abort() }
+      await Promise.allSettled(entries.map(async entry => {
+        if (entry.dispose) await entry.dispose()
+        else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
+        if (entry.sessionId) agents.remove(entry.sessionId)
+      }))
+      await tasks.flushPersistence()
+    },
     async flushPersistence() {
       await ready
       for (;;) {

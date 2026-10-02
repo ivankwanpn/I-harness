@@ -23,6 +23,12 @@ export type SessionEvent =
     // it belongs to, present when the caller knows it (the production path does).
     | { type: "tool/dispatch"; callId: string; eventSeq?: number; seq?: number }
     | { type: "tool/result"; callId: string; name: string; output: unknown; isError?: true; seq?: number }
+    // Durable Code Mode inspection records; only outer exec/wait results enter inference.
+    | { type: "code/cell"; cellId: string; sessionId?: string; parentCallId?: string; state: "started" | "running" | "completed" | "failed" | "terminated" | "interrupted"; source?: string; error?: string; seq?: number }
+    | { type: "code/call"; cellId: string; parentCallId?: string; callId: string; name: string; args: unknown; seq?: number }
+    | { type: "code/dispatch"; cellId: string; callId: string; eventSeq?: number; seq?: number }
+    | { type: "code/result"; cellId: string; callId: string; name: string; output: unknown; isError?: true; seq?: number }
+    | { type: "code/output"; cellId: string; content: unknown; seq?: number }
     | { type: "step/end"; seq?: number; /** M72 Ⅱ: the provider stopped at the output cap. */ truncated?: true; /** M77: the provider REFUSED to produce content (HTTP 200, no content, a bare `end` at the seam). Written only as `true` — absent stays absent, exactly like `truncated`, and the two are INDEPENDENT: one step can be both. */ refused?: true; /** M80: the provider returned NO content at all — an empty success (HTTP 200, no text, no tool call, a bare `end`). Written only as `true`; absent stays absent. Excluded by construction from a step that was `truncated` or `refused` (those are the more specific facts about the same step), and a step whose only output was a tool call is NOT empty. */ empty?: true }
     | { type: "turn/end"; seq?: number }
     | { type: "subagent/inbox"; messageId: string; message: string; seq?: number }

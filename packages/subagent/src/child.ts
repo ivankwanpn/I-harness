@@ -16,6 +16,7 @@ import { CHARS_PER_TOKEN, estimateContent } from "@i-harness/token-meter"
 import type { SettingsProviderProtocol } from "@i-harness/settings"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import { diagnosticsFor } from "@i-harness/diagnostics"
+import type { CodeModeConfig, CodeModeFactory } from "@i-harness/code-mode"
 import type { JobRegistry } from "./jobs.ts"
 import type { AgentTable } from "./agent-table.ts"
 import { builtinRoles, type SubagentRole } from "./roles.ts"
@@ -101,6 +102,9 @@ export function resolveRoleTools(
 ): string[] {
   const missing: string[] = []
   for (const name of declared) {
+    // Code Mode wrappers close over their owning registry/session. Each child
+    // mounts these separately through the host factory below.
+    if (name === "code_exec" || name === "code_wait") continue
     const tool = parent.get(name)
     if (tool) child.register(tool)
     else missing.push(name)
@@ -132,6 +136,8 @@ export interface RoleModelSelection {
  * and `RegisterSubagentOptions` all carry this shape, so it is written here
  * ONCE and the rule below is stated once. */
 export interface RoleModelHost {
+  codeMode?: CodeModeConfig
+  codeModeFactory?: CodeModeFactory
   /** Trusted parent context, rendered afresh for each child model request. */
   inheritedSystemContext?: () => string
   /** Settings' `agents.roles.<name>` (or any host's equivalent): the model the
@@ -414,6 +420,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // A declared tool the host does not mount is reported, never dropped silently.
   const childReg = createToolRegistry(childCtx)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
+  const codeModeMount = opts.codeModeFactory?.(childCtx, childReg, {
+    session: childSession, sessionId, config: opts.codeMode,
+    ...(opts.childSessions !== undefined && sessionId !== undefined ? { flush: () => opts.childSessions!.coordinator.flush(sessionId!) } : {}),
+  })
+  const modelToolSchemas = () => codeModeMount?.schemas() ?? childReg.schemas()
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
   // estimate below prices it.
@@ -429,13 +440,16 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // Absent window → absent overhead: `budget` needs a window anyway.
   const overheadTokens = contextWindow === undefined
     ? undefined
-    : estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, childReg.schemas())
+    : estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
+  const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     tools: childReg,
+    modelToolSchemas,
+    ...(codeModeMount ? { modelOverheadTokens } : {}),
     model,
     // M49 Task 14 (spec §11): role prompt + the subagent contract (scope/
     // delegation/changed-files+test reporting/result delivery). Human and
@@ -530,6 +544,16 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     // cannot reject the chain and silently kill all later followups.
     followupChain: initialRun.then(() => {}, () => {}),
     unmount: () => childCtx.scope.unmount(),
+    ...(codeModeMount ? { cancel: (reason?: string) => codeModeMount.cancel(reason) } : {}),
+    dispose: async () => {
+      const entry = opts.table.get(childPath)
+      if (entry) { entry.closing = true; entry.controller.abort() }
+      controller.abort()
+      await codeModeMount?.cancel("Subagent closed")
+      await codeModeMount?.dispose()
+      await opts.table.get(childPath)?.followupChain?.catch(() => {})
+      await childCtx.scope.unmount()
+    },
   })
 
   initialRun.then(

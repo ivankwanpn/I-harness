@@ -1,7 +1,7 @@
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import { useLocale, useText } from "../design/i18n.ts"
 import { relativeActivity } from "./relative-activity.ts"
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { MoreHorizontal, Pin } from "lucide-react"
 import { SessionActions, type SessionAction, type SessionNavigation } from "./SessionActions.tsx"
 
@@ -35,7 +35,7 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
     try { await action() }
     finally { locks.current.delete(key); if (mounted.current) setBusy((current) => ({ ...current, [key]: false })) }
   }
-  useEffect(() => { setMenu(undefined) }, [workspaceId, selectedId])
+  useLayoutEffect(() => { setMenu(undefined) }, [workspaceId, selectedId])
   const active = menu?.workspaceId === workspaceId ? dashboard.sessions.find((row) => row.id === menu?.id) : undefined
   const canManage = !!(onManage || onCopyId || onOpenFolder)
   const showMenu = (id: string, element: HTMLElement, point?: { x: number; y: number }) => {

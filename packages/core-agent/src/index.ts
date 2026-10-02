@@ -3,7 +3,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { ImageInput, Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite, publishTransient, SYSTEM_INPUT_PLUGIN } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { ModelClient, LLMRequest, LLMStreamEvent } from "@i-harness/llm-seam"
+import type { ModelClient, LLMRequest, LLMStreamEvent, ToolSchema } from "@i-harness/llm-seam"
 import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
 import { activeTokens, checkBudget, estimateContent } from "@i-harness/token-meter"
 import type { Telemetry } from "@i-harness/telemetry"
@@ -60,6 +60,10 @@ export interface AgentDeps {
   session: Session
   tools: ToolRegistry
   model: ModelClient
+  /** Optional inference exposure; executable registry authority stays intact. */
+  modelToolSchemas?: () => ToolSchema[]
+  /** Live price of the same system/tool surface used by modelToolSchemas. */
+  modelOverheadTokens?: () => number
   // M19 (Ruling 24): the executing session's id, seeded onto every prepared
   // ToolExec so tool bodies can attribute the caller (agent-team resolves
   // team-tool callers from it). Additive: absent → ToolExec.sessionId stays
@@ -209,9 +213,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // handed down here; the engine clamps it against the window it
         // resolved (compaction's own `contextWindow`, above).
         ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
+        ...(deps.modelOverheadTokens ? { overheadTokens: deps.modelOverheadTokens } : {}),
         requestShape: () => ({
           systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
-          tools: deps.tools.schemas(),
+          tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
         }),
       })
     : undefined
@@ -242,7 +247,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     const resetRetainLast = budgetCfg.resetRetainLast ?? 20
     // M33 §3.1: the host-known charge the session log does not carry (system
     // prompt + tool schemas) is added to EVERY boundary measurement.
-    const overhead = budgetCfg.overheadTokens ?? 0
+    const overhead = deps.modelOverheadTokens?.() ?? budgetCfg.overheadTokens ?? 0
+    if (!Number.isInteger(overhead) || overhead < 0) throw new Error("model overhead must be a non-negative integer")
     const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead)
     if (before.state === "ok") return
     // Layer 1: M11 compact (shadow-projection + summary).
@@ -310,6 +316,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       await enforceBudget()
 
       await ctx.emit("agent/pre-step", { task: message, session: deps.session })
+      if (deps.modelOverheadTokens) await enforceBudget()
 
       const messages = deriveMessages(deps.session)
       // Invariant at the seam (audit F01-3): the model may only ever see
@@ -320,7 +327,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
 
       const request: LLMRequest = {
         messages,
-        tools: deps.tools.schemas(),
+        tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
         systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
         // M72 Ⅱ: the cap the host resolved for this model, CLAMPED here because
         // this is the only place that holds all three inputs at once: the value
@@ -333,7 +340,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
               maxOutputTokens: clampOutputCap(
                 outputCap,
                 budgetCfg?.contextWindow,
-                estimateContent(messages) + (budgetCfg?.overheadTokens ?? 0),
+                estimateContent(messages) + (deps.modelOverheadTokens?.() ?? budgetCfg?.overheadTokens ?? 0),
               ),
             }
           : {}),

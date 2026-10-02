@@ -11,6 +11,12 @@ export interface ChildAgentEntry {
   mailbox: string[]
   jobId?: string
   unmount?: () => void
+  /** Drains the child's runtime and turn producers before its owner closes storage. */
+  dispose?: () => Promise<void>
+  /** Cancel current cells and join their producers while retaining the runtime. */
+  cancel?: (reason?: string) => Promise<void>
+  /** Process-local admission barrier while runtime/turn producers drain. */
+  closing?: boolean
   sessionId?: string
   roleName?: string
   /** W11: the epoch ms at which this entry's CURRENT run began — the fact that

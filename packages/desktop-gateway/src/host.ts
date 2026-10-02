@@ -145,6 +145,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     projectContextFor: projects.forSession,
     agentShell: agentShell.resolve,
     team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
+    codeMode: settings.get().codeMode,
     additionalSystemPrompt(session) {
       const goal = foldGoal(session.events)
       return goal ? `Current goal (${goal.phase}, id ${goal.id}, revision ${goal.revision}): ${goal.objective}. ${goal.phase === "active" ? "Continue until fully achieved and verified, then call goal_complete with its current id/revision." : "Do not continue a paused or completed goal unless the user explicitly asks."}` : ""

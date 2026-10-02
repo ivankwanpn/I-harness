@@ -70,6 +70,8 @@ import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
 import { createApprovalEscalationApprover, denialFor, type ApprovalPrompt } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 import { diagnosticsFor } from "@i-harness/diagnostics"
+import { registerCodeMode, type CodeModeConfig, type CodeModeFactory, type CodeModeMount } from "@i-harness/code-mode"
+import { normalizeCodeMode } from "@i-harness/settings"
 
 // W6 T6: ONE module-scope handle for the composition root's own reports, and
 // the phase is `mount` for every one of them — this file IS the assembly seam:
@@ -138,6 +140,8 @@ function cyclicMockClient(script: MockStep[]): ModelClient {
 }
 
 export interface AssemblyOptions {
+  codeMode?: CodeModeConfig
+  codeModeFactory?: CodeModeFactory
   /** Session id — telemetry attribution + subagent persist stateId. A one-shot
    * run may have none. */
   sessionId?: string
@@ -1032,6 +1036,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const lspHandles: LspMountHandle[] = []
   const teamHandles: TeamMountHandle[] = []
   let flushSubagentPersistence: (() => Promise<void>) | undefined
+  let disposeSubagents: (() => Promise<void>) | undefined
+  let codeModeMount: CodeModeMount | undefined
+  const codeMode = normalizeCodeMode(opts.codeMode)
+  const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
+  const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
+    ...mountOptions,
+    ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
+  })
   let workflowMount: WorkflowMountHandle | undefined
 
   try {
@@ -1088,6 +1100,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       reason: `no role-model resolver is configured (role asked for ${selection.provider}:${selection.model})`,
     }))
     const subagent = registerSubagent(ctx, tools, {
+      codeMode, codeModeFactory,
       ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
       includeAgentShell: opts.agentShell !== undefined,
       resolveModel: resolveRoleModel,
@@ -1127,6 +1140,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
     flushSubagentPersistence = () => subagent.flushPersistence()
+    disposeSubagents = () => subagent.dispose()
     // W11 — the unasked path, registered HERE because this is the first point
     // that holds both the runtime-context service and the agent table the
     // section reads (`subagent.table`, which is the persistence-wrapped table
@@ -1209,6 +1223,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentSession: session,
         parentRegistry: tools,
         subagents: {
+          codeMode, codeModeFactory,
           ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
           table: subagent.table,
           jobs: subagent.jobs,
@@ -1276,13 +1291,21 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       }
       return call
     })
+    if (codeModeFactory) codeModeMount = codeModeFactory(ctx, tools, {
+      session, sessionId: opts.sessionId, config: codeMode,
+      ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
+      ...(opts.coordinator !== undefined && opts.sessionId !== undefined ? { flush: () => opts.coordinator!.flush(opts.sessionId!) } : {}),
+    })
+    const modelToolSchemas = () => codeModeMount?.schemas() ?? tools.schemas()
+    let overheadOverride = opts.compact?.overheadTokens
+    const modelOverheadTokens = () => overheadOverride ?? estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
     // M33 §3.2: when the window is resolved and the host did not supply an
     // overhead, the assembly supplies the estimate into BOTH count surfaces
     // (M11 compact config — host's explicit overheadTokens always wins — and
     // the M20 budget ladder).
     const overheadEstimate = opts.contextWindow === undefined
       ? undefined
-      : estimateAssemblyOverhead(systemPromptNow(), tools.schemas())
+      : estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
 
     // M11/M31 T3: the engine needs a window, and the assembly is the layer that
     // resolved one. When a caller asked for compaction but no window is available,
@@ -1318,6 +1341,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     const agent = createAgent(ctx, {
       ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
       session, tools, model,
+      modelToolSchemas,
+      ...(codeModeMount ? { modelOverheadTokens } : {}),
       systemPrompt: systemPromptNow,
       ...(opts.sessionId !== undefined ? { sessionId: opts.sessionId } : {}),
       ...(compactForAgent !== undefined ? { compact: compactForAgent } : {}),
@@ -1382,7 +1407,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       // — follows a `setModel` without being told.
       setModel: (client) => { currentModel = client },
       setModelBinding: (binding, compact) => {
-        const overhead = estimateAssemblyOverhead(systemPromptNow(), tools.schemas())
+        overheadOverride = compact?.overheadTokens
+        const overhead = estimateAssemblyOverhead(systemPromptNow(), modelToolSchemas())
         agent.updateContext!({
           ...(binding.contextWindow === undefined ? {} : {
             budget: { contextWindow: binding.contextWindow, overheadTokens: overhead },
@@ -1457,6 +1483,9 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
+    try { await codeModeMount?.cancel("Session assembly disposed") } catch (error) { d.warn(`Code Mode cancellation failed: ${String(error)}`) }
+    try { await codeModeMount?.dispose() } catch (error) { d.warn(`Code Mode disposal failed: ${String(error)}`) }
+    try { await disposeSubagents?.() } catch (error) { d.warn(`Subagent disposal failed: ${String(error)}`) }
     try { await pluginCapabilities?.dispose() } catch (error) { d.warn(`Plugin disposal failed: ${String(error)}`) }
     // M42 G1: stop scheduling finalizers, then wait for queued journal writes.
     rewindSubscription?.()
