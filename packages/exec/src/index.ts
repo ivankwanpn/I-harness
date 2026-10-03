@@ -12,6 +12,10 @@ export interface ExecCommand {
   env?: Record<string, string>
   timeoutMs?: number
   input?: string
+  /** Byte-preserving stdin for fixed bounded helpers; at most 2 MiB, including
+   * deterministic UTF8 derived from at most 1 MiB of Latin1 file bytes.
+   * Mutually exclusive with the legacy string input. */
+  inputBytes?: Uint8Array
   abortSignal?: AbortSignal // NEW: external cancel → kill the process tree
   sandbox?: SandboxExecutionPolicy // M16: command-carried policy
 }
@@ -27,6 +31,16 @@ export interface ExecResult {
   stdoutSpillPath?: string
   stderrSpillPath?: string
   truncated?: { stdout: boolean; stderr: boolean }
+  stream?: {
+    bytesRead: { stdout: number; stderr: number }
+    bytesAdmitted: { stdout: number; stderr: number }
+    stopReason?: "consumer" | "output-limit" | "aborted" | "timeout"
+  }
+}
+
+export interface ExecStreamRunOptions {
+  stream: { maxBytes: number; onStdout(chunk: Buffer): void | "stop" }
+  backgroundAfterMs?: never
 }
 
 // M21 A-tier spill knobs (memory-tail threshold + optional disk-spill cap).
@@ -122,14 +136,24 @@ interface ResolvedSpawn {
 // returned kill(), and the external abort listener — one implementation, three
 // call sites. Windows uses taskkill /T /F; elsewhere we signal the process
 // group (-pid) and fall back to a direct child SIGKILL.
-function killTree(child: ChildProcess): void {
+function killTree(child: ChildProcess): Promise<void> {
+  if (child.pid === undefined) return Promise.resolve()
   if (process.platform === "win32") {
     const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`
-    const k = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"])
-    k.on("error", () => { /* ignore */ })
+    return new Promise((resolve) => {
+      const k = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" })
+      k.on("error", () => { try { child.kill() } catch { /* already closed */ } })
+      k.on("close", () => resolve())
+    })
   } else {
     try { process.kill(-child.pid!, "SIGKILL") } catch { try { child.kill("SIGKILL") } catch { /* ignore */ } }
   }
+  return Promise.resolve()
+}
+
+function validateInput(cmd: ExecCommand): void {
+  if (cmd.input !== undefined && cmd.inputBytes !== undefined) throw new Error("input and inputBytes are mutually exclusive")
+  if (cmd.inputBytes !== undefined && (!(cmd.inputBytes instanceof Uint8Array) || cmd.inputBytes.byteLength > 2 * 1024 * 1024)) throw new Error("inputBytes must be bytes bounded to 2 MiB")
 }
 
 // The seam types SandboxPolicy as confined-only (mode ≠ danger-full-access),
@@ -167,6 +191,7 @@ function resolveArgv(cmd: ExecCommand, sandboxProvider?: SandboxProvider): Resol
 }
 
 function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?: ExecSpillOptions): SpawnHandle {
+  validateInput(cmd)
   const { confined, mode } = resolveArgv(cmd, sandboxProvider)
   const argv = confined?.argv ?? cmd.argv
   const child = spawn(argv[0]!, argv.slice(1), {
@@ -207,7 +232,9 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
 
   child.stdout?.on("data", (d: Buffer) => { if (stdoutCollector) stdoutCollector.push(d); else stdout += d.toString("utf-8") })
   child.stderr?.on("data", (d: Buffer) => { if (stderrCollector) stderrCollector.push(d); else stderr += d.toString("utf-8") })
+  child.stdin?.on("error", () => { /* A command may close stdin early. */ })
   if (cmd.input !== undefined) child.stdin?.write(cmd.input)
+  if (cmd.inputBytes !== undefined) child.stdin?.write(cmd.inputBytes)
   child.stdin?.end()
 
   function doneFn(code: number) {
@@ -280,9 +307,78 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
   }
 }
 
+/** Opt-in foreground path: admit raw bytes before parsing or retaining them.
+ * Stopping drains/discards pipes and awaits both child close and tree cleanup. */
+async function runStream(cmd: ExecCommand, options: ExecStreamRunOptions, sandboxProvider?: SandboxProvider): Promise<ExecResult> {
+  validateInput(cmd)
+  const { maxBytes, onStdout } = options.stream
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error("stream maxBytes must be a positive safe integer")
+  if (typeof onStdout !== "function") throw new Error("stream onStdout must be a function")
+  if (options.backgroundAfterMs !== undefined) throw new Error("stream cannot be combined with promotion")
+  const { confined, mode } = resolveArgv(cmd, sandboxProvider)
+  const metadata: NonNullable<ExecResult["stream"]> = { bytesRead: { stdout: 0, stderr: 0 }, bytesAdmitted: { stdout: 0, stderr: 0 } }
+  if (cmd.abortSignal?.aborted) return { stdout: "", stderr: "", exitCode: -1, timedOut: false, stream: { ...metadata, stopReason: "aborted" } }
+  const argv = confined?.argv ?? cmd.argv
+  const child = spawn(argv[0]!, argv.slice(1), {
+    cwd: cmd.cwd, env: { ...process.env, ...cmd.env }, stdio: ["pipe", "pipe", "pipe"],
+    detached: process.platform !== "win32", windowsHide: true,
+    windowsVerbatimArguments: cmd.windowsVerbatimArguments === true && argv[0] === cmd.argv[0],
+  })
+  const stderr: Buffer[] = []
+  let observerError: unknown
+  let failedObserver = false
+  let cleanup: Promise<void> | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const stop = (reason: NonNullable<ExecResult["stream"]>["stopReason"]) => {
+    if (metadata.stopReason !== undefined) return
+    metadata.stopReason = reason
+    if (timer !== undefined) clearTimeout(timer)
+    cleanup = killTree(child)
+  }
+  const abort = () => stop("aborted")
+  if (cmd.timeoutMs !== undefined) timer = setTimeout(() => stop("timeout"), cmd.timeoutMs)
+  cmd.abortSignal?.addEventListener("abort", abort, { once: true })
+  const admit = (kind: "stdout" | "stderr", chunk: Buffer) => {
+    metadata.bytesRead[kind] += chunk.byteLength
+    if (metadata.stopReason !== undefined) return
+    const remaining = maxBytes - metadata.bytesAdmitted.stdout - metadata.bytesAdmitted.stderr
+    const length = Math.min(remaining, chunk.byteLength)
+    if (length > 0) {
+      const bytes = Buffer.from(chunk.subarray(0, length))
+      metadata.bytesAdmitted[kind] += length
+      if (kind === "stderr") stderr.push(bytes)
+      else {
+        try { if (onStdout(bytes) === "stop") stop("consumer") }
+        catch (error) { observerError = error; failedObserver = true; stop("consumer") }
+      }
+    }
+    if (length < chunk.byteLength || metadata.bytesAdmitted.stdout + metadata.bytesAdmitted.stderr === maxBytes) stop("output-limit")
+  }
+  child.stdout?.on("data", (b: Buffer) => admit("stdout", b))
+  child.stderr?.on("data", (b: Buffer) => admit("stderr", b))
+  child.stdin?.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code !== "EPIPE" && !failedObserver) { observerError = error; failedObserver = true; stop("consumer") }
+  })
+  child.stdin?.end(cmd.inputBytes ?? cmd.input)
+  // Spawn errors also emit close. Wait for close because exit alone leaves pipes live.
+  child.on("error", () => { /* close supplies the failed exit below */ })
+  const code = await new Promise<number>((resolve) => child.once("close", (exitCode) => resolve(exitCode ?? -1)))
+  if (timer !== undefined) clearTimeout(timer)
+  cmd.abortSignal?.removeEventListener("abort", abort)
+  await cleanup
+  if (failedObserver) throw observerError
+  const cleanErr = Buffer.concat(stderr).toString("utf8").replace(/\r\n/g, "\n")
+  if (metadata.stopReason !== "timeout" && code !== 0 && confined && mode !== undefined) {
+    const failure = classifyRunnerFailure({ exitCode: code, stderr: { text: cleanErr } }, confined.runnerFailureRules)
+    if (failure) throw new SandboxUnavailableError(mode, failure.detail)
+  }
+  return { stdout: "", stderr: cleanErr, exitCode: code, timedOut: metadata.stopReason === "timeout", stream: metadata }
+}
+
 export interface ExecService {
   /** Foreground run: spawn once, wait for the command, return its result. */
   run(cmd: ExecCommand): Promise<ExecResult>
+  run(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   /** W10 promotion overload: ONE spawn that can go either way. With
    * `backgroundAfterMs` set, a command still running at the threshold is
    * REGISTERED as a background job — it keeps running, its output keeps
@@ -399,8 +495,10 @@ function createExecService(deps?: ExecServiceOptions): ExecService {
   // returning `handle.done` would let the same failure escape synchronously
   // instead, i.e. change `run`'s contract for callers that never opted in.
   function runImpl(cmd: ExecCommand): Promise<ExecResult>
+  function runImpl(cmd: ExecCommand, opts: ExecStreamRunOptions): Promise<ExecResult>
   function runImpl(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
-  async function runImpl(cmd: ExecCommand, opts?: ExecRunOptions): Promise<ExecResult | PromotedRun> {
+  async function runImpl(cmd: ExecCommand, opts?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
+    if (opts !== undefined && "stream" in opts) return runStream(cmd, opts, provider)
     const handle = spawnChild(cmd, provider, spill)
     const backgroundAfterMs = opts?.backgroundAfterMs
     // Return the promise directly — mapping out four fields would drop the

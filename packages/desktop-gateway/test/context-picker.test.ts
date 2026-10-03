@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { expect, it } from "vitest"
@@ -8,7 +8,7 @@ import { createWorkspaceReview } from "../src/review.ts"
 import { createContextPicker } from "../src/context-picker.ts"
 import { createConversationVisibility } from "../src/session-visibility.ts"
 
-it("bounds and filters files, rejects traversal and symlink escape, and reads visible same-project history without activation", async () => {
+it("bounds file previews, reads explicit external aliases without writes, rejects traversal, and reads visible same-project history without activation", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-context-picker-"))
   const workspace = join(root, "workspace"), outside = join(root, "outside")
   await mkdir(workspace); await mkdir(outside); await writeFile(join(workspace, "notes.md"), "bounded file data"); await writeFile(join(outside, "secret.md"), "secret")
@@ -25,7 +25,9 @@ it("bounds and filters files, rejects traversal and symlink escape, and reads vi
     expect((await picker.search({ query: "no-match", contextKind: "files", offset: 0 })).items).toEqual([])
     expect(await picker.read({ reference: { kind: "file", workspaceId: "w", path: "notes.md" } })).toMatchObject({ text: "bounded file data" })
     await expect(picker.read({ reference: { kind: "file", workspaceId: "w", path: "../outside/secret.md" } })).rejects.toThrow()
-    await expect(picker.read({ reference: { kind: "file", workspaceId: "w", path: "escape/secret.md" } })).rejects.toThrow()
+    expect(await review.file("escape/secret.md")).toMatchObject({ kind: "text", readonly: true, external: true })
+    expect(await picker.read({ reference: { kind: "file", workspaceId: "w", path: "escape/secret.md" } })).toMatchObject({ text: "secret", truncated: false })
+    expect(await readFile(join(outside, "secret.md"), "utf8")).toBe("secret")
     expect((await picker.search({ query: "Project", contextKind: "sessions", projectId: "p", offset: 0 })).items.map((item: any) => item.sessionId)).toEqual(["public"])
     expect((await picker.search({ query: "visible result", contextKind: "sessions", projectId: "p", offset: 0 })).items).toContainEqual({ kind: "session", sessionId: "public", seq: 1, label: "Project conversation", excerpt: "visible result" })
     expect((await picker.read({ projectId: "p", reference: { kind: "session", workspaceId: "w", sessionId: "public", seq: 1 } })).text).toContain("visible result")

@@ -1,178 +1,59 @@
-import { isAbsolute, resolve } from "node:path"
-import type { ExecService } from "@i-harness/exec"
-import type { Tool } from "@i-harness/core-tools"
-
-// Directory names ripgrep must never descend into for discovery (dsh
-// GLOB_VCS_EXCLUDES). Each is excluded twice: the bare form prunes during
-// traversal; the /** form covers a search root at/inside the directory.
-const GLOB_VCS_EXCLUDES = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"] as const
-// Discovery should not spend its bounded result budget on installed packages.
-// An explicit search root inside node_modules still works because rg sees that
-// root as "."; only nested dependency trees are pruned.
-const SEARCH_EXCLUDES: readonly string[] = [...GLOB_VCS_EXCLUDES, "node_modules"]
-const excludeArgs = SEARCH_EXCLUDES.flatMap((name) => [`--glob=!**/${name}`, `--glob=!**/${name}/**`])
-const GLOB_MAX_RESULTS = 100
-const GREP_MAX_MATCHES = 250
+import { isAbsolute, resolve } from 'node:path'
+import type { ExecService } from '@i-harness/exec'
+import type { Tool, ToolExec } from '@i-harness/core-tools'
+import type { SearchQuery, SearchResult, SearchMatch } from './search-types.ts'
+import { normalizeSearchQuery, createSearchStats, createSearchResult, markSearchResult, addDiagnostic, finishSearchResult } from './options.mjs'
+import { runScopedModelSearch } from './model-search.ts'
+export { normalizeSearchQuery, createSearchStats } from './options.ts'
+export type { SearchQuery, SearchResult, SearchMatch, SearchStats } from './search-types.ts'
 
 let rgPathPromise: Promise<string> | undefined
+export function resolveRgPath(): Promise<string> { return rgPathPromise ??= import('@vscode/ripgrep').then((m) => m.rgPath) }
+export interface FsSearchToolDeps { exec: ExecService; workspace?: string }
+export type GrepMatch = SearchMatch
+export type GrepResult = SearchResult
+export interface GlobResult extends Omit<SearchResult, 'matches'> { matches: string[] }
+type ModelSearchArgs = SearchQuery & { path?: string; include?: string }
 
-// Lazy, memoized: `@vscode/ripgrep` resolves its platform package at module
-// evaluation, so a static import would fail the whole loader on a partial
-// install. Resolution at the call boundary keeps the failure at first use.
-export function resolveRgPath(): Promise<string> {
-  rgPathPromise ??= import("@vscode/ripgrep").then((m) => m.rgPath)
-  return rgPathPromise
+const properties = {
+  pattern: { type: 'string', description: 'Non-empty, at most 4096 characters. Rust regex (default), literal text, or glob path pattern for glob. PCRE2 is an explicit advanced option.' },
+  path: { type: 'string', description: 'File/directory to search under current standing policy; relative paths use the workspace.' },
+  include: { type: 'string', description: 'Legacy optional glob filter of at most 512 characters, combined with includes.' },
+  mode: { type: 'string', enum: ['regex','literal'], description: 'Regex or exact literal text.' }, case: { type: 'string', enum: ['sensitive','insensitive'] },
+  before: { type: 'integer', minimum: 0, maximum: 10 }, after: { type: 'integer', minimum: 0, maximum: 10 },
+  includes: { type: 'array', maxItems: 16, items: { type: 'string' }, description: 'Up to 16 non-empty glob patterns, each at most 512 characters; combined includes/excludes at most 4096.' }, excludes: { type: 'array', maxItems: 16, items: { type: 'string' }, description: 'Up to 16 non-empty glob patterns, each at most 512 characters; combined includes/excludes at most 4096. Exclusions win.' },
+  hidden: { type: 'boolean', description: 'Include hidden names. Default false for grep, true for glob.' }, respectIgnore: { type: 'boolean', description: 'Use engine ignore filtering. Default true for grep, false for glob. Explicit paths and positive globs can override engine ignore rules.' },
+  regexEngine: { type: 'string', enum: ['default','pcre2'] }, multiline: { type: 'boolean' }, encoding: { type: 'string', enum: ['auto','utf8','utf16le','utf16be','windows1252','latin1'] },
+  maxResults: { type: 'integer', minimum: 1, maximum: 1000, description: 'Returned row cap; grep defaults 250, glob defaults 100.' },
+  maxResultBytes: { type: 'integer', minimum: 4096, maximum: 262144, description: 'Combined serialized result bytes including metadata. Default 32768; explicit range 4096..262144.' },
+  timeoutMs: { type: 'integer', minimum: 100, maximum: 30000, description: 'Deadline including discovery, reads and matching. Default and hard maximum 30000ms.' },
 }
 
-export interface FsSearchToolDeps {
-  exec: ExecService
-  // D1 (m55): the assembly workspace — rg's cwd, so an omitted (or relative)
-  // search path resolves against the workspace like every other fs tool.
-  // Absent → no cwd field, so exec keeps its own contract (process cwd).
-  workspace?: string
-}
-
-export interface GlobResult {
-  matches: string[]
-  error?: string
-}
-
-export interface GrepMatch {
-  path: string
-  line: number
-  text: string
-}
-
-export interface GrepResult {
-  matches: GrepMatch[]
-  error?: string
+async function search(kind: 'grep'|'glob', args: ModelSearchArgs, execution: ToolExec, deps: FsSearchToolDeps): Promise<SearchResult | GlobResult> {
+  let query: Required<SearchQuery>
+  try {
+    const { path, include, ...input } = args
+    if (path !== undefined && (typeof path !== 'string' || path.includes('\0'))) throw new Error('path must be a string without NUL')
+    if (include !== undefined) input.includes = [...(input.includes ?? []), include]
+    query = normalizeSearchQuery(input, { profile: kind })
+  } catch (error) {
+    const fallback = normalizeSearchQuery({ pattern: 'invalid' }, { profile: kind }), result = createSearchResult(fallback)
+    result.error = String(error instanceof Error ? error.message : error).slice(0, 512); markSearchResult(result, 'invalid-query', 'error')
+    return result
+  }
+  const partial = createSearchResult(query, createSearchStats())
+  if (execution.abortSignal?.aborted) { markSearchResult(partial, 'aborted', 'cancelled'); return finishSearchResult(partial,query.maxResultBytes) }
+  try {
+    const rgPath = await resolveRgPath()
+    const cwd = kind === 'glob' ? args.path === undefined ? deps.workspace : deps.workspace !== undefined && !isAbsolute(args.path) ? resolve(deps.workspace, args.path) : args.path : deps.workspace
+    return await runScopedModelSearch({exec:deps.exec,rgPath,cwd,root:kind==='glob'?'.':args.path??'.',kind,query,signal:execution.abortSignal})
+  } catch (error) { partial.error = String(error instanceof Error ? error.message : error).slice(0, 512); addDiagnostic(partial, partial.error); markSearchResult(partial, 'runner-error', 'error'); return finishSearchResult(partial, query.maxResultBytes) }
 }
 
 export function createFsSearchTools(deps: FsSearchToolDeps): Tool[] {
-  const glob: Tool<{ pattern: string; path?: string }, GlobResult> = {
-    name: "glob",
-    description: "find files whose paths match a glob pattern (e.g. **/*.txt)",
-    inputSchema: {
-      type: "object",
-      properties: {
-        pattern: { type: "string", description: "glob pattern to match paths against" },
-        path: { type: "string", description: "directory to search (default: workspace root)" },
-      },
-      required: ["pattern"],
-    },
-    exposure: "deferred",
-    searchHint: "find files by pattern",
-    isReadOnly: true,
-    isConcurrencySafe: true,
-    execute: async (args) => {
-      if (args.pattern.trim().length === 0) throw new Error("pattern must be a non-empty string")
-      try {
-        const rgPath = await resolveRgPath()
-        const parts = [
-          "--files",
-          `--glob=${args.pattern}`,
-          "--sort=modified",
-          "--no-ignore",
-          "--hidden",
-          ...excludeArgs,
-          "--",
-          ".",
-        ]
-        // Run with cwd inside the search root so rg emits paths relative to it;
-        // an absolute search root would otherwise yield absolute paths. With no
-        // path arg the workspace is the search root (D1: an assembly workspace
-        // is where the fs tools resolve too); a relative path arg resolves
-        // against it. No workspace configured → cwd stays unset (exec contract:
-        // the process cwd).
-        const searchRoot = args.path === undefined
-          ? deps.workspace
-          : deps.workspace !== undefined && !isAbsolute(args.path)
-            ? resolve(deps.workspace, args.path)
-            : args.path
-        const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(searchRoot !== undefined ? { cwd: searchRoot } : {}) })
-        // rg exits 1 with empty stdout when nothing matches — a normal empty result.
-        // Any other non-zero exit (2+ = rg error, -1 = spawn failure) is a genuine
-        // failure: surface it as an error note instead of a silent empty success.
-        if (result.exitCode !== 0 && result.exitCode !== 1) {
-          return { matches: [], error: result.stderr?.trim() || `ripgrep failed (exit ${result.exitCode})` }
-        }
-        // Paths come back relative to the search root but with a "./" prefix
-        // (".\" on Windows); strip it so callers get bare relative paths.
-        const matches = result.stdout
-          .split("\n")
-          .map((l) => l.trimEnd())
-          .filter((l) => l.length > 0)
-          .map((l) => (l.startsWith("./") ? l.slice(2) : l.startsWith(".\\") ? l.slice(2) : l))
-          .map((l) => l.replaceAll("\\", "/"))
-          .slice(0, GLOB_MAX_RESULTS)
-        return { matches }
-      } catch (err) {
-        return { matches: [], error: err instanceof Error ? err.message : String(err) }
-      }
-    },
-  }
-
-  const grep: Tool<{ pattern: string; path?: string; include?: string }, GrepResult> = {
-    name: "grep",
-    description: "search files for lines matching a regex pattern, returning path, line number, and text",
-    inputSchema: {
-      type: "object",
-      properties: {
-        pattern: { type: "string", description: "regex pattern to search for" },
-        path: { type: "string", description: "directory to search (default: .)" },
-        include: { type: "string", description: "optional glob filter for files to search" },
-      },
-      required: ["pattern"],
-    },
-    exposure: "deferred",
-    searchHint: "search file contents by pattern",
-    isReadOnly: true,
-    isConcurrencySafe: true,
-    execute: async (args) => {
-      if (args.pattern.length === 0) throw new Error("pattern must be a non-empty string")
-      try {
-        const rgPath = await resolveRgPath()
-        const parts = ["--json", `--regexp=${args.pattern}`]
-        if (args.include !== undefined) parts.push(`--glob=${args.include}`)
-        // An explicit root inside an excluded tree is an intentional request
-        // to search that tree. Keep the default pruning for workspace-wide
-        // searches, but do not veto the caller's chosen subtree.
-        const explicitExcludedRoot = args.path?.replaceAll("\\", "/").split("/")
-          .some((segment) => SEARCH_EXCLUDES.includes(segment.toLowerCase())) ?? false
-        if (!explicitExcludedRoot) parts.push(...excludeArgs)
-        parts.push("--", args.path ?? ".")
-        // D1: run rg in the assembly workspace so "." and relative path args
-        // resolve there (fs-tool parity); absent → exec's own process cwd.
-        const result = await deps.exec.run({ argv: [rgPath, ...parts], ...(deps.workspace !== undefined ? { cwd: deps.workspace } : {}) })
-        // rg exits 1 with no match lines when nothing matches — a normal empty
-        // result. Any other non-zero exit (2+ = rg error, -1 = spawn failure) is
-        // a genuine failure: surface it as an error note, not empty success.
-        if (result.exitCode !== 0 && result.exitCode !== 1) {
-          return { matches: [], error: result.stderr?.trim() || `ripgrep failed (exit ${result.exitCode})` }
-        }
-        const matches: GrepMatch[] = []
-        for (const line of result.stdout.split("\n")) {
-          if (line.trim() === "") continue
-          try {
-            const entry = JSON.parse(line) as { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } }
-            if (entry.type === "match" && entry.data) {
-              matches.push({
-                path: (entry.data.path?.text ?? "").replaceAll("\\", "/").replace(/^\.\//, ""),
-                line: entry.data.line_number ?? 0,
-                text: (entry.data.lines?.text ?? "").trimEnd(),
-              })
-              if (matches.length >= GREP_MAX_MATCHES) break
-            }
-          } catch {
-            // Skip a malformed JSON line; the parse loop continues.
-          }
-        }
-        return { matches }
-      } catch (err) {
-        return { matches: [], error: err instanceof Error ? err.message : String(err) }
-      }
-    },
-  }
-
-  return [glob, grep]
+  return (['glob','grep'] as const).map((kind): Tool<ModelSearchArgs, SearchResult | GlobResult> => ({
+    name: kind, description: kind === 'glob' ? 'Find files by glob with bounded discovery, cancellation, filtering and partial-result metadata. Discovery order; default 100 files and 32KiB result.' : 'Search admitted file snapshots using Rust regex or literal text. Typed case/context/globs/hidden/ignore/PCRE2/multiline/encoding options; cancellable 30s, 1000 candidates, 32MiB reads, 1MiB/file, default 250 rows and 32KiB result. Inspect status/reasons before treating empty or partial results as exhaustive.',
+    inputSchema: { type: 'object', properties, required: ['pattern'], additionalProperties: false }, exposure: 'deferred', searchHint: kind === 'glob' ? 'find files by pattern' : 'search file contents by pattern', isReadOnly: true, isConcurrencySafe: true,
+    execute: (args, execution) => search(kind, args, execution, deps),
+  }))
 }

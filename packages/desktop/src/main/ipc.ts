@@ -11,6 +11,7 @@ import { contextRequestParams } from "./context-requests.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 import { dispatchProjectFilesRequest } from "./project-files.ts"
+import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
 import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
 import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
@@ -37,6 +38,14 @@ export interface DesktopIpcDependencies {
   browser?: ReturnType<typeof createBrowserSurface>
   /** Discover local executable choices before a workspace is opened. */
   shellOptions?: typeof listDesktopTerminalShellOptions
+  projectContentSearch?: ReturnType<typeof createDesktopProjectContentSearch>
+}
+const searchOwners = new WeakMap<DesktopIpcDependencies, ReturnType<typeof createDesktopProjectContentSearch>>()
+function searchOwner(dependencies: DesktopIpcDependencies) {
+  if (dependencies.projectContentSearch) return dependencies.projectContentSearch
+  let owner = searchOwners.get(dependencies)
+  if (!owner) { owner = createDesktopProjectContentSearch(dependencies); searchOwners.set(dependencies, owner) }
+  return owner
 }
 
 /**
@@ -101,6 +110,7 @@ export async function dispatchDesktopRequest(
       ? dependencies.drafts.save(scope, value.expectedRevision as string | null, value.draft as import("../shared/attachment-drafts.ts").UnsentDraft)
       : dependencies.drafts.clear(scope, value.expectedRevision as string | null)
   }
+  if (["desktop/project-files/content-search", "desktop/project-files/content-cancel", "desktop/project-files/search-preview", "desktop/project-files/external-read", "desktop/project-files/external-preview"].includes(value.kind)) return searchOwner(dependencies).request(value)
   if (value.kind.startsWith("desktop/project-files/")) return dispatchProjectFilesRequest(value, dependencies)
   if (value.kind === "desktop/session/batch") {
     if (value.confirmed !== true) throw new Error("Session batch requires confirmation")
@@ -119,7 +129,11 @@ export async function dispatchDesktopRequest(
       if (command.projectId !== undefined && !scopes.some(scope => scope.id === command.projectId && scope.roots.length > 0)) throw new Error("Destination project unavailable")
       await runtime.client.request("desktop/project/sync", { projects: scopes })
     }
-    if (command.action !== "delete") return runtime.client.request(value.kind, { command }, 120000)
+    if (command.action !== "delete") {
+      const result = await runtime.client.request(value.kind, { command }, 120000)
+      if (command.action === "move") await notifyDesktopProjectContentScopesChanged()
+      return result
+    }
     const drafts = dependencies.drafts!
     // Only a native retirement receipt from a prior confirmed gateway success
     // authorizes cleanup retries after the session disappears from navigation.
@@ -127,6 +141,7 @@ export async function dispatchDesktopRequest(
     for (const sessionId of command.sessionIds as string[]) if (await drafts.isRetired({ workspaceId, identity: sessionId })) retired.add(sessionId)
     const pending = (command.sessionIds as string[]).filter(id => !retired.has(id))
     const reply = pending.length ? await runtime.client.request(value.kind, { command: { ...command, sessionIds: pending } }, 120000) as import("../../../desktop-gateway/src/session-management.ts").SessionBatchResult : { results: [] }
+    if (pending.length) await notifyDesktopProjectContentScopesChanged()
     const rows = new Map(reply.results.map(row => [row.sessionId, row]))
     const results = []
     for (const sessionId of command.sessionIds as string[]) {
@@ -218,12 +233,14 @@ export async function dispatchDesktopRequest(
       if (input.pinned !== undefined && typeof input.pinned !== "boolean") throw new Error("Invalid project pin")
       if (input.expectedUpdatedAt !== undefined && (typeof input.expectedUpdatedAt !== "string" || !input.expectedUpdatedAt || input.expectedUpdatedAt.length > 64)) throw new Error("Invalid project revision")
       const saved = await dependencies.projects.save({ name: input.name, workspaceIds: input.workspaceIds as string[], ...(typeof input.id === "string" ? { id: input.id } : {}), ...(typeof input.primaryWorkspaceId === "string" ? { primaryWorkspaceId: input.primaryWorkspaceId } : {}), ...(typeof input.pinned === "boolean" ? { pinned: input.pinned } : {}), ...(typeof input.expectedUpdatedAt === "string" ? { expectedUpdatedAt: input.expectedUpdatedAt } : {}) })
+      await notifyDesktopProjectContentScopesChanged()
       try { await syncLiveProjectContexts(dependencies.projects, dependencies.catalog, dependencies.runtimes); return saved }
       catch (error) { return { ...saved, runtimeSyncError: error instanceof Error ? error.message : String(error) } }
     }
     case "projects/remove": {
       if (!dependencies.projects) throw new Error("Project catalog unavailable")
       await dependencies.projects.remove(requireNonEmpty(value.id, "project id"))
+      await notifyDesktopProjectContentScopesChanged()
       try { await syncLiveProjectContexts(dependencies.projects, dependencies.catalog, dependencies.runtimes); return { removed: true } }
       catch (error) { return { removed: true, runtimeSyncError: error instanceof Error ? error.message : String(error) } }
     }
@@ -250,7 +267,9 @@ export async function dispatchDesktopRequest(
       const projectId = value.projectId === undefined ? undefined : requireNonEmpty(value.projectId, "projectId")
       if (projectId && !scopes.some((scope) => scope.id === projectId && scope.roots.length > 0)) throw new Error("Unknown or empty project")
       await runtime.client.request("desktop/project/sync", { projects: scopes })
-      return await runtime.client.request(value.kind, { sessionId, ...(projectId ? { projectId } : {}) })
+      const result = await runtime.client.request(value.kind, { sessionId, ...(projectId ? { projectId } : {}) })
+      await notifyDesktopProjectContentScopesChanged()
+      return result
     }
     case "workspace/files/pick": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
@@ -617,9 +636,11 @@ export function registerDesktopIpc(
   dependencies: DesktopIpcDependencies,
   ipc: IpcMainLike,
 ): () => void {
+  const projectContentSearch = createDesktopProjectContentSearch(dependencies)
+  const ownedDependencies = { ...dependencies, projectContentSearch }
   ipc.handle(DESKTOP_REQUEST_CHANNEL, async (event, request) => {
     if (event.sender !== window.webContents) throw new Error("untrusted IPC sender")
-    return await dispatchDesktopRequest(request, dependencies)
+    return await dispatchDesktopRequest(request, ownedDependencies)
   })
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
@@ -632,6 +653,7 @@ export function registerDesktopIpc(
     removed = true
     ipc.removeHandler(DESKTOP_REQUEST_CHANNEL)
     offEvent()
+    void projectContentSearch.close()
   }
 }
 

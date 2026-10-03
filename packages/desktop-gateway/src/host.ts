@@ -33,6 +33,7 @@ import { createDesktopMcp } from "./mcp-settings.ts"
 import { createDesktopResources } from "./resources.ts"
 import { createEffectiveLocalInputs } from "./effective-local-inputs.ts"
 import { createProjectFiles } from "./project-files.ts"
+import { createProjectContentSearch } from "./project-content-search.ts"
 import { createSessionManagementFence } from "./session-management-fence.ts"
 import { createCodeModeSettings, createDesktopExecution } from "./execution.ts"
 import { createAgentProcesses } from "./agent-processes.ts"
@@ -262,6 +263,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
   const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: notifyWorkflow })
   const review = createWorkspaceReview(options.workspace)
+  const projectContentSearch = createProjectContentSearch(options.workspace)
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
@@ -288,6 +290,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     workflow, agentShell, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
     resources,
     projectFiles: createProjectFiles(options.workspace, review),
+    projectContentSearch,
     mcp,
     hooks: createHookSettings(dirname(settingsPath), async () => (await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs())).hookConfigs, () => service.refreshExtensions(), { workspace: options.workspace }),
     subagents, sessionSubagents,
@@ -387,6 +390,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       terminal.close()
       offInteraction()
       await input.close()
+      await projectContentSearch.close()
       await router.close()
       await sessionSubagents.close()
       await projects.close()

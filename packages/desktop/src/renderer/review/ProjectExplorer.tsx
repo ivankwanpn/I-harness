@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from "react"
-import type { ProjectFileEntry, ProjectFilePage, ProjectFileRef, ProjectFileRoot, ProjectFileSelection, ProjectFilesRequester } from "../../../../desktop-gateway/src/project-files.ts"
+import type { ProjectFileEntry, ProjectFilePage, ProjectFileRoot, ProjectFileSelection, ProjectFilesRequester } from "../../../../desktop-gateway/src/project-files.ts"
+import type { FileOpenTarget } from "../session/file-navigation.ts"
+import { checkedFilePage } from "./project-file-responses.ts"
+import { ProjectContentSearchPane } from "./ProjectContentSearchPane.tsx"
 import "./review-editor.css"
 import { useProjectFilesText } from "./project-files-text.ts"
 
-interface ExplorerProps { roots: ProjectFileRoot[]; selection: ProjectFileSelection; request: ProjectFilesRequester; onOpen(ref: ProjectFileRef): void; refresh: number }
+interface ExplorerProps { roots: ProjectFileRoot[]; selection: ProjectFileSelection; request: ProjectFilesRequester; onOpen(ref: FileOpenTarget): void; refresh: number; contentSearchAvailable?: boolean }
 const reasonOf = (error: unknown) => error instanceof Error ? error.message : String(error)
-function checkedPage(value: unknown): ProjectFilePage {
-  const page = value as ProjectFilePage
-  if (!page || !Array.isArray(page.entries) || page.entries.length > 100 || !page.entries.every((row) => typeof row.path === "string" && typeof row.name === "string" && (row.kind === "file" || row.kind === "directory"))) throw new Error("Invalid project file list")
-  return page
-}
+const checkedPage = checkedFilePage
 function Directory({ root, path, selection, request, onOpen, refresh, initialOpen = false }: Omit<ExplorerProps, "roots"> & { root: ProjectFileRoot; path: string; initialOpen?: boolean }) {
   const pf = useProjectFilesText()
   const [expanded, setExpanded] = useState(initialOpen), [page, setPage] = useState<ProjectFilePage>(), [error, setError] = useState<string>(), [busy, setBusy] = useState(false)
@@ -47,7 +46,7 @@ function Directory({ root, path, selection, request, onOpen, refresh, initialOpe
     </> : null}
   </li>
 }
-export function ProjectExplorer({ roots, selection, request, onOpen, refresh }: ExplorerProps) {
+function FilenameExplorer({ roots, selection, request, onOpen, refresh }: ExplorerProps) {
   const pf = useProjectFilesText()
   const [query, setQuery] = useState(""), [results, setResults] = useState<Record<string, ProjectFilePage>>({}), [error, setError] = useState<string>()
   const identity = JSON.stringify([selection, roots, query, refresh])
@@ -73,12 +72,20 @@ export function ProjectExplorer({ roots, selection, request, onOpen, refresh }: 
     } catch (error) { if (before === current.current) setError(reasonOf(error)) }
     finally { paging.current.delete(pageKey) }
   }
-  return <nav className="project-explorer" aria-label={pf("專案檔案樹")}>
+  return <>
     <input aria-label={pf("搜尋專案檔名")} placeholder={pf("搜尋檔名或相對路徑")} maxLength={512} value={query} onChange={(event) => setQuery(event.target.value)} />
     {error ? <p role="alert" className="notice error-text">{error}</p> : null}
     {!query.trim() ? <ul>{roots.map((root) => <Directory key={`${root.workspaceId}:${JSON.stringify(selection)}`} root={root} path="" initialOpen selection={selection} request={request} onOpen={onOpen} refresh={refresh} />)}</ul>
       : roots.map((root) => <div key={root.workspaceId}><p className="row-label">{root.label}</p><ul>{results[root.workspaceId]?.entries.map((entry: ProjectFileEntry) => <li key={entry.path}><button type="button" className="link-button" onClick={() => onOpen({ workspaceId: root.workspaceId, path: entry.path })}>{entry.path}</button></li>)}</ul>
         {results[root.workspaceId]?.nextOffset != null ? <button type="button" onClick={() => void more(root)}>{pf("載入更多搜尋結果")}</button> : null}
         {results[root.workspaceId]?.truncated ? <p className="notice">{pf("搜尋已達掃描上限。")}</p> : null}</div>)}
+  </>
+}
+export function ProjectExplorer(props: ExplorerProps) {
+  const pf = useProjectFilesText(), [mode, setMode] = useState<"filename" | "content">("filename")
+  return <nav className={`project-explorer${mode === "content" ? " project-explorer-content" : ""}`} aria-label={pf("專案檔案樹")}>
+    <div className="project-search-mode" aria-label={pf("專案搜尋類型")}><button type="button" aria-pressed={mode === "filename"} onClick={() => setMode("filename")}>{pf("檔案名稱")}</button><button type="button" aria-pressed={mode === "content"} onClick={() => setMode("content")}>{pf("檔案內容")}</button></div>
+    <div hidden={mode !== "filename"}><FilenameExplorer {...props} /></div>
+    {mode === "content" ? <ProjectContentSearchPane {...props} available={props.contentSearchAvailable === true} /> : null}
   </nav>
 }

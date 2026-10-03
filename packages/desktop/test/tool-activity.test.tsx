@@ -12,6 +12,13 @@ it("opens an explicit file target through the workspace review callback", () => 
   expect(screen.getByRole("button", { name: "工具詳情 read" }).getAttribute("aria-expanded")).toBe("false")
 })
 
+it("opens an absolute external file through a separate read-only target callback", () => {
+  const targets: unknown[] = []
+  render(<ToolActivity name="read" args={{ path: "C:/reference/outside.md" }} navigation={{ workspacePath: "D:/repo", workspaceId: "project", projectRoots: [{ workspaceId: "project", path: "D:/repo" }], onOpenFile: () => { throw new Error("External file used relative editor route") }, onOpenProjectFile: () => { throw new Error("External file forged project ownership") }, onOpenExternalFile: target => { targets.push(target) } }} />)
+  fireEvent.click(screen.getByRole("button", { name: "唯讀開啟 C:/reference/outside.md" }))
+  expect(targets).toEqual([{ reference: { path: "C:/reference/outside.md", readonly: true } }])
+})
+
 it("reveals the actual invocation as well as its result", () => {
   render(<ToolActivity name="bash" args={{ command: "pwd" }} output="D:/playground" />)
   expect(screen.queryByText(/pwd/)).toBeNull()

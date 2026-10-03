@@ -25,7 +25,7 @@ import type { TimelineRow } from "../session/project.ts"
 import { ExecutionPane } from "../session/ExecutionPane.tsx"
 import { AgentProcessesPane } from "../session/AgentProcessesPane.tsx"
 import { DiagnosticsPane } from "../settings/DiagnosticsPane.tsx"
-import type { FileNavigation } from "../session/file-navigation.ts"
+import type { ExternalFileTarget, FileNavigation, ProjectFileTarget } from "../session/file-navigation.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
 import { TodoProgress } from "../session/TodoProgress.tsx"
 import { WorkflowPane } from "../session/WorkflowPane.tsx"
@@ -98,7 +98,8 @@ export interface ReviewView {
 export interface WorkbenchProps {
   onSelectHistory?(selection: HistorySelection): void
   historicalView?: SessionHistoryViewProps
-  onOpenProjectFile?(ref: import("@i-harness/desktop-gateway/src/project-files.ts").ProjectFileRef): void
+  onOpenProjectFile?(ref: ProjectFileTarget): void
+  onOpenExternalFile?(target: ExternalFileTarget): void
   onBatchSessions?(workspaceId: string, command: import("../session/SessionManager.tsx").ManageSessionBatchCommand): Promise<import("../session/SessionManager.tsx").ManageSessionBatchResult>
   bridge: DesktopBridge
   workspaces: WorkspaceEntry[]
@@ -149,6 +150,7 @@ export function Workbench({
   onSelectHistory,
   historicalView,
   onOpenProjectFile,
+  onOpenExternalFile,
   onBatchSessions,
   onManageSession,
   onRewindComplete,
@@ -253,10 +255,14 @@ export function Workbench({
   const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
   const canCreate = capabilities["session-create"]?.includes("1") === true && (!selectedProject || selectedProject.workspaceIds.includes(selectedWorkspaceId ?? ""))
+  const fileProjectMembers = projects?.find(project => project.id === review?.projectFiles?.selection.projectId)?.workspaceIds
+  const fileProjectRoots = review?.projectFiles ? workspaces.filter(row => review.projectFiles?.selection.projectId ? fileProjectMembers?.includes(row.id) : row.id === selectedWorkspaceId).map(row => ({ workspaceId: row.id, path: row.path })) : undefined
+  const fileMembershipRevision = fileProjectRoots ? JSON.stringify(fileProjectRoots.map(root => [root.workspaceId, root.path] as const).sort((left, right) => left[0].localeCompare(right[0]))) : undefined
   const fileNavigation: FileNavigation | undefined = review && selectedWorkspaceId && (capabilities["desktop-review"]?.includes("1") || review.projectFiles) ? {
     workspaceId: selectedWorkspaceId, workspacePath: workspaces.find(row => row.id === selectedWorkspaceId)?.path ?? "",
-    projectRoots: review.projectFiles ? workspaces.filter(row => row.id === selectedWorkspaceId || (projects?.find(project => project.id === review.projectFiles?.selection.projectId)?.workspaceIds ?? []).includes(row.id)).map(row => ({ workspaceId: row.id, path: row.path })) : undefined,
+    projectRoots: fileProjectRoots,
     onOpenProjectFile: review.projectFiles && onOpenProjectFile ? ref => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); onOpenProjectFile({ ...ref }) } : undefined,
+    onOpenExternalFile: review.projectFiles && onOpenExternalFile && capabilities["desktop-project-content-search"]?.includes("1") ? target => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); onOpenExternalFile({ ...target, reference: { ...target.reference } }) } : undefined,
     onOpenFile: path => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") },
   } : undefined
 
@@ -418,7 +424,7 @@ export function Workbench({
         {workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
           <ReviewPane
             workspaceId={selectedWorkspaceId}
-            projectFiles={review.projectFiles}
+            projectFiles={review.projectFiles ? { ...review.projectFiles, contentSearchAvailable: capabilities["desktop-project-content-search"]?.includes("1") === true, membershipRevision: fileMembershipRevision } : undefined}
             key={selectedWorkspaceId}
             changes={review.changes}
             error={review.error}

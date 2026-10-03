@@ -327,7 +327,11 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     async wait(input,signal) {
       const cell = cells.get(input.cell_id)
       if (!cell) throw new Error('Cell unavailable: unknown, retired, or interrupted by runtime restart')
-      return observe(cell,limit(input.yield_time_ms,config.defaultYieldTimeMs,0,60_000,'yield_time_ms'),limit(input.max_tokens,config.defaultOutputTokens,0,4096,'max_tokens'),signal,input.terminate === true)
+      const observation = await observe(cell,limit(input.yield_time_ms,config.defaultYieldTimeMs,0,60_000,'yield_time_ms'),limit(input.max_tokens,config.defaultOutputTokens,0,4096,'max_tokens'),signal,input.terminate === true)
+      // The cancelling observer owns this cell's tool cleanup. An observer
+      // of a separate human stop remains independent of that owner's drain.
+      if (input.terminate === true || signal?.aborted) await Promise.allSettled([cell.stop, ...cell.producers])
+      return observation
     },
     async terminate(cellId, reason = 'Cell stopped by its owner') {
       const cell = cells.get(cellId)

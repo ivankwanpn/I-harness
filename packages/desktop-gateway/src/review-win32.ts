@@ -15,6 +15,8 @@ interface Win32Bindings {
   readFile(handle: NativeHandle, output: Buffer, length: number, count: unknown, overlapped: null): number
   closeHandle(handle: NativeHandle): number
   getLastError(): number
+  getFileType(handle: NativeHandle): number
+  getFileInformation(handle: NativeHandle, output: Buffer): number
 }
 
 let bindings: Win32Bindings | undefined
@@ -29,6 +31,8 @@ function win32() {
     readFile: library.func("__stdcall", "ReadFile", "int", [PVOID, PVOID, "uint32", koffi.pointer("uint32"), PVOID]),
     closeHandle: library.func("__stdcall", "CloseHandle", "int", [PVOID]),
     getLastError: library.func("__stdcall", "GetLastError", "uint32", []),
+    getFileType: library.func("__stdcall", "GetFileType", "uint32", [PVOID]),
+    getFileInformation: library.func("__stdcall", "GetFileInformationByHandle", "int", [PVOID, PVOID]),
   } as unknown as Win32Bindings
   return bindings!
 }
@@ -55,6 +59,8 @@ export function openWindowsReviewFile(path: string): PinnedReviewFile {
     throw error
   }
   try {
+    const information = Buffer.alloc(52)
+    if (api.getFileType(handle) !== 1 || api.getFileInformation(handle, information) === 0 || (information.readUInt32LE(0) & 0x10) !== 0) throw new Error("Review target is not a regular disk file")
     const output = Buffer.alloc(32768 * 2)
     const length = api.getFinalPath(handle, output, 32768, 0)
     if (length === 0 || length >= 32768) throw new Error(`GetFinalPathNameByHandleW failed (${api.getLastError()})`)

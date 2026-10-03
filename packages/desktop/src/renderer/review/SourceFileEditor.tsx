@@ -1,8 +1,12 @@
-import { useEffect, useState, useSyncExternalStore } from "react"
+import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { RotateCcw, Save } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import { EditorDraftStore, editorDraftKey, getEditorDraftStore, isDraftDirty } from "./editor-drafts.ts"
 import { useProjectFilesText } from "./project-files-text.ts"
+import { displayedNavigationRange, type ProjectFileNavigation } from "../session/file-navigation.ts"
+import { SearchPreview } from "./SearchPreview.tsx"
+import type { SearchPreview as PreviewValue } from "./content-search-results.ts"
+import { ReadonlyFilePreview } from "./ReadonlyFilePreview.tsx"
 import "./review-editor.css"
 
 export type ReviewSaveResult =
@@ -10,14 +14,16 @@ export type ReviewSaveResult =
   | { kind: "conflict" }
   | { kind: "unavailable"; reason: string }
 export type EditableSource =
-  | { kind: "text"; text: string; truncated: boolean; bytes: number; revision?: string }
+  | { kind: "text"; text: string; truncated: boolean; bytes: number; revision?: string; readonly?: boolean; external?: boolean }
   | { kind: "unavailable"; reason: string }
 
 /** External draft ownership survives panel unmounts and folder switches. */
-export function SourceFileEditor({ workspaceId, path, value, store: suppliedStore, available = true, onSave, onReload }: {
+export function SourceFileEditor({ workspaceId, path, value, navigation, preview, store: suppliedStore, available = true, onSave, onReload }: {
   workspaceId?: string
   path: string
   value?: EditableSource
+  navigation?: ProjectFileNavigation
+  preview?: PreviewValue
   store?: EditorDraftStore
   available?: boolean
   onSave(path: string, text: string, expectedRevision: string): Promise<ReviewSaveResult>
@@ -32,14 +38,26 @@ export function SourceFileEditor({ workspaceId, path, value, store: suppliedStor
   const [saving, setSaving] = useState<string>()
   const [reloadChoice, setReloadChoice] = useState(false)
   const [scrollTop, setScrollTop] = useState(0)
+  const textarea = useRef<HTMLTextAreaElement>(null), revealed = useRef<string | undefined>(undefined)
   const complete = value?.kind === "text" && !value.truncated && typeof value.revision === "string" && /^[a-f0-9]{64}$/.test(value.revision)
   const draft = state.drafts[key]
   const dirty = isDraftDirty(draft)
-  const writable = available && complete
+  const external = value?.kind === "text" && value.external === true || navigation?.external === true || preview?.external === true
+  const readonly = external || value?.kind === "text" && value.readonly === true || navigation?.readonly === true || !!preview
+  const writable = available && complete && !readonly
   const lineCount = draft?.text.split("\n").length ?? 0
   const firstVisibleLine = Math.floor(scrollTop / 20)
   useEffect(() => { setScrollTop(0); setReloadChoice(false) }, [key])
-  useEffect(() => { if (available) store.ingest(ref, value) }, [store, key, value, available, !!draft])
+  useEffect(() => { if (available && !readonly) store.ingest(ref, value) }, [store, key, value, available, !!draft, readonly])
+  useEffect(() => {
+    const token = navigation ? `${key}:${navigation.nonce}` : ""
+    if (!navigation || !available || value === undefined || preview && !dirty || !draft || !textarea.current || revealed.current === token) return
+    const range = displayedNavigationRange(draft.text, navigation)
+    revealed.current = token
+    textarea.current.focus({ preventScroll: true }); textarea.current.setSelectionRange(range.start, range.end)
+    textarea.current.scrollTop = Math.max(0, (range.line - 1) * 20 - 40)
+    setScrollTop(textarea.current.scrollTop)
+  }, [key, navigation, draft?.text, value, available, preview, dirty])
 
   async function save() {
     if (!draft || !dirty || !writable || saving !== undefined) return
@@ -49,7 +67,7 @@ export function SourceFileEditor({ workspaceId, path, value, store: suppliedStor
     finally { setSaving(undefined) }
   }
   function discardReload() {
-    store.discard(ref, available ? value : undefined)
+    store.discard(ref, available && !readonly ? value : undefined)
     setReloadChoice(false)
     onReload(path)
   }
@@ -57,6 +75,8 @@ export function SourceFileEditor({ workspaceId, path, value, store: suppliedStor
     if (dirty && workspaceId) setReloadChoice(true)
     else discardReload()
   }
+  if (available && preview && !dirty) return <SearchPreview value={preview} navigation={navigation} />
+  if (available && readonly && !dirty && value?.kind === "text") return <ReadonlyFilePreview value={{ ...value, external }} />
   if (!draft) {
     if (value === undefined) return <p className="muted">{t("正在讀取…")}</p>
     if (value.kind === "unavailable") return <p className="notice">{value.reason === "binary" ? t("二進位內容不顯示") : value.reason === "deleted" ? t("檔案已刪除") : t("找不到檔案")}</p>
@@ -68,7 +88,8 @@ export function SourceFileEditor({ workspaceId, path, value, store: suppliedStor
       <button type="button" className="link-button" disabled={!available || saving !== undefined} onClick={reload}><RotateCcw size={14} />{dirty ? t("捨棄編輯並重新讀取") : t("重新讀取檔案")}</button>
       <button type="button" className="link-button" disabled={!dirty || !writable || saving !== undefined || !!draft.external} onClick={() => void save()}><Save size={14} />{saving === key ? t("儲存中…") : t("儲存檔案")}</button>
     </div>
-    {!available ? <p role="alert" className="notice error-text">{pf("資料夾已移出目前專案；草稿已保留，無法讀取或儲存。")}</p> : !writable ? <p role="alert" className="notice error-text">{value?.kind === "unavailable" ? pf("無法讀取檔案 ({reason})；草稿已保留。", { reason: value.reason }) : pf("正在確認完整檔案版本；草稿已保留。")}</p> : null}
+    {!available ? <p role="alert" className="notice error-text">{pf("資料夾已移出目前專案；草稿已保留，無法讀取或儲存。")}</p> : readonly ? <p className="notice">{pf(external ? "專案外檔案僅供唯讀；草稿已保留。" : "此檔案僅供唯讀；草稿已保留。")}</p> : !writable ? <p role="alert" className="notice error-text">{value?.kind === "unavailable" ? pf("無法讀取檔案 ({reason})；草稿已保留。", { reason: value.reason }) : pf("正在確認完整檔案版本；草稿已保留。")}</p> : null}
+    {navigation && dirty ? <p className="notice">{pf("搜尋位置來自磁碟；未儲存草稿的位置可能不同。")}</p> : navigation?.revision && draft.revision !== navigation.revision ? <p className="notice">{pf("檔案已在搜尋後變更；標示位置可能不同。")}</p> : null}
     {state.persistenceError ? <p role="alert" className="notice error-text">{state.persistenceError}</p> : null}
     {draft.error ? <p role="alert" className="notice error-text">{pf(draft.error)}</p> : null}
     {draft.saved && !dirty ? <p role="status" className="row-meta">{t("檔案已儲存")}</p> : null}
@@ -85,9 +106,9 @@ export function SourceFileEditor({ workspaceId, path, value, store: suppliedStor
     </div> : null}
     <div className="source-editor-body">
       <div className="source-editor-lines" aria-hidden="true" style={{ width: `${String(lineCount).length + 2}ch` }}><div style={{ transform: `translateY(-${scrollTop % 20}px)` }}>{Array.from({ length: Math.max(0, Math.min(32, lineCount - firstVisibleLine)) }, (_, index) => <span key={firstVisibleLine + index}>{firstVisibleLine + index + 1}</span>)}</div></div>
-      <textarea aria-label={t("來源檔案內容")} value={draft.text} spellCheck={false} wrap="off" disabled={!writable || saving === key}
+      <textarea ref={textarea} aria-label={t("來源檔案內容")} value={draft.text} spellCheck={false} wrap="off" disabled={!writable || saving === key}
         onScroll={(event) => setScrollTop(event.currentTarget.scrollTop)}
-        onChange={(event) => store.edit(ref, event.target.value)}
+        onChange={(event) => { if (writable && saving !== key) store.edit(ref, event.target.value) }}
         onKeyDown={(event) => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") { event.preventDefault(); void save() } }} />
     </div>
   </section>

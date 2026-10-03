@@ -59,11 +59,13 @@ it("rejects read results whose membership is revoked while awaiting their respon
   await expect(f.request({ ...f.selection, kind: "desktop/project-files/read", ref: { workspaceId: f.second.id, path: "same.txt" } })).rejects.toThrow(/membership changed/i)
 })
 
-it("rejects symlink escape, traversal, and malformed request before serving outside data", async () => {
+it("reads an explicit external alias readonly while refusing alias saves, traversal and malformed refs", async () => {
   const f = await fixture()
   await symlink(f.second.path, join(f.first.path, "escape"), process.platform === "win32" ? "junction" : "dir")
   await expect(f.files.get(f.first.id)!.list("escape")).rejects.toThrow(/real directory/i)
-  await expect(f.files.get(f.first.id)!.read("escape/same.txt")).rejects.toThrow(/symlink/i)
+  expect(await f.files.get(f.first.id)!.read("escape/same.txt")).toMatchObject({ kind: "text", text: "second", readonly: true, external: true })
+  await expect(f.files.get(f.first.id)!.save("escape/same.txt", "never write outside", "a".repeat(64))).rejects.toThrow(/symlink/i)
+  expect(await readFile(join(f.second.path, "same.txt"), "utf8")).toBe("second")
   await expect(f.files.get(f.first.id)!.list("../second")).rejects.toThrow(/escapes/i)
   await expect(f.files.get(f.first.id)!.search("same")).resolves.toMatchObject({ entries: [{ path: "same.txt" }] })
   await expect(dispatchProjectFilesRequest({ ...f.selection, kind: "desktop/project-files/read", ref: { workspaceId: f.second.id, path: resolve(f.second.path, "same.txt") } }, f.dependencies)).rejects.toThrow(/path/i)

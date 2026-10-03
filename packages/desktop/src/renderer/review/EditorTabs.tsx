@@ -3,7 +3,7 @@ import type { ProjectFileRef, ProjectFileRoot } from "../../../../desktop-gatewa
 import { EditorDraftStore, editorDraftKey, isDraftDirty } from "./editor-drafts.ts"
 import { useProjectFilesText } from "./project-files-text.ts"
 
-export function EditorTabs({ roots, store, onSave }: { roots: ProjectFileRoot[]; store: EditorDraftStore; onSave(ref: ProjectFileRef): Promise<boolean> }) {
+export function EditorTabs({ roots, store, onSave, onOpen }: { roots: ProjectFileRoot[]; store: EditorDraftStore; onSave(ref: ProjectFileRef): Promise<boolean>; onOpen?(ref: ProjectFileRef): void }) {
   const pf = useProjectFilesText()
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
   const [closing, setClosing] = useState<ProjectFileRef>(), [busy, setBusy] = useState(false), [error, setError] = useState<string>()
@@ -20,7 +20,7 @@ export function EditorTabs({ roots, store, onSave }: { roots: ProjectFileRoot[];
   }
   return <>
     <div className="editor-tabs" role="tablist" aria-label={pf("來源檔案分頁")}>{state.tabs.map((ref) => <div className="editor-tab" key={editorDraftKey(ref)}>
-      <button type="button" role="tab" aria-selected={state.active && editorDraftKey(state.active) === editorDraftKey(ref)} onClick={() => store.open(ref)}>{label(ref)}{isDraftDirty(store.get(ref)) ? " ●" : ""}</button>
+      <button type="button" role="tab" aria-selected={state.active && editorDraftKey(state.active) === editorDraftKey(ref)} onClick={() => onOpen ? onOpen(ref) : store.open(ref)}>{label(ref)}{isDraftDirty(store.get(ref)) ? " ●" : ""}</button>
       <button type="button" className="link-button" aria-label={pf("關閉 {path}", { path: label(ref) })} onClick={() => close(ref)}>×</button>
     </div>)}</div>
     {closing ? <div role="dialog" aria-label={pf("關閉未儲存檔案 {path}", { path: label(closing) })} className="editor-close-choice">

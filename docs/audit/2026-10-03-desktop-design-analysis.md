@@ -79,11 +79,11 @@ Code Mode CPU containment 的早期全套案例只捕獲恢復空字串，沒有
 
 ## 搜尋設計的後續建議
 
-這是使用者另行要求的唯讀 grep／ripgrep 研究，以下搜尋契約建議尚未實作。IH 的模型 `grep` 已透過 `@vscode/ripgrep` 啟動打包的 rg；優先改善的是搜尋契約。[實際引擎解析](D:/frontend-test/packages/fs-search/src/index.ts:22)、[grep 註冊與 schema](D:/frontend-test/packages/fs-search/src/index.ts:115)、[實際 argv](D:/frontend-test/packages/fs-search/src/index.ts:135)
+這一節記錄最初唯讀研究時的基線。使用者後來明確批准搜尋優化，並補充外部參考專案可以讀取、不可修改；目前實作、封裝及驗證狀態改以[搜尋驗收報告](2026-10-03-search-optimization-acceptance.md)與[更新後設計](../superpowers/specs/2026-10-03-search-optimization-design.md)為準。IH 繼續使用打包的 rg，沒有新增同名模型工具或 AST／vector 搜尋。
 
-來源顯示 glob 的 100 項及 grep 的 250 項上限在完整進程結果返回後才裁切，不能據此宣稱掃描、原始 stdout 或時間已受限。搜尋走 `spawn`，沒有 `execFile maxBuffer`；一般掛載未啟用可選 spill collector，其 tail 門檻也不是搜尋進程 hard cap。搜尋 body 沒有把既有 ToolExec abortSignal 或 deadline 傳入 exec，結果也缺少 truncated／partial／byte metadata。這些是 source 證據；本次沒有實際 Stop／CLI 故障 fixture 或效能基準，不能宣稱觀察到某個殘留程序或速度倍率。[返回上限](D:/frontend-test/packages/fs-search/src/index.ts:101)、[搜尋執行與結果解析](D:/frontend-test/packages/fs-search/src/index.ts:146)、[spawn／可選 collector](D:/frontend-test/packages/exec/src/index.ts:170)、[一般 shell 掛載](D:/frontend-test/packages/shell/src/index.ts:707)
+研究時 glob100／grep250 是完整 capture 後的裁切，沒有搜尋專用 raw／read／deadline hard cap 或 owner abort 傳遞；這是當時的 source 觀察，不是故障／效能測量。目前改成當前 scoped Exec 的第一代 enumeration、固定 no-spawn fd reader、固定 rg stdin matcher，保留原預設 count 並補上全局 byte／時間／取消／部分結果契約。模型預設返回32KiB，外部參考 viewer 維持唯讀。Windows provider 與既有一般 shell 的保護及預設 capture／promotion 行為保留；沒有擴大全局 FullAccess 權限。
 
-後續可先接上 owner 取消與全局結果／byte／時間限制，回報有限、取消、逾時、無命中與部分錯誤，再補 literal、大小寫、context 和明確 hidden／ignore 選項。現有 glob 開啟 `--hidden --no-ignore`，grep 採 rg 預設且沒有 `--no-config`；需要明示並驗證這些 policy，而非把無命中當作已搜尋全部檔案。多根內容搜尋可沿用 `{workspaceId,relativePath}` 與目前專案歸屬；它與本次已交付的有界「檔名搜尋」是兩個不同入口。完整來源與官方文件比較保存在[獨立研究報告](D:/frontend-test/.superpowers/sdd/2026-10-03-desktop-front-polish/grep-ripgrep-research.md)。這些建議尚未實作或原生驗收。
+目前已加入 literal、大小寫、context、hidden／ignore、PCRE2、multiline、encoding 及 `--no-config`；Desktop 分開檔名／內容搜尋，保持相對 project ref 並提供獨立外部唯讀 reference target。Code Mode 使用同一工具／broker，在真正 workspace-write fixture 內將240筆 nested matches 過濾為10筆 references、輸出少於1000 bytes；沒有宣稱 token 百分比或速度倍率。完整原始研究保存在[歷史研究報告](D:/frontend-test/.superpowers/sdd/2026-10-03-desktop-front-polish/grep-ripgrep-research.md)，新工作的實際 gate／原生狀態見上面的驗收報告。
 
 ## 後續實作採用的檢查原則
 

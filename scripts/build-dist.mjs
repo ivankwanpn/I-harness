@@ -247,6 +247,7 @@ await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
 {
   const assetFiles = [
     { from: join(ROOT, "packages/provider/src/model-catalog.json"), to: join(OUT, "model-catalog.json") },
+    { from: join(ROOT, "packages/fs-search/src/reader.mjs"), to: join(OUT, "reader.mjs") },
   ]
   for (const a of assetFiles) {
     if (!existsSync(a.from)) fail(`asset source missing: ${a.from}`)
@@ -302,6 +303,8 @@ writeFileSync(
     "                    by @i-harness/provider at MODULE LOAD; same rule as the bundle, so it",
     "                    must sit next to ih.mjs (esbuild leaves static file-URLs untouched for",
     "                    node targets — it neither rewrites nor copies them).",
+    "  reader.mjs        fixed no-spawn search reader; current scoped Exec launches it",
+    "                    beside this bundle to relay bounded opened-file bytes.",
     "",
     "Run:",
     "  node ih.mjs --version       # 0.1.0",

@@ -2,6 +2,7 @@ import { lstat, opendir, realpath } from "node:fs/promises"
 import { isAbsolute, join, relative, resolve, win32 } from "node:path"
 import { ReviewPathError, type WorkspaceReview } from "./review.ts"
 import { openPinnedProjectDirectory, type PinnedProjectDirectory } from "./project-directory-handle.ts"
+import type { SearchQuery } from "@i-harness/fs-search"
 
 /** Wire contracts shared by the native dispatcher and renderer. Paths are
  * always relative to the exact workspaceId, never relative to the host root. */
@@ -16,6 +17,11 @@ export type ProjectFilesRequest = ProjectFileSelection & (
   | { kind: "desktop/project-files/search"; ref: ProjectFileRef; query: string; offset: number }
   | { kind: "desktop/project-files/read"; ref: ProjectFileRef }
   | { kind: "desktop/project-files/save"; ref: ProjectFileRef; text: string; expectedRevision: string }
+  | { kind: "desktop/project-files/content-search"; requestId: string; query: SearchQuery; workspaceIds?: string[]; referencePath?: string }
+  | { kind: "desktop/project-files/content-cancel"; requestId: string }
+  | { kind: "desktop/project-files/search-preview"; ref: ProjectFileRef; line: number; encoding?: SearchQuery["encoding"]; expectedRevision?: string; requestId?: string }
+  | { kind: "desktop/project-files/external-read"; path: string; requestId?: string }
+  | { kind: "desktop/project-files/external-preview"; path: string; line: number; encoding?: SearchQuery["encoding"]; expectedRevision?: string; requestId?: string }
 )
 export type ProjectFilesRequester = (request: ProjectFilesRequest) => Promise<unknown>
 

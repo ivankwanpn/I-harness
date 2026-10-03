@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import { retireSessionDraft } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
 import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
-import type { ProjectFilesRequest, ProjectFileRef } from "@i-harness/desktop-gateway/src/project-files.ts"
+import type { ProjectFilesRequest } from "@i-harness/desktop-gateway/src/project-files.ts"
+import type { ExternalFileTarget, ProjectFileTarget } from "./session/file-navigation.ts"
 import type {
   AgentTaskView,
   HistoryRange,
@@ -95,8 +96,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [reviewDiff, setReviewDiff] = useState<ReviewText>()
   const [reviewPreview, setReviewPreview] = useState<ReviewText>()
   const [historyTarget, setHistoryTarget] = useState<HistorySelection>()
-  const [projectOpenFile, setProjectOpenFile] = useState<ProjectFileRef>()
-  useEffect(() => { setProjectOpenFile(undefined) }, [selectedWorkspaceId, selectedSessionId, selectedProjectId])
+  const [projectOpenFile, setProjectOpenFile] = useState<ProjectFileTarget>()
+  const [externalOpenFile, setExternalOpenFile] = useState<ExternalFileTarget>()
+  useEffect(() => { setProjectOpenFile(undefined); setExternalOpenFile(undefined) }, [selectedWorkspaceId, selectedSessionId, selectedProjectId])
   const projectFileRequest = useCallback((request: ProjectFilesRequest) => bridge.request(request), [bridge])
   const historyRequest = useCallback((request: HistoryRequest) => bridge.request(request) as Promise<HistoryRange>, [bridge])
   useEffect(() => {
@@ -643,6 +645,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }).catch(reason => { if (selection.current === scope && navigationVersion.current === version) setError(String(reason)) })
       }}
       onOpenProjectFile={(ref) => setProjectOpenFile({ ...ref })}
+      onOpenExternalFile={(target) => setExternalOpenFile({ ...target, reference: { ...target.reference } })}
       onBatchSessions={async (workspaceId, command) => {
         const scope = selection.current
         const result = await bridge.request({ kind: "desktop/session/batch", workspaceId, command, confirmed: true }) as import("./session/SessionManager.tsx").ManageSessionBatchResult
@@ -663,7 +666,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }}
       historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? { selection: historyTarget, request: historyRequest, onLatest: () => setHistoryTarget(undefined) } : undefined}
       review={{
-        projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile } : undefined,
+        projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile, externalOpenFile } : undefined,
         onSaveFile: async (path, text, expectedRevision) => {
           if (!selectedWorkspaceId) throw new Error("No workspace selected")
           const result = await bridge.request({ kind: "desktop/review/file/save", workspaceId: selectedWorkspaceId, path, text, expectedRevision }) as import("./review/SourceFileEditor.tsx").ReviewSaveResult

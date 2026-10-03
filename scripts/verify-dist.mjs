@@ -107,6 +107,7 @@ if (!existsSync(OUT)) {
 assert(existsSync(IH), `bundle present: ${IH}`, `missing ${IH}`)
 assert(existsSync(join(OUT, "package.json")), "dist package.json present")
 assert(existsSync(join(OUT, "README-dist.txt")), "README-dist.txt present")
+assert(existsSync(join(OUT, "reader.mjs")), "fixed search reader beside the bundle")
 assert(
   existsSync(join(OUT, "model-catalog.json")),
   "model-catalog.json beside the bundle",

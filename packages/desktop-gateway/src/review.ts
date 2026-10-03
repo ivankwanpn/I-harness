@@ -26,7 +26,7 @@ export type DiffResult =
   | { kind: "unavailable"; reason: "untracked" | "binary" | "deleted" | "no-head" | "no-diff" | "not-found" | "not-git-repo" | "git-missing" }
 
 export type FileResult =
-  | { kind: "text"; text: string; truncated: boolean; bytes: number; revision?: string }
+  | { kind: "text"; text: string; truncated: boolean; bytes: number; revision?: string; readonly?: boolean; external?: boolean }
   | { kind: "unavailable"; reason: "binary" | "deleted" | "not-found" }
 
 export type SaveFileResult =
@@ -241,19 +241,19 @@ export function createWorkspaceReview(root: string, options: {
     try {
       for (const part of parts) {
         target = join(target, part)
-        if ((await lstat(target)).isSymbolicLink()) throw new ReviewPathError("review path is a symlink")
+        await lstat(target)
       }
       const before = await realpath(target)
-      if (!inside(canonicalRoot, before)) throw new ReviewPathError("review path escapes workspace")
       const handle = await openPinnedFile(target)
       try {
-        if (!inside(canonicalRoot, handle.finalPath)) throw new ReviewPathError("review handle escapes workspace")
+        if (relative(before, handle.finalPath) !== "") throw new ReviewPathError("review handle identity changed during open")
+        const external = relative(workspace, canonicalRoot) !== "" || !inside(workspace, handle.finalPath)
         const { bytes, count } = await handle.read(limit + 1)
         const slice = bytes.subarray(0, Math.min(count, limit))
         if (slice.includes(0)) return { kind: "unavailable", reason: "binary" }
         const text = utf8Prefix(slice, count > limit)
         if (text === undefined) return { kind: "unavailable", reason: "binary" }
-        return { kind: "text", text, truncated: count > limit, bytes: count, ...(count > limit ? {} : { revision: revisionOf(slice) }) }
+        return { kind: "text", text, truncated: count > limit, bytes: count, ...(count > limit ? {} : { revision: revisionOf(slice) }), ...(external ? { readonly: true, external: true } : {}) }
       } finally { await handle.close() }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -269,6 +269,7 @@ export function createWorkspaceReview(root: string, options: {
     const { parts, gitPath } = checkedRelative(path)
     if (parts.some((part) => part.toLowerCase() === ".git")) throw new ReviewPathError("Git metadata cannot be edited")
     const canonicalRoot = await realpath(workspace)
+    if (relative(resolve(workspace), canonicalRoot) !== "") throw new ReviewPathError("Edit root differs from its stored canonical path")
     let target = canonicalRoot
     for (let index = 0; index < parts.length; index++) {
       target = join(target, parts[index]!)

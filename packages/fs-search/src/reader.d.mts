@@ -1,0 +1,1 @@
+export function readBoundedFile(path:string,maxBytes:number,onChunk:(chunk:Buffer)=>void|Promise<void>):Promise<{type:'read';attempted:boolean;read:boolean;eof:boolean;inputBytes:number;error?:string}>

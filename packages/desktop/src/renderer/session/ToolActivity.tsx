@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react"
 import { ToolSummaryRow } from "../vendor/zcode/ToolSummaryRow.tsx"
 import { useText } from "../design/i18n.ts"
-import { toolFilePath, toolProjectFileRef, type FileNavigation } from "./file-navigation.ts"
+import { toolExternalFileTarget, toolFilePath, toolProjectFileRef, type FileNavigation } from "./file-navigation.ts"
+import { useProjectFilesText } from "../review/project-files-text.ts"
 
 type ToolImage = { mediaType: string; dataBase64: string; name?: string; width?: number; height?: number }
 
@@ -34,10 +35,13 @@ function displayOutput(output: unknown, images: ToolImage[]): string {
 
 export function ToolActivity({ name, args, output, resultReceived, isError, expanded: controlled, onToggle, navigation }: { name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; expanded?: boolean; onToggle?(): void; navigation?: FileNavigation }) {
   const t = useText()
+  const pf = useProjectFilesText()
   const [localExpanded, setExpanded] = useState(false)
   const expanded = controlled ?? localExpanded
+  const projectNavigation = !!navigation?.projectRoots && !!navigation.onOpenProjectFile
   const projectFile = navigation?.workspaceId && navigation.projectRoots && navigation.onOpenProjectFile ? toolProjectFileRef(name, args, navigation.workspaceId, navigation.projectRoots) : undefined
-  const path = projectFile?.path ?? (navigation ? toolFilePath(name, args, navigation.workspacePath) : undefined)
+  const path = projectFile?.path ?? (navigation && !projectNavigation ? toolFilePath(name, args, navigation.workspacePath) : undefined)
+  const external = !path && navigation?.onOpenExternalFile ? toolExternalFileTarget(name, args) : undefined
   const images = useMemo(() => expanded ? resultImages(output) : [], [expanded, output])
   const input = useMemo(() => {
     if (!expanded || args === undefined) return undefined
@@ -51,7 +55,7 @@ export function ToolActivity({ name, args, output, resultReceived, isError, expa
   return <div className="tool-activity">
     <div className="tool-activity-heading"><ToolSummaryRow name={name} status={t(isError || resultFailed(output) ? "執行失敗" : resultReceived || output !== undefined ? "已收到結果" : "尚未回報結果")}
       label={`${t("工具詳情")} ${name}`} expanded={expanded} onToggle={onToggle ?? (() => setExpanded((value) => !value))} />
-      {path && navigation ? <button type="button" className="tool-file-link link-button" title={projectFile ? `${projectFile.workspaceId} · ${path}` : path} aria-label={t("在成果面板開啟 {path}", { path })} onClick={() => projectFile && navigation.onOpenProjectFile ? navigation.onOpenProjectFile({ ...projectFile }) : navigation.onOpenFile(path)}>{path}</button> : null}</div>
+      {path && navigation ? <button type="button" className="tool-file-link link-button" title={projectFile ? `${projectFile.workspaceId} · ${path}` : path} aria-label={t("在成果面板開啟 {path}", { path })} onClick={() => projectFile && navigation.onOpenProjectFile ? navigation.onOpenProjectFile({ ...projectFile }) : navigation.onOpenFile(path)}>{path}</button> : external && navigation?.onOpenExternalFile ? <button type="button" className="tool-file-link link-button" title={external.reference.path} aria-label={pf("唯讀開啟 {path}", { path: external.reference.path })} onClick={() => navigation.onOpenExternalFile?.({ reference: { ...external.reference } })}>{external.reference.path} · {pf("唯讀")}</button> : null}</div>
     {expanded ? <div className="tool-expanded-content">{input !== undefined ? <><div className="tool-detail-label">{t("呼叫參數")}</div><pre className="tool-output">{input}</pre></> : null}<div className="tool-detail-label">{t("執行輸出")}</div><pre className="tool-output">{text ?? t(isError ? "執行失敗" : resultReceived ? "已收到結果" : "尚未回報結果")}</pre>{images.length > 0 ? <div className="tool-result-images">{images.map((image, index) => <img key={index} src={`data:${image.mediaType};base64,${image.dataBase64}`} alt={image.name || `${t("圖片")} ${index + 1}`} loading="lazy" decoding="async" />)}</div> : null}</div> : null}
   </div>
 }

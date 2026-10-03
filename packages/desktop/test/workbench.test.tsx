@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
@@ -9,6 +9,7 @@ import { useLocale } from "../src/renderer/design/i18n.ts"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 import { writeDraft, clearDraft } from "../src/renderer/session/Composer.tsx"
+import type { ProjectFilesRequest } from "../../desktop-gateway/src/project-files.ts"
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
@@ -52,6 +53,50 @@ function Harness(props: {
 }
 
 describe("Desktop workbench shell", () => {
+  it.each(["secondary removed", "root relocated"])("refreshes actual project roots and cancels a captured search when %s without changing selection IDs", async change => {
+    useUiStore.setState({ reviewOpen: true })
+    const secondary = { id: "ws-2", path: "D:/secondary", label: "Second" }, selection = { workspaceId: ENTRY.id, sessionId: "owner", projectId: "current" }
+    const firstRoots = [{ workspaceId: ENTRY.id, label: "workspace" }, { workspaceId: secondary.id, label: "Second" }], refreshed = Promise.withResolvers<unknown>(), search = Promise.withResolvers<unknown>(), calls: ProjectFilesRequest[] = []
+    let changed = false
+    const request = async (input: ProjectFilesRequest) => {
+      calls.push(input)
+      if (input.kind === "desktop/project-files/roots") return changed ? refreshed.promise : { roots: firstRoots }
+      if (input.kind === "desktop/project-files/content-search") return search.promise
+      if (input.kind === "desktop/project-files/content-cancel") return { cancelled: true }
+      return { entries: [], nextOffset: null, truncated: false }
+    }
+    const project = { id: "current", name: "Current", workspaceIds: [ENTRY.id, secondary.id], primaryWorkspaceId: ENTRY.id, createdAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" }
+    const base = { bridge: fakeBridge(), workspaces: [ENTRY, secondary], selectedWorkspaceId: ENTRY.id, selectedSessionId: "owner", selectedProjectId: "current", projects: [project], capabilities: { "desktop-project-files": ["1"], "desktop-project-content-search": ["1"] }, onSelectWorkspace() {}, onSelectSession() {}, review: { projectFiles: { selection, request }, changes: { kind: "ok" as const, files: [], truncated: false }, onSelect() {}, onRefresh() {} } }
+    const view = render(<Workbench {...base} />)
+    await screen.findByRole("button", { name: "▾ Second" })
+    fireEvent.click(screen.getByRole("button", { name: "檔案內容" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "搜尋專案檔案內容" }), { target: { value: "needle" } })
+    fireEvent.submit(screen.getByRole("form", { name: "搜尋檔案內容" }))
+    const captured = calls.find((input): input is Extract<ProjectFilesRequest, { kind: "desktop/project-files/content-search" }> => input.kind === "desktop/project-files/content-search")!
+    expect(captured.workspaceIds).toEqual([ENTRY.id, secondary.id])
+    changed = true
+    view.rerender(<Workbench {...base} projects={change === "secondary removed" ? [{ ...project, workspaceIds: [ENTRY.id] }] : [project]} workspaces={change === "root relocated" ? [{ ...ENTRY, path: "D:/relocated" }, secondary] : base.workspaces} />)
+    await waitFor(() => expect(calls.filter(input => input.kind === "desktop/project-files/roots")).toHaveLength(2))
+    expect(calls.find(input => input.kind === "desktop/project-files/content-cancel")).toEqual({ ...selection, kind: "desktop/project-files/content-cancel", requestId: captured.requestId })
+    expect(screen.queryByRole("option", { name: "Second · ws-2" })).toBeNull()
+    await act(async () => { refreshed.resolve({ roots: change === "secondary removed" ? [firstRoots[0]] : firstRoots }); await refreshed.promise })
+    await act(async () => { search.resolve({ roots: firstRoots, matches: [{ ref: { workspaceId: secondary.id, path: "same.txt" }, path: "same.txt", line: 1, text: "obsolete needle" }], status: "completed", partial: false, truncated: false, reasons: [], diagnostics: [], filters: {}, limits: {}, stats: { candidateFiles: 1, attemptedFiles: 1, readFiles: 1, completedFiles: 1, eofFiles: 1, inputBytes: 15, engineRawBytes: 40, runnerRawBytes: 0 } }); await search.promise })
+    expect(screen.queryByRole("button", { name: "Second/same.txt:1" })).toBeNull()
+    expect(calls.filter(input => input.kind === "desktop/project-files/content-search")).toHaveLength(1)
+  })
+  it("enables project content search only for its advertised backend capability", async () => {
+    useUiStore.setState({ reviewOpen: true })
+    const roots = [{ workspaceId: ENTRY.id, label: "workspace" }]
+    const request = async (input: { kind: string }) => input.kind === "desktop/project-files/roots" ? { roots } : { entries: [], nextOffset: null, truncated: false }
+    const base = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, onSelectWorkspace: () => {}, onSelectSession: () => {}, review: { projectFiles: { selection: { workspaceId: ENTRY.id }, request }, changes: { kind: "ok" as const, files: [], truncated: false }, onSelect: () => {}, onRefresh: () => {} } }
+    const view = render(<Workbench {...base} capabilities={{ "desktop-project-files": ["1"], "desktop-project-content-search": ["1"] }} />)
+    await screen.findByRole("button", { name: "▾ workspace" })
+    fireEvent.click(screen.getByRole("button", { name: "檔案內容" }))
+    fireEvent.change(screen.getByRole("textbox", { name: "搜尋專案檔案內容" }), { target: { value: "needle" } })
+    expect((screen.getByRole("button", { name: "搜尋內容" }) as HTMLButtonElement).disabled).toBe(false)
+    view.rerender(<Workbench {...base} capabilities={{ "desktop-project-files": ["1"] }} />)
+    expect((screen.getByRole("button", { name: "搜尋內容" }) as HTMLButtonElement).disabled).toBe(true)
+  })
   it("shows the durable goal objective and actual phase above the conversation", () => {
     render(<Workbench bridge={fakeBridge()} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} selectedSessionId="goal-1" capabilities={{ "desktop-work-state": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}}
       conversation={{ rows: [], canSend: false, running: false, pending: [], workState: { todos: null, goal: { id: "goal-1", revision: 2, objective: "Finish the workbench", phase: "paused" } }, onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} }} />)

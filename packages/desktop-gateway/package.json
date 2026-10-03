@@ -18,6 +18,7 @@
     "@i-harness/core-session": "workspace:*",
     "@i-harness/credentials": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
+    "@i-harness/fs-search": "workspace:*",
     "@i-harness/goal": "workspace:*",
     "@i-harness/hooks": "workspace:*",
     "@i-harness/interaction": "workspace:*",
@@ -40,6 +41,8 @@
     "@i-harness/subagent": "workspace:*",
     "@i-harness/terminal": "workspace:*",
     "@i-harness/todo": "workspace:*",
+    "ignore": "7.0.12",
+    "picomatch": "4.0.5",
     "koffi": "^3.1.0"
   }
 }

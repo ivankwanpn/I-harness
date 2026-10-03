@@ -37,6 +37,7 @@ export interface DesktopHandlers {
   workspace?: string
   assertSession?: (id: string) => Promise<void>
   projectFiles?: ReturnType<typeof import("./project-files.ts").createProjectFiles>
+  projectContentSearch?: ReturnType<typeof import("./project-content-search.ts").createProjectContentSearch>
   draftSession?: (clientToken: string) => Promise<{ sessionId: string }>
   contextPicker?: ReturnType<typeof import("./context-picker.ts").createContextPicker>
   projects?: ReturnType<typeof createProjectScopeBroker>

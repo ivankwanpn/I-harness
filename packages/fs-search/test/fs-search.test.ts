@@ -50,7 +50,7 @@ describe("fs-search glob", () => {
       const found = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string }[] }> }).execute({ pattern: "unique-search-marker" }, {})
       expect(found.matches).toEqual([])
       const explicit = await (grep as { execute(a: unknown, e: unknown): Promise<{ matches: { path: string }[] }> }).execute({ pattern: "unique-search-marker", path: "node_modules/package" }, {})
-      expect(explicit.matches).toEqual([{ path: "node_modules/package/noise.txt", line: 1, text: "unique-search-marker" }])
+      expect(explicit.matches).toEqual([expect.objectContaining({ path: "node_modules/package/noise.txt", line: 1, text: "unique-search-marker" })])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -136,7 +136,8 @@ describe("fs-search workspace-bound search root (D1)", () => {
     const [, grep] = createFsSearchTools({ exec: recordingExec(calls), workspace: "/ws" })
     await (grep as { execute(a: unknown, e: unknown): Promise<unknown> }).execute({ pattern: "x" }, {})
     await (grep as { execute(a: unknown, e: unknown): Promise<unknown> }).execute({ pattern: "x", path: "sub" }, {})
-    expect(calls.map((c) => c.cwd)).toEqual(["/ws", "/ws"])
+    expect(calls.length).toBeGreaterThanOrEqual(2)
+    expect(calls.every((c) => c.cwd === "/ws")).toBe(true)
   })
 
   it("no workspace configured → no cwd field (exec's own contract: process cwd)", async () => {

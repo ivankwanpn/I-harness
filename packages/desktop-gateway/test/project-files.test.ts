@@ -10,6 +10,20 @@ const homes: string[] = []
 afterEach(async () => { for (const home of homes.splice(0)) await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) })
 async function fixture() { const root = await mkdtemp(join(tmpdir(), "ih-project-tree-")); homes.push(root); return root }
 
+it("reads a replaced root as external readonly content and refuses saving through that alias", async () => {
+  const root = await fixture(), outside = await fixture(), saved = `${root}-saved`; homes.push(saved)
+  const review = createWorkspaceReview(root), files = createProjectFiles(root, review)
+  await writeFile(join(outside, "secret.txt"), "outside secret")
+  await rename(root, saved); await symlink(outside, root, process.platform === "win32" ? "junction" : "dir")
+  try {
+    const result = await files.read("secret.txt")
+    expect(result).toMatchObject({ kind: "text", text: "outside secret", external: true, readonly: true })
+    await expect(files.save("secret.txt", "should never be written", result.kind === "text" ? result.revision! : "a".repeat(64))).rejects.toThrow(/canonical|root/i)
+    expect(await readFile(join(outside, "secret.txt"), "utf8")).toBe("outside secret")
+  }
+  finally { await review.close() }
+})
+
 it("pins directory identity while Windows rejects replacement and Linux scans through its descriptor", async () => {
   const root = await fixture(), directory = join(root, "folder"), renamed = join(root, "moved")
   await mkdir(directory); await writeFile(join(directory, "same.txt"), "old")

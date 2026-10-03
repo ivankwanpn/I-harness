@@ -20,6 +20,7 @@ import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
+import { dispatchGatewayContentSearch } from "./project-content-search.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -32,6 +33,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     const capabilities = { ...frame.result.capabilities }
     if (handlers.contextPicker) capabilities["desktop-context-picker"] = ["1"]
     if (handlers.projectFiles) capabilities["desktop-project-files"] = ["1"]
+    if (handlers.projectContentSearch) capabilities["desktop-project-content-search"] = ["1"]
     if (handlers.autoTitle) capabilities["desktop-auto-title"] = ["1"]
     if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
     if (handlers.execution) capabilities["desktop-execution"] = ["1"]
@@ -273,6 +275,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
               : await handlers.workflow.output(id, String(params?.id ?? ""))
           send(makeSuccess(message.id, result))
         } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/project-files/content-search", "desktop/project-files/content-cancel", "desktop/project-files/search-preview", "desktop/project-files/external-read", "desktop/project-files/external-preview"].includes(message.method) && handlers.projectContentSearch) {
+        try { send(makeSuccess(message.id, await dispatchGatewayContentSearch(message.method, message.params, handlers.projectContentSearch))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
       if (["desktop/project-files/list", "desktop/project-files/search", "desktop/project-files/read", "desktop/project-files/save"].includes(message.method) && handlers.projectFiles) {
@@ -634,6 +641,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       send(makeFailure(message.id, METHOD_NOT_FOUND, `unknown method: ${message.method}`))
     },
     async close() {
+      await handlers.projectContentSearch?.close()
       if (closed) return
       closed = true
       await probes?.close()

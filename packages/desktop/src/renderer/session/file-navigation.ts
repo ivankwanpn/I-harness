@@ -1,5 +1,43 @@
 import type { ProjectFileRef } from "../../../../desktop-gateway/src/project-files.ts"
-export interface FileNavigation { workspacePath: string; workspaceId?: string; onOpenFile(path: string): void; projectRoots?: { workspaceId: string; path: string }[]; onOpenProjectFile?(ref: ProjectFileRef): void }
+import type { SearchQuery } from "../../../../fs-search/src/search-types.ts"
+/** Line numbers are one based; columns are zero based UTF16 code units in the
+ * BOM-stripped, CRLF-normalized displayed text. The end is exclusive. */
+export interface ProjectFileNavigation {
+  line: number
+  column?: number
+  endLine?: number
+  endColumn?: number
+  nonce: string
+  revision?: string
+  encoding?: SearchQuery["encoding"]
+  readonly?: boolean
+  external?: boolean
+}
+export type ProjectFileTarget = ProjectFileRef & { navigation?: ProjectFileNavigation }
+export interface ExternalFileTarget { reference: { path: string; readonly: true }; navigation?: ProjectFileNavigation }
+export type FileOpenTarget = ProjectFileTarget | ExternalFileTarget
+export interface FileNavigation { workspacePath: string; workspaceId?: string; onOpenFile(path: string): void; projectRoots?: { workspaceId: string; path: string }[]; onOpenProjectFile?(ref: ProjectFileTarget): void; onOpenExternalFile?(target: ExternalFileTarget): void }
+export const absoluteReferencePath = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 4096 && !/[\0\r\n]/.test(value) && (value.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\[^\\/]+[\\/][^\\/]+/.test(value))
+
+/** Explicit file arguments may be viewed as read-only references. Shell text and
+ * URLs never produce a target; the native read route checks the actual file. */
+export function toolExternalFileTarget(name: string, args: unknown): ExternalFileTarget | undefined {
+  if (!["read", "read_file", "write", "write_file", "edit"].includes(name) || !args || typeof args !== "object" || Array.isArray(args)) return undefined
+  const input = args as Record<string, unknown>, path = input.path ?? input.file_path ?? input.filePath
+  return absoluteReferencePath(path) ? { reference: { path, readonly: true } } : undefined
+}
+
+export function displayedNavigationRange(text: string, target: Pick<ProjectFileNavigation, "line" | "column" | "endLine" | "endColumn">, startLine = 1) {
+  const lines = text.split("\n")
+  const integer = (value: number | undefined, fallback: number) => value !== undefined && Number.isFinite(value) ? Math.floor(value) : fallback
+  const first = Math.max(0, Math.min(lines.length - 1, integer(target.line, startLine) - startLine))
+  const last = Math.max(first, Math.min(lines.length - 1, integer(target.endLine, target.line) - startLine))
+  const offset = (line: number) => lines.slice(0, line).reduce((sum, value) => sum + value.length + 1, 0)
+  const column = Math.max(0, Math.min(lines[first]!.length, integer(target.column, 0)))
+  const endColumn = Math.max(0, Math.min(lines[last]!.length, integer(target.endColumn, target.column === undefined ? lines[last]!.length : column)))
+  const start = offset(first) + column
+  return { start, end: Math.max(start, offset(last) + endColumn), line: first + startLine }
+}
 
 /** Tool paths retain the root which actually owns them. Relative tool paths use
  * the operation's owner, while absolute paths are matched against current roots. */
