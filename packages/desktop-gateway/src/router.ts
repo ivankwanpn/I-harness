@@ -29,6 +29,8 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
       return
     }
     const capabilities = { ...frame.result.capabilities }
+    if (handlers.contextPicker) capabilities["desktop-context-picker"] = ["1"]
+    if (handlers.draftSession) capabilities["desktop-draft-create"] = ["1"]
     if (handlers.projects) capabilities["desktop-project-scope"] = ["1"]
     if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
@@ -98,6 +100,12 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       }
 
       if (!message.method.startsWith("desktop/")) {
+        if (message.method === "session/create" && asRecord(message.params)?.clientToken !== undefined && handlers.draftSession) {
+          if (!initialized) { send(makeFailure(message.id, INVALID_REQUEST, "not initialized: send initialize first")); return }
+          try { send(makeSuccess(message.id, await handlers.draftSession(asRecord(message.params)!.clientToken as string))) }
+          catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+          return
+        }
         if (message.method === "shutdown") for (const controller of compacting.values()) controller.abort()
         const scopedSessionId = asRecord(message.params)?.sessionId
         if (typeof scopedSessionId === "string" && modelSwitches.has(scopedSessionId)
@@ -424,6 +432,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if ((message.method === "desktop/context/search" || message.method === "desktop/context/read") && handlers.contextPicker) {
+        try { send(makeSuccess(message.id, await (message.method.endsWith("/search") ? handlers.contextPicker.search(message.params) : handlers.contextPicker.read(message.params)))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (message.method === "desktop/session/search" && handlers.sessionQuery !== undefined) {
         const params = asRecord(message.params)
         if (typeof params?.query !== "string" || !params.query.trim() || params.query.length > 4096

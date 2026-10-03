@@ -28,6 +28,8 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  draftSession?: (clientToken: string) => Promise<{ sessionId: string }>
+  contextPicker?: ReturnType<typeof import("./context-picker.ts").createContextPicker>
   projects?: ReturnType<typeof createProjectScopeBroker>
   input?: ReturnType<typeof createDesktopInput>
   workflow?: ReturnType<typeof createDesktopWorkflow>

@@ -8,6 +8,8 @@ import type { ProjectCatalog } from "./projects.ts"
 import { readPickedAttachments } from "./file-attachments.ts"
 import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runtime.ts"
 import { contextRequestParams } from "./context-requests.ts"
+import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
+import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
 // This native helper must be bundled into Electron main. An externalized
 // workspace-package import would require raw gateway TypeScript at app boot.
 import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
@@ -58,6 +60,37 @@ export async function dispatchDesktopRequest(
   }
 
   switch (value.kind as DesktopRequest["kind"]) {
+    case "desktop/context/search":
+    case "desktop/context/read": {
+      const selection = { workspaceId: requireNonEmpty(value.workspaceId, "workspaceId"), ...(value.sessionId === undefined ? {} : { sessionId: requireNonEmpty(value.sessionId, "sessionId") }), ...(value.projectId === undefined ? {} : { projectId: requireNonEmpty(value.projectId, "projectId") }) }
+      const query = value.kind.endsWith("/search") ? contextQuery(value) : undefined
+      const reference = query ? undefined : contextReference(value.reference)
+      const scope = await resolveCurrentProjectMembers(selection, dependencies)
+      if (reference) {
+        const { runtime, projectId } = await runtimeForProjectMember(selection, reference.workspaceId, dependencies)
+        const result = await runtime.client.request("desktop/context/read", { reference, ...(projectId ? { projectId } : {}) })
+        const current = await resolveCurrentProjectMembers(selection, dependencies)
+        if (current.projectId !== scope.projectId || !current.members.some((row) => row.id === reference.workspaceId && row.path === scope.members.find((member) => member.id === reference.workspaceId)?.path)) throw new Error("Project folder membership changed")
+        return result
+      }
+      const items: ContextItem[] = []
+      let truncated = false
+      let remainingOffset = query!.offset
+      for (const member of scope.members) {
+        const { runtime, projectId } = await runtimeForProjectMember(selection, member.id, dependencies)
+        if (!runtime.info.capabilities["desktop-context-picker"]?.includes("1")) throw new Error("Context picker unavailable")
+        const page = await runtime.client.request("desktop/context/search", { ...query!, offset: remainingOffset, ...(projectId ? { projectId } : {}) }) as { items: Omit<ContextItem, "workspaceId">[]; truncated?: boolean; total?: number }
+        if (!Array.isArray(page?.items)) throw new Error("Invalid context results")
+        truncated ||= !!page.truncated
+        if (remainingOffset >= (page.total ?? page.items.length)) { remainingOffset -= page.total ?? page.items.length; continue }
+        items.push(...page.items.slice(0, 31 - items.length).map((item) => ({ ...item, workspaceId: member.id, workspaceLabel: member.label } as ContextItem)))
+        remainingOffset = 0
+        if (items.length > 30) break
+      }
+      const current = await resolveCurrentProjectMembers(selection, dependencies)
+      if (current.projectId !== scope.projectId || JSON.stringify(current.members) !== JSON.stringify(scope.members)) throw new Error("Project folder membership changed")
+      return { items: items.slice(0, 30), nextOffset: items.length > 30 ? query!.offset + 30 : null, truncated }
+    }
     case "workspace/attachments/pick": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
       const workspace = dependencies.catalog.get(workspaceId)
@@ -201,13 +234,15 @@ export async function dispatchDesktopRequest(
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.dashboard()
     case "session/create": {
       const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid draft creation token")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
       let projectId: string | undefined
       if (value.projectId !== undefined) {
         projectId = requireNonEmpty(value.projectId, "projectId")
         if (!dependencies.projects || !(await dependencies.projects.list()).some((project) => project.id === projectId && project.workspaceIds.includes(workspaceId))) throw new Error("Project does not contain the selected folder")
       }
-      const created = await runtime.client.createSession()
+      if (value.clientToken && !runtime.info.capabilities["desktop-draft-create"]?.includes("1")) throw new Error("Durable draft creation unavailable")
+      const created = value.clientToken ? await runtime.client.request("session/create", { clientToken: value.clientToken }) as { sessionId: string } : await runtime.client.createSession()
       if (projectId) {
         await runtime.client.request("desktop/project/sync", { projects: await projectRuntimeContexts(dependencies.projects!, dependencies.catalog) })
         await runtime.client.request("desktop/session/project/bind", { sessionId: created.sessionId, projectId })

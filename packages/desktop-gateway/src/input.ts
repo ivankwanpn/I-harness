@@ -1,9 +1,15 @@
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { ImageInput } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
 import { Inbox, validateImages } from "@i-harness/core-session"
+
+/** Exact producer-owned document identity for permanent session cleanup. */
+export const desktopInputReceiptDocumentKey = (sessionId: string) => `desktop-input-tokens-${createHash("sha256").update(sessionId).digest("hex")}`
+interface TokenReceipt { fingerprint: string; inputId: string }
+interface TokenReceipts { version: 1; sessionId: string; receipts: Record<string, TokenReceipt> }
+const MAX_TOKEN_RECEIPTS = 4096
 
 /** Durable admission owns acceptance; each execution is scheduled separately. */
 export function createDesktopInput(coordinator: SessionCoordinator, service: SessionService, options: {
@@ -45,12 +51,34 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         if (raw.clientToken !== undefined && (typeof raw.clientToken !== "string" || raw.clientToken.length < 8 || raw.clientToken.length > 128)) throw new Error("Invalid prompt client token")
         if (raw.images) validateImages(raw.images, "desktop input")
         await coordinator.profile(id)
+        let receipt: TokenReceipt | undefined
+        if (raw.clientToken) {
+          const tokenHash = createHash("sha256").update(JSON.stringify([id, raw.clientToken])).digest("hex")
+          const documentKey = desktopInputReceiptDocumentKey(id)
+          const fingerprint = createHash("sha256").update(JSON.stringify({ text: raw.text, context: raw.context, delivery: raw.delivery, images: raw.images })).digest("hex")
+          const document = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
+          if (document && (document.version !== 1 || document.sessionId !== id || !document.receipts || typeof document.receipts !== "object" || Array.isArray(document.receipts) || Object.keys(document.receipts).length > MAX_TOKEN_RECEIPTS)) throw new Error("Invalid input token receipts")
+          if (document && Object.entries(document.receipts).some(([key, value]) => !/^[a-f0-9]{64}$/.test(key) || !value || !/^[a-f0-9]{64}$/.test(value.fingerprint) || typeof value.inputId !== "string" || value.inputId.length > 128)) throw new Error("Invalid input token receipt identity")
+          const stored = document?.receipts[tokenHash]
+          if (stored && (stored.fingerprint !== fingerprint || typeof stored.inputId !== "string")) throw new Error("Input token payload does not match its durable admission")
+          receipt = stored ? { fingerprint, inputId: stored.inputId as string } : { fingerprint, inputId: `desktop-token-${tokenHash}` }
+          if (!stored) {
+            if (Object.keys(document?.receipts ?? {}).length >= MAX_TOKEN_RECEIPTS) throw new Error("Conversation input receipt limit reached; start a new conversation")
+            await coordinator.putDocument(documentKey, { version: 1, sessionId: id, receipts: { ...document?.receipts, [tokenHash]: receipt } } satisfies TokenReceipts)
+            const saved = await coordinator.getDocument(documentKey) as TokenReceipts | undefined
+            if (saved?.receipts[tokenHash]?.fingerprint !== fingerprint || saved?.receipts[tokenHash]?.inputId !== receipt.inputId) throw new Error("Could not persist input token receipt")
+          }
+          // Inspect durable/live events before assembly startup. Retrying an
+          // acknowledged input must never recreate execution or replay tools.
+          const existing = (await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
+          if (existing?.type === "agent/input/admitted") return { accepted: true as const, inputId: existing.inputId, delivery: existing.delivery }
+        }
         // Live admissions use the exact assembly session and its write hook.
         // Recovery-only admissions can be saved without a configured model.
         const binding = raw.start === false ? await service.modelState(id) : undefined
         const session = raw.start === false && binding?.status !== "ready" ? await ownSession(id) : (await service.assemblyFor(id)).session
         const inbox = new Inbox(session)
-        let inputId = raw.inputId ?? randomUUID()
+        let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
         // recovery can use a deterministic new generation; pending/promoted
         // generations remain exactly once across the crash window.

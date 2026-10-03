@@ -16,6 +16,8 @@ import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
 import { commitModelSwitch } from "./model-switch.ts"
 import { createSessionManagement } from "./session-management.ts"
+import { createContextPicker } from "./context-picker.ts"
+import { createDraftSession } from "./draft-session.ts"
 import { createConversationVisibility, createConversationQuery, createSessionRuntimeVisibility } from "./session-visibility.ts"
 import { createDesktopSubagents } from "./session-subagents.ts"
 import { createDesktopRewind } from "./rewind.ts"
@@ -235,6 +237,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const workflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const handlers: DesktopHandlers = {
+    draftSession: createDraftSession(coordinator),
+    contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
     workflow, agentShell, input, projects,
     resources: createDesktopResources(options.workspace, () => plugins.inputs()),
     mcp,

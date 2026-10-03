@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, lazy, Suspense, type CSSProperties } from "react"
-import { ArrowUp, Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound } from "lucide-react"
+import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { useUiStore } from "./ui-store.ts"
 import { useText, type Message } from "../design/i18n.ts"
@@ -18,7 +18,7 @@ import { ProjectSidebar } from "./ProjectSidebar.tsx"
 import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { Composer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
+import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { TaskPane } from "../session/TaskPane.tsx"
 import { TodoProgress } from "../session/TodoProgress.tsx"
@@ -35,7 +35,6 @@ import { TitleBar } from "./TitleBar.tsx"
 import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
-import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
 import type { ImageInput } from "@i-harness/sdk"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
@@ -163,25 +162,11 @@ export function Workbench({
   useAppearance()
   const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
   const updatePreferences = usePreferences((state) => state.update)
-  const [createError, setCreateError] = useState<string>()
   const [archivedWorkspaceId, setArchivedWorkspaceId] = useState<string>()
-  const [creating, setCreating] = useState(false)
-  const createLock = useRef(false)
-  const [emptyPrompt, setEmptyPrompt] = useState("")
-  const emptyPromptRef = useRef("")
-  const focusCreatedSession = useRef<string | undefined>(undefined)
-  const workspaceScope = useRef({ id: selectedWorkspaceId })
-  if (workspaceScope.current.id !== selectedWorkspaceId) workspaceScope.current = { id: selectedWorkspaceId }
-  useEffect(() => { emptyPromptRef.current = ""; focusCreatedSession.current = undefined; setEmptyPrompt("") }, [selectedWorkspaceId])
-  useEffect(() => {
-    if (selectedSessionId === undefined || focusCreatedSession.current !== selectedSessionId) return
-    const frame = requestAnimationFrame(() => {
-      document.querySelector<HTMLTextAreaElement>(".composer-input")?.focus()
-      focusCreatedSession.current = undefined
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [selectedSessionId])
+  const workspaceScope = useRef({ id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId })
+  if (workspaceScope.current.id !== selectedWorkspaceId || workspaceScope.current.sessionId !== selectedSessionId || workspaceScope.current.projectId !== selectedProjectId) workspaceScope.current = { id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId }
   const [workPaneTab, setWorkPaneTab] = useState("changes")
+  const [workflowSection, setWorkflowSection] = useState<"goal" | "team" | "jobs" | "reviews">("goal")
   useEffect(() => {
     if (workPaneTab === "reminders" && (!selectedSessionId || !capabilities["desktop-schedule"]?.includes("1"))) setWorkPaneTab("changes")
     if (workPaneTab === "subagents" && (!selectedSessionId || !capabilities["desktop-subagent-catalog"]?.includes("1"))) setWorkPaneTab("changes")
@@ -214,36 +199,22 @@ export function Workbench({
     if (reviewOpen && workPaneTab === "tasks") { todoFocusScope.current = undefined; focusTodoEditor() }
   }, [reviewOpen, workPaneTab, selectedWorkspaceId, selectedSessionId])
   const sessionTitle = dashboard?.sessions.find((row) => row.id === selectedSessionId)?.title ?? t("未命名會話")
+  function openWorkflow(name: string) {
+    if (name === "settings") { setSurface("settings"); return }
+    setSurface("conversation")
+    if (!reviewOpen) toggleReview()
+    setWorkflowSection(name === "team" || name === "jobs" || name === "reviews" ? name : "goal")
+    setWorkPaneTab("workflow")
+  }
   const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
   const canCreate = capabilities["session-create"]?.includes("1") === true
 
-  async function createSession(seedEmptyPrompt = false): Promise<void> {
-    if (selectedWorkspaceId === undefined || createLock.current || focusCreatedSession.current !== undefined) return
-    const scope = workspaceScope.current
-    createLock.current = true
+  async function createSession(): Promise<void> {
+    if (selectedWorkspaceId === undefined) return
     drawer.setOpen(false)
-    setCreating(true)
-    setCreateError(undefined)
-    try {
-      const created = await bridge.request({ kind: "session/create", workspaceId: selectedWorkspaceId, ...(selectedProjectId ? { projectId: selectedProjectId } : {}) })
-      if (workspaceScope.current !== scope) return
-      const sessionId = (created as { sessionId?: unknown } | undefined)?.sessionId
-      if (typeof sessionId === "string") {
-        if (seedEmptyPrompt) {
-          writeDraft(selectedWorkspaceId, sessionId, emptyPromptRef.current)
-          focusCreatedSession.current = sessionId
-        }
-        setMemoryOpen(false)
-        onSelectSession(sessionId)
-      }
-      onSessionsChanged?.()
-    } catch (reason) {
-      if (workspaceScope.current === scope) setCreateError(reason instanceof Error ? reason.message : String(reason))
-    } finally {
-      createLock.current = false
-      setCreating(false)
-    }
+    setMemoryOpen(false)
+    onSelectWorkspace(selectedWorkspaceId, selectedProjectId)
   }
 
   if (surface === "settings") return <SettingsPane onSandboxChange={onSandboxChange} onUseResource={selectedWorkspaceId && selectedSessionId ? (prefix) => {
@@ -269,7 +240,7 @@ export function Workbench({
         onSelectSession={(workspaceId, sessionId, projectId) => { drawer.setOpen(false); setMemoryOpen(false); setSurface("conversation"); onSelectSessionInWorkspace?.(workspaceId, sessionId, projectId) }}
         onManageSession={onManageSessionInWorkspace} onManageArchived={setArchivedWorkspaceId}
         onProjects={() => { drawer.setOpen(false); setSurface("projects") }}
-        onOpenWorkspace={() => onOpenWorkspace?.()} onCreate={() => { void createSession() }} canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
+        onOpenWorkspace={() => onOpenWorkspace?.()} onCreate={() => { void createSession() }} canCreate={canCreate && selectedWorkspaceId !== undefined}
         onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
         onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => { drawer.setOpen(false); setSurface("plugins") } : undefined}
       /> : <WorkspaceSidebar
@@ -278,7 +249,7 @@ export function Workbench({
         onSelect={(id) => { drawer.setOpen(false); setSurface("conversation"); onSelectWorkspace(id) }}
         onOpen={() => onOpenWorkspace?.()}
         onCreate={() => { void createSession() }}
-        canCreate={canCreate && !creating && selectedWorkspaceId !== undefined}
+        canCreate={canCreate && selectedWorkspaceId !== undefined}
         onSettings={() => { drawer.setOpen(false); setSurface("settings") }}
         onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => { drawer.setOpen(false); setSurface("plugins") } : undefined}
       >
@@ -292,6 +263,7 @@ export function Workbench({
             <PanelRight size={18} />
           </button>
           {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "連線中…")}</span> : null}
+          {selectedWorkspaceId && selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? <>{([["goal", "Goal / Plan"], ["team", "Team"], ["jobs", t("背景工作")], ["reviews", t("代審")]] as const).map(([name, label]) => <button key={name} type="button" className="primary-button header-action" onClick={() => openWorkflow(name)}>{label}</button>)}</> : null}
           {selectedWorkspaceId && selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t("子代理")} title={t("子代理")} onClick={() => { setSurface("conversation"); if (!reviewOpen) toggleReview(); setWorkPaneTab("subagents") }}><UsersRound size={16} /><span className="header-action-label">{t("子代理")}</span></button> : null}
           {selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <button type="button" className="primary-button header-action" aria-label={t(memoryOpen ? "返回會話" : "工作區記憶")} title={t(memoryOpen ? "返回會話" : "工作區記憶")} onClick={() => setMemoryOpen((open) => !open)}><Brain size={16} /><span className="header-action-label">{t(memoryOpen ? "返回會話" : "工作區記憶")}</span></button> : null}
           {selectedWorkspaceId ? <button type="button" className="primary-button header-action" aria-label={t("瀏覽器")} onClick={() => { if (!reviewOpen) toggleReview(); setWorkPaneTab("browser") }}><Globe size={16} /><span className="header-action-label">{t("瀏覽器")}</span></button> : null}
@@ -311,7 +283,6 @@ export function Workbench({
               )}
             </p>
           )}
-        {createError === undefined ? null : <p className="notice error-text">{createError}</p>}
         {surface === "plugins" && selectedWorkspaceId ? <PluginMarketplace key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : surface === "search" && selectedWorkspaceId !== undefined && capabilities["desktop-session-search"]?.includes("1") ? <SessionSearch key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} titles={Object.fromEntries((dashboard?.sessions ?? []).filter((row) => row.title).map((row) => [row.id, row.title!]))} onSelect={(id) => { setSurface("conversation"); onSelectSession(id) }} /> : memoryOpen && selectedWorkspaceId !== undefined && capabilities["desktop-memory"]?.includes("1") ? <MemoryPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /> : <section className="session-body todo-progress-host" aria-label={t("會話")}>
           {selectedSessionId !== undefined && selectedWorkspaceId !== undefined && conversation !== undefined
             ? (
@@ -332,6 +303,10 @@ export function Workbench({
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
                 <Composer
+                  projectId={selectedProjectId}
+                  permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")}
+                  onPermissionsChanged={onSandboxChange}
+                  onWorkflow={openWorkflow}
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
                   contextUsageEnabled={capabilities["session-context"]?.includes("1")}
@@ -364,13 +339,7 @@ export function Workbench({
                 </> : <>
                   <h1>{t("今天想完成甚麼？")}</h1>
                   <p>{t("描述你的目標，從這個工作區開始。")}</p>
-                  <div className="empty-composer"><ComposerSurface onSubmit={() => { void createSession(true) }}
-                    editor={<textarea aria-label={t("提示")} className="composer-input" rows={3} value={emptyPrompt} disabled={!canCreate}
-                      onChange={(event) => { const next = boundedDraft(event.target.value); emptyPromptRef.current = next; setEmptyPrompt(next); if (next.trim()) void createSession(true) }}
-                      placeholder={t("輸入提示…")} />}
-                    leadingActions={<span className="empty-composer-context"><FolderOpen size={15} />{workspaces.find((item) => item.id === selectedWorkspaceId)?.label}</span>}
-                    trailingActions={<button type="submit" className="composer-send" aria-label={t("開始新任務")} disabled={!canCreate || creating}><ArrowUp size={18} /></button>}
-                  /></div>
+                  <div className="empty-composer"><NewTaskComposer key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} projectId={selectedProjectId} capabilities={capabilities} onPermissionsChanged={onSandboxChange} onSubmitted={(id) => { if (workspaceScope.current.id === selectedWorkspaceId && workspaceScope.current.sessionId === undefined && workspaceScope.current.projectId === selectedProjectId) { onSelectSession(id); onSessionsChanged?.() } }} onWorkflow={openWorkflow} /></div>
                 </>}
               </div>}
         </section>}
@@ -384,7 +353,8 @@ export function Workbench({
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
         {workPaneTab === "subagents" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? <SubagentPane key={`subagents:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} parentTitle={sessionTitle} /> : null}
-        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId ? conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
+        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId ? conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} section={workflowSection} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
+        {workPaneTab === "workflow" && !selectedSessionId ? <p role="status" className="notice">{t("選擇會話以開啟工作流程。")}</p> : null}
         {workPaneTab === "browser" && selectedWorkspaceId ? <BrowserPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} visible={!drawer.open} /> : null}
         {workPaneTab === "terminal" && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense> : null}
         {workPaneTab === "reminders" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? <SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && !conversation.queue?.length && conversation.operation?.busy !== true} /> : null}

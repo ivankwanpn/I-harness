@@ -46,7 +46,8 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
   const [selectedTab, setTab] = useState<Section>(readSection)
   const [search, setSearch] = useState("")
   const [pluginQuery, setPluginQuery] = useState("")
-  const available = sections.filter((section) => !("capability" in section) || (workspace && bridge && capabilities[section.capability]?.includes("1")))
+  const available = sections
+  const unavailableReason = (section: typeof sections[number]) => !("capability" in section) ? undefined : !workspace ? t("請先選擇工作區以使用此設定。") : !bridge ? t("等待工作區連線。") : !capabilities[section.capability]?.includes("1") ? t("目前工作區後端未提供此功能。") : undefined
   const current = available.find((section) => section.id === selectedTab) ?? available[0]!
   const tab = current.id
   const visible = available.filter((section) => `${t(section.label)} ${t(section.group)}`.toLocaleLowerCase().includes(search.toLocaleLowerCase()))
@@ -66,14 +67,14 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
       <input className="settings-search" type="search" aria-label={t("搜尋設定")} placeholder={t("搜尋設定")} value={search} onChange={(event) => setSearch(event.target.value)} />
       {(["基本設定", "Agent 設定", "本機資料"] as const).map((group) => <div className="settings-nav-group" key={group}>
         {visible.some((section) => section.group === group) ? <p>{t(group)}</p> : null}
-        {visible.filter((section) => section.group === group).map(({ id, label, icon: Icon }) => <button key={id} className="row-button" title={t(label)} aria-label={t(label)} aria-current={id === tab ? "page" : undefined} onClick={() => select(id)}><Icon size={17} aria-hidden="true" /><span>{t(label)}</span></button>)}
+        {visible.filter((section) => section.group === group).map((section) => { const { id, label, icon: Icon } = section; const reason = unavailableReason(section); return <div key={id}><button className="row-button" title={reason ?? t(label)} aria-label={t(label)} aria-disabled={!!reason} aria-current={id === tab ? "page" : undefined} onClick={() => select(id)}><Icon size={17} aria-hidden="true" /><span>{t(label)}</span></button>{reason ? <small className="muted">{reason}</small> : null}</div> })}
       </div>)}
     </nav>
     <main className="settings-main">
     {bridge ? <TitleBar bridge={bridge} title={t("設定")} /> : null}
     <div className="settings-scroll"><div className="settings-content">
       <h1>{t(current.label)}</h1>
-      {tab === "general" ? <>
+      {unavailableReason(current) ? <p role="status" className="muted">{unavailableReason(current)}</p> : tab === "general" ? <>
         <SettingsGroup>
           <SettingsRow label={t("界面語言")} description={t("選擇應用界面的顯示語言。")} control={<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}><option value="zh-TW">繁體中文</option><option value="en">English</option></select>} />
         </SettingsGroup>

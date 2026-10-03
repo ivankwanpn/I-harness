@@ -145,14 +145,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ?? projects?.find((project) => project.workspaceIds.includes(selectedWorkspaceId))?.id
     : projects?.find((project) => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
-  const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && projectBinding.projectId === activeProjectId && !projectBinding.error)
+  const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && !projectBinding.error)
   useEffect(() => {
     if (!projectScopeSupported || !selectedWorkspaceId || !selectedSessionId) return
     let active = true
     const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId, projectId = activeProjectId
     setProjectBinding(undefined)
-    void bridge.request({ kind: "desktop/session/project/bind", workspaceId, sessionId, ...(projectId ? { projectId } : {}) }).then(() => {
-      if (active) setProjectBinding({ workspaceId, sessionId, projectId })
+    void bridge.request({ kind: "desktop/session/project/state", workspaceId, sessionId }).then((value) => {
+      if (active) setProjectBinding({ workspaceId, sessionId, projectId: (value as { projectId?: string })?.projectId })
     }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, projectId, error: error instanceof Error ? error.message : String(error) }) })
     return () => { active = false }
   }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, activeProjectId, retryNonce])
@@ -510,7 +510,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           await refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
         onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/bind", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, ...(activeProjectId ? { projectId: activeProjectId } : {}) })
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
@@ -531,7 +531,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void): Promise<void> => {
           const scope = selection.current
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/bind", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, ...(activeProjectId ? { projectId: activeProjectId } : {}) })
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted)
           if (selection.current !== scope) return
           if (connection === "online") {

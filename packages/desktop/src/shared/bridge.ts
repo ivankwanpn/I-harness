@@ -12,6 +12,8 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | { kind: "desktop/context/search"; workspaceId: string; sessionId?: string; projectId?: string; query: string; contextKind: "files" | "sessions"; offset: number }
+  | { kind: "desktop/context/read"; workspaceId: string; sessionId?: string; projectId?: string; reference: import("@i-harness/desktop-gateway/src/context-picker.ts").ContextReference }
   | { kind: "projects/list" }
   | { kind: "projects/save"; input: { id?: string; name: string; workspaceIds: string[]; primaryWorkspaceId?: string; pinned?: boolean; expectedUpdatedAt?: string } }
   | { kind: "projects/remove"; id: string }
@@ -88,7 +90,7 @@ export type DesktopRequest =
   | { kind: "desktop/capabilities"; workspaceId: string }
   | { kind: "session/list"; workspaceId: string }
   | { kind: "session/dashboard"; workspaceId: string }
-  | { kind: "session/create"; workspaceId: string; projectId?: string }
+  | { kind: "session/create"; workspaceId: string; projectId?: string; clientToken?: string }
   | { kind: "session/history"; workspaceId: string; sessionId: string; afterSeq: number; limit: number }
   | { kind: "session/prompt"; workspaceId: string; sessionId: string; prompt: string; context?: string; images?: ImageInput[]; clientToken?: string }
   | { kind: "session/cancel"; workspaceId: string; sessionId: string }

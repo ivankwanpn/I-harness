@@ -48,6 +48,15 @@
 .composer-spinner { animation: composer-spin 1s linear infinite; }
 @keyframes composer-spin { to { transform: rotate(360deg); } }
 
+.slash-commands [role="listbox"] { display: flex; flex-direction: column; max-height: 220px; overflow: auto; }
+.slash-commands [aria-selected="true"] { background: var(--ih-hover); outline: 1px solid var(--ih-accent); }
+.composer-permissions { font-size: 12px; }
+.composer-permissions summary { list-style: none; }
+.composer-permissions button { font: inherit; color: var(--ih-muted); background: transparent; border: 0; cursor: pointer; }
+.composer-permissions-panel { min-width: 240px; max-width: 320px; padding: 10px; border: 1px solid var(--ih-border); border-radius: 8px; background: var(--ih-panel); }
+.composer-permissions-panel label { display: flex; gap: 8px; justify-content: space-between; margin: 8px 0; }
+.composer-permissions-panel select { max-width: 170px; color: var(--ih-text); background: var(--ih-panel); }
+
 @container session-composer (max-width: 620px) {
   .session-composer .composer-model { min-width: 0; max-width: 200px; font-size: 12px; }
   .session-composer .composer-send { margin-left: auto; }

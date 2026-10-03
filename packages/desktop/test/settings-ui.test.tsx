@@ -56,10 +56,13 @@ it("routes workspace memory using the real workspace context", () => {
   expect(onMemory).toHaveBeenCalledTimes(1)
 })
 
-it("mounts only advertised Agent pages with the selected workspace", async () => {
+it("explains unavailable Agent pages and mounts advertised pages with the selected workspace", async () => {
   const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/memory/state" ? { enabled: false } : { notes: [] })
   render(<SettingsPane workspace={{ id: "play", label: "playground", path: "D:/agent-complete/playground" }} capabilities={{ "desktop-memory": ["1"] }} bridge={{ request, onEvent: () => () => {} }} onClose={() => {}} />)
-  expect(screen.queryByRole("button", { name: "執行與上下文" })).toBeNull()
+  expect(screen.getByRole("button", { name: "執行與上下文" }).getAttribute("aria-disabled")).toBe("true")
+  fireEvent.click(screen.getByRole("button", { name: "執行與上下文" }))
+  expect(screen.getByRole("status").textContent).toBe("目前工作區後端未提供此功能。")
+  expect(request).not.toHaveBeenCalledWith({ kind: "desktop/agent-settings/state", workspaceId: "play" })
   fireEvent.click(screen.getByRole("button", { name: "記憶" }))
   await screen.findByRole("checkbox", { name: "啟用工作區記憶" })
   expect(request).toHaveBeenCalledWith({ kind: "desktop/memory/state", workspaceId: "play" })

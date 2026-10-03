@@ -1,5 +1,5 @@
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useId, useState } from "react"
+import { useEffect, useId, useState } from "react"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { WorkflowGoalPlan } from "./WorkflowGoalPlan.tsx"
 import { WorkflowTeam } from "./WorkflowTeam.tsx"
@@ -14,6 +14,7 @@ export interface WorkflowPaneProps {
   sessionId: string
   running?: boolean
   onChanged?(): void
+  section?: "goal" | "team" | "jobs" | "reviews"
 }
 
 /** A selected conversation owns every draft, in-flight response and listener. */
@@ -22,14 +23,15 @@ export function WorkflowPane(props: WorkflowPaneProps) {
 }
 
 const tabs: { id: string; label: WorkflowMessage }[] = [{ id: "goal", label: "目標與計畫" }, { id: "team", label: "團隊" }, { id: "jobs", label: "背景任務" }, { id: "reviews", label: "代審記錄" }]
-function WorkflowSession({ bridge, workspaceId, sessionId, running = false, onChanged }: WorkflowPaneProps) {
+function WorkflowSession({ bridge, workspaceId, sessionId, running = false, onChanged, section = "goal" }: WorkflowPaneProps) {
   const t = useWorkflowText()
   const id = useId()
-  const [tab, setTab] = useState("goal")
+  const [tab, setTab] = useState(section)
+  useEffect(() => { setTab(section) }, [section])
   const { view, busy, error, disabled, retry, mutate } = useWorkflow(bridge, workspaceId, sessionId, onChanged)
   return <section className="workflow-pane" aria-label={t("工作流程")}>
     <header className="workflow-pane-header"><h1>{t("工作流程")}</h1><button disabled={busy} onClick={() => { void retry() }}>{t("重新整理")}</button></header>
-    <PaneTabs id={id} items={tabs.map((item) => ({ id: item.id, label: t(item.label) }))} selected={tab} onSelect={setTab} label={t("工作流程")} />
+    <PaneTabs id={id} items={tabs.map((item) => ({ id: item.id, label: t(item.label) }))} selected={tab} onSelect={(id) => setTab(id as typeof section)} label={t("工作流程")} />
     {error ? <p role="alert" className="workflow-error">{error}<button disabled={busy} onClick={() => { void retry() }}>{t("重試")}</button></p> : null}
     {busy ? <p className="workflow-progress" role="status">{t("更新中…")}</p> : null}
     <div role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-${tab}`} className="workflow-tab-body">
