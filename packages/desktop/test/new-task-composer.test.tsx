@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { webcrypto } from "node:crypto"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
@@ -41,4 +41,39 @@ it("keeps model, effort, text and attachment as a draft until submit; failed adm
   expect(admissions[0].clientToken).toBe(admissions[1].clientToken)
   expect(admissions[1].context).toContain("bounded fixture")
   expect(request).toHaveBeenCalledWith({ kind: "session/model/set", workspaceId: "draft-root", sessionId: "new-session", selection: { provider: "fixture", model: "offline-model", reasoningEffort: "high" } })
+})
+
+it.each(["creation", "model"])("retains a newer model and reasoning draft after a delayed %s response and admission failure", async (stage) => {
+  vi.stubGlobal("crypto", webcrypto)
+  let release!: () => void
+  const deferred = new Promise<void>((resolve) => { release = resolve })
+  let first = true
+  const request = vi.fn(async (input: any) => {
+    if (input.kind === "desktop/provider/directory") return [{ id: "fixture", displayName: "Fixture", configured: true, models: [{ id: "model-a" }, { id: "model-b" }] }]
+    if (input.kind === "session/create") { if (stage === "creation") await deferred; return { sessionId: `delayed-${stage}` } }
+    if (input.kind === "session/model/set" && stage === "model" && first) { first = false; await deferred }
+    if (input.kind === "desktop/session/input/submit") throw new Error("retain model draft")
+  })
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={[{ id: `draft-${stage}`, label: "Fixture", path: "D:/fixture" }]} selectedWorkspaceId={`draft-${stage}`}
+    capabilities={{ "session-create": ["1"], "desktop-draft-create": ["1"], "desktop-input": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} />)
+  fireEvent.change(screen.getByRole("textbox", { name: "提示" }), { target: { value: "Keep later selection" } })
+  fireEvent.click(screen.getByRole("button", { name: "選擇模型" }))
+  fireEvent.click(await screen.findByRole("button", { name: "model-a" }))
+  await waitFor(() => expect((screen.getByRole("button", { name: "思考強度：Default" }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => expect(request.mock.calls.some(([input]) => input.kind === (stage === "creation" ? "session/create" : "session/model/set"))).toBe(true))
+  fireEvent.click(screen.getByRole("button", { name: /model-a/ }))
+  fireEvent.click(await screen.findByRole("button", { name: "model-b" }))
+  await waitFor(() => expect((screen.getByRole("button", { name: "思考強度：Default" }) as HTMLButtonElement).disabled).toBe(false))
+  fireEvent.click(screen.getByRole("button", { name: "思考強度：Default" }))
+  fireEvent.click(screen.getByRole("button", { name: "High" }))
+  await waitFor(() => expect((screen.getByRole("button", { name: "思考強度：High" }) as HTMLButtonElement).disabled).toBe(false))
+  await act(async () => release())
+  await screen.findByText("retain model draft")
+  expect(screen.getByRole("button", { name: /model-b/ })).toBeTruthy()
+  expect(screen.getByRole("button", { name: "思考強度：High" })).toBeTruthy()
+  expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe("Keep later selection")
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "session/model/set", workspaceId: `draft-${stage}`, sessionId: `delayed-${stage}`, selection: { provider: "fixture", model: "model-b", reasoningEffort: "high" } }))
+  expect(request.mock.calls.filter(([input]) => input.kind === "session/create")).toHaveLength(1)
 })

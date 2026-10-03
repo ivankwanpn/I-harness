@@ -307,6 +307,7 @@ export function Workbench({
                   permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")}
                   onPermissionsChanged={onSandboxChange}
                   onWorkflow={openWorkflow}
+                  workflowEnabled={capabilities["desktop-workflow"]?.includes("1")}
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
                   contextUsageEnabled={capabilities["session-context"]?.includes("1")}
@@ -353,7 +354,8 @@ export function Workbench({
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
         {workPaneTab === "subagents" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? <SubagentPane key={`subagents:${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} parentTitle={sessionTitle} /> : null}
-        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId ? conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} section={workflowSection} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
+        {workPaneTab === "workflow" && selectedWorkspaceId && selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? conversation?.projectReady === false ? <p role="status" className="notice">{conversation.sendReason}</p> : <WorkflowPane key={`${selectedWorkspaceId}:${selectedSessionId}`} section={workflowSection} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} running={conversation?.running} onChanged={conversation?.onRetryWorkState} /> : null}
+        {workPaneTab === "workflow" && !capabilities["desktop-workflow"]?.includes("1") ? <p role="status" className="notice">{t("目前工作區後端未提供此功能。")}</p> : null}
         {workPaneTab === "workflow" && !selectedSessionId ? <p role="status" className="notice">{t("選擇會話以開啟工作流程。")}</p> : null}
         {workPaneTab === "browser" && selectedWorkspaceId ? <BrowserPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} visible={!drawer.open} /> : null}
         {workPaneTab === "terminal" && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense> : null}

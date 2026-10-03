@@ -92,6 +92,7 @@ export interface ComposerProps {
   permissionsEnabled?: boolean
   onPermissionsChanged?(mode: AgentDefaults["sandboxMode"]): void
   onWorkflow?(name: string): void
+  workflowEnabled?: boolean
   canSend: boolean
   sendReason?: string
   executionError?: string
@@ -126,29 +127,31 @@ export function NewTaskComposer({ bridge, workspaceId, projectId, capabilities, 
     canSend={capabilities["session-create"]?.includes("1") === true && !!selected && capabilities["desktop-input"]?.includes("1") === true && capabilities["desktop-draft-create"]?.includes("1") === true}
     sendReason={!selected ? t("選擇模型") : t("耐久輸入不可用")} running={false} onCancel={() => {}}
     fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") === true} imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") === true}
-    permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} onPermissionsChanged={onPermissionsChanged}
+    permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} workflowEnabled={capabilities["desktop-workflow"]?.includes("1")} onPermissionsChanged={onPermissionsChanged}
     modelControl={<SessionModelPicker bridge={bridge} workspaceId={workspaceId} current={model} disabled={false} onSelect={async (selection) => save({ ...latest.current, selection })} />}
     onPrompt={async (text, context, images, onAdmitted) => {
       let state = latest.current
       if (!state.selection) throw new Error("Choose a model")
       if (!state.createdId) {
-        if (!state.creationToken) save(state = { ...state, creationToken: crypto.randomUUID() })
+        if (!state.creationToken) { state = { ...state, creationToken: crypto.randomUUID() }; save({ ...latest.current, creationToken: state.creationToken }) }
         const created = await bridge.request({ kind: "session/create", workspaceId, ...(projectId ? { projectId } : {}), clientToken: state.creationToken }) as { sessionId: string }
         if (!created?.sessionId) throw new Error("Invalid session creation result")
-        save(state = { ...state, createdId: created.sessionId })
+        state = { ...state, createdId: created.sessionId }
+        save({ ...latest.current, createdId: created.sessionId })
       }
       const modelKey = JSON.stringify(state.selection)
       if (state.appliedModel !== modelKey) {
         await bridge.request({ kind: "session/model/set", workspaceId, sessionId: state.createdId!, selection: state.selection! })
-        save(state = { ...state, appliedModel: modelKey })
+        state = { ...state, appliedModel: modelKey }
+        save({ ...latest.current, appliedModel: modelKey })
       }
       const draftIdentity = JSON.stringify({ text, selection: state.selection, files: readFileReferences(workspaceId, sessionId), references: rawRead(`${draftKey(workspaceId, sessionId)}:context-references`), texts: readTextAttachmentDrafts(workspaceId, sessionId), images })
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(draftIdentity))
       const payload = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("")
-      if (state.payload !== payload || !state.token) save(state = { ...state, payload, token: crypto.randomUUID() })
+      if (state.payload !== payload || !state.token) { state = { ...state, payload, token: crypto.randomUUID() }; save({ ...latest.current, payload: state.payload, token: state.token }) }
       await bridge.request({ kind: "desktop/session/input/submit", workspaceId, sessionId: state.createdId!, text, delivery: "queue", clientToken: state.token!, ...(context ? { context } : {}), ...(images?.length ? { images } : {}) })
       onAdmitted?.()
-      latest.current = {}; setMetadata({}); rawRemove(metadataKey)
+      save({ selection: latest.current.selection })
       onSubmitted(state.createdId!)
     }} />
 }
@@ -166,6 +169,7 @@ function SessionComposer({
   permissionsEnabled = false,
   onPermissionsChanged,
   onWorkflow,
+  workflowEnabled = false,
   canSend,
   sendReason,
   executionError,
@@ -331,7 +335,7 @@ function SessionComposer({
       {texts.length ? <div className="composer-file-references">{texts.map((attachment) => <span key={attachment.id} className="composer-file-chip"><FileText size={14} aria-hidden="true" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={t("移除附件 {name}", { name: attachment.name })} onClick={() => writeTextAttachmentDrafts(workspaceId, sessionId, texts.filter((value) => value.id !== attachment.id))}><X size={12} aria-hidden="true" /></button></span>)}</div> : null}
       {pickError ? <p role="alert" className="error-text">{pickError}</p> : null}
       {imageError ? <p role="alert" className="error-text">{imageError}</p> : null}
-      {bridge ? <SlashCommands ref={slashRef} bridge={bridge} workspaceId={workspaceId} text={value} showCompact={onCompact !== undefined} workflows={!!onWorkflow} onSelect={(name) => { const workflow = onWorkflow && ["goal", "team", "jobs", "reviews", "settings"].includes(name); const next = workflow ? "" : `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); if (workflow) onWorkflow!(name); editorRef.current?.focus() }} /> : null}
+      {bridge ? <SlashCommands ref={slashRef} bridge={bridge} workspaceId={workspaceId} text={value} showCompact={onCompact !== undefined} workflows={workflowEnabled && !!onWorkflow} settings={!!onWorkflow} onSelect={(name) => { const workflow = onWorkflow && (name === "settings" || workflowEnabled && ["goal", "team", "jobs", "reviews"].includes(name)); const next = workflow ? "" : `/${name} `; setValue(next); writeDraft(workspaceId, sessionId, next); if (workflow) onWorkflow!(name); editorRef.current?.focus() }} /> : null}
       {bridge && fileReferencesEnabled ? <ContextPicker ref={pickerRef} bridge={bridge} workspaceId={workspaceId} sessionId={draftSession ? undefined : sessionId} projectId={projectId} text={value} onSelect={(item) => {
         if (contextRefs.length + references.length + texts.length >= 8) { setPickError(t("檔案附件合計不能超過 8 個。")); return }
         if (!contextRefs.some((old) => JSON.stringify(old) === JSON.stringify(item))) saveContextRefs([...contextRefs, item])

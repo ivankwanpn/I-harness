@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import type { ImageInput } from "@i-harness/core-session"
+import type { ImageInput, SessionEvent } from "@i-harness/core-session"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { SessionService } from "@i-harness/session-executor"
 import { createDurableSessionLoader } from "@i-harness/session-executor"
@@ -42,6 +42,26 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
       .finally(() => { scheduled.delete(key); jobs.delete(job); controllers.delete(controller) })
     jobs.add(job)
   }
+  function schedulePending(id: string, inbox: Inbox) {
+    const running = service.queueState(id).running
+    for (const pending of inbox.pending()) {
+      if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text)
+    }
+  }
+  async function acknowledgeExisting(id: string, existing: Extract<SessionEvent, { type: "agent/input/admitted" }>, shouldStart: boolean) {
+    // Inbox mutation happens before persistence. An event in the live session
+    // alone cannot acknowledge a retry after the earlier flush failed.
+    await coordinator.flush(id)
+    if (closed) throw new Error("Input service closed")
+    if (!coordinator.snapshot) throw new Error("Durable input snapshots unavailable")
+    const persisted = (await coordinator.snapshot(id)).session.events.find((event) => event.type === "agent/input/admitted" && event.inputId === existing.inputId)
+    if (persisted?.type !== "agent/input/admitted" || persisted.text !== existing.text || persisted.delivery !== existing.delivery) throw new Error("Input admission is not durable")
+    if (closed) throw new Error("Input service closed")
+    // A failed earlier barrier never reached scheduling. Pending inputs may
+    // now start; promoted/completed/cancelled inputs are absent from pending.
+    if (shouldStart && persisted.delivery === "queue") schedulePending(id, new Inbox(await ownSession(id)))
+    return { accepted: true as const, inputId: persisted.inputId, delivery: persisted.delivery }
+  }
   return {
     admit(id: string, raw: { text: string; delivery: "queue" | "steer"; context?: string; images?: ImageInput[]; clientToken?: string; inputId?: string; start?: boolean }) {
       return serial(id, async () => {
@@ -71,7 +91,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           // Inspect durable/live events before assembly startup. Retrying an
           // acknowledged input must never recreate execution or replay tools.
           const existing = (await ownSession(id)).events.find((event) => event.type === "agent/input/admitted" && event.inputId === receipt!.inputId)
-          if (existing?.type === "agent/input/admitted") return { accepted: true as const, inputId: existing.inputId, delivery: existing.delivery }
+          if (existing?.type === "agent/input/admitted") return acknowledgeExisting(id, existing, raw.start !== false)
         }
         // Live admissions use the exact assembly session and its write hook.
         // Recovery-only admissions can be saved without a configured model.
@@ -88,7 +108,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
           const cancelled = session.events.findLast((event) => event.type === "agent/input/cancelled" && event.inputId === inputId)
           if (cancelled) { inputId = `${raw.inputId}:retry:${cancelled.seq}`; continue }
           if (duplicate.text !== raw.text || duplicate.delivery !== raw.delivery) throw new Error("Recovered input does not match its durable admission")
-          return { accepted: true as const, inputId, delivery: raw.delivery }
+          return acknowledgeExisting(id, duplicate, raw.start !== false)
         }
         const prepared = raw.start === false ? raw.text : await options.prepare?.(id, raw.text) ?? raw.text
         const text = raw.context ? `${prepared}\n\n${raw.context}` : prepared
@@ -97,10 +117,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         await coordinator.flush(id)
         if (closed) throw new Error("Input service closed")
         if (raw.start !== false && delivery === "queue") {
-          const running = service.queueState(id).running
-          for (const pending of inbox.pending()) {
-            if (pending.delivery === "queue" || !running) start(id, pending.inputId, pending.text)
-          }
+          schedulePending(id, inbox)
         }
         return { accepted: true as const, inputId, delivery }
       })

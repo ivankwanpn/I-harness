@@ -3,7 +3,7 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 interface Command { name: string; description?: string; argumentHints?: string }
 import type { PickerKeyboard } from "./ContextPicker.tsx"
-export const SlashCommands = forwardRef<PickerKeyboard, { bridge: DesktopBridge; workspaceId: string; text: string; showCompact?: boolean; onSelect(name: string): void; workflows?: boolean }>(function SlashCommands({ bridge, workspaceId, text, showCompact = false, onSelect, workflows = false }, ref) {
+export const SlashCommands = forwardRef<PickerKeyboard, { bridge: DesktopBridge; workspaceId: string; text: string; showCompact?: boolean; onSelect(name: string): void; workflows?: boolean; settings?: boolean }>(function SlashCommands({ bridge, workspaceId, text, showCompact = false, onSelect, workflows = false, settings = false }, ref) {
   const t = useText()
   const prefix = /^\/([a-z0-9_-]*)$/.exec(text)?.[1]
   const [dismissed, setDismissed] = useState<string>()
@@ -25,7 +25,7 @@ export const SlashCommands = forwardRef<PickerKeyboard, { bridge: DesktopBridge;
     void refresh()
     return () => { mounted = false; clearTimeout(timer) }
   }, [bridge, workspaceId, active])
-  const builtins: Command[] = [...(showCompact ? [{ name: "compact", description: t("壓縮目前會話上下文") }] : []), ...(workflows ? [{ name: "goal", description: "Goal / Plan" }, { name: "team", description: "Team" }, { name: "jobs", description: t("背景工作") }, { name: "reviews", description: t("代審") }, { name: "settings", description: t("設定") }] : [])]
+  const builtins: Command[] = [...(showCompact ? [{ name: "compact", description: t("壓縮目前會話上下文") }] : []), ...(workflows ? [{ name: "goal", description: "Goal / Plan" }, { name: "team", description: "Team" }, { name: "jobs", description: t("背景工作") }, { name: "reviews", description: t("代審") }] : []), ...(settings ? [{ name: "settings", description: t("設定") }] : [])]
   const matches = [...builtins, ...commands.filter((command) => !builtins.some((item) => item.name === command.name) && command.name !== "compact")].filter((command) => command.name.startsWith(prefix ?? "")).slice(0, 20)
   useImperativeHandle(ref, () => ({ key(key) {
     if (!active) return false
