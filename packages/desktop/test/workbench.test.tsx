@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { SessionDashboardResult } from "@i-harness/sdk"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
@@ -130,7 +130,7 @@ describe("Desktop workbench shell", () => {
     const onSelectWorkspace = vi.fn()
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
       capabilities={{ "session-create": ["1"], "desktop-input": ["1"] }} onSelectWorkspace={onSelectWorkspace} onSelectSession={() => {}} />)
-    fireEvent.click(screen.getByRole("button", { name: "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" }))
     expect(onSelectWorkspace).toHaveBeenCalledWith(ENTRY.id, undefined)
     const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
     fireEvent.change(editor, { target: { value: "Review the playground" } })
@@ -183,7 +183,7 @@ describe("Desktop workbench shell", () => {
       onSelectWorkspace={() => {}} onSelectSession={onSelectSession} />)
     fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
     expect(await screen.findByRole("region", { name: "工作區記憶" })).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
     await waitFor(() => expect(screen.queryByRole("region", { name: "工作區記憶" })).toBeNull())
     if (mode === "existing") expect(onSelectSession).toHaveBeenCalledWith("existing")
     else expect(vi.mocked(bridge.request).mock.calls.some(([request]) => request.kind === "session/create")).toBe(false)
@@ -195,7 +195,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "一般" }))
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
-    expect(screen.getByRole("button", { name: "New conversation" })).toBeTruthy()
+    expect(within(screen.getByRole("navigation", { name: "Workspaces" })).getByRole("button", { name: "New conversation" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "What would you like to work on?" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "workspace" })).toBeTruthy()
     expect(document.documentElement.lang).toBe("en")
@@ -242,14 +242,14 @@ describe("Desktop workbench shell", () => {
   it("renders a disabled create control when the host lacks session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} capabilities={{ "session-list": ["1"] }} />)
 
-    const create = screen.getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(true)
   })
 
   it("enables the create control when the host advertises session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
 
-    const create = screen.getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(false)
   })
 
@@ -271,7 +271,7 @@ describe("Desktop workbench shell", () => {
       />,
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "開啟工作區" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "開啟工作區" }))
     expect(request).toHaveBeenCalledWith({ kind: "workspace/pick" })
   })
 

@@ -28,7 +28,7 @@ const approvalChoices = [
   { mode: "delegate", label: "代我核准", description: "由代審模型檢查操作，必要時再詢問你。", Icon: ShieldCheck },
   { mode: "full-access", label: "完整存取權", description: "允許代理直接操作本機檔案與網路。", Icon: Shield },
 ] as const
-const dangerousApproval = { mode: "dangerous", label: "高風險時核准", description: "高風險或無法判定的操作會先詢問你。", Icon: ShieldAlert } as const
+const dangerousApproval = { mode: "dangerous", label: "僅危險操作詢問", description: "高風險或無法判定的操作會先詢問你。", Icon: ShieldAlert } as const
 const allApprovalChoices = [dangerousApproval, ...approvalChoices]
 const memoryDrafts = new Map<string, string>()
 const rawListeners = new Set<(key: string) => void>()
@@ -283,7 +283,6 @@ function SessionComposer({
   const [permissionsPlacement, setPermissionsPlacement] = useState({ left: 12, bottom: 64, maxHeight: 360 })
   const effectiveApproval = permissions?.effective?.approvalMode
   const approvalLabel = allApprovalChoices.find(choice => choice.mode === effectiveApproval)?.label ?? "核準模式"
-  const visibleApprovalChoices = effectiveApproval === "dangerous" ? allApprovalChoices : approvalChoices
   function closePermissions(restoreFocus = true) { permissionsOpenRef.current = false; setPermissionsOpen(false); if (restoreFocus) permissionsTrigger.current?.focus() }
   useEffect(() => {
     const epoch = ++permissionsEpoch.current
@@ -537,7 +536,7 @@ function SessionComposer({
               else if (event.key === "Tab") closePermissions()
             }}>
             <p className="composer-approval-heading">{t("核準模式")}</p>
-            {visibleApprovalChoices.map(({ mode, label, description, Icon }) => <button key={mode} type="button" className="composer-approval-option" data-mode={mode} role="menuitemradio" aria-label={t(label)} aria-checked={effectiveApproval === mode} disabled={permissionsBusy || !permissions?.effective} onClick={() => { void chooseApproval(mode) }}>
+            {allApprovalChoices.map(({ mode, label, description, Icon }) => <button key={mode} type="button" className="composer-approval-option" data-mode={mode} role="menuitemradio" aria-label={t(label)} aria-checked={effectiveApproval === mode} disabled={permissionsBusy || !permissions?.effective} onClick={() => { void chooseApproval(mode) }}>
               <Icon size={18} aria-hidden="true" /><span><strong>{t(label)}</strong><small>{t(description)}</small></span>{effectiveApproval === mode ? <Check size={16} aria-hidden="true" /> : <span />}
             </button>)}
             {!permissions?.effective && !permissionsError ? <p role="status" className="composer-approval-note">{t("正在讀取權限…")}</p> : null}

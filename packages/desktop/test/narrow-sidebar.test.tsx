@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from "@testing-library/react"
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 const original = window.matchMedia
@@ -24,7 +24,7 @@ it("closes the narrow drawer after opening a new workspace", () => {
   const props = { bridge, capabilities: {}, onSelectSession: () => {}, onSelectWorkspace: () => {}, onOpenWorkspace }
   const view = render(<Workbench {...props} workspaces={[]} />)
   fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
-  fireEvent.click(screen.getByRole("button", { name: "開啟工作區" }))
+  fireEvent.click(within(screen.getByRole("dialog", { name: "工作區" })).getByRole("button", { name: "開啟工作區" }))
   expect(onOpenWorkspace).toHaveBeenCalledOnce()
   expect(screen.getByRole("dialog", { name: "工作區" })).toBeTruthy()
   view.rerender(<Workbench {...props} workspaces={[{ id: "w1", path: "D:/agent-complete/playground", label: "playground" }]} selectedWorkspaceId="w1" />)

@@ -4,7 +4,7 @@ import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { SessionManagementAction } from "@i-harness/desktop-gateway/src/session-management.ts"
 import { useCallback, useEffect, useRef, useState } from "react"
-import { ChevronRight, Folder, FolderOpen, Pin, Plus } from "lucide-react"
+import { ChevronRight, Folder, FolderOpen, Pin, Plus, Puzzle, Settings } from "lucide-react"
 import { useText, useLocale } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { TaskList } from "./TaskList.tsx"
@@ -28,7 +28,7 @@ export interface ProjectSidebarProps {
   onCreate(): void
   onOpenWorkspace(): void
   onProjects(): void
-  onSettings(): void
+  onSettings?(): void
   onPlugins?(): void
   onSelectProject(id: string): void
   onSelectWorkspace(workspaceId: string, projectId?: string): void
@@ -196,11 +196,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   }
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
+    <div className="sidebar-header">
     <div className="brand">I-harness <span>Desktop</span></div>
     <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!props.canCreate || !selectedWorkspaceId} onClick={props.onCreate}>{t("新增會話")}</Button>
-    {props.onPlugins ? <Button variant="ghost" className="sidebar-open" onClick={props.onPlugins}>{t("插件市場")}</Button> : null}
+    {props.onPlugins ? <Button variant="ghost" className="sidebar-open" icon={<Puzzle size={16} />} onClick={props.onPlugins}>{t("插件市場")}</Button> : null}
     <div className="project-sidebar-heading"><h2 className="sidebar-title">{t("專案")}</h2><button type="button" className="link-button" onClick={props.onProjects}>{t("管理專案")}</button></div>
     <Button variant="ghost" className="sidebar-open" icon={<FolderOpen size={16} />} onClick={props.onOpenWorkspace}>{t("開啟工作區")}</Button>
+    </div>
+    <div className="sidebar-scroll">
     {ownerError ? <p role="alert" className="notice error-text">{ownerError}</p> : null}
     <ul className="project-sidebar-tree">
       {[...projects].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true)).map((project) => {
@@ -228,6 +231,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       </li>}
     </ul>
     {workspaces.length === 0 && projects.length === 0 ? <p className="notice">{t("尚未開啟工作區")}</p> : null}
-    <div className="sidebar-footer"><Button variant="ghost" className="sidebar-open" onClick={props.onSettings}>{t("設定")}</Button></div>
+    </div>
+    {props.onSettings ? <div className="sidebar-footer"><Button variant="ghost" className="sidebar-open" icon={<Settings size={17} />} onClick={props.onSettings}>{t("設定")}</Button></div> : null}
   </nav>
 }
