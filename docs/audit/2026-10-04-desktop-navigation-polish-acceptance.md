@@ -1,12 +1,26 @@
 # IH Desktop navigation and approval acceptance
 
-Verified on 2026-10-04 (Asia/Hong_Kong) in `D:/frontend-test`, branch `codex/desktop-workbench`, from `5c2bb19b3fdfe80f29215084951b7d0ac29c790d`. This delivery is the bounded correction approved from the user's screenshots and subsequent Settings clarification.
+## Current correction: retain the original header toggle
+
+The current [portable ZIP](D:/frontend-test/packages/desktop/release-navigation-toggle-fix-2026-10-04/I-harness-Desktop-0.1.0.zip) and [Desktop EXE](<D:/frontend-test/packages/desktop/release-navigation-toggle-fix-2026-10-04/I-harness Desktop/I-harness Desktop.exe>) supersede the earlier `release-navigation-polish-2026-10-04` download. The earlier build had an extra rail sidebar toggle in addition to the original header button.
+
+From `626637c8dc493460da088c138ca850e95e7e2a1c`, the correction removes the rail button, its unused icon/props and its unused translation. The original header button labelled **顯示側欄** remains. The 48px rail, other actions, fixed Settings gear, project tree and approval implementation are unchanged.
+
+Fresh scoped verification passed **28/28 existing navigation/workbench/narrow tests**, Desktop typecheck exited **0**, renderer/attachment build exited **0**, and packaging exited **0** with the unchanged shipped gateway runtime. No new mirror test or CSS change was added. The 4443-test full gate below is historical verification of the previous commit; it was not rerun for this minimal removal.
+
+Actual copied visible native run `21bcf60c-257c-4ffe-bd81-0b1e7af528e6` passed the finite correction probe at requested widths1500 and680 (actual clients1502 and682). Both widths reported **one header toggle, zero rail toggles, one total PanelLeft button and zero duplicate-label buttons**. Original-header mouse/Enter collapse and expansion worked; narrow Escape restored header focus. The same selected session and tree node survived, the unsent draft remained, and Settings opened through the rail with its gear y829.600 unchanged. The app, server and captured processes closed **IDLE**, with `surviving: []`, **zero provider POSTs and zero renderer exceptions**. Root inspected and accepted the new [wide collapsed screenshot](D:/frontend-test/.superpowers/sdd/2026-10-04-desktop-navigation-polish/toggle-native-owned/21bcf60c-257c-4ffe-bd81-0b1e7af528e6/toggle-collapsed-1500.png) and [narrow collapsed screenshot](D:/frontend-test/.superpowers/sdd/2026-10-04-desktop-navigation-polish/toggle-native-owned/21bcf60c-257c-4ffe-bd81-0b1e7af528e6/toggle-collapsed-680.png).
+
+Current ZIP SHA256: `4505E5CC3909932C2A144023E25D1A5BD2498F2AC3C6164B12EC6D782476C079`. Native report SHA256: `97FA2AA94B3B38B8168327C0B9852D5F1C1DDE4D8E846EAD9B83A330AB10FC2D`. Actual RPC observations SHA256: `AEB66129248D2911A54CBD6F2B0CE66CA4D822C17EECC89ACF847303142D2855`. Current proof files are retained in `.superpowers/sdd/2026-10-04-desktop-navigation-polish/` with `toggle-` prefixes. Version remains0.1.0, Electron44.4.5/Node24.21.0. The original dirty config remains unchanged/unstaged at the SHA recorded below; local delivery only.
+
+## Original delivery record
+
+The following records the preceding verification on 2026-10-04 (Asia/Hong_Kong) in `D:/frontend-test`, branch `codex/desktop-workbench`, from `5c2bb19b3fdfe80f29215084951b7d0ac29c790d` to `626637c8dc493460da088c138ca850e95e7e2a1c`. It is retained as historical evidence for the broader navigation and approval correction.
 
 ## Delivered behavior
 
 - Composer always offers the existing four approval modes: dangerous, ask-all, delegate and full-access. Dangerous is labelled **僅危險操作詢問**, matching Settings, and can be selected from every other mode. Existing settings save/effective authority, rejected saves, serialized changes and workspace replacement handling remain in place. Composer changes only `approvalMode`; the backend continues to determine effective permissions and sandbox state.
 - The expanded sidebar has a fixed brand and action header. Only the project, workspace and session tree scrolls. The same tree stays mounted during collapse and Settings/Projects navigation, preserving expansion, selection and its scroll element.
-- A permanent 48px icon rail remains on expanded, collapsed, Settings and Projects surfaces. It provides the existing project-pane toggle and available New conversation, Open workspace, project management, plugin and session-search actions. Actions depend on their existing callbacks and capabilities.
+- A permanent 48px icon rail remains on expanded, collapsed, Settings and Projects surfaces. It provides available New conversation, Open workspace, project management, plugin and session-search actions. Actions depend on their existing callbacks and capabilities. The original header now owns the only sidebar toggle.
 - The bottom rail gear directly opens Settings. There is one live Settings entry and no avatar, account or login surface. Standalone sidebar components retain an optional gear footer for their existing consumers.
 - The narrow drawer retains modal focus, Tab wrapping, Escape dismissal and focus restoration. Its temporary state does not change the desktop collapse preference. The sandbox selector remains in Settings.
 
@@ -18,7 +32,7 @@ Before the Composer change, all three regression cases for dangerous selection f
 
 One independent read-only source review returned **READY with no concrete findings**. The root reviewer inspected current expanded/scrolled, collapsed, Settings, four-choice approval and narrow screenshots and accepted their geometry. Both implementation workers and the reviewer were idle before the complete gate.
 
-## Portable artifact and native evidence
+## Original portable artifact and native evidence (superseded download)
 
 Distinct artifact: [portable ZIP](D:/frontend-test/packages/desktop/release-navigation-polish-2026-10-04/I-harness-Desktop-0.1.0.zip), with runnable [Desktop EXE](<D:/frontend-test/packages/desktop/release-navigation-polish-2026-10-04/I-harness Desktop/I-harness Desktop.exe>).
 
@@ -54,7 +68,7 @@ Current screenshots include [scrolled tree](D:/frontend-test/.superpowers/sdd/20
 
 Two earlier native harness runs remain recorded as **failed**: `6cdf193a-787a-44a9-9e76-d5ec1d0544f6` used the textbox role for an existing search input, and `d8fad95b-6451-4417-9693-bf155a643a51` assumed the requested native width exactly equalled the client width. The locator and settle assertion were corrected, with actual geometry still reported. Product source and artifact bytes did not change between those runs and the final passing run. Each failed run closed `IDLE`; none is counted as a complete pass.
 
-## Fresh complete gate and parity
+## Original complete gate and parity (historical)
 
 After source, artifact and native proofs were frozen and all owned processes were idle, **`pnpm verify:all` ran alone and exited 0**:
 

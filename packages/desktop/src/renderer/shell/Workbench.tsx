@@ -294,7 +294,7 @@ export function Workbench({
 
   return (
     <div className={reviewOpen && !pageOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={pageOpen || drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>
-      <NavigationRail expanded={!pageOpen && (drawer.narrow ? drawer.open : !sidebarCollapsed)} surface={surface} onToggle={toggleSidebar}
+      <NavigationRail surface={surface}
         onCreate={() => { void createSession() }} canCreate={canCreate && selectedWorkspaceId !== undefined} onOpenWorkspace={onOpenWorkspace}
         onProjects={onProjectsChanged ? () => navigate("projects") : undefined}
         onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => navigate("plugins") : undefined}

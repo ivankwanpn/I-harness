@@ -13,7 +13,7 @@ const english = {
   "權限": "Permissions", "專案引用": "Project references", "檔案": "Files", "沒有符合的引用": "No matching references", "搜尋中…": "Searching…",
   "核准": "Approval",
   "結果已達搜尋上限，請縮小搜尋範圍。": "Search limit reached. Narrow your query.", "正在讀取權限…": "Loading permissions…",
-  "主導覽": "Main navigation", "專案與會話": "Projects and conversations",
+  "主導覽": "Main navigation",
   "已儲存；有效權限仍以目前狀態為準，重新啟動工作區後生效。": "Saved. Effective permissions are shown above; restart the workspace to apply pending changes.",
   "請先選擇工作區以使用此設定。": "Select a workspace to use this setting.", "等待工作區連線。": "Waiting for workspace connection.", "目前工作區後端未提供此功能。": "This workspace gateway does not provide this feature.",
   "選擇會話以開啟工作流程。": "Select a conversation to open workflows.", "背景工作": "Background work", "代審": "Review agents", "耐久輸入不可用": "Durable input unavailable",
