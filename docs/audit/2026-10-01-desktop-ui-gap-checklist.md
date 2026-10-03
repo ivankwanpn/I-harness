@@ -1,5 +1,7 @@
 # IH Desktop 介面缺口清單 — 2026-10-01
 
+2026-10-03 的後續實作已完成：最後完整 gate4322passed／10skipped／0failed、71／71；原生八組與最新核準選單由有完整 payload 對比的分段紀錄驗收。最新逐項狀態記錄於 [前端打磨與操作介面驗收](2026-10-03-desktop-front-polish-acceptance.md)。下文保留 2026-10-01 的盤點基準；目前狀態請以新報告的驗證結果為準。
+
 ## 盤點範圍
 
 依據 `D:/frontend-test` 的實際 renderer、App/Workbench 掛載點、Desktop IPC 與 gateway 路由盤點。參考 DSH、ZCode 及使用者提供的 Codex 介面。這份清單是**程式碼與入口檢查**，不代表逐頁重新完成真實模型驗收。
