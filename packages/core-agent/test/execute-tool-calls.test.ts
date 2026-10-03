@@ -968,7 +968,9 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     expect(session.events.filter((e) => e.type === "tool/result")).toHaveLength(1)
 
     await executeToolCalls(ctx, session, tools, [{ callId: "c1", name: "typed", args: { n: 3 } }], { maxParallel: 10, telemetry })
-    expect(counts).toEqual({ preExecute: 1, postExecute: 1, postTool: 1, guards: 1, guardian: 1, answerer: 1, body: 1, telemetry: 2 })
+    // Pure guards are rechecked at prepare, dispatch entry and the actual body
+    // after execution hooks. Hooks, authorizers, body and result events run once.
+    expect(counts).toEqual({ preExecute: 1, postExecute: 1, postTool: 1, guards: 3, guardian: 1, answerer: 1, body: 1, telemetry: 2 })
   })
 
   // The two REGRESSION pins below hold the same hole from its two sides. A

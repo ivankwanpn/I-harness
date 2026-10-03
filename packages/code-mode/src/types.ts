@@ -36,9 +36,11 @@ export interface CodeModeWaitInput { cell_id: string; yield_time_ms?: number; ma
 export interface CodeModeRuntime {
   exec(input: CodeModeExecInput, origin?: CodeModeOrigin): Promise<CodeModeObservation>
   wait(input: CodeModeWaitInput, signal?: AbortSignal): Promise<CodeModeObservation>
+  /** Owner cancellation does not acquire or consume the output observer. */
+  terminate(cellId: string, reason?: string): Promise<void>
   cancel(reason?: string): Promise<void>
   dispose(): Promise<void>
 }
-export interface CodeModeMount { schemas(): ToolSchema[]; cancel(reason?: string): Promise<void>; dispose(): Promise<void> }
+export interface CodeModeMount { schemas(): ToolSchema[]; liveCells?(): { id: string; status: "running" }[]; terminateCell?(cellId: string): Promise<void>; cancel(reason?: string): Promise<void>; dispose(): Promise<void> }
 export interface CodeModeMountOptions { session: Session; sessionId?: string; config?: CodeModeConfig; flush?(): Promise<void>; maxParallel?: number }
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount

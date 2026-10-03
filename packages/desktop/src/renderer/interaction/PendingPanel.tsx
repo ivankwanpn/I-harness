@@ -3,10 +3,12 @@ import { ApprovalCard } from "./ApprovalCard.tsx"
 import { QuestionCard } from "./QuestionCard.tsx"
 import { useText } from "../design/i18n.ts"
 import type { PendingInteraction } from "./pending.ts"
+import type { ApprovalRememberView } from "@i-harness/desktop-gateway/src/approval-rules.ts"
+import type { RememberApprovalOptions } from "@i-harness/desktop-gateway/src/approval-rules.ts"
 
 export type InteractionReply = {
   requestId: string
-  decision: { kind: "approval"; approved: boolean } | { kind: "question"; answer: string }
+  decision: { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions } | { kind: "question"; answer: string }
 }
 
 export interface PendingPanelProps {
@@ -26,6 +28,12 @@ function approvalDetails(payload: unknown): string | undefined {
   if (typeof record.argumentsSummary === "string") return record.argumentsSummary
   if (typeof record.command === "string") return record.command
   return typeof record.pathSummary === "string" ? record.pathSummary : undefined
+}
+
+function approvalRemember(payload: unknown): ApprovalRememberView | undefined {
+  const value = (payload as { remember?: unknown } | null)?.remember
+  if (!value || typeof value !== "object" || typeof (value as ApprovalRememberView).available !== "boolean") return undefined
+  return value as ApprovalRememberView
 }
 
 function questionShape(payload: unknown, fallback: string): { prompt: string; options: string[] } {
@@ -68,7 +76,7 @@ export function PendingPanel({ pending, onReply }: PendingPanelProps) {
           ? (
             <li key={row.requestId} className="task-row">
               <ApprovalCard requestId={row.requestId} description={approvalText(row.payload, t("工具請求"))} details={approvalDetails(row.payload)} busy={busy[row.requestId] === true} interrupted={row.state === "interrupted"}
-                onConfirm={(approved) => { void reply(row, { kind: "approval", approved }) }} />
+                remember={approvalRemember(row.payload)} onConfirm={(approved, remember) => { void reply(row, { kind: "approval", approved, ...(remember ? { remember } : {}) }) }} />
               {errors[row.requestId] ? <p role="alert" className="notice error-text">{errors[row.requestId]}</p> : null}
             </li>
           )

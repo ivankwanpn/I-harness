@@ -1,3 +1,4 @@
+import { publishDraftChange, isDraftRetired } from "./draft-changes.ts"
 const empty: readonly string[] = []
 const cache = new Map<string, { raw: string | null; paths: readonly string[] }>()
 const fallback = new Map<string, string>()
@@ -16,13 +17,15 @@ export function readFileReferences(workspace: string, session: string): readonly
   cache.set(key, { raw, paths })
   return paths
 }
-export function writeFileReferences(workspace: string, session: string, paths: readonly string[]): void {
+export function writeFileReferences(workspace: string, session: string, paths: readonly string[], requireRemoval = false): void {
+  if (paths.length && isDraftRetired(workspace, session)) return
   if (paths.length > 8 || paths.some((path) => !valid(path))) throw new Error("Invalid workspace file references")
   const key = keyFor(workspace, session), raw = paths.length ? JSON.stringify(paths) : null
   if (raw) fallback.set(key, raw); else fallback.delete(key)
-  try { if (raw) localStorage.setItem(key, raw); else localStorage.removeItem(key); volatile.delete(key) } catch { volatile.add(key) }
+  try { if (raw) localStorage.setItem(key, raw); else localStorage.removeItem(key); volatile.delete(key) } catch (error) { volatile.add(key); if (!raw && requireRemoval) throw error }
   cache.set(key, { raw, paths: paths.length ? [...paths] : empty })
   for (const listener of listeners) listener()
+  publishDraftChange(workspace, session)
 }
 export function subscribeFileReferences(listener: () => void): () => void {
   listeners.add(listener)

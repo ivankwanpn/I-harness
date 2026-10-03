@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest"
 import type { HistoryRange } from "@i-harness/sdk"
-import { outcomeLabel, projectTimeline, type TimelineRow } from "../src/renderer/session/project.ts"
+import { outcomeLabel, projectHistoryTimeline, projectTimeline, type TimelineRow } from "../src/renderer/session/project.ts"
 
 type WireEvent = HistoryRange["events"][number]
 type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 
 describe("projectTimeline", () => {
+  it("keeps searchable text visible when a historical window starts after the tool call", () => {
+    const row = projectHistoryTimeline([{ type: "tool/result", name: "read", callId: "old", seq: 900, output: "old searchable output" }])[0]!
+    expect(row).toMatchObject({ seqs: [900], kind: "other", detail: '"old searchable output"' })
+  })
   it("shows a live reasoning block and replaces it with its canonical record using a stable row id", () => {
     const chunks: WireEvent[] = [
       { type: "reasoning/chunk", streamId: "step-3:0", blockId: "0", text: "Inspect ", offset: 0, atSeq: 3 },

@@ -24,7 +24,12 @@ function bridgeWith(value: DesktopWorkflowView, mutate?: (request: DesktopReques
   const bridge: DesktopBridge = { request, onEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener) } } }
   return { bridge, request, emit: (event: DesktopEvent) => listeners.forEach((listener) => listener(event)) }
 }
-async function loaded() { await screen.findByRole("textbox", { name: "目標內容" }) }
+async function loaded() {
+  // The form exists while its authoritative read is still pending. Flush that
+  // response before issuing a user action against the enabled controls.
+  await act(async () => {})
+  await screen.findByRole("textbox", { name: "目標內容" })
+}
 
 it("creates and starts a goal only after the user submits its objective", async () => {
   const current = view()
@@ -34,8 +39,8 @@ it("creates and starts a goal only after the user submits its objective", async 
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/read", workspaceId: "w", sessionId: "s" })
   expect(request).toHaveBeenCalledTimes(1)
   fireEvent.change(screen.getByRole("textbox", { name: "目標內容" }), { target: { value: " Explore " } })
-  fireEvent.click(screen.getByRole("button", { name: "建立並開始" }))
-  await screen.findByText("Explore")
+  await act(async () => { fireEvent.click(screen.getByRole("button", { name: "建立並開始" })) })
+  await screen.findByText("Explore", { selector: ".workflow-objective" })
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "goal", operation: "create", request: { objective: "Explore" }, start: true } })
 })
 
@@ -140,6 +145,8 @@ it("distinguishes saved running jobs from owned live jobs and reads bounded outp
   expect(screen.getByText("輸出已截斷")).toBeTruthy()
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/job/output", workspaceId: "w", sessionId: "s", id: "cold" })
   fireEvent.click(within(screen.getByRole("article", { name: "背景任務 Live worker" })).getByRole("button", { name: "取消工作" }))
+  expect(request.mock.calls.some(([input]) => input.kind === "desktop/session/workflow/mutate")).toBe(false)
+  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "確認執行" }))
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/workflow/mutate", workspaceId: "w", sessionId: "s", command: { action: "job/cancel", id: "live" } }))
 })
 

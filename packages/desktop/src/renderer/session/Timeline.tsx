@@ -48,7 +48,8 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
-export function Timeline({ rows, navigation, running = false }: { rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean }) {
+export interface TimelineProps { rows: TimelineRow[]; navigation?: FileNavigation; running?: boolean; targetSeq?: number; historical?: boolean; onTargetVisible?(seq: number): void }
+export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible }: TimelineProps) {
   const t = useText()
   const [preview, setPreview] = useState<{ src: string; name: string }>()
   useEffect(() => {
@@ -74,7 +75,8 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
     })
   }
   const parentRef = useRef<HTMLDivElement>(null)
-  const following = useRef(true)
+  const following = useRef(!historical && targetSeq === undefined)
+  const located = useRef<number | undefined>(undefined)
   const [showLatest, setShowLatest] = useState(false)
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -86,6 +88,28 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
     initialRect: { width: 1024, height: 768 },
   })
   const totalSize = virtualizer.getTotalSize()
+  const target = rows.find(row => targetSeq !== undefined && row.seqs?.includes(targetSeq))
+  const targetGroup = target ? grouped.find(row => row.kind === "activity-group" && row.rows.some(tool => tool.id === target.id)) : undefined
+  useEffect(() => {
+    if (!target || targetSeq === undefined) return
+    following.current = false
+    const group = targetGroup
+    setOpen(previous => {
+      const next = new Map(previous)
+      next.set(target.id, true)
+      if (target.turn) next.set(`work:${target.turn.id}`, true)
+      if (group) next.set(group.id, true)
+      return next
+    })
+    if (group?.kind === "activity-group") setPages(previous => new Map(previous).set(group.id, Math.floor(group.rows.findIndex(tool => tool.id === target.id) / 50)))
+  }, [target?.id, target?.turn?.id, targetGroup?.id, targetSeq])
+  useEffect(() => {
+    if (!target || targetSeq === undefined || located.current === targetSeq) return
+    const index = items.findIndex(row => row.id === target.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target.id)))
+    if (index < 0) return
+    const frame = requestAnimationFrame(() => { located.current = targetSeq; virtualizer.scrollToIndex(index, { align: "center" }); onTargetVisible?.(targetSeq) })
+    return () => cancelAnimationFrame(frame)
+  }, [items, target?.id, targetSeq, virtualizer, onTargetVisible])
   useEffect(() => {
     if (!following.current || items.length === 0) return
     const frame = requestAnimationFrame(() => {
@@ -110,10 +134,12 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
             <div
               key={row.id}
               className="timeline-row"
+              data-search-target={row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? "true" : undefined}
               data-index={item.index}
               ref={virtualizer.measureElement}
-              style={{ transform: `translateY(${item.start}px)` }}
+              style={{ transform: `translateY(${item.start}px)`, ...(row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? { outline: "2px solid var(--accent, #5073c8)", outlineOffset: "-2px" } : {}) }}
             >
+              {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
               <RowView row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
                 following.current = false; setShowLatest(true)
                 setPages((previous) => {
@@ -127,7 +153,7 @@ export function Timeline({ rows, navigation, running = false }: { rows: Timeline
         })}
       </div>
     </div>
-    {showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
+    {!historical && showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
       following.current = true; setShowLatest(false); virtualizer.scrollToIndex(items.length - 1, { align: "end" })
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
     {preview ? createPortal(<div className="timeline-image-overlay" role="dialog" aria-modal="true" aria-label={preview.name}>

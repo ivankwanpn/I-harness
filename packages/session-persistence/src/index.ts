@@ -88,7 +88,13 @@ export interface PersistenceBackend {
    * header line replaced via temp+rename, event lines byte-exact; sqlite:
    * whitelisted-column UPDATE). Throws for an unknown session. */
   updateMeta(sessionId: string, patch: Partial<SessionMeta>): Promise<SessionMeta>
+  /** Exact store-owned artifacts; unsupported/custom stores withhold this capability. */
+  deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>
+  /** Read a durable closure's original visibility and exact cleanup manifest. */
+  deletionReceipt?(sessionId: string): Promise<{ visibility: { origin?: string; parentSession?: string }; manifest: SessionArtifactManifest } | undefined>
 }
+
+export interface SessionArtifactManifest { documents: string[]; files?: string[] }
 
 export interface CoordinatorOptions {
   /** Write-behind batching window. Default 200. */
@@ -109,6 +115,9 @@ export interface CoordinatorOptions {
 }
 
 export interface SessionCoordinator {
+  /** Drain producers before calling. Holds write ownership until the store commits its tombstone. */
+  deleteOwnedSession?(sessionId: string, manifest: SessionArtifactManifest): Promise<void>
+  deletionReceipt?(sessionId: string): Promise<{ visibility: { origin?: string; parentSession?: string }; manifest: SessionArtifactManifest } | undefined>
   create(meta?: Partial<SessionMeta>): Promise<{ id: string }>
   append(sessionId: string, events: SessionEvent[]): Promise<void>
   enqueue(sessionId: string, events: SessionEvent[]): void
@@ -263,6 +272,9 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
     ?? ((error: unknown) => { console.warn("[i-harness] background persistence failure:", error) })
   const maxDelayMs = opts?.maxDelayMs ?? 200
   const writeBehinds = new Map<string, SessionWriteBehind>()
+  const deleted = new Set<string>()
+  const deletedDocuments = new Set<string>()
+  function assertWritable(id: string) { if (deleted.has(id)) throw new Error("Session is deleting or deleted") }
   let docChain: Promise<void> = Promise.resolve()
 
   // M23 ownership lease (opt-in — ruling M23-P2: lock.enabled defaults to
@@ -454,8 +466,23 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
   }
 
   return {
+    ...(backend.deletionReceipt ? { deletionReceipt: (sessionId: string) => backend.deletionReceipt!(sessionId) } : {}),
+    ...(backend.deleteOwnedSession ? { async deleteOwnedSession(sessionId: string, manifest: SessionArtifactManifest) {
+      // Close local admissions synchronously, before awaiting the existing writes.
+      deleted.add(sessionId)
+      for (const key of manifest.documents) deletedDocuments.add(key)
+      const wb = writeBehinds.get(sessionId)
+      if (wb) { wb.cancelAutomaticWait(); await wb.flush(); writeBehinds.delete(sessionId) }
+      await docChain
+      await withSessionOperation(sessionId, async () => {
+        await ensureOwnership(sessionId)
+        try { await backend.deleteOwnedSession!(sessionId, manifest) }
+        finally { await releaseOwnershipUnlocked(sessionId) }
+      })
+    } } : {}),
     async create(meta) {
       const id = meta?.sessionId ?? `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+      assertWritable(id)
       return withSessionOperation(id, async () => {
         // Acquire-at-live (M23): the lease is taken BEFORE the store write so a
         // conflicting writer can never clobber the session; the typed Conflict/
@@ -480,12 +507,14 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       })
     },
     async append(sessionId, events) {
+      assertWritable(sessionId)
       await withSessionOperation(sessionId, async () => {
         await ensureOwnership(sessionId) // acquire-at-first-use (M23)
         await backend.append(sessionId, events)
       })
     },
     enqueue(sessionId, events) {
+      assertWritable(sessionId)
       const wb = writeBehindFor(sessionId)
       for (const ev of events) wb.enqueue(ev)
     },
@@ -549,6 +578,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       })
     },
     async loadOwned(sessionId) {
+      assertWritable(sessionId)
       const pendingWrites = writeBehinds.get(sessionId)
       if (pendingWrites !== undefined) await pendingWrites.flush()
       return withSessionOperation(sessionId, async () => {
@@ -590,6 +620,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       return backend.profile(sessionId)
     },
     async updateMeta(sessionId, patch) {
+      assertWritable(sessionId)
       // Mutating path (M23 discipline, same as append): the rewrite must be
       // serialized with appends/write-behind flushes on the same session.
       return withSessionOperation(sessionId, async () => {
@@ -619,6 +650,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       if (failures.length > 0) throw new AggregateError(failures, "Failed to persist sessions during shutdown")
     },
     async putDocument(key, data) {
+      if (deletedDocuments.has(key)) { report(new Error("Session document is deleted")); return }
       const p = docChain.then(() => putDocumentWithLease(key, data))
       docChain = p.catch(() => {}) // keep the chain alive after a failure
       return p.catch((error: unknown) => { report(error) }) // report; never rejects the caller
@@ -630,6 +662,7 @@ export function createSessionCoordinator(backend: PersistenceBackend, opts?: Coo
       return heldLocks.has(sessionId)
     },
     async adoptOwnership(sessionId) {
+      assertWritable(sessionId)
       // CLI resume path: after a successful load(), hold the lease until
       // close(). Conflict → SessionLockConflictError (fail-closed).
       await withSessionOperation(sessionId, () => ensureOwnership(sessionId))

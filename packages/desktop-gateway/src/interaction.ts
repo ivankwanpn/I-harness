@@ -4,9 +4,10 @@ import { makeNotification } from "@i-harness/sdk"
 import type { SessionAssembly } from "@i-harness/session-executor"
 import type { RpcNotification } from "@i-harness/sdk"
 import type { SettingsApprovalMode } from "@i-harness/settings"
+import type { ApprovalRulesAdapter, RememberApprovalOptions } from "./approval-rules.ts"
 
 export type InteractionDecision =
-  | { kind: "approval"; approved: boolean }
+  | { kind: "approval"; approved: boolean; remember?: RememberApprovalOptions }
   | { kind: "question"; answer: string }
 
 export interface PendingInteraction {
@@ -34,6 +35,7 @@ export interface InteractionRecoveryInput {
 }
 
 export interface InteractionBridgeOptions {
+  approvalRules?: ApprovalRulesAdapter
   approvalMode?: () => SettingsApprovalMode
   persistence?: InteractionPersistence
   /** Resolve only after idempotently admitting this stable inputId durably.
@@ -45,6 +47,10 @@ export interface InteractionBridge {
   attach(assembly: SessionAssembly): void
   pending(sessionId?: string): PendingInteraction[]
   reply(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true } | Promise<{ accepted: true }>
+  /** Call exclusively from authenticated Desktop human UI ingress. */
+  replyTrustedHuman(input: { requestId: string; sessionId: string; decision: InteractionDecision }): { accepted: true } | Promise<{ accepted: true }>
+  /** Explicit settings action against a currently pending live request. */
+  rememberPending(input: { requestId: string; sessionId: string; remember: RememberApprovalOptions }): { accepted: true }
   cancelSession(sessionId: string): void
   close(): void
 }
@@ -72,6 +78,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
     // Closing preserves snapshots: their async resolvers cannot survive restart.
     if (reason !== "closed") options.persistence?.write(snapshot().filter((view) => view.requestId !== row.view.requestId))
     waiting.delete(row.view.requestId)
+    if (row.view.kind === "approval") options.approvalRules?.forget(row.view.payload as ApprovalRequest)
     clearTimeout(row.timer)
     if (reason !== "reply") row.recovering?.abort(new Error(`interaction ${reason}`))
     row.settle?.(decision, reason)
@@ -167,10 +174,11 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
     }))
   }
 
-  return {
+  const bridge: InteractionBridge = {
     attach(assembly) {
       if (closed || assembly.sessionId === undefined) return
       const sessionId = assembly.sessionId
+      options.approvalRules?.attach(assembly)
       registerApprovalAnswerer(assembly.ctx, (request) => waitForApproval(sessionId, request))
       registerQuestionProvider(assembly.ctx, { ask: (question) => waitForAnswer(sessionId, question) })
     },
@@ -180,6 +188,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
         .map((row) => structuredClone(row.view))
     },
     reply(input) {
+      if (input.decision.kind === "approval" && input.decision.remember !== undefined) throw new Error("remembering requires trusted human UI input")
       if (closed) throw new Error("interaction bridge closed")
       const row = waiting.get(input.requestId)
       if (row === undefined) throw new Error("unknown or settled interaction request")
@@ -224,6 +233,23 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       finish(row, input.decision, "reply")
       return { accepted: true }
     },
+    replyTrustedHuman(input) {
+      if (input.decision.kind !== "approval" || input.decision.remember === undefined) return bridge.reply(input)
+      const row = waiting.get(input.requestId)
+      if (closed || !row || row.view.sessionId !== input.sessionId || row.view.kind !== "approval" || !row.settle || row.view.state === "interrupted" || (row.view.expiresAt ?? 0) <= Date.now()) throw new Error("only a live owned human approval can create a rule")
+      if (input.decision.approved !== true) throw new Error("denied requests cannot create approval rules")
+      if (!options.approvalRules) throw new Error("approval rules are unavailable")
+      const rule = options.approvalRules.grant(row.view.payload as ApprovalRequest, input.sessionId, input.decision.remember)
+      try { return bridge.reply({ ...input, decision: { kind: "approval", approved: true } }) }
+      catch (error) { options.approvalRules.revoke(rule.evidence.workspaceId, rule.id); throw error }
+    },
+    rememberPending(input) {
+      const row = waiting.get(input.requestId)
+      if (closed || !row || row.view.sessionId !== input.sessionId || row.view.kind !== "approval" || !row.settle || row.view.state === "interrupted" || (row.view.expiresAt ?? 0) <= Date.now()) throw new Error("only a live owned human approval can create a rule")
+      if (!options.approvalRules) throw new Error("approval rules are unavailable")
+      options.approvalRules.grant(row.view.payload as ApprovalRequest, input.sessionId, input.remember)
+      return { accepted: true }
+    },
     cancelSession(sessionId) {
       for (const row of [...waiting.values()]) {
         if (row.view.sessionId === sessionId) finish(row, undefined, "cancelled")
@@ -235,6 +261,7 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
       for (const row of [...waiting.values()]) finish(row, undefined, "closed")
     },
   }
+  return bridge
 }
 
 function recoveryText(request: PendingInteraction, decision: InteractionDecision): string {

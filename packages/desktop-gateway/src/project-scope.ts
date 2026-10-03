@@ -3,6 +3,8 @@ import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import type { SessionProjectContext } from "@i-harness/session-executor"
+import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
+export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; fence?: SessionManagementFence }
 
 interface Binding { bound: boolean; projectId?: string }
 interface ConfirmedProjectScope { id: string; name: string; roots: string[]; primaryRoot?: string; unavailableReason?: string }
@@ -24,7 +26,8 @@ async function directory(value: unknown, field: string): Promise<string> {
 
 /** Session documents identify owners; only this process's main-confirmed
  * catalog supplies roots. Reopening a session never restores saved authority. */
-export function createProjectScopeBroker(coordinator: SessionCoordinator, _workspace: string, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async () => true) {
+export function createProjectScopeBroker(coordinator: SessionCoordinator, _workspace: string, visible: (id: string, meta: SessionMeta) => Promise<boolean> = async () => true, moveOptions: ProjectMoveOptions = {}) {
+  const fence = moveOptions.fence ?? createSessionManagementFence()
   const projects = new Map<string, ConfirmedProjectScope>()
   const bindings = new Map<string, Binding>()
   const parents = new Map<string, string>()
@@ -196,6 +199,54 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       })
     },
     projectFor,
+    move(id: string, expectedOwner: string | undefined, projectId: string | undefined): Promise<{ sessionId: string; projectId?: string; executionWorkspace: string }> {
+      return serial(id, () => fence.exclusive(id, async () => {
+        const meta = await ensureVisible(id)
+        if (meta.origin === "subagent" || meta.origin === "approval-review" || (meta.origin === "team" && meta.parentSession)) throw new Error("Session is unavailable for project move")
+        if (!moveOptions.assertIdle) throw new Error("Idle project move inspection is unavailable")
+        if (expectedOwner !== undefined) identifier(expectedOwner)
+        if (projectId !== undefined) identifier(projectId)
+        const alreadyOwned = coordinator.ownerOf(id)
+        await coordinator.adoptOwnership(id)
+        try {
+        // A second broker/process may have committed ownership since this
+        // broker last resolved it. Compare durable identity under the lease.
+        await loading.get(id)
+        bindings.delete(id)
+        const current = await resolveOwner(id, id)
+        if (current.projectId !== expectedOwner) throw new Error("Session project owner changed; refresh before moving")
+        for (const child of await coordinator.list()) if ((await coordinator.profile(child)).meta.parentSession === id) throw new Error("Session has descendants; coordinated project move is unavailable")
+        await catalog(async () => {
+          if (projectId !== undefined) {
+            const declared = projects.get(projectId)
+            if (!declared) throw new Error("Destination project has not been confirmed by the current main process")
+            projects.set(projectId, await resolveScope(declared))
+            assertAvailable(projectId)
+          }
+        })
+        await moveOptions.assertIdle(id)
+        await moveOptions.drainSession?.(id)
+        await moveOptions.assertIdle(id)
+        await catalog(async () => {
+          await loading.get(id)
+          bindings.delete(id)
+          if ((await resolveOwner(id, id)).projectId !== expectedOwner) throw new Error("Session project owner changed; refresh before moving")
+          if (projectId !== undefined) {
+            const declared = projects.get(projectId)
+            if (!declared) throw new Error("Destination project has not been confirmed by the current main process")
+            const scope = await resolveScope(declared)
+            projects.set(projectId, scope)
+            assertAvailable(projectId)
+          }
+          await save(id, projectId)
+        })
+        return { sessionId: id, ...(projectId ? { projectId } : {}), executionWorkspace: _workspace }
+        } finally { if (!alreadyOwned) await coordinator.releaseOwnership(id) }
+      }, async () => {
+        if (!moveOptions.assertIdle) throw new Error("Idle project move inspection is unavailable")
+        await moveOptions.assertIdle(id)
+      }))
+    },
     async state(id: string): Promise<{ sessionId: string; projectId?: string }> {
       const projectId = await projectFor(id)
       return { sessionId: id, ...(projectId ? { projectId } : {}) }

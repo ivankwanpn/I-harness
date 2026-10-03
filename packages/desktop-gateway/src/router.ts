@@ -19,6 +19,7 @@ import { memoryRequest } from "./memory-wire.ts"
 import { boundSearchHits } from "./search-bounds.ts"
 import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
+import { dispatchGatewayProjectFiles } from "./project-files.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -30,14 +31,23 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     }
     const capabilities = { ...frame.result.capabilities }
     if (handlers.contextPicker) capabilities["desktop-context-picker"] = ["1"]
+    if (handlers.projectFiles) capabilities["desktop-project-files"] = ["1"]
+    if (handlers.autoTitle) capabilities["desktop-auto-title"] = ["1"]
+    if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
+    if (handlers.execution) capabilities["desktop-execution"] = ["1"]
+    if (handlers.diagnostics) capabilities["desktop-environment-diagnostics"] = ["1"]
+    if (handlers.agentProcesses) capabilities["desktop-agent-processes"] = ["1"]
+    if (handlers.approvalRules) capabilities["desktop-approval-rules"] = ["1"]
     if (handlers.draftSession) capabilities["desktop-draft-create"] = ["1"]
     if (handlers.projects) capabilities["desktop-project-scope"] = ["1"]
     if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
     if (handlers.resources) capabilities["desktop-resources"] = ["1"]
+    if (handlers.resources?.write) capabilities["desktop-resource-authoring"] = ["1"]
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
     if (handlers.hooks) capabilities["desktop-hooks"] = ["1"]
+    if (handlers.hooks?.writeConfig) capabilities["desktop-hook-authoring"] = ["1"]
     if (handlers.subagents) capabilities["desktop-subagents"] = ["1"]
     if (handlers.sessionSubagents) capabilities["desktop-subagent-catalog"] = ["1"]
     if (handlers.agentSettings) capabilities["desktop-agent-settings"] = ["1"]
@@ -49,6 +59,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
+    if (handlers.memory?.update) capabilities["desktop-memory-authoring"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
     if (handlers.sessionQuery !== undefined) capabilities["desktop-session-search"] = ["1"]
     if (handlers.sandboxState !== undefined) capabilities["desktop-sandbox"] = ["1"]
@@ -161,6 +172,38 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch"].includes(message.method)) {
+        const params = asRecord(message.params)
+        try {
+          if (!params) throw new Error("Invalid Desktop parameters")
+          if (params.sessionId !== undefined) {
+            if (typeof params.sessionId !== "string" || !params.sessionId || params.sessionId.length > 256) throw new Error("Invalid session identity")
+            await handlers.assertSession?.(params.sessionId)
+          }
+          const sessionId = params.sessionId as string
+          let result: unknown
+          switch (message.method) {
+            case "desktop/auto-title/state": if (!handlers.autoTitle) throw new Error("Auto-title preferences unavailable"); result = handlers.autoTitle.state(); break
+            case "desktop/auto-title/configure": if (!handlers.autoTitle) throw new Error("Auto-title preferences unavailable"); result = await handlers.autoTitle.configure(params.autoTitle); break
+            case "desktop/code-mode/state": if (!handlers.codeSettings) throw new Error("Code Mode settings unavailable"); result = await handlers.codeSettings.state(sessionId); break
+            case "desktop/code-mode/configure": if (!handlers.codeSettings) throw new Error("Code Mode settings unavailable"); result = await handlers.codeSettings.configure(params.patch, sessionId); break
+            case "desktop/environment/diagnostics": if (!handlers.diagnostics) throw new Error("Diagnostics unavailable"); result = await handlers.diagnostics.read(sessionId, params.probe as boolean | undefined); break
+            case "desktop/session/execution/read": if (!sessionId || !handlers.execution) throw new Error("Execution unavailable"); result = await handlers.execution.read(sessionId, { offset: params.offset as number | undefined, limit: params.limit as number | undefined }); break
+            case "desktop/session/execution/stop": if (!sessionId || !handlers.execution || typeof params.cellId !== "string") throw new Error("Execution unavailable"); result = await handlers.execution.stop(sessionId, params.cellId); break
+            case "desktop/session/processes/read": if (!sessionId || !handlers.agentProcesses) throw new Error("Processes unavailable"); result = await handlers.agentProcesses.read(sessionId); break
+            case "desktop/session/processes/control": if (!sessionId || !handlers.agentProcesses) throw new Error("Processes unavailable"); result = await handlers.agentProcesses.control(sessionId, params.command); break
+            case "desktop/session/processes/job-output": if (!sessionId || !handlers.agentProcesses || typeof params.id !== "string") throw new Error("Processes unavailable"); result = await handlers.agentProcesses.jobOutput(sessionId, params.id); break
+            case "desktop/session/processes/terminal-output": if (!sessionId || !handlers.agentProcesses || typeof params.id !== "string") throw new Error("Processes unavailable"); result = await handlers.agentProcesses.terminalOutput(sessionId, params.id); break
+            case "desktop/approval-rules/state": if (!handlers.approvalRules || !handlers.workspace) throw new Error("Approval rules unavailable"); result = handlers.approvalRules.state(handlers.workspace, handlers.interaction?.pending() ?? []); break
+            case "desktop/approval-rules/revoke": if (!handlers.approvalRules || !handlers.workspace || typeof params.ruleId !== "string") throw new Error("Approval rules unavailable"); handlers.approvalRules.revoke(handlers.workspace, params.ruleId); result = { revoked: true }; break
+            case "desktop/approval-rules/add": if (!sessionId || !handlers.interaction?.rememberPending || typeof params.requestId !== "string") throw new Error("Approval rules unavailable"); result = await handlers.interaction.rememberPending({ sessionId, requestId: params.requestId, remember: params.remember as import("./approval-rules.ts").RememberApprovalOptions }); break
+            case "desktop/session/batch": if (!handlers.sessions) throw new Error("Session management unavailable"); result = await handlers.sessions.batch(params.command as import("./session-management.ts").SessionBatchCommand); break
+          }
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+
       if (["desktop/session/subagents/list", "desktop/session/subagents/history", "desktop/session/subagents/control"].includes(message.method) && handlers.sessionSubagents) {
         const params = asRecord(message.params)
         try {
@@ -232,6 +275,11 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
+      if (["desktop/project-files/list", "desktop/project-files/search", "desktop/project-files/read", "desktop/project-files/save"].includes(message.method) && handlers.projectFiles) {
+        try { send(makeSuccess(message.id, await dispatchGatewayProjectFiles(message.method, message.params, handlers.projectFiles))) }
+        catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/resources/list", "desktop/resources/read"].includes(message.method) && handlers.resources) {
         const params = asRecord(message.params)
         if ((params?.resourceKind !== "skills" && params?.resourceKind !== "commands") || (message.method.endsWith("/list")
@@ -239,8 +287,38 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           : typeof params.name !== "string" || !params.name || params.name.length > 256 || /[\0\r\n]/.test(params.name))) {
           send(makeFailure(message.id, INVALID_PARAMS, "Invalid resource request")); return
         }
-        try { send(makeSuccess(message.id, message.method.endsWith("/list") ? await handlers.resources.list(params.resourceKind, params.query as string, params.offset as number) : await handlers.resources.read(params.resourceKind, params.name as string) ?? null)) }
+        if ((params?.includeShadowed !== undefined && typeof params.includeShadowed !== "boolean")
+          || (params?.source !== undefined && !["workspace", "global", "plugin"].includes(String(params.source)))
+          || (params?.pluginId !== undefined && (typeof params.pluginId !== "string" || !params.pluginId || params.pluginId.length > 256))) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid resource source")); return
+        }
+        try { send(makeSuccess(message.id, message.method.endsWith("/list") ? await handlers.resources.list(params.resourceKind, params.query as string, params.offset as number, params.includeShadowed as boolean | undefined) : await handlers.resources.read(params.resourceKind, params.name as string, params.source as "workspace" | "global" | "plugin" | undefined, params.pluginId as string | undefined) ?? null)) }
         catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/resources/write", "desktop/resources/remove", "desktop/resources/import"].includes(message.method) && handlers.resources) {
+        const params = asRecord(message.params)
+        try {
+          if (!params || (params.source !== "workspace" && params.source !== "global")) throw new Error("Invalid resource source")
+          const result = message.method.endsWith("/import")
+            ? await handlers.resources.importSkill(params.source, typeof params.selectedPath === "string" ? params.selectedPath : "")
+            : message.method.endsWith("/remove")
+              ? params.confirmed === true ? await handlers.resources.remove(params as unknown as import("./resources.ts").ResourceRemove) : (() => { throw new Error("Resource removal requires confirmation") })()
+              : await handlers.resources.write(params as unknown as import("./resources.ts").ResourceWrite)
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/hooks/read-config", "desktop/hooks/write-config", "desktop/hooks/read-script", "desktop/hooks/write-script"].includes(message.method) && handlers.hooks) {
+        const params = asRecord(message.params)
+        try {
+          if (!params || (params.source !== "workspace" && params.source !== "global")) throw new Error("Invalid hook source")
+          const result = message.method.endsWith("/read-config") ? await handlers.hooks.readConfig(params.source)
+            : message.method.endsWith("/read-script") ? await handlers.hooks.readScript(params.source, String(params.name ?? ""))
+              : message.method.endsWith("/write-config") ? await handlers.hooks.writeConfig(params as unknown as import("./hook-authoring.ts").HookConfigWrite)
+                : await handlers.hooks.writeScript(params as unknown as import("./hook-authoring.ts").HookScriptWrite)
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
       if (["desktop/mcp/state", "desktop/mcp/mutate", "desktop/mcp/refresh"].includes(message.method) && handlers.mcp) {
@@ -476,7 +554,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
-      if (message.method === "desktop/interaction/reply" && handlers.interaction !== undefined) {
+      if ((message.method === "desktop/interaction/reply" || message.method === "desktop/interaction/reply/trusted-human") && handlers.interaction !== undefined) {
         const params = asRecord(message.params)
         const decision = asRecord(params?.decision)
         if (typeof params?.requestId !== "string" || params.requestId === ""
@@ -488,11 +566,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           return
         }
         try {
-          const reply = await handlers.interaction.reply({
+          await handlers.assertSession?.(params.sessionId)
+          const trusted = message.method.endsWith("/trusted-human")
+          if (trusted && !handlers.interaction.replyTrustedHuman) throw new Error("Trusted human reply unavailable")
+          if (!trusted && decision.remember !== undefined) throw new Error("Remembering requires a trusted human reply")
+          const reply = await (trusted ? handlers.interaction.replyTrustedHuman! : handlers.interaction.reply)({
             requestId: params.requestId,
             sessionId: params.sessionId,
             decision: decision.kind === "approval"
-              ? { kind: "approval", approved: decision.approved as boolean }
+              ? { kind: "approval", approved: decision.approved as boolean, ...(decision.remember === undefined ? {} : { remember: decision.remember as import("./approval-rules.ts").RememberApprovalOptions }) }
               : { kind: "question", answer: decision.answer as string },
           })
           send(makeSuccess(message.id, reply))

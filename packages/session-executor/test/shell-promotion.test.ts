@@ -206,7 +206,11 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
   }, 30_000)
 
   it("FALSIFICATION: a threshold ABOVE the deadline never fires — the command dies, and dies branded as a timeout", async () => {
-    const shell = resolveShell().name
+    // Isolate deadline cancellation from Git Bash's launcher and repeatedly
+    // forked sleep children, whose inherited pipes can outlive shell exit.
+    // Native PowerShell's Start-Sleep is a builtin held in the same process.
+    // The default-shell promotion/survival controls above remain unchanged.
+    const shell = process.platform === "win32" ? "pwsh" : resolveShell().name
     const base = mkdtempSync(join(tmpdir(), "i-harness-w10-falsify-"))
     const workspace = join(base, "ws")
     mkdirSync(workspace, { recursive: true })
@@ -217,9 +221,10 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
     // abort wins the race by construction. (That is deliberate — the default is
     // otherwise only observable by waiting thirty seconds, and a future default
     // moved under this deadline would flip this test red rather than silently
-    // hollow it out.) The command is the same held-open one as above; it can
-    // only end by being killed or by the release file, which this test never
-    // writes. The assembly also prints its F1 warning on this pair — expected,
+    // hollow it out.) The command uses the same release-file protocol as above; it can
+    // only end by being killed or by the release file, which stays absent until
+    // all observations finish (failure cleanup may release it afterward).
+    // The assembly also prints its F1 warning on this pair — expected,
     // and deliberately not silenced: this case IS the misconfiguration.
     const assembly = await mountAssembly(
       workspace,
@@ -245,6 +250,12 @@ describe("W10: a foreground shell command that outlives its promotion threshold"
       // failure mode this test exists to keep visible.
       expect(existsSync(donePath)).toBe(false)
     } finally {
+      // Release only AFTER the timeout/no-job/done-absent assertions. If a
+      // regression left a promoted owned command alive, drain that fixture's
+      // natural completion before removing its directory; do not orphan it.
+      writeFileSync(release, "cleanup")
+      const exec = assembly.ctx.services.get<ExecService>("exec/service")
+      await waitFor(() => exec.listJobs().every(job => job.status !== "running"))
       await assembly.dispose()
       rmWorkspaceSync(base)
     }

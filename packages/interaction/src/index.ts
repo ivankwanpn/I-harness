@@ -12,6 +12,8 @@ export interface ApprovalRequest {
   pathSummary?: string
   /** Bounded, redacted preview of the validated tool arguments. */
   argumentsSummary?: string
+  /** Display metadata only. The opaque token names live prepared evidence. */
+  remember?: { available: boolean; candidateId?: string; reason?: string; arguments?: string }
 }
 
 export interface ApprovalDecision {

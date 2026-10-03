@@ -3,6 +3,7 @@ import { ReviewFileRow } from "../vendor/zcode/ReviewFileRow.tsx"
 import { useText, type Message } from "../design/i18n.ts"
 import { useState } from "react"
 import { SourceFileEditor, type ReviewSaveResult } from "./SourceFileEditor.tsx"
+import { ProjectFilesPane, type ProjectFilesPaneProps } from "./ProjectFilesPane.tsx"
 import "./review-editor.css"
 
 export type ReviewChangeStatus = "modified" | "added" | "deleted" | "untracked" | "renamed"
@@ -25,6 +26,8 @@ export type ReviewText =
   | { kind: "unavailable"; reason: string }
 
 export interface ReviewPaneProps {
+  workspaceId?: string
+  projectFiles?: ProjectFilesPaneProps
   changes?: ReviewChanges
   error?: string
   selected?: { path: string; mode: "diff" | "preview" }
@@ -83,7 +86,7 @@ function TextBlock({ value, label }: { value: ReviewText; label: string }) {
 }
 
 /** Workspace review with explicit human source edits and local Git actions. */
-export function ReviewPane({ changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit }: ReviewPaneProps) {
+export function ReviewPane({ workspaceId, projectFiles, changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit }: ReviewPaneProps) {
   const t = useText()
   const [sourcePath, setSourcePath] = useState("")
   const [message, setMessage] = useState("")
@@ -113,6 +116,7 @@ export function ReviewPane({ changes, error, selected, diff, preview, onSelect, 
   }
   return (
     <section className="review-view" aria-label={t("變更")}>
+      {projectFiles ? <ProjectFilesPane {...projectFiles} /> : null}
       <div className="review-head">
         <h3 className="review-title">{t("變更")}</h3>
         <button type="button" className="link-button" onClick={onRefresh}>{t("重新整理")}</button>
@@ -161,7 +165,7 @@ export function ReviewPane({ changes, error, selected, diff, preview, onSelect, 
             ? diff === undefined ? <p className="muted">{t("正在讀取…")}</p> : <TextBlock value={diff} label="diff" />
             : onSaveFile ? null
             : preview === undefined ? <p className="muted">{t("正在讀取…")}</p> : <TextBlock value={preview} label={t("預覽")} />}
-          {onSaveFile ? <div hidden={selected.mode !== "preview"}><SourceFileEditor path={selected.path} value={preview} onSave={onSaveFile} onReload={(path) => onSelect(path, "preview")} /></div> : null}
+          {onSaveFile ? <div hidden={selected.mode !== "preview"}><SourceFileEditor workspaceId={workspaceId} path={selected.path} value={preview} onSave={onSaveFile} onReload={(path) => onSelect(path, "preview")} /></div> : null}
         </div>
       )}
       {onCommit ? <form className="review-commit" onSubmit={(event) => { event.preventDefault(); if (message.trim() && stagedCount > 0) void mutate(() => onCommit(message)) }}>

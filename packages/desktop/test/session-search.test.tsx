@@ -15,7 +15,18 @@ it("searches within the selected workspace/session and opens a matching conversa
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/search", workspaceId: "playground", sessionId: "s1", query: "內容", limit: 50 })
   expect(screen.getByText("結果已截斷，請縮小搜尋範圍。")).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: /測試會話/ }))
-  expect(onSelect).toHaveBeenCalledWith("s1")
+  expect(onSelect).toHaveBeenCalledWith({ workspaceId: "playground", sessionId: "s1", seq: 4 })
+})
+it("rejects pending results after the workspace or session changes", async () => {
+  let finish!: (value: unknown) => void
+  const request = vi.fn(() => new Promise(resolve => { finish = resolve }))
+  const props = { bridge: { request, onEvent: () => () => {} }, titles: {}, onSelect: vi.fn() }
+  const view = render(<SessionSearch {...props} workspaceId="a" sessionId="first" />)
+  fireEvent.change(screen.getByRole("searchbox"), { target: { value: "old" } })
+  fireEvent.click(screen.getByRole("button", { name: "搜尋" }))
+  view.rerender(<SessionSearch {...props} workspaceId="b" sessionId="second" />)
+  await act(async () => { finish({ hits: [{ sessionId: "first", seq: 3, snippet: "stale workspace" }] }) })
+  expect(screen.queryByText("stale workspace")).toBeNull()
 })
 
 it("does not restore stale results after the query is cleared", async () => {

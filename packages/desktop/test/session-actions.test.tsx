@@ -9,6 +9,14 @@ afterEach(cleanup)
 const dashboard = { sessions: [{ id: "s1", title: "First" }, { id: "s2", title: "Second" }] } as SessionDashboardResult
 
 describe("sidebar session actions", () => {
+  it("opens the selected row in session management for confirmed batch and permanent controls", () => {
+    const manageSessions = vi.fn()
+    render(<TaskList dashboard={dashboard} workspaceId="w" onSelect={() => {}} onManageSessions={manageSessions} />)
+    fireEvent.click(screen.getByRole("button", { name: "更多會話操作 First" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "管理此會話" }))
+    expect(manageSessions).toHaveBeenCalledWith("s1")
+    expect(screen.queryByRole("menu")).toBeNull()
+  })
   it("disables fork before a completed turn and enables it when a turn has finished", async () => {
     const manage = vi.fn(async () => {})
     render(<TaskList dashboard={{ sessions: [{ id: "blank", title: "Blank", turnCount: 0 }, { id: "complete", title: "Complete", turnCount: 1 }] } as SessionDashboardResult} onSelect={() => {}} onManage={manage} />)

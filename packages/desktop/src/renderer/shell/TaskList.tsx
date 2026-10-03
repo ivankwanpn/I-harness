@@ -15,11 +15,12 @@ export interface TaskListProps {
   onCopyId?(sessionId: string): Promise<void>
   onOpenFolder?(): Promise<void>
   onManageArchived?(): void
+  onManageSessions?(sessionId?: string): void
   onSelect(sessionId: string): void
 }
 
 /** Sessions with only the fields the host actually reported — never invented. */
-export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, navigation, onManage, onCopyId, onOpenFolder, onManageArchived }: TaskListProps) {
+export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, workspaceId, navigation, onManage, onCopyId, onOpenFolder, onManageArchived, onManageSessions }: TaskListProps) {
   const t = useText()
   const locale = useLocale((state) => state.locale)
   const [menu, setMenu] = useState<{ id: string; workspaceId?: string; x: number; y: number; element: HTMLElement }>()
@@ -37,7 +38,7 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
   }
   useLayoutEffect(() => { setMenu(undefined) }, [workspaceId, selectedId])
   const active = menu?.workspaceId === workspaceId ? dashboard.sessions.find((row) => row.id === menu?.id) : undefined
-  const canManage = !!(onManage || onCopyId || onOpenFolder)
+  const canManage = !!(onManage || onCopyId || onOpenFolder || onManageSessions)
   const showMenu = (id: string, element: HTMLElement, point?: { x: number; y: number }) => {
     if (!canManage || locks.current.has(actionKey(id))) return
     const rect = element.getBoundingClientRect()
@@ -50,7 +51,7 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
     return <><p className="notice">{t("尚無會話")}</p>{onManageArchived ? <button type="button" className="session-archived-button" onClick={onManageArchived}>{t("管理已封存會話")}</button> : null}</>
   }
   return (
-    <><ul className="session-list">
+    <>{onManageSessions ? <button type="button" className="session-archived-button" onClick={() => onManageSessions()}>批次管理會話</button> : null}<ul className="session-list">
       {[...dashboard.sessions].sort((a, b) => Number(navigation?.[b.id]?.pinned === true) - Number(navigation?.[a.id]?.pinned === true)).map((row) => (
         <li key={row.id} className="session-list-row" onContextMenu={(event) => { if (canManage) { event.preventDefault(); const element = event.currentTarget.querySelector<HTMLButtonElement>(".row-button")!; showMenu(row.id, element, event.clientX || event.clientY ? { x: event.clientX, y: event.clientY } : undefined) } }}>
           <button
@@ -80,6 +81,7 @@ export function TaskList({ dashboard, selectedId, onSelect, attentionCounts, wor
       onManage={onManage ? (id, action, title) => guarded(id, () => onManage(id, action, title)) : undefined}
       onCopyId={onCopyId ? (id) => guarded(id, () => onCopyId(id)) : undefined}
       onOpenFolder={onOpenFolder ? () => guarded(active.id, onOpenFolder) : undefined}
+      onManageSession={onManageSessions}
       onClose={() => setMenu(undefined)} /> : null}
     </>
   )

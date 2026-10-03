@@ -75,10 +75,19 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   return {
     schemas() {
       if (disposed || mode === "off") return tools.schemas()
-      execTool.description = codeModeDescription(tools)
-      waitTool.description = liveCells.size ? `${waitDescription}\nCurrently active cell IDs in this session: ${JSON.stringify([...liveCells])}` : waitDescription
-      const all = tools.schemas()
+      const execDescription = codeModeDescription(tools)
+      const currentWaitDescription = liveCells.size ? `${waitDescription}\nCurrently active cell IDs in this session: ${JSON.stringify([...liveCells])}` : waitDescription
+      // Live cell IDs belong to model presentation. A schema read must not
+      // mutate registry declarations consumed by approval authority snapshots.
+      const all = tools.schemas().map(schema => schema.name === "code_exec" ? { ...schema, description: execDescription }
+        : schema.name === "code_wait" ? { ...schema, description: currentWaitDescription } : schema)
       return mode === "only" ? all.filter(s => s.name === "code_exec" || s.name === "code_wait") : all
+    },
+    liveCells: () => [...liveCells].map(id => ({ id, status: "running" as const })),
+    async terminateCell(cellId) {
+      if (disposed || !liveCells.has(cellId)) throw new Error("Live cell unavailable for this owner")
+      await runtime.terminate(cellId, "Cell stopped by user")
+      await options.flush?.()
     },
     async cancel(reason) { await runtime.cancel(reason) },
     async dispose() {

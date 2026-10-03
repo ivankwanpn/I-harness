@@ -6,7 +6,7 @@ afterEach(() => { cleanup(); vi.useRealTimers() })
 it("lists the built-in compact command when the gateway supports it", async () => {
   const select = vi.fn()
   render(<SlashCommands bridge={{ request: vi.fn().mockResolvedValue([]), onEvent: () => () => {} }} workspaceId="w" text="/com" showCompact onSelect={select} />)
-  fireEvent.click(await screen.findByRole("button", { name: /compact/ }))
+  fireEvent.click(await screen.findByRole("option", { name: /compact/ }))
   expect(select).toHaveBeenCalledWith("compact")
 })
 it("refreshes enabled commands while open and removes a disabled command", async () => {
@@ -16,9 +16,9 @@ it("refreshes enabled commands while open and removes a disabled command", async
   const request = vi.fn(async () => enabled ? [{ name: "hello", description: "Greeting" }] : [])
   render(<SlashCommands bridge={{ request, onEvent: () => () => {} }} workspaceId="w" text="/" onSelect={select} />)
   await act(async () => { await vi.advanceTimersByTimeAsync(1) })
-  fireEvent.click(screen.getByRole("button", { name: /hello/ }))
+  fireEvent.click(screen.getByRole("option", { name: /hello/ }))
   expect(select).toHaveBeenCalledWith("hello")
   enabled = false
   await act(async () => { await vi.advanceTimersByTimeAsync(500) })
-  expect(screen.queryByRole("button", { name: /hello/ })).toBeNull()
+  expect(screen.queryByRole("option", { name: /hello/ })).toBeNull()
 })

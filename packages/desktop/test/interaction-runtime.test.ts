@@ -20,7 +20,7 @@ function fixture() {
   const pendingReply = { accepted: true as const }
   const request = vi.fn(async (method: string) => {
     if (method === "desktop/interaction/pending") return [{ requestId: "r1", sessionId: "s1", kind: "approval", payload: {}, openedAt: 1 }]
-    if (method === "desktop/interaction/reply") return pendingReply
+    if (method === "desktop/interaction/reply/trusted-human") return pendingReply
     throw new Error(`unexpected request ${method}`)
   })
   const client = { request } as unknown as HarnessClient
@@ -63,7 +63,7 @@ describe("Desktop interaction IPC rows", () => {
       sessionId: "s1",
       decision: { kind: "approval", approved: false },
     }, f.dependencies)).resolves.toEqual({ accepted: true })
-    expect(f.request).toHaveBeenCalledWith("desktop/interaction/reply", {
+    expect(f.request).toHaveBeenCalledWith("desktop/interaction/reply/trusted-human", {
       requestId: "r1",
       sessionId: "s1",
       decision: { kind: "approval", approved: false },

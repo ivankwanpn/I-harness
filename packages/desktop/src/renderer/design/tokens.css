@@ -69,7 +69,9 @@ button { font: inherit; color: inherit; }
 .desktop-titlebar { app-region: drag; user-select: none; background: var(--ih-bg); }
 .desktop-titlebar button, .desktop-header-actions { app-region: no-drag; }
 .desktop-drag-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.desktop-header-actions { display: flex; align-items: center; flex-shrink: 0; gap: 6px; }
+.desktop-header-actions { display: flex; align-items: center; flex-shrink: 1; min-width: 0; gap: 6px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.desktop-header-actions > * { flex-shrink: 0; }
+.desktop-titlebar > .icon-button, .desktop-titlebar > .zc-window-controls { flex-shrink: 0; }
 .header-action { display: inline-flex; align-items: center; gap: 6px; }
 .connection-state { font-size: 11px; color: var(--ih-muted); white-space: nowrap; }
 .connection-state::before { content: "●"; margin-right: 4px; }

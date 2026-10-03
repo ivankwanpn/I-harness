@@ -3,9 +3,10 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import { useText } from "../design/i18n.ts"
 interface Hit { sessionId: string; seq: number; snippet: string }
+export interface HistorySelection { workspaceId: string; sessionId: string; seq: number }
 export function SessionSearch({ bridge, workspaceId, sessionId, titles, onSelect }: {
   bridge: DesktopBridge; workspaceId: string; sessionId?: string;
-  titles: Record<string, string>; onSelect(sessionId: string): void
+  titles: Record<string, string>; onSelect(selection: HistorySelection): void
 }) {
   const t = useText()
   const [query, setQuery] = useState("")
@@ -16,6 +17,7 @@ export function SessionSearch({ bridge, workspaceId, sessionId, titles, onSelect
   const [error, setError] = useState<string>()
   const requestId = useRef(0)
   useEffect(() => () => { requestId.current += 1 }, [])
+  useEffect(() => { requestId.current += 1; setHits(undefined); setBusy(false); setError(undefined); setTruncated(false) }, [workspaceId, sessionId])
   function clear() { requestId.current += 1; setQuery(""); setHits(undefined); setBusy(false); setError(undefined); setTruncated(false) }
   async function search() {
     if (!query.trim()) return
@@ -43,7 +45,7 @@ export function SessionSearch({ bridge, workspaceId, sessionId, titles, onSelect
     {truncated ? <p className="notice">{t("結果已截斷，請縮小搜尋範圍。")}</p> : null}
     {hits?.length === 0 ? <p className="muted">{t("沒有符合的會話內容")}</p> : null}
     <ul className="session-list search-results">{hits?.map((hit, index) => <li key={`${hit.sessionId}:${hit.seq}:${index}`}>
-      <button className="row-button" onClick={() => onSelect(hit.sessionId)}><span className="row-label">{titles[hit.sessionId] ?? t("未命名會話")}</span><span className="search-snippet">{hit.snippet}</span></button>
+      <button className="row-button" onClick={() => onSelect({ workspaceId, sessionId: hit.sessionId, seq: hit.seq })}><span className="row-label">{titles[hit.sessionId] ?? t("未命名會話")}</span><span className="search-snippet">{hit.snippet}</span></button>
     </li>)}</ul>
   </section>
 }

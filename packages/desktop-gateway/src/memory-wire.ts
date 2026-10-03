@@ -1,5 +1,10 @@
 import type { MemoryStore } from "@i-harness/memory"
 
+export type MemoryAuthoringRequest =
+  | { kind: "desktop/memory/update"; workspaceId: string; id: string; title: string; text: string; expectedRevision: string }
+  | { kind: "desktop/memory/forget-many"; workspaceId: string; confirmed: true; targets: { id: string; expectedRevision: string }[] }
+export type MemoryAuthoringRequestHandler = (request: MemoryAuthoringRequest) => Promise<unknown>
+
 export function memoryRequest(store: MemoryStore, method: string, raw: unknown): unknown {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("params must be an object")
   const params = raw as Record<string, unknown>
@@ -22,6 +27,12 @@ export function memoryRequest(store: MemoryStore, method: string, raw: unknown):
       if (typeof params.title !== "string" || typeof params.text !== "string") throw new Error("title and text required")
       if (!store.enabled()) throw new Error("memory is disabled")
       return { note: store.add({ title: params.title, text: params.text }) }
+    case "desktop/memory/update":
+      if (typeof params.id !== "string" || typeof params.title !== "string" || typeof params.text !== "string" || typeof params.expectedRevision !== "string") throw new Error("id, title, text and expectedRevision required")
+      return store.update({ id: params.id, title: params.title, text: params.text, expectedRevision: params.expectedRevision })
+    case "desktop/memory/forget-many":
+      if (params.confirmed !== true || !Array.isArray(params.targets) || !params.targets.every(row => row && typeof row === "object" && typeof row.id === "string" && typeof row.expectedRevision === "string")) throw new Error("confirmed targets required")
+      return store.forgetMany(params.targets)
     case "desktop/memory/forget":
       if (typeof params.id !== "string") throw new Error("id is required")
       return { forgotten: store.forget(params.id) }

@@ -1,17 +1,18 @@
 import type { ImageInput } from "@i-harness/sdk"
 import { open, realpath, stat, type FileHandle } from "node:fs/promises"
-import { basename, extname, isAbsolute, relative, win32 } from "node:path"
+import { basename, isAbsolute, relative, win32 } from "node:path"
+import { documentFormat, READER_LIMITS, readDocumentSnapshot } from "./attachment-readers.ts"
+import type { DocumentSnapshot } from "./attachment-reader-core.ts"
 export interface PickedAttachments {
   paths: string[]
   images: Array<ImageInput & { name?: string }>
-  texts: Array<{ name: string; text: string }>
+  texts: Array<{ name: string; text: string } & Partial<Omit<DocumentSnapshot, "text">>>
 }
 const MAX_IMAGES = 10
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 const MAX_FILES = 8
 const MAX_CONTEXT_BYTES = 64 * 1024
-const unsupportedDocuments = new Set([".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx"])
 
 function mediaType(bytes: Buffer): ImageInput["mediaType"] | undefined {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"
@@ -82,13 +83,25 @@ export async function readPickedAttachments(workspacePath: string, selectedPaths
         continue
       }
       if (result.paths.length + result.texts.length >= MAX_FILES) throw new Error("Attach at most 8 non-image files")
+      const format = documentFormat(requested, header)
+      if (format) {
+        if (info.size > READER_LIMITS.inputBytes) throw new Error("Document input limit is 16 MiB")
+        const bytes = await readUpTo(file, READER_LIMITS.inputBytes + 1)
+        const snapshot = await readDocumentSnapshot(bytes, format)
+        // Keep the prompt-context serialization cap, including JSON escaping.
+        const fits = (text: string) => Buffer.byteLength(JSON.stringify([...result.texts.map(({ name, text }) => ({ name, text })), { name, text }])) <= MAX_CONTEXT_BYTES
+        if (!fits("")) throw new Error("Attachment text context must total at most 64 KiB")
+        if (!fits(snapshot.text)) {
+          const points = Array.from(snapshot.text); let low = 0, high = points.length
+          while (low < high) { const middle = Math.ceil((low + high) / 2); if (fits(points.slice(0, middle).join(""))) low = middle; else high = middle - 1 }
+          snapshot.text = points.slice(0, low).join(""); snapshot.truncated = true
+          snapshot.reason = [snapshot.reason, "Combined attachment context limit (64 KiB) reached; snapshot truncated"].filter(Boolean).join("; ")
+        }
+        result.texts.push({ name, ...snapshot }); continue
+      }
       const path = workspaceReference(root, canonical)
       if (path !== undefined) { result.paths.push(path); continue }
-      if (unsupportedDocuments.has(extname(requested).toLowerCase()) || header.subarray(0, 5).toString("ascii") === "%PDF-"
-        || header.length >= 4 && header[0] === 0x50 && header[1] === 0x4b && [0x03, 0x05, 0x07].includes(header[2]!) && [0x04, 0x06, 0x08].includes(header[3]!)) {
-        throw new Error("Unsupported external document format; select a UTF-8 text file or supported image")
-      }
-      const room = MAX_CONTEXT_BYTES - Buffer.byteLength(JSON.stringify(result.texts), "utf8")
+      const room = MAX_CONTEXT_BYTES - Buffer.byteLength(JSON.stringify(result.texts.map(({ name, text }) => ({ name, text }))), "utf8")
       if (info.size > room) throw new Error("External text context must total at most 64 KiB")
       const bytes = await readUpTo(file, room + 1)
       if (bytes.length > room) throw new Error("External text context must total at most 64 KiB")
@@ -97,7 +110,7 @@ export async function readPickedAttachments(workspacePath: string, selectedPaths
       try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes) }
       catch { throw new Error("Unsupported external attachment encoding; select a UTF-8 text file") }
       result.texts.push({ name, text })
-      if (Buffer.byteLength(JSON.stringify(result.texts), "utf8") > MAX_CONTEXT_BYTES) throw new Error("External text context must total at most 64 KiB")
+      if (Buffer.byteLength(JSON.stringify(result.texts.map(({ name, text }) => ({ name, text }))), "utf8") > MAX_CONTEXT_BYTES) throw new Error("External text context must total at most 64 KiB")
     } finally { await file.close() }
   }
   return result

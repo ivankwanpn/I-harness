@@ -8,9 +8,31 @@ const captured = vi.hoisted(() => ({ props: undefined as WorkbenchProps | undefi
 vi.mock("../src/renderer/shell/Workbench.tsx", () => ({ Workbench: (props: WorkbenchProps) => { captured.props = props; return null } }))
 import { App } from "../src/renderer/app.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
+import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0 }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("clears renderer drafts only for confirmed successful native permanent deletions", async () => {
+  writeDraft("w1", "delete-ok", "delete me"); writeDraft("w1", "delete-failed", "keep failure"); writeDraft("w1", "new-task:unassigned", "keep new task")
+  fixture(request => request.kind === "desktop/session/batch" ? Promise.resolve({ results: [{ sessionId: "delete-ok", ok: true }, { sessionId: "delete-failed", ok: false, sessionDeleted: true, error: "Native cleanup failed" }] }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  await act(async () => { await captured.props!.onBatchSessions!("w1", { action: "delete", sessionIds: ["delete-ok", "delete-failed"] }) })
+  expect(readDraft("w1", "delete-ok")).toBe(""); expect(readDraft("w1", "delete-failed")).toBe("keep failure"); expect(readDraft("w1", "new-task:unassigned")).toBe("keep new task")
+})
+it.each([undefined, "destination"])("settles async authoritative ownership %s despite the selected workspace grouping", async (owner) => {
+  const pending: ReturnType<typeof defer>[] = []
+  fixture(request => request.kind === "projects/list" ? Promise.resolve([{ id: "original", name: "Original", workspaceIds: ["w1"] }, { id: "destination", name: "Destination", workspaceIds: ["w2"] }])
+    : request.kind === "desktop/capabilities" ? Promise.resolve({ "desktop-project-scope": ["1"] })
+    : request.kind === "desktop/session/project/state" ? (() => { const reply = defer(); pending.push(reply); return reply.promise })() : undefined)
+  await waitFor(() => expect(captured.props?.capabilities["desktop-project-scope"]).toEqual(["1"]))
+  act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "original"))
+  await waitFor(() => expect(pending).toHaveLength(1))
+  expect(captured.props!.conversation!.projectReady).toBe(false)
+  await act(async () => { pending[0]!.resolve({ sessionId: "a", ...(owner ? { projectId: owner } : {}) }); await pending[0]!.promise })
+  expect(pending).toHaveLength(1)
+  expect(captured.props!.conversation!.projectReady).toBe(true)
+  expect(captured.props!.selectedProjectId).toBe(owner)
+})
 it("clears a persisted selection that is no longer in the conversation list", async () => {
   useUiStore.setState({ selectedWorkspaceId: "w1", selectedSessionId: "old-reviewer" })
   fixture(() => undefined)
@@ -294,4 +316,46 @@ it("refreshes the selected file content together with the change list", async ()
   await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version1" }))
   act(() => captured.props!.review!.onRefresh())
   await waitFor(() => expect(captured.props!.review!.diff).toMatchObject({ text: "version2" }))
+})
+
+it("validates historical targets and keeps historical page reads separate from the live rows", async () => {
+  fixture(request => request.kind === "desktop/notifications/target" ? Promise.resolve({ workspaceId: request.workspaceId, sessionId: request.sessionId })
+    : request.kind === "session/dashboard" ? Promise.resolve({ sessions: [{ id: "a", live: false }] })
+    : request.kind === "session/history" ? Promise.resolve({ events: [{ type: "user/message", seq: 900, text: "Live latest" }], nextSeq: 901 }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props?.conversation?.rows.length).toBeGreaterThan(0))
+  const rows = captured.props!.conversation!.rows
+  act(() => captured.props!.onSelectHistory!({ workspaceId: "w1", sessionId: "a", seq: 300 }))
+  await waitFor(() => expect(captured.props?.historicalView?.selection).toEqual({ workspaceId: "w1", sessionId: "a", seq: 300 }))
+  await act(async () => { await captured.props!.historicalView!.request({ kind: "session/history", workspaceId: "w1", sessionId: "a", afterSeq: 200, limit: 200 }) })
+  expect(captured.props!.conversation!.rows).toEqual(rows)
+  act(() => captured.props!.historicalView!.onLatest())
+  expect(captured.props!.historicalView).toBeUndefined()
+  expect(captured.props!.selectedSessionId).toBe("a")
+})
+
+it("ignores a delayed historical target validation after a newer conversation selection", async () => {
+  const target = defer()
+  fixture(request => request.kind === "desktop/notifications/target" ? target.promise : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectHistory!({ workspaceId: "w1", sessionId: "a", seq: 300 }))
+  act(() => captured.props!.onSelectSession("b"))
+  await act(async () => { target.resolve({ workspaceId: "w1", sessionId: "a" }); await target.promise })
+  expect(captured.props!.selectedSessionId).toBe("b")
+  expect(captured.props!.historicalView).toBeUndefined()
+})
+
+it("moves the selected conversation grouping while retaining its execution workspace", async () => {
+  const projects = [{ id: "original", name: "Original", workspaceIds: ["w1"], createdAt: "now", updatedAt: "now" }, { id: "destination", name: "Destination", workspaceIds: ["w2"], createdAt: "now", updatedAt: "now" }]
+  const request = fixture(request => request.kind === "projects/list" ? Promise.resolve(projects)
+    : request.kind === "session/dashboard" ? Promise.resolve({ sessions: [{ id: "a", live: false }] })
+    : request.kind === "desktop/session/batch" ? Promise.resolve({ results: [{ sessionId: "a", ok: true, projectId: "destination", executionWorkspace: "D:/agent-complete/playground" }, { sessionId: "b", ok: false, error: "Busy" }] }) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "original"))
+  await act(async () => { await captured.props!.onBatchSessions!("w1", { action: "move", sessionIds: ["a", "b"], projectId: "destination", expectedOwners: { a: "original", b: "original" } }) })
+  expect(request).toHaveBeenCalledWith({ kind: "desktop/session/batch", workspaceId: "w1", confirmed: true, command: { action: "move", sessionIds: ["a", "b"], projectId: "destination", expectedOwners: { a: "original", b: "original" } } })
+  expect(captured.props!.selectedProjectId).toBe("destination")
+  expect(captured.props!.selectedWorkspaceId).toBe("w1")
+  expect(captured.props!.selectedSessionId).toBe("a")
 })

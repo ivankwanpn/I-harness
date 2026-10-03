@@ -7,6 +7,21 @@ import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { clampOutputCap } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
 
+it("reports an actual yielded live cell while the agent turn is idle and drops it after completion", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-live-cells-"))
+  const assembly = await createSessionAssembly({ workspace: root, sessionId: "owned", modelPolicy: "test-mock", sandbox: "danger-full-access", codeMode: { mode: "mixed" } })
+  try {
+    const result = await assembly.tools.execute({ name: "code_exec", args: { code: 'await yield_control(); text("done");', yield_time_ms: 2000 } })
+    const output = result.output as { cell_id: string; status: string }
+    expect(output.status).toBe("running")
+    expect(typeof assembly.liveResources).toBe("function")
+    expect(assembly.liveResources!().codeCells).toEqual([{ id: output.cell_id, status: "running" }])
+    await assembly.tools.execute({ name: "code_wait", args: { cell_id: output.cell_id, yield_time_ms: 2000 } })
+    expect(assembly.liveResources!().codeCells).toEqual([])
+    expect(assembly.liveResources!().terminals).toEqual([])
+  } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
+})
+
 it("mounts a Code Mode program against the assembly's actual tool registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-mode-"))
   let assembly: Awaited<ReturnType<typeof createSessionAssembly>> | undefined

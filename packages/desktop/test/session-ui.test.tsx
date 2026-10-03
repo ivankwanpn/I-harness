@@ -1,13 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-import { boundedDraft, Composer } from "../src/renderer/session/Composer.tsx"
+import { boundedDraft, clearDraft, Composer } from "../src/renderer/session/Composer.tsx"
 import { sendGate } from "../src/renderer/session/send-gate.ts"
 import { TaskPane } from "../src/renderer/session/TaskPane.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
-afterEach(() => {
-  cleanup()
+afterEach(async () => {
+  await act(async () => { cleanup() })
+  // The owner keeps a memory draft across remounts even if localStorage is
+  // unavailable. Reset the actual fixture scopes as well as browser storage.
+  clearDraft("ws-1", "s1")
+  clearDraft("ws-1", "s2")
   window.localStorage.clear()
   useUiStore.setState({ followupDelivery: "queue" } as never)
 })

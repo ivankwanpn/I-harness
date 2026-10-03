@@ -1,4 +1,5 @@
 import { readFile, writeFile, readdir } from "node:fs/promises"
+import { filesystemApprovalIdentity } from "./approval-identity.ts"
 import { resolve, relative, isAbsolute } from "node:path"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { FsToolFailure } from "./error.ts"
@@ -236,12 +237,14 @@ function decodeUtf8Safely(bytes: Uint8Array): string | undefined {
 // declaration can move by editing another's.
 
 export function createFsTools(deps: FsToolDeps): Tool[] {
+  const implementation = [createFsTools, filesystemApprovalIdentity, resolvePath, resolveWriteCall, guardWrite, writeFileAtomic, assertSnapshotFresh, normalizeLineEndings, detectLineEndings, restoreLineEndings, assertTextData, applyLiteralEdit, parsePatch, applyPatch, softFail].map((fn) => fn.toString()).join("\n")
   const read: Tool<{ path: string }, { content: string } | FsToolFailure> = {
     name: "read",
     description: "read a file",
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
+    approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "read", implementation),
     execute: async ({ path }) => softFail(async () => ({ content: await readFile(resolvePath(deps.workspace, path), "utf-8") })),
   }
   const write: Tool<{ path: string; text: string; sandbox_permissions?: string; justification?: string }, { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } | FsToolFailure> = {
@@ -249,6 +252,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     description: "write a file",
     inputSchema: { type: "object", properties: { path: { type: "string" }, text: { type: "string" }, sandbox_permissions: { type: "string", enum: [...ESCALATION_TARGETS], description: "request a wider sandbox mode for THIS call when a denial says the operation needs one" }, justification: { type: "string", description: "why the wider mode is required; shown to whoever approves the request" } }, required: ["path", "text"] },
     isReadOnly: false,
+    approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "write", implementation),
     execute: async ({ path, text, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
       // M62: the ladder runs ONCE here, before any guard invocation — never
       // inside `guardWrite`, which apply_patch calls per hunk. The resolved
@@ -281,6 +285,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
     inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
     isReadOnly: true,
     isConcurrencySafe: true,
+    approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "list_dir", implementation),
     execute: async ({ path }) => softFail(async () => ({ entries: await readdir(resolvePath(deps.workspace, path)) })),
   }
   const edit: Tool<{ path: string; old_string: string; new_string: string; replace_all?: boolean; observedMtimeMs?: number; sandbox_permissions?: string; justification?: string }, { ok: boolean; path: string; replacements: number; change: TextDiff; preImageRef?: string; isNewFile?: boolean } | FsToolFailure> = {
@@ -300,6 +305,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       required: ["path", "old_string", "new_string"],
     },
     isReadOnly: false,
+    approvalIdentity: ({ path }) => filesystemApprovalIdentity(deps.workspace, path, "edit", implementation),
     execute: async ({ path, old_string, new_string, replace_all = false, observedMtimeMs, sandbox_permissions, justification }, exec: ToolExec) => softFail(async () => {
       const target = resolvePath(deps.workspace, path)
       const ladder = await resolveWriteCall(deps, exec, "edit", { sandbox_permissions, justification }, `write to ${target}`)

@@ -24,3 +24,15 @@
 .source-editor-lines span { display: block; }
 .source-editor-body textarea { flex: 1; min-width: 0; height: 100%; border: 0; border-radius: 0; resize: none; padding: 8px; margin: 0; background: transparent; color: var(--ih-text); font: 12px/20px Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; box-sizing: border-box; }
 .source-editor-body textarea:focus-visible { outline: 1px solid var(--ih-accent); outline-offset: -1px; }
+.project-files-pane { border-bottom: 1px solid var(--ih-divider); padding-bottom: 16px; margin-bottom: 16px; }
+.project-explorer { max-height: 300px; overflow: auto; border: 1px solid var(--ih-divider); border-radius: 6px; padding: 8px; }
+.project-explorer > input { box-sizing: border-box; width: 100%; padding: 7px 9px; border: 1px solid var(--ih-divider); border-radius: 5px; background: var(--ih-panel); color: var(--ih-text); }
+.project-explorer ul { list-style: none; margin: 2px 0; padding-left: 14px; }
+.project-explorer > ul { padding-left: 0; }
+.project-explorer .link-button { text-align: left; overflow-wrap: anywhere; }
+.editor-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 8px 0; }
+.editor-tab { display: flex; flex-shrink: 0; border: 1px solid var(--ih-divider); border-radius: 5px; }
+.editor-tab > button { background: var(--ih-panel); color: var(--ih-text); border: 0; padding: 6px; cursor: pointer; font: inherit; font-size: 12px; }
+.editor-tab > [aria-selected="true"] { background: var(--ih-selected); }
+.editor-close-choice, .editor-conflict { padding: 10px; border: 1px solid var(--ih-divider); border-radius: 6px; margin: 8px 0; }
+.editor-close-choice button, .editor-conflict button { padding: 6px; margin: 4px; background: var(--ih-panel); color: var(--ih-text); border: 1px solid var(--ih-divider); border-radius: 5px; cursor: pointer; }

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, shell, type Tray } from "electron"
+import { app, BrowserWindow, dialog, ipcMain, shell, clipboard, type Tray } from "electron"
 import { join } from "node:path"
 import { registerDesktopIpc } from "./ipc.ts"
 import { createWorkspaceRuntimeManager, launchBundledGateway, type WorkspaceRuntimeManager } from "./sdk-runtime.ts"
@@ -11,10 +11,14 @@ import { attachNativeWindow } from "./native-window.ts"
 import { createBrowserSurface } from "./browser-surface.ts"
 import { attachCloseLifecycle } from "./close-lifecycle.ts"
 import { createDesktopTray } from "./tray.ts"
+import { createGlobalProviderSettings } from "./global-provider-settings.ts"
+import { createNotificationHistory } from "./notification-history.ts"
+import { AttachmentDraftStore } from "./attachment-draft-store.ts"
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
 let quitting = false
+let drainNativeSettings: (() => Promise<void>) | undefined
 
 /** Later main-process modules (the scoped IPC in the next task) read through these. */
 export function workspaceCatalog(): WorkspaceCatalog {
@@ -40,6 +44,11 @@ app.whenReady().then(() => {
   })
   catalog = workspaces
   runtimes = manager
+  const globalProviders = createGlobalProviderSettings(async () => (await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" })).client)
+  const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
+  const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
+  drainNativeSettings = async () => { await globalProviders.close(); await manager.close(); await notifications.flush(); await drafts.flush() }
+  const applicationInfo = () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, arch: process.arch, packaged: app.isPackaged, updateSupported: false })
   let mainWindow: BrowserWindow | undefined
   let tray: Tray | undefined
   const openWindow = (): void => {
@@ -50,7 +59,7 @@ app.whenReady().then(() => {
       trayAvailable: () => tray !== undefined,
       isQuitting: () => quitting,
     })
-    const native = attachNativeWindow(window, localPreferences)
+    const native = attachNativeWindow(window, localPreferences, { notifications })
     const browser = createBrowserSurface(window)
     const unregister = registerDesktopIpc(window, {
       catalog: workspaces,
@@ -59,6 +68,14 @@ app.whenReady().then(() => {
       runtimes: manager,
       native,
       browser,
+      globalProviders,
+      notifications,
+      drafts,
+      about: { info: applicationInfo, copy: () => { clipboard.writeText(JSON.stringify(applicationInfo(), null, 2)); return { copied: true } } },
+      pickSkill: async () => {
+        const result = await dialog.showOpenDialog(window, { properties: ["openFile"], filters: [{ name: "SKILL.md", extensions: ["md"] }] })
+        return result.canceled ? undefined : result.filePaths[0]
+      },
       pickFiles: async (workspacePath) => {
         const result = await dialog.showOpenDialog(window, { defaultPath: workspacePath, properties: ["openFile", "multiSelections"] })
         return result.canceled ? undefined : result.filePaths
@@ -94,6 +111,6 @@ app.on("before-quit", (event) => {
   if (quitting || runtimes === undefined) return
   event.preventDefault()
   quitting = true
-  void runtimes.close().finally(() => app.quit())
+  void (drainNativeSettings ? drainNativeSettings() : runtimes.close()).finally(() => app.quit())
 })
 

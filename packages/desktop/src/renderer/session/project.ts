@@ -9,7 +9,7 @@ export type TimelineRow = (
   | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
   | { id: string; kind: "other"; label: string; detail?: string; transient?: true }
-) & { turn?: { id: string; complete: boolean } }
+) & { turn?: { id: string; complete: boolean }; seqs?: number[] }
 
 /** Pure fold of durable records and live chunks, with stable rendered ids. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
@@ -92,6 +92,35 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     } else {
       const detail = event.type === "compaction/summary" ? event.text : undefined
       appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, ...(detail ? { detail } : {}) })
+    }
+  }
+  return rows
+}
+
+/** Sequence references survive message/tool/reasoning folding for history jumps. */
+export function projectHistoryTimeline(events: readonly WireEvent[]): TimelineRow[] {
+  const rows = projectTimeline(events).map(row => ({ ...row, seqs: [] as number[] }))
+  const byId = new Map(rows.map(row => [row.id, row]))
+  for (const event of events) {
+    if (event.seq === undefined) continue
+    const groupedId = event.type === "tool/call" || event.type === "tool/result" ? `tool:${event.callId}` : event.type === "reasoning" && event.streamId ? `reasoning:${event.streamId}` : undefined
+    const row = (groupedId && byId.get(groupedId)) || byId.get(`message:${event.seq}`) || byId.get(`event:${event.seq}`) || byId.get(`step:${event.seq}`) || byId.get(`chunk:${event.seq}`)
+    if (!row) continue
+    row.seqs.push(event.seq)
+    if (row.kind === "other" && !row.detail) {
+      // A bounded page can begin after a call. Keep the searchable result
+      // readable even without its earlier call row; never replay the tool.
+      let detail: string | undefined
+      if (event.type === "tool/result") {
+        const raw = event.output
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) { const { images: _images, ...rest } = raw as Record<string, unknown>; detail = JSON.stringify(rest) }
+        else detail = JSON.stringify(raw)
+      } else if (event.type === "subagent/inbox") detail = event.message
+      else if (event.type === "team/task") detail = `${event.task.subject}\n${event.task.description}`
+      else if (event.type === "team/message/queued") detail = event.message.content
+      else if (event.type === "subagent/start") detail = `${event.description}\n${event.agentPath}`
+      else if (event.type === "subagent/end") detail = event.resultText ?? event.error
+      if (detail) row.detail = detail
     }
   }
   return rows

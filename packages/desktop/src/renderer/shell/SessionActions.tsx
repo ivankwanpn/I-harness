@@ -13,11 +13,12 @@ export interface SessionActionsProps {
   onManage?(sessionId: string, action: SessionAction, title?: string): Promise<void>
   onCopyId?(sessionId: string): Promise<void>
   onOpenFolder?(): Promise<void>
+  onManageSession?(sessionId: string): void
   onClose(): void
 }
 
 /** Native sidebar affordances, using this app's existing management services. */
-export function SessionActions({ session, navigation, anchor, onManage, onCopyId, onOpenFolder, onClose }: SessionActionsProps) {
+export function SessionActions({ session, navigation, anchor, onManage, onCopyId, onOpenFolder, onManageSession, onClose }: SessionActionsProps) {
   const t = useText()
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(session.title ?? "")
@@ -91,6 +92,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
       <button type="button" role="menuitem" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork")}><GitBranch size={15} />{t("建立分支")}</button>
       <button type="button" role="menuitem" disabled={structuralBusy} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
     </> : null}
+    {onManageSession ? <button type="button" role="menuitem" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Archive size={15} />管理此會話</button> : null}
     {onCopyId || onOpenFolder ? <div className="session-menu-separator" role="separator" /> : null}
     {onCopyId ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(() => onCopyId(session.id)) }}><Copy size={15} />{t("複製會話 ID")}</button> : null}
     {onOpenFolder ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(onOpenFolder) }}><FolderOpen size={15} />{t("開啟工作區資料夾")}</button> : null}

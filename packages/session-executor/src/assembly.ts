@@ -140,7 +140,7 @@ function cyclicMockClient(script: MockStep[]): ModelClient {
 }
 
 export interface AssemblyOptions {
-  codeMode?: CodeModeConfig
+  codeMode?: CodeModeConfig | (() => CodeModeConfig)
   codeModeFactory?: CodeModeFactory
   /** Session id — telemetry attribution + subagent persist stateId. A one-shot
    * run may have none. */
@@ -191,7 +191,7 @@ export interface AssemblyOptions {
   pluginAgents?: SubagentRole[]
   pluginAgentsEphemeral?: boolean
   lsp?: LspServerConfig[] // M18: LSP servers to mount
-  skills?: { extraDirs?: string[] } // plugin overlay skill roots
+  skills?: { extraDirs?: string[]; globalDir?: string } // plugin overlay and host-confirmed global skill roots
   team?: Partial<TeamConfig> // M19: mount the agent-team domain
   concurrentSessionTeams?: boolean
   agentShell?: () => ResolvedAgentShell
@@ -315,6 +315,14 @@ interface RewindAssemblyHandle {
 }
 
 export interface SessionAssembly {
+  /** Current owning runtime registries only; reading never mounts or restores work. */
+  liveResources?(): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
+  /** Reports the actual mounted mode/catalogue; never resolves a model. */
+  executionState?(): { codeMode: "off" | "mixed" | "only"; modelTools: string[] }
+  /** Cancels only an owned live cell without competing with its model observer. */
+  stopCodeCell?(cellId: string): Promise<void>
+  /** The real assembly-local exec registry and exact owner-filtered workflow store. */
+  backgroundJobs?(): { id: string; kind: "shell" | "workflow"; status: "running" | "completed" | "killed" | "error"; output: string; outputTruncated: boolean; ownerSessionId?: string }[]
   /** Retry durable parent messages only after the host publishes its lane. */
   drainParentNotifications?(): Promise<void>
   tools: ToolRegistry
@@ -820,6 +828,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const skillsMount = registerSkills(ctx, tools, {
     workspace: opts.workspace,
     extraDirs: pluginSkillDirs,
+    ...(opts.skills?.globalDir !== undefined ? { globalDir: opts.skills.globalDir } : {}),
   })
   const execService = createScopedExec(ctx.services.get<ExecService>("exec/service"), opts.workspace, sandboxPolicyNow)
   for (const tool of createFsSearchTools({ exec: execService, workspace: opts.workspace })) tools.register(tool)
@@ -1038,10 +1047,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let flushSubagentPersistence: (() => Promise<void>) | undefined
   let disposeSubagents: (() => Promise<void>) | undefined
   let codeModeMount: CodeModeMount | undefined
-  const codeMode = normalizeCodeMode(opts.codeMode)
+  const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
+  const codeMode = codeModeNow()
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
-  const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
+  const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" && typeof opts.codeMode !== "function" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
     ...mountOptions,
+    config: codeModeNow(),
     ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
   })
   let workflowMount: WorkflowMountHandle | undefined
@@ -1291,7 +1302,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       }
       return call
     })
-    if (codeModeFactory) codeModeMount = codeModeFactory(ctx, tools, {
+    if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
       session, sessionId: opts.sessionId, config: codeMode,
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
       ...(opts.coordinator !== undefined && opts.sessionId !== undefined ? { flush: () => opts.coordinator!.flush(opts.sessionId!) } : {}),
@@ -1391,6 +1402,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       stepInputs: { claimAtStepBoundary: () => inbox.claimAtStepBoundary() },
     })
 
+    const backgroundOutput = (stdout: string, stderr: string) => {
+      const first = stdout.slice(0, 131072)
+      return { output: first + stderr.slice(0, 131072 - first.length), outputTruncated: stdout.length + stderr.length > 131072 }
+    }
     return {
       ctx,
       tools,
@@ -1438,6 +1453,20 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      liveResources: () => {
+        if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
+        const terminal = ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")
+        return { codeCells: codeModeMount?.liveCells?.() ?? [], terminals: (terminal?.list() ?? []).filter(row => row.ownerSessionId === opts.sessionId) }
+      },
+      executionState: () => ({ codeMode: codeMode.mode, modelTools: modelToolSchemas().map(tool => tool.name) }),
+      ...(codeModeMount?.terminateCell ? { async stopCodeCell(cellId: string) {
+        if (!codeModeMount?.terminateCell || !codeModeMount.liveCells?.().some(cell => cell.id === cellId)) throw new Error("Live cell unavailable for this owner")
+        await codeModeMount.terminateCell(cellId)
+      } } : {}),
+      backgroundJobs: () => [
+        ...execService.listJobs().map(job => ({ id: job.id, kind: "shell" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: opts.sessionId })),
+        ...workflowMount!.executor.listJobs().filter(job => job.owner === opts.sessionId).map(job => ({ id: job.id, kind: "workflow" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
+      ],
       // M49 Task 12: the projection owns NO registry object — rows only. The
       // workflow group comes from THIS workflow executor's real store rows
       // (mounted unconditionally above — the non-null claim is the mount

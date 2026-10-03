@@ -2,8 +2,9 @@ import { Notification, screen, type BrowserWindow } from "electron"
 import type { DesktopEvent } from "../shared/bridge.ts"
 import { createLocalPreferences, restoreBounds, type FollowupDelivery } from "./local-preferences.ts"
 import type { TerminalShellChoice } from "../shared/bridge.ts"
+import type { createNotificationHistory } from "./notification-history.ts"
 
-export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>) {
+export function attachNativeWindow(window: BrowserWindow, preferences: ReturnType<typeof createLocalPreferences>, options: { notifications?: ReturnType<typeof createNotificationHistory> } = {}) {
   window.on("close", () => {
     try { preferences.update({ bounds: window.getNormalBounds(), maximized: window.isMaximized() }) }
     catch (error) { console.warn("Unable to save window preferences", error instanceof Error ? error.message : String(error)) }
@@ -25,12 +26,14 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
       return { reset: true }
     },
     onEvent(event: DesktopEvent) {
-      if (window.isDestroyed() || window.isFocused() || !preferences.get().notifications || !Notification.isSupported()) return
+      if (window.isDestroyed()) return
       if (event.kind !== "sdk/notification" || event.method !== "desktop/interaction/request") return
-      const request = event.params as { requestId?: unknown }
+      const request = event.params as { requestId?: unknown; sessionId?: unknown; kind?: unknown }
       if (!request || typeof request.requestId !== "string") return
       const key = `${event.workspaceId}:${request.requestId}`
       if (seen.has(key)) return
+      if (typeof request.sessionId === "string") void options.notifications?.record({ id: key, workspaceId: event.workspaceId, sessionId: request.sessionId, kind: request.kind === "question" ? "question" : "approval", summary: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" }).catch(error => console.warn("Unable to save notification history", error instanceof Error ? error.message : String(error)))
+      if (window.isFocused() || !preferences.get().notifications || !Notification.isSupported()) return
       seen.add(key)
       if (seen.size > 512) seen.delete(seen.values().next().value!)
       const notification = new Notification({ title: "I-harness Desktop", body: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" })

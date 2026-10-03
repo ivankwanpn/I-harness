@@ -1,43 +1,52 @@
 import { useEffect, useRef, useState } from "react"
 import type { HookSettingsCommand, HookSettingsState } from "@i-harness/desktop-gateway/src/hook-settings.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useText } from "../design/i18n.ts"
+import { useAuthoringText } from "./resource-authoring-text.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import type { HookAuthoringRequestHandler } from "@i-harness/desktop-gateway/src/hook-authoring.ts"
+import { HookAuthoringEditor } from "./HookAuthoringEditor.tsx"
 
-export function HookSettings({ bridge, workspaceId }: { bridge: DesktopBridge; workspaceId: string }) {
-  const t = useText()
+export function HookSettings({ bridge, workspaceId, onAuthoringRequest }: { bridge: DesktopBridge; workspaceId: string; onAuthoringRequest?: HookAuthoringRequestHandler }) {
+  const t = useAuthoringText()
   const [state, setState] = useState<HookSettingsState>()
   const [error, setError] = useState<string>()
   const [confirm, setConfirm] = useState<HookSettingsState["handlers"][number]>()
   const [busy, setBusy] = useState(true)
+  const [editing, setEditing] = useState(false)
   const lock = useRef(false)
+  const scope = useRef(workspaceId), version = useRef(0)
+  if (scope.current !== workspaceId) { scope.current = workspaceId; ++version.current }
   useEffect(() => {
     let active = true
-    lock.current = true
-    void bridge.request({ kind: "desktop/hooks/state", workspaceId }).then((value) => { if (active) setState(value as HookSettingsState) }).catch((reason: unknown) => { if (active) setError(String(reason)) }).finally(() => { lock.current = false; if (active) setBusy(false) })
+    lock.current = true; setBusy(true); setState(undefined); setConfirm(undefined); setError(undefined)
+    void bridge.request({ kind: "desktop/hooks/state", workspaceId }).then((value) => { if (active) setState(value as HookSettingsState) }).catch((reason: unknown) => { if (active) setError(String(reason)) }).finally(() => { if (active) { lock.current = false; setBusy(false) } })
     return () => { active = false }
   }, [bridge, workspaceId])
   async function run(action: "state" | "refresh" | HookSettingsCommand) {
     if (lock.current) return
+    const token = version.current
     lock.current = true; setBusy(true); setError(undefined)
     try {
       const value = await bridge.request(typeof action === "string" ? { kind: action === "state" ? "desktop/hooks/state" : "desktop/hooks/refresh", workspaceId } : { kind: "desktop/hooks/mutate", workspaceId, command: action })
+      if (token !== version.current) return
       setState(value as HookSettingsState); setConfirm(undefined)
-    } catch (reason) { setError(String(reason)) }
-    finally { lock.current = false; setBusy(false) }
+    } catch (reason) { if (token === version.current) setError(String(reason)) }
+    finally { if (token === version.current) { lock.current = false; setBusy(false) } }
   }
   return <section aria-label={t("Hooks 信任")}>
     <p className="settings-description">{t("插件啟用不等於腳本授權。授權依腳本內容雜湊共用；撤銷會影響使用相同內容的處理器。")}</p>
-    <div className="provider-actions"><button disabled={busy} onClick={() => { void run("refresh") }}>{t("重新套用 Hooks")}</button></div>
+    <div className="provider-actions"><button disabled={busy} onClick={() => { void run("refresh") }}>{t("重新套用 Hooks")}</button>{onAuthoringRequest ? <button disabled={busy} onClick={() => setEditing(!editing)}>{t(editing ? "關閉本機 Hooks 編輯器" : "編輯本機 Hooks")}</button> : null}</div>
+    {onAuthoringRequest ? <div hidden={!editing}><HookAuthoringEditor workspaceId={workspaceId} request={onAuthoringRequest} onSaved={() => { void run("state") }} /></div> : null}
     {error ? <p role="alert" className="error-text">{error}<button disabled={busy} onClick={() => { void run(state ? "refresh" : "state") }}>{t("重試")}</button></p> : null}
     {busy ? <p role="status">{t("正在處理…")}</p> : null}
     {confirm ? <div className="hook-confirmation" role="group" aria-label={t("確認授權此內容")}>
       <h2>{t("確認授權此內容")}</h2><p>{confirm.script}</p><code>{confirm.sha256}</code>
+      <p>{confirm.name} · {confirm.event}</p>{confirm.command ? <pre className="tool-output">{JSON.stringify(confirm.command, null, 2)}</pre> : null}{confirm.configRevision ? <p><code>{confirm.configRevision}</code></p> : null}
       <p>{t("授權後，對應的 Hook 可在其宣告事件執行。已開始的操作可繼續完成。")}</p>
       <div className="provider-actions"><button className="primary-button" disabled={busy} onClick={() => { void run({ action: "approve", id: confirm.id, sha256: confirm.sha256 }) }}>{t("確認授權此內容")}</button><button disabled={busy} onClick={() => setConfirm(undefined)}>{t("取消")}</button></div>
     </div> : null}
     {state ? <>
-      <h2>{t("已啟用插件的 Hooks")}</h2>
+      <h2>{t("目前有效的 Hooks")}</h2>
       {!state.handlers.length && !state.errors.length ? <p className="muted">{t("目前沒有已啟用插件宣告的 Hooks。")}</p> : null}
       {state.errors.map((row) => <div role="alert" className="notice" key={row.configPath}><strong>{row.configPath}</strong><p>{row.message}</p></div>)}
       {state.handlers.map((row) => <SettingsGroup key={row.id}>

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useCallback } from "react"
 import { ArrowLeft, Settings, Palette, Bell, Server, Folder, Info, Brain, Puzzle, Shield } from "lucide-react"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { useLocale, useText } from "../design/i18n.ts"
@@ -7,7 +7,12 @@ import { useUiStore } from "../shell/ui-store.ts"
 import type { WorkspaceEntry } from "../../main/workspaces.ts"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { NativeSettings } from "./NativeSettings.tsx"
-import { ProviderDirectory } from "./ProviderDirectory.tsx"
+import { AutoTitleSettings } from "./AutoTitleSettings.tsx"
+import { CodeModeSettings } from "./CodeModeSettings.tsx"
+import { DiagnosticsPane } from "./DiagnosticsPane.tsx"
+import { GlobalProviderDirectory } from "./GlobalProviderDirectory.tsx"
+import { NotificationsPane } from "./NotificationsPane.tsx"
+import { ApplicationInformation } from "./ApplicationInformation.tsx"
 import { SessionManager, type ManageSession } from "../session/SessionManager.tsx"
 import { TitleBar } from "../shell/TitleBar.tsx"
 import { AgentSettings } from "./AgentSettings.tsx"
@@ -41,8 +46,19 @@ function readSection(): Section {
   catch { return "general" }
 }
 
-export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSession, onRewindComplete, onSandboxChange, capabilities = {}, onUseResource }: { workspace?: WorkspaceEntry; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; onSandboxChange?(mode: "read-only" | "workspace-write" | "danger-full-access"): void; capabilities?: Record<string, string[]>; onUseResource?(prefix: string): void }) {
+export function SettingsPane({ workspace, sessionId, sessionManagement, onMemory, onClose, bridge, onManageSession, onRewindComplete, onSandboxChange, capabilities = {}, onUseResource, onOpenConversation }: { workspace?: WorkspaceEntry; sessionId?: string; sessionManagement?: Pick<import("../session/SessionManager.tsx").SessionManagerProps, "onBatch" | "projects" | "currentOwners" | "executionWorkspace">; onMemory?: () => void; onClose(): void; bridge?: DesktopBridge; onManageSession?: ManageSession; onRewindComplete?: (sessionId: string) => void; onSandboxChange?(mode: "read-only" | "workspace-write" | "danger-full-access"): void; capabilities?: Record<string, string[]>; onUseResource?(prefix: string): void; onOpenConversation?(target: { workspaceId: string; sessionId: string; projectId?: string }): Promise<void> }) {
   const t = useText()
+  const authoringRequest = useCallback((request: import("../../shared/bridge.ts").DesktopRequest) => {
+    if (!bridge) return Promise.reject(new Error("Desktop connection unavailable"))
+    return bridge.request(request)
+  }, [bridge])
+  const globalProviderRequest = useCallback((request: import("../../main/global-provider-settings.ts").GlobalProviderRequest) => authoringRequest(request), [authoringRequest])
+  const notificationRequest = useCallback((request: import("../../main/notification-history.ts").NotificationHistoryRequest) => authoringRequest(request) as Promise<import("../../main/notification-history.ts").NotificationHistoryView>, [authoringRequest])
+  const notificationSubscribe = useCallback((listener: () => void) => bridge?.onEvent(event => { if (event.kind === "sdk/notification" && (event.method === "desktop/interaction/request" || event.method === "desktop/interaction/closed")) listener() }) ?? (() => {}), [bridge])
+  const openNotification = useCallback(async (target: { workspaceId: string; sessionId: string }) => {
+    if (!onOpenConversation) throw new Error("Conversation navigation unavailable")
+    await onOpenConversation(target)
+  }, [onOpenConversation])
   const [selectedTab, setTab] = useState<Section>(readSection)
   const [search, setSearch] = useState("")
   const [pluginQuery, setPluginQuery] = useState("")
@@ -78,7 +94,7 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
         <SettingsGroup>
           <SettingsRow label={t("界面語言")} description={t("選擇應用界面的顯示語言。")} control={<select aria-label={t("語言")} value={locale} onChange={(event) => setLocale(event.target.value === "en" ? "en" : "zh-TW")}><option value="zh-TW">繁體中文</option><option value="en">English</option></select>} />
         </SettingsGroup>
-        {bridge ? <NativeSettings bridge={bridge} section="window" /> : null}
+        {bridge ? <><NativeSettings bridge={bridge} section="window" /><AutoTitleSettings bridge={bridge} /></> : null}
         {bridge && workspace && capabilities["desktop-agent-shell"]?.includes("1") ? <AgentShellSettings bridge={bridge} workspaceId={workspace.id} /> : null}
       </> : tab === "appearance" ? <>
         <SettingsGroup>
@@ -89,19 +105,19 @@ export function SettingsPane({ workspace, onMemory, onClose, bridge, onManageSes
         </SettingsGroup>
         <p className="muted">{t("外觀偏好只儲存在此電腦。")}</p>
         <button className="primary-button" onClick={preferences.reset}>{t("重設外觀偏好")}</button>
-      </> : tab === "notifications" ? bridge ? <NativeSettings bridge={bridge} section="notifications" /> : null
-      : tab === "models" ? workspace && bridge ? <ProviderDirectory key={workspace.id} bridge={bridge} workspaceId={workspace.id} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
-      : tab === "execution" && workspace && bridge ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} />
+      </> : tab === "notifications" ? bridge ? <><NativeSettings bridge={bridge} section="notifications" /><NotificationsPane request={notificationRequest} subscribe={notificationSubscribe} onOpenTarget={openNotification} /></> : null
+      : tab === "models" ? bridge ? <GlobalProviderDirectory bridge={bridge} request={globalProviderRequest} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
+      : tab === "execution" && workspace && bridge ? <><AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} />{capabilities["desktop-code-mode-settings"]?.includes("1") ? <CodeModeSettings key={`code:${workspace.id}:${sessionId ?? ""}`} bridge={bridge} workspaceId={workspace.id} sessionId={sessionId} /> : null}{capabilities["desktop-environment-diagnostics"]?.includes("1") ? <DiagnosticsPane key={`diagnostics:${workspace.id}:${sessionId ?? ""}`} bridge={bridge} workspaceId={workspace.id} sessionId={sessionId} /> : null}</>
       : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
-      : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onAuthoringRequest={capabilities["desktop-hook-authoring"]?.includes("1") ? authoringRequest : undefined} />
       : tab === "mcp" && workspace && bridge ? <McpSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
-      : (tab === "skills" || tab === "commands") && workspace && bridge ? <ResourceSettings key={`${workspace.id}:${tab}`} resourceKind={tab} bridge={bridge} workspaceId={workspace.id} onUse={onUseResource} onManagePlugins={capabilities["desktop-plugins"]?.includes("1") ? (id) => { setPluginQuery(id ?? ""); select("plugins") } : undefined} />
-      : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded />
+      : (tab === "skills" || tab === "commands") && workspace && bridge ? <ResourceSettings key={`${workspace.id}:${tab}`} resourceKind={tab} bridge={bridge} workspaceId={workspace.id} onAuthoringRequest={capabilities["desktop-resource-authoring"]?.includes("1") ? authoringRequest : undefined} onUse={onUseResource} onManagePlugins={capabilities["desktop-plugins"]?.includes("1") ? (id) => { setPluginQuery(id ?? ""); select("plugins") } : undefined} />
+      : tab === "memory" && workspace && bridge ? <MemoryPane key={workspace.id} bridge={bridge} workspaceId={workspace.id} embedded onAuthoringRequest={capabilities["desktop-memory-authoring"]?.includes("1") ? authoringRequest : undefined} />
       : tab === "plugins" && workspace && bridge ? <PluginMarketplace key={`${workspace.id}:${pluginQuery}`} initialQuery={pluginQuery} bridge={bridge} workspaceId={workspace.id} embedded />
       : tab === "workspace" ? <>
-        {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} onRewindComplete={onRewindComplete} /> : null}
+        {workspace && bridge && onManageSession ? <SessionManager key={workspace.id} bridge={bridge} workspaceId={workspace.id} onManage={onManageSession} onRewindComplete={onRewindComplete} {...sessionManagement} /> : null}
         {workspace ? <SettingsGroup><SettingsRow label={workspace.label} description={workspace.path} control={onMemory ? <button className="primary-button" onClick={onMemory}>{t("工作區記憶")}</button> : null} /></SettingsGroup> : <p className="muted">{t("尚未開啟工作區")}</p>}
-      </> : <SettingsGroup><SettingsRow label="I-harness Desktop" description={t("本機 Agent 工作台；使用既有後端執行任務。") } control={<span>MIT</span>} /><SettingsRow label={t("第三方 UI 程式碼")} description={t("部分介面改編自 ZCode，依 Apache-2.0 保留授權與來源說明。") } control={<span>Apache-2.0</span>} /></SettingsGroup>}
+      </> : <>{bridge ? <ApplicationInformation bridge={bridge} /> : null}<SettingsGroup><SettingsRow label="I-harness Desktop" description={t("本機 Agent 工作台；使用既有後端執行任務。") } control={<span>MIT</span>} /><SettingsRow label={t("第三方 UI 程式碼")} description={t("部分介面改編自 ZCode，依 Apache-2.0 保留授權與來源說明。") } control={<span>Apache-2.0</span>} /></SettingsGroup></>}
     </div></div></main>
   </section>
 }

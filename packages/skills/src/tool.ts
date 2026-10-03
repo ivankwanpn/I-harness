@@ -255,6 +255,8 @@ export interface SkillsMountHandle {
  * `allowImplicitInvocation` defaults to TRUE (status quo behavior). */
 export interface SkillsMountConfig {
   workspace?: string
+  /** Host-confirmed configuration directory's global skill collection. */
+  globalDir?: string
   telemetry?: SkillTelemetryEmitter
   allowImplicitInvocation?: boolean
   /** Additional read-only skill roots — plugin overlays. The precedence
@@ -279,6 +281,7 @@ export function registerSkills(
 ): SkillsMountHandle {
   const registry = createSkillRegistry({
     ...(config?.workspace !== undefined ? { workspace: config.workspace } : {}),
+    ...(config?.globalDir !== undefined ? { globalDir: config.globalDir } : {}),
     ...(config?.extraDirs !== undefined ? { extraDirs: config.extraDirs } : {}),
   })
   ctx.services.register(skillsServiceName, registry)

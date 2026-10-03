@@ -3,6 +3,7 @@ import type { AgentDefaults, AgentSettingsState } from "@i-harness/desktop-gatew
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
 import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
+import { ApprovalRuleManager } from "./ApprovalRuleManager.tsx"
 
 export function AgentSettings({ bridge, workspaceId, onSandboxChange }: { bridge: DesktopBridge; workspaceId: string; onSandboxChange?(mode: AgentDefaults["sandboxMode"]): void }) {
   const t = useText()
@@ -54,5 +55,6 @@ export function AgentSettings({ bridge, workspaceId, onSandboxChange }: { bridge
       <h2>{t("目前生效")}</h2>
       <SettingsGroup><SettingsRow label={t("沙箱")} control={<span>{t(labels[state.effective.sandboxMode])}</span>} /><SettingsRow label={t("核準模式")} control={<span>{t(approvalLabels[state.effective.approvalMode])}</span>} /><SettingsRow label={t("自動壓縮上下文")} control={<span>{t(state.effective.autoCompaction ? "已啟用" : "已停用")}</span>} /></SettingsGroup>
     </form>}
+    <ApprovalRuleManager key={workspaceId} bridge={bridge} workspaceId={workspaceId} />
   </section>
 }

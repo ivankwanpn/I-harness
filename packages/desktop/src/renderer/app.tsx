@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react"
+import { retireSessionDraft } from "./session/Composer.tsx"
+import type { HistorySelection } from "./session/SessionSearch.tsx"
+import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
+import type { ProjectFilesRequest, ProjectFileRef } from "@i-harness/desktop-gateway/src/project-files.ts"
 import type {
   AgentTaskView,
   HistoryRange,
@@ -90,6 +94,14 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [reviewSelected, setReviewSelected] = useState<{ path: string; mode: "diff" | "preview" }>()
   const [reviewDiff, setReviewDiff] = useState<ReviewText>()
   const [reviewPreview, setReviewPreview] = useState<ReviewText>()
+  const [historyTarget, setHistoryTarget] = useState<HistorySelection>()
+  const [projectOpenFile, setProjectOpenFile] = useState<ProjectFileRef>()
+  useEffect(() => { setProjectOpenFile(undefined) }, [selectedWorkspaceId, selectedSessionId, selectedProjectId])
+  const projectFileRequest = useCallback((request: ProjectFilesRequest) => bridge.request(request), [bridge])
+  const historyRequest = useCallback((request: HistoryRequest) => bridge.request(request) as Promise<HistoryRange>, [bridge])
+  useEffect(() => {
+    if (historyTarget && (historyTarget.workspaceId !== selectedWorkspaceId || historyTarget.sessionId !== selectedSessionId)) setHistoryTarget(undefined)
+  }, [selectedWorkspaceId, selectedSessionId, historyTarget])
   const [retryNonce, setRetryNonce] = useState(0)
   const cursorRef = useRef(0)
   const chunkBuffer = useRef<WireEvent[]>([])
@@ -140,8 +152,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     return () => { active = false }
   }, [bridge])
 
-  const activeProjectId = selectedWorkspaceId
-    ? projects?.find((project) => project.id === selectedProjectId && project.workspaceIds.includes(selectedWorkspaceId))?.id
+  const selectedBinding = projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && !projectBinding?.error ? projectBinding : undefined
+  const activeProjectId = selectedSessionId && selectedBinding ? selectedBinding.projectId : selectedWorkspaceId
+    ? projects?.find((project) => project.id === selectedProjectId && (selectedSessionId || project.workspaceIds.includes(selectedWorkspaceId)))?.id
       ?? projects?.find((project) => project.workspaceIds.includes(selectedWorkspaceId))?.id
     : projects?.find((project) => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
@@ -149,13 +162,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (!projectScopeSupported || !selectedWorkspaceId || !selectedSessionId) return
     let active = true
-    const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId, projectId = activeProjectId
+    const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId
     setProjectBinding(undefined)
     void bridge.request({ kind: "desktop/session/project/state", workspaceId, sessionId }).then((value) => {
       if (active) setProjectBinding({ workspaceId, sessionId, projectId: (value as { projectId?: string })?.projectId })
-    }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, projectId, error: error instanceof Error ? error.message : String(error) }) })
+    }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, error: error instanceof Error ? error.message : String(error) }) })
     return () => { active = false }
-  }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, activeProjectId, retryNonce])
+  }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, retryNonce])
 
   const refreshDashboard = useCallback(async (workspaceId: string): Promise<void> => {
     const scope = workspaceSelection.current
@@ -593,6 +606,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }}
       onSelectSessionInWorkspace={(workspaceId, sessionId, projectId) => {
         navigationVersion.current++
+        setHistoryTarget(undefined)
         if (workspaceId !== selection.current.workspaceId) { setDashboard(undefined); setConnection("connecting") }
         setSelectedProjectId(projectId)
         setSelectedWorkspaceId(workspaceId); setSelectedSessionId(sessionId)
@@ -615,7 +629,41 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       selectedSessionId={selectedSessionId}
       connection={selectedWorkspaceId ? connection : undefined}
       conversation={conversation}
+      onSelectHistory={(target) => {
+        const scope = selection.current
+        const version = ++navigationVersion.current
+        if (!Number.isSafeInteger(target.seq) || target.seq < 0) { setError("Invalid history position"); return }
+        void bridge.request({ kind: "desktop/notifications/target", workspaceId: target.workspaceId, sessionId: target.sessionId }).then(value => {
+          if (selection.current !== scope || navigationVersion.current !== version) return
+          const validated = value as { workspaceId: string; sessionId: string; projectId?: string }
+          if (validated.workspaceId !== target.workspaceId || validated.sessionId !== target.sessionId) throw new Error("Invalid history target")
+          if (target.workspaceId !== scope.workspaceId) { setDashboard(undefined); setConnection("connecting") }
+          setSelectedProjectId(validated.projectId); setHistoryTarget({ ...target }); setSelectedWorkspaceId(target.workspaceId); setSelectedSessionId(target.sessionId)
+          useUiStore.getState().setSurface("conversation")
+        }).catch(reason => { if (selection.current === scope && navigationVersion.current === version) setError(String(reason)) })
+      }}
+      onOpenProjectFile={(ref) => setProjectOpenFile({ ...ref })}
+      onBatchSessions={async (workspaceId, command) => {
+        const scope = selection.current
+        const result = await bridge.request({ kind: "desktop/session/batch", workspaceId, command, confirmed: true }) as import("./session/SessionManager.tsx").ManageSessionBatchResult
+        const successes = result.results.filter(row => row.ok)
+        if (command.action === "delete") for (const row of successes) retireSessionDraft(workspaceId, row.sessionId)
+        if (successes.length) {
+          await Promise.all([refreshProjects(), refreshDashboard(workspaceId)])
+          if (selection.current === scope && scope.workspaceId === workspaceId) {
+            const current = successes.find(row => row.sessionId === scope.sessionId)
+            if (current) {
+              if (command.action === "archive" || command.action === "delete") { setHistoryTarget(undefined); setSelectedSessionId(undefined) }
+              else if (command.action === "move") { setSelectedProjectId(command.projectId); setProjectBinding(undefined) }
+            }
+            setRetryNonce(value => value + 1)
+          }
+        }
+        return result
+      }}
+      historicalView={historyTarget && historyTarget.workspaceId === selectedWorkspaceId && historyTarget.sessionId === selectedSessionId ? { selection: historyTarget, request: historyRequest, onLatest: () => setHistoryTarget(undefined) } : undefined}
       review={{
+        projectFiles: selectedWorkspaceId && capabilities["desktop-project-files"]?.includes("1") ? { selection: { workspaceId: selectedWorkspaceId, ...(selectedSessionId ? { sessionId: selectedSessionId } : {}), ...(selectedBinding?.projectId ? { projectId: selectedBinding.projectId } : activeProjectId ? { projectId: activeProjectId } : {}) }, request: projectFileRequest, openFile: projectOpenFile } : undefined,
         onSaveFile: async (path, text, expectedRevision) => {
           if (!selectedWorkspaceId) throw new Error("No workspace selected")
           const result = await bridge.request({ kind: "desktop/review/file/save", workspaceId: selectedWorkspaceId, path, text, expectedRevision }) as import("./review/SourceFileEditor.tsx").ReviewSaveResult
@@ -667,6 +715,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }}
       onSelectWorkspace={(workspaceId, projectId) => {
         navigationVersion.current++
+        setHistoryTarget(undefined)
         setSelectedProjectId(projectId)
         if (workspaceId !== selectedWorkspaceId) {
           setConnection("connecting")
@@ -675,7 +724,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         }
         setSelectedSessionId(undefined)
       }}
-      onSelectSession={(id) => { navigationVersion.current++; setSelectedSessionId(id) }}
+      onSelectSession={(id) => { navigationVersion.current++; setHistoryTarget(undefined); setSelectedSessionId(id) }}
       onRewindComplete={(workspaceId, sessionId) => {
         if (selection.current.workspaceId !== workspaceId) return
         void refreshDashboard(workspaceId)

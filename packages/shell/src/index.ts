@@ -1,8 +1,9 @@
-import { existsSync } from "node:fs"
-import { win32 } from "node:path"
+import { existsSync, realpathSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { delimiter, isAbsolute, join, win32 } from "node:path"
 import { spawnSync } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { Tool, ToolExec } from "@i-harness/core-tools"
+import type { Tool, ToolExec, PreparedToolIdentity } from "@i-harness/core-tools"
 import type { ExecService, PromotedRun } from "@i-harness/exec"
 import { registerExec } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
@@ -414,6 +415,23 @@ function promotedResult(
 }
 
 export function createShellTools(deps: ShellToolDeps): Tool[] {
+  // Remember only a fully literal native --version query. General commands can
+  // load profiles, config, hooks, scripts or interpreters whose complete binding
+  // is opaque at this layer. Advisory getArgv is never permission evidence.
+  function versionIdentity(args: { command: string }, executable: string, dialect: AgentShellDialect): PreparedToolIdentity | undefined {
+    if (dialect !== "posix" || ["BASH_ENV", "ENV", "NODE_OPTIONS", "LD_PRELOAD", "DYLD_INSERT_LIBRARIES"].some((key) => environmentValue(process.env, key)) || Object.keys(process.env).some((key) => key.startsWith("BASH_FUNC_"))) return undefined
+    const match = /^(?:"([A-Za-z0-9_ ./:\\-]+)"|'([A-Za-z0-9_ ./:\\-]+)'|([A-Za-z0-9_./:\\-]+)) --version$/.exec(args.command)
+    const target = match?.[1] ?? match?.[2] ?? match?.[3]
+    if (!target || !isAbsolute(target)) return undefined
+    // Other native programs can load config/plugins even for --version. Only
+    // the host's known Node binary has a supported complete version-query shape.
+    try { if (realpathSync(target) !== realpathSync(process.execPath)) return undefined } catch { return undefined }
+    const resolved = isAbsolute(executable) ? executable : (process.env.PATH ?? "").split(delimiter).map((directory) => join(directory, executable)).find(existsSync)
+    if (!resolved || !isAbsolute(resolved)) return undefined
+    const environmentDigest = createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0))).digest("hex")
+    return { binding: JSON.stringify({ version: 1, cwd: deps.cwd ?? process.cwd(), shell: resolved, dialect, environmentDigest }), executablePaths: [resolved, target], command: { text: args.command, dialect } }
+  }
+  const bashBindings = new WeakMap<object, string>()
   // Retention is OPT-IN: without `deps.retention` the tools behave exactly as
   // before. The resolved retainer here is only the "configured" flag — the
   // per-run helper builds FRESH retainers because they are one-accumulation
@@ -501,6 +519,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
+    approvalIdentity: (args) => {
+      const executable = bashBindings.get(args) ?? resolveBashExe()
+      if (!executable) return undefined
+      bashBindings.set(args, executable)
+      return versionIdentity(args, executable, "posix")
+    },
     // Hardcoded bash argv: a tool NAMED bash must run bash, never the platform
     // default shell (resolveShell can return pwsh on Windows without bash).
     // If bash is absent, exec.run exits -1 (fail-loud) rather than silently
@@ -517,7 +541,8 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           exitCode: -1,
         }
       }
-      const argv = [resolveBashExe()!, "-c", args.command]
+      const argv = [bashBindings.get(args) ?? resolveBashExe()!, "-c", args.command]
+      bashBindings.delete(args)
       // M62: the ladder runs BEFORE exec is called and AFTER the availability
       // check — asking a human to widen the sandbox for a command this host
       // cannot run at all would be a prompt with no possible outcome.
@@ -570,6 +595,8 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
+    // PowerShell resolves aliases/invocation itself; no proven reusable shape.
+    approvalIdentity: () => undefined,
     execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       const argv = [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command]
       // M62: the ladder runs once, before exec; `ladder.policy` is the granted
@@ -621,6 +648,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     getArgv: (args) => {
       const binding = bindingFor(args)
       return "error" in binding ? [] : getAgentArgv(args.command, binding.shell.dialect)
+    },
+    approvalIdentity: (args) => {
+      const binding = bindingFor(args)
+      return "error" in binding ? undefined : versionIdentity(args, binding.shell.command, binding.shell.dialect)
     },
     execute: async (args, exec) => {
       const binding = bindingFor(args)

@@ -1,4 +1,5 @@
 import type { ImageInput } from "@i-harness/sdk"
+import { publishDraftChange, isDraftRetired } from "./draft-changes.ts"
 
 export interface ImageDraft extends ImageInput { id: number }
 const drafts = new Map<string, readonly ImageDraft[]>()
@@ -9,9 +10,12 @@ const keyFor = (workspace: string, session: string) => JSON.stringify([workspace
 const mediaTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"])
 export function readImageDrafts(workspace: string, session: string): readonly ImageDraft[] { return drafts.get(keyFor(workspace, session)) ?? empty }
 export function writeImageDrafts(workspace: string, session: string, images: readonly ImageDraft[]): void {
+  if (images.length && isDraftRetired(workspace, session)) return
   const key = keyFor(workspace, session)
   if (images.length) drafts.set(key, [...images]); else drafts.delete(key)
+  nextId = Math.max(nextId, ...images.map((image) => image.id + 1))
   for (const listener of listeners) listener()
+  publishDraftChange(workspace, session)
 }
 export function subscribeImageDrafts(listener: () => void): () => void { listeners.add(listener); return () => { listeners.delete(listener) } }
 

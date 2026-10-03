@@ -5,6 +5,67 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createSessionService } from "@i-harness/session-executor"
+import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
+import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
+
+it.each(["sandbox", "approval", "project"] as const)("still refuses actual %s authority changes during an awaited execution hook", async change => {
+  const root = await mkdtemp(join(tmpdir(), "ih-code-policy-change-"))
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" }, sandbox: "read-only" })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let outcome: Promise<unknown> | undefined
+  try {
+    const assembly = await service.assemblyFor("owner")
+    let roots = [root]
+    const options = { workspace: root, sandbox: "read-only", approval: "dangerous", project: () => ({ id: "project", name: "Project", primaryRoot: root, roots }), hookConfigs: [], grantPaths: [], pluginAuthority: [] }
+    createApprovalRulesAdapter({ filePath: join(root, "rules.json"), policyIdentity: () => approvalPolicyIdentity(assembly, options) }).attach(assembly)
+    assembly.ctx.onCascade("tools/execute", async (_input, next) => { entered.resolve(); await release.promise; return next() })
+    const prepared = await assembly.tools.prepare({ name: "list_dir", args: { path: "." } }, undefined, { sessionId: "owner" })
+    const dispatch = assembly.tools.dispatch(prepared)
+    outcome = dispatch.catch(error => error)
+    await entered.promise
+    if (change === "sandbox") { service.updateSandboxMode("danger-full-access"); options.sandbox = "danger-full-access" }
+    if (change === "approval") options.approval = "ask-all"
+    if (change === "project") roots = [root, join(root, "another-root")]
+    release.resolve(); expect(String(await outcome)).toMatch(/prepared approval authority or policy changed/)
+  } finally { release.resolve(); await outcome; await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it("keeps presentation of changing live cell IDs out of pending tool authority during an awaited hook", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-code-presentation-"))
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode: "mixed" }, sandbox: "read-only" })
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  let outcome: Promise<{ value?: unknown; error?: unknown }> | undefined
+  try {
+    const assembly = await service.assemblyFor("owner")
+    const options = { workspace: root, sandbox: "read-only", approval: "dangerous", project: () => undefined, hookConfigs: [], grantPaths: [], pluginAuthority: [] }
+    const identity = () => approvalPolicyIdentity(assembly, options)
+    createApprovalRulesAdapter({ filePath: join(root, "rules.json"), policyIdentity: identity }).attach(assembly)
+    const before = identity(), waitDescription = assembly.tools.get("code_wait")!.description
+    assembly.ctx.onCascade("tools/execute", async (input, next) => { if ((input as { name: string }).name === "list_dir") { entered.resolve(); await release.promise }; return next() })
+    const prepared = await assembly.tools.prepare({ name: "list_dir", args: { path: "." } }, undefined, { sessionId: "owner" })
+    outcome = assembly.tools.dispatch(prepared).then(value => ({ value }), error => ({ error }))
+    await entered.promise
+    const cell = await assembly.tools.execute({ name: "code_exec", args: { code: "await new Promise(()=>{})", yield_time_ms: 0 } })
+    const cellId = (cell.output as { cell_id: string }).cell_id
+    assembly.executionState!()
+    expect(identity()).toEqual(before); expect(assembly.tools.get("code_wait")!.description).toBe(waitDescription)
+    await assembly.stopCodeCell!(cellId)
+    assembly.executionState!(); expect(identity()).toEqual(before)
+    release.resolve(); expect(await outcome).toMatchObject({ value: { entries: [] } })
+  } finally { release.resolve(); await outcome; await service.close(); await rm(root, { recursive: true, force: true }) }
+})
+
+it.each(["mixed", "only"] as const)("takes a coherent approval authority snapshot when saved %s Code Mode refreshes its schemas", async mode => {
+  const root = await mkdtemp(join(tmpdir(), "ih-code-authority-"))
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock", codeMode: { mode }, sandbox: "read-only" })
+  try {
+    const assembly = await service.assemblyFor("owner")
+    const options = { workspace: root, sandbox: "read-only", approval: "dangerous", project: () => undefined, hookConfigs: [], grantPaths: [], pluginAuthority: [] }
+    const first = approvalPolicyIdentity(assembly, options), second = approvalPolicyIdentity(assembly, options)
+    expect(first).toBeDefined(); expect(first).toEqual(second)
+  } finally { await service.close(); await rm(root, { recursive: true, force: true }) }
+})
 
 it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and normalized limits through the Desktop host", async (mode) => {
   const bodies: Array<{ tools?: Array<{ function: { name: string } }> }> = []
@@ -51,9 +112,11 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
     const names = bodies[0]!.tools!.map(tool => tool.function.name)
     if (mode === "only") expect(names).toEqual(["code_exec", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
-    const { events } = await call("session/history", { sessionId, afterSeq: 0, limit: 200 }) as { events: Array<{ type: string; output?: unknown }> }
+    const { events } = await call("session/history", { sessionId, afterSeq: 0, limit: 200 }) as { events: Array<{ type: string; name?: string; state?: string; error?: string; isError?: boolean; output?: unknown }> }
     if (mode !== "off") {
+      expect(events.filter(event => event.type === "code/cell" && event.state === "failed")).toEqual([])
       expect(events.some(event => event.type === "code/dispatch")).toBe(true)
+      expect(events.find(event => event.type === "code/result" && event.name === "list_dir")).toMatchObject({ output: { entries: [] } })
       expect(events.find(event => event.type === "tool/result")).toMatchObject({ output: { status: "completed", text: "long", truncated: true } })
     } else expect(events.some(event => event.type.startsWith("code/"))).toBe(false)
   } finally {

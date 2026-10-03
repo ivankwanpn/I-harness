@@ -1,4 +1,4 @@
-import { dirname } from "node:path"
+import { dirname, join } from "node:path"
 import { readFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { toMcpServerConfigs, toSubagentRoles, type RuntimeInputs } from "@i-harness/plugin-registry"
@@ -6,6 +6,7 @@ import { createPromptCommand, registerPromptCommand, parseCommandLine, listComma
 import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-executor"
 import type { McpServerConfig } from "@i-harness/mcp-client"
+import { createAuthoredHookApprovals, isAuthoredHookPath } from "./hook-authoring.ts"
 
 interface Mounted {
   commands: Map<string, { signature: string; dispose(): void }>
@@ -33,13 +34,16 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         if (descriptor.unsupported?.length) messages.push(`Command ${name}: unsupported ${descriptor.unsupported.join(", ")}`)
       }
       const signatures = new Map<string, string>()
-      const approvals = createHookTrustStore(resolveHookTrustPath(configDir))
-      const trustSignature = JSON.stringify(approvals.list().map((entry) => entry.sha256).sort())
+      const baseApprovals = createHookTrustStore(resolveHookTrustPath(configDir))
+      const baseTrustSignature = baseApprovals.list().map((entry) => entry.sha256).sort()
+      const trustSignatureFor = (path: string) => JSON.stringify([baseTrustSignature, isAuthoredHookPath(configDir, path) ? signatures.get(path) : null])
       for (const path of inputs.hookConfigs) {
         try { signatures.set(path, createHash("sha256").update(await readFile(path)).digest("hex")) }
         catch (error) { failures.push(error); messages.push(`Hooks ${path}: ${String(error)}`) }
       }
       for (const [path, old] of state.hooks) {
+        const approvals = createAuthoredHookApprovals(configDir, path)
+        const trustSignature = trustSignatureFor(path)
         if (signatures.get(path) === old.signature) {
           // The artifact may have been restored without changing either the
           // config or grant set. Explicit refresh must repair that cached verdict.
@@ -54,6 +58,8 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
       for (const [configPath, signature] of signatures) {
         if (state.hooks.has(configPath)) continue
         try {
+          const approvals = createAuthoredHookApprovals(configDir, configPath)
+          const trustSignature = trustSignatureFor(configPath)
           const registry = await createHookRegistry(assembly.ctx, { configPath, configDir: dirname(configPath), approvals, report: (error) => { messages.push(String(error)); publish() } })
           state.hooks.set(configPath, { signature, trustSignature, registry })
           for (const handler of registry.handlers()) if (!handler.valid) messages.push(`Hook ${configPath}: not granted or invalid`)
@@ -70,7 +76,7 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
       if (strict && failures.length) throw new AggregateError(failures, "Plugin hooks failed to update")
   }
   return {
-    options: { skills: { extraDirs: inputs.skillDirs }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true },
+    options: { skills: { extraDirs: inputs.skillDirs, globalDir: join(configDir, "skills") }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true },
     update,
     async mount(assembly) {
       await update(assembly, false)

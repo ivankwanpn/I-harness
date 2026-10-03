@@ -1,5 +1,6 @@
 import { parentPort, workerData } from 'node:worker_threads'
 import { getQuickJS } from 'quickjs-emscripten'
+import { createCpuBudget } from './cpu-budget.mjs'
 
 // This file executes in Node. Guest code executes only inside the WASM context.
 const { code, cellId, catalog, store, config } = workerData
@@ -10,7 +11,7 @@ const tools = new Map()
 const timers = new Map()
 let runtime, vm, moduleHandle, decode, formatError, diagnosticReserve
 let closed = false, pumping = false, scheduled = false
-let cpuUsed = 0, sliceStart = 0
+const cpu = createCpuBudget(config.cpuTimeMs)
 let outputBytes = 0, textBytes = 0, outputItems = 0, truncated = false
 let diagnosticTruncated = false
 let pendingYields = 0
@@ -28,7 +29,7 @@ function errorText(value) {
   return text
 }
 function guestError(handle) {
-  if (cpuUsed + performance.now() - sliceStart >= config.cpuTimeMs) return 'CPU work limit exceeded'
+  if (cpu.exceeded()) return 'CPU work limit exceeded'
   diagnosticReserve?.dispose(); diagnosticReserve = undefined
   if (!formatError) { truncated = true; return 'Guest initialization error' }
   const result = vm.callFunction(formatError, vm.undefined, handle)
@@ -44,7 +45,13 @@ function guestError(handle) {
 }
 function finish(status, error) {
   if (closed) return
-  parentPort.postMessage({type:'closed',status,error:error === undefined ? undefined : errorText(error),truncated:truncated || diagnosticTruncated,writes})
+  if (status === 'completed') {
+    // Account exactly once before success permits the parent to commit writes.
+    // A failed clock cannot be hidden by an already published completed event.
+    try { cpu.end(); if (cpu.exceeded()) { status = 'failed'; error = 'CPU work limit exceeded' } }
+    catch (failure) { status = 'failed'; error = errorText(failure) }
+  }
+  parentPort.postMessage({type:'closed',status,error:error === undefined ? undefined : errorText(error),truncated:truncated || diagnosticTruncated,writes:status === 'completed' ? writes : '[]'})
   closed = true
   for (const timer of timers.values()) clearTimeout(timer)
   timers.clear()
@@ -52,17 +59,17 @@ function finish(status, error) {
   // Parent hard termination reclaims all handles together, including unresolved promises.
   parentPort.close()
 }
-function run(fn) {
+function run(fn, charge = true) {
   if (closed) return
-  sliceStart = performance.now()
+  if (charge) cpu.begin()
   send({type:'busy'})
   try { return fn() }
   catch (error) { finish('failed',errorText(error)) }
   finally {
-    cpuUsed += performance.now() - sliceStart
+    if (charge) cpu.end()
     // An interrupt can leave a rejected internal promise with no queued job.
     // Closing at the slice boundary also contains that engine outcome.
-    if (!closed && cpuUsed >= config.cpuTimeMs) finish('failed','CPU work limit exceeded')
+    if (!closed && cpu.exceeded()) finish('failed','CPU work limit exceeded')
     send({type:'idle'})
   }
 }
@@ -71,7 +78,7 @@ function pump() {
   pumping = true
   try {
     run(() => {
-      if (cpuUsed >= config.cpuTimeMs) { finish('failed','CPU work limit exceeded'); return }
+      if (cpu.exceeded()) { finish('failed','CPU work limit exceeded'); return }
       for (let i=0;i<=64;i++) {
         // Completion is a lifetime boundary; do not run unrelated jobs after it.
         const state = vm.getPromiseState(moduleHandle)
@@ -160,7 +167,7 @@ try {
   runtime.setMemoryLimit(config.memoryLimitMb * 1024 * 1024)
   runtime.setMaxStackSize(512 * 1024)
   runtime.setModuleLoader(() => { throw new Error('Module imports are disabled in Code Mode') })
-  runtime.setInterruptHandler(() => cpuUsed + performance.now() - sliceStart >= config.cpuTimeMs)
+  runtime.setInterruptHandler(() => closed || cpu.exceeded())
   vm = runtime.newContext()
   const callback = vm.newFunction('__codeModeBridge',bridge)
   vm.setProp(vm.global,'__codeModeBridge',callback)
@@ -230,6 +237,10 @@ try {
     formatError = vm.getProp(setup.value,'formatError')
     setup.value.dispose()
     diagnosticReserve = vm.newString(' '.repeat(16 * 1024))
+  }, false)
+  // Only fixed trusted helper construction is excluded. Source evaluation,
+  // promise pumping, result settlement and later callbacks stay charged.
+  run(() => {
     const result = vm.evalCode(code,'cell.mjs',{type:'module'})
     if (result.error) { const error=guestError(result.error);result.error.dispose();finish('failed',error);return }
     moduleHandle = result.value

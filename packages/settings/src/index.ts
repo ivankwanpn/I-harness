@@ -281,6 +281,8 @@ export interface SettingsOnboarding {
  * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
   codeMode: SettingsCodeMode
+  /** Automatic conversation titles. Absent documents retain the existing enabled default. */
+  autoTitle?: boolean
   sandboxMode: SettingsSandboxMode
   /** Executable preference for new Agent shell commands. */
   agentShell: SettingsAgentShell
@@ -351,6 +353,7 @@ export function normalizeCodeMode(raw: unknown): SettingsCodeMode {
 // docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
 const SETTINGS_DEFAULTS: Settings = {
   codeMode: { mode: "off" },
+  autoTitle: true,
   sandboxMode: "workspace-write",
   agentShell: "auto",
   approvalMode: "dangerous",
@@ -720,6 +723,7 @@ export function normalizeSettings(raw: unknown): Settings {
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
     codeMode: normalizeCodeMode(raw.codeMode),
+    autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,
     agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),
     approvalMode: oneOf(raw.approvalMode, APPROVAL_MODES, base.approvalMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,

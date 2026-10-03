@@ -4,7 +4,7 @@
 // searchSkills() touch summaries only; getSkill() reads the SKILL.md fresh.
 // v0 has no watcher — rescan-per-access (scanning a handful of SKILL.md files
 // is cheap); one bad skill warns and skips, never breaking the registry.
-import { existsSync, readdirSync, readFileSync, type Dirent } from "node:fs"
+import { existsSync, lstatSync, readdirSync, readFileSync, type Dirent } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { currentDiagnostics } from "@i-harness/diagnostics"
 import { parseFrontmatter } from "./frontmatter.ts"
@@ -170,6 +170,12 @@ function toSummary(skill: Skill): SkillSummary {
 // (leading ".") are skipped entirely; per-skill errors warn and skip.
 function scanSkillsDir(root: string, source: SkillSource, onWarn: (message: string) => void): SkillSummary[] {
   const summaries: SkillSummary[] = []
+  try {
+    if (lstatSync(root).isSymbolicLink()) { onWarn(`symlink skill root is not supported: ${root}`); return summaries }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") onWarn(`cannot inspect skills directory ${root}: ${errorText(error)}`)
+    return summaries
+  }
   let capped = false
   const visit = (dir: string, depth: number): void => {
     if (capped) return
@@ -259,6 +265,12 @@ export function createSkillRegistry(deps?: SkillRegistryDeps): SkillRegistry {
     for (const [root, source] of probeRoots()) {
       const candidate = join(root, name, SKILL_FILE)
       if (!existsSync(candidate)) continue
+      // The conventional invalid-file probe must obey the same symlink
+      // refusal as discovery, including a symlinked named skill directory.
+      if ([root, join(root, name), candidate].some(path => lstatSync(path).isSymbolicLink())) {
+        onWarn(`symlink skill source is not supported: ${candidate}`)
+        continue
+      }
       const skill = readSkillFile(candidate, name, source) // may throw SKILL_INVALID_*
       if (skill.name === name) return skill
     }

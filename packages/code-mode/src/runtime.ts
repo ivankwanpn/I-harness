@@ -91,6 +91,7 @@ interface Cell {
   watchdog?: ReturnType<typeof setTimeout>
   removeOwner?: () => void
   calls: Map<string, AbortController>
+  producers: Set<Promise<void>>
   stop?: Promise<number>
   knownTools: Set<string>
 }
@@ -182,8 +183,9 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       if (typeof error === 'object' && error !== null && 'policyRefusal' in error && error.policyRefusal === true) {
         close(cell,'terminated',message(error),true)
       } else if (!controller.signal.aborted) reject(error)
-    }).finally(() => { cell.calls.delete(id); producers.delete(producer) })
+    }).finally(() => { cell.calls.delete(id); producers.delete(producer); cell.producers.delete(producer) })
     producers.add(producer)
+    cell.producers.add(producer)
   }
   function receive(cell: Cell, data: {type:string; [key:string]: unknown}) {
     if (cell.status !== 'running') return
@@ -308,7 +310,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         throw Object.assign(new Error(bounded.text),{truncated:bounded.truncated})
       }
       const worker = new Worker(new URL('./worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:JSON.stringify([...store]),config},execArgv:[]})
-      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),knownTools:names}
+      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names}
       cells.set(id,cell)
       worker.on('message',data => receive(cell,data))
       worker.on('error',error => close(cell,'failed',message(error)))
@@ -326,6 +328,14 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       const cell = cells.get(input.cell_id)
       if (!cell) throw new Error('Cell unavailable: unknown, retired, or interrupted by runtime restart')
       return observe(cell,limit(input.yield_time_ms,config.defaultYieldTimeMs,0,60_000,'yield_time_ms'),limit(input.max_tokens,config.defaultOutputTokens,0,4096,'max_tokens'),signal,input.terminate === true)
+    },
+    async terminate(cellId, reason = 'Cell stopped by its owner') {
+      const cell = cells.get(cellId)
+      if (!cell || cell.status !== 'running') throw new Error('Cell unavailable: unknown, retired, or interrupted by runtime restart')
+      // Keep the cell object even if the observer retires its map entry while
+      // the nested producer drains. Cancellation owns no output cursor.
+      close(cell,'terminated',reason)
+      await Promise.allSettled([cell.stop, ...cell.producers])
     },
     async cancel(reason = 'Code Mode cancelled') {
       if (cancelling) return cancelling

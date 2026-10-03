@@ -41,7 +41,7 @@ describe("project sidebar hierarchy", () => {
     expect(screen.getByText("Current chat")).toBeTruthy()
     await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
     expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
-    expect((bridge.request as ReturnType<typeof vi.fn>).mock.calls.every(([request]) => request.workspaceId === "w1")).toBe(true)
+    expect((bridge.request as ReturnType<typeof vi.fn>).mock.calls.every(([request]) => request.workspaceId === "w1" || request.kind === "desktop/session/navigation/state")).toBe(true)
     expect(screen.queryByText("Chat w2")).toBeNull()
   })
 
@@ -74,9 +74,9 @@ describe("project sidebar hierarchy", () => {
     render(<ProjectSidebar {...props} />)
     fireEvent.click(screen.getByRole("button", { name: "Backend" }))
     await waitFor(() => expect(reads).toBe(1))
-    expect(listeners.size).toBe(2)
+    expect(listeners.size).toBe(3)
     fireEvent.click(screen.getByRole("button", { name: "收合資料夾 Backend" }))
-    expect(listeners.size).toBe(1)
+    expect(listeners.size).toBe(2)
     fireEvent.click(screen.getByRole("button", { name: "Backend" }))
     await screen.findByText("Fresh backend chat")
     await act(async () => { finish(dashboard("Stale backend chat")); await Promise.resolve() })
@@ -169,4 +169,14 @@ describe("project sidebar hierarchy", () => {
       else Reflect.deleteProperty(navigator, "clipboard")
     }
   })
+})
+
+it("shows a moved conversation in its destination project through its original storage folder", async () => {
+  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? request.workspaceId === "w1" ? { s1: { projectId: "p2", pinned: false, unread: false } } : {} : undefined)
+  render(<ProjectSidebar {...props} selectedProjectId="p2" selectedWorkspaceId="w1" />)
+  await screen.findByText(/執行起始資料夾/)
+  const chat = await screen.findByText("Current chat")
+  fireEvent.click(chat)
+  expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", "p2")
+  expect(props.onManageSession).toHaveBeenCalledWith("w1", "s1", "read")
 })

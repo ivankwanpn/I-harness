@@ -2,6 +2,8 @@ import { isAbsolute, relative, resolve } from "node:path"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolCall, ToolDecision, ToolRegistry } from "@i-harness/core-tools"
 import { classifyDanger } from "./danger-class.ts"
+export { createApprovalRuleStore, prepareApprovalEvidence, canonicalApprovalArguments } from "./active-rules.ts"
+export type { ApprovalRule, ApprovalEvidence } from "./active-rules.ts"
 
 export interface ApprovalConfig {
   workspace: string

@@ -28,6 +28,15 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  autoTitle?: ReturnType<typeof import("./auto-title.ts").createAutoTitleSettings>
+  codeSettings?: ReturnType<typeof import("./execution.ts").createCodeModeSettings>
+  execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>
+  agentProcesses?: ReturnType<typeof import("./agent-processes.ts").createAgentProcesses>
+  diagnostics?: ReturnType<typeof import("./environment-diagnostics.ts").createDesktopDiagnostics>
+  approvalRules?: import("./approval-rules.ts").ApprovalRulesAdapter
+  workspace?: string
+  assertSession?: (id: string) => Promise<void>
+  projectFiles?: ReturnType<typeof import("./project-files.ts").createProjectFiles>
   draftSession?: (clientToken: string) => Promise<{ sessionId: string }>
   contextPicker?: ReturnType<typeof import("./context-picker.ts").createContextPicker>
   projects?: ReturnType<typeof createProjectScopeBroker>
@@ -51,7 +60,7 @@ export interface DesktopHandlers {
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
   sessionQuery?: SessionQuery
   sandboxState?: () => SandboxState | Promise<SandboxState>
-  interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession">>
+  interaction?: Pick<InteractionBridge, "pending" | "reply"> & Partial<Pick<InteractionBridge, "cancelSession" | "replyTrustedHuman" | "rememberPending">>
   review?: WorkspaceReview
 }
 

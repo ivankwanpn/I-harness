@@ -6,7 +6,7 @@ import type { SessionQuery } from "@i-harness/session-query"
 const LEGACY_REVIEW_PREFIX = "An agent requests execution of a tool call. Decide: approve (execute now, never ask the user),\nallow (ask the user first), or deny (never execute)."
 
 export function createConversationVisibility(_coordinator: SessionCoordinator) {
-  return async (_id: string, meta: SessionMeta): Promise<boolean> => meta.origin !== "subagent" && meta.origin !== "approval-review"
+  return async (_id: string, meta: SessionMeta): Promise<boolean> => meta.origin !== "subagent" && meta.origin !== "approval-review" && !(meta.origin === "team" && meta.parentSession)
 }
 
 /** Keep legacy internal review children out of the parent-scoped catalog too. */

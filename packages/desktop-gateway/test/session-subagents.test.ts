@@ -193,22 +193,40 @@ it("drives normal and teammate followups through their real owning tools without
   let turns = 0
   const child: NonNullable<SessionServiceOptions["model"]> = { async *stream() { yield { type: "text/chunk", text: `child-final-${++turns}` }; yield { type: "end" } } }
   const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model: parent, team: {}, concurrentSessionTeams: true, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "local", model: "fixture" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }) })
+  const catalog = createDesktopSubagents(f.coordinator, service)
   try {
     const assembly = await service.assemblyFor("parent")
     const normal = await assembly.tools.get("spawn_agent")!.execute({ task_name: "actual-normal", agent_type: "explore", message: "initial", fork_turns: "none", background: false }, { sessionId: "parent" }) as { agent_path: string }
     await assembly.tools.get("spawn_teammate")!.execute({ name: "actual-team", description: "team", prompt: "initial", context: "fresh" }, { sessionId: "parent" })
-    const catalog = createDesktopSubagents(f.coordinator, service)
-    await vi.waitFor(async () => expect((await catalog.list("parent")).agents.some((row) => row.path === "lead/actual-team" && row.status !== "running")).toBe(true))
+    const settleOwnedTurn = async (path: string, finalText: string) => {
+      // Both root/ and lead/ entries belong to this parent's shared registry.
+      // Wait on that owner, then flush the actual child log before catalog reads.
+      const result = await assembly.tools.get("wait_agent")!.execute({ target: path }, { sessionId: "parent" }) as { path: string; status: string; timed_out: boolean; finalText?: string; error?: string }
+      expect(result).toMatchObject({ path, status: "waiting", timed_out: false, finalText })
+      expect(result.error).toBeUndefined()
+      const owned = assembly.subagentState().agentTable.find(row => row.path === path)!
+      expect(owned).toMatchObject({ path, sessionId: expect.any(String), jobId: expect.any(String) })
+      const output = await assembly.tools.get("job_output")!.execute({ job_id: owned.jobId! }, { sessionId: "parent" }) as { status: string }
+      expect(output.status).toBe("completed")
+      await f.coordinator.flush(owned.sessionId!)
+      await f.coordinator.flush("parent")
+    }
+    await settleOwnedTurn(normal.agent_path, "child-final-1")
+    await settleOwnedTurn("lead/actual-team", "child-final-2")
     const before = await catalog.list("parent")
+    await vi.waitFor(() => expect(before.agents.some(row => row.path === "lead/actual-team" && row.status !== "running")).toBe(true))
     const normalRow = before.agents.find((row) => row.path === normal.agent_path)!
     const teamRow = before.agents.find((row) => row.path === "lead/actual-team")!
     expect(normalRow.canFollowup).toBe(true); expect(teamRow.canFollowup).toBe(true)
     await catalog.control("parent", normalRow.sessionId, { action: "followup", text: "normal followup" })
+    await settleOwnedTurn(normal.agent_path, "child-final-3")
     await vi.waitFor(() => expect(turns).toBeGreaterThanOrEqual(3))
     await catalog.control("parent", teamRow.sessionId, { action: "followup", text: "team followup" })
+    await settleOwnedTurn("lead/actual-team", "child-final-4")
     await vi.waitFor(() => expect(turns).toBe(4))
     expect(service.liveAssembly(normalRow.sessionId)).toBeUndefined()
     expect(service.liveAssembly(teamRow.sessionId)).toBeUndefined()
-    await vi.waitFor(async () => expect(JSON.stringify((await catalog.history("parent", teamRow.sessionId)).events)).toContain("team followup"))
-  } finally { await service.close(); await f.close() }
+    const history = await catalog.history("parent", teamRow.sessionId)
+    await vi.waitFor(() => expect(JSON.stringify(history.events)).toContain("team followup"))
+  } finally { await catalog.close(); await service.close(); await f.close() }
 }, 15000)

@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite"
-import { randomUUID } from "node:crypto"
+import { randomUUID, createHash } from "node:crypto"
 import { mkdirSync, lstatSync } from "node:fs"
 import { dirname, isAbsolute } from "node:path"
 import { createRedactor, type Redactor } from "@i-harness/diagnostics"
@@ -11,12 +11,21 @@ interface MemoryNote {
   text: string
   sessionId: string | null
   createdAt: number
+  revision: string
+}
+type MemoryUpdate = { id: string; title: string; text: string; expectedRevision: string }
+type MemoryUpdateResult = { kind: "saved"; note: MemoryNote } | { kind: "conflict"; note: MemoryNote }
+type MemoryForgetTarget = { id: string; expectedRevision: string }
+type MemoryForgetResult = { kind: "forgotten"; ids: string[] } | { kind: "conflict"; note: MemoryNote }
+function withRevision(note: Omit<MemoryNote, "revision">): MemoryNote {
+  return { ...note, revision: createHash("sha256").update(JSON.stringify([note.id, note.title, note.text, note.sessionId, note.createdAt])).digest("hex") }
 }
 interface MemoryHit {
   id: string
   title: string
   snippet: string
   sessionId: string | null
+  revision?: string
 }
 export interface MemoryStore {
   enabled(): boolean
@@ -27,6 +36,8 @@ export interface MemoryStore {
   search(query: string, limit?: number): MemoryHit[]
   summary(): string
   forget(id: string): boolean
+  update(input: MemoryUpdate): MemoryUpdateResult
+  forgetMany(targets: MemoryForgetTarget[]): MemoryForgetResult
   close(): void
 }
 
@@ -97,7 +108,7 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
       const title = bounded(String(redactor.redact(bounded(input.title, "title", 256))), "title", 256)
       const text = bounded(String(redactor.redact(bounded(input.text, "text", 16384))), "text", 16384)
       const sessionId = input.sessionId === undefined ? null : bounded(input.sessionId, "sessionId", 256)
-      const note: MemoryNote = { id: randomUUID(), title, text, sessionId, createdAt: Date.now() }
+      const note = withRevision({ id: randomUUID(), title, text, sessionId, createdAt: Date.now() })
       transaction(() => {
         db.prepare("INSERT INTO notes(id, scope, title, text, sessionId, createdAt) VALUES (?, ?, ?, ?, ?, ?)").run(note.id, scope, title, text, sessionId, note.createdAt)
         db.prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(note.id, scope, title, text)
@@ -108,10 +119,10 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
       bounded(id, "id", 256)
       const note = db.prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE id=? AND scope=?").get(id, scope)
       if (!note) throw new Error("memory note not found")
-      return note as unknown as MemoryNote
+      return withRevision(note as unknown as Omit<MemoryNote, "revision">)
     },
     list(limit) {
-      return db.prepare("SELECT id, title, sessionId, createdAt FROM notes WHERE scope=? ORDER BY createdAt DESC, id LIMIT ?").all(scope, limitOf(limit)) as unknown as Omit<MemoryNote, "text">[]
+      return (db.prepare("SELECT id, title, text, sessionId, createdAt FROM notes WHERE scope=? ORDER BY createdAt DESC, id LIMIT ?").all(scope, limitOf(limit)) as unknown as Omit<MemoryNote, "revision">[]).map(row => { const { text: _text, ...note } = withRevision(row); return note })
     },
     search(query, limit) {
       bounded(query, "query", 1024)
@@ -131,10 +142,11 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
       // Bound complete rendered results, not merely the number of hits.
       let remaining = 12000
       return rows.flatMap(row => {
-        const overhead = Buffer.byteLength(JSON.stringify({ ...row, snippet: "" }), "utf8") + 2
+        const revised = { ...row, revision: store.read(row.id).revision }
+        const overhead = Buffer.byteLength(JSON.stringify({ ...revised, snippet: "" }), "utf8") + 2
         if (remaining < overhead) return []
         const snippet = truncate(row.snippet, Math.min(512, Math.floor((remaining - overhead) / 6)))
-        const result = { ...row, snippet }
+        const result = { ...revised, snippet }
         remaining -= Buffer.byteLength(JSON.stringify(result), "utf8") + 2
         return [result]
       })
@@ -153,6 +165,35 @@ export function openMemoryStore(options: { path: string; scope: string; redactor
         if (deleted.changes === 0) return false
         db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
         return true
+      })
+    },
+    update(input) {
+      bounded(input.id, "id", 256)
+      if (typeof input.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(input.expectedRevision)) throw new Error("expectedRevision required")
+      return transaction(() => {
+        const previous = store.read(input.id)
+        if (previous.revision !== input.expectedRevision) return { kind: "conflict", note: previous }
+        const title = bounded(String(redactor.redact(bounded(input.title, "title", 256))), "title", 256)
+        const text = bounded(String(redactor.redact(bounded(input.text, "text", 16384))), "text", 16384)
+        db.prepare("UPDATE notes SET title=?, text=? WHERE id=? AND scope=?").run(title, text, input.id, scope)
+        db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(input.id, scope)
+        db.prepare("INSERT INTO notes_fts(id, scope, title, text) VALUES (?, ?, ?, ?)").run(input.id, scope, title, text)
+        return { kind: "saved", note: store.read(input.id) }
+      })
+    },
+    forgetMany(targets) {
+      if (!Array.isArray(targets) || targets.length < 1 || targets.length > 100 || new Set(targets.map(row => row.id)).size !== targets.length) throw new Error("targets must be 1-100 unique notes")
+      return transaction(() => {
+        for (const target of targets) {
+          if (typeof target.expectedRevision !== "string" || !/^[a-f0-9]{64}$/.test(target.expectedRevision)) throw new Error("expectedRevision required")
+          const note = store.read(target.id)
+          if (note.revision !== target.expectedRevision) return { kind: "conflict", note }
+        }
+        for (const { id } of targets) {
+          db.prepare("DELETE FROM notes WHERE id=? AND scope=?").run(id, scope)
+          db.prepare("DELETE FROM notes_fts WHERE id=? AND scope=?").run(id, scope)
+        }
+        return { kind: "forgotten", ids: targets.map(row => row.id) }
       })
     },
     close() { if (!closed) { closed = true; db.close() } },

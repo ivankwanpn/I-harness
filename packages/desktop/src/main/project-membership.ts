@@ -19,7 +19,9 @@ export async function resolveCurrentProjectMembers(selection: ProjectSelection, 
   if (!currentHost || currentHost.path !== host.path) throw new Error("Project host folder changed")
   if (!projectId) return { members: [currentHost] }
   const project = (await dependencies.projects?.list())?.find((row) => row.id === projectId)
-  if (!project || !project.workspaceIds.includes(selection.workspaceId)) throw new Error("Project no longer contains the host folder")
+  // A grouping move retains the original execution/storage host. Its current
+  // authoritative session owner may legitimately have different member roots.
+  if (!project || (!selection.sessionId && !project.workspaceIds.includes(selection.workspaceId))) throw new Error("Project no longer contains the host folder")
   return { projectId, members: project.workspaceIds.map((id) => dependencies.catalog.get(id)).filter((row): row is WorkspaceEntry => !!row) }
 }
 

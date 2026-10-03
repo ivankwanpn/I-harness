@@ -172,11 +172,24 @@ describe('isolated Code Mode runtime', () => {
     } finally { await r.dispose() }
   })
   it('bounds uninterrupted promise work and keeps the host usable after containment', async () => {
-    const r = make({config:{cpuTimeMs:30}})
+    const closed = new Map<string,{cellId:string;status:string;error?:string}>()
+    let finished: (()=>void) | undefined
+    const r = make({config:{cpuTimeMs:100},onEvent:event=>{if(event.type==='closed'){closed.set(event.cellId,event);finished?.()}}})
     try {
       const loop = await r.exec({code:`while(true) await Promise.resolve();`,yield_time_ms:2000})
       expect(loop.status).toBe('failed'); expect(loop.error).toMatch(/CPU|interrupt/i)
-      expect((await r.exec({code:'text(7)'})).text).toBe('7')
+      expect(closed.get(loop.cellId)).toMatchObject({cellId:loop.cellId,status:'failed',error:expect.stringMatching(/CPU|interrupt/i)})
+      // Terminal containment initiates worker shutdown; drain this owner's
+      // accepted stop/producers before admitting its recovery worker.
+      await r.cancel('Drain contained worker')
+      const terminal = new Promise<void>(resolve=>{finished=resolve})
+      const initial = await r.exec({code:'text(7)',yield_time_ms:0})
+      if (!closed.has(initial.cellId)) await terminal
+      expect(closed.get(initial.cellId)?.error).toBeUndefined()
+      expect(closed.get(initial.cellId)).toMatchObject({cellId:initial.cellId,status:'completed'})
+      const recovery = initial.status === 'running' ? await r.wait({cell_id:initial.cellId}) : initial
+      expect(recovery.status).toBe('completed'); expect(recovery.error).toBeUndefined()
+      expect((initial.status === 'running' ? [initial.text,recovery.text] : [initial.text]).filter(Boolean).join('\n')).toBe('7')
     } finally { await r.dispose() }
   })
   it('honors pragma output limits, successful exit, cleared timers and wait cancellation', async () => {
@@ -256,11 +269,16 @@ describe('isolated Code Mode runtime', () => {
     } finally {await r.dispose()}
   })
   it('observes completion on the final job of a promise-pump batch', async () => {
-    const r = make()
+    let finished!:()=>void, closed: {cellId:string;status:string} | undefined
+    const r = make({onEvent:event=>{if(event.type==='closed'){closed=event;finished()}}})
     try {
       for(const jobs of [62,63,64,65]) {
-        const out=await r.exec({code:`for(let i=0;i<${jobs};i++)await Promise.resolve();text('done')`,yield_time_ms:300})
-        expect(out.status).toBe('completed'); expect(out.text).toBe('done')
+        const terminal = new Promise<void>(resolve=>{finished=resolve})
+        const initial=await r.exec({code:`for(let i=0;i<${jobs};i++)await Promise.resolve();text('done')`,yield_time_ms:0})
+        await terminal
+        expect(closed).toMatchObject({cellId:initial.cellId,status:'completed'})
+        const final=await r.wait({cell_id:initial.cellId})
+        expect(final.status).toBe('completed'); expect([initial.text,final.text].filter(Boolean).join('\n')).toBe('done')
       }
     } finally {await r.dispose()}
   })

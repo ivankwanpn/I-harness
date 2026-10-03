@@ -26,7 +26,23 @@ export interface Tool<Args = unknown, Output = unknown> {
   // a remote server's dialect is not ours to reject. Additive, and read in
   // exactly one place: `register`.
   inputSchemaForeign?: true
+  /** Host/tool supplied identity for operations whose complete executable and
+   * binding dependencies can be named. Opaque operations remain one-time. */
+  approvalIdentity?(args: Args): PreparedToolIdentity | undefined
 }
+
+export interface PreparedToolIdentity {
+  binding: string
+  executablePaths?: readonly string[]
+  command?: { text: string; dialect: "posix" | "powershell" | "cmd" }
+}
+
+export interface PreparedApprovalInput { tool: Tool; call: ToolCall; sessionId?: string; bindingGeneration?: number; validateBinding?(): boolean }
+export interface ApprovalRememberView { available: boolean; candidateId?: string; reason?: string; arguments?: string }
+interface PreparedApprovalResult { remembered: boolean; remember: ApprovalRememberView; validate?(): boolean }
+export type PreparedApprovalProvider = (input: PreparedApprovalInput) => PreparedApprovalResult
+/** Read-only current-policy snapshot, independent of reusable tool evidence. */
+export type ApprovalAuthorityProvider = (input: PreparedApprovalInput) => (() => boolean)
 
 export interface ToolExec {
   abortSignal?: AbortSignal
@@ -134,6 +150,12 @@ export interface PreparedCall {
   call: ToolCall
   tool: Tool
   exec: ToolExec
+  /** Every prepared operation retains its exact registry registration. */
+  bindingValidation(): boolean
+  /** Captured for allow, guardian and opaque one-time approval paths too. */
+  authorityValidation?(): boolean
+  /** Revalidate live authority and prepared identity immediately before launch. */
+  approvalValidation?(): boolean
 }
 
 export interface ToolSchema {
@@ -186,7 +208,19 @@ function isDecision(value: unknown): value is ToolDecision {
   return typeof value === "object" && value !== null && "kind" in value && DECISION_KINDS.has((value as ToolDecision).kind)
 }
 
-type ApprovalAnswerer = (req: { name: string; reason: string; command?: string; pathSummary?: string; argumentsSummary?: string }) => Promise<boolean>
+type ApprovalAnswerer = (req: { name: string; reason: string; command?: string; pathSummary?: string; argumentsSummary?: string; remember?: ApprovalRememberView }) => Promise<boolean>
+
+function freezeArguments(value: unknown): void {
+  const pending = [value]
+  const seen = new Set<object>()
+  while (pending.length > 0) {
+    const current = pending.pop()
+    if (current === null || typeof current !== "object" || seen.has(current)) continue
+    seen.add(current)
+    for (const child of Object.values(current)) pending.push(child)
+    Object.freeze(current)
+  }
+}
 
 function approvalArgumentsSummary(args: unknown): string {
   try {
@@ -223,6 +257,7 @@ export interface ToolRegistry {
 }
 
 export function createToolRegistry(ctx: PluginContext): ToolRegistry {
+  const bindingGenerations = new Map<string, number>()
   const tools = new Map<string, Tool>()
   // Deferred tools whose names were returned by the search engine are promoted
   // into schemas() output (but never hidden tools). Additive metadata: a name
@@ -270,6 +305,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // The assertion is IH's contract with itself — see Tool.inputSchemaForeign.
     if (tool.inputSchemaForeign !== true) assertSupportedJsonSchema(tool.inputSchema)
     tools.set(tool.name, tool)
+    bindingGenerations.set(tool.name, (bindingGenerations.get(tool.name) ?? 0) + 1)
   }
 
   // Metadata lookup for policy consumers (guard-approval reads isReadOnly /
@@ -317,8 +353,16 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
   }
 
   async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall> {
+    // The validated snapshot is also the dispatched operation. A caller cannot
+    // mutate it while the human or guardian is deciding.
+    call = structuredClone(call)
+    freezeArguments(call)
     const tool = tools.get(call.name)
     if (!tool) throw new Error(`unknown tool: ${call.name}`)
+    const bindingGeneration = bindingGenerations.get(call.name)!
+    const executeBinding = tool.execute
+    const bindingValidation = () => tools.get(call.name) === tool
+      && bindingGenerations.get(call.name) === bindingGeneration && tool.execute === executeBinding
 
     // spec §3.7: BEFORE the policy layers, so a malformed call never reaches an
     // approval prompt — nobody should be asked to approve garbage. The refusal
@@ -362,7 +406,21 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
 
     // 3. decision enforcement + approval seam — fail closed: no answerer ⇒ deny.
     if (resolved.kind === "deny") throw new Error(`denied: ${resolved.reason}`)
+    const preparedApprovalInput: PreparedApprovalInput = { tool, call, bindingGeneration, validateBinding: bindingValidation,
+      ...(identity?.sessionId !== undefined ? { sessionId: identity.sessionId } : {}) }
+    let authorityProvider: ApprovalAuthorityProvider | undefined
+    try { authorityProvider = ctx.services.get<ApprovalAuthorityProvider>("approval/authority") } catch { /* optional host capability */ }
+    // Capture before a guardian/human can await. This service neither creates
+    // grant candidates nor changes the existing approval decision.
+    const authorityValidation = authorityProvider?.(preparedApprovalInput)
+    let approvalValidation: (() => boolean) | undefined
     const askHuman = async (reason: string): Promise<void> => {
+      let preparedApproval: PreparedApprovalResult | undefined
+      let provider: PreparedApprovalProvider | undefined
+      try { provider = ctx.services.get<PreparedApprovalProvider>("approval/prepared") } catch { /* optional */ }
+      if (provider) preparedApproval = provider(preparedApprovalInput)
+      approvalValidation = preparedApproval?.validate
+      if (preparedApproval?.remembered === true) return
       let answerer: ApprovalAnswerer | null = null
       try {
         answerer = ctx.services.get<ApprovalAnswerer>("approval/answerer")
@@ -379,6 +437,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
         ...(command !== undefined ? { command: command.length > 4000 ? `${command.slice(0, 4000)}… [truncated]` : command } : {}),
         ...(pathSummary !== undefined ? { pathSummary: pathSummary.slice(0, 1000) } : {}),
         argumentsSummary: approvalArgumentsSummary(call.args),
+        ...(preparedApproval !== undefined ? { remember: preparedApproval.remember } : {}),
       })
       if (!ok) throw new Error(`denied by user: ${reason}`)
     }
@@ -413,17 +472,31 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     if (identity?.callId !== undefined) exec.callId = identity.callId
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
 
-    return { call, tool, exec }
+    return { call, tool, exec, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}) }
   }
 
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
   // (`tools/execute` cascade handlers wrap the real tool body). `prepare` and
   // `finalize` run in the ordered lane so the policy layer stays model-ordered.
+  function validatePrepared(prepared: PreparedCall): void {
+    if (tools.get(prepared.call.name) !== prepared.tool || !prepared.bindingValidation()) throw new Error("prepared tool binding changed: replaced or revoked before dispatch")
+    if (prepared.authorityValidation?.() === false) throw new Error("prepared approval authority or policy changed before dispatch")
+    if (prepared.approvalValidation?.() === false) throw new Error("prepared approval identity, rule or policy changed before dispatch")
+    const guardReason = ctx.checkGuards("tools/execute", { name: prepared.call.name, args: prepared.call.args })
+    if (guardReason !== undefined) throw new Error(`guard denied: ${guardReason}`)
+  }
+
   async function dispatch(prepared: PreparedCall): Promise<unknown> {
+    validatePrepared(prepared)
     const output = await ctx.cascade(
       "tools/execute",
       { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool },
-      async () => prepared.tool.execute(prepared.call.args as never, prepared.exec),
+      async () => {
+        // Hooks may await before next(). No await is allowed between this final
+        // authority check and invoking the body whose binding was validated.
+        validatePrepared(prepared)
+        return prepared.tool.execute(prepared.call.args as never, prepared.exec)
+      },
     )
     return output
   }

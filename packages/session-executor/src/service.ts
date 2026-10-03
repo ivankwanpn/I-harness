@@ -91,6 +91,8 @@ type SessionModelState =
   | { status: "ready"; providerId: string; modelId: string; label: string; protocol?: string; reasoningEffort?: ReasoningEffort; reasoningEfforts?: ReasoningEffort[]; imageInput?: true }
 
 export interface SessionServiceOptions extends AssemblyOptions {
+  /** Host structural management shares this admission boundary with all writers. */
+  sessionOperation?: { run<T>(id: string, operation: () => Promise<T>): Promise<T>; assertOpen(id: string): void }
   /** Bind the session once; its returned getter follows current membership. */
   projectContextFor?: (sessionId: string) => Promise<() => SessionProjectContext | undefined>
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
@@ -264,7 +266,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (opts.parentNotify) return opts.parentNotify
     return {
       admit(input) {
-        const job = (notificationAdmissions.get(id) ?? Promise.resolve()).catch(() => undefined).then(async () => {
+        const previousAdmission = notificationAdmissions.get(id) ?? Promise.resolve()
+        const admission = async () => previousAdmission.catch(() => undefined).then(async () => {
           const assembly = assemblies.get(id)
           if (closed || closing.has(id) || cancelledParents.has(id)) throw new ParentNotificationStoppedError()
           if (input.sessionId !== id || !assembly || assembly !== owner()) throw new Error("parent notification admission unavailable")
@@ -282,12 +285,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (!inputs) { inputs = new Set(); notificationInputs.set(id, inputs) }
           inputs.add(inputId)
         })
+        const job = opts.sessionOperation ? opts.sessionOperation.run(id, admission) : admission()
         notificationAdmissions.set(id, job)
         void job.finally(() => { if (notificationAdmissions.get(id) === job) notificationAdmissions.delete(id) }).catch(() => undefined)
         return job
       },
       wake(sessionId) {
         if (sessionId !== id || closed || closing.has(id) || cancelledParents.has(id)) return
+        try { opts.sessionOperation?.assertOpen(id) } catch { return }
         const assembly = assemblies.get(id)
         if (!assembly || assembly !== owner()) return
         let controllers = notificationControllers.get(id)
@@ -426,7 +431,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return true
   }
 
-  async function getOrCreate(sessionId: string): Promise<SessionAssembly> {
+  function getOrCreate(sessionId: string): Promise<SessionAssembly> {
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => getOrCreateUnfenced(sessionId)) : getOrCreateUnfenced(sessionId)
+  }
+  async function getOrCreateUnfenced(sessionId: string): Promise<SessionAssembly> {
     if (closed) throw new Error("session service closed")
     const pendingClose = closing.get(sessionId)
     if (pendingClose !== undefined) await pendingClose
@@ -555,6 +563,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
 
   function submit(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => submitUnfenced(sessionId, prompt, signal, options)) : submitUnfenced(sessionId, prompt, signal, options)
+  }
+  function submitUnfenced(sessionId: string, prompt: string, signal: AbortSignal, options?: { context?: string; images?: ImageInput[]; clientToken?: string; admittedInputId?: string }): Promise<void> {
     const context = options?.context
     if (context !== undefined && (typeof context !== "string" || context.length > 131072)) return Promise.reject(new Error("Invalid prompt context"))
     const clientToken = options?.clientToken

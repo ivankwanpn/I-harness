@@ -2,6 +2,14 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "搜尋核准規則": "Search approval rules",
+  "記住此操作的完整參數": "Remember this operation with its complete arguments", "規則作用範圍": "Rule scope", "此會話": "This conversation", "此專案": "This project", "有效期限": "Expiry", "1 小時": "1 hour", "1 天": "1 day", "7 天": "7 days",
+  "只重用相同工具身分與完整參數。沙箱、Plan Mode、角色及 Hooks 仍會檢查；工具或設定改變後會重新詢問。": "Reuse applies only to the same tool identity and complete arguments. Sandbox, Plan Mode, roles and Hooks still run; changed tools or settings require approval again.",
+  "此操作只支援單次核准": "This operation supports one-time approval", "批准並保存規則": "Approve and save rule", "記住核准規則": "Remembered approval rules",
+  "規則僅允許相同工具身分與完整參數。每次仍會檢查目前沙箱、Plan Mode、角色與 Hooks；變更身分、設定或到期後重新詢問。": "Rules apply only to the same tool identity and complete arguments. Current sandbox, Plan Mode, roles and Hooks are checked every time. Identity changes, settings changes or expiry require approval again.",
+  "重新讀取規則": "Reload rules", "尚未保存核准規則": "No approval rules saved", "已到期": "Expired", "撤銷規則": "Revoke rule", "新增規則": "Add rule", "待核准操作": "Pending operation",
+  "目前沒有可記住的即時待核准操作。可在新的核准卡片勾選記住；中斷或無完整身分證據的操作只支援單次核准。": "There are no live pending operations eligible to remember. Select remember on a new approval card. Interrupted operations or operations without complete identity evidence support one-time approval.",
+  "新增只保存此完整操作的規則；目前核准卡片仍須明確批准或拒絕。": "Adding a rule saves this complete operation. The current approval card still requires an explicit approve or deny decision.",
   "權限": "Permissions", "專案引用": "Project references", "檔案": "Files", "沒有符合的引用": "No matching references", "搜尋中…": "Searching…",
   "核准": "Approval",
   "結果已達搜尋上限，請縮小搜尋範圍。": "Search limit reached. Narrow your query.", "正在讀取權限…": "Loading permissions…",
@@ -182,6 +190,10 @@ const english = {
   "這些預設值儲存在共用的本機設定，重啟 Desktop 後生效。": "These defaults are saved in shared local settings and take effect after restarting Desktop.",
   "沙箱與核準模式會套用到現有 Agent 的下一次工具呼叫；已顯示的核準仍須手動決定。自動壓縮設定重啟後生效。": "Sandbox and approval modes apply to the next tool call in existing Agents. Already displayed approvals still need your decision. Auto-compaction changes take effect after restarting Desktop.",
   "核準模式": "Approval mode", "僅危險操作詢問": "Ask for risky actions", "逐項詢問": "Ask for every tool", "代我審批": "Review for me", "完整存取權": "Full access",
+  "要求核准": "Ask for approval", "代我核准": "Review for me", "高風險時核准": "Ask for risky actions",
+  "每次工具操作都先請你核准。": "Ask you before each tool action.", "由代審模型檢查操作，必要時再詢問你。": "A reviewer checks each action and asks you when needed.",
+  "允許代理直接操作本機檔案與網路。": "Allow the agent to act directly on local files and the network.", "高風險或無法判定的操作會先詢問你。": "Ask you about high-risk or unclassified actions.",
+  "已儲存為 {saved}；目前使用 {effective}，重新載入工作區後生效。": "Saved as {saved}; {effective} is still active. Reload the workspace to apply.",
   "危險模式只詢問高風險或無法判定的操作；代審使用模型檢查每項工具請求，仍可能交由你決定。完整存取權會一併設定完整存取沙箱。": "Risky mode asks for high-risk or unclassified actions. Review for me uses a model to assess every tool call and may still ask you. Full access also selects the full-access sandbox.",
   "自動壓縮仍需重啟 Desktop；請查看下方目前生效的設定。": "Restart Desktop to apply pending auto-compaction changes. The effective settings are shown below.",
   "控制 Agent 工具可存取的範圍。": "Controls what Agent tools can access.",

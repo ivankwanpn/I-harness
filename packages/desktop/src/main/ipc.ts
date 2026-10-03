@@ -10,6 +10,10 @@ import { projectRuntimeContexts, syncLiveProjectContexts } from "./project-runti
 import { contextRequestParams } from "./context-requests.ts"
 import { contextQuery, contextReference, type ContextItem } from "../../../desktop-gateway/src/context-picker.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"
+import { dispatchProjectFilesRequest } from "./project-files.ts"
+import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
+import type { createNotificationHistory } from "./notification-history.ts"
+import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
 // This native helper must be bundled into Electron main. An externalized
 // workspace-package import would require raw gateway TypeScript at app boot.
 import { listDesktopTerminalShellOptions } from "../../../desktop-gateway/src/terminal-shells.ts"
@@ -24,6 +28,11 @@ export interface DesktopIpcDependencies {
   /** Native folder picker; injected so the dispatcher stays testable. */
   pickFolder?: () => Promise<string | undefined>
   pickFiles?: (workspacePath: string) => Promise<string[] | undefined>
+  pickSkill?: () => Promise<string | undefined>
+  globalProviders?: ReturnType<typeof createGlobalProviderSettings>
+  notifications?: ReturnType<typeof createNotificationHistory>
+  drafts?: AttachmentDraftStore
+  about?: { info(): unknown; copy(): unknown }
   native?: ReturnType<typeof attachNativeWindow>
   browser?: ReturnType<typeof createBrowserSurface>
   /** Discover local executable choices before a workspace is opened. */
@@ -45,6 +54,98 @@ export async function dispatchDesktopRequest(
 ): Promise<unknown> {
   const value = requireRecord(request)
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind.startsWith("desktop/global-provider/") || value.kind.startsWith("desktop/global-preferences/")) {
+    if (!dependencies.globalProviders) throw new Error("Global provider settings unavailable")
+    return dependencies.globalProviders.request(value)
+  }
+  if (value.kind === "desktop/about/info" || value.kind === "desktop/about/copy") {
+    if (!dependencies.about) throw new Error("Application information unavailable")
+    return value.kind.endsWith("/copy") ? dependencies.about.copy() : dependencies.about.info()
+  }
+  if (value.kind.startsWith("desktop/notifications/")) {
+    if (!dependencies.notifications) throw new Error("Notification history unavailable")
+    if (value.kind === "desktop/notifications/target") {
+      const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+      const sessionId = requireNonEmpty(value.sessionId, "sessionId")
+      const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+      const navigation = await runtime.client.request("desktop/session/navigation/state", {}) as Record<string, { projectId?: string }>
+      if (!navigation || !Object.hasOwn(navigation, sessionId)) throw new Error("會話已不存在或無法開啟")
+      const archived = await runtime.client.request("desktop/session/archived", {}) as { id: string }[]
+      if (archived.some(row => row.id === sessionId)) throw new Error("會話已封存，請先在會話管理還原")
+      return { workspaceId, sessionId, ...(navigation[sessionId]?.projectId ? { projectId: navigation[sessionId]!.projectId } : {}) }
+    }
+    if (value.kind === "desktop/notifications/list") return dependencies.notifications.list()
+    if (value.kind === "desktop/notifications/read") return dependencies.notifications.markRead(value.id === undefined ? undefined : requireNonEmpty(value.id, "notification ID"))
+    if (value.kind === "desktop/notifications/clear" && value.confirmed === true) return dependencies.notifications.clear()
+    throw new Error("Invalid notification request")
+  }
+  if (value.kind.startsWith("desktop/draft/")) {
+    if (!dependencies.drafts || !["desktop/draft/load", "desktop/draft/save", "desktop/draft/clear"].includes(value.kind)) throw new Error("Draft persistence unavailable")
+    const rawScope = requireRecord(value.scope)
+    const scope = { workspaceId: requireNonEmpty(rawScope.workspaceId, "workspaceId"), identity: requireNonEmpty(rawScope.identity, "draft identity") }
+    if (!dependencies.catalog.get(scope.workspaceId)) throw new Error("Unknown draft workspace")
+    if (scope.identity.startsWith("new-task:")) {
+      const projectId = scope.identity.slice("new-task:".length)
+      if (projectId !== "unassigned") {
+        const project = (await dependencies.projects?.list())?.find(row => row.id === projectId)
+        if (!project?.workspaceIds.includes(scope.workspaceId)) throw new Error("Draft project is unavailable")
+      }
+    } else {
+      const runtime = await runtimeForKnownWorkspace(scope.workspaceId, dependencies)
+      const navigation = await runtime.client.request("desktop/session/navigation/state", {})
+      if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, scope.identity)) throw new Error("Draft conversation unavailable")
+    }
+    if (value.kind.endsWith("/load")) return dependencies.drafts.load(scope)
+    if (value.expectedRevision !== null && typeof value.expectedRevision !== "string") throw new Error("Invalid draft revision")
+    return value.kind.endsWith("/save")
+      ? dependencies.drafts.save(scope, value.expectedRevision as string | null, value.draft as import("../shared/attachment-drafts.ts").UnsentDraft)
+      : dependencies.drafts.clear(scope, value.expectedRevision as string | null)
+  }
+  if (value.kind.startsWith("desktop/project-files/")) return dispatchProjectFilesRequest(value, dependencies)
+  if (value.kind === "desktop/session/batch") {
+    if (value.confirmed !== true) throw new Error("Session batch requires confirmation")
+    const command = requireRecord(value.command)
+    if (!["archive", "restore", "delete", "move"].includes(String(command.action)) || !Array.isArray(command.sessionIds) || command.sessionIds.length < 1 || command.sessionIds.length > 100
+      || command.sessionIds.some(id => typeof id !== "string" || !id || id.length > 256) || new Set(command.sessionIds).size !== command.sessionIds.length) throw new Error("Invalid explicit session batch")
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    if (command.action === "delete" && !dependencies.drafts) throw new Error("Permanent deletion requires native draft cleanup")
+    const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+    if (command.action === "move") {
+      if (command.projectId !== undefined) requireNonEmpty(command.projectId, "destination project")
+      const owners = requireRecord(command.expectedOwners)
+      if (command.sessionIds.some(id => !Object.hasOwn(owners, String(id)) || owners[String(id)] !== null && (typeof owners[String(id)] !== "string" || !owners[String(id)]))) throw new Error("Invalid expected project owners")
+      if (!dependencies.projects) throw new Error("Project catalog unavailable")
+      const scopes = await projectRuntimeContexts(dependencies.projects, dependencies.catalog)
+      if (command.projectId !== undefined && !scopes.some(scope => scope.id === command.projectId && scope.roots.length > 0)) throw new Error("Destination project unavailable")
+      await runtime.client.request("desktop/project/sync", { projects: scopes })
+    }
+    if (command.action !== "delete") return runtime.client.request(value.kind, { command }, 120000)
+    const drafts = dependencies.drafts!
+    // Only a native retirement receipt from a prior confirmed gateway success
+    // authorizes cleanup retries after the session disappears from navigation.
+    const retired = new Set<string>()
+    for (const sessionId of command.sessionIds as string[]) if (await drafts.isRetired({ workspaceId, identity: sessionId })) retired.add(sessionId)
+    const pending = (command.sessionIds as string[]).filter(id => !retired.has(id))
+    const reply = pending.length ? await runtime.client.request(value.kind, { command: { ...command, sessionIds: pending } }, 120000) as import("../../../desktop-gateway/src/session-management.ts").SessionBatchResult : { results: [] }
+    const rows = new Map(reply.results.map(row => [row.sessionId, row]))
+    const results = []
+    for (const sessionId of command.sessionIds as string[]) {
+      const row = retired.has(sessionId) ? { sessionId, ok: true as const } : rows.get(sessionId)
+      if (!row) throw new Error("Missing session deletion result")
+      if (!row.ok) { results.push(row); continue }
+      try { await drafts.retire({ workspaceId, identity: sessionId }); results.push(row) }
+      catch (error) { results.push({ sessionId, ok: false, sessionDeleted: true, error: `Session deleted; native draft cleanup failed. Retry permanent deletion: ${error instanceof Error ? error.message : String(error)}` }) }
+    }
+    return { results }
+  }
+  if (value.kind === "desktop/resources/import") {
+    const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
+    if (value.source !== "workspace" && value.source !== "global") throw new Error("Invalid skill import source")
+    const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
+    if (!dependencies.pickSkill || !runtime.info.capabilities["desktop-resource-authoring"]?.includes("1")) throw new Error("Skill import unavailable")
+    const selectedPath = await dependencies.pickSkill()
+    return selectedPath === undefined ? undefined : runtime.client.request("desktop/resources/import", { source: value.source, selectedPath })
+  }
   if (value.kind.startsWith("browser/")) {
     const workspaceId = requireNonEmpty(value.workspaceId, "workspaceId")
     if (!dependencies.catalog.get(workspaceId)) throw new Error("Unknown browser workspace")
@@ -55,6 +156,10 @@ export async function dispatchDesktopRequest(
   if (contextParams !== undefined) {
     const runtime = await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)
     if (value.kind.startsWith("desktop/session/subagents/") && !runtime.info.capabilities["desktop-subagent-catalog"]?.includes("1")) throw new Error("Subagent catalog unavailable")
+    if (value.kind === "desktop/approval-rules/add") {
+      const navigation = await runtime.client.request("desktop/session/navigation/state", {})
+      if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
+    }
     const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh"].includes(value.kind)
     return runtime.client.request(value.kind, contextParams, longOperation ? 600000 : 30000)
   }
@@ -200,7 +305,7 @@ export async function dispatchDesktopRequest(
           : runtime.sandbox
       }
     case "desktop/capabilities":
-      return (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities
+      return { ...(await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).info.capabilities, ...(dependencies.drafts ? { "desktop-drafts": ["1"] } : {}) }
     case "session/list":
       return await (await runtimeForKnownWorkspace(requireNonEmpty(value.workspaceId, "workspaceId"), dependencies)).client.listSessions()
     case "desktop/session/archived":
@@ -456,11 +561,17 @@ export async function dispatchDesktopRequest(
       const approval = record.kind === "approval" && typeof record.approved === "boolean"
       const answer = record.kind === "question" && typeof record.answer === "string"
       if (!approval && !answer) throw new Error("decision must be an approval or a question answer")
-      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request("desktop/interaction/reply", {
+      let remember: { scope: "session" | "workspace"; expiresAt: number } | undefined
+      if (record.remember !== undefined) {
+        const raw = requireRecord(record.remember)
+        if (!approval || record.approved !== true || !["session", "workspace"].includes(String(raw.scope)) || typeof raw.expiresAt !== "number" || !Number.isSafeInteger(raw.expiresAt) || raw.expiresAt <= Date.now() || raw.expiresAt > Date.now() + 366 * 86400000) throw new Error("Invalid remembered approval")
+        remember = { scope: raw.scope as "session" | "workspace", expiresAt: raw.expiresAt }
+      }
+      return await (await runtimeForKnownWorkspace(workspaceId, dependencies)).client.request("desktop/interaction/reply/trusted-human", {
         requestId,
         sessionId,
         decision: approval
-          ? { kind: "approval", approved: record.approved as boolean }
+          ? { kind: "approval", approved: record.approved as boolean, ...(remember ? { remember } : {}) }
           : { kind: "question", answer: record.answer as string },
       })
     }
