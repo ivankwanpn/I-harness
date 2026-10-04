@@ -5,7 +5,7 @@ import {
   type ProviderAuthResolver,
   type ResolvedProviderAuth,
 } from "@i-harness/credentials"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, validatePromptCacheConfig, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
 import {
   buildModelClient,
   defaultProviderRegistry,
@@ -57,13 +57,14 @@ interface ProviderPatch {
   displayName?: string | null
   modelsURL?: string | null
   apiKeyEnv?: string | null
+  promptCache?: SettingsProviderConfig["promptCache"] | null
 }
 
 /** The route fields `patchProvider` may change — a RUNTIME allowlist, not only
  * a type. `models` is absent ON PURPOSE (see the method), and a type cannot
  * enforce that here: the patch arrives as a variable, so TypeScript's
  * excess-property check never runs. */
-const PATCHABLE_PROVIDER_FIELDS = ["baseURL", "protocol", "catalog", "displayName", "modelsURL", "apiKeyEnv"] as const
+const PATCHABLE_PROVIDER_FIELDS = ["baseURL", "protocol", "catalog", "displayName", "modelsURL", "apiKeyEnv", "promptCache"] as const
 
 export interface SessionModelBinding {
   client: ModelClient
@@ -114,6 +115,7 @@ export interface ProviderRuntimeEntry {
    * consumer to re-derive the rule — a listing that computes it a second time
    * is a listing that can disagree with the chain it is describing. */
   cardFamily: string
+  promptCache?: SettingsProviderConfig["promptCache"]
 }
 
 export interface ProviderRuntime {
@@ -192,6 +194,7 @@ interface ProviderView {
   /** M72 Ⅲ: the ROUTE's usage ask (user config wins over the template; absent
    * → the adapter's own default, which is ON). */
   usageInStream?: boolean
+  promptCache?: SettingsProviderConfig["promptCache"]
   models: ModelDescriptor[]
   defaultModel?: string
 }
@@ -368,6 +371,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
           cardFamily: cardFamilyOf(view),
           ...(view.catalog !== undefined ? { catalog: view.catalog } : {}),
+          ...(view.promptCache !== undefined ? { promptCache: { ...view.promptCache } } : {}),
         })
       }
       return rows
@@ -375,6 +379,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async upsertProvider(id, config) {
       assertProviderId(id)
+      validatePromptCacheConfig(config.promptCache)
       const llm = canonicalLlm(options.settings)
       await persistLlm({
         providers: { ...llm.providers, [id]: cloneProviderConfig(config) },
@@ -385,6 +390,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async createProvider(id, fields) {
       assertProviderId(id)
+      validatePromptCacheConfig(fields.promptCache)
       if (Object.hasOwn(fields, "inputModalities")) throw new Error("Input modality belongs to a model")
       const llm = canonicalLlm(options.settings)
       if (llm.providers[id] !== undefined) {
@@ -402,6 +408,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async patchProvider(id, patch) {
       assertProviderId(id)
+      if (patch.promptCache !== null) validatePromptCacheConfig(patch.promptCache)
       if (Object.hasOwn(patch, "inputModalities")) throw new Error("Input modality belongs to a model")
       const llm = canonicalLlm(options.settings)
       const current = llm.providers[id]
@@ -794,6 +801,9 @@ function providerView(
     ...(user?.usageInStream !== undefined
       ? { usageInStream: user.usageInStream }
       : template?.usageInStream !== undefined ? { usageInStream: template.usageInStream } : {}),
+    ...(user?.promptCache !== undefined
+      ? { promptCache: { ...user.promptCache } }
+      : template?.promptCache !== undefined ? { promptCache: { ...template.promptCache } } : {}),
     models,
     ...(template?.defaultModel !== undefined ? { defaultModel: template.defaultModel } : {}),
   }
@@ -847,6 +857,7 @@ function runtimeProfile(
     // M72 Ⅲ: route-level only, for the same reason — one endpoint asks for
     // usage one way.
     ...(view.usageInStream !== undefined ? { usageInStream: view.usageInStream } : {}),
+    ...(view.promptCache !== undefined ? { promptCache: { ...view.promptCache } } : {}),
     models: view.models.map((model) => model.id),
     ...(apiKey !== undefined ? { apiKey } : {}),
   }
@@ -975,6 +986,7 @@ function cloneModels(models: readonly ModelDescriptor[]): ModelDescriptor[] {
 function cloneProviderConfig(config: SettingsProviderConfig): SettingsProviderConfig {
   return {
     ...config,
+    ...(config.promptCache !== undefined ? { promptCache: { ...config.promptCache } } : {}),
     ...(config.models !== undefined ? { models: config.models.map((model) => ({ ...model })) } : {}),
   }
 }

@@ -1,5 +1,5 @@
 import { clampOutputCap } from "@i-harness/llm-seam"
-import type { LLMMessage, LLMRequest, ModelClient, ToolSchema } from "@i-harness/llm-seam"
+import type { LLMMessage, LLMRequest, LLMUsage, ModelClient, ToolSchema } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
 import type { Session } from "@i-harness/core-session"
 import { approxTokens } from "./tokens.ts"
@@ -197,7 +197,7 @@ export async function summarizeWithModel(
    * the truncated text still clears `minSummaryChars`, so the next round's
    * anchored summary would be built on the stump. This one is a token ceiling
    * on the request; the two are different quantities and different arguments. */
-  limits?: { maxOutputTokens?: number; contextWindow?: number; overheadTokens?: number },
+  limits?: { maxOutputTokens?: number; contextWindow?: number; overheadTokens?: number; onUsage?: (usage: LLMUsage) => void },
   /** M75: the region this call is summarising — the session and the seqs the
    * caller would have shadowed, handed in RAW and un-sliced. The decision to
    * slice is taken here, by the very expression the clamp below is fed, so the
@@ -253,6 +253,10 @@ export async function summarizeWithModel(
         prefix === undefined
           ? { messages: [{ role: "user", content: directive }], tools: [], systemPrompt: "" }
           : { messages: [...messages, { role: "user", content: directive }], tools: prefix.tools, systemPrompt: prefix.systemPrompt }
+      // One-off summaries do not introduce explicit cache writes or retention.
+      // The original-message prefix remains intact; upstream automatic caching
+      // is protocol-owned and cannot be disabled with this neutral intent.
+      request.promptCache = { mode: "off" }
       // M73: the cap this request carries, clamped against the window and the
       // input we are about to send — the same `clampOutputCap` the session's
       // own requests go through (llm-seam), applied HERE because this request
@@ -265,14 +269,26 @@ export async function summarizeWithModel(
       let out = ""
       // M77: per-call, so a refusal cannot leak into the next round's message.
       let refused = false
+      let truncated = false
+      const usage: LLMUsage = {}
       for await (const ev of model.stream(cappedRequest)) {
         if (ev.type === "text/chunk") out += ev.text
         else if (ev.type === "error") throw ev.error
+        else if (ev.type === "usage") {
+          for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+            const value = ev.usage[field]
+            if (typeof value === "number" && Number.isFinite(value)) usage[field] = value
+          }
+          if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") usage.inputTokenSemantics = ev.usage.inputTokenSemantics
+        }
         else if (ev.type === "end") {
           if (ev.refused === true) refused = true
+          if (ev.truncated === true) truncated = true
           break
         }
       }
+      if (Object.keys(usage).length) limits?.onUsage?.(usage)
+      if (truncated) throw new Error("compaction: provider truncated the summary; checkpoint was not committed")
       const trimmed = out.trim()
       // M77: an empty output has two causes, and the message may not merge them.
       // A provider REFUSAL (HTTP 200, no content, `end.refused`) reported as

@@ -1,5 +1,7 @@
 # Pi 1.0.2：MCP、Code Mode、快取與壓縮研究
 
+後續狀態：本研究列出的 IH 改善已依使用者指示落地，實際範圍、量測及成品見 [2026-10-04 驗收](2026-10-04-pi-context-efficiency-acceptance.md)。以下研究與「下一步」保留研究完成時的紀錄。
+
 本輪依使用者指定，唯讀研究 `D:/agent-complete/pi-1.0.2`，並對照 IH 現行副本 `D:/frontend-test`。Pi 的 MCP、Code Mode、coding-agent 套件均為1.0.2；monorepo 根套件另為0.0.3。研究由子代理完成，Root 已讀研究記錄並直接核對 changelog、cache warmer、摘要請求與 IH 動態工具描述。沒有修改參考專案、安裝依賴、啟動 Pi、呼叫模型或執行 benchmark。這份文件是研究結論，以下 IH 借鑑尚未實作。
 
 ## 先釐清「省了約40%」的範圍

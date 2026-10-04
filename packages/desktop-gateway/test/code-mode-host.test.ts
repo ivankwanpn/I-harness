@@ -110,7 +110,7 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
     const { sessionId } = await call("session/create") as { sessionId: string }
     await call("session/prompt", { sessionId, prompt: "run fixture" })
     const names = bodies[0]!.tools!.map(tool => tool.function.name)
-    if (mode === "only") expect(names).toEqual(["code_exec", "code_wait"])
+    if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
     const { events } = await call("session/history", { sessionId, afterSeq: 0, limit: 200 }) as { events: Array<{ type: string; name?: string; state?: string; error?: string; isError?: boolean; output?: unknown }> }
     if (mode !== "off") {

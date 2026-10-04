@@ -11,10 +11,12 @@ export interface BudgetResult {
 // overheadTokens (M33 §3.1): the host-known charge the session log does NOT
 // carry (system prompt + tool schemas) — added to the measured tokens. 0
 // (default) keeps the pre-M33 measurement.
-export function checkBudget(session: Session, contextWindow: number, reserveRatio = 0.9, overheadTokens = 0): BudgetResult {
+export function checkBudget(session: Session, contextWindow: number, reserveRatio = 0.9, overheadTokens = 0, calibratedInputTokens?: number): BudgetResult {
   if (!(reserveRatio > 0 && reserveRatio <= 1)) throw new Error(`reserveRatio must be in (0, 1] (got ${reserveRatio})`)
   if (!Number.isInteger(overheadTokens) || overheadTokens < 0) throw new Error(`overheadTokens must be a non-negative integer (got ${overheadTokens})`)
-  const tokens = activeTokens(session) + overheadTokens
+  if (calibratedInputTokens !== undefined && (!Number.isSafeInteger(calibratedInputTokens) || calibratedInputTokens < 0)) throw new Error("calibratedInputTokens must be a non-negative integer")
+  // A calibrated measurement already includes system/tools. Charge it once.
+  const tokens = calibratedInputTokens ?? activeTokens(session) + overheadTokens
   const budget = Math.floor(contextWindow * reserveRatio)
   return { state: tokens > budget ? "overflow" : "ok", tokens, budget }
 }

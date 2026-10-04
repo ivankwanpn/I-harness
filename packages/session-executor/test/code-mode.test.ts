@@ -1,11 +1,12 @@
 import { expect, it, vi } from "vitest"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, stat } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createSessionAssembly } from "../src/assembly.ts"
 import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import { clampOutputCap } from "@i-harness/llm-seam"
 import { estimateContent } from "@i-harness/token-meter"
+import { gcSpillStore } from "@i-harness/output-retention"
 
 it("reports an actual yielded live cell while the agent turn is idle and drops it after completion", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-live-cells-"))
@@ -68,7 +69,7 @@ it.each(["off", "mixed", "only"] as const)("uses the %s tool surface in actual m
     await assembly.agent.run("hello")
     const request = requests[0]!
     const names = request.tools.map(tool => tool.name)
-    if (mode === "only") expect(names).toEqual(["code_exec", "code_wait"])
+    if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else { expect(names).toContain("list_dir"); expect(names.includes("code_exec")).toBe(mode === "mixed") }
     const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
     expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
@@ -87,5 +88,16 @@ it("prices a live Code Mode catalog after host tools change", async () => {
     const overhead = Math.ceil(request.systemPrompt.length / 4) + Math.ceil(JSON.stringify(request.tools).length / 4)
     expect(request.tools[0]!.description).toContain("late_tool")
     expect(request.maxOutputTokens).toBe(clampOutputCap(100_000, 100_000, overhead + estimateContent(request.messages)))
+  } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
+})
+
+it("retains Code Mode text in the host's unified spill root where existing GC can find it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-code-unified-spill-")), spillRoot = join(root, "owned-spills")
+  const assembly = await createSessionAssembly({ workspace: root, modelPolicy: "test-mock", sandbox: "workspace-write", codeMode: { mode: "only" }, outputSpill: { spillRoot } })
+  try {
+    const result = (await assembly.tools.execute({ name: "code_exec", args: { code: 'text("x".repeat(20000));' } })).output as { textRetention: { path: string } }
+    expect(dirname(result.textRetention.path)).toBe(spillRoot)
+    expect((await stat(result.textRetention.path)).size).toBe(20000)
+    expect(await gcSpillStore(spillRoot, { maxAgeMs: 0, maxTotalBytes: 0, now: Date.now() + 1000 })).toMatchObject({ removedFiles: 1, removedBytes: 20000 })
   } finally { await assembly.dispose(); await rm(root, { recursive: true, force: true }) }
 })

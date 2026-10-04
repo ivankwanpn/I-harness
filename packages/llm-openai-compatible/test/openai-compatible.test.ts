@@ -634,7 +634,7 @@ describe("M72 Ⅲ: usage is asked for (openai-compatible)", () => {
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.filter((e) => e.type === "usage")).toEqual([
-      { type: "usage", usage: { inputTokens: 9, outputTokens: 4, cacheReadTokens: 7 } },
+      { type: "usage", usage: { inputTokens: 9, outputTokens: 4, cacheReadTokens: 7, inputTokenSemantics: "includes-cache" } },
     ])
     expect(events.at(-1)).toEqual({ type: "end" })
   })

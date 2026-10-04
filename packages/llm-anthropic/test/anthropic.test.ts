@@ -783,7 +783,7 @@ describe("M5 T2 provider usage (anthropic)", () => {
     // Two reports, one round-trip — the consumer merges them. Emitting each
     // field under the name the wire used, and nothing that was not sent.
     expect(seen).toEqual([
-      { inputTokens: 25, outputTokens: 1, cacheReadTokens: 900, cacheCreationTokens: 100 },
+      { inputTokens: 25, outputTokens: 1, cacheReadTokens: 900, cacheCreationTokens: 100, inputTokenSemantics: "excludes-cache" },
       { outputTokens: 15 },
     ])
   })
@@ -796,7 +796,7 @@ describe("M5 T2 provider usage (anthropic)", () => {
       { type: "message_start", message: { usage: { input_tokens: 7, output_tokens: 1 } } },
       { type: "message_stop" },
     ])
-    expect(seen).toEqual([{ inputTokens: 7, outputTokens: 1 }])
+    expect(seen).toEqual([{ inputTokens: 7, outputTokens: 1, inputTokenSemantics: "excludes-cache" }])
     expect("cacheReadTokens" in (seen[0] as object)).toBe(false)
   })
 

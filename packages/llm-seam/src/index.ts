@@ -15,16 +15,19 @@ import { deriveMessages } from "@i-harness/core-session"
  * These are native field NAMES normalized once, not a semantic model of the
  * cache: the roadmap's Q3 forbids inventing a unified "epoch", and nothing here
  * derives one. This is the same job the seam already does for `text/chunk` and
- * `tool_call` across five wire protocols. Note also that nothing is ever summed
- * into a total — the protocols disagree about whether `input` already includes
- * cache (Anthropic's `input_tokens` does not), so a total would be a wrong
- * number rather than a convenient one.
+ * `tool_call` across five wire protocols. Raw counters are never summed here.
+ * Adapters declare inputTokenSemantics when known, allowing the token meter to
+ * derive a separate full input total without double-counting cache-inclusive
+ * protocols. Unknown accounting stays uncalibrated.
  */
 export interface LLMUsage {
   inputTokens?: number
   outputTokens?: number
   cacheReadTokens?: number
   cacheCreationTokens?: number
+  /** Adapter-declared accounting; unknown routes leave it absent. Raw input
+   * counts stay raw, while consumers may derive a separate full input total. */
+  inputTokenSemantics?: "includes-cache" | "excludes-cache"
 }
 
 /**
@@ -330,6 +333,23 @@ export interface ToolSchema {
  */
 export type ReasoningEffort = "off" | "low" | "medium" | "high" | "xhigh" | "max"
 
+/** Route opt-in for explicit prompt-cache metadata. Absence leaves the wire
+ * unchanged. Retention controls Anthropic marker TTL only; other protocols
+ * must not invent a mapping to their different retention policies. */
+export interface PromptCacheConfig {
+  mode: "off" | "automatic"
+  retention?: "5m" | "1h"
+}
+
+export function validatePromptCacheConfig(value: unknown, path = "promptCache"): asserts value is PromptCacheConfig | undefined {
+  if (value === undefined) return
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${path} must be an object`)
+  const config = value as Record<string, unknown>
+  if (config.mode !== "off" && config.mode !== "automatic") throw new Error(`${path}.mode must be "off" or "automatic"`)
+  if (config.retention !== undefined && config.retention !== "5m" && config.retention !== "1h") throw new Error(`${path}.retention must be "5m" or "1h"`)
+  if (Object.keys(config).some((key) => key !== "mode" && key !== "retention")) throw new Error(`${path} contains an unknown field`)
+}
+
 export interface LLMRequest {
   messages: LLMMessage[]
   tools: ToolSchema[]
@@ -337,6 +357,10 @@ export interface LLMRequest {
   model?: string
   /** M32: per-request reasoning effort; undefined → do not send (provider default). */
   reasoningEffort?: ReasoningEffort
+  /** Per-request intent and opaque session affinity. "off" removes applicable
+   * explicit cache metadata; it cannot disable upstream automatic caching.
+   * "default" follows the declared route capability, never a URL guess. */
+  promptCache?: { mode?: "off" | "default"; key?: string }
   /** M61: the turn's abort signal — adapters hand it to their transport
    * (fetch/`abortSignal`) so CANCEL actually kills a parked request. Without
    * it a provider that never yields could not be interrupted: the agent loop
@@ -351,6 +375,11 @@ export interface LLMRequest {
    * back. Anthropic is the one exception and owns its own fallback (its
    * Messages API REJECTS a request without `max_tokens`). */
   maxOutputTokens?: number
+}
+
+/** Explicit off wins over either an automatic route or manual wire options. */
+export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, intent: LLMRequest["promptCache"]): PromptCacheConfig["mode"] | undefined {
+  return intent?.mode === "off" || config?.mode === "off" ? "off" : config?.mode
 }
 
 export interface ModelClient {

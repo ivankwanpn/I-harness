@@ -156,6 +156,11 @@ const providerConfigFields: Record<string, FieldSpec> = {
   // drop the value silently. The FIRST boolean row in this map — the lattice's
   // FieldType/compliance arms already carry "boolean", so no other change.
   usageInStream: { type: "boolean" },
+  promptCache: {
+    type: "object",
+    fields: { mode: { type: "enum", enum: ["off", "automatic"] }, retention: { type: "enum", enum: ["5m", "1h"] } },
+    required: ["mode"],
+  },
   models: { type: "array", items: { type: "object", fields: MODEL_FIELDS, required: ["id"] } },
 }
 
@@ -570,6 +575,14 @@ export async function mutateSection(
   }
   const next = structuredClone(current)
   for (const op of ops) applyOp(schema, next, op)
+  // Nested edits must leave a complete cache configuration. Validating only
+  // the leaf would allow retention without mode, then normalization would
+  // silently discard the user's edit before persistence.
+  if (name === "llm" && isRecord(next.providers)) {
+    for (const [id, provider] of Object.entries(next.providers)) {
+      if (isRecord(provider) && Object.hasOwn(provider, "promptCache")) validateValue(providerConfigFields.promptCache, provider.promptCache, `providers.${id}.promptCache`)
+    }
+  }
   if (stableStringify(next) === stableStringify(current)) {
     return describeSection(name, store) // content unchanged → no persist, no bump
   }

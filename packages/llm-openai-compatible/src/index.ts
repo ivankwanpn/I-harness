@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M72 Ⅲ: the wire's usage, under the seam's names.
@@ -17,13 +17,19 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const src = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: string, to: keyof LLMUsage): void => {
+  const take = (from: string, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
     const v = src[from]
     if (typeof v === "number" && Number.isFinite(v)) out[to] = v
   }
   take("prompt_tokens", "inputTokens")
   take("completion_tokens", "outputTokens")
   take("prompt_cache_hit_tokens", "cacheReadTokens")
+  const details = src.prompt_tokens_details
+  if (out.cacheReadTokens === undefined && details !== null && typeof details === "object") {
+    const cached = (details as Record<string, unknown>).cached_tokens
+    if (typeof cached === "number" && Number.isFinite(cached)) out.cacheReadTokens = cached
+  }
+  if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "includes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }
 
@@ -33,6 +39,9 @@ export interface OpenAICompatibleConfig {
   model: string
   providerId?: string
   options?: Record<string, unknown>
+  /** Only explicit off removes manual controls; no cache keys are generated
+   * for a Chat-compatible gateway by the automatic mode. */
+  promptCache?: PromptCacheConfig
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
@@ -141,7 +150,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const messages = config.inputModalities?.includes("image") ?? false ? request.messages : projectImagesForTextModel(request.messages)
-      const body = {
+      const body: Record<string, unknown> = {
         model: config.model,
         // M72 Ⅰ: the system prompt is the first MESSAGE. The old code sent no
         // system content at all — chat/completions has no top-level `system`
@@ -176,6 +185,11 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         ...(request.maxOutputTokens !== undefined
           ? { [config.maxTokensField ?? "max_tokens"]: request.maxOutputTokens }
           : {}),
+      }
+      if (resolvePromptCacheMode(config.promptCache, request.promptCache) === "off") {
+        delete body.prompt_cache_key
+        delete body.prompt_cache_retention
+        delete body.prompt_cache_options
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /

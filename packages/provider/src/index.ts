@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { createRetryingClient, describeTransportError, resolveRetryPolicy, type ModelClient, type RetryPolicyConfig } from "@i-harness/llm-seam"
+import { createRetryingClient, describeTransportError, resolveRetryPolicy, validatePromptCacheConfig, type ModelClient, type PromptCacheConfig, type RetryPolicyConfig } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "@i-harness/llm-openai"
 import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
@@ -55,6 +55,7 @@ export interface ProviderProfile {
    * openai-compatible adapter only — it is the one protocol of the five that
    * reports usage solely on request. */
   usageInStream?: boolean
+  promptCache?: PromptCacheConfig
   contextWindow?: number                // M15: default window (tokens) for this provider
   maxContextWindow?: number             // M15: absolute ceiling; budget-enforcement hook (no enforcement in M15)
   modelContexts?: Record<string, ProviderModelContext> // M15: per-model overrides
@@ -792,6 +793,7 @@ export function createProviderRegistry(): ProviderRegistry {
       if (profiles.has(profile.name)) throw new Error(`duplicate provider: ${profile.name}`)
       validateModelContext(profile)
       validateRetryPolicy(profile.retryPolicy) // M20: fail loud at registration on invalid retry config
+      validatePromptCacheConfig(profile.promptCache)
       profiles.set(profile.name, profile)
     },
     get(name) { return profiles.get(name) },
@@ -900,15 +902,16 @@ function validateRetryPolicy(policy: RetryPolicyConfig | undefined): void {
 // error at the model end.
 function buildClient(profile: ProviderProfile, model: string, extra?: Record<string, unknown>): ModelClient {
   const headers = profile.headers
+  validatePromptCacheConfig(profile.promptCache)
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
-      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":
-      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createAnthropicClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "gemini":
-      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(headers !== undefined ? { headers } : {}) })
+      return createGeminiClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "bedrock":
       // No apiKey — the AWS credential chain (env / ~/.aws/credentials /
       // IMDS) resolves at the SDK client; region defaults from the env in the
@@ -944,6 +947,7 @@ export interface WireClientConfig {
   /** M72 Ⅲ: the route's usage ask (openai-compatible only; absent → the
    * adapter's default, ON). */
   usageInStream?: boolean
+  promptCache?: PromptCacheConfig
   /** M59: literal extra request headers merged into every request. */
   headers?: Record<string, string>
 }

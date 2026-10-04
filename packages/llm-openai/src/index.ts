@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -6,6 +6,7 @@ export interface OpenAIConfig {
   model: string
   providerId?: string
   options?: Record<string, unknown>
+  promptCache?: PromptCacheConfig
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
@@ -40,6 +41,27 @@ function toInputContent(content: string | LLMContentPart[]): unknown {
       ? { type: "input_text", text: part.text }
       : { type: "input_image", image_url: `data:${part.image.mediaType};base64,${part.image.dataBase64}` },
   )
+}
+
+/** Remove explicit cache metadata only from documented content-block sites;
+ * opaque tool arguments, tool text and native reasoning remain intact. */
+function withoutCacheBreakpoints(input: unknown): unknown {
+  if (!Array.isArray(input)) return input
+  const cleanBlocks = (blocks: unknown[]): unknown[] => blocks.map((block) => {
+    if (typeof block !== "object" || block === null || Array.isArray(block)) return block
+    const part = block as Record<string, unknown>
+    if (part.type !== "input_text" && part.type !== "input_image" && part.type !== "input_file") return block
+    const clean = { ...part }
+    delete clean.prompt_cache_breakpoint
+    return clean
+  })
+  return input.map((item) => {
+    if (typeof item !== "object" || item === null || Array.isArray(item)) return item
+    const record = item as Record<string, unknown>
+    if (record.type === "function_call_output" && Array.isArray(record.output)) return { ...record, output: cleanBlocks(record.output) }
+    if (Array.isArray(record.content) && (record.type === "message" || typeof record.role === "string")) return { ...record, content: cleanBlocks(record.content) }
+    return item
+  })
 }
 
 // M14 direct-path collapse: a host hand-built tool message with image parts
@@ -92,7 +114,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
       const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
-      const body = {
+      const body: Record<string, unknown> = {
         model: config.model,
         instructions: request.systemPrompt,
         input: messages
@@ -137,6 +159,15 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // M72 Ⅱ: a request-level cap, so it lands after config.options (the
         // same precedence rule the reasoning line above documents).
         ...(request.maxOutputTokens !== undefined ? { max_output_tokens: request.maxOutputTokens } : {}),
+      }
+      const cacheMode = resolvePromptCacheMode(config.promptCache, request.promptCache)
+      if (cacheMode === "off") {
+        delete body.prompt_cache_key
+        delete body.prompt_cache_retention
+        delete body.prompt_cache_options
+        body.input = withoutCacheBreakpoints(body.input)
+      } else if (cacheMode === "automatic" && body.prompt_cache_key === undefined && request.promptCache?.key !== undefined) {
+        body.prompt_cache_key = request.promptCache.key
       }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
@@ -397,11 +428,12 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   const r = raw as Record<string, unknown>
   const details = (r.input_tokens_details ?? {}) as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: unknown, to: keyof LLMUsage): void => {
+  const take = (from: unknown, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
     if (typeof from === "number" && Number.isFinite(from)) out[to] = from
   }
   take(r.input_tokens, "inputTokens")
   take(r.output_tokens, "outputTokens")
   take(details.cached_tokens, "cacheReadTokens")
+  if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "includes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }

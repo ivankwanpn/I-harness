@@ -32,6 +32,19 @@ afterEach(() => {
 })
 
 describe("llm-bedrock protocol (Converse wire)", () => {
+  it("keeps request cache intent out of the Converse payload", async () => {
+    const { fake } = fakeRuntime([])
+    const client = createBedrockClient({ model: "fixture" }, fake)
+    const request: LLMRequest = { systemPrompt: "stable", tools: [], messages: [{ role: "user", content: "hi" }] }
+    for await (const _event of client.stream(request)) {}
+    const plain = (await lastCommandSent(fake)).input
+    for await (const _event of client.stream({ ...request, promptCache: { mode: "default", key: "opaque" } })) {}
+    const opted = (await lastCommandSent(fake)).input
+    expect(opted).toEqual(plain)
+    for await (const _event of client.stream({ ...request, promptCache: { mode: "off" } })) {}
+    expect((await lastCommandSent(fake)).input).toEqual(plain)
+  })
+
   it("translates an LLMRequest to a ConverseStreamCommand (modelId/system/messages/toolConfig)", async () => {
     const { fake } = fakeRuntime([])
     const client = createBedrockClient({ model: "claude-x" }, fake)
@@ -390,7 +403,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     for await (const ev of client.stream({ messages: [], tools: [], systemPrompt: "" } as LLMRequest)) events.push(ev)
     const usage = events.filter((e) => e.type === "usage")
     expect(usage).toEqual([
-      { type: "usage", usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 7, cacheCreationTokens: 2 } },
+      { type: "usage", usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 7, cacheCreationTokens: 2, inputTokenSemantics: "excludes-cache" } },
     ])
     expect("totalTokens" in usage[0]!.usage).toBe(false)
   })

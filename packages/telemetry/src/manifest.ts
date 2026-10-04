@@ -30,6 +30,9 @@ export const TELEMETRY_MANIFEST = [
   // event COUNT is the denominator for every number in the payload. No refs —
   // this code is ours; the five-source audit has no equivalent row for it.
   { code: "provider/usage", domain: "provider", description: "A provider round-trip reported its own token usage (count = round-trips that reported)" },
+  { code: "provider/context", domain: "provider", description: "Neutral request component bytes and input estimate; no prompt bodies" },
+  { code: "provider/cache", domain: "provider", description: "Completed request cache measurement availability and normalized input accounting" },
+  { code: "compaction/usage", domain: "system", description: "A summary model request reported token usage, counted separately" },
   // M72 Ⅱ: the same discipline as the row above — the event COUNT is the
   // denominator ("round-trips that hit the cap"). No refs: this code is ours;
   // the five-source audit has no equivalent row for it.

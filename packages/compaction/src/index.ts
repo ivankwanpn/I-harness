@@ -102,6 +102,10 @@ export function createCompactionEngine(deps: {
   maxOutputTokens?: number
   /** Current system/tool overhead when the model-facing catalog is live. */
   overheadTokens?: () => number
+  /** Optional full current input estimate, including system/tools. A host may
+   * calibrate it with a completed provider report; rewritten projections fall
+   * back to the existing meter. */
+  contextTokens?: () => number
 }): CompactionEngine {
   // M34 ⑦a: global chain + the per-model policy arm (deps.provider/modelId
   // select the exact "provider/model" entry of config.modelPolicies). No
@@ -249,6 +253,7 @@ export function createCompactionEngine(deps: {
         // request carries the system prompt and tool schemas too. Resolved
         // (default 0), so it is passed as a value, not as a spread.
         overheadTokens: overheadNow(),
+        onUsage: usage => { deps.telemetry?.emit({ type: "compaction/usage", ts: Date.now(), data: { ...usage } }) },
       },
       // M75: and the region itself, RAW — the summarizer slices it for itself
       // when the single request cannot fit the window. Pre-slicing here would
@@ -311,7 +316,7 @@ export function createCompactionEngine(deps: {
     async maybeCompact(session: Session): Promise<CompactionResult> {
       // M33 §3.1: the host-known charge the session log does not carry
       // (system prompt + tool schemas — CompactionConfig.overheadTokens).
-      if (activeTokens(session) + overheadNow() < contextWindow * config.thresholdRatio) {
+      if ((deps.contextTokens?.() ?? activeTokens(session) + overheadNow()) < contextWindow * config.thresholdRatio) {
         return { compacted: false, shadowedSeqs: [] }
       }
       // M34 ⑦d — the auto-path gate stack (documented state machine):

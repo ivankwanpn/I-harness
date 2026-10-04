@@ -16,6 +16,9 @@ export type TelemetryEventType =
   // M5 T2: the provider's OWN usage report for one round-trip — a fact, kept
   // apart from `token/usage`, which carries our estimate of the same surface.
   | "provider/usage"
+  | "provider/context" // neutral serialized component bytes and calibrated/heuristic input estimate
+  | "provider/cache" // one completed request; missing cache measurements stay absent
+  | "compaction/usage" // summary model counters, separate from main-agent usage
   // M72 Ⅱ: that round-trip ended at the output cap (the seam's `end.truncated`,
   // decided by each adapter's own terminal literal). One event per truncated
   // round-trip, so the count is the denominator: a run with no event here is a

@@ -58,16 +58,20 @@ describe("core-agent telemetry emit (M25)", () => {
     expect(events.map((e) => e.type)).toEqual([
       "turn/start",
       "provider/call",
+      "provider/context",
+      "provider/cache",
       "tool/start",
       "tool/end",
       "provider/call",
+      "provider/context",
+      "provider/cache",
       "turn/end",
       "token/usage",
     ])
     expect(events[0]!.data).toMatchObject({ message: "read a.txt" })
-    expect(events[2]!.data).toMatchObject({ tool: "read", callId: "call_1" })
-    expect(events[3]!.data).toMatchObject({ tool: "read", callId: "call_1" })
-    expect((events[6]!.data as { tokens: number }).tokens).toBeGreaterThan(0)
+    expect(events[4]!.data).toMatchObject({ tool: "read", callId: "call_1" })
+    expect(events[5]!.data).toMatchObject({ tool: "read", callId: "call_1" })
+    expect((events[10]!.data as { tokens: number }).tokens).toBeGreaterThan(0)
     // telemetry is host-side: the session log carries NO telemetry events.
     expect(session.events.some((e) => e.type === "turn/start" && "message" in e)).toBe(false)
   })
@@ -132,8 +136,8 @@ describe("core-agent telemetry emit (M25)", () => {
       telemetry,
     })
     await expect(agent.run("read a.txt")).rejects.toThrow(/model stream error: boom/)
-    expect(events.map((e) => e.type)).toEqual(["turn/start", "provider/call", "provider/error"])
-    expect(events[2]!.data).toMatchObject({ error: "boom" })
+    expect(events.map((e) => e.type)).toEqual(["turn/start", "provider/call", "provider/context", "provider/error"])
+    expect(events[3]!.data).toMatchObject({ error: "boom" })
   })
 
   it("absent telemetry → no events, behavior unchanged (backward compat)", async () => {

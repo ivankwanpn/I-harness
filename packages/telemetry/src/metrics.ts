@@ -50,6 +50,8 @@ export interface MetricsSnapshot {
   }
   /** Tool outcomes by tool name (`tool/end` vs `tool/error`). */
   tools: Record<string, { ok: number; error: number }>
+  cache?: { requests: number; inputMeasured: number; cacheMeasured: number; totalInputTokens?: number; cacheReadTokens?: number; cacheReadRatio?: number }
+  summaries?: Record<string, number>
 }
 
 export interface MetricsSink extends TelemetrySink {
@@ -69,10 +71,29 @@ export function createMetricsSink(): MetricsSink {
     lastCause?: string
   }
   const tools = new Map<string, { ok: number; error: number }>()
+  const cache = { requests: 0, inputMeasured: 0, cacheMeasured: 0, totalInputTokens: 0, cacheReadTokens: 0 }
+  const summaries = new Map<string, number>()
 
   return {
     onEvent(ev: TelemetryEvent): void {
       events.set(ev.type, (events.get(ev.type) ?? 0) + 1)
+      if (ev.type === "provider/cache") {
+        cache.requests++
+        const input = ev.data.totalInputTokens, read = ev.data.cacheReadTokens
+        const valid = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+        if (valid(input)) cache.inputMeasured++
+        if (ev.data.cacheReadReported === true && valid(input) && valid(read) && read <= input) {
+          cache.cacheMeasured++; cache.totalInputTokens += input; cache.cacheReadTokens += read
+        }
+        return
+      }
+      if (ev.type === "compaction/usage") {
+        for (const key of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"]) {
+          const value = ev.data[key]
+          if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) summaries.set(key, (summaries.get(key) ?? 0) + value)
+        }
+        return
+      }
 
       // Two bags, deliberately: `tokens` is OUR estimate (activeTokens over the
       // derived surface) and `reported` is what the provider SAID. T2 exists to
@@ -130,6 +151,10 @@ export function createMetricsSink(): MetricsSink {
         reported: Object.fromEntries(reported),
         prefix: { ...prefix },
         tools: Object.fromEntries([...tools].map(([name, row]) => [name, { ...row }])),
+        ...(cache.requests ? { cache: { requests: cache.requests, inputMeasured: cache.inputMeasured, cacheMeasured: cache.cacheMeasured,
+          ...(cache.cacheMeasured ? { totalInputTokens: cache.totalInputTokens, cacheReadTokens: cache.cacheReadTokens,
+            ...(cache.totalInputTokens ? { cacheReadRatio: cache.cacheReadTokens / cache.totalInputTokens } : {}) } : {}) } } : {}),
+        ...(summaries.size ? { summaries: Object.fromEntries(summaries) } : {}),
       }
     },
   }

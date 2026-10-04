@@ -794,7 +794,7 @@ describe("M72 Ⅲ: response.completed's usage (openai)", () => {
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.filter((e) => e.type === "usage")).toEqual([
-      { type: "usage", usage: { inputTokens: 25, outputTokens: 7, cacheReadTokens: 19 } },
+      { type: "usage", usage: { inputTokens: 25, outputTokens: 7, cacheReadTokens: 19, inputTokenSemantics: "includes-cache" } },
     ])
     expect(events.at(-1)).toEqual({ type: "end" })
   })
@@ -816,7 +816,7 @@ describe("M72 Ⅲ: response.completed's usage (openai)", () => {
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     const usage = events.find((e) => e.type === "usage") as { usage: Record<string, unknown> } | undefined
-    expect(usage?.usage).toEqual({ inputTokens: 25 })
+    expect(usage?.usage).toEqual({ inputTokens: 25, inputTokenSemantics: "includes-cache" })
     expect("outputTokens" in (usage?.usage ?? {})).toBe(false)
     expect("cacheReadTokens" in (usage?.usage ?? {})).toBe(false)
   })

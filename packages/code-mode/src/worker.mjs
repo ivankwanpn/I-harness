@@ -108,8 +108,8 @@ function bridge(payloadHandle) {
     const encoded = JSON.stringify(item)
     const bytes = Buffer.byteLength(encoded)
     const itemTextBytes = item.type === 'text' ? Buffer.byteLength(item.text) : 0
-    if (outputItems >= ITEM_CAP || outputBytes + bytes > config.maxResultBytes || textBytes + itemTextBytes > TEXT_CAP) {
-      if (!truncated) { truncated = true; send({type:'truncated'}) }
+    if (outputItems >= ITEM_CAP || outputBytes + bytes > config.maxResultBytes) {
+      truncated = true; send({type:'truncated',text:item.type==='text'})
     } else {
       outputItems++; outputBytes += bytes; textBytes += itemTextBytes
       send({type:'output',json:encoded})
@@ -117,7 +117,7 @@ function bridge(payloadHandle) {
     return vm.undefined
   }
   if (request.type === 'truncated') {
-    if (!truncated) { truncated = true; send({type:'truncated'}) }
+    truncated = true; send({type:'truncated',text:request.text===true})
     return vm.undefined
   }
   if (request.type === 'call') {
@@ -187,9 +187,28 @@ try {
     let sequence = 0;
     const bytes = s => { let n=0; for (let i=0;i<s.length;i++) { const c=s.charCodeAt(i); if(c<128)n++; else if(c<2048)n+=2; else if(c>=0xD800&&c<=0xDBFF&&i+1<s.length&&s.charCodeAt(i+1)>=0xDC00&&s.charCodeAt(i+1)<=0xDFFF){n+=4;i++;}else n+=3; } return n; };
     const copy = value => { const s=stringify(value); if(s===undefined)throw Error('Value must be JSON serializable'); return parse(s); };
+    const jsonCopy = value => {const encoded=stringify(value,(key,current)=>{if(current===undefined||typeof current==='function'||typeof current==='symbol'||typeof current==='bigint'||typeof current==='number'&&!Number.isFinite(current))throw Error('Store requires JSON values only');return current;});return parse(encoded);};
+    const clip = (value, cap) => {let end=0,size=0;while(end<value.length){const c=charCode(value,end);let cost=c<128?1:c<2048?2:3,units=1;if(c>=0xD800&&c<=0xDBFF&&end+1<value.length){const n=charCode(value,end+1);if(n>=0xDC00&&n<=0xDFFF){cost=4;units=2;}}if(size+cost>cap)break;size+=cost;end+=units;}return slice(value,0,end);};
+    globalThis.searchTools=(query,limit=8)=>{
+      if(typeof query!=='string')throw Error('Tool query must be a string');
+      if(bytes(query)>256)throw Error('Tool query limit exceeded');
+      if(!Number.isInteger(limit)||limit<0)throw Error('Tool search limit must be a nonnegative integer');
+      if(limit===0)return [];
+      const terms=query.toLowerCase().trim().split(/\\s+/).filter(Boolean),matches=[];
+      for(const tool of catalog){if(tool.name.length>256||tool.alias.length>256)continue;const haystack=(tool.name+' '+tool.alias+' '+tool.description).toLowerCase();if(terms.every(term=>haystack.includes(term))){const row={name:tool.name,alias:tool.alias,description:clip(tool.description,320)};if(bytes(stringify(row))>1024)continue;matches.push(row);if(matches.length>=Math.min(20,limit))break;}}
+      return matches;
+    };
+    globalThis.describeTool=name=>{
+      if(typeof name!=='string')throw Error('Tool name must be a string');
+      const tool=catalog.find(tool=>tool.name===name||tool.alias===name);
+      if(!tool)throw Error('Tool not found: '+clip(name,256));
+      const {alias,...definition}=tool,encoded=stringify(definition);
+      if(bytes(encoded)>${Math.min(16 * 1024, config.maxResultBytes)})throw Error('Tool definition limit exceeded; complete definition unavailable');
+      return parse(encoded);
+    };
     const emit = item => {
       const encoded=stringify(item);
-      if(bytes(encoded)>${config.maxResultBytes} || (item.type==='text'&&bytes(item.text)>${TEXT_CAP})) {callHost({type:'truncated'});return;}
+      if(bytes(encoded)>${config.maxResultBytes}) {callHost({type:'truncated',text:item.type==='text'});return;}
       callHost({type:'output',item});
     };
     globalThis.tools = Object.create(null);
@@ -198,7 +217,7 @@ try {
       if(bytes(json)>${config.maxResultBytes})throw Error('Tool argument transfer limit exceeded');
       return callHost({type:'call',id:${JSON.stringify(cellId)}+':'+(++sequence),name:tool.name,json});
     },enumerable:true});
-    globalThis.ALL_TOOLS=catalog.map(({alias,...tool})=>tool);
+    globalThis.ALL_TOOLS=catalog.map(({alias,...tool})=>copy(tool));
     globalThis.text=value=>{let result;if(typeof value==='string')result=value;else {try {result=stringify(value)}catch{} if(result===undefined)result=String(value);} emit({type:'text',text:result});};
     globalThis.image=value=>{
       let image;
@@ -210,7 +229,7 @@ try {
     };
     globalThis.audio=value=>{const audioUrl=typeof value==='string'?value:value&&value.type==='audio'?('data:'+value.mimeType+';base64,'+value.data):value&&value.audio_url; if(typeof audioUrl!=='string'||!/^data:audio\\/[^;,]+;base64,[A-Za-z0-9+/]*={0,2}$/.test(audioUrl))throw Error('Audio must be a base64 data URL'); emit({type:'audio',audioUrl});};
     globalThis.store=(key,value)=>{
-      if(typeof key!=='string')throw Error('Store key must be a string'); const next=copy(value), merged=new Map(values);merged.set(key,next);
+      if(typeof key!=='string')throw Error('Store key must be a string'); const next=jsonCopy(value), merged=new Map(values);merged.set(key,next);
       if(bytes(stringify([...merged]))>${config.maxStoreBytes})throw Error('Session store limit exceeded');
       values.set(key,next);writes.set(key,next);callHost({type:'store',json:stringify([...writes])});
     };

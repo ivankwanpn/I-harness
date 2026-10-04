@@ -24,7 +24,7 @@ it.each(["mixed", "only"] as const)("runs a real CLI Code Mode cell in %s mode w
     expect(result.finalText).toBe("program completed")
     expect(session.events.some(event => event.type === "code/dispatch")).toBe(true)
     const names = requests[0]!.tools.map(tool => tool.name)
-    if (mode === "only") expect(names).toEqual(["code_exec", "code_wait"])
+    if (mode === "only") expect(names).toEqual(["code_exec", "code_status", "code_wait"])
     else expect(names).toContain("list_dir")
     expect(requests[1]!.messages.filter(message => message.role === "tool")).toHaveLength(1)
   } finally {

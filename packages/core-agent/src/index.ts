@@ -1,11 +1,12 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
+import { createHash } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ImageInput, Session } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite, publishTransient, SYSTEM_INPUT_PLUGIN } from "@i-harness/core-session"
 import type { ToolRegistry } from "@i-harness/core-tools"
-import type { ModelClient, LLMRequest, LLMStreamEvent, ToolSchema } from "@i-harness/llm-seam"
+import type { ModelClient, LLMRequest, LLMStreamEvent, LLMUsage, ToolSchema } from "@i-harness/llm-seam"
 import { assertMessagesFromLog, clampOutputCap } from "@i-harness/llm-seam"
-import { activeTokens, checkBudget, estimateContent } from "@i-harness/token-meter"
+import { activeTokens, checkBudget, createContextMeter, normalizeInputUsage } from "@i-harness/token-meter"
 import type { Telemetry } from "@i-harness/telemetry"
 
 export {
@@ -155,10 +156,11 @@ function canonicalJson(value: unknown): string {
 
 function validateBudget(budget: AgentBudgetConfig | undefined): void {
   if (budget !== undefined) {
-    const { contextWindow, resetRetainLast, overheadTokens } = budget
+    const { contextWindow, resetRetainLast, overheadTokens, reserveRatio } = budget
     if (!(Number.isFinite(contextWindow) && contextWindow > 0)) {
       throw new Error(`budget.contextWindow must be a finite positive number (got ${contextWindow})`)
     }
+    if (reserveRatio !== undefined && !(reserveRatio > 0 && reserveRatio <= 1)) throw new Error(`reserveRatio must be in (0, 1] (got ${reserveRatio})`)
     if (resetRetainLast !== undefined && (!Number.isInteger(resetRetainLast) || resetRetainLast < 0)) {
       throw new Error(`budget.resetRetainLast must be a non-negative integer (got ${resetRetainLast})`)
     }
@@ -175,6 +177,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   async function track<T>(operation: () => Promise<T>): Promise<T> {
     activeOperations++
     try { return await operation() }
+    catch (error) { contextMeter.invalidate(); throw error }
     finally { activeOperations-- }
   }
   // Desktop turns have no arbitrary step ceiling. Explicit callers may still
@@ -193,6 +196,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // values at creation too. Absent optional fields keep their defaults; no
   // change to `resetWindow` runtime behavior.
   validateBudget(deps.budget)
+  const contextMeter = createContextMeter()
+  const projectionRevision = (): number => deriveProjectionRewrite(deps.session).markers
+    + deps.session.events.filter(event => event.type === "compaction/prune").length
+  const currentShape = () => ({
+    systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+    tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
+    reasoningEffort: deps.reasoningEffort,
+  })
+  const contextEstimate = (overhead = 0) => contextMeter.estimate({ ...currentShape(), messages: deriveMessages(deps.session) }, overhead, projectionRevision())
   // M11: optional compaction seam. No `compact` config → no engine → the agent
   // behaves byte-identically to before this milestone.
   // M5/D2: the agent is the only layer that knows the shape the model sees, so
@@ -206,6 +218,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     ? createCompactionEngine({
         model: deps.model,
         config: compact,
+        ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
         // M73: compaction builds and sends its OWN model request, so it never
         // met the clamp the session's requests go through — on an anthropic
         // route that left the adapter's 128k fallback unclamped on the call
@@ -214,6 +227,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // resolved (compaction's own `contextWindow`, above).
         ...(cap !== undefined ? { maxOutputTokens: cap } : {}),
         ...(deps.modelOverheadTokens ? { overheadTokens: deps.modelOverheadTokens } : {}),
+        contextTokens: () => contextEstimate(deps.modelOverheadTokens?.() ?? compact.overheadTokens ?? 0).tokens,
         requestShape: () => ({
           systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
           tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
@@ -249,17 +263,18 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     // prompt + tool schemas) is added to EVERY boundary measurement.
     const overhead = deps.modelOverheadTokens?.() ?? budgetCfg.overheadTokens ?? 0
     if (!Number.isInteger(overhead) || overhead < 0) throw new Error("model overhead must be a non-negative integer")
-    const before = checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead)
+    const check = () => checkBudget(deps.session, budgetCfg!.contextWindow, budgetCfg!.reserveRatio, overhead, contextEstimate(overhead).tokens)
+    const before = check()
     if (before.state === "ok") return
     // Layer 1: M11 compact (shadow-projection + summary).
     if (compactor) {
       await compactor.compact(deps.session)
-      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead).state === "ok") return
+      if (check().state === "ok") return
     }
     // Layer 2: pure reset (absorb codex token-budget) — keep the recent tail.
     if (compactor && resetAllowed) {
       await compactor.resetWindow(deps.session, resetRetainLast)
-      if (checkBudget(deps.session, budgetCfg.contextWindow, budgetCfg.reserveRatio, overhead).state === "ok") return
+      if (check().state === "ok") return
     }
     // Layer 3: fail-closed.
     throw new Error(`prompt_too_long: context budget exceeded (${before.tokens} tokens > ${before.budget} budget)`)
@@ -336,6 +351,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         messages,
         tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
         systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,
+        ...(deps.sessionId === undefined ? {} : { promptCache: { key: `ih_${createHash("sha256").update(deps.sessionId).digest("hex").slice(0, 48)}` } }),
         // M72 Ⅱ: the cap the host resolved for this model, CLAMPED here because
         // this is the only place that holds all three inputs at once: the value
         // (deps), the window (budgetCfg) and the input we are about to send.
@@ -347,7 +363,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
               maxOutputTokens: clampOutputCap(
                 outputCap,
                 budgetCfg?.contextWindow,
-                estimateContent(messages) + (deps.modelOverheadTokens?.() ?? budgetCfg?.overheadTokens ?? 0),
+                contextEstimate(deps.modelOverheadTokens?.() ?? budgetCfg?.overheadTokens ?? 0).tokens,
               ),
             }
           : {}),
@@ -359,6 +375,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // a provider parked on a silent socket could not be stopped.
         ...(abort !== undefined ? { signal: abort } : {}),
       }
+      const requestRevision = projectionRevision()
 
       // M25: provider/call before the model stream opens.
       // NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20
@@ -410,13 +427,23 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           ...(previous === undefined ? {} : { prefixKept: shared, prefixBroke: shared < previous.length }),
         },
       })
+      if (deps.telemetry) {
+        const estimate = contextMeter.estimate(request, deps.modelOverheadTokens?.() ?? budgetCfg?.overheadTokens ?? 0, requestRevision)
+        deps.telemetry.emit({ type: "provider/context", ts: Date.now(), data: {
+          systemBytes: Buffer.byteLength(request.systemPrompt),
+          schemaBytes: Buffer.byteLength(JSON.stringify(request.tools)),
+          historyBytes: Buffer.byteLength(JSON.stringify(request.messages)),
+          toolResultBytes: request.messages.filter(message => message.role === "tool").reduce((sum, message) => sum + Buffer.byteLength(JSON.stringify(message.content)), 0),
+          estimatedInputTokens: estimate.tokens, estimateSource: estimate.source,
+        } })
+      }
 
       let stepText = ""
       let toolCallsThisStep = 0
       // M5 T2: the provider's own usage report for THIS round-trip. Merged
       // rather than overwritten, because one request can report twice and each
       // report carries only its own fields.
-      const stepUsage: Record<string, number> = {}
+      const stepUsage: LLMUsage = {}
       const batch: BatchCall[] = []
       // M72 Ⅱ: this step's ending, decided by the provider's own terminal
       // literal (Task 6) and carried to the durable log below. Per-STEP, so
@@ -526,9 +553,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
               // into something the host can see: the switch has no default and no
               // exhaustiveness assert, so without it the event is dropped in
               // silence — the run looks perfect and the numbers are simply absent.
-              for (const [field, value] of Object.entries(ev.usage)) {
-                if (typeof value === "number") stepUsage[field] = value
+              for (const field of ["inputTokens", "outputTokens", "cacheReadTokens", "cacheCreationTokens"] as const) {
+                const value = ev.usage[field]
+                if (typeof value === "number" && Number.isFinite(value)) stepUsage[field] = value
               }
+              if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
               break
             case "error":
               deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
@@ -552,6 +581,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           }
         }
       } catch (error) {
+        contextMeter.invalidate()
         flushReasoning()
         append(deps.session, { type: "step/failed" })
         throw error
@@ -568,6 +598,16 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (Object.keys(stepUsage).length > 0) {
         deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
       }
+      const normalized = normalizeInputUsage(stepUsage)
+      const cacheRead = stepUsage.cacheReadTokens
+      const measuredCacheRead = typeof cacheRead === "number" && Number.isSafeInteger(cacheRead) && cacheRead >= 0
+      deps.telemetry?.emit({ type: "provider/cache", ts: Date.now(), data: {
+        cacheReadReported: measuredCacheRead,
+        ...(normalized ?? {}),
+        ...(measuredCacheRead ? { cacheReadTokens: cacheRead } : {}),
+      } })
+      if (abort?.aborted || refusedThisStep || truncatedThisStep) contextMeter.invalidate()
+      else contextMeter.record(request, stepUsage, requestRevision)
 
       // The provider's signed continuation belongs to its tool-use message.
       // Persist it before a tool can be refused, cancelled or fail to commit;
@@ -660,6 +700,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     updateContext(config) {
       if (activeOperations > 0) throw new Error("agent is busy")
       validateBudget(config.budget)
+      contextMeter.invalidate()
       if (config.maxOutputTokens !== undefined && (!Number.isInteger(config.maxOutputTokens) || config.maxOutputTokens < 1)) throw new Error("invalid output cap")
       const next = buildCompactor(config.compact, config.maxOutputTokens)
       compactor = next

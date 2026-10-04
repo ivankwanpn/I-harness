@@ -24,7 +24,7 @@ import { createTodoTool, renderTodoContext } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
 import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
-import { createOutputSpillGuard, type OutputSpillGuardConfig } from "@i-harness/output-retention"
+import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import type { ExecService } from "@i-harness/exec"
@@ -1060,9 +1060,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
+  const codeSpillStore = opts.outputSpill?.spillRoot === undefined ? undefined : createUnifiedSpillStore(opts.outputSpill.spillRoot)
   const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" && typeof opts.codeMode !== "function" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
     ...mountOptions,
     config: codeModeNow(),
+    ...(codeSpillStore ? { spillStore: mountOptions.spillStore ?? codeSpillStore } : {}),
     ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
   })
   let workflowMount: WorkflowMountHandle | undefined
@@ -1314,6 +1316,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     })
     if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
       session, sessionId: opts.sessionId, config: codeMode,
+      ...(codeSpillStore ? { spillStore: codeSpillStore } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
       ...(opts.coordinator !== undefined && opts.sessionId !== undefined ? { flush: () => opts.coordinator!.flush(opts.sessionId!) } : {}),
     })

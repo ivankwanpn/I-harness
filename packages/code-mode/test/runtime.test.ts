@@ -6,6 +6,41 @@ const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRu
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 describe('isolated Code Mode runtime', () => {
+  it('bounds discovery metadata and complete definitions in the captured catalog', async () => {
+    const definitions = Array.from({length:25},(_,i)=>({name:`lookup.${i}`,description:'Find documents '+ 'x'.repeat(2000),inputSchema:{type:'object'}}))
+    definitions.push({name:'huge',description:'oversized schema',inputSchema:{type:'object',properties:{body:{description:'s'.repeat(18000)}}}} as typeof definitions[number])
+    const r = make({tools:()=>definitions})
+    try {
+      const out = await r.exec({code:`text(searchTools('documents').length);text(searchTools('documents',999).length);text(searchTools('lookup_0')[0]);text(describeTool('lookup_0').name);for(const fn of [()=>describeTool('huge'),()=>searchTools('x'.repeat(300)),()=>searchTools('find',-1)]){try{fn()}catch(e){text(e.message)}}`})
+      expect(out.status).toBe('completed')
+      const lines=out.text.split('\n')
+      expect(lines.slice(0,2)).toEqual(['8','20'])
+      const row=JSON.parse(lines[2]) as {name:string;alias:string;description:string}
+      expect(row).toMatchObject({name:'lookup.0',alias:'lookup_0'})
+      expect(Buffer.byteLength(row.description)).toBeLessThanOrEqual(320)
+      expect(row).not.toHaveProperty('inputSchema')
+      expect(lines[3]).toBe('lookup.0')
+      expect(lines[4]).toMatch(/definition.*limit/i)
+      expect(lines[5]).toMatch(/query.*limit/i)
+      expect(lines[6]).toMatch(/limit.*integer/i)
+    } finally { await r.dispose() }
+  })
+  it('does not let mutable discovery results rewrite captured schemas or broker names', async () => {
+    const r=make({tools:()=>[{name:'direct.read',description:'Read file',inputSchema:{type:'object',properties:{path:{type:'string'}}}}],invoke:async call=>call.name})
+    try {
+      const out=await r.exec({code:`const row=describeTool('direct_read');row.name='changed';row.inputSchema.properties.path.type='number';const found=searchTools('READ');found[0].name='changed';text(describeTool('direct.read').inputSchema.properties.path.type);text(await tools.direct_read({path:'a'}));`})
+      expect(out.status).toBe('completed');expect(out.text).toBe('string\ndirect.read')
+    } finally {await r.dispose()}
+  })
+  it('keeps search metadata bounded even when an authorized tool name is unusually large', async () => {
+    const r=make({tools:()=>[{...read,name:'n'.repeat(4000)},read]})
+    try {
+      const out=await r.exec({code:`const rows=searchTools('');text(rows.some(row=>row.name==='read'));text(Math.max(...rows.map(row=>JSON.stringify(row).length)));`})
+      expect(out.status).toBe('completed')
+      const [found,size]=out.text.split('\n')
+      expect(found).toBe('true');expect(Number(size)).toBeLessThanOrEqual(1024)
+    } finally {await r.dispose()}
+  })
   it('awaits a tool in an actual QuickJS worker module', async () => {
     const r = make()
     try {
@@ -160,6 +195,15 @@ describe('isolated Code Mode runtime', () => {
       await r.wait({cell_id:first.cellId,terminate:true})
       expect((await r.exec({code:'text(1)'})).text).toBe('1')
     } finally { await r.dispose(); await collisions.dispose() }
+  })
+  it.each([false,true])('enforces active-cell admission when callers start cells concurrently (async started=%s)', async asyncStarted => {
+    const r = make({config:{maxActiveCells:1},onEvent:event=>{if(asyncStarted&&event.type==='started')return Promise.resolve()}})
+    try {
+      const results = await Promise.allSettled([r.exec({code:'await new Promise(()=>{})',yield_time_ms:0}),r.exec({code:'await new Promise(()=>{})',yield_time_ms:0})])
+      expect(results.filter(result=>result.status==='fulfilled')).toHaveLength(1)
+      const rejected=results.find(result=>result.status==='rejected') as PromiseRejectedResult
+      expect(rejected.reason.message).toMatch(/active cell limit/i)
+    } finally {await r.dispose()}
   })
   it('refuses oversized guest arguments before invoking the host and cannot forge a policy refusal', async () => {
     let calls=0

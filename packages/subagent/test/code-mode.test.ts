@@ -40,7 +40,7 @@ it("ordinary children mount their own role-scoped Code Mode and never copy paren
     await child.followupChain
     expect(child.error).toBeUndefined()
     expect(child.finalText).toBe("done")
-    expect(f.requests[0]!.tools.map(t => t.name)).toEqual(["code_exec", "code_wait"])
+    expect(f.requests[0]!.tools.map(t => t.name)).toEqual(["code_exec", "code_status", "code_wait"])
     expect(f.requests[0]!.maxOutputTokens).toBe(123)
     const output = child.session.events.find(event => event.type === "code/output")
     expect(output).toMatchObject({ content: { text: '["allowed"]' } })
@@ -83,7 +83,7 @@ it("a restored resident mounts a fresh role-local runtime and closes its produce
     await f.deps.agents.get("restored")!.run("read")
     expect(entry.session.events.some(event => event.type === "code/call" && event.name === "allowed")).toBe(true)
     expect(f.deps.parentSession.events.some(event => event.type === "code/dispatch")).toBe(false)
-    expect(f.requests[0]!.tools.map(t => t.name)).toEqual(["code_exec", "code_wait"])
+    expect(f.requests[0]!.tools.map(t => t.name)).toEqual(["code_exec", "code_status", "code_wait"])
     expect(entry.dispose).toBeTypeOf("function")
   } finally { await entry.dispose?.(); await f.parentMount.dispose() }
 })

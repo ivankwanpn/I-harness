@@ -92,7 +92,7 @@ describe("llm-gemini protocol", () => {
     // The fixture carries only promptTokenCount/candidatesTokenCount: the
     // element above pins the position, this pins that the field the wire did
     // NOT send stays absent — never a fabricated `cacheReadTokens: 0`.
-    expect(usage).toEqual({ inputTokens: 2, outputTokens: 5 })
+    expect(usage).toEqual({ inputTokens: 2, outputTokens: 5, inputTokenSemantics: "includes-cache" })
   })
 
   it("separates Gemini thought-summary parts from answer text and preserves their block positions", async () => {
@@ -856,7 +856,7 @@ describe("M72 Ⅲ: usageMetadata on the gemini wire", () => {
     const events: LLMStreamEvent[] = []
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.filter((e) => e.type === "usage")).toEqual([
-      { type: "usage", usage: { inputTokens: 2, outputTokens: 5, cacheReadTokens: 1 } },
+      { type: "usage", usage: { inputTokens: 2, outputTokens: 5, cacheReadTokens: 1, inputTokenSemantics: "includes-cache" } },
     ])
   })
 

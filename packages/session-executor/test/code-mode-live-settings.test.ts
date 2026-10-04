@@ -23,7 +23,7 @@ it("adopts the current saved mode in new parent and child environments while pre
     expect(off.tools.get("code_exec")).toBeUndefined()
     saved = { mode: "only" }
     await off.tools.get("spawn_agent")!.execute({ task_name: "child", agent_type: "probe", message: "read", fork_turns: "none", background: false }, { sessionId: "off-parent" })
-    expect(requests[0]!.tools.map(tool => tool.name)).toEqual(["code_exec", "code_wait"])
+    expect(requests[0]!.tools.map(tool => tool.name)).toEqual(["code_exec", "code_status", "code_wait"])
     expect(modes).toEqual(["only"])
     expect(off.executionState!().codeMode).toBe("off")
     const parent = await service.assemblyFor("new-parent")

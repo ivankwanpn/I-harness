@@ -175,6 +175,10 @@ export interface SettingsProviderConfig {
    * keeps it only as a real boolean, and never fills a default here (the
    * resolved ask belongs to the adapter, not to the stored document). */
   usageInStream?: boolean
+  /** Opt-in explicit cache metadata for this route. Absence keeps existing
+   * payloads. Retention is an Anthropic marker TTL; Responses uses affinity
+   * only because its retention policies have different durations. */
+  promptCache?: { mode: "off" | "automatic"; retention?: "5m" | "1h" }
 }
 
 /** The section-level default model (resolution chain in Task 5:
@@ -571,6 +575,10 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   // must stay absent — the ADAPTER's default decides, and a filled-in default
   // here would be a second place to be wrong.
   if (typeof raw.usageInStream === "boolean") out.usageInStream = raw.usageInStream
+  if (isRecord(raw.promptCache) && (raw.promptCache.mode === "off" || raw.promptCache.mode === "automatic")
+    && (raw.promptCache.retention === undefined || raw.promptCache.retention === "5m" || raw.promptCache.retention === "1h")) {
+    out.promptCache = { mode: raw.promptCache.mode, ...(raw.promptCache.retention !== undefined ? { retention: raw.promptCache.retention } : {}) }
+  }
   if (isProviderProtocol(raw.protocol)) out.protocol = raw.protocol
   if (Object.keys(out).length === 0) return null
   return out

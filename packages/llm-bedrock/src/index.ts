@@ -18,7 +18,7 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const src = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: string, to: keyof LLMUsage): void => {
+  const take = (from: string, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
     const v = src[from]
     if (typeof v === "number" && Number.isFinite(v)) out[to] = v
   }
@@ -26,6 +26,9 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   take("outputTokens", "outputTokens")
   take("cacheReadInputTokens", "cacheReadTokens")
   take("cacheWriteInputTokens", "cacheCreationTokens")
+  // Converse inputTokens excludes both cache reads and cache writes (AWS
+  // prompt-caching guide); preserve raw counters and declare that accounting.
+  if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "excludes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }
 

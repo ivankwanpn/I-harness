@@ -3,6 +3,13 @@ import { createSession, append } from "@i-harness/core-session"
 import { checkBudget } from "../src/index.ts"
 
 describe("checkBudget", () => {
+  it("charges a calibrated full-input total once while preserving the budget validator", () => {
+    const s = createSession()
+    append(s, { type: "user/message", text: "short" })
+    const check = checkBudget
+    expect(check(s, 1000, .9, 50, 901)).toEqual({ state: "overflow", tokens: 901, budget: 900 })
+    expect(() => check(s, 1000, .9, 50, NaN)).toThrow(/calibrated/)
+  })
   it("returns ok when under budget", () => {
     const s = createSession()
     append(s, { type: "user/message", text: "hello" })

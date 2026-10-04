@@ -6,12 +6,14 @@ import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeOb
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
 import { codeModeDescription } from "./catalog.ts"
+import { replayCodeModeStore } from "./state.ts"
 
 function observationOutput(out: CodeModeObservation) {
   if (out.policyRefusal) throw Object.assign(new Error(out.error || "Code Mode policy refusal"), { policyRefusal: true as const })
   const images = out.items.flatMap(item => item.type === "image" ? [item.image] : [])
   return {
     cellId: out.cellId, cell_id: out.cellId, status: out.status, text: out.text, truncated: out.truncated,
+    ...(out.textRetention ? { textRetention: out.textRetention } : {}),
     ...(out.error ? { error: out.error } : {}),
     items: out.items.map(item => item.type === "text" ? { type: "text", length: item.text.length }
       : item.type === "image" ? { type: "image", mediaType: item.image.mediaType, name: item.image.name }
@@ -34,8 +36,16 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   for (const [cellId, parentCallId] of open) append(options.session, { type: "code/cell", cellId, sessionId: options.sessionId, parentCallId, state: "interrupted", error: "Code Mode execution was interrupted; restart does not restore its continuation" })
   const runtime = createCodeModeRuntime({
     config: options.config,
+    ...(options.spillStore ? { spillStore: options.spillStore } : {}),
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
+    restoreStore: origin => replayCodeModeStore(options.session, options.sessionId ?? origin.sessionId),
+    async commitStore({ cellId, origin, writes, signal }) {
+      if (signal.aborted) throw new Error("Code Mode store commit aborted")
+      append(options.session, { type: "code/store", version: 1, cellId, sessionId: options.sessionId ?? origin.sessionId, writes })
+      await options.flush?.()
+      if (signal.aborted) throw new Error("Code Mode store commit aborted")
+    },
     onEvent(event) {
       if (event.type === "started") {
         broker.startCell(event.cellId)
@@ -43,9 +53,12 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
         append(options.session, { type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: "started", source: event.source })
       } else if (event.type === "output") append(options.session, { type: "code/output", cellId: event.cellId, content: event.item })
       else {
+        append(options.session, { type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}) })
+        if (event.status === "completed" && options.flush) return options.flush().then(() => {
+          liveCells.delete(event.cellId); broker.retireCell(event.cellId)
+        })
         liveCells.delete(event.cellId)
         broker.retireCell(event.cellId)
-        append(options.session, { type: "code/cell", cellId: event.cellId, sessionId: options.sessionId ?? event.origin.sessionId, parentCallId: event.origin.callId, state: event.status, ...(event.error ? { error: event.error } : {}) })
       }
     },
   })
@@ -67,21 +80,24 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       return observationOutput(await runtime.wait(args as CodeModeWaitInput, exec.abortSignal))
     },
   }
-  const waitDescription = waitTool.description
+  const statusTool: Tool = {
+    name: "code_status", description: "List live code_exec cells owned by this session with their cell IDs and running status. Use code_wait to read new output or terminate a cell. Previous-process continuations are unavailable.", isReadOnly: true,
+    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    async execute() {
+      if (disposed || mode === "off") throw new Error("Code Mode unavailable")
+      return { cells: [...liveCells].map(id => ({ id, status: "running" as const })) }
+    },
+  }
   if (mode !== "off") {
-    if (tools.get("code_exec") || tools.get("code_wait")) throw new Error("Code Mode tool names are already registered")
-    tools.register(execTool); tools.register(waitTool)
+    if (tools.get("code_exec") || tools.get("code_wait") || tools.get("code_status")) throw new Error("Code Mode tool names are already registered")
+    tools.register(execTool); tools.register(waitTool); tools.register(statusTool)
   }
   return {
     schemas() {
       if (disposed || mode === "off") return tools.schemas()
-      const execDescription = codeModeDescription(tools)
-      const currentWaitDescription = liveCells.size ? `${waitDescription}\nCurrently active cell IDs in this session: ${JSON.stringify([...liveCells])}` : waitDescription
-      // Live cell IDs belong to model presentation. A schema read must not
-      // mutate registry declarations consumed by approval authority snapshots.
-      const all = tools.schemas().map(schema => schema.name === "code_exec" ? { ...schema, description: execDescription }
-        : schema.name === "code_wait" ? { ...schema, description: currentWaitDescription } : schema)
-      return mode === "only" ? all.filter(s => s.name === "code_exec" || s.name === "code_wait") : all
+      const execDescription = codeModeDescription(tools, mode)
+      const all = tools.schemas().map(schema => schema.name === "code_exec" ? { ...schema, description: execDescription } : schema)
+      return mode === "only" ? all.filter(s => s.name === "code_exec" || s.name === "code_wait" || s.name === "code_status") : all
     },
     liveCells: () => [...liveCells].map(id => ({ id, status: "running" as const })),
     async terminateCell(cellId) {
@@ -96,6 +112,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
       try { await runtime.dispose() } finally { await broker.dispose() }
       if (tools.get("code_exec") === execTool) tools.unregister("code_exec")
       if (tools.get("code_wait") === waitTool) tools.unregister("code_wait")
+      if (tools.get("code_status") === statusTool) tools.unregister("code_status")
     },
   }
 }

@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -6,6 +6,8 @@ export interface GeminiConfig {
   model: string
   providerId?: string
   options?: Record<string, unknown>
+  /** Only explicit off removes a manual cachedContent reference. */
+  promptCache?: PromptCacheConfig
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping.
   inputModalities?: ("text" | "image")[]
@@ -250,7 +252,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         } } : {}),
         ...(request.maxOutputTokens !== undefined ? { maxOutputTokens: request.maxOutputTokens } : {}),
       }
-      const body = {
+      const body: Record<string, unknown> = {
         contents,
         ...(request.systemPrompt.trim() !== "" ? { systemInstruction: { parts: [{ text: request.systemPrompt }] } } : {}),
         ...(request.tools.length > 0
@@ -264,6 +266,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         // The parent stays absent when neither the route nor the request needs
         // generation settings.
       }
+      if (resolvePromptCacheMode(config.promptCache, request.promptCache) === "off") delete body.cachedContent
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
       // TCP / TLS / proxy. Surface the cause chain instead.
@@ -515,11 +518,12 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const r = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: unknown, to: keyof LLMUsage): void => {
+  const take = (from: unknown, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
     if (typeof from === "number" && Number.isFinite(from)) out[to] = from
   }
   take(r.promptTokenCount, "inputTokens")
   take(r.candidatesTokenCount, "outputTokens")
   take(r.cachedContentTokenCount, "cacheReadTokens")
+  if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "includes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }

@@ -55,7 +55,7 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     await waitTurns(1)
     expect(parallelLimits).toEqual([1, 1, 1])
     for (const request of requests) {
-      expect(request.tools.map(t => t.name)).toEqual(["code_exec", "code_wait"])
+      expect(request.tools.map(t => t.name)).toEqual(["code_exec", "code_status", "code_wait"])
       expect(request.maxOutputTokens).toBe(123)
     }
     expect(assembly.session.events.some(e => e.type === "code/dispatch")).toBe(false)
@@ -72,7 +72,7 @@ it("ordinary and Team children keep role-local Code Mode through followup and re
     for (const id of ids) {
       const events = (await coordinator.snapshot!(id)).session.events
       const numbers = events.filter(e => e.type === "code/output").map(e => (e as { content: { text?: string } }).content.text).filter(text => /^\d+$/.test(text ?? ""))
-      expect(numbers).toEqual(["1", "2", "1"])
+      expect(numbers).toEqual(["1", "2", "3"])
     }
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 }, 15_000)

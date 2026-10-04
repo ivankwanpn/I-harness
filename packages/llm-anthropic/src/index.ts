@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
   return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
@@ -20,7 +20,7 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   if (raw === null || typeof raw !== "object") return undefined
   const src = raw as Record<string, unknown>
   const out: LLMUsage = {}
-  const take = (from: string, to: keyof LLMUsage): void => {
+  const take = (from: string, to: Exclude<keyof LLMUsage, "inputTokenSemantics">): void => {
     const v = src[from]
     if (typeof v === "number" && Number.isFinite(v)) out[to] = v
   }
@@ -28,6 +28,7 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
   take("output_tokens", "outputTokens")
   take("cache_read_input_tokens", "cacheReadTokens")
   take("cache_creation_input_tokens", "cacheCreationTokens")
+  if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "excludes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }
 
@@ -37,6 +38,7 @@ export interface AnthropicConfig {
   model: string
   providerId?: string
   options?: Record<string, unknown>
+  promptCache?: PromptCacheConfig
   // M14: mirrors ProviderProfile.inputModalities — when the route lacks
   // "image", images are projected out before wire mapping. Forwarded by
   // buildModelClient (Task 6).
@@ -75,6 +77,75 @@ function toAnthropicContent(content: string | LLMContentPart[]): unknown {
       ? { type: "text", text: part.text }
       : { type: "image", source: { type: "base64", media_type: part.image.mediaType, data: part.image.dataBase64 } },
   )
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/** Work on the final wire copy so cache markers never enter signed-continuation
+ * fingerprints or mutate the neutral transcript. Only cache-control locations
+ * are visited: a tool schema or tool argument named cache_control is data. */
+function applyPromptCache(body: Record<string, unknown>, config: PromptCacheConfig | undefined, intent: LLMRequest["promptCache"]): Record<string, unknown> {
+  const mode = resolvePromptCacheMode(config, intent)
+  if (mode === undefined) return body
+  const tools = Array.isArray(body.tools) ? body.tools : []
+  const messages = Array.isArray(body.messages) ? body.messages : []
+  const blocks = (content: unknown): Record<string, unknown>[] => Array.isArray(content) ? content.filter(isRecord) : []
+  const cleanBlock = (block: unknown): unknown => {
+    if (!isRecord(block)) return block
+    const clean = { ...block }
+    delete clean.cache_control
+    if (block.type === "tool_result" && Array.isArray(block.content)) clean.content = block.content.map(cleanBlock)
+    return clean
+  }
+  if (mode === "off") {
+    const clean = { ...body }
+    delete clean.cache_control
+    return {
+      ...clean,
+      system: Array.isArray(body.system) ? body.system.map(cleanBlock) : body.system,
+      tools: tools.map(cleanBlock),
+      messages: messages.map((message) => isRecord(message) && Array.isArray(message.content) ? { ...message, content: message.content.map(cleanBlock) } : message),
+    }
+  }
+  // A caller's existing automatic wire option also occupies one slot. Its TTL
+  // wins so the final explicit block cannot disagree with that moving marker.
+  const manual = isRecord(body.cache_control) ? body.cache_control : undefined
+  const retention = manual?.type === "ephemeral" ? manual.ttl : config?.retention
+  const marker = { type: "ephemeral", ...(retention !== undefined ? { ttl: retention } : {}) }
+  let used = Object.hasOwn(body, "cache_control") ? 1 : 0
+  const countBlock = (block: Record<string, unknown>): void => {
+    if (Object.hasOwn(block, "cache_control")) used++
+    if (block.type === "tool_result") for (const inner of blocks(block.content)) countBlock(inner)
+  }
+  for (const block of [...blocks(body.system), ...tools.filter(isRecord), ...messages.flatMap((message) => isRecord(message) ? blocks(message.content) : [])]) countBlock(block)
+  const mark = (block: Record<string, unknown>): Record<string, unknown> => {
+    if (used >= 4 || Object.hasOwn(block, "cache_control")) return block
+    used++
+    return { ...block, cache_control: { ...marker } }
+  }
+  let system = body.system
+  if (typeof system === "string" && system.length > 0 && used < 4) system = [mark({ type: "text", text: system })]
+  const cachedTools = tools.map((tool, index) => index === tools.length - 1 && isRecord(tool) ? mark(tool) : tool)
+  const cachedMessages = [...messages]
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!isRecord(message) || message.role !== "user") continue
+    if (typeof message.content === "string") {
+      if (message.content.length === 0 || used >= 4) continue
+      cachedMessages[index] = { ...message, content: [mark({ type: "text", text: message.content })] }
+      break
+    }
+    if (!Array.isArray(message.content)) continue
+    const content = [...message.content]
+    const last = content.findLastIndex((block) => isRecord(block) && (block.type === "tool_result" || block.type === "image" || block.type === "text" && typeof block.text === "string" && block.text.length > 0))
+    if (last === -1) continue
+    content[last] = mark(content[last] as Record<string, unknown>)
+    cachedMessages[index] = { ...message, content }
+    break
+  }
+  return { ...body, system, tools: cachedTools, messages: cachedMessages }
 }
 
 /**
@@ -204,6 +275,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // `options.max_tokens` keeps working and the constant is the last resort.
         max_tokens: maxTokens,
       }
+      const payload = applyPromptCache(body, config.promptCache, request.promptCache)
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
       // TCP / TLS / proxy. Surface the cause chain instead.
@@ -212,7 +284,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         response = await fetch(`${baseUrl}/v1/messages`, {
           method: "POST",
           headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", "x-api-key": config.apiKey, "anthropic-version": "2023-06-01" }),
-          body: JSON.stringify(body),
+          body: JSON.stringify(payload),
           // M61: the caller's abort signal reaches the transport — cancel must
           // kill a parked request, not wait for the first event.
           ...(request.signal !== undefined ? { signal: request.signal } : {}),

@@ -29,6 +29,51 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+describe("explicit route prompt cache configuration", () => {
+  it.each(["upsert", "create", "patch"] as const)("rejects malformed cache configuration at %s before a settings write", async (operation) => {
+    const f = await fixture({ providers: { existing: { protocol: "openai-responses", models: [{ id: "m" }] } } })
+    const before = readFileSync(f.settingsPath, "utf8")
+    const promptCache = { mode: "automatic", retention: "24h" } as unknown as SettingsProviderConfig["promptCache"]
+    const mutation = operation === "patch" ? f.runtime.patchProvider("existing", { promptCache })
+      : operation === "create" ? f.runtime.createProvider("new", { protocol: "openai-responses", promptCache })
+      : f.runtime.upsertProvider("existing", { protocol: "openai-responses", promptCache })
+    await expect(mutation).rejects.toThrow(/promptCache/)
+    expect(readFileSync(f.settingsPath, "utf8")).toBe(before)
+  })
+
+  it("propagates the canonical route through the real settings/runtime/profile/adapter chain", async () => {
+    const f = await fixture({ providers: { gateway: { protocol: "anthropic-messages", apiKeyEnv: "SYNTHETIC", baseURL: "https://gateway.test", promptCache: { mode: "automatic", retention: "1h" }, models: [{ id: "messages-model" }, { id: "chat-model", protocol: "openai-completions" }] } }, credentials: { SYNTHETIC: "fixture-key" } })
+    const runtime = createProviderRuntime({ settings: f.settings, credentials: f.credentials, registry: f.registry })
+    const bodies: Record<string, any>[] = []
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => { bodies.push(JSON.parse(init.body as string)); return new Response("") })
+    const request = { systemPrompt: "stable", tools: [], messages: [{ role: "user" as const, content: "hi" }], promptCache: { key: "opaque" } }
+    for (const selection of [{ model: "messages-model" }, { model: "chat-model" }, { model: "chat-model", protocol: "openai-responses" as const }]) {
+      const resolved = await runtime.resolveModel({ sessionSelection: { provider: "gateway", ...selection } })
+      expect(resolved.status).toBe("ready")
+      if (resolved.status === "ready") for await (const _event of resolved.binding.client.stream(request)) {}
+    }
+    expect(bodies[0]!.system).toEqual([{ type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } }])
+    expect(bodies[1]!.messages[0]).toEqual({ role: "system", content: "stable" })
+    expect(bodies[1]!.cache_control).toBeUndefined()
+    expect(bodies[1]!.prompt_cache_key).toBeUndefined()
+    expect(bodies[2]!.prompt_cache_key).toBe("opaque")
+    expect(bodies[2]!.prompt_cache_retention).toBeUndefined()
+  })
+
+  it("round-trips patch, directory, reload and clear while preserving the model catalog", async () => {
+    const f = await fixture({ providers: { route: { protocol: "openai-responses", apiKeyEnv: "SYNTHETIC", models: [{ id: "m" }] } }, credentials: { SYNTHETIC: "fixture-key" } })
+    await f.runtime.patchProvider("route", { promptCache: { mode: "automatic", retention: "5m" } })
+    expect(f.settings.get().llm.providers.route?.promptCache).toEqual({ mode: "automatic", retention: "5m" })
+    expect((await f.runtime.directory()).find((row) => row.id === "route")?.promptCache).toEqual({ mode: "automatic", retention: "5m" })
+    await f.settings.load()
+    await f.runtime.resolveModel({ sessionSelection: { provider: "route", model: "m" } })
+    expect(f.builds[0]?.profile.promptCache).toEqual({ mode: "automatic", retention: "5m" })
+    await f.runtime.patchProvider("route", { promptCache: null })
+    expect(f.settings.get().llm.providers.route?.promptCache).toBeUndefined()
+    expect(f.settings.get().llm.providers.route?.models).toEqual([{ id: "m" }])
+  })
+})
+
 interface BuildCall {
   profile: ProviderProfile
   model: string | undefined

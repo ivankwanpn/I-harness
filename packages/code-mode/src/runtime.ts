@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Worker } from 'node:worker_threads'
-import type { CodeModeConfig, CodeModeItem, CodeModeObservation, CodeModeOrigin, CodeModeRuntime, CodeModeRuntimeOptions, CodeModeStatus } from './types.js'
+import { createUnifiedSpillStore } from '@i-harness/output-retention'
+import type { CodeModeConfig, CodeModeItem, CodeModeObservation, CodeModeOrigin, CodeModeRuntime, CodeModeRuntimeOptions, CodeModeStatus, CodeModeStoreEntries, CodeModeTextRetention } from './types.js'
 
 const TEXT_CAP = 16 * 1024
 const ITEM_CAP = 256
@@ -22,7 +23,7 @@ function limits(config: CodeModeConfig = {}) {
     defaultOutputTokens: limit(config.defaultOutputTokens, 4096, 0, 4096, 'defaultOutputTokens'),
   }
 }
-function json(value: unknown, bytes: number, label: string): string {
+function json(value: unknown, bytes: number, label: string, strict = false): string {
   let consumed = 0
   let root = true
   const counts = new WeakMap<object, number>()
@@ -36,6 +37,7 @@ function json(value: unknown, bytes: number, label: string): string {
   const encoded = JSON.stringify(value === undefined ? null : value,function(key,current: unknown) {
     const array = Array.isArray(this)
     const omitted = current === undefined || typeof current === 'function' || typeof current === 'symbol'
+    if (strict && (omitted || typeof current === 'bigint' || typeof current === 'number' && !Number.isFinite(current))) throw new Error(`${label} must contain JSON values only`)
     let size = 0
     if (root) root = false
     else if (!omitted || array) {
@@ -94,6 +96,9 @@ interface Cell {
   producers: Set<Promise<void>>
   stop?: Promise<number>
   knownTools: Set<string>
+  finishing: boolean
+  commitStop: AbortController
+  textIncomplete: boolean
 }
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
@@ -104,11 +109,27 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
   const store = new Map<string, unknown>()
   const producers = new Set<Promise<void>>()
   const stopping = new Set<Promise<number>>()
+  let commits: Promise<void> = Promise.resolve()
+  let spillStore = options.spillStore
   let disposed = false
   let disposing: Promise<void> | undefined
   let cancelling: Promise<void> | undefined
+  let admissions = 0, cancellationEpoch = 0
 
-  function event(event: Parameters<NonNullable<CodeModeRuntimeOptions['onEvent']>>[0]) { options.onEvent?.(event) }
+  function event(event: Parameters<NonNullable<CodeModeRuntimeOptions['onEvent']>>[0]) { return options.onEvent?.(event) }
+  function entries(value: unknown): CodeModeStoreEntries {
+    const encoded = json(value,config.maxStoreBytes,'Session store',true)
+    const decoded: unknown = JSON.parse(encoded)
+    if (!Array.isArray(decoded) || decoded.some(entry => !Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== 'string')) throw new Error('Invalid session store entries')
+    return decoded as CodeModeStoreEntries
+  }
+  function currentStore(origin: CodeModeOrigin) {
+    return options.restoreStore ? new Map(entries(options.restoreStore(origin))) : new Map(store)
+  }
+  function track(pending: Promise<void>, cell?: Cell) {
+    producers.add(pending); cell?.producers.add(pending)
+    void pending.finally(() => { producers.delete(pending); cell?.producers.delete(pending) })
+  }
   function stop(cell: Cell) {
     if (cell.stop) return cell.stop
     const pending = cell.worker.terminate()
@@ -124,18 +145,25 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     cell.error = bounded?.text
     cell.truncated ||= bounded?.truncated ?? false
     cell.policyRefusal = policyRefusal
+    cell.commitStop.abort(cell.error ?? 'Cell closed')
     clearTimeout(cell.watchdog)
     cell.removeOwner?.()
     for (const controller of cell.calls.values()) controller.abort(cell.error ?? 'Cell completed')
     cell.calls.clear()
     void stop(cell)
-    try { event({type:'closed',cellId:cell.id,status,error:cell.error,policyRefusal,origin:cell.origin}) }
-    catch (failure) {
+    function failed(failure: unknown) {
       if (cell.status !== 'terminated') cell.status = 'failed'
       const failed = diagnostic(failure,errorCap)
       const combined = diagnostic(cell.error ? `${cell.error}; ${failed.text}` : failed.text,errorCap)
       cell.error = combined.text
       cell.truncated ||= failed.truncated || combined.truncated
+    }
+    try {
+      const pending = event({type:'closed',cellId:cell.id,status,error:cell.error,policyRefusal,origin:cell.origin})
+      if (pending) track(Promise.resolve(pending).catch(failed).finally(() => cell.wake?.()),cell)
+    }
+    catch (failure) {
+      failed(failure)
     }
     finally { cell.wake?.() }
   }
@@ -143,18 +171,19 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     if (cell.status !== 'running') return
     const item = JSON.parse(encoded) as CodeModeItem
     const bytes = Buffer.byteLength(encoded)
-    if (cell.items.length >= ITEM_CAP || cell.bytes + bytes > config.maxResultBytes ||
-        (item.type === 'text' && cell.textBytes + Buffer.byteLength(item.text) > TEXT_CAP)) {
+    if (cell.items.length >= ITEM_CAP || cell.bytes + bytes > config.maxResultBytes) {
       cell.truncated = true
+      cell.textIncomplete ||= item.type === 'text'
       return
     }
     cell.items.push(item)
     cell.bytes += bytes
     if (item.type === 'text') cell.textBytes += Buffer.byteLength(item.text)
-    event({type:'output',cellId:cell.id,item,origin:cell.origin})
+    const pending = event({type:'output',cellId:cell.id,item,origin:cell.origin})
+    if (pending) track(Promise.resolve(pending).catch(error => close(cell,'failed',message(error))),cell)
   }
   function call(cell: Cell, id: string, name: string, encoded: string) {
-    if (cell.status !== 'running') return
+    if (cell.status !== 'running' || cell.finishing) return
     if (!cell.knownTools.has(name) || cell.calls.has(id)) { close(cell,'failed','Invalid tool request'); return }
     if (cell.calls.size >= config.maxPendingCalls) {
       cell.worker.postMessage({type:'result',id,error:'Pending tool call limit exceeded'})
@@ -175,7 +204,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     try { invocation = Promise.resolve(options.invoke({cellId:cell.id,invocationId:id,name,args:JSON.parse(encoded),origin:cell.origin,signal:controller.signal})) }
     catch (error) { invocation = Promise.reject(error) }
     const producer = invocation.then(value => {
-      if (cell.status !== 'running' || controller.signal.aborted) return
+      if (cell.status !== 'running' || cell.finishing || controller.signal.aborted) return
       try { cell.worker.postMessage({type:'result',id,json:json(value,config.maxResultBytes,'Tool result')}) }
       catch (error) { reject(error) }
     }, error => {
@@ -187,8 +216,45 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     producers.add(producer)
     cell.producers.add(producer)
   }
+  function complete(cell: Cell, encoded: string) {
+    cell.finishing = true
+    clearTimeout(cell.watchdog)
+    // Executable lifetime ends when the guest module ends. Persistence retains
+    // only JSON and never extends unawaited tools, timers or continuations.
+    for (const controller of cell.calls.values()) controller.abort('Guest module completed')
+    cell.calls.clear()
+    void stop(cell)
+    let writes: CodeModeStoreEntries
+    try { writes = entries(JSON.parse(encoded)) }
+    catch (error) { close(cell,'failed',message(error)); return }
+    const finalize = async () => {
+      try {
+        if (cell.status !== 'running') return
+        const merged = currentStore(cell.origin)
+        for (const [key,value] of writes) merged.set(key,value)
+        const bounded = entries([...merged])
+        if (writes.length) await options.commitStore?.({cellId:cell.id,origin:cell.origin,writes,signal:cell.commitStop.signal})
+        if (cell.status !== 'running') return
+        const closing = event({type:'closed',cellId:cell.id,status:'completed',origin:cell.origin})
+        if (closing) await closing
+        if (cell.status !== 'running') return
+        if (writes.length) {
+          store.clear()
+          for (const [key,value] of bounded) store.set(key,value)
+        }
+        cell.status = 'completed'
+        cell.removeOwner?.()
+        cell.wake?.()
+      } catch (error) { close(cell,'failed',message(error)) }
+    }
+    // Read-only completions do not queue behind a held store write. Every write
+    // merges and validates only when earlier durable commits have settled.
+    const pending = writes.length ? commits.then(finalize) : finalize()
+    if (writes.length) commits = pending.then(() => {}, () => {})
+    track(pending,cell)
+  }
   function receive(cell: Cell, data: {type:string; [key:string]: unknown}) {
-    if (cell.status !== 'running') return
+    if (cell.status !== 'running' || cell.finishing) return
     try {
       switch (data.type) {
         case 'busy':
@@ -197,19 +263,13 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
           break
         case 'idle': clearTimeout(cell.watchdog); break
         case 'output': output(cell,data.json as string); break
-        case 'truncated': cell.truncated = true; break
+        case 'truncated': cell.truncated = true; cell.textIncomplete ||= data.text === true; break
         case 'yield': cell.yielded = true; cell.wake?.(); break
         case 'call': call(cell,data.id as string,data.name as string,data.json as string); break
         case 'closed': {
           cell.truncated ||= data.truncated === true
           if (data.status === 'completed') {
-            const writes = JSON.parse(data.writes as string) as [string,unknown][]
-            const merged = new Map(store)
-            for (const [key,value] of writes) merged.set(key,value)
-            json([...merged],config.maxStoreBytes,'Session store')
-            store.clear()
-            for (const [key,value] of merged) store.set(key,value)
-            close(cell,'completed')
+            complete(cell,data.writes as string)
           } else close(cell,'failed',message(data.error ?? 'Guest failed'))
           break
         }
@@ -235,16 +295,44 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
           }
         })
       }
+      const admitted = cell.items
+      const incomplete = cell.textIncomplete
+      let truncated = cell.truncated
+      // Detach the consumed window before awaiting disk I/O. Later guest output
+      // stays queued for the next observer rather than disappearing on reset.
+      cell.items = []; cell.bytes = 0; cell.textBytes = 0; cell.truncated = false; cell.textIncomplete = false; cell.yielded = false
+      const fullText = admitted.filter((item): item is Extract<CodeModeItem,{type:'text'}> => item.type === 'text').map(item => item.text).join('\n')
+      let textRetention: CodeModeTextRetention | undefined
+      const previewBytes = Math.min(TEXT_CAP,tokens * 4)
+      const diagnosticBytes = cell.error === undefined ? 0 : Buffer.byteLength(textSlice(cell.error,previewBytes))
+      if (Buffer.byteLength(fullText) > previewBytes - diagnosticBytes || incomplete) {
+        textRetention = {stored:false,cellId:cell.id,...(cell.origin.sessionId ? {sessionId:cell.origin.sessionId} : {}),admittedBytes:Buffer.byteLength(fullText),omittedBytes:0,complete:false,truncated:true}
+        if (fullText) {
+          try {
+            spillStore ??= createUnifiedSpillStore()
+            const retaining = Promise.resolve(spillStore.saveText(fullText,`code-${cell.origin.sessionId ?? 'session'}-${cell.id}`))
+            track(retaining.then(() => {}, () => {}),cell)
+            const path = await retaining
+            if (typeof path !== 'string' || !path || Buffer.byteLength(path) > Math.min(4096,config.maxResultBytes)) throw new Error('Text retention reference limit exceeded')
+            textRetention.path = path; textRetention.stored = true; textRetention.complete = !incomplete
+          } catch (error) {
+            const bounded = diagnostic(`Text retention failed: ${message(error)}`,errorCap)
+            cell.error = bounded.text; truncated ||= bounded.truncated
+            // Completion data may already be durable; a retention error remains
+            // visible without claiming that disk persistence was rolled back.
+            if (cell.status === 'running') close(cell,'failed',cell.error)
+          }
+        }
+      }
       const items: CodeModeItem[] = []
       let remaining = Math.min(TEXT_CAP,tokens * 4)
-      let truncated = cell.truncated
       const error = cell.error === undefined ? undefined : textSlice(cell.error,remaining)
       if (error !== undefined) {
         truncated ||= error !== cell.error
         remaining -= Buffer.byteLength(error)
       }
       let textCount = 0
-      for (const item of cell.items) {
+      for (const item of admitted) {
         if (item.type !== 'text') { items.push(item); continue }
         const separator = textCount ? 1 : 0
         const value = textSlice(item.text,Math.max(0,remaining - separator))
@@ -252,11 +340,16 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         if (value || (!item.text && remaining >= separator)) { items.push({type:'text',text:value}); remaining -= Buffer.byteLength(value) + separator; textCount++ }
         else if (!item.text) truncated = true
       }
-      const out: CodeModeObservation = {cellId:cell.id,status:cell.status,items,text:items.filter((item): item is Extract<CodeModeItem,{type:'text'}> => item.type === 'text').map(item=>item.text).join('\n'),truncated,
+      const text = items.filter((item): item is Extract<CodeModeItem,{type:'text'}> => item.type === 'text').map(item=>item.text).join('\n')
+      if (textRetention) textRetention.omittedBytes = textRetention.admittedBytes - Buffer.byteLength(text)
+      // A slow spill can overlap later output and guest completion. Keep the
+      // observation cursor available until that later window is consumed.
+      const status = cell.items.length || cell.truncated || cell.textIncomplete ? 'running' : cell.status
+      const out: CodeModeObservation = {cellId:cell.id,status,items,text,truncated,
+        ...(textRetention ? {textRetention} : {}),
         ...(error === undefined ? {} : {error}), ...(cell.policyRefusal ? {policyRefusal:true} : {})}
-      cell.items = []; cell.bytes = 0; cell.textBytes = 0; cell.truncated = false; cell.yielded = false
-      if (cell.status !== 'running') cells.delete(cell.id)
-      else cell.worker.postMessage({type:'observed'})
+      if (out.status !== 'running') cells.delete(cell.id)
+      else if (cell.status === 'running' && !cell.finishing) cell.worker.postMessage({type:'observed'})
       return out
     } finally { removeAbort?.(); cell.observer = false }
   }
@@ -275,7 +368,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       if (!input || typeof input.code !== 'string') throw new Error('Code source must be a string')
       if (Buffer.byteLength(input.code) > config.maxSourceBytes) throw new Error('Code source limit exceeded')
       if (origin.abortSignal?.aborted) throw new Error('Cell owner already aborted')
-      if ([...cells.values()].filter(cell => cell.status === 'running').length >= config.maxActiveCells) throw new Error('Active cell limit exceeded')
+      if (admissions + [...cells.values()].filter(cell => cell.status === 'running').length >= config.maxActiveCells) throw new Error('Active cell limit exceeded')
       let duration = input.yield_time_ms, tokens = input.max_output_tokens
       const pragma = /^\/\/ @exec:\s*(\{[^\r\n]*\})\s*(?:\r?\n|$)/.exec(input.code)
       if (pragma) {
@@ -284,6 +377,10 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
       const yieldMs = limit(duration,config.defaultYieldTimeMs,0,60_000,'yield_time_ms')
       const maxTokens = limit(tokens,config.defaultOutputTokens,0,4096,'max_output_tokens')
+      const restored = currentStore(origin)
+      const initialStoreJson = JSON.stringify([...restored])
+      store.clear()
+      for (const [key,value] of restored) store.set(key,value)
       const definitions = options.tools()
       const aliases = new Set<string>()
       const names = new Set<string>()
@@ -304,17 +401,28 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         if (cell.status !== 'running' && !cell.observer) cells.delete(cellId)
       }
       const id = randomUUID()
-      try { event({type:'started',cellId:id,source:input.code,origin}) }
+      const epoch = cancellationEpoch
+      admissions++
+      try {
+        const started = event({type:'started',cellId:id,source:input.code,origin})
+        if (started) {
+          const pending = Promise.resolve(started)
+          track(pending.catch(() => {}))
+          await pending
+        }
+        if (disposed || epoch !== cancellationEpoch || origin.abortSignal?.aborted) throw new Error('Cell admission stopped by its owner')
+      }
       catch (error) {
         const bounded = diagnostic(error,errorCap)
         throw Object.assign(new Error(bounded.text),{truncated:bounded.truncated})
       }
-      const worker = new Worker(new URL('./worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:JSON.stringify([...store]),config},execArgv:[]})
-      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names}
+      finally { admissions-- }
+      const worker = new Worker(new URL('./worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]})
+      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),textIncomplete:false}
       cells.set(id,cell)
       worker.on('message',data => receive(cell,data))
       worker.on('error',error => close(cell,'failed',message(error)))
-      worker.on('exit',code => { if (cell.status === 'running') close(cell,'failed',`Worker exited unexpectedly (${code})`) })
+      worker.on('exit',code => { if (cell.status === 'running' && !cell.finishing) close(cell,'failed',`Worker exited unexpectedly (${code})`) })
       cell.watchdog = setTimeout(()=>close(cell,'failed','Worker initialization deadline exceeded'),30_000)
       if (origin.abortSignal) {
         const abort = () => close(cell,'terminated',message(origin.abortSignal?.reason ?? 'Cell owner aborted'))
@@ -347,6 +455,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       let finish!: () => void
       const barrier = new Promise<void>(resolve => { finish = resolve })
       cancelling = barrier
+      cancellationEpoch++
       for (const cell of cells.values()) close(cell,'terminated',reason)
       try {
         await Promise.allSettled([...stopping])
