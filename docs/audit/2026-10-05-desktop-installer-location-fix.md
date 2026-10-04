@@ -27,3 +27,9 @@ User data and settings live separately from the application payload. The exact-f
 - Complete real-payload lifecycle: eleven checks passed, including install, unelevated upgrade, installed Electron/backend startup, running-app refusal, uninstall and preservation of unrelated files/app data.
 
 The complete Desktop package gate passed 686 tests with three existing skips; its typecheck exited zero. The corrected artifact hash is recorded in the release's SHA256SUMS and build manifest after compilation. This phase does not automatically update the separately installed CLI.
+
+## Corrected v0.1.1 artifact
+
+The production installer compiled successfully with NSIS 3.11. Its size is **138,668,914 bytes** and SHA256 is `fa44c0c23c70dfbf02c36aa6669373947b20b64b64038fa1bbe42367a0f08d2c`. The accepted app payload remains 7,951 files / 577,100,473 bytes, with the same executable hash and unchanged Portable ZIP. This installer supersedes the original v0.1.1 installer hash `8696699f68e9863466bb68b1da8a9f525b7ef33d3748f514f2a786ea1d4ee7d4`.
+
+The existing v0.1.1 release's setup attachment, checksum and build manifest are updated together. Its source tag is updated with the installation correction while retaining the prior commit in main's history. Download the replacement setup again; an earlier locally saved copy still contains the original manifest. Real Program Files installation requires Windows consent and is left to the user; native permission/installation tests operated only inside the repository's owned fixtures.

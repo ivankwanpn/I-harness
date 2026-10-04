@@ -4,6 +4,8 @@ Work began on 2026-10-04 in `D:/frontend-test`, branch `codex/desktop-workbench`
 
 This report records verification of Desktop and gateway version 0.1.1. The user separately authorized GitHub publication after local acceptance. The release is [I-harness Desktop v0.1.1](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1); the artifact hashes below identify the accepted payload.
 
+The v0.1.1 installer was subsequently corrected for protected-directory permissions on 2026-10-05. The installer hash below is the original historical artifact, superseded by the current release checksum; the Portable ZIP and application payload are unchanged. See the [installer correction and native installation evidence](2026-10-05-desktop-installer-location-fix.md).
+
 ## Product behavior
 
 The dedicated settings page is **「上下文與檢索」**. Its two independent sections are **Context Mode** and **Code Context**, with visible **「設計參考 context-mode」** and **「設計參考 claude-context」** attribution. Both default to off. Global defaults and workspace overrides are supported, along with reset, status, clear, update, rebuild and cancellation controls.
