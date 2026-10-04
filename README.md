@@ -4,16 +4,16 @@
 
 I-harness 是開源的 AI 程式開發工作區。連接你選擇的模型服務，開啟本機專案，讓 Agent 搜尋程式碼、讀取檔案、執行命令與完成修改；你可以隨時查看工作過程、核準操作、檢查差異或停止執行。
 
-[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.0) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
+[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
 
 ## 下載
 
-目前提供 **Windows x64 · v0.1.0**，包含 Desktop 與它需要的執行環境。
+目前提供 **Windows x64 · v0.1.1**，包含 Desktop 與它需要的執行環境。
 
 | 版本 | 適合你，如果… | 下載 |
 | --- | --- | --- |
-| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-Setup-0.1.0.exe) |
-| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-0.1.0.zip) |
+| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-Setup-0.1.1.exe) |
+| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-0.1.1.zip) |
 
 Portable 版解壓到獨立資料夾後，執行 `I-harness Desktop.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
 
@@ -67,7 +67,7 @@ Code Mode 讓 Agent 用 JavaScript 組合工具，在腳本內過濾與統計結
 
 ### Context Mode 與 Code Context
 
-目前開發分支新增兩個內建子系統，可從「設定 → 上下文與檢索」分別控制。兩項預設關閉；設定可作為全域預設，或只套用到目前工作區。GitHub 的 v0.1.0 發行包尚未包含這兩項功能，使用本分支原始碼建置可取得。
+從 v0.1.1 起提供兩個內建子系統，可從「設定 → 上下文與檢索」分別控制。兩項預設關閉；設定可作為全域預設，或只套用到目前工作區。
 
 - **Context Mode**：將大型工具和 Code Mode 文字輸出保留在本機，以有界預覽和引用交給模型。需要細節時，可搜尋內容或分段讀取；保存的引用可隨會話恢復與分叉。
 - **Code Context**：為工作區及明確加入的唯讀參考來源建立程式碼索引。詞彙搜尋使用本機索引；混合搜尋另行配置 embedding 服務，向量與索引仍存放在本機。

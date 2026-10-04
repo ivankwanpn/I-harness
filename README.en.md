@@ -4,16 +4,16 @@
 
 I-harness is an open source workspace for coding with AI. Connect your preferred model service, open a local project, and let the agent search code, read files, run commands and make changes. Follow its progress, approve operations, inspect diffs and stop execution from the same desktop app.
 
-[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.0) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
+[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
 
 ## Download
 
-**Windows x64 · v0.1.0** includes Desktop and its required runtime.
+**Windows x64 · v0.1.1** includes Desktop and its required runtime.
 
 | Edition | Choose it when… | Download |
 | --- | --- | --- |
-| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-Setup-0.1.0.exe) |
-| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-0.1.0.zip) |
+| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-Setup-0.1.1.exe) |
+| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-0.1.1.zip) |
 
 Extract the portable ZIP into its own folder and run `I-harness Desktop.exe`. Keep the executable beside the `resources` folder.
 
@@ -67,7 +67,7 @@ Automatic and manual compaction help organize long conversations. Valid model us
 
 ### Context Mode and Code Context
 
-This development branch adds two native subsystems, controlled independently in Settings → Context and retrieval. Both default to off. Use global defaults or overrides for the current workspace. The published v0.1.0 assets do not include these features; build this branch from source to use them.
+Version 0.1.1 includes two native subsystems, controlled independently in Settings → Context and retrieval. Both default to off. Use global defaults or overrides for the current workspace.
 
 - **Context Mode** retains large tool and Code Mode text locally and gives the model bounded previews and references. Search retained content or read it in exact windows; references can survive conversation restoration and forks.
 - **Code Context** indexes workspace code and explicitly selected read-only reference sources. Lexical search uses a local index. Hybrid search uses a separately configured embedding service while vectors and indexes remain local.

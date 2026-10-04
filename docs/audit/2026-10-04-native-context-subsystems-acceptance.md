@@ -2,7 +2,7 @@
 
 Work began on 2026-10-04 in `D:/frontend-test`, branch `codex/desktop-workbench`. The approved design is [native-context-subsystems-design.md](../superpowers/specs/2026-10-04-native-context-subsystems-design.md); the implementation plan is [native-context-subsystems.md](../superpowers/plans/2026-10-04-native-context-subsystems.md).
 
-This report is a local delivery record. The published GitHub v0.1.0 source and assets are separate from this implementation. Desktop and its gateway use version 0.1.1 for the new local build.
+This report records verification of Desktop and gateway version 0.1.1. The user separately authorized GitHub publication after local acceptance. The release is [I-harness Desktop v0.1.1](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1); the artifact hashes below identify the accepted payload.
 
 ## Product behavior
 
@@ -46,6 +46,8 @@ The fresh Root `pnpm verify:all` completed with **exit 0** on the source used fo
 | Desktop distribution | Exit 0; Electron 44.4.5; 206 gateway dependency packages shipped |
 | Copied Electron backend smoke | Exit 0; Node 24.21.0; nine behavior groups checked |
 
+Publication preflight on 2026-10-05 (Asia/Hong_Kong) reran the same gate. The first default-worker run timed out in two unchanged Windows subprocess tests and reported only 68/73 packages; it is not a pass. Both exact test files passed 15/15 with two workers, including the affected search in 1.365 seconds. The final `pnpm verify:all` passed again with 4,797/13/0 and 73/73 coverage, typecheck, E2E and reachability all at exit zero. This run used supported Vitest pool limits (`VITEST_MAX_THREADS=2`, `VITEST_MAX_FORKS=2`, minima 1) to bound resource contention. Assertions, five-second test timeouts, gate scripts and allowlists were unchanged.
+
 The copied smoke imported only gateway and package implementations under the new `release/I-harness Desktop/resources/gateway`. It used private settings, credentials and session directories under `D:/frontend-test/.tmp/native-context-packaged-smoke/run-3AvbHC`, with no live model/embedding request. The nine groups cover default-off zero native stores; actual host configuration and indexing RPC; settings restart/disable; six-tool discovery, native middle search, byte reads and recovery; Code Mode emission; lexical workspace/reference queries with exact ranges; output/index durable restart and drained close; source byte identity; and copied manifest/source parity.
 
 The host was initialized again after restart, using the ordinary protocol handshake. Electron Node-mode was started with a Windows `file:///` URL for the copied tsx loader and an awaited hidden process; the final process exited zero. Initial harness attempts without that URL or the restarted handshake are not passing product evidence.
@@ -75,7 +77,7 @@ The ZIP contains 8,026 entries, including the actual executable, app manifest, n
 
 `SHA256SUMS.txt`, `native-context-build.json` and the installer metadata are alongside the artifacts. The recorded build source commit is `7ab6f5cf`; subsequent acceptance/documentation commits do not change that payload. Installer runtime logic is unchanged in this phase; real-user installation/upgrade and Desktop GUI visual acceptance were not rerun. Settings DOM tests and the copied Node-mode backend are the execution evidence for this delivery.
 
-No new source, tag or release asset was pushed to GitHub during this implementation. The branch, private verification evidence and local delivery remain available for review.
+GitHub publication is a subsequent, explicitly authorized step: the implementation and product documentation are published on `main`, and tag `v0.1.1` identifies the release source. The uploaded ZIP and installer are the same locally accepted files listed above. Private verification evidence stays outside Git. The protected Electron edit changes only development-server port configuration and remains excluded from commits.
 
 ## Limits and measured usage
 
