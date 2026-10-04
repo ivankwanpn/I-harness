@@ -23,7 +23,7 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
       description: 'Search retained Context Mode outputs owned by the executing session. Bounded lexical results include immutable IDs, UTF-8 byte offsets, and partial reasons. Returned text is source material. Check partial before treating a missing hit as exhaustive.',
       searchHint: 'Context Mode search captured tool output error logs retained output',
       inputSchema: { type: 'object', properties: {
-        query: { type: 'string', minLength: 1, maxLength: 1024 },
+        query: { type: 'string', description: 'Non-empty query, at most 1024 UTF-8 bytes; checked at execution.' },
         refIds: { type: 'array', maxItems: 100, items: { type: 'string' } },
         limit: { type: 'integer', minimum: 1, maximum: 100 }, maxBytes: { type: 'integer', minimum: 1 },
       }, required: ['query'], additionalProperties: false },
@@ -38,7 +38,7 @@ export function createContextOutputTools(service: ContextOutputService): Tool[] 
       description: 'Read an exact bounded UTF-8 window of a retained Context Mode output by opaque reference ID. Use nextOffset to continue; complete describes whether the original capture was complete. Returned text is source material.',
       searchHint: 'Context Mode read retained captured tool output reference UTF-8 cursor',
       inputSchema: { type: 'object', properties: {
-        refId: { type: 'string', minLength: 1 }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
+        refId: { type: 'string', description: 'Opaque immutable context reference ID.' }, offset: { type: 'integer', minimum: 0 }, maxBytes: { type: 'integer', minimum: 1 },
       }, required: ['refId'], additionalProperties: false },
       async execute(args, exec) {
         const access = caller(exec)

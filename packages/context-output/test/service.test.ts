@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { createContextOutputService, createContextOutputTools, renderContextRecovery } from '../src/index.ts'
+import { ContextStore } from '../src/store.ts'
+import { DatabaseSync } from 'node:sqlite'
+import { createToolRegistry } from '@i-harness/core-tools'
+import { createContext } from '../../core-plugin/src/index.ts'
 
 const fixtureBase = resolve(import.meta.dirname, '../../../build/context-output-tests')
 const roots: string[] = []
@@ -17,6 +21,129 @@ async function create(options: Record<string, unknown> = {}) {
 afterEach(async () => {
   await Promise.all(services.splice(0).map((s) => s.close()))
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+})
+
+describe('review regressions', () => {
+  it('registers native schemas while disabled and dispatches through the real broker', async () => {
+    const { service } = await create({ config: { enabled: false } })
+    const registry = createToolRegistry(createContext())
+    for (const tool of createContextOutputTools(service)) registry.register(tool)
+    const status = await registry.prepare({ name: 'context_output_status', args: {} }, undefined, { sessionId: 'a' })
+    expect(await registry.dispatch(status)).toMatchObject({ enabled: false })
+    await service.configure({ enabled: true })
+    const ref = await service.capture({ sessionId: 'a', callId: '1', label: 'broker', text: 'needle', complete: true })
+    const read = await registry.prepare({ name: 'context_output_read', args: { refId: ref!.id } }, undefined, { sessionId: 'a' })
+    expect(await registry.dispatch(read)).toMatchObject({ text: 'needle' })
+    await expect(registry.prepare({ name: 'context_output_read', args: { refId: ref!.id, sessionId: 'a' } }, undefined, { sessionId: 'b' })).rejects.toThrow()
+    const invalid = await registry.prepare({ name: 'context_output_search', args: { query: '' } }, undefined, { sessionId: 'a' })
+    await expect(registry.dispatch(invalid)).rejects.toThrow(/query/i)
+    const search = await registry.prepare({ name: 'context_output_search', args: { query: 'needle' } }, undefined, { sessionId: 'a' })
+    expect(await registry.dispatch(search)).toMatchObject({ hits: [{ ref: { id: ref!.id } }] })
+  })
+  it.each([
+    { name: 'source authority', text: 'abc', complete: true, source: { sourceId: 'revoked', readonly: true } },
+    { name: 'common-prefix original size', text: 'abcd', complete: true },
+    { name: 'completeness', text: 'abc', complete: false },
+  ])('rejects recaptures with conflicting $name', async ({ name: _name, ...conflict }) => {
+    const { service } = await create({ config: { enabled: true, maxCaptureBytes: 3 }, authorize: () => false })
+    const first = await service.capture({ sessionId: 'a', callId: '1', label: 'same', text: 'abc', complete: true })
+    await expect(service.capture({ sessionId: 'a', callId: '1', label: 'same', ...conflict })).rejects.toThrow(/conflict/i)
+    expect((await service.read({ sessionId: 'a' }, { refId: first!.id })).ref).toMatchObject({ complete: true, originalBytes: 3 })
+  })
+
+  it('hides a capture from concurrent read/search/status while real post-write validation is held', async () => {
+    const { root, service } = await create()
+    await service.capture({ sessionId: 'a', callId: 'seed', label: 'seed', text: 'seed', complete: true })
+    let entered!: () => void
+    let release!: () => void
+    const started = new Promise<void>((r) => { entered = r })
+    const held = new Promise<void>((r) => { release = r })
+    const original = ContextStore.prototype.diskBytes
+    let armed = true
+    // Timing gate around the real completed physical measurement. All writes,
+    // SQLite transactions, quota checks, queries and rollback remain production.
+    ContextStore.prototype.diskBytes = async function(this: ContextStore, directory = this.directory) {
+      const bytes = await original.call(this, directory)
+      if (armed && directory === this.directory && (await readdir(resolve(directory, 'artifacts'))).length === 2) {
+        armed = false; entered(); await held
+      }
+      return bytes
+    }
+    const controller = new AbortController()
+    const capturing = service.capture({ sessionId: 'a', callId: 'candidate', label: 'candidate', text: 'pending needle', complete: true }, controller.signal)
+    const outcome = capturing.then(() => ({ rejected: false }), (error: unknown) => ({ rejected: true, error }))
+    try {
+      await started
+      const workspace = (await readdir(resolve(root, 'context-output')))[0]!
+      const artifacts = resolve(root, 'context-output', workspace, 'artifacts')
+      const manifests = await Promise.all((await readdir(artifacts)).map((name) => readFile(resolve(artifacts, name), 'utf8').then(JSON.parse)))
+      const pendingId = manifests.find((manifest) => manifest.ref.label === 'candidate')!.ref.id as string
+      await expect(service.read({ sessionId: 'a' }, { refId: pendingId })).rejects.toThrow()
+      expect((await service.search({ sessionId: 'a' }, { query: 'needle' })).hits).toEqual([])
+      expect(service.status().results).toBe(1)
+      controller.abort()
+      release()
+      expect(await outcome).toMatchObject({ rejected: true, error: { name: 'AbortError' } })
+      expect((await service.search({ sessionId: 'a' }, { query: 'needle' })).hits).toEqual([])
+    } finally {
+      controller.abort(); release(); await outcome
+      ContextStore.prototype.diskBytes = original
+    }
+  })
+
+  it.each(['read', 'search'] as const)('rejects tiny disk budgets before %s creates any store files', async (operation) => {
+    const { root, service } = await create({ config: { enabled: true, maxDiskBytes: 1 } })
+    const result = operation === 'read'
+      ? service.read({ sessionId: 'a' }, { refId: 'ctx_' + '0'.repeat(64) })
+      : service.search({ sessionId: 'a' }, { query: 'needle' })
+    await expect(result).rejects.toThrow(/disk|quota/i)
+    expect(await readdir(root)).toEqual([])
+  })
+
+  it('rejects a newly lowered startup disk budget without rebuilding retained storage', async () => {
+    const { root, service } = await create()
+    await service.capture({ sessionId: 'a', callId: '1', label: 'retained', text: 'needle', complete: true })
+    await service.close()
+    const workspace = (await readdir(resolve(root, 'context-output')))[0]!
+    const database = resolve(root, 'context-output', workspace, 'index.sqlite')
+    const before = await readFile(database)
+    const restarted = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true, maxDiskBytes: 1 } })
+    services.push(restarted)
+    await expect(restarted.search({ sessionId: 'a' }, { query: 'needle' })).rejects.toThrow(/disk|quota/i)
+    expect(await readFile(database)).toEqual(before)
+  })
+
+  it('uses a persisted SQLite FTS5 candidate index for substring and CJK searches', async () => {
+    const { root, service } = await create()
+    const ref = await service.capture({ sessionId: 'a', callId: '1', label: 'fts', text: 'x'.repeat(5000) + '中間錯誤ERROR😀' + 'y'.repeat(5000), complete: true })
+    expect((await service.search({ sessionId: 'a' }, { query: 'ERROR' })).hits[0]?.ref.id).toBe(ref!.id)
+    expect((await service.search({ sessionId: 'a' }, { query: '中間錯誤' })).hits[0]?.ref.id).toBe(ref!.id)
+    const workspace = (await readdir(resolve(root, 'context-output')))[0]!
+    const db = new DatabaseSync(resolve(root, 'context-output', workspace, 'index.sqlite'), { readOnly: true })
+    try {
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE lower(sql) LIKE '%using fts5%' AND name='chunks_fts'").get()).toBeDefined()
+      const plan = db.prepare('EXPLAIN QUERY PLAN SELECT ref_id FROM chunks_fts WHERE chunks_fts MATCH ? LIMIT 64').all('"ERROR"')
+      expect(plan.some((row) => String(row.detail).includes('VIRTUAL TABLE INDEX'))).toBe(true)
+    } finally { db.close() }
+  })
+
+  it('labels bounded short-query fallback and caps a frequent indexed candidate walk', async () => {
+    const { service } = await create()
+    await service.capture({ sessionId: 'a', callId: '1', label: 'frequent', text: 'needle '.repeat(650000) + '中', complete: true })
+    const short = await service.search({ sessionId: 'a' }, { query: '中' })
+    expect(short.partial).toBe(true)
+    expect(short.reasons).toContain('short-query-fallback')
+    const indexed = await service.search({ sessionId: 'a' }, { query: 'needle' })
+    expect(indexed.hits).toHaveLength(1)
+    expect(indexed.partial).toBe(true)
+    expect(indexed.reasons).toContain('candidate-budget')
+    const controller = new AbortController()
+    const query = service.search({ sessionId: 'a', signal: controller.signal }, { query: 'needle' })
+    const rejected = expect(query).rejects.toThrow(/abort/i)
+    await new Promise((r) => setImmediate(r))
+    controller.abort()
+    await rejected
+  }, 15000)
 })
 
 describe('owned context outputs', () => {
@@ -234,6 +361,8 @@ describe('owned context outputs', () => {
     release()
     await rejected
     await stopping
+    // Restart releases the original workspace's SQLite owner first.
+    await service.close()
     const restarted = createContextOutputService({ root, workspaceId: 'w', config: { enabled: true } })
     services.push(restarted)
     expect((await restarted.search({ sessionId: 'a' }, { query: 'needle' })).hits).toHaveLength(operation === 'clear' ? 0 : 1)

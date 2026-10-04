@@ -34,7 +34,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
     if (store) return store
     if (!opening) {
       const next = new ContextStore(options.root, options.workspaceId)
-      opening = next.open(signal).then(() => { store = next; return next }).catch((failure) => {
+      opening = next.open(config.maxDiskBytes, signal).then(() => { store = next; return next }).catch((failure) => {
         if (!(failure instanceof Error && failure.name === 'AbortError')) {
           error = failure instanceof Error ? failure.message : String(failure)
           state = 'error'
@@ -166,10 +166,14 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
         const result: ContextSearchResult = { hits: [], partial: false, reasons: [] }
         const mark = (reason: string) => { result.partial = true; if (!result.reasons.includes(reason)) result.reasons.push(reason) }
         const matchers = terms.map((term) => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'iu'))
-        for (const ref of current.candidates(terms)) {
+        let scannedBytes = 0
+        for await (const { ref, verify } of current.candidates(terms, owned, mark)) {
           checkAbort(owned)
           if (filter && !filter.has(ref.id) || !await allowed(caller, ref, owned) || !current.get(ref.id)) continue
           if (!ref.complete) mark('incomplete-capture')
+          if (!verify) continue
+          if (scannedBytes + ref.bytes > 32 * 1024 * 1024) { mark('scan-byte-budget'); break }
+          scannedBytes += ref.bytes
           const bytes = await current.bytes(ref.id, owned)
           const text = bytes.toString('utf8')
           const matches = matchers.map((matcher) => matcher.exec(text))
