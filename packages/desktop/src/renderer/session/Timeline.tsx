@@ -41,8 +41,8 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
     return <p className="timeline-outcome">{outcomeLabel(row.flags, t)}</p>
   }
   if (row.kind === "other") {
-    const expanded = open.get(row.id) ?? (row.label === "reasoning" && row.transient === true)
-    return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{activityLabel(row.label, t)}</p>
+    const expanded = open.get(row.id) ?? false
+    return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{row.title ?? activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{row.title ?? activityLabel(row.label, t)}</p>
   }
   return <ToolActivity name={row.name} args={row.args} output={row.output} resultReceived={row.resultReceived} isError={row.isError} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} />
 }
@@ -68,7 +68,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     setOpen((previous) => {
     const next = new Map(previous)
     const group = items.find((item) => item.id === id)
-    const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : group?.kind === "other" ? group.label === "reasoning" && group.transient === true : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
+    const current = previous.get(id) ?? (group?.kind === "work-stage" ? group.active : (group?.kind === "activity-group" && group.rows.some((tool) => previous.get(tool.id) === true)))
     next.set(id, !current)
     if (next.size > 2000) next.delete(next.keys().next().value!)
     return next
@@ -134,6 +134,8 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
             <div
               key={row.id}
               className="timeline-row"
+              data-row-id={row.id}
+              data-row-kind={row.kind}
               data-search-target={row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? "true" : undefined}
               data-index={item.index}
               ref={virtualizer.measureElement}

@@ -3,6 +3,26 @@ import { createTaskRegistry } from "../src/task-protocol.ts"
 import { createNotificationDrain, renderTaskNotification } from "../src/task-notification.ts"
 
 describe("task notification outbox", () => {
+  it.each([
+    { outcome: "completed" as const, resultText: "Read tool failed: missing file", title: "Task reply ended: helper", body: "Read tool failed: missing file" },
+    { outcome: "error" as const, error: "model stream disconnected", title: "Task reply error: helper", body: "model stream disconnected" },
+    { outcome: "cancelled" as const, error: "task cancelled by owner", title: "Task reply cancelled: helper", body: "task cancelled by owner" },
+    { outcome: "recovery-required" as const, error: "dispatch outcome unknown", title: "Task reply needs recovery: helper", body: "dispatch outcome unknown" },
+  ])("supplies readable $outcome presentation from the durable task fields", async ({ outcome, resultText, error, title, body }) => {
+    const tasks = createTaskRegistry()
+    tasks.submit({ identity: { parentSessionId: "s-main", callEventSeq: 1 }, agentPath: "root/h", description: "helper", prompt: "p", agent: "general", delivery: "parent" })
+    tasks.terminalize({ taskId: "task-1", outcome, ...(resultText === undefined ? {} : { resultText }), ...(error === undefined ? {} : { error }) })
+    const admissions: unknown[] = []
+    const drain = createNotificationDrain({ tasks, admit: { admit: async (input) => { admissions.push(input) }, wake: () => {} } })
+    expect(await drain.drain()).toBe(1)
+    expect(admissions).toEqual([expect.objectContaining({
+      display: { kind: "task", title, body },
+      text: expect.stringContaining(`<task id="task-1" state="${outcome}">`),
+    })])
+    expect(await drain.drain()).toBe(0)
+    expect(admissions).toHaveLength(1)
+  })
+
   it("drain admits pending rows (renderPayload → admit → delivered → wake → woken)", async () => {
     const tasks = createTaskRegistry()
     tasks.submit({ identity: { parentSessionId: "s-main", callEventSeq: 1 }, agentPath: "root/h", description: "helper", prompt: "p", agent: "general", delivery: "parent" })

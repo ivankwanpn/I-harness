@@ -34,6 +34,15 @@ function makeMailbox(overrides?: Partial<MailboxDeps> & { state?: TeamFoldState 
 }
 
 describe("TeamMailbox", () => {
+  it("persists readable result fields separately from transport text for retry", async () => {
+    const { mailbox, state, events } = makeMailbox({ deliver: async () => false })
+    await mailbox.sendMessage(HELPER, "lead", "raw result transport", "quiet", undefined, { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" })
+    expect(state.queued.get("lead-1")).toEqual([expect.objectContaining({
+      content: "raw result transport", display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" },
+    })])
+    expect(events).toEqual([expect.objectContaining({ type: "team/message/queued", message: expect.objectContaining({ display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" } }) })])
+  })
+
   it("queues, delivers, then acknowledges delivered", async () => {
     const { mailbox, state, events } = makeMailbox()
     const r = await mailbox.sendMessage(LEAD, "helper", "hello", "wakeup")
@@ -42,6 +51,7 @@ describe("TeamMailbox", () => {
     expect(state.delivered.has(r.messageId)).toBe(true)
     // the queued entry remains (delivered is marked, not pruned) — idempotent replays
     expect(state.queued.get("child-1")?.some((m) => m.id === r.messageId)).toBe(true)
+    expect(state.queued.get("child-1")?.find((m) => m.id === r.messageId)).toMatchObject({ display: { kind: "team-message", title: "Team message from lead", body: "hello" } })
     // both events appended: queued first, then the delivered ACK (only after deliver resolved true)
     expect(events.map((e) => e.type)).toEqual(["team/message/queued", "team/message/delivered"])
   })

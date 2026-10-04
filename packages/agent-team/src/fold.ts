@@ -48,6 +48,9 @@ const TEAM_EVENT_SCHEMA = z.discriminatedUnion("type", [
     message: z.strictObject({
       id: z.string(), senderId: z.string(), senderName: z.string(), targetId: z.string(),
       delivery: z.enum(["quiet", "wakeup"]), content: z.string(),
+      display: z.strictObject({
+        kind: z.enum(["task", "team-message", "team-result", "schedule"]), title: z.string().min(1), body: z.string(),
+      }).optional(),
     }),
     seq: z.number().optional(), ignorable: z.boolean().optional(),
   }),

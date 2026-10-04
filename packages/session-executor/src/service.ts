@@ -273,7 +273,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           if (input.sessionId !== id || !assembly || assembly !== owner()) throw new Error("parent notification admission unavailable")
           const inputId = `parent-notify-${createHash("sha256").update(input.text).update(input.description).digest("hex")}`
           if (!assembly.session.events.some((event) => event.type === "agent/input/admitted" && event.inputId === inputId)) {
-            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", synthetic: { description: input.description, scope: "turn" } })
+            assembly.inbox.admit({ inputId, text: input.text, delivery: "steer", intent: "system", synthetic: { description: input.description, scope: "turn", ...(input.display !== undefined ? { display: input.display } : {}) } })
           }
           await opts.coordinator?.flush(id)
           if (closed || closing.has(id) || cancelledParents.has(id)) {

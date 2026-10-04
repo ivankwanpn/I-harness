@@ -1,4 +1,5 @@
 import type { TaskOutcome, TaskRegistry } from "./task-protocol.ts"
+import type { InputDisplay } from "@i-harness/core-session"
 
 /**
  * R-A1 (A-plan) 輸入接納契約 —— 本計畫（R-D2）消費的單一輸入接納面。
@@ -12,7 +13,7 @@ import type { TaskOutcome, TaskRegistry } from "./task-protocol.ts"
  * 未注入（undefined）= durable-only 交付（fail-closed，通知停 pending 不回退）。
  */
 export interface ParentInputAdmission {
-  admit(input: { sessionId: string; text: string; description: string }): Promise<void>
+  admit(input: { sessionId: string; text: string; description: string; display?: InputDisplay }): Promise<void>
   wake(sessionId: string): void
 }
 
@@ -46,6 +47,13 @@ export interface NotificationDrainOptions {
   isSessionCancelled?: (sessionId: string) => boolean
 }
 
+const TASK_REPLY_TITLES: Record<TaskOutcome, string> = {
+  completed: "Task reply ended",
+  error: "Task reply error",
+  cancelled: "Task reply cancelled",
+  "recovery-required": "Task reply needs recovery",
+}
+
 export function createNotificationDrain(opts: NotificationDrainOptions): { drain: () => Promise<number> } {
   const isCancelled = opts.isSessionCancelled ?? (() => false)
   return {
@@ -73,6 +81,7 @@ export function createNotificationDrain(opts: NotificationDrainOptions): { drain
             sessionId: n.parentSessionId,
             text: renderTaskNotification(n.state, n.submissionId, n.description, n.text),
             description: n.description,
+            display: { kind: "task", title: `${TASK_REPLY_TITLES[n.state]}: ${n.description}`, body: n.text },
           })
           opts.tasks.updateNotification(n.id, { status: "delivered", timeDelivered: Date.now(), error: undefined })
           opts.tasks.updateNotification(n.id, { status: "woken", timeWoken: Date.now(), error: undefined })

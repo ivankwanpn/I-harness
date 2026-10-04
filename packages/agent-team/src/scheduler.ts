@@ -197,15 +197,20 @@ export async function mountAgentTeams(
       const framingBytes = Buffer.byteLength(`Team message <msg-${"0".repeat(36)}> from <${name}>:\n`, "utf8")
       const output = patch.output ?? ""
       let content = `${header}${output}`
+      let displayBody = output
       if (framingBytes + Buffer.byteLength(content, "utf8") > cfg.maxMessageBytes) {
         const footer = `\n[Result truncated; full output: job_output({job_id:${JSON.stringify(id)}})]`
         const budget = Math.max(0, cfg.maxMessageBytes - framingBytes - Buffer.byteLength(header + footer, "utf8"))
         const bytes = Buffer.from(output, "utf8")
         let end = Math.min(budget, bytes.length)
         while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--
-        content = `${header}${bytes.subarray(0, end).toString("utf8")}${footer}`
+        const summary = bytes.subarray(0, end).toString("utf8")
+        content = `${header}${summary}${footer}`
+        displayBody = `${summary}\n[Result truncated; full output is available in job output]`
       }
-      const job = mailbox.sendMessage({ id: member.id, name, role: "teammate" }, "lead", content, "quiet")
+      const job = mailbox.sendMessage({ id: member.id, name, role: "teammate" }, "lead", content, "quiet", undefined, {
+        kind: "team-result", title: `${patch.status === "completed" ? "Team reply ended" : "Team reply error"}: ${name}`, body: displayBody,
+      })
       completionJobs.add(job)
       void job.catch(() => { /* Delivery failures retain the full job result; an admitted mailbox entry remains recoverable. */ }).finally(() => { completionJobs.delete(job); activity.notify() })
       return updated
@@ -376,9 +381,13 @@ export async function mountAgentTeams(
           }
         }
         if (deps.parentNotify) {
-          const sender = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)?.senderName ?? "teammate"
+          const queued = (state.queued.get(teamId) ?? []).find((message) => message.id === messageId)
+          const sender = queued?.senderName ?? "teammate"
           try {
-            await deps.parentNotify.admit({ sessionId: sub.childSessions?.parentSessionId ?? teamId, text: `Team message <${messageId}> from <${sender}>:\n${content}`, description: `Team message from ${sender}` })
+            await deps.parentNotify.admit({
+              sessionId: sub.childSessions?.parentSessionId ?? teamId, text: `Team message <${messageId}> from <${sender}>:\n${content}`, description: `Team message from ${sender}`,
+              display: queued?.display ?? { kind: "team-message", title: `Team message from ${sender}`, body: queued?.content ?? content },
+            })
             if (!unmounted) deps.parentNotify.wake(sub.childSessions?.parentSessionId ?? teamId)
           } catch (error) {
             // Explicit Stop/disposal keeps the durable inbox audit but consumes

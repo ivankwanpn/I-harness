@@ -63,4 +63,46 @@ describe("conversation Todo progress card", () => {
     expect(card.getByText("Item 24")).toBeTruthy()
     expect(card.queryByText("Item 14")).toBeNull()
   })
+
+  it("keeps all seven completed CJK and tool-path items in the authoritative snapshot", () => {
+    const completed = [
+      "環境盤點：系統/工具/CLI ✅",
+      "檢查命令工具（exec_command/shell/powershell/背景程序）",
+      "檢查檔案工具（read/write/edit/apply_patch/view_image/list_directory）",
+      "檢查搜尋工具 🔎（skill/tool/memory/session）",
+      "檢查子代理/團隊/待辦/目標/排程",
+      "確認 D:/workspace/packages/desktop/src/renderer/session/TodoProgress.tsx",
+      "確認 very_long_unbroken_ASCII_tool_name_without_spaces",
+    ].map((content) => ({ content, status: "completed" as const }))
+    render(<TodoProgress todos={completed} onOpenTasks={() => {}} />)
+    expect(screen.getByLabelText("已完成 7/7").textContent).toBe("7/7")
+    expect(screen.getAllByRole("listitem")).toHaveLength(7)
+    for (const item of completed) expect(screen.getByText(item.content).closest("s")).toBeTruthy()
+    expect(screen.queryByRole("button", { name: "下一頁" })).toBeNull()
+  })
+
+  it("keeps every page and the existing editor reachable for more than fifty items", () => {
+    const open = vi.fn()
+    const long = Array.from({ length: 57 }, (_, index) => ({
+      content: `工作 ${index + 1} 📂 read/write/apply_patch/確認結果`,
+      status: index < 53 ? "completed" as const : index === 53 ? "in_progress" as const : "pending" as const,
+    }))
+    const view = render(<TodoProgress todos={long} onOpenTasks={open} />)
+    const card = within(screen.getByRole("region", { name: "待辦進度" }))
+    expect(card.getByText(long[53]!.content)).toBeTruthy()
+    expect(card.getAllByRole("listitem")).toHaveLength(8)
+    for (let page = 0; page < 6; page++) fireEvent.click(card.getByRole("button", { name: "上一頁" }))
+    expect(card.getByText(long[0]!.content)).toBeTruthy()
+    expect(card.getByRole("button", { name: "上一頁" }).hasAttribute("disabled")).toBe(true)
+    for (let page = 0; page < 7; page++) fireEvent.click(card.getByRole("button", { name: "下一頁" }))
+    expect(card.getByText(long[56]!.content)).toBeTruthy()
+    expect(card.getAllByRole("listitem")).toHaveLength(1)
+    expect(card.getByRole("button", { name: "下一頁" }).hasAttribute("disabled")).toBe(true)
+    expect(card.getByLabelText("已完成 53/57").textContent).toBe("53/57")
+    fireEvent.click(card.getByRole("button", { name: "開啟待辦編輯" }))
+    expect(open).toHaveBeenCalledTimes(1)
+    view.rerender(<TodoProgress todos={long.map((item, index) => ({ ...item, status: index === 0 ? "in_progress" : "pending" }))} onOpenTasks={open} />)
+    expect(card.getByText(long[0]!.content)).toBeTruthy()
+    expect(card.getByLabelText("已完成 0/57").textContent).toBe("0/57")
+  })
 })

@@ -7,6 +7,49 @@ import { createAgent } from "../src/index.ts"
 import { createSessionExecutor, createSessionExecutorRegistry, mapSubmitToAdmission } from "../src/executor.ts"
 
 describe("SessionExecutor", () => {
+  it("retains trusted notice provenance when a restored idle admission starts its own turn", async () => {
+    const admitted = createSession()
+    new Inbox(admitted).admit({
+      inputId: "result-1", text: '<task id="child" state="error"><task_error>read failed</task_error></task>',
+      delivery: "steer", intent: "system", synthetic: { description: "Inspect source", scope: "turn", display: { kind: "task", title: "Task reply error: Inspect source", body: "read failed" } },
+    })
+    const session = JSON.parse(JSON.stringify(admitted)) as typeof admitted
+    const ctx = createContext()
+    const inbox = new Inbox(session)
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model: createMockClient([{ role: "assistant", text: "received" }]), systemPrompt: "p" })
+    const lane = createSessionExecutor({ session, agent, inbox })
+    await lane.runAdmitted("result-1")
+    const notice = session.events.find((event) => event.type === "user/message")
+    expect(notice).toMatchObject({
+      text: '<task id="child" state="error"><task_error>read failed</task_error></task>',
+      source: { kind: "plugin", plugin: "i-harness/system-input" },
+      input: { inputId: "result-1", intent: "system", synthetic: { description: "Inspect source", scope: "turn" } },
+    })
+    expect(notice).toMatchObject({ input: { synthetic: { display: { kind: "task", title: "Task reply error: Inspect source", body: "read failed" } } } })
+    expect(deriveMessages(session)[0]).toEqual({ role: "user", content: '<task id="child" state="error"><task_error>read failed</task_error></task>' })
+    expect(session.events.filter((event) => event.type === "agent/input/admitted")).toHaveLength(1)
+    expect(session.events.filter((event) => event.type === "agent/input/promoted")).toHaveLength(1)
+    await expect(lane.runAdmitted("result-1")).rejects.toThrow("Input is no longer pending")
+    expect(session.events.filter((event) => event.type === "user/message")).toHaveLength(1)
+  })
+
+  it.each([
+    '<task id="literal" state="completed"><task_result>quoted example</task_result></task>',
+    "Team message <literal> from <writer>:\nquoted example",
+    "Team result <literal:1> from <writer> (completed):\nquoted example",
+    "[SCHEDULE REMINDER]\nquoted example",
+  ])("retains human intent when a literal notice is queued: %s", async (text) => {
+    const ctx = createContext(), session = createSession(), inbox = new Inbox(session)
+    const agent = createAgent(ctx, { session, tools: createToolRegistry(ctx), model: createMockClient([{ role: "assistant", text: "received" }]), systemPrompt: "p" })
+    const lane = createSessionExecutor({ session, agent, inbox })
+    const { inputId } = lane.submit({ tier: "send", text })
+    await lane.drain()
+    expect(session.events.find((event) => event.type === "user/message")).toMatchObject({ text, input: { inputId, intent: "user" } })
+    expect(session.events.find((event) => event.type === "user/message")).not.toHaveProperty("source")
+    expect(session.events.find((event) => event.type === "user/message")).not.toHaveProperty("input.synthetic.display")
+    expect(deriveMessages(session)[0]).toEqual({ role: "user", content: text })
+  })
+
   it("delivers an image submitted with a queued turn", async () => {
     const ctx = createContext(), session = createSession(), inbox = new Inbox(session)
     const model = createMockClient([{ role: "assistant", text: "done" }])

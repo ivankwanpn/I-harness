@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { InputDisplay } from "@i-harness/core-session"
 
 export interface TeamConfig {
   maxMembers?: number                    // default 8 (incl. ever-provisioned failed)
@@ -55,6 +56,7 @@ export interface TeamTaskView extends TeamTaskSnapshot {
 export interface TeamMessageSnapshot {
   id: string; senderId: string; senderName: string
   targetId: string; delivery: "quiet" | "wakeup"; content: string
+  display?: InputDisplay
 }
 export type TeamEvent =
   | { type: "team/member"; version: 1; teamId: string; member: TeamMemberSnapshot }

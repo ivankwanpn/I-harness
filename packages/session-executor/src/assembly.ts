@@ -10,7 +10,7 @@ import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capa
 import { createScopedExec } from "./scoped-exec.ts"
 import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
-import { createToolRegistry, registerContextRemaining, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -361,6 +361,8 @@ export interface SessionAssembly {
   tasks(): AgentTaskView[]
   /** Synchronous copied metadata from this assembly's owning child registry. */
   subagentState(): SubagentStateSnapshot
+  /** Host-only read seam over an exact live child caller; no registry escapes. */
+  ownedToolCaller?(input: PreparedApprovalInput): { sessionId: string; role: string; snapshot: string; validate(): boolean } | undefined
   /** M49 Task 12: cancel ONE task by its stable id THROUGH THE OWNING
    * registry — an agent path aborts the live entry + kills its job (the
    * interrupt_agent/job_kill machinery); a `workflow-` id routes to the
@@ -915,7 +917,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // so the user sees the reminder) while the write-behind retains & retries the batch —
         // `deliveryErrors` is a durability report, not a refusal.
         for (const ev of delivery.dispatchEvents) append(session, ev)
-        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system" })
+        inbox.admit({ inputId: delivery.inputId, text: delivery.text, delivery: "steer", intent: "system", synthetic: {
+          description: "Scheduled reminder", scope: "turn",
+          display: {
+            kind: "schedule",
+            title: delivery.due.length === 1 ? `Scheduled reminder: ${delivery.due[0]!.record.id}` : "Scheduled reminders",
+            body: delivery.due.length === 1 ? delivery.due[0]!.record.prompt : delivery.due.map(({ record }) => `${record.id}: ${record.prompt}`).join("\n\n"),
+          },
+        } })
         await coordinator.flush(scheduleSessionId)
       },
     })
@@ -1046,6 +1055,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const teamHandles: TeamMountHandle[] = []
   let flushSubagentPersistence: (() => Promise<void>) | undefined
   let disposeSubagents: (() => Promise<void>) | undefined
+  let disposing = false
   let codeModeMount: CodeModeMount | undefined
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
@@ -1453,6 +1463,28 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      ownedToolCaller: (input) => {
+        const entry = [...subagent.table.entries().values()].find((row) => row.sessionId === input.sessionId)
+        const registry = entry?.toolRegistry
+        const controller = entry?.controller
+        const valid = () => {
+          if (disposing || !entry || !registry || !controller || !opts.sessionId || !entry.sessionId || !entry.roleName) return false
+          if (subagent.table.get(entry.path) !== entry || entry.toolRegistry !== registry || entry.controller !== controller || entry.status !== "running" || entry.closing || controller.signal.aborted) return false
+          if (entry.session.header?.parentSession !== opts.sessionId || input.registry !== registry || registry.get(input.call.name) !== input.tool || input.validateBinding?.() !== true) return false
+          const role = subagent.roles.get(entry.roleName)
+          if (!role) return false
+          // Child-local Code Mode wrappers already own the restricted registry;
+          // inherited tools must still be the current parent's exact binding.
+          const localWrapper = entry.factoryTools?.includes(input.tool) === true
+          return localWrapper || role.tools.includes(input.call.name) && tools.get(input.call.name) === input.tool
+        }
+        if (!valid()) return undefined
+        const role = subagent.roles.get(entry!.roleName!)!
+        return { sessionId: entry!.sessionId!, role: role.name, snapshot: JSON.stringify({
+          sessionId: entry!.sessionId, parentSessionId: opts.sessionId, role, plan: derivePlanMode(entry!.session),
+          catalog: registry!.genToolCatalog(), deferred: registry!.deferredSearchIndex(),
+        }), validate: valid }
+      },
       liveResources: () => {
         if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
         const terminal = ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")
@@ -1512,6 +1544,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   }
 
   async function dispose(): Promise<void> {
+    disposing = true
     try { await codeModeMount?.cancel("Session assembly disposed") } catch (error) { d.warn(`Code Mode cancellation failed: ${String(error)}`) }
     try { await codeModeMount?.dispose() } catch (error) { d.warn(`Code Mode disposal failed: ${String(error)}`) }
     try { await disposeSubagents?.() } catch (error) { d.warn(`Subagent disposal failed: ${String(error)}`) }

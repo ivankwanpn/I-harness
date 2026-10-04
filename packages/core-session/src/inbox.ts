@@ -3,7 +3,20 @@ import type { ImageInput, Session } from "./index.ts"
 
 export type InputDelivery = "queue" | "steer"
 export type InputIntent = "user" | "system"
-export interface InputSynthetic { description: string; scope: "turn" | "session" }
+/** Producer-owned presentation metadata. It never changes model text or authority. */
+export interface InputDisplay {
+  kind: "task" | "team-message" | "team-result" | "schedule"
+  title: string
+  body: string
+}
+export interface InputSynthetic { description: string; scope: "turn" | "session"; display?: InputDisplay }
+
+/** Durable admission provenance for display; the provider still receives user role. */
+export interface UserMessageInput {
+  inputId: string
+  intent: InputIntent
+  synthetic?: InputSynthetic
+}
 
 export interface AdmittedInput {
   inputId: string
@@ -115,6 +128,7 @@ export class Inbox {
       append(this.session, {
         type: "user/message",
         text: p.text,
+        input: { inputId: p.inputId, intent: p.intent, ...(p.synthetic !== undefined ? { synthetic: p.synthetic } : {}) },
         ...(p.images?.length ? { imageInputId: p.inputId } : {}),
         ...(p.intent === "system"
           ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } }
@@ -137,5 +151,12 @@ function validateAdmitted(input: AdmittedInput): void {
     if (input.synthetic.scope !== "turn" && input.synthetic.scope !== "session") {
       throw new Error(`agent/input admitted: invalid synthetic.scope '${String(input.synthetic.scope)}'`)
     }
+    const display = input.synthetic.display
+    if (display !== undefined && (
+      typeof display !== "object" || display === null || Array.isArray(display) ||
+      !["task", "team-message", "team-result", "schedule"].includes(display.kind) ||
+      typeof display.title !== "string" || display.title.length === 0 || typeof display.body !== "string" ||
+      Object.keys(display).some((key) => key !== "kind" && key !== "title" && key !== "body")
+    )) throw new Error("agent/input admitted: invalid synthetic.display")
   }
 }

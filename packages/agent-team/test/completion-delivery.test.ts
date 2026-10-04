@@ -63,6 +63,15 @@ it("delivers initial and followup teammate finals exactly once to an idle Lead u
     expect(f.assembly.session.events.filter((event) => event.type === "user/message" && event.text.includes("TEAMMATE_")).map((event) => event.type === "user/message" ? event.source : undefined)).toEqual([
       { kind: "plugin", plugin: SYSTEM_INPUT_PLUGIN }, { kind: "plugin", plugin: SYSTEM_INPUT_PLUGIN },
     ])
+    const notices = f.assembly.session.events.filter((event) => event.type === "user/message" && event.text.includes("TEAMMATE_"))
+    expect(notices.map((event) => event.type === "user/message" ? event.input?.inputId : undefined)).toEqual(admitted.map((event) => event.type === "agent/input/admitted" ? event.inputId : undefined))
+    for (const event of notices) expect(event).toMatchObject({ input: { intent: "system", synthetic: { description: "Team message from helper", scope: "turn" } } })
+    expect(notices.map((event) => event.type === "user/message" ? event.input?.synthetic : undefined)).toEqual([
+      expect.objectContaining({ display: { kind: "team-result", title: "Team reply ended: helper", body: "TEAMMATE_INITIAL_OK" } }),
+      expect.objectContaining({ display: { kind: "team-result", title: "Team reply ended: helper", body: "TEAMMATE_FOLLOWUP_OK" } }),
+    ])
+    const durable = (await f.coordinator.snapshot!("lead")).session.events.filter((event) => event.type === "user/message" && event.text.includes("TEAMMATE_"))
+    expect(durable).toEqual(notices)
   } finally { await f.close() }
 })
 
@@ -98,6 +107,10 @@ it("retries durable Lead messages after publishing the cold assembly and does no
     await vi.waitFor(() => expect(f.service.queueState("lead")).toEqual({ running: false, queued: 0 }))
     expect(seen).toHaveLength(1)
     expect(f.assembly.session.events.filter((event) => event.type === "agent/input/admitted" && event.text.includes("COLD_TEAM_RESULT"))).toHaveLength(1)
+    expect(f.assembly.session.events.find((event) => event.type === "user/message" && event.text.includes("COLD_TEAM_RESULT"))).toMatchObject({ input: { intent: "system", synthetic: { description: "Team message from helper", scope: "turn" } } })
+    expect(f.assembly.session.events.find((event) => event.type === "user/message" && event.text.includes("COLD_TEAM_RESULT"))).toMatchObject({
+      input: { synthetic: { display: { kind: "team-message", title: "Team message from helper", body: "COLD_TEAM_RESULT" } } },
+    })
     expect(f.assembly.session.events.filter((event) => event.type === "subagent/inbox" && event.messageId === "msg-cold")).toHaveLength(1)
     expect((await f.coordinator.snapshot!("lead")).session.events.filter((event) => event.type === "team/message/delivered" && event.messageId === "msg-cold")).toHaveLength(1)
   } finally { await f.close() }
@@ -114,6 +127,44 @@ it("preserves an explicitly supplied parent admission adapter", async () => {
     expect(parentNotify.admit).toHaveBeenCalledWith(expect.objectContaining({ sessionId: "lead", text: expect.stringContaining("EXPLICIT_RESULT") }))
     expect(parentNotify.wake).toHaveBeenCalledWith("lead")
     expect(f.assembly.inbox.pending()).toEqual([])
+  } finally { await f.close() }
+})
+
+it("keeps a teammate error readable using its actual job error", async () => {
+  const seen: LLMRequest[] = []
+  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Lead received error" }; yield { type: "end" } } }
+  const child: ModelClient = { async *stream() { throw new Error("provider disconnected"); yield { type: "end" } } }
+  const f = await fixture(lead, child)
+  try {
+    await f.execute("spawn_teammate", { name: "helper", description: "error fixture", prompt: "first", context: "fresh" })
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.waitFor(() => expect(f.service.queueState("lead")).toEqual({ running: false, queued: 0 }))
+    expect(f.assembly.session.events.find((event) => event.type === "user/message" && event.text.includes("provider disconnected"))).toMatchObject({
+      input: { synthetic: { display: { kind: "team-result", title: "Team reply error: helper", body: "provider disconnected" } } },
+    })
+    expect(JSON.stringify(seen[0]!.messages)).toContain("provider disconnected")
+  } finally { await f.close() }
+})
+
+it("restores a queued result presentation without sending presentation fields to the model", async () => {
+  const seen: LLMRequest[] = []
+  const lead: ModelClient = { async *stream(request) { seen.push(request); yield { type: "text/chunk", text: "Received" }; yield { type: "end" } } }
+  const child: ModelClient = { async *stream() { throw new Error("must not wake child"); yield { type: "end" } } }
+  const seed = [{ type: "team/message/queued", version: 1, seq: 0, teamId: "lead-cold", message: {
+    id: "msg-result", senderId: "child-old", senderName: "helper", targetId: "lead-cold", delivery: "quiet", content: "COLD_RAW_RESULT",
+    display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" },
+  } }] as unknown as SessionEvent[]
+  const f = await fixture(lead, child, undefined, seed)
+  try {
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+    await vi.waitFor(() => expect(f.service.queueState("lead")).toEqual({ running: false, queued: 0 }))
+    const notice = f.assembly.session.events.find((event) => event.type === "user/message" && event.text.includes("COLD_RAW_RESULT"))
+    expect(notice).toMatchObject({ input: { synthetic: { display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" } } } })
+    expect(JSON.stringify(seen[0]!.messages)).toContain("COLD_RAW_RESULT")
+    expect(JSON.stringify(seen[0]!.messages)).not.toContain("Read tool failed")
+    await f.assembly.drainParentNotifications?.()
+    expect(f.assembly.session.events.filter((event) => event.type === "agent/input/admitted")).toHaveLength(1)
+    expect((await f.coordinator.snapshot!("lead")).session.events.find((event) => event.type === "user/message" && event.text.includes("COLD_RAW_RESULT"))).toEqual(notice)
   } finally { await f.close() }
 })
 

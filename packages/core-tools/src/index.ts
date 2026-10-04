@@ -37,7 +37,7 @@ export interface PreparedToolIdentity {
   command?: { text: string; dialect: "posix" | "powershell" | "cmd" }
 }
 
-export interface PreparedApprovalInput { tool: Tool; call: ToolCall; sessionId?: string; bindingGeneration?: number; validateBinding?(): boolean }
+export interface PreparedApprovalInput { tool: Tool; call: ToolCall; sessionId?: string; registry?: ToolRegistry; bindingGeneration?: number; validateBinding?(): boolean }
 export interface ApprovalRememberView { available: boolean; candidateId?: string; reason?: string; arguments?: string }
 interface PreparedApprovalResult { remembered: boolean; remember: ApprovalRememberView; validate?(): boolean }
 export type PreparedApprovalProvider = (input: PreparedApprovalInput) => PreparedApprovalResult
@@ -406,7 +406,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
 
     // 3. decision enforcement + approval seam — fail closed: no answerer ⇒ deny.
     if (resolved.kind === "deny") throw new Error(`denied: ${resolved.reason}`)
-    const preparedApprovalInput: PreparedApprovalInput = { tool, call, bindingGeneration, validateBinding: bindingValidation,
+    const preparedApprovalInput: PreparedApprovalInput = { tool, call, registry, bindingGeneration, validateBinding: bindingValidation,
       ...(identity?.sessionId !== undefined ? { sessionId: identity.sessionId } : {}) }
     let authorityProvider: ApprovalAuthorityProvider | undefined
     try { authorityProvider = ctx.services.get<ApprovalAuthorityProvider>("approval/authority") } catch { /* optional host capability */ }
@@ -558,7 +558,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     }
   }
 
-  return {
+  const registry: ToolRegistry = {
     register,
     get,
     unregister,
@@ -574,4 +574,5 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     deferredSearchIndex,
     deferredToolCount,
   }
+  return registry
 }

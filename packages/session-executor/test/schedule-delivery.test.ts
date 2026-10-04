@@ -264,6 +264,10 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       const reminders = reminderMessages(host.session)
       expect(reminders).toHaveLength(1)
       expect(reminders[0]!.internal).toBeUndefined()
+      expect(reminders[0]).toMatchObject({
+        input: { inputId: `schedule-1@${record.scheduledAt}`, intent: "system", synthetic: { description: "Scheduled reminder", scope: "turn" } },
+      })
+      expect(reminders[0]).toMatchObject({ input: { synthetic: { display: { kind: "schedule", title: "Scheduled reminder: schedule-1", body: "check the build" } } } })
 
       // (e) the transcript/CLI surface: deriveMessages — what the apps/cli
       // transcript reader projects from the same log — carries it too.
@@ -288,6 +292,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
         inputId: `schedule-1@${record.scheduledAt}`,
         delivery: "steer",
         intent: "system",
+        synthetic: { description: "Scheduled reminder", scope: "turn" },
       })
     } finally {
       await host.assembly.dispose()
@@ -345,6 +350,10 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       expect(claimed).toHaveLength(1)
       expect(claimed[0]!.source).toEqual({ kind: "plugin", plugin: SYSTEM_INPUT_PLUGIN })
       expect(claimed[0]!.internal).toBeUndefined()
+      expect(claimed[0]).toMatchObject({
+        input: { inputId: `schedule-1@${record.scheduledAt}`, intent: "system", synthetic: { description: "Scheduled reminder", scope: "turn" } },
+      })
+      expect(claimed[0]).toMatchObject({ input: { synthetic: { display: { kind: "schedule", title: "Scheduled reminder: schedule-1", body: "check the build" } } } })
       expect(requestMessagesCarrying(host.model.requests[1]!, REMINDER)).toHaveLength(1)
     } finally {
       await host.assembly.dispose()
@@ -391,6 +400,7 @@ describe("createSessionAssembly — the schedule delivery mount (Task 5)", () =>
       const admissions = host.session.events.filter(isScheduleAdmission)
       expect(admissions).toHaveLength(1)
       expect(admissions[0]!.text).toContain(BATCH_REMINDER)
+      expect(admissions[0]).toMatchObject({ synthetic: { display: { kind: "schedule", title: "Scheduled reminders", body: "schedule-1: check the build\n\nschedule-2: check the build" } } })
       expect(requestMessagesCarrying(host.model.requests[1]!, BATCH_REMINDER)).toHaveLength(1)
 
       // The two dispatches land together, and the admission is adjacent to the

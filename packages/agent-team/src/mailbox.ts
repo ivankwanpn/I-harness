@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import type { InputDisplay } from "@i-harness/core-session"
 import { TeamError, TEAM_CODES, type TeamCaller, type TeamMessageSnapshot } from "./types.ts"
 import type { TeamFoldState } from "./fold.ts"
 import type { TeamTransaction } from "./transact.ts"
@@ -37,13 +38,16 @@ export function createMailbox(deps: MailboxDeps) {
     return (deps.state.queued.get(targetId) ?? []).filter((m) => !deps.state.delivered.has(m.id)).length
   }
 
-  async function sendMessage(caller: TeamCaller, target: string, message: string, delivery: "quiet" | "wakeup", signal?: AbortSignal): Promise<{ messageId: string; status: "accepted" | "queued" }> {
+  async function sendMessage(caller: TeamCaller, target: string, message: string, delivery: "quiet" | "wakeup", signal?: AbortSignal, display?: InputDisplay): Promise<{ messageId: string; status: "accepted" | "queued" }> {
     // Pre-checks read the LIVE state getters (read-only, no transact needed).
     if (caller.role === "teammate" && !deps.state.members.has(caller.name)) throw new TeamError(TEAM_CODES.NOT_MEMBER, `not a team member: ${caller.name}`)
     const targetId = target === "lead" ? deps.teamId : deps.state.members.get(target)?.id
     if (!targetId) throw new TeamError(TEAM_CODES.MEMBER_NOT_FOUND, `unknown target "${target}"`)
     if (caller.id === targetId) throw new TeamError(TEAM_CODES.SELF_MESSAGE, "cannot message yourself")
-    const snapshot: TeamMessageSnapshot = { id: `msg-${randomUUID()}`, senderId: caller.id, senderName: caller.name, targetId, delivery, content: message }
+    const snapshot: TeamMessageSnapshot = {
+      id: `msg-${randomUUID()}`, senderId: caller.id, senderName: caller.name, targetId, delivery, content: message,
+      display: display !== undefined ? display : { kind: "team-message", title: `Team message from ${caller.name}`, body: message },
+    }
     // Spec byte-limit framing: `Team message <id> from <name>:` + content.
     const framing = `Team message <${snapshot.id}> from <${caller.name}>:\n${message}`
     if (Buffer.byteLength(framing, "utf-8") > maxBytes) throw new TeamError(TEAM_CODES.MESSAGE_TOO_LARGE, `message exceeds ${maxBytes} bytes`)

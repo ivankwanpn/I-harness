@@ -71,6 +71,31 @@ describe("Inbox", () => {
     inbox.claimAtStepBoundary()
     const msg = s.events.at(-1) as { source?: unknown }
     expect(msg.source).toEqual({ kind: "plugin", plugin: "i-harness/system-input" })
+    expect(msg).toMatchObject({
+      input: { inputId: "i", intent: "system", synthetic: { description: "git branch changed", scope: "turn" } },
+    })
+    expect(deriveMessages(s)).toEqual([{ role: "user", content: "branch is now main" }])
+    const restored = JSON.parse(JSON.stringify(s)) as typeof s
+    expect(restored.events.at(-1)).toMatchObject({
+      input: { inputId: "i", intent: "system", synthetic: { description: "git branch changed", scope: "turn" } },
+    })
+    expect(new Inbox(restored).pending()).toEqual([])
+  })
+
+  it.each([
+    '<task id="literal" state="error"><task_error>quoted example</task_error></task>',
+    "Team message <literal> from <writer>:\nquoted example",
+    "Team result <literal:1> from <writer> (error):\nquoted example",
+    "[SCHEDULE REMINDER]\nquoted example",
+  ])("preserves human intent for a literal notice: %s", (text) => {
+    const session = createSession()
+    const inbox = new Inbox(session)
+    inbox.admit({ inputId: "human", text, delivery: "steer", intent: "user" })
+    inbox.claimAtStepBoundary()
+    expect(session.events.at(-1)).toMatchObject({ type: "user/message", text, input: { inputId: "human", intent: "user" } })
+    expect(session.events.at(-1)).not.toHaveProperty("source")
+    expect(session.events.at(-1)).not.toHaveProperty("input.synthetic.display")
+    expect(deriveMessages(session)).toEqual([{ role: "user", content: text }])
   })
 
   it("replays pending from the log on construction (resume recovery)", () => {
@@ -90,5 +115,19 @@ describe("Inbox", () => {
     expect(() => inbox.admit({ inputId: "a", text: "two", delivery: "queue", intent: "user" })).toThrow(/already pending/)
     expect(() => inbox.admit({ inputId: "b", text: "", delivery: "queue", intent: "user" })).toThrow(/text/)
     expect(() => inbox.admit({ inputId: "c", text: "x", delivery: "instant", intent: "user" } as never)).toThrow(/delivery/)
+  })
+
+  it.each([
+    null,
+    { kind: "human", title: "forged", body: "notice" },
+    { kind: "task", title: "", body: "notice" },
+    { kind: "task", title: "Notice", body: 1 },
+    { kind: "task", title: "Notice" },
+    { kind: "task", title: "Notice", body: "notice", role: "user" },
+  ])("rejects malformed or unknown display metadata at admission: %j", (display) => {
+    const session = createSession()
+    const inbox = new Inbox(session)
+    expect(() => inbox.admit({ inputId: "bad", text: "notice", delivery: "steer", intent: "system", synthetic: { description: "Notice", scope: "turn", display } } as never)).toThrow(/display/)
+    expect(session.events).toEqual([])
   })
 })

@@ -1,6 +1,6 @@
 .todo-progress-host { position: relative; container-name: conversation-todos; container-type: inline-size; }
-.todo-progress-dock { --todo-success: #65b77a; flex: 0 0 auto; align-self: flex-end; width: 300px; max-width: 100%; margin: 12px 0 8px; border: 1px solid var(--ih-divider); border-radius: 14px; background: var(--ih-panel); box-shadow: 0 3px 12px rgb(0 0 0 / 8%); overflow: hidden; }
-.todo-progress-header { display: flex; align-items: center; gap: 15px; min-height: 38px; padding: 8px 12px 5px 15px; }
+.todo-progress-dock { --todo-success: #65b77a; position: absolute; top: 12px; right: 20px; z-index: 2; display: flex; flex-direction: column; width: min(300px, calc(100% - 40px)); max-height: calc(100% - 24px); margin: 0; border: 1px solid var(--ih-divider); border-radius: 14px; background: var(--ih-panel); box-shadow: 0 3px 12px rgb(0 0 0 / 8%); overflow: hidden; }
+.todo-progress-header { display: flex; flex-shrink: 0; align-items: center; gap: 15px; min-height: 38px; padding: 8px 12px 5px 15px; }
 .todo-progress-header h3 { margin: 0; color: var(--ih-muted); font-size: 12px; font-weight: 500; }
 .todo-progress-count { color: var(--ih-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 .todo-progress-dock[data-complete="true"] .todo-progress-count { color: var(--todo-success); }
@@ -8,23 +8,19 @@
 .todo-progress-actions button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--ih-muted); cursor: pointer; }
 .todo-progress-actions button:hover { background: color-mix(in srgb, var(--ih-text) 7%, transparent); color: var(--ih-text); }
 .todo-progress-actions button:focus-visible, .todo-progress-pager button:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: -1px; }
-.todo-progress-body { padding: 1px 15px 12px; }
-.todo-progress-list { list-style: none; padding: 0; margin: 0; max-height: 250px; overflow-y: auto; scrollbar-gutter: stable; }
+.todo-progress-body { display: flex; flex-direction: column; min-height: 0; padding: 1px 15px 12px; }
+.todo-progress-list { list-style: none; padding: 0; margin: 0; min-height: 0; max-height: 250px; overflow-y: auto; scrollbar-gutter: stable; }
 .todo-progress-list li { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; color: var(--ih-muted); font-size: 12px; line-height: 1.5; }
 .todo-progress-list svg { flex: 0 0 auto; margin-top: 2px; color: var(--ih-muted); stroke-width: 1.7; }
 .todo-progress-list li[data-status="completed"] svg { color: var(--todo-success); }
 .todo-progress-list li[data-status="completed"] s { color: color-mix(in srgb, var(--ih-muted) 72%, var(--ih-panel)); text-decoration-color: color-mix(in srgb, var(--ih-muted) 65%, transparent); }
 .todo-progress-list li[data-status="in_progress"], .todo-progress-list li[data-status="in_progress"] svg { color: var(--ih-text); }
 .todo-progress-list span, .todo-progress-list s { min-width: 0; overflow-wrap: anywhere; }
-.todo-progress-pager { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; color: var(--ih-muted); font-size: 10px; }
+.todo-progress-pager { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; padding-top: 7px; color: var(--ih-muted); font-size: 10px; }
 .todo-progress-pager button { border: 0; border-radius: 4px; background: transparent; color: var(--ih-muted); padding: 3px 4px; cursor: pointer; font: inherit; }
 .todo-progress-pager button:disabled { opacity: .4; cursor: default; }
 :root[data-theme="light"] .todo-progress-dock { --todo-success: #31834a; }
-@container conversation-todos (min-width: 1360px) {
-  .todo-progress-dock { position: absolute; top: 12px; right: 20px; z-index: 2; margin: 0; }
-  .todo-progress-host:has(.todo-progress-dock) > .conversation-goal, .todo-progress-host:has(.todo-progress-dock) > .notice { width: 100%; max-width: 720px; align-self: center; }
-}
-@container conversation-todos (max-width: 480px) {
-  .todo-progress-dock { width: 100%; }
-  .todo-progress-list { max-height: 170px; }
+@container conversation-todos (max-width: 600px) {
+  .todo-progress-dock { right: 12px; width: min(300px, calc(100% - 24px)); }
+  .todo-progress-list { max-height: 140px; }
 }

@@ -1,7 +1,8 @@
 // `&` binds tighter than `|`, so the intersection must wrap the whole union —
 // otherwise only the last member would carry `ignorable`.
 export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
-export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic } from "./inbox.ts"
+export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic, InputDisplay, UserMessageInput } from "./inbox.ts"
+import type { InputDisplay, InputSynthetic, UserMessageInput } from "./inbox.ts"
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
@@ -10,7 +11,7 @@ export type SessionEvent =
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
-    | { type: "user/message"; text: string; seq?: number; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
+    | { type: "user/message"; text: string; seq?: number; input?: UserMessageInput; source?: { kind: "plugin"; plugin: string }; internal?: true; images?: ImageInput[]; imageInputId?: string; imageSummaries?: ImageSummary[] }
     | { type: "assistant/chunk"; text: string; seq?: number }
     | { type: "assistant/message"; text: string; seq?: number; thinkingBlocks?: ProviderThinkingBlock[]; providerContinuation?: ProviderContinuation }
     | { type: "tool/call"; callId: string; name: string; args: unknown; seq?: number }
@@ -63,7 +64,7 @@ export type SessionEvent =
     // agent-team/src/types.ts.
     | { type: "team/member"; version: 1; teamId: string; member: { id: string; name: string; description: string; provider: string; context: "fresh" | "fork"; phase: "provisioning" | "active" | "failed"; error?: string; sessionId?: string }; seq?: number }
     | { type: "team/task"; version: 1; teamId: string; task: { id: string; revision: number; subject: string; description: string; status: "pending" | "in_progress" | "completed" | "deleted"; ownerId?: string; blockedBy: string[]; writeScopes: string[] }; seq?: number }
-    | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string }; seq?: number }
+    | { type: "team/message/queued"; version: 1; teamId: string; message: { id: string; senderId: string; senderName: string; targetId: string; delivery: "quiet" | "wakeup"; content: string; display?: InputDisplay }; seq?: number }
     | { type: "team/message/delivered"; version: 1; teamId: string; messageId: string; targetId: string; seq?: number }
     // M21 todo tool: whole-list snapshot writes (version 1). INLINED like
     // team/* above so core-session stays dependency-free (the todo tool owns
@@ -103,7 +104,7 @@ export type SessionEvent =
     // All three are log-only (never model-visible; the text enters the model
     // surface only through the promoted user/message). version 1 (M19/M21
     // convention for structured new event slots).
-    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: { description: string; scope: "turn" | "session" }; images?: ImageInput[]; clientToken?: string; seq?: number }
+    | { type: "agent/input/admitted"; version: 1; inputId: string; text: string; delivery: "queue" | "steer"; intent: "user" | "system"; synthetic?: InputSynthetic; images?: ImageInput[]; clientToken?: string; seq?: number }
     | { type: "agent/input/promoted"; version: 1; inputId: string; seq?: number }
     | { type: "agent/input/cancelled"; version: 1; inputId: string; reason?: string; seq?: number }
     // R-A6 session title: latest-wins log-only snapshot (dsh `session/title`).

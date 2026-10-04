@@ -1,4 +1,5 @@
 import { createSession } from "@i-harness/core-session"
+import type { Tool, ToolRegistry } from "@i-harness/core-tools"
 
 export type ChildStatus = "running" | "waiting" | "completed" | "killed" | "error"
 export interface ChildAgentEntry {
@@ -19,6 +20,10 @@ export interface ChildAgentEntry {
   closing?: boolean
   sessionId?: string
   roleName?: string
+  /** Runtime-only owning registry identity; never included in durable or UI snapshots. */
+  toolRegistry?: ToolRegistry
+  /** Exact child-local wrapper bindings produced by the existing host factory. */
+  factoryTools?: readonly Tool[]
   /** W11: the epoch ms at which this entry's CURRENT run began — the fact that
    * makes "how long has this child been running" answerable. Stamped where a
    * run starts and NOWHERE else: `spawnChild` (the initial run) and

@@ -8,6 +8,30 @@ const base: TeamEvent = {
 }
 
 describe("foldTeam", () => {
+  it("retains structured result presentation when the durable mailbox is replayed", () => {
+    const event = {
+      type: "team/message/queued", version: 1, teamId: "lead-1", message: {
+        id: "msg-result", senderId: "child-1", senderName: "helper", targetId: "lead-1", delivery: "quiet", content: "raw transport frame",
+        display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" },
+      },
+    } as unknown as TeamEvent
+    const { state } = foldTeam(JSON.parse(JSON.stringify([event])) as TeamEvent[])
+    expect(state.queued.get("lead-1")).toEqual([expect.objectContaining({
+      display: { kind: "team-result", title: "Team reply ended: helper", body: "Read tool failed: missing file" },
+    })])
+  })
+
+  it.each([
+    null,
+    { kind: "human", title: "Notice", body: "body" },
+    { kind: "team-result", title: "", body: "body" },
+    { kind: "team-result", title: "Notice", body: 1 },
+    { kind: "team-result", title: "Notice", body: "body", role: "user" },
+  ])("rejects malformed or unknown presentation during durable mailbox replay: %j", (display) => {
+    const event = { type: "team/message/queued", version: 1, teamId: "lead-1", message: { id: "msg-bad", senderId: "child-1", senderName: "helper", targetId: "lead-1", delivery: "quiet", content: "raw", display } } as unknown as TeamEvent
+    expect(() => foldTeam([event])).toThrow(/invalid team\/message\/queued event/)
+  })
+
   it("folds sequential member/queue/delivered events into state", () => {
     const events: TeamEvent[] = [
       base,

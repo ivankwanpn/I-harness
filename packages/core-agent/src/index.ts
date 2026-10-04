@@ -293,7 +293,14 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
     const admitted = inputId ? deps.session.events.findLast((event) => event.type === "agent/input/admitted" && event.inputId === inputId) : undefined
-    append(deps.session, { type: "user/message", text: message, ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}), ...(admitted?.type === "agent/input/admitted" && admitted.intent === "system" ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } } : {}) })
+    append(deps.session, {
+      type: "user/message", text: message,
+      ...(images?.length ? inputId ? { imageInputId: inputId } : { images } : {}),
+      ...(admitted?.type === "agent/input/admitted" ? {
+        input: { inputId: admitted.inputId, intent: admitted.intent, ...(admitted.synthetic !== undefined ? { synthetic: admitted.synthetic } : {}) },
+        ...(admitted.intent === "system" ? { source: { kind: "plugin" as const, plugin: SYSTEM_INPUT_PLUGIN } } : {}),
+      } : {}),
+    })
 
     let needsContinuation = true
     while (needsContinuation) {

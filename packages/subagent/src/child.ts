@@ -536,6 +536,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     jobId,
     ...(sessionId !== undefined ? { sessionId } : {}),
     roleName: opts.role.name,
+    toolRegistry: childReg,
+    factoryTools: codeModeMount ? ["code_exec", "code_wait"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }) : [],
     ...(modelLabel !== undefined ? { modelLabel } : {}),
     // Serialization: seed the followup chain with the initial run so a
     // followup_task fired mid-run waits for turn 1 to finish (dsh's

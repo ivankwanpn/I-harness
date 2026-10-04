@@ -730,6 +730,8 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   entry.status = "waiting"
   entry.closing = false
   entry.controller = controller
+  entry.toolRegistry = childReg
+  entry.factoryTools = codeModeMount ? ["code_exec", "code_wait"].flatMap((name) => { const tool = childReg.get(name); return tool ? [tool] : [] }) : []
   entry.unmount = () => childCtx.scope.unmount()
   entry.cancel = codeModeMount ? (reason) => codeModeMount.cancel(reason) : undefined
   entry.dispose = async () => {

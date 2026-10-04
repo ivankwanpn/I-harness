@@ -30,9 +30,16 @@ export function createApprovalRulesAdapter(options: ApprovalRulesAdapterOptions)
       const authority: ApprovalAuthorityProvider = (input) => {
         const policy = options.policyIdentity(assembly)
         const workspaceId = policy?.workspaceId, revision = policy?.revision
+        const rootCaller = input.sessionId === undefined || input.sessionId === assembly.sessionId
+        const childCaller = rootCaller ? undefined : assembly.ownedToolCaller?.(input)
         return () => {
           const currentPolicy = options.policyIdentity(assembly)
-          return (input.sessionId === undefined || input.sessionId === assembly.sessionId)
+          const currentChild = rootCaller ? undefined : assembly.ownedToolCaller?.(input)
+          return (rootCaller ? (input.sessionId === undefined || input.sessionId === assembly.sessionId)
+              && (assembly.tools === undefined || input.registry === assembly.tools)
+            : policy !== undefined && currentPolicy !== undefined && childCaller !== undefined && childCaller.validate()
+              && currentChild !== undefined && currentChild.sessionId === childCaller.sessionId
+              && currentChild.role === childCaller.role && currentChild.snapshot === childCaller.snapshot)
             && input.validateBinding?.() !== false
             && currentPolicy?.workspaceId === workspaceId && currentPolicy?.revision === revision
         }
