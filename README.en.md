@@ -21,6 +21,8 @@ Desktop does not require a separate Node.js installation. Configure your own mod
 
 The current Windows distribution is unsigned.
 
+The installer defaults to a per-user LocalAppData folder. Windows asks administrator accounts for consent, allowing a Program Files destination. If a copy is already installed and setup is elevated, uninstall that copy through Windows Apps before reinstalling; conversation and settings data are retained. The v0.1.1 installer includes the destination-permission correction documented in the [fix report](docs/audit/2026-10-05-desktop-installer-location-fix.md).
+
 ## Get started
 
 1. **Open I-harness Desktop** and choose a local project folder as your workspace.

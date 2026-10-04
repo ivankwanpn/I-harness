@@ -1,7 +1,14 @@
 ; -*- coding: utf-8 -*-
 ; build-installer.mjs supplies a validated, exact file list. No recursive removal.
 Unicode true
-RequestExecutionLevel user
+!ifdef TEST_ROOT
+  ; File-only fixtures stay unelevated and never request a UAC prompt.
+  RequestExecutionLevel user
+!else
+  ; Administrators may choose Program Files. Standard users can still use the
+  ; default per-user destination without administrator credentials.
+  RequestExecutionLevel highest
+!endif
 AllowRootDirInstall false
 ManifestDPIAware true
 SetCompressor /SOLID lzma
@@ -38,6 +45,7 @@ VIAddVersionKey "LegalCopyright" "I-harness contributors"
 
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE ValidateDirectoryPage
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -57,6 +65,12 @@ Var SetupMutex
 Var UninstallMutex
 Var UpgradeNonce
 Var UpgradeParent
+Var DestinationWritable
+Var DestinationDirectory
+Var DestinationError
+Var SetupElevated
+
+!define DESTINATION_PERMISSION_MESSAGE "The installation folder is not writable with the current permissions (Windows error $DestinationError). Use the default LocalAppData folder: $LOCALAPPDATA\Programs\${APP_NAME}, or grant administrator permission to install under Program Files."
 
 !macro Fail MESSAGE CODE
   StrCpy $FailureMessage "${MESSAGE}"
@@ -127,6 +141,55 @@ FunctionEnd
 !insertmacro LocationFunction ""
 !insertmacro LocationFunction "un."
 
+; Check create-file/create-directory access on the closest existing directory.
+; Opening a directory handle does not create a probe file or mutate a folder
+; that has not passed the installation ownership checks yet.
+Function CheckDestinationAccess
+  StrCpy $DestinationWritable 0
+  StrCpy $DestinationDirectory $INSTDIR
+  StrCpy $DestinationError 3
+  destination_access_parent:
+    System::Call 'kernel32::GetFileAttributesW(w "$DestinationDirectory") i.r0 ?e'
+    Pop $DestinationError
+    ${If} $0 != -1
+      IntOp $0 $0 & 0x10
+      ${If} $0 == 0
+        StrCpy $DestinationError 267
+        Return
+      ${EndIf}
+      ; FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY, FILE_FLAG_BACKUP_SEMANTICS.
+      System::Call 'kernel32::CreateFileW(w "$DestinationDirectory", i 6, i 7, p 0, i 3, i 0x02000000, p 0) p.r0 ?e'
+      Pop $DestinationError
+      ${If} $0 == -1
+        Return
+      ${EndIf}
+      System::Call 'kernel32::CloseHandle(p r0)'
+      StrCpy $DestinationWritable 1
+      StrCpy $DestinationError 0
+      Return
+    ${EndIf}
+    ${If} $DestinationError != 2
+    ${AndIf} $DestinationError != 3
+      Return
+    ${EndIf}
+    ${GetParent} "$DestinationDirectory" $1
+    ${If} $1 == ""
+    ${OrIf} $1 == $DestinationDirectory
+      Return
+    ${EndIf}
+    StrCpy $DestinationDirectory $1
+    Goto destination_access_parent
+FunctionEnd
+
+Function ValidateDirectoryPage
+  Call ValidateLocation
+  Call CheckDestinationAccess
+  ${If} $DestinationWritable != 1
+    MessageBox MB_OK|MB_ICONSTOP "${DESTINATION_PERMISSION_MESSAGE}"
+    Abort
+  ${EndIf}
+FunctionEnd
+
 !macro CheckPayloadDirectory RELATIVE
   System::Call 'kernel32::GetFileAttributesW(w "$INSTDIR\${RELATIVE}") i.r0'
   ${If} $0 != -1
@@ -185,7 +248,13 @@ Function ${PREFIX}CreateMutexNames
   System::Call 'kernel32::lstrcpynW(w .r7, p r5, i ${NSIS_MAX_STRLEN})'
   System::Call 'kernel32::LocalFree(p r5)'
   System::Free $3
+  ; Read the actual token; highestAvailable can still be a standard-user token.
+  System::Call 'advapi32::GetTokenInformation(p r1, i 20, *i .r8, i 4, *i .r9) i.r4'
+  StrCpy $SetupElevated $8
   System::Call 'kernel32::CloseHandle(p r1)'
+  ${If} $4 == 0
+    !insertmacro Fail "The current installer permissions could not be checked." 5
+  ${EndIf}
   StrCpy $0 $7 4
   ${If} $0 != "S-1-"
     !insertmacro Fail "The installer operation lock identity is invalid." 5
@@ -301,6 +370,10 @@ FunctionEnd
 
 Section "${APP_NAME}" Install
   Call ValidateLocation
+  Call CheckDestinationAccess
+  ${If} $DestinationWritable != 1
+    !insertmacro Fail "${DESTINATION_PERMISSION_MESSAGE}" 5
+  ${EndIf}
 !ifndef TEST_ROOT
   ReadRegStr $0 HKCU "${UNINSTALL_KEY}" "InstallLocation"
   ${If} $0 != ""
@@ -317,6 +390,14 @@ Section "${APP_NAME}" Install
     ReadINIStr $0 "$INSTDIR\${INSTALL_MARKER}" "Install" "Path"
     ${If} $0 != $INSTDIR
       !insertmacro Fail "The installation ownership marker belongs to a different path." 2
+    ${EndIf}
+!ifdef TEST_HOOKS
+    !insertmacro TestBeforeUpgrade
+!endif
+    ${If} $SetupElevated != 0
+      ; The old marker authenticates a location, not the executable bytes.
+      ; Never promote an existing user-writable uninstaller to admin execution.
+      !insertmacro Fail "Uninstall the previous copy from Windows Apps or with its Uninstall.exe before using an elevated installer. Then run this setup again. The existing installation was not changed." 7
     ${EndIf}
     ${IfNot} ${FileExists} "$INSTDIR\Uninstall.exe"
       !insertmacro Fail "The previous installation has no uninstaller. Restore its installer before upgrading." 2

@@ -1,4 +1,11 @@
 ; Included only in the compile-time, owned file-only TEST_ROOT namespace.
+!macro TestBeforeUpgrade
+  ReadINIStr $8 "${TEST_ROOT}\test-controls.ini" "Controls" "SimulateElevatedUpgrade"
+  ${If} $8 == 1
+    StrCpy $SetupElevated 1
+  ${EndIf}
+!macroend
+
 !macro TestSetupReady
   ReadINIStr $8 "${TEST_ROOT}\test-controls.ini" "Controls" "HoldFirstSetup"
   ${If} $8 == 1

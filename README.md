@@ -21,6 +21,8 @@ Desktop 不需要另裝 Node.js。模型服務需要自行配置；使用雲端�
 
 目前的 Windows 發行檔未進行程式碼簽署。
 
+安裝器預設使用每使用者的 LocalAppData 位置；管理員帳戶啟動時會由 Windows 詢問授權，可選擇 `Program Files`。若已有舊版且安裝器以管理員權限執行，請先從 Windows「已安裝的應用程式」解除安裝舊版，再重新安裝；會話與設定資料會保留。v0.1.1 的安裝器已更新目錄權限檢查，詳見[修正紀錄](docs/audit/2026-10-05-desktop-installer-location-fix.md)。
+
 ## 快速開始
 
 1. **開啟 I-harness Desktop**，選擇本機專案資料夾作為工作區。
