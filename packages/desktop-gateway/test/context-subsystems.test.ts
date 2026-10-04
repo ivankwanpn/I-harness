@@ -76,8 +76,8 @@ it('does not cancel active indexing during no-op sync and awaits reader drainage
 })
 it('stores credential references without secret values and rejects model-supplied index actors', async () => {
   const f = await fixture()
-  await f.controller.configure({ scope: 'global', codeRetrieval: { mode: 'hybrid', embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'test', credentialRef: 'vault:embedding' } } })
-  expect((await f.controller.state()).saved.codeRetrieval.embedding?.credentialRef).toBe('vault:embedding')
+  await f.controller.configure({ scope: 'global', codeRetrieval: { mode: 'hybrid', embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'test', credentialRef: 'EMBEDDING_KEY' } } })
+  expect((await f.controller.state()).saved.codeRetrieval.embedding?.credentialRef).toBe('EMBEDDING_KEY')
   expect(await readFile(f.settingsPath, 'utf8')).not.toContain('apiKey')
   await expect(f.controller.action({ target: 'code', action: 'update', sessionId: 'model-granted' })).rejects.toThrow('host')
 })
@@ -85,4 +85,43 @@ it('rejects references that shadow the host-owned workspace source before saving
   const f = await fixture()
   await expect(f.controller.configure({ scope: 'workspace', references: [{ id: 'workspace', path: f.root, label: 'shadow' }] })).rejects.toThrow('reserved')
   expect((await f.controller.state()).saved.references).toEqual([])
+})
+it('rejects over-byte-limit Unicode before saving and round-trips valid Unicode through real services', async () => {
+  const f = await fixture()
+  const validPattern = '漢'.repeat(341)
+  const validIdentity = '漢'.repeat(1365)
+  const validReference = 'ENV_' + 'A'.repeat(4092)
+  await f.controller.configure({ scope: 'global', codeRetrieval: { ignorePatterns: [validPattern], embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: validIdentity, credentialRef: validReference } } })
+  expect((await f.controller.state()).saved.codeRetrieval).toMatchObject({ ignorePatterns: [validPattern], embedding: { model: validIdentity, credentialRef: validReference } })
+  expect(f.codeRetrieval.status().config.ignorePatterns).toEqual([validPattern])
+  const document = await readFile(f.settingsPath, 'utf8')
+  const invalidPatches = [
+    { codeRetrieval: { ignorePatterns: ['漢'.repeat(400)] } },
+    { codeRetrieval: { embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: '漢'.repeat(1400) } } },
+    { codeRetrieval: { embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'valid', credentialRef: '漢'.repeat(1400) } } },
+    { codeRetrieval: { embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'valid', credentialRef: 'ENV_' + 'A'.repeat(4093) } } },
+  ]
+  for (const scope of ['global', 'workspace']) {
+    for (const patch of invalidPatches) {
+      await expect(f.controller.configure({ scope, ...patch })).rejects.toThrow()
+      expect(await readFile(f.settingsPath, 'utf8')).toBe(document)
+      expect((await f.controller.state()).applicationError).toBeUndefined()
+    }
+  }
+  await f.controller.configure({ scope: 'workspace', codeRetrieval: { ignorePatterns: ['中文字'], embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: '模型', credentialRef: 'EMBEDDING_KEY' } }, references: [{ id: '資料來源', path: f.root, label: '中文資料' }] })
+  expect(await f.controller.sync()).toMatchObject({ code: { config: { embedding: { model: '模型', credentialRef: 'EMBEDDING_KEY' }, ignorePatterns: ['中文字'] } }, saved: { references: [{ id: '資料來源', path: f.root, label: '中文資料' }] } })
+})
+it.each([
+  { contextOutput: { maxPreviewBytes: 4095 } },
+  { contextOutput: { maxDiskBytes: 65535 } },
+  { codeRetrieval: { maxDiskBytes: 131071 } },
+  { codeRetrieval: { ignorePatterns: Array(8).fill('a'.repeat(512)) } },
+  { codeRetrieval: { embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'model', credentialRef: 'vault:key' } } },
+  { references: [{ id: 'reference', path: 'D:/' + '漢'.repeat(1400), label: 'long path' }] },
+])('rejects persisted values outside native reader and credential bounds: %j', async patch => {
+  const f = await fixture()
+  await f.controller.configure({ scope: 'global' })
+  const before = await readFile(f.settingsPath, 'utf8')
+  await expect(f.controller.configure({ scope: 'workspace', ...patch })).rejects.toThrow()
+  expect(await readFile(f.settingsPath, 'utf8')).toBe(before)
 })

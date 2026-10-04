@@ -4,6 +4,7 @@ import { afterEach, expect, it } from 'vitest'
 import { ContextSubsystemSettings } from '../src/renderer/settings/ContextSubsystemSettings.tsx'
 import { normalizeContextSubsystems } from '../../settings/src/context-subsystems.ts'
 import type { ContextSubsystemRequest, ContextSubsystemState } from '@i-harness/desktop-gateway/src/context-subsystems.ts'
+import { configuration } from '../../code-retrieval/src/config.ts'
 afterEach(cleanup)
 function initial(): ContextSubsystemState {
   const saved = normalizeContextSubsystems(undefined)
@@ -48,10 +49,10 @@ it('edits global defaults independently from workspace values and saves explicit
   fireEvent.change(screen.getByRole('combobox', { name: 'Embedding 提供商' }), { target: { value: 'ollama' } })
   fireEvent.change(screen.getByRole('textbox', { name: 'Embedding 端點' }), { target: { value: 'http://localhost:11434' } })
   fireEvent.change(screen.getByRole('textbox', { name: 'Embedding 模型' }), { target: { value: 'local-model' } })
-  fireEvent.change(screen.getByRole('textbox', { name: '憑證引用' }), { target: { value: 'vault:local' } })
+  fireEvent.change(screen.getByRole('textbox', { name: '憑證引用' }), { target: { value: 'EMBEDDING_KEY' } })
   fireEvent.change(screen.getByRole('textbox', { name: '參考資料夾清單' }), { target: { value: '[{"id":"manual","path":"D:/owned/reference","label":"Manual"}]' } })
   fireEvent.click(screen.getByRole('button', { name: '儲存' }))
-  await waitFor(() => expect(requests.find(req => req.kind === 'desktop/context-subsystems/configure')).toMatchObject({ workspaceId: 'w', patch: { scope: 'global', contextOutput: { enabled: false }, codeRetrieval: { mode: 'hybrid', embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'local-model', credentialRef: 'vault:local' } }, references: [{ id: 'manual', path: 'D:/owned/reference', label: 'Manual' }] } }))
+  await waitFor(() => expect(requests.find(req => req.kind === 'desktop/context-subsystems/configure')).toMatchObject({ workspaceId: 'w', patch: { scope: 'global', contextOutput: { enabled: false }, codeRetrieval: { mode: 'hybrid', embedding: { provider: 'ollama', endpoint: 'http://localhost:11434', model: 'local-model', credentialRef: 'EMBEDDING_KEY' } }, references: [{ id: 'manual', path: 'D:/owned/reference', label: 'Manual' }] } }))
   expect(screen.queryByLabelText('API key')).toBeNull()
 })
 it('sends explicit update rebuild cancel and clear commands from the user controls', async () => {
@@ -66,4 +67,31 @@ it('sends explicit update rebuild cancel and clear commands from the user contro
     await waitFor(() => expect(commands.at(-1)).toEqual(command))
     await waitFor(() => expect((screen.getByRole('button', { name }) as HTMLButtonElement).disabled).toBe(false))
   }
+})
+it('saves lexical mode after leaving an incomplete hybrid embedding draft', async () => {
+  let state = initial()
+  let saved = false
+  const request = async (req: ContextSubsystemRequest) => {
+    if (req.kind === 'desktop/context-subsystems/configure') {
+      const codeRetrieval = configuration(req.patch.codeRetrieval ?? {}, state.saved.codeRetrieval)
+      const contextOutput = { ...state.saved.contextOutput, ...req.patch.contextOutput }
+      state = { ...state, saved: { ...state.saved, codeRetrieval, contextOutput } }
+      state.context = { ...state.context, config: contextOutput, enabled: contextOutput.enabled, state: 'ready' }
+      state.code = { ...state.code, config: codeRetrieval }
+      saved = true
+    }
+    return structuredClone(state)
+  }
+  render(<ContextSubsystemSettings workspaceId="w" bridge={{ request }} />)
+  await screen.findByRole('checkbox', { name: '啟用 Context Mode' })
+  fireEvent.change(screen.getByRole('combobox', { name: '檢索模式' }), { target: { value: 'hybrid' } })
+  fireEvent.change(screen.getByRole('textbox', { name: 'Embedding 端點' }), { target: { value: 'http://localhost:11434' } })
+  fireEvent.change(screen.getByRole('combobox', { name: '檢索模式' }), { target: { value: 'lexical' } })
+  fireEvent.click(screen.getByRole('checkbox', { name: '啟用 Context Mode' }))
+  fireEvent.click(screen.getByRole('button', { name: '儲存' }))
+  await waitFor(() => expect(saved).toBe(true))
+  expect(state.saved.contextOutput.enabled).toBe(true)
+  expect(state.saved.codeRetrieval.mode).toBe('lexical')
+  expect(state.saved.codeRetrieval.embedding).toBeUndefined()
+  expect(screen.queryByRole('alert')).toBeNull()
 })

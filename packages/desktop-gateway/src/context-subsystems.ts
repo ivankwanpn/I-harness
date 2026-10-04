@@ -24,8 +24,8 @@ function object(raw: unknown): Record<string, unknown> {
 function keys(v: Record<string, unknown>, allowed: readonly string[]) {
   if (Object.keys(v).some(k => !allowed.includes(k))) throw new Error('Unsupported context subsystem field')
 }
-function identity(v: unknown, max = 4096): asserts v is string {
-  if (typeof v !== 'string' || !v.trim() || v.length > max || v.includes('\0')) throw new Error('Invalid context subsystem identity')
+function identity(v: unknown, maxChars = 4096, maxBytes = 4096): asserts v is string {
+  if (typeof v !== 'string' || !v.trim() || v.length > maxChars || Buffer.byteLength(v, 'utf8') > maxBytes || v.includes('\0')) throw new Error('Invalid context subsystem identity')
 }
 function validateConfig(raw: unknown, defaults: typeof CONTEXT_OUTPUT_DEFAULTS | typeof CODE_RETRIEVAL_DEFAULTS) {
   const v = object(raw); keys(v, [...Object.keys(defaults), ...('mode' in defaults ? ['embedding'] : [])])
@@ -33,16 +33,26 @@ function validateConfig(raw: unknown, defaults: typeof CONTEXT_OUTPUT_DEFAULTS |
     if (key === 'enabled' || key === 'autoRefresh') { if (typeof value !== 'boolean') throw new Error(`Invalid ${key}`) }
     else if (key === 'mode') { if (value !== 'lexical' && value !== 'hybrid') throw new Error('Invalid retrieval mode') }
     else if (key === 'ignorePatterns') {
-      if (!Array.isArray(value) || value.length > 16 || value.some(p => typeof p !== 'string' || !p || p.length > 512 || p.includes('\0'))) throw new Error('Invalid ignore patterns (maximum 16 patterns, 512 characters each)')
+      if (!Array.isArray(value) || value.length > 16 || value.some(p => typeof p !== 'string' || !p || p.length > 512 || Buffer.byteLength(p, 'utf8') > 1024 || p.includes('\0'))) {
+        throw new Error('Invalid ignore patterns (maximum 16 patterns, 512 characters and 1024 UTF-8 bytes each)')
+      }
+      // Leave room for the native reader's include/revalidation filter.
+      if (value.reduce((sum: number, p: string) => sum + p.length, 0) > 3584) throw new Error('Combined ignore patterns exceed 3584 characters')
     } else if (key === 'embedding') {
       const e = object(value); keys(e, ['provider', 'endpoint', 'model', 'credentialRef', 'dimensions'])
       if (e.provider !== 'ollama' && e.provider !== 'openai-compatible') throw new Error('Invalid embedding provider')
       identity(e.endpoint); identity(e.model)
       const url = new URL(e.endpoint)
       if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('Embedding endpoint must not contain credentials or query parameters')
-      if (e.credentialRef !== undefined) identity(e.credentialRef)
+      if (e.credentialRef !== undefined) {
+        identity(e.credentialRef)
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(e.credentialRef)) throw new Error('Credential reference must be an environment variable name')
+      }
       if (e.dimensions !== undefined && (!Number.isSafeInteger(e.dimensions) || Number(e.dimensions) < 1 || Number(e.dimensions) > 8192)) throw new Error('Invalid embedding dimensions')
-    } else if (!Number.isSafeInteger(value) || Number(value) < (key === 'retentionDays' ? 0 : key === 'maxSearchBytes' && 'mode' in defaults ? 128 : 1) || Number(value) > (key === 'retentionDays' ? 36500 : 2147483647)) throw new Error(`Invalid ${key}`)
+    } else {
+      const minimum = key === 'retentionDays' ? 0 : key === 'maxPreviewBytes' ? 4096 : key === 'maxDiskBytes' ? ('mode' in defaults ? 131072 : 65536) : key === 'maxSearchBytes' && 'mode' in defaults ? 128 : 1
+      if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > (key === 'retentionDays' ? 36500 : 2147483647)) throw new Error(`Invalid ${key}`)
+    }
   }
 }
 function validateReferences(raw: unknown): asserts raw is SettingsContextReference[] {
@@ -66,7 +76,7 @@ export function createContextSubsystemSettings(options: {
   settingsPath: string; workspaceKey: string; workspaceId: string; contextOutput: ContextOutputService; codeRetrieval: CodeRetrievalService;
   onReferencesChanged?: (references: SettingsContextReference[]) => void | Promise<void>; actionSessionId?: string
 }) {
-  identity(options.workspaceKey); identity(options.workspaceId)
+  identity(options.workspaceKey); identity(options.workspaceId, 1024, 1024)
   let applicationError: string | undefined
   let appliedReferences: SettingsContextReference[] | undefined
   let queue = Promise.resolve()
@@ -119,7 +129,7 @@ export function createContextSubsystemSettings(options: {
       const command = object(raw); keys(command, ['target', 'action', 'sessionId'])
       if (command.target !== 'context' && command.target !== 'code') throw new Error('Invalid context action target')
       if (!['clear', 'update', 'rebuild', 'cancel'].includes(String(command.action))) throw new Error('Invalid context action')
-      if (command.sessionId !== undefined) identity(command.sessionId, 1024)
+      if (command.sessionId !== undefined) identity(command.sessionId, 1024, 1024)
       if (command.target === 'context') {
         if (command.action !== 'clear') throw new Error('Context Mode supports clear only')
         await options.contextOutput.clear(command.sessionId as string | undefined)

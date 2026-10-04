@@ -29,7 +29,12 @@ export function ContextSubsystemSettings({ bridge, workspaceId }: { bridge: { re
     if (!draft) return
     await view.act(async () => {
       const refs: unknown = JSON.parse(references)
-      const config = { ...draft.codeRetrieval, ignorePatterns: ignores.split('\n').filter(Boolean) }
+      const { embedding: embeddingDraft, ...retrieval } = draft.codeRetrieval
+      const config = {
+        ...retrieval,
+        ...(retrieval.mode === 'hybrid' ? { embedding: embeddingDraft } : {}),
+        ignorePatterns: ignores.split('\n').filter(Boolean),
+      }
       const state = await bridge.request({ kind: 'desktop/context-subsystems/configure', workspaceId, patch: { scope, contextOutput: draft.contextOutput, codeRetrieval: config, references: refs as ContextSubsystemState['saved']['references'] } }) as ContextSubsystemState
       dirty.current = false; view.replace(state); load(state)
       return state
@@ -38,7 +43,10 @@ export function ContextSubsystemSettings({ bridge, workspaceId }: { bridge: { re
   function action(command: ContextSubsystemAction) {
     void view.act(() => bridge.request({ kind: 'desktop/context-subsystems/action', workspaceId, command }))
   }
-  const number = (target: 'contextOutput' | 'codeRetrieval', key: string, label: Parameters<typeof t>[0], value: number) => <SettingsRow key={key} label={t(label)} control={<input aria-label={t(label)} type="number" min={key === 'retentionDays' ? 0 : 1} step="1" value={value} disabled={view.busy} onChange={event => change(target, key, Number(event.target.value))} />} />
+  const number = (target: 'contextOutput' | 'codeRetrieval', key: string, label: Parameters<typeof t>[0], value: number) => {
+    const minimum = key === 'retentionDays' ? 0 : key === 'maxPreviewBytes' ? 4096 : key === 'maxDiskBytes' ? (target === 'contextOutput' ? 65536 : 131072) : key === 'maxSearchBytes' && target === 'codeRetrieval' ? 128 : 1
+    return <SettingsRow key={key} label={t(label)} control={<input aria-label={t(label)} type="number" min={minimum} step="1" value={value} disabled={view.busy} onChange={event => change(target, key, Number(event.target.value))} />} />
+  }
   const discrepancy = view.state && (JSON.stringify(view.state.saved.contextOutput) !== JSON.stringify(view.state.context.config) || JSON.stringify(view.state.saved.codeRetrieval) !== JSON.stringify(view.state.code.config))
   return <section aria-label={t('上下文與檢索')}>
     <SettingsGroup><SettingsRow label={t('設定範圍')} control={<select aria-label={t('設定範圍')} value={scope} disabled={view.busy} onChange={event => { const next = event.target.value as typeof scope; setScope(next); if (view.state) load(view.state, next) }}><option value="workspace">{t('此工作區')}</option><option value="global">{t('全域預設')}</option></select>} />
@@ -66,7 +74,10 @@ export function ContextSubsystemSettings({ bridge, workspaceId }: { bridge: { re
       <SettingsRow label={t('自動更新索引')} control={<input type="checkbox" aria-label={t('自動更新索引')} checked={draft.codeRetrieval.autoRefresh} disabled={view.busy} onChange={event => change('codeRetrieval', 'autoRefresh', event.target.checked)} />} />
       {draft.codeRetrieval.mode === 'hybrid' ? <>
         <SettingsRow label={t('Embedding 提供商')} control={<select aria-label={t('Embedding 提供商')} disabled={view.busy} value={draft.codeRetrieval.embedding?.provider ?? 'openai-compatible'} onChange={event => embedding('provider', event.target.value)}><option value="openai-compatible">OpenAI compatible</option><option value="ollama">Ollama</option></select>} />
-        {(['endpoint', 'model', 'credentialRef'] as const).map((key, i) => { const label = (['Embedding 端點', 'Embedding 模型', '憑證引用'] as const)[i]!; return <SettingsRow key={key} label={t(label)} control={<input aria-label={t(label)} value={draft.codeRetrieval.embedding?.[key] ?? ''} disabled={view.busy} onChange={event => embedding(key, key === 'credentialRef' && !event.target.value ? undefined : event.target.value)} />} /> })}
+        {(['endpoint', 'model', 'credentialRef'] as const).map((key, i) => {
+          const label = (['Embedding 端點', 'Embedding 模型', '憑證引用'] as const)[i]!
+          return <SettingsRow key={key} label={t(label)} description={key === 'credentialRef' ? t('填入既有憑證的環境變數名稱，只可使用英文字母、數字和底線，開頭不可為數字。') : undefined} control={<input aria-label={t(label)} value={draft.codeRetrieval.embedding?.[key] ?? ''} disabled={view.busy} onChange={event => embedding(key, key === 'credentialRef' && !event.target.value ? undefined : event.target.value)} />} />
+        })}
       </> : null}
       {number('codeRetrieval', 'maxFiles', '檔案數量上限', draft.codeRetrieval.maxFiles)}
       {number('codeRetrieval', 'maxFileBytes', '單一檔案上限（bytes）', draft.codeRetrieval.maxFileBytes)}
@@ -75,7 +86,7 @@ export function ContextSubsystemSettings({ bridge, workspaceId }: { bridge: { re
       {number('codeRetrieval', 'maxDiskBytes', '索引儲存上限（bytes）', draft.codeRetrieval.maxDiskBytes)}
       {number('codeRetrieval', 'maxSearchBytes', '程式碼搜尋上限（bytes）', draft.codeRetrieval.maxSearchBytes)}
       {number('codeRetrieval', 'deadlineMs', '索引期限（ms）', draft.codeRetrieval.deadlineMs)}
-      <SettingsRow label={t('忽略模式')} description={t('每行一個，最多 16 個，每個最多 512 字元。')} control={<textarea aria-label={t('忽略模式')} value={ignores} disabled={view.busy} onChange={event => { dirty.current = true; setIgnores(event.target.value) }} />} />
+      <SettingsRow label={t('忽略模式')} description={t('每行一個，最多 16 個；每個最多 512 字元及 1024 UTF-8 bytes，合計最多 3584 字元。')} control={<textarea aria-label={t('忽略模式')} value={ignores} disabled={view.busy} onChange={event => { dirty.current = true; setIgnores(event.target.value) }} />} />
       <p role="status">{t('有效狀態')}：{view.state?.code.state} · {t('已載入統計')}：{view.state?.code.files} {t('檔案')} / {view.state?.code.chunks} {t('片段')} / {view.state?.code.storedBytes} bytes · {t('索引版本')}：{view.state?.code.generation}</p>
       {view.state?.code.progress ? <p role="status">{t('索引進度')}：{view.state.code.progress.files} {t('檔案')} / {view.state.code.progress.bytes} bytes</p> : null}
       {view.state?.code.lastJob ? <p>{t('最近索引工作')}：{view.state.code.lastJob.outcome} {view.state.code.lastJob.reason}</p> : null}

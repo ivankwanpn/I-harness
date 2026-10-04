@@ -2,6 +2,8 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  '填入既有憑證的環境變數名稱，只可使用英文字母、數字和底線，開頭不可為數字。': 'Enter the environment variable name of an existing credential. Use letters, digits and underscores, starting with a letter or underscore.',
+  '每行一個，最多 16 個；每個最多 512 字元及 1024 UTF-8 bytes，合計最多 3584 字元。': 'One per line, up to 16 patterns; each at most 512 characters and 1024 UTF-8 bytes, with 3584 characters total.',
   '上下文與檢索': 'Context and retrieval',
   '設定範圍': 'Settings scope', '此工作區': 'This workspace', '全域預設': 'Global defaults', '有效範圍': 'Effective scope', '重設工作區覆寫': 'Reset workspace overrides',
   '設計參考 context-mode': 'Design reference: context-mode', '設計參考 claude-context': 'Design reference: claude-context',
