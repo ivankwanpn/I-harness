@@ -65,6 +65,17 @@ Code Mode lets agents compose tools with JavaScript, filter or aggregate results
 
 Automatic and manual compaction help organize long conversations. Valid model usage reports calibrate context budgets. Cache behavior can be configured for supported endpoints; actual savings depend on the requests, model and provider.
 
+### Context Mode and Code Context
+
+This development branch adds two native subsystems, controlled independently in Settings → Context and retrieval. Both default to off. Use global defaults or overrides for the current workspace. The published v0.1.0 assets do not include these features; build this branch from source to use them.
+
+- **Context Mode** retains large tool and Code Mode text locally and gives the model bounded previews and references. Search retained content or read it in exact windows; references can survive conversation restoration and forks.
+- **Code Context** indexes workspace code and explicitly selected read-only reference sources. Lexical search uses a local index. Hybrid search uses a separately configured embedding service while vectors and indexes remain local.
+
+The settings page includes quotas, retention, indexing progress, refresh, rebuild, cancel and clear controls. Disabling stops new subsystem work and drains owned operations while retaining data. Clearing is a separate action. Indexing outside reference sources grants read access only.
+
+Design references: [context-mode](https://github.com/mksglu/context-mode) for Context Mode and [claude-context](https://github.com/zilliztech/claude-context) for Code Context. See the [native context guide](docs/native-context.md).
+
 ## Control operations
 
 - **Access scopes:** read-only, workspace write and full access.
