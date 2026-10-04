@@ -2,7 +2,7 @@
 
 這兩項功能是 IH 的內建子系統，在「設定 → 上下文與檢索」各自控制。介面標示設計來源：Context Mode 參考 context-mode；Code Context 參考 claude-context。
 
-本指南對應目前開發分支。GitHub v0.1.0 發行檔尚未包含這兩項功能。
+本指南對應目前開發分支與本機 0.1.1 測試版。GitHub v0.1.0 發行檔尚未包含這兩項功能。驗證範圍與實作限制見[驗收報告](audit/2026-10-04-native-context-subsystems-acceptance.md)。
 
 ## 選擇設定範圍
 
