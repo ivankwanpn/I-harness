@@ -92,6 +92,7 @@ describe.skipIf(!playwrightModule)("Todo progress browser geometry", () => {
         const host = document.querySelector<HTMLElement>(".todo-progress-host")!
         const todo = document.querySelector<HTMLElement>(".todo-progress-dock")!
         const timeline = document.querySelector<HTMLElement>(".timeline-region")!
+        const scroller = timeline.querySelector<HTMLElement>(".timeline")!
         const composer = document.querySelector<HTMLElement>(".conversation-dock")!
         const list = document.querySelector<HTMLElement>(".todo-progress-list")!
         const rect = (element: HTMLElement) => {
@@ -112,6 +113,7 @@ describe.skipIf(!playwrightModule)("Todo progress browser geometry", () => {
         const outsideHit = document.elementFromPoint(Math.max(host.getBoundingClientRect().left + 1, todoRect.left - 10), todoRect.top + 20)
         return {
           host: rect(host), todo: rect(todo), timeline: rect(timeline), composer: rect(composer),
+          scrollbarGap: scroller.getBoundingClientRect().right - (scroller.offsetWidth - scroller.clientWidth) - todoRect.right,
           list: { width: list.clientWidth, scrollWidth: list.scrollWidth, height: list.clientHeight, scrollHeight: list.scrollHeight, scrollLeft: list.scrollLeft },
           minIconLeft: Math.min(...Array.from(list.children).map((item) => item.firstElementChild!.getBoundingClientRect().left - listRect.left)),
           minGlyphLeft: Math.min(...glyphs.map((glyph) => glyph.left - listRect.left)),
@@ -126,6 +128,7 @@ describe.skipIf(!playwrightModule)("Todo progress browser geometry", () => {
       results.push({ ...layout, ...geometry, withoutTodo })
       expect(geometry.todo.left, JSON.stringify(layout)).toBeGreaterThanOrEqual(geometry.host.left)
       expect(geometry.todo.right).toBeLessThanOrEqual(geometry.host.right)
+      expect(geometry.scrollbarGap, JSON.stringify(layout)).toBeGreaterThanOrEqual(16)
       expect(geometry.todo.bottom).toBeLessThanOrEqual(geometry.host.bottom)
       expect(geometry.timeline.bottom).toBeLessThanOrEqual(geometry.composer.top + 1)
       expect(geometry.timeline, JSON.stringify(layout)).toEqual(withoutTodo.timeline)
