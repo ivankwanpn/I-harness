@@ -4,7 +4,7 @@ import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvid
 import { assertSandboxCapable, SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 import { OutputCollector } from "./spill.ts"
 import { execOutputReader, registerRetainedOutput } from './retained-output.ts'
-export { registerRetainedOutput, retainedOutputReader, type RetainedOutputReader } from './retained-output.ts'
+export { registerRetainedOutput, retainedOutputReader } from './retained-output.ts'
 
 export interface ExecCommand {
   argv: string[]

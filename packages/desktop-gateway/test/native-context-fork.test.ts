@@ -10,7 +10,7 @@ it('grants only the real fork seed, survives disabled fork and origin clear, and
   const base=resolve('build/native-fork-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'fork-'))
   const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')))
   await coordinator.create({sessionId:'parent'})
-  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>undefined,
+  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>{const session=(await coordinator.snapshot!(id)).session;const cuts=rewindCuts(session);return session.events.flatMap(event=>event.type==='context/result-ref'&&!cuts.some(cut=>event.seq!>=cut.cutFrom&&event.seq!<cut.markerSeq)?[event.ref]:[])}})
   try {
     await runtime.contextOutput.configure({enabled:true})

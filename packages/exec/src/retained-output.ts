@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import { open } from 'node:fs/promises'
 
-export type RetainedOutputReader = (access: { maxBytes: number; signal: AbortSignal }) => Promise<{ text: string; complete: boolean; originalBytes?: number }>
+type RetainedOutputReader = (access: { maxBytes: number; signal: AbortSignal }) => Promise<{ text: string; complete: boolean; originalBytes?: number }>
 // Only host producers can register object identities. JSON/path fields never
 // confer permission to open a file. Entries vanish with the returned object.
 const retained = new WeakMap<object, RetainedOutputReader>()

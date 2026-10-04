@@ -13,7 +13,7 @@ it('live enabling lets a real explore child capture and search native refs throu
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'child-'))
   const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')));await coordinator.create({sessionId:'parent'})
   let service:ReturnType<typeof createSessionService>|undefined
-  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>undefined,
+  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let calls=0;const requests:LLMRequest[]=[]
   const model:ModelClient={async *stream(request){requests.push(request);calls++
@@ -47,7 +47,7 @@ it.each([false,true])('a real child owns its inherited native references before 
   const base=resolve('build/native-child-tests');await mkdir(base,{recursive:true});const root=await mkdtemp(join(base,'seed-'))
   const coordinator=createSessionCoordinator(createJsonlBackend(join(root,'sessions')));await coordinator.create({sessionId:'parent'})
   let service:ReturnType<typeof createSessionService>|undefined
-  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>undefined,
+  const runtime=await createNativeContextRuntime({workspace:root,storageRoot:join(root,'native'),coordinator,projectFor:async()=>({}),
     visibleRefsFor:async id=>(service?.liveSession(id)??(await coordinator.snapshot!(id)).session).events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])})
   let calls=0,refId=''
   const model:ModelClient={async *stream(){calls++

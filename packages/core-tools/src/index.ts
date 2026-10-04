@@ -1,4 +1,5 @@
 import type { PluginContext } from "@i-harness/core-plugin"
+import type { Session } from '@i-harness/core-session'
 import { assertSupportedJsonSchema, validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 
@@ -45,6 +46,8 @@ export type PreparedApprovalProvider = (input: PreparedApprovalInput) => Prepare
 export type ApprovalAuthorityProvider = (input: PreparedApprovalInput) => (() => boolean)
 
 export interface ToolExec {
+  /** Actual executing session, supplied by trusted Agent/Code Mode hosts. */
+  session?: Session
   /** Trusted broker presentation hint; it never widens tool authority. */
   resultConsumer?: "code"
   abortSignal?: AbortSignal
@@ -246,7 +249,7 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
@@ -354,7 +357,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       }))
   }
 
-  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall> {
+  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; session?: Session; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall> {
     // The validated snapshot is also the dispatched operation. A caller cannot
     // mutate it while the human or guardian is deciding.
     call = structuredClone(call)
@@ -471,6 +474,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     const exec: ToolExec = {}
     if (signal) exec.abortSignal = signal
     if (identity?.sessionId !== undefined) exec.sessionId = identity.sessionId
+    if (identity?.session !== undefined) exec.session = identity.session
     if (identity?.callId !== undefined) exec.callId = identity.callId
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"

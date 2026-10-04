@@ -212,7 +212,7 @@ export async function executeToolCalls(
       prepared = await tools.prepare(
         { name: call.name, args: call.args },
         batchSignal,
-        { sessionId: opts.sessionId, callId: call.callId, callEventSeq: call.eventSeq },
+        { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq },
       )
     } catch (err) {
       if (err instanceof ToolArgsError) {

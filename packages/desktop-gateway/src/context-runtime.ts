@@ -10,7 +10,9 @@ import {createNativeCodeSourceReader,type NativeReferenceSource} from './context
 const pathKey=(path:string)=>process.platform==='win32'?path.toLowerCase():path
 export async function createNativeContextRuntime(options:{
   workspace:string;storageRoot:string;coordinator:Pick<SessionCoordinator,'profile'>
-  projectFor(sessionId:string):Promise<SessionProjectContext|undefined>
+  // A durable binding is independent of its currently confirmed scope. An
+  // absent scope for a bound consumer is revoked authority, never unassigned.
+  projectFor(sessionId:string):Promise<{projectId?:string;scope?:SessionProjectContext}>
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly ContextResultRef[]>
@@ -24,7 +26,9 @@ export async function createNativeContextRuntime(options:{
     if(sessionId===humanSessionId)return undefined
     const {meta}=await options.coordinator.profile(sessionId)
     if(meta.archived)throw new Error('Native context session is archived')
-    return options.projectFor(sessionId)
+    const selected=await options.projectFor(sessionId)
+    if(selected.projectId && (!selected.scope || selected.scope.id!==selected.projectId))throw new Error('Native context project scope is not currently confirmed')
+    return selected.scope
   }
   async function sourceFor(sessionId:string){
     const scope=await projectScope(sessionId)

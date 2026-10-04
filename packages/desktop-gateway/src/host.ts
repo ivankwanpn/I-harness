@@ -156,7 +156,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
   const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
-    projectFor:async id=>(await projects.forSession(id))(),
+    projectFor:projects.nativeScopeFor,
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
     visibleRefsFor:async id=>{
       const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session

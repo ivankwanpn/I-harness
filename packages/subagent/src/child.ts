@@ -139,7 +139,7 @@ export interface RoleModelHost {
   codeMode?: CodeModeConfig
   codeModeFactory?: CodeModeFactory
   /** Trusted parent context, rendered afresh for each child model request. */
-  inheritedSystemContext?: () => string
+  inheritedSystemContext?: (session?: ReturnType<typeof createSession>) => string
   /** Settings' `agents.roles.<name>` (or any host's equivalent): the model the
    * host declares for a role. Absent → the role's own `model`, then inherit. */
   roleSelectionFor?: (roleName: string) => RoleModelSelection | undefined
@@ -435,7 +435,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // estimate below prices it.
   const childPrompt = composeSubagentPrompt(opts.role.systemPrompt)
   const systemPrompt = opts.inheritedSystemContext ? () => {
-    const inherited = opts.inheritedSystemContext!()
+    const inherited = opts.inheritedSystemContext!(childSession)
     return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
   } : childPrompt
   // The charge the child's log never carries but the model sees on every

@@ -1,7 +1,7 @@
 import type { PluginContext } from '@i-harness/core-plugin'
 import { append, rewindCuts, type Session } from '@i-harness/core-session'
 import type { ToolExec } from '@i-harness/core-tools'
-import type { ContextCapture, ContextOutputService, ContextResultRef } from '@i-harness/context-output'
+import { renderContextRecovery, type ContextCapture, type ContextOutputService, type ContextResultRef } from '@i-harness/context-output'
 import { createHash, randomUUID } from 'node:crypto'
 import { retainedOutputReader } from '@i-harness/exec'
 
@@ -10,6 +10,12 @@ export interface NativeContextOutputOptions {
   sourceFor?(sessionId: string): Promise<ContextCapture['source']>
   inheritedSessionFor?(sessionId:string):Promise<Session|undefined>
   parent?: {sessionId:string;session:Session}
+}
+export function renderNativeContextRecovery(service:ContextOutputService,session:Session):string {
+  if(!service.status().enabled)return ''
+  const cuts=rewindCuts(session)
+  const refs=session.events.flatMap(event=>event.type==='context/result-ref'&&!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?[event.ref]:[])
+  return renderContextRecovery(refs.slice(-12),2048)
 }
 function textualOutput(output: unknown): string {
   if(typeof output==='string') return output
@@ -83,7 +89,9 @@ export function installNativeContextOutput(ctx:PluginContext,options:NativeConte
     if(!ref) return output
     if(exec?.abortSignal?.aborted||!options.service.status().enabled)return output
     if(options.sessionId && options.sessionId!==actor) await options.service.grant({sessionId:actor,signal:exec?.abortSignal},[ref.id],options.sessionId)
-    append(options.session,{type:'context/result-ref',ignorable:true,ref:structuredClone(ref)})
+    const ownerSession=exec?.session ?? options.session
+    append(ownerSession,{type:'context/result-ref',ignorable:true,ref:structuredClone(ref)})
+    if(ownerSession!==options.session)append(options.session,{type:'context/result-ref',ignorable:true,ref:structuredClone(ref)})
     if(exec?.resultConsumer==='code'||!options.service.status().enabled) return output
     return preview(output,text,ref,config.maxPreviewBytes)
   })

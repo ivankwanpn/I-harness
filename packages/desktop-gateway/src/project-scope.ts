@@ -199,6 +199,16 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       })
     },
     projectFor,
+    async nativeScopeFor(id:string):Promise<{projectId?:string;scope?:SessionProjectContext}> {
+      await resolveOwner(id)
+      assertOpen()
+      const projectId=liveOwner(id)
+      if(!projectId)return {}
+      const context=projects.get(projectId)
+      if(!context)return {projectId}
+      assertAvailable(projectId)
+      return {projectId,scope:{id:context.id,name:context.name,roots:[...context.roots],primaryRoot:context.primaryRoot!}}
+    },
     move(id: string, expectedOwner: string | undefined, projectId: string | undefined): Promise<{ sessionId: string; projectId?: string; executionWorkspace: string }> {
       return serial(id, () => fence.exclusive(id, async () => {
         const meta = await ensureVisible(id)

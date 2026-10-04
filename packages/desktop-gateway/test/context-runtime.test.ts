@@ -15,7 +15,7 @@ async function setup(){
   const runtime=await createNativeContextRuntime({workspace,storageRoot,
     coordinator:{profile:async id=>{if(!profiles[id])throw new Error('unknown');return{meta:{...profiles[id]!,formatVersion:1,sessionId:id,createdAt:new Date().toISOString()},blank:false}}},
     visibleRefsFor:async id=>visibleRefs[id]??[],
-    projectFor:async()=>({id:'project',name:'Project',roots,primaryRoot:roots[0]!})})
+    projectFor:async()=>({projectId:'project',scope:{id:'project',name:'Project',roots,primaryRoot:roots[0]!}})})
   cleanup.push(()=>runtime.close())
   return{runtime,storageRoot,workspace,visibleRefs,move:()=>{roots=[root]}}
 }

@@ -8,7 +8,7 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec } from "./scoped-exec.ts"
-import { append, createSession, derivePlanMode, rewindCuts, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
@@ -25,8 +25,8 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
-import { createContextOutputTools, renderContextRecovery, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
-import { createNativeCodeTextRetention, installNativeContextOutput } from "./context-output.ts"
+import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
+import { createNativeCodeTextRetention, installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import type { ExecService } from "@i-harness/exec"
@@ -1082,6 +1082,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     ...(mountOptions.maxParallel === undefined && opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),
   })
   let workflowMount: WorkflowMountHandle | undefined
+  const inheritedSystemContext=(childSession?:Session)=>[
+    projectContextNow(),
+    childSession&&opts.contextOutput?renderNativeContextRecovery(opts.contextOutput,childSession):'',
+  ].filter(Boolean).join('\n\n')
 
   try {
     for (const cfg of opts.mcp ?? []) {
@@ -1138,7 +1142,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }))
     const subagent = registerSubagent(ctx, tools, {
       codeMode, codeModeFactory,
-      ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
+      ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
       includeAgentShell: opts.agentShell !== undefined,
       includeNativeContext: Boolean(opts.contextOutput),
       resolveModel: resolveRoleModel,
@@ -1211,7 +1215,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await pluginCapabilities.update(opts, false)
     if (opts.guardian) {
       await registerGuardian(ctx, {
-        ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
+        ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
         subagents: {
           roles: subagent.roles,
           jobs: subagent.jobs,
@@ -1262,7 +1266,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           codeMode, codeModeFactory,
-          ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
+          ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
           table: subagent.table,
           jobs: subagent.jobs,
           roles: subagent.roles,
@@ -1317,10 +1321,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       const projectContext = projectContextNow()
       if (projectContext) text += `\n\n${projectContext}`
       if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
-      if(opts.contextOutput?.status().enabled){
-        const cuts=rewindCuts(session)
-        const refs=session.events.filter(event=>event.type==="context/result-ref" && !cuts.some(cut=>event.seq!==undefined && event.seq>=cut.cutFrom && event.seq<cut.markerSeq)).flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
-        const recovery=renderContextRecovery(refs.slice(-12),2048)
+      if(opts.contextOutput){
+        const recovery=renderNativeContextRecovery(opts.contextOutput,session)
         if(recovery) text+=`\n\n${recovery}`
       }
       return text

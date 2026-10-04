@@ -684,7 +684,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // rides "every child agent". Same composer, same place, one call site each.
   const childPrompt = composeSubagentPrompt(role.systemPrompt)
   const systemPrompt = deps.inheritedSystemContext ? () => {
-    const inherited = deps.inheritedSystemContext!()
+    const inherited = deps.inheritedSystemContext!(entry.session)
     return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
   } : childPrompt
   // M73: the charge the child's log never carries but the model sees on every

@@ -41,7 +41,7 @@ export function createCodeModeBroker(ctx: PluginContext, tools: ToolRegistry, op
       if (tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed")
       let prepared
       try {
-        prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code" })
+        prepared = await tools.prepare({ name: item.call.name, args: item.call.args }, item.signal, { sessionId: options.sessionId ?? item.call.origin.sessionId, session:options.session, callId: item.call.invocationId, callEventSeq: item.eventSeq, resultConsumer: "code" })
       } catch (e) { throw e instanceof ToolArgsError ? e : fatal(e) }
       if (item.signal.aborted || !cells.has(item.call.cellId)) throw new Error("Code Mode tool call aborted before dispatch")
       if (prepared.tool !== item.tool || tools.get(item.call.name) !== item.tool) throw new Error("Code Mode tool binding changed during admission")

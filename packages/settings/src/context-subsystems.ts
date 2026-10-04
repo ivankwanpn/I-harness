@@ -1,13 +1,13 @@
 /** Durable structural configuration; no runtime service dependency. */
 import { Buffer } from 'node:buffer'
-export interface SettingsContextOutput {
+interface SettingsContextOutput {
   enabled: boolean; maxPreviewBytes: number; maxCaptureBytes: number; maxReadBytes: number;
   maxSearchBytes: number; maxDiskBytes: number; retentionDays: number
 }
-export interface SettingsCodeEmbedding {
+interface SettingsCodeEmbedding {
   provider: 'openai-compatible' | 'ollama'; endpoint: string; model: string; credentialRef?: string; dimensions?: number
 }
-export interface SettingsCodeRetrieval {
+interface SettingsCodeRetrieval {
   enabled: boolean; mode: 'lexical' | 'hybrid'; autoRefresh: boolean; maxFiles: number; maxFileBytes: number;
   maxInputBytes: number; maxChunks: number; maxDiskBytes: number; maxSearchBytes: number; deadlineMs: number;
   ignorePatterns: string[]; embedding?: SettingsCodeEmbedding
