@@ -42,3 +42,21 @@ Mount 只建立已啟用的 backend。Cancel/clear/unmount 等 jobs、watchers�
 5. 固定 repo revisions 比較 grep/glob、lexical、hybrid：file/symbol recall、任務通過率、agent/embedding tokens、冷索引時間、warm query latency、memory/disk、stale hit 和拒絕率。
 
 必要案例：插入／commit 失敗後重試、clear 與 refresh 競爭、改 ignore/policy、刪除／重新命名 worktree、link/junction、huge files、parser error、低輸出預算、取消與 provider 排空。39.4%上游 agent-token 研究不能替代這些 IH 驗收結果。
+
+## 本機源碼與 native 控制補充
+
+使用者提供 `D:/agent-complete/claude-context-0.1.11`；root、core 與 MCP metadata 均為 0.1.11。本機核查記錄見 [研究報告補充](../../audit/2026-10-04-context-mode-and-claude-context-research.md)，與先前 0.1.15 固定 commit 研究分別記錄。參考目錄維持唯讀。
+
+建議 coordinator 位於 `packages/code-retrieval`，組合授權 snapshot reader、chunker、transactional index 和可選 embedding adapter。Desktop gateway 擁有工作區實例、索引 job 與 dispose；`session-executor` 掛載共同的 deferred 工具，direct、子代理和 Code Mode 走原有 broker。索引以 workspace/worktree identity 隔離，搜尋仍按當前消費者的 scope 過濾。
+
+Desktop「上下文與檢索」專頁顯示獨立的「程式碼檢索」開關，預設 off。控制項包含本機文字／混合模式、索引範圍、唯讀參考來源、忽略設定、embedding 服務、索引進度與資料大小，以及更新／重建／取消／清除動作。顯示 workspace scope、設定來源、saved/effective 和配置不足／更新中／就緒／過期／停止中／錯誤狀態。Embedding 配置只保存 credential reference，索引儲存與 embedding 端點分別說明資料傳送位置。
+
+使用者提供的外部參考根以明確 read-only source 身分加入；IH 在自己的儲存目錄建立索引，不在參考目錄建立 `.context`、hash snapshot 或其它衍生檔案，也不把參考根加入來源 write authority。
+
+refresh、rebuild、clear 與 disable 共用 mutation owner。每個 job 有 ID、generation、scope revision 和取消訊號；clear／disable 先停止新工作、取消舊 job、等待 provider/read/index 工作排空，再發布狀態，舊 completion 不能恢復被清除的索引或將已停用功能標為就緒。close 釋放 handle；清除資料由獨立動作處理。
+
+一般 `read` 工具允許外部存取，不能替代 Index ReadAuthority。這個新增契約採用 host 選定的唯讀來源和 consumer 可見性，整合既有 scoped search／descriptor 機制；chunker 只處理已授權 snapshot，query 對結果作當前可見性與 revision 校驗。
+
+增量更新遵循 stage → 寫入新 chunks／embedding → 原子 commit → 前移 file hashes 的順序。Embedding cache key 包含內容 hash、模型／維度／版本；query cache 還須包括 index generation、實際搜尋範圍及可見性 revision。AST／文字 chunk 保留精確原文範圍；若展示拼接上下文，單獨列出來源範圍。
+
+驗收增加：embedding／索引寫入失敗後下次能重試、force rebuild 和 clear 不會讓舊背景工作發布成功、disable 後 watcher/provider/jobs 確實排空、跨 session 權限過濾、外部來源零寫入、中文／識別字召回、查詢快取權限失效，以及五協議與 direct／Code Mode 路徑一致。

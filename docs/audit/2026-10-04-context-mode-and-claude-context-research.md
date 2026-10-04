@@ -56,3 +56,40 @@ IH 已有 `session_search`／`lineage` 及 FTS5；研究基準 `d0eca79f` 的 `d
 - [程式碼檢索子系統方案](D:/frontend-test/docs/superpowers/specs/2026-10-04-code-retrieval-subsystem-proposal.md)：索引與更新獨立，有明確 owner、generation、revision、成本及取消規則；embedding／Milvus 作可選 adapter。
 
 以上兩份是未實作的提案。Pi 這輪新增的 Code Mode 長文字 spill 與 JSON store 恢復是其現有 runtime 的改善，並不等於已完成這兩個子系統。
+
+## 使用者提供的本機源碼核查
+
+2026-10-04，使用者提供以下兩份源碼。這次補充以本機實際內容為依據；前文的 claude-context 0.1.15 固定 commit 研究保留為先前證據，不當作本機 0.1.11 的版本證明。兩份參考目錄全程唯讀，沒有安裝依賴、執行程式、連接資料庫或呼叫 embedding。
+
+| 參考目錄 | 實際 metadata | 核對檔案 SHA256 |
+| --- | --- | --- |
+| `D:/agent-complete/claude-context-0.1.11` | root、core、MCP 均為 0.1.11 | root package.json: `E46432CF3C40262687A772B82D18063CA99D7E5D2F676EAD506466AE8BF765D3` |
+| `D:/agent-complete/context-mode-1.0.169` | root 為 1.0.169 | root package.json: `F0A96C5AFFD66F5334F2F4CD5A1270E65018A0B83317B4E752CD6F60CDBA8680` |
+
+引擎內容指紋：claude-context `packages/core/src/context.ts` 為 `E183326028E9516E94DB2DEF1D7245DDA1309A81CF50AA3562367B0E1AA0F7C5`；其 `sync/synchronizer.ts` 為 `7788F4B54FBA1D4DE3E185F7D48594CC283DB00AECEA9D67183549F39E21532E`。context-mode `src/store.ts` 為 `D7B06661006E884832E0DCD27720EF2C59A585E301D9C7A38AFC883330781CAD`。版本目錄名稱不等同於 Git commit 身分，以上指紋記錄本次實際閱讀的內容。
+
+### context-mode 1.0.169：本機確認與 IH 設計要求
+
+- 已確認：plain text、JSON 和 Markdown 有各自的分塊流程，FTS5 的文字與 trigram 表在同一交易中更新。相同 label 會刪除前一份來源；IH 的工具結果需要不可變 ID，label 只作顯示 metadata。[分塊與寫入](D:/agent-complete/context-mode-1.0.169/src/store.ts:959)
+- 已確認：plain-text 分塊有 UTF-8 byte-aware 處理，但不能由此推論所有 Markdown／JSON chunk 都遵守同一硬上限。搜尋的 aggregate 累加使用 `formatted.length`，查詢標題、分隔符及後續提示不全在同一預算內。`trackResponse` 的 byte 計量是回應統計，不是完整 serialized response 的硬限制。IH 應限制捕獲、單個 chunk、檢索回應三個層次，並把 metadata 算入回應上限。[搜尋預算](D:/agent-complete/context-mode-1.0.169/src/server.ts:2672)、[字元累加](D:/agent-complete/context-mode-1.0.169/src/server.ts:2756)
+- 已確認：來源 refresh 對已刪除／deny 的檔案跳過更新並保留 cache；shared store 的無 session attribution 舊資料也可通過 session filter。IH 必須在查詢及取回時檢查目前的來源可見性，為共用資料明確指定 owner。[來源更新](D:/agent-complete/context-mode-1.0.169/src/store.ts:1415)、[session filter](D:/agent-complete/context-mode-1.0.169/src/store.ts:1395)
+- 已確認：本機 executor 的環境繼承有 denylist／prefix 過濾，仍使用真實 HOME；前文的「繼承環境」應按此限定理解。捕獲的分塊經過 trim、overlap 或 JSON reserialization，沒有原文 byte offset／durable revision，不能作 byte-exact blob 的替代。[環境處理](D:/agent-complete/context-mode-1.0.169/src/executor.ts:674)、[文字與 JSON 轉換](D:/agent-complete/context-mode-1.0.169/src/store.ts:1654)
+- 已確認：live events 的 lookup 有 session 過濾，但空會話可 claim 同專案另一會話的最新未取用 snapshot；snapshot 的 `maxBytes` 參數被明確忽略。IH 恢復必須匹配實際 session／fork lineage，恢復資訊也要有真正的 byte 上限。[恢復 fallback](D:/agent-complete/context-mode-1.0.169/hooks/sessionstart.mjs:269)、[snapshot 預算](D:/agent-complete/context-mode-1.0.169/src/session/snapshot.ts:142)
+- 已確認：`ctx_purge` 在把 session scope 交給 `purgeSession` 前，對已開啟的 store 呼叫 `cleanup()`；該方法會關閉並 unlink 整份 DB、WAL 和 SHM。靜態控制流程因此顯示「只清一個會話」可能影響共用 content DB；本輪沒有執行重現。IH 的 close、disable、session clear 和 workspace clear 必須有不同契約，且清理前等待自己的工作排空。[清理入口](D:/agent-complete/context-mode-1.0.169/src/server.ts:4552)、[cleanup 實作](D:/agent-complete/context-mode-1.0.169/src/store.ts:452)
+- 已確認：fetch cache key 組合 source 與 URL，但 cache-hit 節省 bytes 仍以 chunk count 估算，token 節省採 bytes÷4。IH 的內容／embedding／query cache 命中、provider prompt cache 命中及 token 計量分開報告。[fetch key](D:/agent-complete/context-mode-1.0.169/src/fetch-cache.ts:13)、[估算](D:/agent-complete/context-mode-1.0.169/src/server.ts:3310)
+
+### claude-context 0.1.11：本機確認與 IH 設計要求
+
+- 已確認：core 會建立 embedding，要求呼叫端提供 vectorDatabase；exported backend 是 Milvus SDK／REST。IH 的本機無 embedding 檢索需要自行提供。[Context 建構](D:/agent-complete/claude-context-0.1.11/packages/core/src/context.ts:114)、[backend exports](D:/agent-complete/claude-context-0.1.11/packages/core/src/vectordb/index.ts:15)
+- 已確認：`checkForChanges` 先更新 hash／Merkle snapshot，回到 Context 後才刪除舊 chunks、建立 replacements。推論：後續失敗可能使下次 refresh 認為已處理變更。IH 採 staging generation，成功提交索引後才前移檔案 hash。[snapshot 提交](D:/agent-complete/claude-context-0.1.11/packages/core/src/sync/synchronizer.ts:244)、[索引更新](D:/agent-complete/claude-context-0.1.11/packages/core/src/context.ts:400)
+- 已確認：force reindex 可移除 snapshot 的 indexing 狀態；clear 可直接刪除索引，而原背景 promise 的完成路徑仍會寫回 indexed 狀態。已核對的介面沒有 job ID／AbortSignal／cancel 工具串起這些操作。競爭影響是靜態推論，沒有執行重現。IH 的 refresh、rebuild、clear 和 disable 應共用工作區 mutation owner，先取消／等待舊工作，再發布新狀態。[force 路徑](D:/agent-complete/claude-context-0.1.11/packages/mcp/src/handlers.ts:354)、[clear 路徑](D:/agent-complete/claude-context-0.1.11/packages/mcp/src/handlers.ts:857)、[背景完成](D:/agent-complete/claude-context-0.1.11/packages/mcp/src/handlers.ts:548)
+- 已確認：AST overlap 把前一塊抽取文字接到當前塊並調整起始行；IH 檢索回傳須分清精確連續原文範圍和拼接展示，不能由拼接文字宣稱一個 exact source range。[overlap](D:/agent-complete/claude-context-0.1.11/packages/core/src/splitter/ast-splitter.ts:239)
+- 已確認：修改檔案會重新 embedding 全部新 chunks；dense／hybrid query 都呼叫 embedding，沒有以 chunk 內容 hash 查找可重用 embedding 的實作。IH 可在完整的模型、維度、chunker 與 owner 身分下重用已成功保存的 embedding，並記錄真實呼叫用量。[檔案 embedding](D:/agent-complete/claude-context-0.1.11/packages/core/src/context.ts:874)、[query embedding](D:/agent-complete/claude-context-0.1.11/packages/core/src/context.ts:499)
+
+### 對 IH 整合位置的再確認
+
+`desktop-gateway/host.ts` 已擁有 workspace session query、memory、service 與設定控制器；`session-executor` 是 Agent／Code Mode 的組裝邊界。現有 Code Mode 已保留超過預覽的 emitted text，但 `core-session.deriveSearchText` 尚未納入 Code Mode 事件。新子系統應沿用原有 session log、blob retention、broker 和壓縮流程。[Host 組裝](D:/frontend-test/packages/desktop-gateway/src/host.ts:152)、[Code Mode retention](D:/frontend-test/packages/code-mode/src/runtime.ts:312)、[搜尋投影](D:/frontend-test/packages/core-session/src/index.ts:793)
+
+IH 一般 `read` 工具本來允許外部唯讀存取，不能把「呼叫既有 read」當作索引範圍授權。Index ReadAuthority 要明確綁定已選定來源、session 和 consumer，並整合既有 scoped search／descriptor 機制，在發現檔案與返回片段時分別校驗。[一般 read](D:/frontend-test/packages/fs/src/index.ts:28)、[scoped model search](D:/frontend-test/packages/fs-search/src/model-search.ts:1)
+
+本機核查維持「兩個內建子系統，一個專用設定頁，各自開關」的建議。兩份提案已補充 native host、設定狀態、清理範圍及工作取消要求；仍為設計提案，尚未開始子系統實作。

@@ -41,3 +41,19 @@ Durable session event 與 immutable blob 是真實來源；FTS 是可重建索�
 5. 相同任務比較 full request tokens、結果 bytes、檢索正確性、延遲和 disk usage。
 
 必要案例：CJK／emoji／長行、media 排除、已刪除 blob、索引失敗／重建、撤銷可見性、跨 session 拒絕、外部唯讀來源、symlink／descriptor 邊界、cancel 排空、fork、quota／expiry。不繼承上游的固定98%節省宣稱。
+
+## 本機源碼與 native 控制補充
+
+使用者提供 `D:/agent-complete/context-mode-1.0.169`，本機核查記錄見 [研究報告補充](../../audit/2026-10-04-context-mode-and-claude-context-research.md)。該目錄維持唯讀。採用其分塊、文字／trigram 排序、按需恢復的模式，按 IH 的 owner、權限與資料保留契約獨立實作。
+
+建議 native coordinator 位於 `packages/context-output`，組合既有 `output-retention`、`session-query`、`core-session` 和 `compaction`；由 `session-executor` 綁定 Agent 與 Code Mode，由 Desktop gateway 擁有工作區實例與 dispose。模型工具和 SDK／Desktop 使用同一服務；開關判定、broker、核準與角色可見性共用既有路徑。
+
+Desktop 設定新增「上下文與檢索」專頁，本模組顯示為「上下文管理」，與程式碼檢索分開開關。新能力預設 off，沿用既有輸出限制與壓縮設定。頁面顯示 workspace scope、saved/effective 狀態、保留期限、儲存配額、目前內容大小與清理動作；全域預設與工作區覆寫必須有明確來源。一般自動壓縮仍由現有欄位控制，避免同一設定有兩個相互矛盾的入口。
+
+關閉時停止接收新的 capture／query 工作，取消並等待該模組自己的工作排空後才回覆 effective off。一般使用者工具操作由其原 owner 繼續管理。關閉保留資料；清理是獨立動作。close 只釋放資源，session clear 只刪除該會話有權清理的資料，workspace clear 只清理該模組擁有的工作區資料；fork 或共用引用的存活 owner 必須保留。
+
+捕獲來源位於已核準、實際執行後且尚未丟失完整內容的 producer／retention 邊界。已有完整 spill 應由可信 producer 登記，避免重複寫入或把模型傳入的任意 path 當作引用。歷史結果和當前檔案分別標明來源版本。原始失敗、退出碼、timeout、cancelled 及 upstream truncation 狀態須保留；引用或索引失敗須有可讀狀態。
+
+恢復匹配實際 session 與可見 fork lineage；空會話不自動取同專案其他會話的最新 snapshot。Recovery block 必須有包含 metadata 的 byte 上限。回傳 source material 維持原有信任層級。內容／query cache 和 provider prompt cache 的命中分別統計，模型 usage 保留實報數值，bytes 與估算 tokens 分別標示。
+
+驗收增加：disable 與正在捕獲／查詢的競爭、兩會話共用資料時只清理一個會話、close 不刪除持久資料、舊 label 不覆蓋歷史引用、CJK 回應包含所有 metadata 後仍遵守 UTF-8 上限，以及五種模型協議和 direct／Code Mode 的共同可見性。
