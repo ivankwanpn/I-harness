@@ -18,11 +18,11 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   let controls:Promise<unknown>=Promise.resolve()
   const status=():CodeRetrievalStatus=>({enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':store.status().generation?'ready':'unindexed',
     config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(error?{error}:{})})
-  function admit(access:CodeAccess) {
+  function admit(access:CodeAccess,controlOwner=false) {
     identity(access.sessionId,'session ID');access.signal?.throwIfAborted()
     if(closed)throw new Error('Code Context is closed')
     if(!config.enabled)throw new Error('Code Context is disabled')
-    if(stopping)throw new Error('Code Context is stopping')
+    if(stopping&&!controlOwner)throw new Error('Code Context is stopping')
   }
   function operation<T>(access:CodeAccess,run:(signal:AbortSignal,check:()=>void)=>Promise<T>):Promise<T> {
     const controller=new AbortController(),signal=access.signal?AbortSignal.any([access.signal,controller.signal]):controller.signal
@@ -46,8 +46,20 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
     admit(access);sourceIds(input.sourceIds)
     if(input.force!==undefined&&typeof input.force!=='boolean')throw new Error('Invalid force flag')
     if(input.force) {
-      await service.cancel();admit(access)
-    } else if(indexing)return {jobId:indexing.jobId}
+      const requested={...input,sourceIds:input.sourceIds?[...input.sourceIds]:undefined}
+      return control(async()=>{
+        // Drainage and synchronous reservation share this owner. Admission
+        // remains closed until the replacement is tracked in indexing/active.
+        // Do not await the job here: later cancel/clear/disable owners must be
+        // able to abort and drain it.
+        admit(access,true)
+        return reserveIndex(access,requested)
+      })
+    }
+    if(indexing)return {jobId:indexing.jobId}
+    return reserveIndex(access,input)
+  }
+  function reserveIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean}) {
     const jobId=randomUUID(),captured=structuredClone(config),scope=input.sourceIds?[...new Set(input.sourceIds)]:undefined
     let result:NonNullable<CodeRetrievalStatus['lastJob']>
     const finish=(outcome:'completed'|'cancelled'|'failed',reason?:string)=>{

@@ -94,3 +94,57 @@ it('records caller cancellation before the job callback starts',async()=>{
   expect((await service.wait(jobId)).lastJob).toEqual({jobId,outcome:'cancelled',generation:0,reason:'Code Context indexing cancelled'})
   expect(service.status().activeJobs).toBe(0)
 })
+
+it('reserves the force replacement before a microtask contender can admit another index',async()=>{
+  const {service,reader}=await fixture();await index(service)
+  const original=reader.snapshots
+  let release!:()=>void,reads=0
+  const gate=new Promise<void>(r=>{release=r})
+  reader.snapshots=async function*(access,input){reads++;await gate;yield* original(access,input)}
+  const forcing=service.startIndex({sessionId:'s'},{force:true})
+  const contending=(async()=>{
+    while(service.status().state==='stopping')await Promise.resolve()
+    return service.startIndex({sessionId:'s'})
+  })()
+  const [forced,contender]=await Promise.all([forcing,contending])
+  await new Promise<void>(r=>setImmediate(r))
+  const active=service.status().activeJobs,readers=reads
+  release()
+  await Promise.all([...new Set([forced.jobId,contender.jobId])].map(id=>service.wait(id)))
+  expect(contender.jobId).toBe(forced.jobId)
+  expect(readers).toBe(1);expect(active).toBe(1);expect(service.status().generation).toBe(2)
+})
+
+it.each(['cancel','clear','disable'] as const)('serializes %s queued during force drainage without deadlocking the replacement',async(action)=>{
+  const {service,reader}=await fixture();await index(service)
+  let searchEntered!:()=>void,releaseSearch!:()=>void,releaseIndex!:()=>void
+  const searchStarted=new Promise<void>(r=>{searchEntered=r})
+  const searchGate=new Promise<void>(r=>{releaseSearch=r}),indexGate=new Promise<void>(r=>{releaseIndex=r})
+  reader.revalidate=async()=>{searchEntered();await searchGate;return true}
+  const searching=service.search({sessionId:'s'},{query:'approveDeployment'}).catch(error=>error)
+  await searchStarted
+  const original=reader.snapshots
+  reader.snapshots=async function*(access,input){await indexGate;yield* original(access,input)}
+  const forcing=service.startIndex({sessionId:'s'},{force:true}).then(result=>({result}),error=>({error}))
+  let controlDone=false
+  const command=action==='disable'?service.configure({enabled:false}):service[action]()
+  const controlling=command.then(state=>{controlDone=true;return state})
+  await new Promise<void>(r=>setImmediate(r))
+  const earlyDone=controlDone
+  releaseSearch()
+  const forced=await forcing
+  releaseIndex()
+  const settled=await controlling
+  expect(earlyDone).toBe(false)
+  expect(await searching).toBeInstanceOf(Error)
+  expect(forced).toHaveProperty('result')
+  if(!('result' in forced))throw forced.error
+  const attempt=await service.wait(forced.result.jobId)
+  expect(attempt.lastJob).toMatchObject({jobId:forced.result.jobId,outcome:'cancelled',generation:1})
+  expect(settled.generation).toBe(action==='clear'?0:1)
+  expect(settled.activeJobs).toBe(0)
+  expect(settled.enabled).toBe(action!=='disable')
+  if(action==='disable')await service.configure({enabled:true})
+  reader.snapshots=original
+  expect((await index(service)).lastJob?.outcome).toBe('completed')
+})
