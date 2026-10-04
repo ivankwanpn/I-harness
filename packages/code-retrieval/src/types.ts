@@ -19,6 +19,9 @@ export interface CodeRetrievalStatus {
   config: CodeRetrievalConfig; generation: number; files: number; chunks: number;
   storedBytes: number; activeJobs: number; jobId?: string; progress?: { files: number; bytes: number };
   partial: boolean; reasons: string[]; error?: string;
+  /** Outcome of an indexing attempt, separate from committed completeness.
+   * wait(jobId) retains the outcome of that specific job. */
+  lastJob?: { jobId:string; outcome:'completed'|'cancelled'|'failed'; generation:number; reason?:string };
   /** Measured counters for this service lifetime. Missing provider token usage
    * increments unreportedRequests; it is never presented as zero token use. */
   metrics?: { embeddingRequests:number; embeddingCacheHits:number; reportedInputTokens:number; unreportedRequests:number };

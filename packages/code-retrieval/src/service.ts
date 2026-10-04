@@ -14,9 +14,10 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   type Operation={controller:AbortController;done:Promise<unknown>}
   const active=new Set<Operation>(),jobs=new Map<string,Promise<CodeRetrievalStatus>>()
   let indexing:{jobId:string;progress:{files:number;bytes:number}}|undefined
+  let lastJob:CodeRetrievalStatus['lastJob']
   let controls:Promise<unknown>=Promise.resolve()
   const status=():CodeRetrievalStatus=>({enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':store.status().generation?'ready':'unindexed',
-    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(error?{error}:{})})
+    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(error?{error}:{})})
   function admit(access:CodeAccess) {
     identity(access.sessionId,'session ID');access.signal?.throwIfAborted()
     if(closed)throw new Error('Code Context is closed')
@@ -44,11 +45,15 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   async function startIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean}={}) {
     admit(access);sourceIds(input.sourceIds)
     if(input.force!==undefined&&typeof input.force!=='boolean')throw new Error('Invalid force flag')
-    if(indexing) {
-      if(!input.force)return {jobId:indexing.jobId}
+    if(input.force) {
       await service.cancel();admit(access)
-    }
+    } else if(indexing)return {jobId:indexing.jobId}
     const jobId=randomUUID(),captured=structuredClone(config),scope=input.sourceIds?[...new Set(input.sourceIds)]:undefined
+    let result:NonNullable<CodeRetrievalStatus['lastJob']>
+    const finish=(outcome:'completed'|'cancelled'|'failed',reason?:string)=>{
+      result={jobId,outcome,generation:store.status().generation,...(reason?{reason}:{})}
+      lastJob=result
+    }
     indexing={jobId,progress:{files:0,bytes:0}};error=undefined
     const work=operation(access,async (signal,check)=>{
       try {
@@ -62,6 +67,11 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
         const model=captured.mode==='hybrid'?modelIdentity(captured.embedding!):''
         const old=store.status()
         if(preserved.files&&old.model!==model)throw new Error('Embedding configuration changed; run a full refresh')
+        if(preserved.files&&captured.mode==='hybrid') {
+          const retainedDimensions=store.vectorDimensions()
+          if(dimensions!==undefined&&retainedDimensions!==undefined&&dimensions!==retainedDimensions)throw new Error('Stored embedding dimensions changed; run a full refresh')
+          dimensions??=retainedDimensions
+        }
         if(preserved.files&&old.partial)for(const reason of old.reasons)reasons.add(reason)
         const iterator=options.reader.snapshots({...access,signal},{sourceIds:scope,config:captured})
         for await(const file of iterator) {
@@ -112,13 +122,16 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
         }
         check()
         store.commit(files,scope,[...reasons],model,vectors,captured.maxDiskBytes,check)
+        finish('completed')
       } catch(failure) {
-        if(!signal.aborted || signal.reason?.message==='Code Context deadline exceeded')error=failure instanceof Error?failure.message:'Code Context indexing failed'
+        if(signal.aborted&&signal.reason?.message!=='Code Context deadline exceeded')finish('cancelled','Code Context indexing cancelled')
+        else {error=failure instanceof Error?failure.message:'Code Context indexing failed';finish('failed',error)}
       } finally {if(indexing?.jobId===jobId)indexing=undefined}
     }).catch(failure=>{
       if(indexing?.jobId===jobId)indexing=undefined
-      if(failure?.message==='Code Context deadline exceeded')error=failure.message
-    }).then(()=>status())
+      if(failure?.message!=='Code Context deadline exceeded'&&(access.signal?.aborted||failure?.message==='Code Context operation cancelled'))finish('cancelled','Code Context indexing cancelled')
+      else {error=failure instanceof Error?failure.message:'Code Context indexing failed';finish('failed',error)}
+    }).then(()=>({...status(),lastJob:{...result}}))
     jobs.set(jobId,work)
     // Bound completed handles; callers can always inspect current durable status.
     if(jobs.size>64)jobs.delete(jobs.keys().next().value!)

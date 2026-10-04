@@ -52,6 +52,13 @@ export class Store {
     const row=this.db!.prepare('SELECT vector FROM vectors WHERE key=?').get(key) as {vector:string}|undefined
     return row?JSON.parse(row.vector) as number[]:undefined
   }
+  vectorDimensions():number|undefined {
+    // The actual dimension is durable in the vectors themselves, including
+    // generations created before explicit dimension metadata existed.
+    const rows=this.db!.prepare('SELECT DISTINCT json_array_length(vector) AS dimensions FROM vectors').all() as {dimensions:number}[]
+    if(rows.length>1 || rows.some(row=>!Number.isInteger(row.dimensions)||row.dimensions<1||row.dimensions>8192))throw new Error('Inconsistent stored embedding dimensions; run a full rebuild')
+    return rows[0]?.dimensions
+  }
   outside(sources:string[]|undefined):{files:number;chunks:number} {
     if(!sources)return {files:0,chunks:0}
     const files=this.db!.prepare('SELECT source FROM files').all() as {source:string}[]
@@ -63,7 +70,7 @@ export class Store {
     if(!keys.length) return []
     const filters=['t.term IN ('+keys.map(()=>'?').join(',')+')'], values:string[]=[...keys]
     if(sourceIds) {if(!sourceIds.length)return [];filters.push('c.source IN ('+sourceIds.map(()=>'?').join(',')+')');values.push(...sourceIds)}
-    if(pathPrefix) {filters.push("(c.path=? OR substr(c.path,1,?)=?)");values.push(pathPrefix,String(pathPrefix.length+1),pathPrefix+'/')}
+    if(pathPrefix) {filters.push("(c.path=? OR substr(c.path,1,?)=?)");values.push(pathPrefix,String([...pathPrefix].length+1),pathPrefix+'/')}
     return this.db!.prepare(`SELECT c.source AS sourceId,c.path,c.revision,c.text,c.startLine,c.endLine,c.startOffset,c.endOffset,count(*) AS score FROM terms t JOIN chunks c ON c.id=t.chunk WHERE ${filters.join(' AND ')} GROUP BY c.id ORDER BY score DESC,c.source,c.path,c.startOffset`).all(...values) as unknown as CodeHit[]
   }
   all(sourceIds?:string[],pathPrefix?:string):CodeHit[] {
