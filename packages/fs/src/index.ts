@@ -186,7 +186,8 @@ export interface FsToolDeps {
 }
 
 // M42: workspace-relative key for rewind capture — null when the target
-// escapes the workspace (absolute inputs / `..`) — the recorder is
+// escapes the workspace — absolute inputs inside it still have a relative key.
+// The recorder is
 // workspace-scoped, so such writes proceed UNTRACKED (honest).
 function relForRewind(workspace: string, target: string): string | null {
   const rel = relative(workspace, target)
@@ -386,8 +387,17 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
         : `apply a patch touching ${hunks.length} files`
       const ladder = await resolveWriteCall(deps, exec, "apply_patch", { sandbox_permissions, justification }, subject)
       if (ladder.kind === "refused") return ladder.failure
-      // patch.ts 不 import index.ts（循環）——resolve 由這裡傳入；rewind sink 透傳
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, deps.rewind, (target) => guardWrite(deps, target, ladder.mode))
+      // Keep raw patch paths in results, but give the workspace-scoped journal
+      // the same resolved relative keys used by write/edit. A permitted write
+      // outside this workspace remains untracked rather than expanding rewind.
+      const recorder = deps.rewind
+      const patchRewind: RewindCapture | undefined = recorder === undefined ? undefined : {
+        take(path, before) {
+          const rel = relForRewind(deps.workspace, resolvePath(deps.workspace, path))
+          return rel === null ? { blobId: null, isNewFile: false } : recorder.take(rel, before)
+        },
+      }
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
       const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {

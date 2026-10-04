@@ -23,7 +23,8 @@ export type PathResolver = (path: string) => string
 // M42 rewind (G1): the pre-image sink the write pipeline reports into — the
 // SAME structural shape index.ts wires as `createFsTools({ rewind })` without
 // importing packages/rewind (fs never depends on rewind; the assembly glues
-// them). `take` receives the RAW patch path (recorder normalizes + guards);
+// them). This layer passes the patch path to the mount's capture adapter,
+// which resolves workspace-relative journal keys before the recorder guards it;
 // returns the restore blob id (null = new file) so the result can carry
 // preImageRef/isNewFile (the log is the rewind channel, spec §2).
 export interface RewindCapture {
@@ -196,8 +197,8 @@ export async function applyPatch(
         // M42 rewind: new file — no pre-image to restore (before = null)
         let isNewFile: boolean | undefined
         if (rewind !== undefined) {
-          rewind.take(hunk.path, null)
-          isNewFile = true
+          const captured = rewind.take(hunk.path, null)
+          if (captured.isNewFile) isNewFile = true
         }
         await writeFileAtomic(target, hunk.contents ?? "")
         applied.push({ path: hunk.path, action: "added", ...(isNewFile !== undefined ? { isNewFile } : {}) })
