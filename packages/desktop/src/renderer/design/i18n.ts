@@ -2,6 +2,21 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  '上下文與檢索': 'Context and retrieval',
+  '設定範圍': 'Settings scope', '此工作區': 'This workspace', '全域預設': 'Global defaults', '有效範圍': 'Effective scope', '重設工作區覆寫': 'Reset workspace overrides',
+  '設計參考 context-mode': 'Design reference: context-mode', '設計參考 claude-context': 'Design reference: claude-context',
+  '大型工具輸出保存在本機工作區資料庫，會話透過引用讀取。停用會等待工作完成；清除會刪除保留資料。': 'Large tool outputs are stored in the local workspace database and read through conversation references. Disabling waits for work to finish; clearing deletes retained data.',
+  '啟用 Context Mode': 'Enable Context Mode', '預覽上限（bytes）': 'Preview limit (bytes)', '單次保存上限（bytes）': 'Capture limit (bytes)', '讀取上限（bytes）': 'Read limit (bytes)', '輸出搜尋上限（bytes）': 'Output search limit (bytes)', '輸出儲存上限（bytes）': 'Output storage limit (bytes)', '保留天數': 'Retention days',
+  '有效狀態': 'Effective status', '已載入統計': 'Loaded statistics', '結果': 'Results', '執行中工作': 'Active jobs', '清除輸出資料': 'Clear output data',
+  '索引儲存在本機。詞彙搜尋無需 embedding；混合搜尋會把選取的程式碼傳送到指定提供商。憑證只保存引用。': 'The index is stored locally. Lexical search needs no embeddings; hybrid search sends selected code to the specified provider. Only a credential reference is saved.',
+  '啟用 Code Context': 'Enable Code Context', '檢索模式': 'Retrieval mode', '詞彙搜尋': 'Lexical search', '混合搜尋': 'Hybrid search', '自動更新索引': 'Automatically update the index',
+  'Embedding 提供商': 'Embedding provider', 'Embedding 端點': 'Embedding endpoint', 'Embedding 模型': 'Embedding model', '憑證引用': 'Credential reference',
+  '檔案數量上限': 'File count limit', '單一檔案上限（bytes）': 'File size limit (bytes)', '索引輸入上限（bytes）': 'Index input limit (bytes)', '片段數量上限': 'Chunk count limit', '索引儲存上限（bytes）': 'Index storage limit (bytes)', '程式碼搜尋上限（bytes）': 'Code search limit (bytes)', '索引期限（ms）': 'Index deadline (ms)',
+  '忽略模式': 'Ignore patterns', '每行一個，最多 16 個，每個最多 512 字元。': 'One per line, up to 16 patterns and 512 characters each.', '片段': 'Chunks', '索引版本': 'Index generation', '索引進度': 'Index progress', '最近索引工作': 'Last indexing job', '索引不完整': 'Incomplete index',
+  'Embedding 請求': 'Embedding requests', '快取命中': 'Cache hits', '已回報輸入 tokens': 'Reported input tokens', '未回報用量請求': 'Requests with unreported usage',
+  '更新索引': 'Update index', '重建索引': 'Rebuild index', '取消索引': 'Cancel indexing', '清除索引': 'Clear index',
+  '唯讀參考資料夾': 'Read-only reference folders', '明確加入絕對路徑。參考資料夾只供讀取；索引和輸出寫入本機工作區儲存。': 'Add explicit absolute paths. Reference folders are read only; indexes and outputs are written to local workspace storage.', '參考資料夾清單': 'Reference folder list', 'JSON 陣列，每項包含 id、path 和 label。': 'A JSON array with id, path, and label for each entry.',
+  '已儲存設定與有效設定不同，請重新整理或再次儲存以重試。': 'Saved and effective settings differ. Refresh or save again to retry.',
   "搜尋核准規則": "Search approval rules",
   "記住此操作的完整參數": "Remember this operation with its complete arguments", "規則作用範圍": "Rule scope", "此會話": "This conversation", "此專案": "This project", "有效期限": "Expiry", "1 小時": "1 hour", "1 天": "1 day", "7 天": "7 days",
   "只重用相同工具身分與完整參數。沙箱、Plan Mode、角色及 Hooks 仍會檢查；工具或設定改變後會重新詢問。": "Reuse applies only to the same tool identity and complete arguments. Sandbox, Plan Mode, roles and Hooks still run; changed tools or settings require approval again.",

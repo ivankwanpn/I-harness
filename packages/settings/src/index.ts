@@ -21,6 +21,8 @@ import { PROVIDER_PROTOCOLS } from "./sections.ts"
 import type { SettingsProviderProtocol } from "./sections.ts"
 import type { Telemetry } from "@i-harness/telemetry"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { normalizeContextSubsystems, type SettingsContextSubsystems } from './context-subsystems.ts'
+export * from './context-subsystems.ts'
 
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
@@ -284,6 +286,7 @@ export interface SettingsOnboarding {
 /** The full, durable settings document. Every field has a default so an
  * absent field in a partial on-disk document falls back instead of breaking. */
 export interface Settings {
+  contextSubsystems: SettingsContextSubsystems
   codeMode: SettingsCodeMode
   /** Automatic conversation titles. Absent documents retain the existing enabled default. */
   autoTitle?: boolean
@@ -356,6 +359,7 @@ export function normalizeCodeMode(raw: unknown): SettingsCodeMode {
 // retires was blocked for months by a mis-stated reason; see the correction in
 // docs/handoff/2026-09-17-remove-tui-and-web-frontends.md §3.
 const SETTINGS_DEFAULTS: Settings = {
+  contextSubsystems: normalizeContextSubsystems(undefined),
   codeMode: { mode: "off" },
   autoTitle: true,
   sandboxMode: "workspace-write",
@@ -716,6 +720,7 @@ export function normalizeSettings(raw: unknown): Settings {
   if (!isRecord(raw)) {
     return {
       ...base,
+      contextSubsystems: normalizeContextSubsystems(undefined),
       plugins: { ...base.plugins },
       agents: normalizeAgents(undefined, base.agents),
       llm: normalizeLlm(undefined, base.llm),
@@ -730,6 +735,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    contextSubsystems: normalizeContextSubsystems(raw.contextSubsystems),
     codeMode: normalizeCodeMode(raw.codeMode),
     autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,
     agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),

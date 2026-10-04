@@ -9,6 +9,7 @@ import type { DesktopBridge } from "../../shared/bridge.ts"
 import { NativeSettings } from "./NativeSettings.tsx"
 import { AutoTitleSettings } from "./AutoTitleSettings.tsx"
 import { CodeModeSettings } from "./CodeModeSettings.tsx"
+import { ContextSubsystemSettings } from './ContextSubsystemSettings.tsx'
 import { DiagnosticsPane } from "./DiagnosticsPane.tsx"
 import { GlobalProviderDirectory } from "./GlobalProviderDirectory.tsx"
 import { NotificationsPane } from "./NotificationsPane.tsx"
@@ -30,6 +31,7 @@ const sections = [
   { id: "notifications", label: "通知", icon: Bell, group: "基本設定" },
   { id: "models", label: "模型與提供商", icon: Server, group: "Agent 設定" },
   { id: "execution", label: "執行與上下文", icon: Shield, group: "Agent 設定", capability: "desktop-agent-settings" },
+  { id: 'context-subsystems', label: '上下文與檢索', icon: Brain, group: 'Agent 設定', capability: 'desktop-context-subsystems' },
   { id: "subagents", label: "子代理", icon: Brain, group: "Agent 設定", capability: "desktop-subagents" },
   { id: "hooks", label: "Hooks 信任", icon: Shield, group: "Agent 設定", capability: "desktop-hooks" },
   { id: "mcp", label: "MCP 伺服器", icon: Server, group: "Agent 設定", capability: "desktop-mcp" },
@@ -109,6 +111,7 @@ export function SettingsPane({ workspace, sessionId, sessionManagement, onMemory
       : tab === "models" ? bridge ? <GlobalProviderDirectory bridge={bridge} request={globalProviderRequest} showHeading={false} /> : <p className="muted">{t("尚未開啟工作區")}</p>
       : tab === "execution" && workspace && bridge ? <><AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} />{capabilities["desktop-code-mode-settings"]?.includes("1") ? <CodeModeSettings key={`code:${workspace.id}:${sessionId ?? ""}`} bridge={bridge} workspaceId={workspace.id} sessionId={sessionId} /> : null}{capabilities["desktop-environment-diagnostics"]?.includes("1") ? <DiagnosticsPane key={`diagnostics:${workspace.id}:${sessionId ?? ""}`} bridge={bridge} workspaceId={workspace.id} sessionId={sessionId} /> : null}</>
       : tab === "subagents" && workspace && bridge ? <SubagentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
+      : tab === 'context-subsystems' && workspace && bridge ? <ContextSubsystemSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : tab === "hooks" && workspace && bridge ? <HookSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onAuthoringRequest={capabilities["desktop-hook-authoring"]?.includes("1") ? authoringRequest : undefined} />
       : tab === "mcp" && workspace && bridge ? <McpSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} />
       : (tab === "skills" || tab === "commands") && workspace && bridge ? <ResourceSettings key={`${workspace.id}:${tab}`} resourceKind={tab} bridge={bridge} workspaceId={workspace.id} onAuthoringRequest={capabilities["desktop-resource-authoring"]?.includes("1") ? authoringRequest : undefined} onUse={onUseResource} onManagePlugins={capabilities["desktop-plugins"]?.includes("1") ? (id) => { setPluginQuery(id ?? ""); select("plugins") } : undefined} />
