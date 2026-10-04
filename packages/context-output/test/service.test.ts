@@ -24,6 +24,33 @@ afterEach(async () => {
 })
 
 describe('review regressions', () => {
+  it('applies live SQLite quota raises and safe lowering on the same open service', async () => {
+    const originalQuota = 128 * 1024
+    const raisedQuota = 8 * 1024 * 1024
+    const { root, service } = await create({ config: { enabled: true, maxDiskBytes: originalQuota } })
+    const seed = await service.capture({ sessionId: 'a', callId: 'seed', label: 'seed', text: 'seed', complete: true })
+    await service.configure({ maxDiskBytes: raisedQuota })
+    const text = 'distinct needle line\n'.repeat(20000)
+    const large = await service.capture({ sessionId: 'a', callId: 'large', label: 'large', text, complete: true })
+    expect(large).toMatchObject({ complete: true, originalBytes: 420000, bytes: 420000 })
+    const workspace = (await readdir(resolve(root, 'context-output')))[0]!
+    const { stat } = await import('node:fs/promises')
+    expect((await stat(resolve(root, 'context-output', workspace, 'index.sqlite'))).size).toBeGreaterThan(originalQuota)
+    const storage = new ContextStore(root, 'w')
+    expect(await storage.diskBytes()).toBeLessThanOrEqual(raisedQuota)
+    const loweredQuota = Math.ceil((await storage.diskBytes()) / 4096) * 4096 + originalQuota
+    expect(loweredQuota).toBeLessThan(raisedQuota)
+    await service.configure({ maxDiskBytes: loweredQuota })
+    const small = await service.capture({ sessionId: 'a', callId: 'small', label: 'small', text: 'needle '.repeat(200), complete: true })
+    expect(small?.complete).toBe(true)
+    expect(await storage.diskBytes()).toBeLessThanOrEqual(loweredQuota)
+    await expect(service.configure({ maxDiskBytes: 1 })).rejects.toThrow(/smaller|clear/i)
+    expect(service.status().config.maxDiskBytes).toBe(loweredQuota)
+    expect((await service.read({ sessionId: 'a' }, { refId: seed!.id })).text).toBe('seed')
+    expect((await service.search({ sessionId: 'a' }, { query: 'distinct' })).hits.some((hit) => hit.ref.id === large!.id)).toBe(true)
+    await service.configure({ maxDiskBytes: raisedQuota })
+    expect((await service.capture({ sessionId: 'a', callId: 'raised-again', label: 'again', text, complete: true }))?.complete).toBe(true)
+  })
   it('registers native schemas while disabled and dispatches through the real broker', async () => {
     const { service } = await create({ config: { enabled: false } })
     const registry = createToolRegistry(createContext())

@@ -159,6 +159,17 @@ export class ContextStore {
     }
     return bytes
   }
+  async configureDiskBudget(maxDiskBytes: number): Promise<void> {
+    const physicalBytes = await this.diskBytes()
+    if (physicalBytes > maxDiskBytes) throw new Error('Context disk budget is smaller than retained storage; clear results first')
+    const indexBytes = (await stat(resolve(this.directory, 'index.sqlite'))).size
+    const pageSize = Number(this.db.prepare('PRAGMA page_size').get()!.page_size)
+    // Configuration owns the drained mutation lane. Keep all authoritative
+    // files inside the new quota while giving SQLite the remaining page budget.
+    // Raises must replace the old opening ceiling; lowering keeps current pages.
+    const maxPages = Math.floor((maxDiskBytes - physicalBytes + indexBytes) / pageSize)
+    this.db.exec(`PRAGMA max_page_count=${maxPages}`)
+  }
   async put(artifact: Artifact, bytes: Buffer, maxDiskBytes: number, signal: AbortSignal): Promise<ContextResultRef|undefined> {
     const id = artifact.ref.id
     const existing = this.get(id)

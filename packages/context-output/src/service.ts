@@ -98,9 +98,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       configureContext(config, patch)
       await transition(async () => {
         const next = configureContext(config, patch)
-        if (store && next.maxDiskBytes < config.maxDiskBytes && await store.diskBytes() > next.maxDiskBytes) {
-          throw new Error('Context disk budget is smaller than retained storage; clear results first')
-        }
+        if (store && next.maxDiskBytes !== config.maxDiskBytes) await store.configureDiskBudget(next.maxDiskBytes)
         config = next
       })
       return status()
