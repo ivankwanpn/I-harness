@@ -6,7 +6,7 @@
 // Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
 // sibling release folder when an earlier portable app is still open.
 // Assumes `electron-vite build` and `scripts/build-gateway.mjs` already ran.
-import { cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
@@ -39,6 +39,9 @@ renameSync(join(appDir, "electron.exe"), join(appDir, `${appName}.exe`))
 const resources = join(appDir, "resources")
 cpSync(outDir, join(resources, "app", "out"), { recursive: true, dereference: true })
 cpSync(join(packageRoot, "licenses"), join(resources, "app", "licenses"), { recursive: true })
+for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES"]) {
+  copyFileSync(join(packageRoot, "..", "..", notice), join(resources, "app", notice))
+}
 writeFileSync(join(resources, "app", "package.json"), `${JSON.stringify({
   name: manifest.name,
   productName: appName,

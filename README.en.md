@@ -1,330 +1,126 @@
 # I-harness
 
-> **⚠️ This document is a dated snapshot: its content stops at M65's eve (2026-09-17).**
-> The TUI/web frontends it describes were **removed** in M65, and the backend was
-> **closed out** in M76–M80 (2026-09-24) — **verdict: the backend is done; the frontend era
-> is open**. The current entry points are the Chinese [`README.md`](README.md) and the
-> readiness record [`docs/handoff/2026-09-24-m80-backend-readiness.md`](docs/handoff/2026-09-24-m80-backend-readiness.md)
-> (verdict §5, residuals §6; per-item classification in
-> [`docs/handoff/2026-09-24-m80-residual-audit.md`](docs/handoff/2026-09-24-m80-residual-audit.md)).
-> A full English rewrite is a named residual, not a silent gap.
+**Work with AI in your own projects, from a goal to a result you can inspect.**
 
-I-harness agent runtime — a TypeScript/ESM monorepo (pnpm workspace) that runs
-an agent end-to-end on Windows: real tools, persisted sessions, subagents and
-teams, sandboxed execution, MCP/LSP integration, skills, workflows, and a
-headless CLI. **Backend-complete (M1–M25) achieved, then extended by the M26–M34 wheel
-(runtime interaction/tiers, subagent messaging, SDK, ACP, JSONL-only persistence
-+ a reconcile-on-search index). Frontend phase opened via the TUI wheel: research
-(M35) → tui-core renderer layer (M36: cell grid/diff + zero-byte idle, terminal
-init/teardown, capability probe, GrokNight theme, PTY harness) → M37a app layer
-(grok 1:1 agent screen: scrollback engine + views + keymap + embedded
-SessionService bridge + `apps/tui`, PTY-proved live streaming). M37b covers
-interaction overlays + Inline/minimal modes — and M65 then removed the TUI and
-web frontends entirely (2026-09-17); see the removal note below.**
+I-harness is an open source workspace for coding with AI. Connect your preferred model service, open a local project, and let the agent search code, read files, run commands and make changes. Follow its progress, approve operations, inspect diffs and stop execution from the same desktop app.
 
-> **Taking this project over?** Read [`docs/handoff/HANDOFF.md`](docs/handoff/HANDOFF.md) first: current
-> branch/commit state, the verification commands with **measured baselines**, nine traps that actually
-> cost time here, and the list of what was deliberately left undone. The same directory holds
-> [`FINAL-REPORT.md`](docs/handoff/FINAL-REPORT.md) (the last goal's full report) and
-> [`what-the-design-does-not-answer.md`](docs/handoff/what-the-design-does-not-answer.md) (what the
-> design does not answer, and what was declined with rulings).
+[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.0) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
 
-> **Frontends: the TUI and the web frontend were removed on 2026-09-17 (M65).** The product
-> position is that **the backend must keep working when no interface is attached**, and that **a
-> frontend should be a pure frontend** — so the frontends went first, and the rebuild is a
-> separate milestone (the rebuild is *not* part of M65). Removed: `apps/tui`, `packages/tui`,
-> `packages/tui-core`, `packages/web-host` and `apps/cli/src/web.ts`. **`packages/web` is not a
-> frontend** — it is the `web_search` / `web_fetch` **tool** package, still on the production path
-> (`packages/session-executor/src/assembly.ts:19`). **The bare launch is back to its pre-M44
-> shape**: usage goes to **stderr**, exit code **1** — no UI launches. Full record:
-> [`docs/handoff/2026-09-17-remove-tui-and-web-frontends.md`](docs/handoff/2026-09-17-remove-tui-and-web-frontends.md).
+## Download
 
-## What it is
+**Windows x64 · v0.1.0** includes Desktop and its required runtime.
 
-An agent harness (the "back end" of an agent product) that:
+| Edition | Choose it when… | Download |
+| --- | --- | --- |
+| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-Setup-0.1.0.exe) |
+| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.0/I-harness-Desktop-0.1.0.zip) |
 
-- Drives an LLM agent loop over a real tool set (shell, fs, patch, search, todo…)
-- Persists sessions durably (JSONL — the sole authority), with cross-process ownership locks
-- Runs subagents and subagent teams (spawn/send/followup/interrupt/resume + mailbox/task board)
-- Executes tools under guard/approval/timeout/retry/parallel policies
-- Integrates MCP servers + LSP, with reconnect supervision
-- Loads skills (deferred SKILL.md retrieval) and runs static YAML workflows
-- Emits telemetry (independent host event stream — JSONL via `--telemetry`)
-- Is sandbox-safe on Windows (ACL isolation) and fail-closed elsewhere
+Extract the portable ZIP into its own folder and run `I-harness Desktop.exe`. Keep the executable beside the `resources` folder.
 
-## Requirements
+Desktop does not require a separate Node.js installation. Configure your own model service; cloud models require network access, credentials and usage allowance from that service.
 
-- Node.js >= 22.18 (`engines.node` — `node:sqlite`'s `readOnly`)
-- pnpm >= 9
+The current Windows distribution is unsigned.
 
-## Getting started
+## Get started
 
-```bash
-pnpm install
-pnpm test            # unit/integration suites for every package
-pnpm typecheck       # tsc --noEmit for every package
-pnpm e2e             # end-to-end: real CLI + real tools (spawned process / runHeadless)
+1. **Open I-harness Desktop** and choose a local project folder as your workspace.
+2. **Configure a model** in Settings → Models and providers: add the endpoint, protocol and API credentials, then select a model.
+3. **Choose an access scope** in Execution and context: read-only, workspace write or full access, with an approval mode suited to the task.
+4. **Start a conversation with a concrete goal**, such as “Find why login fails, make a fix, and run the relevant tests.”
+5. **Inspect the result** through the work process, Todo progress, command output and file diffs.
+
+Save and continue conversations, rename or archive them, or create a fork. Stop and cancellation controls are available during execution.
+
+## Work through development in one workspace
+
+### Projects, conversations and progress
+
+Organize conversations by project and switch workspaces. Collapse navigation into an icon rail and resize both side panes. Reasoning, tool activity and background notifications appear in the work process, while the final response stays readable. A floating Todo card shows progress; search long conversations, return to recent content and compact context when needed.
+
+### Find code, make changes and verify them
+
+Use built-in search, file reading, editing and patch tools alongside command execution, interactive terminals, previews and diff views. Analyze a project before making changes, and open outside projects or documents as read-only references.
+
+Rewind previews restoration of conversations and recorded file changes. Its coverage follows the snapshots actually captured; arbitrary external effects of commands are not equivalent to file snapshots.
+
+### Choose your model service
+
+Five model protocols are supported:
+
+- OpenAI Responses
+- OpenAI-compatible Chat Completions
+- Anthropic Messages
+- Google Gemini
+- AWS Bedrock Converse
+
+Configure custom endpoints, models, context windows and output limits, and change the model used by a conversation. Image input, reasoning options and other model features depend on the selected model and endpoint.
+
+### Extend tools and delegate work
+
+Connect MCP servers, use Skills, manage plugins and run workflows. Subagents and Teams support division of work, messages, status and cancellation. Tools follow the current role, access scope and approval configuration.
+
+### Keep longer tasks usable
+
+Code Mode lets agents compose tools with JavaScript, filter or aggregate results in the script, and return the relevant content to the model. Tools can be discovered on demand. Long outputs have bounded previews and retained references; successfully saved JSON state can survive session reconstruction.
+
+Automatic and manual compaction help organize long conversations. Valid model usage reports calibrate context budgets. Cache behavior can be configured for supported endpoints; actual savings depend on the requests, model and provider.
+
+## Control operations
+
+- **Access scopes:** read-only, workspace write and full access.
+- **Approval modes:** ask for dangerous operations, ask each time, model review or full access.
+- **Visible execution:** inspect tool requests, results, errors and progress.
+- **Stop and cancel:** stop a model turn, tool work or a specific background resource.
+- **Local storage:** Desktop settings and conversations are saved locally; configured models and external tools receive the data required for their work.
+
+The app's authority follows your selected settings. Full access permits broader operations. Workspace write is suited to restricting changes to admitted project roots.
+
+## Interface and integrations
+
+Desktop includes Traditional Chinese and English, light and dark themes, text-size preferences and notification options.
+
+The project also provides a **CLI, SDK and ACP** for integrating agents into other workflows. The CLI runs tasks, manages models and inspects sessions without the Desktop interface.
+
+## Run from source
+
+Development requires **Node.js ≥ 22.18 and pnpm ≥ 10**. Desktop distributions currently target Windows x64.
+
+```powershell
+git clone https://github.com/ivankwanpn/I-harness.git
+cd I-harness
+pnpm install --frozen-lockfile
+
+# Start Desktop development
+pnpm --filter @i-harness/desktop dev
+
+# Show CLI commands
+node --import tsx apps/cli/src/index.ts help
 ```
 
-## Install once — a global command in any folder (M44)
+Build a distribution:
 
-`i-harness` / `ih` — type the name in ANY folder's cmd/PowerShell to run the
-headless CLI there (workspace = cwd):
+Building the Windows installer also requires [NSIS 3](https://nsis.sourceforge.io/Download). Compiler locations and options are documented in the [installer guide](packages/desktop/installer/README.md).
 
-```bash
-# from the repo (one-time global link; both names go on PATH)
-cd apps/cli
-pnpm link -g            # or: npm i -g ./apps/cli
+```powershell
+# Build the portable Desktop app
+pnpm --filter @i-harness/desktop dist
 
-# from ANY project folder
-ih run "say hi" --model deepseek:deepseek-chat --yes   # headless run (workspace = cwd)
-ih sessions list                                       # session list
-ih help                 # full usage (run / sdk / acp / sessions)
+# Build the Windows installer from that app
+pnpm --filter @i-harness/desktop installer
 ```
 
-**A bare launch, or an absent/unknown subcommand, is a usage error**: usage goes
-to **stderr**, exit code **1**. There is no "default UI" launch — that was the
-M44–M64 behaviour, and M65 restored the pre-M44 shape (authority:
-`db3d1e7^:apps/cli/src/index.ts`).
+Outputs are collected in `packages/desktop/release/`. See the [Desktop documentation](packages/desktop/README.md) for development and packaging details.
 
-The bin shim resolves the tsx loader by ABSOLUTE path from its own install —
-no bundle, no dist: the repo stays source-run.
+## Report issues and contribute
 
-### Distribution — NSIS self-contained installer (M45)
+[Report a problem or suggest a feature](https://github.com/ivankwanpn/I-harness/issues). Include the app version, operating system, model protocol, reproduction steps and error details with secrets redacted.
 
-```bash
-node scripts/build-installer.mjs    # → build/I-harness-Setup-0.1.0.exe
+Before submitting a change, run:
+
+```powershell
+pnpm verify:all
 ```
 
-- **Self-contained**: bundles the Node v22.23.2 runtime (satisfies the
-  declared `engines.node >= 22.18` floor) + esbuild bundles (`dist/ih.mjs` +
-  `dist/runner.mjs`) + platform native modules (node-pty / koffi / ripgrep
-  via a flat hoisted deploy). ~50 MB of install media; no Node requirement on
-  the target. `I-harness-Setup-0.1.0.exe` (and the `-test.exe` variant that
-  installs user-level without PATH/registry writes).
-- **Installs** to `Program Files\I-harness`, appends PATH (HKLM, with
-  `WM_SETTINGCHANGE` broadcast), Start Menu shortcuts, and a full uninstaller
-  (registry + PATH cleanup). `i-harness` and `ih` both work in any cmd after
-  install.
-- **Verify**: `node scripts/verify-installer.mjs` — silent install → both
-  commands + `--version` + the `help` usage surface + the installed dist
-  self-check → clean uninstall (currently 19/19 de-verified on this machine).
-- **Dist is self-sufficient (M55)**: the Windows-ACL sandbox spawns the bundled
-  `dist/runner.mjs`, and the SDK stdio server re-enters the bundle itself
-  (`node ih.mjs sdk`) — neither needs the source or tsx anymore. (M65 removed
-  the three TUI-subject probes — the `--attach` SDK spawn, the `/minimal`
-  relaunch argv and the minimal inline engine — together with their subject,
-  the deleted `@i-harness/tui-app`.) `I_HARNESS_HOME` is a **source-mode** dev
-  override only (a non-standard checkout); dist never reads it. Version is the
-  single constant `apps/cli/package.json` (0.1.0).
+## License
 
-## Scripts
-
-| Script           | Purpose                                              |
-|------------------|------------------------------------------------------|
-| `pnpm test`      | Every package's vitest suite (`pnpm -r test`)        |
-| `pnpm typecheck` | Type-check every package (`pnpm -r typecheck`)       |
-| `pnpm e2e`       | End-to-end tests (`vitest run e2e/ --config e2e/vitest.config.ts`) |
-| `pnpm verify:store` | pnpm store integrity check (`scripts/check-store.sh`) — run before e2e after installs |
-| `pnpm verify:reachability` | Reachability ratchet — fails on **newly added** orphan rows only, never on a low count; seeded from `scripts/audit/reachability-baseline.json`, with exemptions only in a dated, reasoned allowlist. It proves a caller exists, never that the call is right |
-
-Per-package gates: `@i-harness/core-tools` adds `gen-tool-catalog` / `verify-tool-catalog`.
-
-### Building a distribution (M45)
-
-```
-node scripts/build-dist.mjs    # esbuild bundle + native deploy → dist/ (gitignored)
-node scripts/verify-dist.mjs   # gate: layout/manifest checks + --version / bare-launch usage error / help + __dist-selfcheck
-```
-
-`build-dist.mjs` bundles `apps/cli/src/index.ts` with esbuild (platform node,
-ESM, node22) into `dist/ih.mjs`, the windows-acl runner into `dist/runner.mjs`,
-and deploys the three NATIVE externals — `node-pty`, `koffi`,
-`@vscode/ripgrep` (+ their platform optionals) into `dist/node_modules` from
-the pinned manifest `installer/dist-package.json` (exact versions, build-time
-drift check). The dist layout is
-`dist/{ih.mjs, runner.mjs, model-catalog.json, package.json, README-dist.txt, node_modules/}`
-and runs with plain `node` — no tsx needed. `verify-dist.mjs` is the gate
-(fails loud on any mismatch; it also runs the hidden `__dist-selfcheck`, which
-proves the windows-acl confinement seam, and drives `node ih.mjs sdk` directly,
-which proves the SDK stdio re-entry — M65 removed the three TUI-subject probes,
-so these are what remain). The `Distribution` story (installing the produced
-dist) is owned by the packaging milestone.
-
-## Development status (M1 → M34)
-
-The full **backend-complete** milestone wheel (M1–M25) is done, and the
-M26–M29 extension wheel that followed — this is the "backend complete before
-frontend" gate:
-
-| Milestone | Topic | Status |
-|---|---|---|
-| M1  | Kernel (plugin/session/tools/loop) | ✅ |
-| M2–M1x | Guards, session-query, compaction, retry/retention, parallel calls, multimodal | ✅ |
-| M13–M15 | Parallel tool calls, multimodal, token meter/catalog | ✅ |
-| M16–M18 | Sandbox (Windows ACL), MCP client, LSP client | ✅ |
-| M19 | Subagent teams (roster/mailbox/task-board) | ✅ |
-| M20 | Model reliability (provider retry, budget, overflow) | ✅ |
-| M21 | Tools (apply_patch, todo, output spill) | ✅ |
-| M22 | Windows security complete (ACL isolation) | ✅ |
-| M23 | Session/interop leaks: cross-process ownership lock (Windows koffi + Linux flock), MCP reconnect, resume wakeup | ✅ |
-| M23-c | Linux flock + coordinator hardening | ✅ |
-| M24a | Subagent/team resume consistency + nested delegation | ✅ |
-| M24b | Skills (deferred SKILL.md) + workflows (YAML) | ✅ |
-| M25 | Engineering wrap-up: telemetry, e2e layer, docs closure, dir cleanup | ✅ |
-| M26 | Runtime exec + interaction wheel: input tiers (SessionExecutor), terminal PTY, MCP OAuth, tool naming, goal/feedback/jobs/credentials/workspace/plugin-registry/settings/schedule/hooks/instructions/session-title/plan-mode, engine-owned web-host | ✅ |
-| M27 | Stabilization + integration: cli web --port, external contracts, get_context_remaining, web-host routes + /api/health, crash-repair chain, skills shadow selector, settings layering, `@i-harness/sdk` | ✅ |
-| M28 | Cleanup: SDK wire contract v0 freeze, R-B13 close, MCP OAuth real-AS integration, fs-watch (chokidar), ACP (v0 automation subset) | ✅ |
-| M29 | SQLite persistence split: JSONL-only authority + reconcile-on-search file-backed index, remove `--session-backend` | ✅ |
-| M30 | First-class providers: gemini (native), bedrock (AWS Converse), double dispatch, model contexts | ✅ |
-| M31 | Models/web surface: unified context-window resolution (per-session), `probe-apply` discover→adopt, no hardcoded catalogs, websearch dsh-honest contract + trust notice | ✅ |
-| M32 | Model cards (`model-catalog.json`: `contextWindow`/`maxOutputTokens`) + 6-level reasoning effort × 4 protocol translation tables (generation-aware) | ✅ |
-| M33 | Compaction four-way absorption: anchored summary + 8-section prompt, model-free prune pass, overhead counting, 3-turn hysteresis + 3-strike breaker, `session-compact` command | ✅ |
-| M34 | Compaction policy: per-model `modelPolicies`, `compaction/attempt` analytics, summary degenerate floor, until-success breaker + sticky suppression | ✅ |
-| M35 | TUI research: four-way study + grok-build blueprint + UI 1:1 replication spec (skips: rewind/dashboard/plan-review/credits/voice) | ✅ |
-| M36 | @i-harness/tui-core: cell renderer (zero-byte idle), input parser, terminal init/teardown, capability probe, screen-mode policy, GrokNight theme, PTY harness first case | ✅ |
-| M37a | @i-harness/tui: grok 1:1 agent screen — scrollback engine (virtual_y / folding / selection / search), views (status/turn/prompt/shortcuts), keymap subset, embedded SessionService bridge (16ms batch + seq cursor), `apps/tui`, PTY live-streaming + resize cases (byte-budget zero-idle proof) | ✅ |
-| M37b | Interaction coverage: permission/question/cancel-turn overlays (approval seam, read-only backend), todo/tasks/queue//btw panes, slash/completion/history/file-search dropdowns, session picker + welcome, full keymap, PTY case-012 (real keys) + case-013 (permission flow) | ✅ |
-| M38a | Minimal mode: Inline insert_before engine (native-scrollback commit, print-once, LF-at-bottom scroll — CSI S proved lossy in xterm 6), live region + 500ms flush, self-relaunch /minimal /fullscreen, PTY case-015 (scrollback pins + 10-write budget + resize + relaunch) | ✅ |
-| M38b | Content wheel: markdown checkpoint rendering (marked lexer — paragraph/list/fence closure boundaries) + hljs polarity-safe highlighting, md_code_bg code blocks, info-line real values (model label; context shape), `--attach` remote backend (SDK stdio client), PTY case-016 (per-paragraph flush + fence-close highlight) | ✅ |
-| M39 | Quality wheel: 12-attribute replication checklist (1–10+12 verified; mermaid skip = spec'd), PTY case-017 interaction matrix (freeform reject real-key path, question, /btw, picker, history), FPS HUD (default-off), scrollback retain display-trunk trim, bench numbers | ✅ |
-| M40 | Inventory-driven gap harvest: todo_write/read_image mount, CLI plugin-registry+job-kill wiring, settings/changed emitter (+ dormant detector fix), guardian breaker all-verdicts, toasts, real context values, mouse wheel scroll (case-018), mermaid unicode art, plan-review adapt (case-019) | ✅ |
-| M41a | SDK wire v1: `session/history` + `session/list` + protocolVersion 2 handshake (additive-only, v0 frozen intact) — `--attach` replay/list gaps close (real subprocess e2e) | ✅ |
-| M42 | Rewind engine: `packages/rewind` (store/recorder/service — grok-style tool-report pre-images, RewindPoint jsonl, clean/conflict lazy compare, two-phase restore) + `rewind/point` event + deriveMessages cut projection (append-only conversation rewind; compaction interplay) | ✅ |
-| M43 | Rewind UI 1:1 (§3.9 phases/strings/keys via grok's rewind.rs) — Esc-Esc picker, mode-select, two-phase confirm with clean/conflict lists, engine hidement of rewound blocks, dim-from-anchor; PTY case-020 (real service restore: disk byte-exact v1 + journal truncate + marker line) | ✅ |
-| M41b | Wire v1.1 appendix: `session/cancel` (in-flight abort now reaches the engine — per-submit signal threading) + `session/rewind/*` (points/plan/execute via rewindFactory), capability-gated remote consumption, CLI list-row enrichment (updatedAt/turnCount), DA1 probe | ✅ |
-| M46b | Mouse full parity (new-truth): capture five-mode (1000/1002/1003/1015/1006, crossterm order) + Moved decode, HitArea hover (dirty-only repaint — row bg blend / ts `%H:%M:%S | %b %d` swap / md border / dropdown+permission rows), click semantics (single=select+focus; 300ms multi-click: double=fold, triple=fold+top; drag ≥1 cell = display-line selection + edge-band autoscroll + auto-copy (injected clipboard) + "Copied!" toast + flash; scrollbar latch+fraction jump; permission double-fire; prompt/pane/dropdown clicks), scroll streaming (grok engine port — 80ms gap / 16ms cadence / per-brand ept / 2.5x accel / taper / carry / speed knob), knobs (settings Mouse 7: speed/mode/lines/invert/keep_text_selection/word_separators/mouse_reporting_toggle + Ctrl+R opt-in gate), minimal no-capture; PTY case-023 mouse matrix (wheel/hover+ts-swap/click/fold/drag-autocopy/scrollbar/permission-double + minimal no-?1000h byte assert; 34-write budget) | ✅ |
-| M48 | Reliability and TUI delivery: G1 chain rejection advancement; durable TUI session-dir create/list/resume/close flush; capability-gated durable Rewind bridge for recorder-backed file changes; PTY case-010 Windows `chcp` command-resolution fix | ⚠️ delivered, full verification blocked by Windows ACL/installer runtime failures |
-| **M65** | **Removed the TUI and web frontends** (`apps/tui`, `packages/tui`, `packages/tui-core`, `packages/web-host`, `apps/cli/src/web.ts`); restored the **pre-M44 bare launch** (usage → stderr, exit 1); retired 19 TUI-only settings and 21 exports whose only consumer was a frontend; priced the 104 rows the removal orphaned as **one named class** (T delete / B retire / C contract / ? defer). **The M35–M49 interface capabilities therefore no longer exist** — the rebuild is a separate milestone |
-
-Each milestone was developed spec → plan → subagent-driven execution with
-per-task review. Design specs and plans live in `docs/superpowers/`.
-
-**Full capability inventory: `docs/CAPABILITIES.md`**（能力全景/邊界,以 m34 為準）。
-
-## Package structure (65 packages + apps/cli)
-
-```
-packages/
-├── core-plugin/          plugin kernel (events, waterfall, guard, scope, lifecycle)
-├── core-session/         session event log + deriveMessages + subscribe()
-├── core-tools/           tool registry, guarded exec pipeline, exposure (direct/deferred/hidden)
-├── core-agent/           event-driven agent loop (+ budget/overflow)
-├── llm-seam/             unified LLM interface (stream events, retry)
-├── llm-mock/             script-driven mock LLM
-├── llm-{openai,openai-compatible,anthropic,gemini,bedrock}/  provider protocols
-├── provider/             provider registry + retry policy
-│   ...
-├── exec/                 ExecService: run / background jobs (bash/pwsh)
-├── shell/                bash/pwsh tools (resolveShell, getArgv)
-├── fs/                   file read/write tools (resolvePath, writeFileAtomic)
-├── fs-search/            glob/grep search tools
-├── output-retention/     M21 A-tier output spill
-├── todo/                 todo list-write tool
-├── tool-search/          BM25 deferred-tool search
-├── skills/               SKILL.md registry + skill_search/skill_get (deferred retrieval)
-├── workflow/             static YAML workflows (single-job runner, workflow_run/list)
-├── subagent/             subagent tools + resilient resume (ensureResidentAgent)
-├── agent-team/           M19 teams: roster/mailbox/task-board/activity
-├── attachment/           (image/video) attachment store
-├── compaction/           M11 compaction engine
-├── token-meter/          M20 budget enforcement (context window)
-├── session-persistence/  coordinator + write-behind (ownership leases)
-├── session-persistence-jsonl/  the only persistence backend (JSONL is the sole authority)
-├── session-query/        search/lineage over the file-backed derived index (reconcile-on-search)
-├── mcp-client/           MCP client + reconnect supervisor + naming
-├── lsp/                  LSP client
-├── guard-{approval,timeout,retry,repeat-tool}/  guards
-├── interaction/          approval/question/command seams
-├── sandbox/              enforcement gate (refuse-to-run)
-├── sandbox-policy/       policy context
-├── sandbox-local/        local sandbox (spawn isolation)
-├── sandbox-windows-acl/  Windows ACL isolation (restricted token)
-├── fs-lock/              ownership lease (koffi LockFileEx / Linux flock)
-├── preset/               agent preset discovery/mount
-├── telemetry/            independent host event stream (JSONL sink)
-├── session-executor/     M26 A: SessionExecutor — input tiers (send/steer/followup), multi-session
-├── terminal/             M26 B: node-pty (ConPTY) terminal + process control tools
-├── runtime-context/      M26 A: dynamic system-context snapshot
-├── instructions/         M26 A: AGENTS.md instruction loading
-├── session-title/        M26 A: session title (LLM providers + fold)
-├── plan-mode/            M26 A: plan mode (log-only event + projection + exit tool)
-├── goal/                 M26 E: event-sourced goal + tools
-├── jobs/                 M26 D: durable job records + kill bridge
-├── credentials/          M26 E: credentials (env-first, refs-not-values)
-├── workspace/            M26 E: workspace document-library registry
-├── plugin-registry/      M26 E: plugin register/market/status (plugin code never executes)
-├── hooks/                M26 E: hooks (Claude / Codex contracts)
-├── schedule/             M26 E: persistent schedule
-├── settings/             M26 E: settings layering + hot reload + comment-preserving patch
-├── web/                  M26 C: web_search / web_fetch tools — a tool package, NOT a frontend
-├── sdk/                  M27 C: stdio NDJSON JSON-RPC SDK (wire contract v0)
-├── acp/                  M28 C: ACP server (v0 automation subset)
-└── fs-watch/             M28 B: fs watch (chokidar)
-apps/
-└── cli/                  headless CLI (run / sessions / sdk / acp + bin shim)
-```
-
-## Running the CLI
-
-```bash
-# default mock model (no API key needed)
-node --import tsx apps/cli/src/index.ts run "hello"
-
-# real model
-node --import tsx apps/cli/src/index.ts run "solve it" --model openai:gpt-4o --api-key $KEY --yes
-
-# M30 first-class providers: gemini (x-goog-api-key) and bedrock (key-less —
-# AWS credential chain: AWS_ACCESS_KEY_ID/SECRET or ~/.aws/credentials + profile;
-# region = AWS_REGION, default us-east-1)
-node --import tsx apps/cli/src/index.ts run "solve it" --model gemini:gemini-2.5-pro --api-key $GEMINI_API_KEY --yes
-node --import tsx apps/cli/src/index.ts run "hello" --model bedrock:anthropic.claude-3-5-sonnet-20241022 --yes
-
-# resume a session
-node --import tsx apps/cli/src/index.ts run "continue" --resume sess-xxx --yes
-
-# telemetry (JSONL on stdout)
-node --import tsx apps/cli/src/index.ts run "hello" --telemetry
-```
-
-## Design docs
-
-- Specs: `docs/superpowers/specs/` (M1–M29, each milestone)
-- Plans: `docs/superpowers/plans/`
-- Research: `.superpowers/research/` (gitignored — absorb-not-port conclusions)
-
----
-
-### Milestone history
-
-- **M1–M14**: kernel backbone (plugin/session/tools/loop, guards, session-query,
-  compaction, retry/retention, parallel tool calls, multimodal image input).
-- **M15–M25**: backend-complete wheel (token meter, sandbox, MCP/LSP, teams,
-  model reliability, tools, Windows security, session/interop locking, resume,
-  skills/workflows, telemetry, e2e, doc closure).
-- **M26**: runtime-exec + interaction wheel (input tiers + SessionExecutor,
-  terminal PTY, MCP OAuth, model governance, engine-owned web-host) — planned
-  via `docs/roadmap/roadmap-{A..E}`.
-- **M27**: stabilization + integration (stdio SDK, `get_context_remaining`,
-  web-host routes + `/api/health`, crash-repair chain, settings layering,
-  skills shadow selector, external contracts).
-- **M28**: cleanup (SDK wire contract v0 freeze, fs-watch, ACP v0, MCP OAuth
-  real-AS integration, R-B13 closure).
-- **M29**: SQLite persistence split (JSONL becomes the sole authority; the FTS /
-  lineage search face moves to an independent file-backed reconcile-on-search
-  index; `--session-backend` removed).
-
-> **M29 note**: `--session-backend` is removed — JSONL is the only persistence
-> backend (the flag now fails loud). When `--session-dir` (storeRoot) is present,
-> the search tools (`session_search` / `lineage`) are mounted via the file-backed
-> index and are enabled on first search (reconcile-on-search), default-on.
-
-The acceptance task runs end-to-end:
-
-```bash
-node --import tsx apps/cli/src/index.ts run "把 src/data.txt 第一行改成 hello"
-```
-
-## Known infra quirks
-
-- **vitest worker flake (RESOLVED M31)**: the tinypool IPC teardown race (`ERR_IPC_CHANNEL_CLOSED`) that hit web-host (M27-M31) is fixed — `packages/web-host/vitest.config.ts` used `pool: "forks"` (child-process workers; two consecutive full-run verifications green; **that package was removed in M65**). If any other package shows the same symptom, mirror that config.
+I-harness is licensed under the [MIT License](LICENSE). Third-party terms and notices are listed in [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES) and the [Desktop notices](packages/desktop/licenses/), and are retained in distributions.

@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit",
     "gateway:ship": "node scripts/build-gateway.mjs",
     "attachment:build": "node scripts/build-attachment-reader.mjs",
-    "dist": "electron-vite build && node scripts/build-attachment-reader.mjs && node scripts/build-gateway.mjs && node scripts/package-app.mjs"
+    "dist": "electron-vite build && node scripts/build-attachment-reader.mjs && node scripts/build-gateway.mjs && node scripts/package-app.mjs",
+    "installer": "node scripts/build-installer.mjs",
+    "installer:test": "node test/installer-lifecycle.mjs"
   },
   "dependencies": {
     "@i-harness/desktop-gateway": "workspace:*",

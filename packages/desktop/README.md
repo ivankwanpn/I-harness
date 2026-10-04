@@ -1,57 +1,66 @@
-# I-harness Desktop (experimental)
+# I-harness Desktop
 
-Local Desktop workbench built around the existing SDK and approved desktop-gateway package. Development checkout: `D:/frontend-test`; manual operation workspace: `D:/agent-complete/playground`.
+The Windows desktop app for the I-harness workspace. For downloads and first-run setup, see the [product README](../../README.en.md) or [繁體中文介紹](../../README.md).
 
-## Run and build
+## Development
 
-From the repository root:
+From the repository root, with Node.js >=22.18 and pnpm >=10:
 
 ```powershell
+pnpm install --frozen-lockfile
 pnpm --filter @i-harness/desktop dev
-pnpm --filter @i-harness/desktop test
-pnpm --filter @i-harness/desktop typecheck
-pnpm --filter @i-harness/desktop dist
 ```
 
-The unsigned portable build is written to `packages/desktop/release/I-harness Desktop/` and the adjacent ZIP. It bundles Electron, the gateway source/dependencies and its TypeScript loader. No standalone Node installation is required by the portable runtime.
+Desktop hosts the interface, native windows, terminals and browser surfaces. Its gateway uses the same session, provider, permission, persistence and tool implementation as the rest of I-harness.
 
-## Implemented flows
+## Build and distribute
 
-- Local workspace selection and nested session navigation with running/attention status.
-- New/resumed conversations, Markdown, collapsed tool output, bounded drafts and virtualized history.
-- Enter/Shift+Enter and IME-safe submission; stop, task and queue cancellation.
-- Explicit approvals/questions with per-request submission and error state.
-- Read-only changes, diff/preview, derived diff line numbers, task tab and resizable work pane.
-- Workspace/current-session search, manual compaction and saved-note management/search/excerpts.
-- Traditional Chinese/English with saved/system locale selection; dark/light/system appearance and text size.
-- Narrow sidebar drawer, latest-content navigation, reduced-motion support.
-- Native frame controls, bounds restore/reset and opt-in background attention notifications.
-- Provider/API key and per-model context/output/protocol forms, explicit discovery/import, default and per-session model selection.
-- Session rename, archive/restore, completed-turn forks and rewind preview/confirmation/results.
-- Plugin marketplace source/install/enable management, capability/conflict/mount diagnostics and actual fresh-assembly plugin inputs.
-- Interactive workspace PTYs with lazy xterm rendering, bounded output and explicit lifecycle controls.
-- Workspace-isolated native human browser tabs, address/navigation controls and restricted guest permissions.
+```powershell
+# Build the app, gateway and portable ZIP
+pnpm --filter @i-harness/desktop dist
 
-Desktop main manages native UI and SDK processes. Renderer does not resolve providers, run the agent loop, implement sandboxing or own backend persistence.
+# Package that app as a Windows installer
+pnpm --filter @i-harness/desktop installer
+```
 
-## Backend configuration and scope
+The current distribution is collected in `packages/desktop/release/`:
 
-Gateway uses the existing settings/provider/credential implementation, including its `IH_CONFIG_DIR` configuration location. Provider edits use shared-file serialization for cooperating Desktop hosts. Live sessions keep their resolved model bindings until an explicit model selection or a new assembly; editing defaults does not silently retarget a running task. Plugin enable/disable updates existing assemblies in place and is observed by other workspace hosts. Commands, skill roots, plugin roles and MCP connections are updated without replacing conversation history or the Agent. Unchanged MCP servers stay connected; in-flight calls follow their existing completion/cancellation lifecycle. Hook trust rules are retained and hooks are detached when disabled. Failed live application is shown separately from saved enablement and can be retried.
+```text
+release/
+  I-harness Desktop/
+    I-harness Desktop.exe
+    resources/
+  I-harness-Desktop-0.1.0.zip
+  I-harness-Desktop-Setup-0.1.0.exe
+  SHA256SUMS.txt
+```
 
-The interactive terminal uses local user permissions and is separate from agent sandboxed tools. Browser tabs are native UI in the Desktop package; they have no Node/preload/SDK bridge and do not expose agent browser automation. Popups, downloads and unsolicited permissions are restricted. Browser sessions are ephemeral and capped at eight tabs per window.
+The portable and installed app carry Electron, gateway dependencies and their loader; end users do not install a separate Node runtime. Keep the portable executable and resources together. Build outputs are ignored by Git; downloadable packages belong in [GitHub Releases](https://github.com/ivankwanpn/I-harness/releases).
 
-Provider account usage, quota resets and OAuth are explicitly excluded from this round. No hosted service, remote workspace, own account/subscription system or cloud sync was added.
+Local Desktop release policy: keep the latest distribution in the canonical release directory. Dated release folders used for development are temporary outputs. Do not keep obsolete Desktop distributions beside the current product.
 
-Workspace memory is manually managed. Its excerpt action uses stored notes without a model call; automatic memory extraction is unavailable. Context size continues to be each model's backend setting; Desktop adds no billing threshold policy.
+Installer behavior and compiler requirements are documented in [installer/README.md](installer/README.md).
 
-## Verification boundaries
+## Configuration and user data
 
-Component/integration tests, repository verification, data-layer profiling and isolated packaged-gateway smoke are recorded outside the repository in the task's `desktop-audit` folder. These do not establish final visual fidelity or native pointer geometry. The user explicitly deferred those checks because browser access remained blocked by a saved origin permission setting. No alternate browser/CDP bypass is used.
+Desktop preferences, project navigation and conversations are stored in Electron's local user-data directory. The gateway uses the shared I-harness settings/provider/credential implementation; `IH_CONFIG_DIR` can specify its configuration location. User data is separate from the installed program payload.
 
-`src/renderer/permission-preview.html` is a development-only fixture using labelled simulated data; it is not a production entry or a backend acceptance test.
+Configure providers and model capabilities explicitly. Live work keeps its model binding until an explicit selection or reconstruction. Saved defaults and plugin configuration changes are reflected through the gateway's existing lifecycle.
+
+Interactive human terminals use local user permissions. Agent tool operations follow their configured sandbox and approval policy. Human browser tabs are native UI surfaces, isolated from Node and the SDK bridge; they do not provide agent browser automation.
+
+Manual memory notes and excerpts are available. Automatic memory extraction, a hosted I-harness account service and cloud session synchronization are not part of this release.
+
+## Verification
+
+```powershell
+pnpm --filter @i-harness/desktop test
+pnpm --filter @i-harness/desktop typecheck
+pnpm verify:all
+```
+
+Release verification includes the actual packaged runtime and an isolated installer install/run/uninstall flow. Tests use owned temporary data rather than the user's projects or configuration.
 
 ## Licensing
 
-I-harness code retains the project's MIT license. Adapted ZCode presentation files under `src/renderer/vendor/zcode/` retain Apache-2.0 notices and are documented under `licenses/zcode/`. Portable packaging includes those files. No ZCode logos, private packages or ZCode backend services are imported.
-
-All development commits remain local. The experimental checkout's GitHub push URL is disabled.
+I-harness uses the root MIT license. Adapted presentation files under `src/renderer/vendor/zcode/` retain Apache-2.0 notices, documented in `licenses/zcode/`. Distribution packages include the third-party notices under `resources/app/licenses/`.
