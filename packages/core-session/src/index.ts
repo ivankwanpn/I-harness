@@ -30,6 +30,7 @@ export type SessionEvent =
     | { type: "code/dispatch"; cellId: string; callId: string; eventSeq?: number; seq?: number }
     | { type: "code/result"; cellId: string; callId: string; name: string; output: unknown; isError?: true; seq?: number }
     | { type: "code/output"; cellId: string; content: unknown; seq?: number }
+    | { type: "context/result-ref"; ignorable?: true; ref: { id: string; workspaceId: string; sessionId: string; callId: string; label: string; revision: string; bytes: number; originalBytes: number; complete: boolean; expiresAt: number; source?: { sourceId: string; path?: string; revision?: string; readonly?: boolean } }; seq?: number }
     // Candidate JSON writes become replayable only with a later successful
     // terminal code/cell record for this owner; later failure/stop suppresses them.
     | { type: "code/store"; version: 1; cellId: string; sessionId?: string; writes: Array<[string, unknown]>; seq?: number }
@@ -798,6 +799,18 @@ export function deriveSearchText(ev: SessionEvent): string {
       return ev.text
     case "tool/call":
       return JSON.stringify(ev.args) ?? ""
+    case "code/call":
+      return `${ev.name} ${codeSearchText(ev.args)}`
+    case "code/result":
+      return codeSearchText(ev.output)
+    case "code/output": {
+      if (typeof ev.content === "string") return ev.content
+      if (ev.content && typeof ev.content === "object" && !Array.isArray(ev.content)) {
+        const item = ev.content as { type?: unknown; text?: unknown }
+        return item.type === "text" && typeof item.text === "string" ? item.text : ""
+      }
+      return ""
+    }
     case "tool/result": {
       // Images never enter the FTS index: strip `output.images` before
       // stringifying so base64 payloads stay out of search text.
@@ -828,6 +841,17 @@ export function deriveSearchText(ev: SessionEvent): string {
     default:
       return ""
   }
+}
+
+/** Code Mode may carry nested MCP media blocks, not only a top-level images
+ * member. Search indexes their textual companions without transport bytes. */
+function codeSearchText(value: unknown): string {
+  if (typeof value === "string") return value
+  return JSON.stringify(value, (key, child) => {
+    if (["images", "image", "audioUrl", "dataBase64"].includes(key)) return undefined
+    if (child && typeof child === "object" && ["image", "audio"].includes(child.type)) return undefined
+    return child
+  }) ?? ""
 }
 
 export interface PlanModeView { active: boolean; proposal?: string; eventSeq?: number }

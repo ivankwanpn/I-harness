@@ -46,9 +46,9 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
     checkAbort(signal)
     return current
   }
-  function run<T>(signal: AbortSignal|undefined, operation: (signal: AbortSignal) => Promise<T>, mutation = false): Promise<T> {
+  function run<T>(signal: AbortSignal|undefined, operation: (signal: AbortSignal) => Promise<T>, mutation = false, hostMetadata = false): Promise<T> {
     if (closed || closing) return Promise.reject(new Error('Context output is closed'))
-    if (!config.enabled || controls > 0) return Promise.reject(new Error('Context output is disabled or stopping'))
+    if ((!config.enabled && !hostMetadata) || controls > 0) return Promise.reject(new Error('Context output is disabled or stopping'))
     const controller = new AbortController()
     const owned = signal ? AbortSignal.any([signal, controller.signal]) : controller.signal
     const start = async () => { checkAbort(owned); return operation(owned) }
@@ -103,7 +103,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       })
       return status()
     },
-    async capture(input, signal) {
+    async capture(input, signal, producer) {
       identity(input.sessionId, 'sessionId')
       identity(input.callId, 'callId')
       if (typeof input.label !== 'string' || Buffer.byteLength(input.label) > 1024) throw new Error('label exceeds 1024 UTF-8 bytes')
@@ -115,6 +115,12 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
         // A useful index needs fixed overhead. Avoid creating files for an
         // impossible disk budget and conservatively reserve index growth.
         if (config.maxDiskBytes < 65536) return undefined
+        const produced=producer ? await producer({maxBytes:config.maxCaptureBytes,signal:owned}) : undefined
+        checkAbort(owned)
+        if(produced){
+          if(typeof produced.text!=='string'||typeof produced.complete!=='boolean'||(produced.originalBytes!==undefined&&(!Number.isSafeInteger(produced.originalBytes)||produced.originalBytes<Buffer.byteLength(produced.text))))throw new Error('Invalid producer capture')
+          captured.text=produced.text;captured.complete=produced.complete
+        }
         const current = await getStore(owned)
         await current.prune()
         checkAbort(owned)
@@ -126,8 +132,8 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
         const ref: ContextResultRef = {
           id: referenceId(options.workspaceId, captured.sessionId, captured.callId, revision),
           workspaceId: options.workspaceId, sessionId: captured.sessionId, callId: captured.callId,
-          label: captured.label, revision, bytes: bytes.length, originalBytes: original.length,
-          complete: captured.complete && bytes.length === original.length,
+          label: captured.label, revision, bytes: bytes.length, originalBytes: produced?.originalBytes ?? original.length,
+          complete: captured.complete && bytes.length === (produced?.originalBytes ?? original.length),
           expiresAt: Date.now() + config.retentionDays * 86400000,
           ...(captured.source ? { source: captured.source } : {}),
         }
@@ -215,7 +221,7 @@ export function createContextOutputService(options: ContextOutputOptions): Conte
       return run(access.signal, async (owned) => {
         for (const id of ids) await readable(caller, id, owned)
         if (ids.length) await store!.addOwners(ids, targetSessionId, config.maxDiskBytes, owned)
-      }, true)
+      }, true, true)
     },
     async clear(sessionId) {
       if (closed || closing) throw new Error('Context output is closed')

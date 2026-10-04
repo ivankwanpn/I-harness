@@ -2,7 +2,7 @@ import { readFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
-import { deriveSessionTitle } from "@i-harness/core-session"
+import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
 import { maybeAutoTitle } from "@i-harness/session-title"
@@ -52,6 +52,10 @@ import { createDesktopRouter, createGatewayWrite } from "./router.ts"
 import { createInteractionBridge } from "./interaction.ts"
 import { createProjectScopeBroker } from "./project-scope.ts"
 import { createDesktopInput } from "./input.ts"
+import { createNativeContextRuntime } from "./context-runtime.ts"
+import { createContextSubsystemSettings } from "./context-subsystems.ts"
+import { createCodeRetrievalTools } from "@i-harness/code-retrieval"
+import { createCredentialStore } from "@i-harness/credentials"
 import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
@@ -150,8 +154,22 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // The derived in-memory search index belongs to this workspace gateway
   // process. Never call global query cleanup when closing an individual host.
   const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
+  const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
+  const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
+    projectFor:async id=>(await projects.forSession(id))(),
+    references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
+    visibleRefsFor:async id=>{
+      const snapshot=service.liveSession(id) ?? (await coordinator.snapshot!(id)).session
+      const cuts=rewindCuts(snapshot)
+      return snapshot.events.flatMap(event=>event.type==="context/result-ref"&&!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?[event.ref]:[])
+    },
+    resolveCredential:ref=>nativeCredentials.resolve(ref),
+  })
+  const contextSubsystems=createContextSubsystemSettings({settingsPath,workspaceKey:nativeContext.workspaceKey,workspaceId:nativeContext.workspaceId,
+    contextOutput:nativeContext.contextOutput,codeRetrieval:nativeContext.codeRetrieval,onReferencesChanged:nativeContext.configureReferences,actionSessionId:nativeContext.humanSessionId})
+  await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
-  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow)]
+  const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
   const plugins = createDesktopPlugins(join(dirname(settingsPath), "plugins"))
   const terminal = createDesktopTerminal(options.workspace)
   let roleModelsEnabled = settings.get().plugins.subagentModel
@@ -184,6 +202,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
     additionalTools,
+    contextOutput:nativeContext.contextOutput,
+    contextOutputSourceFor:nativeContext.sourceFor,
     sessionQuery,
     workspace: options.workspace,
     sandbox: mode,
@@ -268,7 +288,12 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     onRunningChanged: (sessionId, running, error) => options.onWrite(makeNotification("session/status", { sessionId, status: running ? "queued" : error ? "failed" : "completed", ...(error ? { error } : {}) })) })
   const workflow = { ...rawWorkflow, mutate: (id: string, command: unknown) => fence.run(id, () => rawWorkflow.mutate(id, command)) }
   management = createSessionManagement(coordinator, service, isConversation, { workspace: options.workspace, sessionDir: options.sessionDir, fence,
-    projectFor: projects.projectFor, onFork: projects.inherit, moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
+    projectFor: projects.projectFor, onFork: async(parent,target)=>{
+      await projects.inherit(parent,target)
+      const snapshot=await coordinator.snapshot!(target)
+      const refs=snapshot.session.events.flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
+      await nativeContext.inheritFork(parent,target,refs)
+    }, moveProject: projects.move, pendingInteractions: async id => interaction.pending(id),
     activeWork: async id => (await workflow.read(id)).goalRun?.running === true, drainSession })
   const schedules = createDesktopSchedules(coordinator, service)
   const rewind = createDesktopRewind(options.sessionDir, options.workspace, coordinator, service)
@@ -295,6 +320,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     hooks: createHookSettings(dirname(settingsPath), async () => (await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs())).hookConfigs, () => service.refreshExtensions(), { workspace: options.workspace }),
     subagents, sessionSubagents,
     agentSettings,
+    contextSubsystems,
     terminal,
     schedules: { ...schedules, create: (id, command) => fence.run(id, () => schedules.create(id, command)), delete: (id, scheduleId) => fence.run(id, () => schedules.delete(id, scheduleId)) },
     workState: { ...workState, writeTodos: (id, command) => fence.run(id, () => workState.writeTodos(id, command)) },
@@ -370,7 +396,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     if (closing || policySync) return
     // Both reads own settings file leases. An early failure must not release
     // shutdown's ownership of the other read while it can still create a lock.
-    const job = Promise.allSettled([agentSettings.sync(), subagents.state()]).then((results) => {
+    const job = Promise.allSettled([agentSettings.sync(), subagents.state(),contextSubsystems.sync().then(()=>nativeContext.syncAutoRefresh())]).then((results) => {
       const failure = results.find((result) => result.status === "rejected")
       if (failure?.status === "rejected") console.warn(`[desktop] agent settings refresh failed: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`)
     })
@@ -397,6 +423,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       await review.close()
       await workflow.close()
       await service.close()
+      await nativeContext.close()
       await approvals.flush()
       await plugins.close()
       await policySync

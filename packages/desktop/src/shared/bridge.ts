@@ -15,12 +15,14 @@ import type { DiagnosticsRequest } from "@i-harness/desktop-gateway/src/environm
 import type { NotificationHistoryRequest } from "../main/notification-history.ts"
 import type { MemoryAuthoringRequest } from "@i-harness/desktop-gateway/src/memory-wire.ts"
 import type { DraftRequest } from "./attachment-drafts.ts"
+import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway/src/context-subsystems.ts"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | ContextSubsystemRequest
   | ProjectFilesRequest | ResourceAuthoringRequest | HookAuthoringRequest | MemoryAuthoringRequest | GlobalProviderRequest | GlobalPreferencesRequest | NotificationHistoryRequest | DraftRequest | ExecutionRequest | AgentProcessesRequest | DiagnosticsRequest
   | { kind: "desktop/session/batch"; workspaceId: string; command: import("@i-harness/desktop-gateway/src/session-management.ts").SessionBatchCommand; confirmed?: true }
   | { kind: "desktop/approval-rules/state"; workspaceId: string }

@@ -254,6 +254,9 @@ importers:
 
   packages/code-mode:
     dependencies:
+      '@i-harness/context-output':
+        specifier: workspace:*
+        version: link:../context-output
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -272,6 +275,19 @@ importers:
       quickjs-emscripten:
         specifier: 0.32.0
         version: 0.32.0
+
+  packages/code-retrieval:
+    dependencies:
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+    devDependencies:
+      '@i-harness/core-plugin':
+        specifier: workspace:*
+        version: link:../core-plugin
 
   packages/compaction:
     dependencies:
@@ -293,6 +309,12 @@ importers:
       '@i-harness/token-meter':
         specifier: workspace:*
         version: link:../token-meter
+
+  packages/context-output:
+    dependencies:
+      '@i-harness/core-tools':
+        specifier: workspace:*
+        version: link:../core-tools
 
   packages/core-agent:
     dependencies:
@@ -441,6 +463,12 @@ importers:
       '@i-harness/agent-team':
         specifier: workspace:*
         version: link:../agent-team
+      '@i-harness/code-retrieval':
+        specifier: workspace:*
+        version: link:../code-retrieval
+      '@i-harness/context-output':
+        specifier: workspace:*
+        version: link:../context-output
       '@i-harness/core-plugin':
         specifier: workspace:*
         version: link:../core-plugin
@@ -994,6 +1022,9 @@ importers:
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../compaction
+      '@i-harness/context-output':
+        specifier: workspace:*
+        version: link:../context-output
       '@i-harness/core-agent':
         specifier: workspace:*
         version: link:../core-agent

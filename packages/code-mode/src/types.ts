@@ -3,6 +3,7 @@ import type { ToolExec, ToolRegistry } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolSchema } from "@i-harness/llm-seam"
 import type { SpillStore } from "@i-harness/output-retention"
+import type { ContextResultRef } from "@i-harness/context-output"
 
 export interface CodeModeConfig {
   mode?: "off" | "mixed" | "only"
@@ -24,7 +25,7 @@ export type CodeModeStatus = "running" | "completed" | "failed" | "terminated"
 export type CodeModeJsonValue = null | boolean | number | string | CodeModeJsonValue[] | { [key: string]: CodeModeJsonValue }
 export type CodeModeStoreEntries = Array<[string, CodeModeJsonValue]>
 export interface CodeModeStoreCommit { cellId: string; origin: CodeModeOrigin; writes: CodeModeStoreEntries; signal: AbortSignal }
-export interface CodeModeTextRetention { stored: boolean; path?: string; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
+export interface CodeModeTextRetention { stored: boolean; path?: string; contextRef?: ContextResultRef; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
 export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true }
 export type CodeModeRuntimeEvent =
   | { type: "started"; cellId: string; source: string; origin: CodeModeOrigin }
@@ -40,6 +41,8 @@ export interface CodeModeRuntimeOptions {
   commitStore?(commit: CodeModeStoreCommit): void | Promise<void>
   /** Optional host store; the default temp store is created only on truncation. */
   spillStore?: SpillStore
+  /** Native host capture, before the model observation loses emitted text. */
+  retainText?(input: {text:string;cellId:string;origin:CodeModeOrigin;complete:boolean}): Promise<ContextResultRef|undefined>
   config?: CodeModeConfig
 }
 export interface CodeModeExecInput { code: string; yield_time_ms?: number; max_output_tokens?: number }
@@ -53,5 +56,5 @@ export interface CodeModeRuntime {
   dispose(): Promise<void>
 }
 export interface CodeModeMount { schemas(): ToolSchema[]; liveCells?(): { id: string; status: "running" }[]; terminateCell?(cellId: string): Promise<void>; cancel(reason?: string): Promise<void>; dispose(): Promise<void> }
-export interface CodeModeMountOptions { session: Session; sessionId?: string; config?: CodeModeConfig; spillStore?: SpillStore; flush?(): Promise<void>; maxParallel?: number }
+export interface CodeModeMountOptions { session: Session; sessionId?: string; config?: CodeModeConfig; spillStore?: SpillStore; retainText?: CodeModeRuntimeOptions['retainText']; flush?(): Promise<void>; maxParallel?: number }
 export type CodeModeFactory = (ctx: PluginContext, tools: ToolRegistry, options: CodeModeMountOptions) => CodeModeMount

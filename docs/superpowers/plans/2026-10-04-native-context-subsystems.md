@@ -56,9 +56,12 @@ export interface ContextSearchResult {
 export interface ContextOutputService {
   configure(patch: Partial<ContextOutputConfig>): Promise<ContextOutputStatus>;
   status(): ContextOutputStatus;
-  capture(input: ContextCapture, signal?: AbortSignal): Promise<ContextResultRef|undefined>;
+  capture(input: ContextCapture, signal?: AbortSignal,
+    producer?: (access: {maxBytes:number; signal:AbortSignal}) => Promise<{text:string; complete:boolean; originalBytes?:number}>
+  ): Promise<ContextResultRef|undefined>;
   read(access: ContextAccess, query: { refId: string; offset?: number; maxBytes?: number }): Promise<ContextReadResult>;
   search(access: ContextAccess, query: { query: string; refIds?: string[]; limit?: number; maxBytes?: number }): Promise<ContextSearchResult>;
+  grant(access: ContextAccess, refIds: string[], targetSessionId: string): Promise<void>;
   clear(sessionId?: string): Promise<ContextOutputStatus>;
   close(): Promise<void>;
 }
@@ -98,6 +101,7 @@ export interface CodeSearchResult { hits: CodeHit[]; mode: 'lexical'|'hybrid'; p
 export interface CodeSnapshotReader {
   snapshots(access: CodeAccess, options: { sourceIds?: string[]; config: CodeRetrievalConfig }): AsyncIterable<CodeFileSnapshot>;
   revalidate(access: CodeAccess, hit: CodeHit): Promise<boolean>;
+  status?(): { partial: boolean; reasons: string[] };
 }
 export interface CodeRetrievalService {
   configure(patch: Partial<CodeRetrievalConfig>): Promise<CodeRetrievalStatus>;
@@ -134,7 +138,8 @@ expect((await service.read({sessionId:'a'}, {refId:one!.id})).text).toBe('first 
 await expect(service.read({sessionId:'b'}, {refId:one!.id})).rejects.toThrow();
 ```
 
-Also cover real restart, lower capture quota, expired results, CJK/emoji cursor boundaries, search middle hits, byte budgets including metadata, independent session clear, explicit authorize for fork visibility, disabled zero writes, held capture/query drainage and close persistence. Record RED command/output in the task report.
+Also cover real restart, lower capture quota, expired results, CJK/emoji cursor boundaries, search middle hits, byte budgets including metadata, independent session clear, explicit authorize for fork visibility, disabled zero writes, held capture/query drainage and close persistence. `grant` is a host API, not a model tool: grant only refs readable by source access, durably add target ownership, and preserve a granted blob when the original owner is cleared. Record RED command/output in the task report.
+The optional capture producer is also host-only: trusted exec/shell object identities supply bounded readers of immutable producer-owned spill snapshots. Invoke it inside the service's owned capture job so disable, clear and close abort and drain it. Arbitrary returned path fields never authorize native reads.
 - [ ] Implement the public contracts using a lazy owned SQLite/blob root, immutable records, transactionally derived lexical chunks, serial mutations and AbortController job ownership. Assert caller identity; ref lookup never resolves an arbitrary path. Stop admission before cancellation/drain; retain data on disable/close. Private storage is not a source write root.
 - [ ] Register stable deferred `context_output_search`, `context_output_read`, `context_output_status` tools. ToolExec supplies session/signal; tool args cannot choose owner. Read operations are read-only and concurrency safe. Render recovery as bounded IDs/metadata, never raw captured prose or instructions.
 - [ ] Run complete package Vitest/typecheck once, self-review, commit only owned paths. Write report with RED/GREEN evidence, exact signatures, storage/lifecycle and limitations.
@@ -157,7 +162,7 @@ expect(result.hits[0]!.text).toContain('approveDeployment');
 ```
 
 Cover changed/deleted snapshots, failed embedding/write leaves old generation and retries, clear/force/disable with held reader/provider, late completion fencing, restart, source/subdirectory restriction, revalidation suppression, non-contiguous AST data, Chinese/identifier recall, metadata budget, quotas and exact range equality to the admitted snapshot. Provider tests use local controlled HTTP/fetch response bodies and demonstrate cancellation, finite/dimension validation and content/model cache invalidation.
-- [ ] Implement byte-bounded contiguous chunks; use existing TypeScript AST for TS/JS when useful, explicit line-window fallback elsewhere. Enforce all job quotas and serialized envelopes. Commit only complete staged generations; truthful partial/reason fields survive caps. Record durable counts, not attempted counts.
+- [ ] Implement byte-bounded contiguous chunks; use existing TypeScript AST for TS/JS when useful, explicit line-window fallback elsewhere. Enforce all job quotas and serialized envelopes. Commit only complete staged generations; truthful partial/reason fields survive caps. After snapshot iteration include optional reader.status() reasons for traversal/ignore/read limits, so omissions cannot look complete. Record durable counts, not attempted counts.
 - [ ] Implement OpenAI-compatible `/embeddings` and Ollama `/api/embed` with explicit endpoint/model, credential resolver, abort/deadline/batch/response bounds and no implicit cloud action. Cache successful chunk embeddings by complete identity; local cosine plus lexical ranking yields hybrid results. Lexical mode never calls embedding. No mandatory new native dependency.
 - [ ] Register stable deferred `code_context_search`, `code_context_index`, `code_context_status` tools, using ToolExec identity. Index mutates internal storage and is not read-only/concurrency safe; search/status are read-only. Clearing is a human control API.
 - [ ] Run complete package tests/typecheck, self-review and commit only package paths. Report RED/GREEN, API, generation and provider evidence.

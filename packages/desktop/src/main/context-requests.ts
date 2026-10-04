@@ -11,6 +11,15 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
     return { limit: value.limit }
   }
   switch (value.kind) {
+    case "desktop/context-subsystems/state": return {}
+    case "desktop/context-subsystems/configure": {
+      if(!value.patch||typeof value.patch!=="object"||Array.isArray(value.patch)||Buffer.byteLength(JSON.stringify(value.patch))>65536)throw new Error("invalid context subsystem configuration")
+      return {patch:value.patch}
+    }
+    case "desktop/context-subsystems/action": {
+      if(!value.command||typeof value.command!=="object"||Array.isArray(value.command)||Buffer.byteLength(JSON.stringify(value.command))>4096)throw new Error("invalid context subsystem action")
+      return {command:value.command}
+    }
     case "desktop/code-mode/state": return value.sessionId === undefined ? {} : { sessionId: text("sessionId", 256) }
     case "desktop/code-mode/configure": {
       const patch = value.patch

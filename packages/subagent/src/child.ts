@@ -354,6 +354,11 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     childSession = createSession()
     for (const ev of seedEvents) childSession.events.push({ ...ev })
   }
+  // Host services may establish durable ownership of retained seed artifacts.
+  // This trusted lifecycle event runs before any child model/tool work.
+  if(sessionId && opts.childSessions) await childCtx.emit('session/inherited',{
+    sessionId,parentSessionId:opts.childSessions.parentSessionId,session:childSession,
+  })
 
   // M76 (design §1.3): a seed that already fills the window is VISIBLE, and
   // that is all this is. The seed is not trimmed and a spawn is not refused for

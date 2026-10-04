@@ -31,7 +31,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }
     if (event.type === "agent/input/promoted") { promotedInput = admittedInputs.get(event.inputId); continue }
     if (event.type === "agent/input/cancelled") { admittedInputs.delete(event.inputId); if (promotedInput?.inputId === event.inputId) promotedInput = undefined; continue }
-    if (event.type === "tool/dispatch" || event.type === "session/title"
+    if (event.type === "tool/dispatch" || event.type === "session/title" || event.type === "context/result-ref"
       || event.type === "sandbox/mode") continue
     if (event.type === "reasoning" || event.type === "reasoning/chunk") {
       const streamId = event.streamId

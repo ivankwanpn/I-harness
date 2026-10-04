@@ -45,6 +45,8 @@ export type PreparedApprovalProvider = (input: PreparedApprovalInput) => Prepare
 export type ApprovalAuthorityProvider = (input: PreparedApprovalInput) => (() => boolean)
 
 export interface ToolExec {
+  /** Trusted broker presentation hint; it never widens tool authority. */
+  resultConsumer?: "code"
   abortSignal?: AbortSignal
   // M19 (Ruling 24): caller/session identity for tool executions that carry
   // one — the agent loop seeds it from the executing session id. Additive: a
@@ -244,7 +246,7 @@ export interface ToolRegistry {
   get(name: string): Tool | undefined
   unregister(name: string): void
   schemas(): ToolSchema[]
-  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall>
+  prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall>
   dispatch(prepared: PreparedCall): Promise<unknown>
   finalize(prepared: PreparedCall, output: unknown): Promise<ToolResult>
   execute(call: ToolCall, opts?: { signal?: AbortSignal }): Promise<ToolResult>
@@ -352,7 +354,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
       }))
   }
 
-  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number }): Promise<PreparedCall> {
+  async function prepare(call: ToolCall, signal?: AbortSignal, identity?: { sessionId?: string; callId?: string; callEventSeq?: number; resultConsumer?: "code" }): Promise<PreparedCall> {
     // The validated snapshot is also the dispatched operation. A caller cannot
     // mutate it while the human or guardian is deciding.
     call = structuredClone(call)
@@ -471,6 +473,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     if (identity?.sessionId !== undefined) exec.sessionId = identity.sessionId
     if (identity?.callId !== undefined) exec.callId = identity.callId
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
+    if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
 
     return { call, tool, exec, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}) }
   }

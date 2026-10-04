@@ -180,6 +180,7 @@ const KNOWN_EVENT_TYPES = new Set([
   "tool/call", "tool/result", "step/end", "turn/end", "subagent/inbox",
   "compaction/start", "compaction/end", "compaction/summary",
   "code/cell", "code/output", "code/call", "code/dispatch", "code/result", "code/store",
+  "context/result-ref",
 ])
 
 // M19: extensible event-type registry (fixes the M16 closed-set gap). The

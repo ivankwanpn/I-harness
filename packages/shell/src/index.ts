@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec, PreparedToolIdentity } from "@i-harness/core-tools"
 import type { ExecService, PromotedRun } from "@i-harness/exec"
-import { registerExec } from "@i-harness/exec"
+import { registerExec, registerRetainedOutput, retainedOutputReader } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
 import { ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
 import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
@@ -464,7 +464,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     // declared output shape now names it, and this branch is the one path where
     // the shape and the value disagreed — a stderr the caller can read is part of
     // the contract, not an artifact of whether retention happens to be on.
-    if (retention === null) return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode }
+    const bind = <T extends object>(output:T):T => {
+      const reader=retainedOutputReader(result)
+      if(reader) registerRetainedOutput(output,reader)
+      return output
+    }
+    if (retention === null) return bind({ stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode })
     const so = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     const se = createTextRetainer({ maxBytes: deps.retention!.maxBytes ?? 64_000, mode: deps.retention!.mode })
     so.push(result.stdout)
@@ -473,7 +478,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     const re = se.finish()
     // 截斷判定＝exec 層（spill 落檔或明確標記）與 retainer 層取聯集。
     const execTruncated = result.truncated?.stdout === true || result.stdoutSpillPath !== undefined
-    const truncated = execTruncated || rs.truncated || re.truncated
+    const truncated = execTruncated || result.truncated?.stderr === true || rs.truncated || re.truncated
     let stdout = rs.text
     // Spill 檔優先用 exec 既有的（完整原文）；否則僅在 retainer 自身截斷 stdout
     // 且有設定 store 時寫一份。只在「真省略」時加 notice——僅 stderr 截斷時
@@ -488,12 +493,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const omittedForNotice = rs.truncated ? rs.omittedBytes : execTruncated ? 0 : 0
       stdout = rs.text + "\n" + spillNotice(omittedForNotice, spillPathForNotice)
     }
-    return {
+    return bind({
       stdout,
       stderr: re.text,
       exitCode: result.exitCode,
       ...(truncated ? { truncated: { stdoutBytes: rs.omittedBytes, stderrBytes: re.omittedBytes } } : {}),
-    }
+    })
   }
   // execute: `return retainedRunResult(result)`——async fn 回 promise 自動展平（既有呼叫面不變）
 

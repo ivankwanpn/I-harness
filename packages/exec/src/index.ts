@@ -3,6 +3,8 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
 import { assertSandboxCapable, SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 import { OutputCollector } from "./spill.ts"
+import { execOutputReader, registerRetainedOutput } from './retained-output.ts'
+export { registerRetainedOutput, retainedOutputReader, type RetainedOutputReader } from './retained-output.ts'
 
 export interface ExecCommand {
   argv: string[]
@@ -47,6 +49,7 @@ export interface ExecStreamRunOptions {
 export interface ExecSpillOptions {
   maxOutputBytes?: number // default 64_000
   maxSpillBytes?: number
+  spillRoot?: string
 }
 
 // W10: the second `run` overload's options. Deliberately NOT exported — every
@@ -208,8 +211,8 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
   // tail + complete-stream disk spill). Otherwise keep plain string accumulation
   // — byte-identical to the pre-spill behavior.
   const maxOut = spill?.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES
-  const stdoutCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, label: "stdout" }) : undefined
-  const stderrCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, label: "stderr" }) : undefined
+  const stdoutCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, spillRoot:spill.spillRoot, label: "stdout" }) : undefined
+  const stderrCollector = spill ? new OutputCollector({ maxBytes: maxOut, maxSpillBytes: spill.maxSpillBytes, spillRoot:spill.spillRoot, label: "stderr" }) : undefined
   let timedOut = false
   let settled = false
   let resolveDone!: (v: ExecResult) => void
@@ -270,7 +273,7 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
         return
       }
     }
-    resolveDone({
+    const result: ExecResult = {
       stdout: cleanOut,
       stderr: cleanErr,
       exitCode: code,
@@ -282,7 +285,9 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
         stderrSpillPath: sErr.spillPath,
         truncated: { stdout: sOut.truncated, stderr: sErr.truncated },
       } : {}),
-    })
+    }
+    registerRetainedOutput(result, execOutputReader([sOut,sErr]))
+    resolveDone(result)
   }
   child.on("close", (code) => doneFn(code ?? -1))
   child.on("error", () => doneFn(-1))

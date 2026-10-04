@@ -28,6 +28,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  contextSubsystems?: ReturnType<typeof import("./context-subsystems.ts").createContextSubsystemSettings>
   autoTitle?: ReturnType<typeof import("./auto-title.ts").createAutoTitleSettings>
   codeSettings?: ReturnType<typeof import("./execution.ts").createCodeModeSettings>
   execution?: ReturnType<typeof import("./execution.ts").createDesktopExecution>

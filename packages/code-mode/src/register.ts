@@ -37,6 +37,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
   const runtime = createCodeModeRuntime({
     config: options.config,
     ...(options.spillStore ? { spillStore: options.spillStore } : {}),
+    ...(options.retainText ? { retainText: options.retainText } : {}),
     tools: () => broker.definitions(),
     invoke: call => broker.invoke(call),
     restoreStore: origin => replayCodeModeStore(options.session, options.sessionId ?? origin.sessionId),

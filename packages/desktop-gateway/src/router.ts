@@ -36,6 +36,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.projectContentSearch) capabilities["desktop-project-content-search"] = ["1"]
     if (handlers.autoTitle) capabilities["desktop-auto-title"] = ["1"]
     if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
+    if (handlers.contextSubsystems) capabilities["desktop-context-subsystems"] = ["1"]
     if (handlers.execution) capabilities["desktop-execution"] = ["1"]
     if (handlers.diagnostics) capabilities["desktop-environment-diagnostics"] = ["1"]
     if (handlers.agentProcesses) capabilities["desktop-agent-processes"] = ["1"]
@@ -174,6 +175,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
 
+      if (["desktop/context-subsystems/state","desktop/context-subsystems/configure","desktop/context-subsystems/action"].includes(message.method)) {
+        try{
+          if(!handlers.contextSubsystems)throw new Error("Context subsystem settings unavailable")
+          const params=message.params as Record<string,unknown>
+          const result=message.method.endsWith('/state')?await handlers.contextSubsystems.state():message.method.endsWith('/configure')?await handlers.contextSubsystems.configure(params.patch as import('./context-subsystems.ts').ContextSubsystemConfigure):await handlers.contextSubsystems.action(params.command as import('./context-subsystems.ts').ContextSubsystemAction)
+          send(makeSuccess(message.id,result))
+        }catch(error){send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
+        return
+      }
       if (["desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch"].includes(message.method)) {
         const params = asRecord(message.params)
         try {

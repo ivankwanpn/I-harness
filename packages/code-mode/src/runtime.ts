@@ -98,6 +98,7 @@ interface Cell {
   knownTools: Set<string>
   finishing: boolean
   commitStop: AbortController
+  retentionStop: AbortController
   textIncomplete: boolean
 }
 
@@ -146,6 +147,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     cell.truncated ||= bounded?.truncated ?? false
     cell.policyRefusal = policyRefusal
     cell.commitStop.abort(cell.error ?? 'Cell closed')
+    if(status==='terminated') cell.retentionStop.abort(cell.error ?? 'Cell stopped')
     clearTimeout(cell.watchdog)
     cell.removeOwner?.()
     for (const controller of cell.calls.values()) controller.abort(cell.error ?? 'Cell completed')
@@ -309,12 +311,25 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         textRetention = {stored:false,cellId:cell.id,...(cell.origin.sessionId ? {sessionId:cell.origin.sessionId} : {}),admittedBytes:Buffer.byteLength(fullText),omittedBytes:0,complete:false,truncated:true}
         if (fullText) {
           try {
-            spillStore ??= createUnifiedSpillStore()
-            const retaining = Promise.resolve(spillStore.saveText(fullText,`code-${cell.origin.sessionId ?? 'session'}-${cell.id}`))
+            const retaining = (async()=>{
+              const retentionSignal=AbortSignal.any([cell.retentionStop.signal,...(cell.origin.abortSignal?[cell.origin.abortSignal]:[]),...(signal?[signal]:[])])
+              retentionSignal.throwIfAborted()
+              const ref=await options.retainText?.({text:fullText,cellId:cell.id,origin:{...cell.origin,abortSignal:retentionSignal},complete:!incomplete})
+              retentionSignal.throwIfAborted()
+              if(ref) return {ref}
+              spillStore ??= createUnifiedSpillStore()
+              return {path:await spillStore.saveText(fullText,`code-${cell.origin.sessionId ?? 'session'}-${cell.id}`)}
+            })()
             track(retaining.then(() => {}, () => {}),cell)
-            const path = await retaining
-            if (typeof path !== 'string' || !path || Buffer.byteLength(path) > Math.min(4096,config.maxResultBytes)) throw new Error('Text retention reference limit exceeded')
-            textRetention.path = path; textRetention.stored = true; textRetention.complete = !incomplete
+            const stored = await retaining
+            if(stored.ref){
+              if(Buffer.byteLength(JSON.stringify(stored.ref))>Math.min(4096,config.maxResultBytes)) throw new Error('Native text reference limit exceeded')
+              textRetention.contextRef=stored.ref; textRetention.stored=true; textRetention.complete=stored.ref.complete && !incomplete
+            } else {
+              const path=stored.path
+              if (typeof path !== 'string' || !path || Buffer.byteLength(path) > Math.min(4096,config.maxResultBytes)) throw new Error('Text retention reference limit exceeded')
+              textRetention.path = path; textRetention.stored = true; textRetention.complete = !incomplete
+            }
           } catch (error) {
             const bounded = diagnostic(`Text retention failed: ${message(error)}`,errorCap)
             cell.error = bounded.text; truncated ||= bounded.truncated
@@ -418,7 +433,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
       finally { admissions-- }
       const worker = new Worker(new URL('./worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]})
-      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),textIncomplete:false}
+      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false}
       cells.set(id,cell)
       worker.on('message',data => receive(cell,data))
       worker.on('error',error => close(cell,'failed',message(error)))
@@ -456,7 +471,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       const barrier = new Promise<void>(resolve => { finish = resolve })
       cancelling = barrier
       cancellationEpoch++
-      for (const cell of cells.values()) close(cell,'terminated',reason)
+      for (const cell of cells.values()) { cell.retentionStop.abort(reason); close(cell,'terminated',reason) }
       try {
         await Promise.allSettled([...stopping])
         await Promise.allSettled([...producers])

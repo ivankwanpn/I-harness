@@ -26,7 +26,7 @@ export interface ContextSearchResult {
 export interface ContextOutputService {
   configure(patch: Partial<ContextOutputConfig>): Promise<ContextOutputStatus>;
   status(): ContextOutputStatus;
-  capture(input: ContextCapture, signal?: AbortSignal): Promise<ContextResultRef|undefined>;
+  capture(input: ContextCapture, signal?: AbortSignal, producer?: (access:{maxBytes:number;signal:AbortSignal})=>Promise<{text:string;complete:boolean;originalBytes?:number}>): Promise<ContextResultRef|undefined>;
   read(access: ContextAccess, query: { refId: string; offset?: number; maxBytes?: number }): Promise<ContextReadResult>;
   search(access: ContextAccess, query: { query: string; refIds?: string[]; limit?: number; maxBytes?: number }): Promise<ContextSearchResult>;
   grant(access: ContextAccess, refIds: string[], targetSessionId: string): Promise<void>;

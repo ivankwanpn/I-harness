@@ -50,6 +50,7 @@ import { createNotificationDrain, type ParentInputAdmission } from "./task-notif
 export interface RegisterSubagentOptions extends RoleModelHost {
   /** The host mounted the generic shell tool; expose it to built-in workers. */
   includeAgentShell?: boolean
+  includeNativeContext?: boolean
   /** Resolve a selection to a live client through the HOST's provider plane —
    * the same one the session's own model went through, so a role gets the same
    * credentials, the same card table and the same protocol chain.
@@ -132,7 +133,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
   if (!opts.restoredState) {
     // Snapshot roles are authoritative (builtins + custom/edited); seeding
     // builtins now would throw on duplicates and shadow edited builtins.
-    for (const r of builtinRoles({ agentShell: opts.includeAgentShell })) roles.register(r)
+    for (const r of builtinRoles({ agentShell: opts.includeAgentShell, nativeContext: opts.includeNativeContext })) roles.register(r)
   }
   if (opts.restoredState) {
     // Restore BEFORE wrapping so the first save persists the restored state.

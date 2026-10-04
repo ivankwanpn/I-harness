@@ -8,7 +8,7 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec } from "./scoped-exec.ts"
-import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
+import { append, createSession, derivePlanMode, rewindCuts, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
@@ -25,6 +25,8 @@ import { createReadImageTool } from "@i-harness/attachment"
 import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
+import { createContextOutputTools, renderContextRecovery, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
+import { createNativeCodeTextRetention, installNativeContextOutput } from "./context-output.ts"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
 import type { ExecService } from "@i-harness/exec"
@@ -199,6 +201,8 @@ export interface AssemblyOptions {
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
   /** Host-owned tools participate in the same validation and approval pipeline. */
   additionalTools?: Tool[]
+  contextOutput?: ContextOutputService
+  contextOutputSourceFor?: (sessionId: string) => Promise<ContextCapture['source']>
   // M11: the window is NOT part of the host contract — the assembly resolves it
   // (see `CompactionRequest`) and fills it in before handing the engine a config.
   compact?: CompactionRequest
@@ -811,6 +815,14 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // first registered = outermost) + M26-B7 registry-level output spill
   // (spill outermost so it sees the largest unprocessed output).
   if (opts.outputSpill) ctx.mount(createOutputSpillGuard(ctx, opts.outputSpill))
+  if (opts.contextOutput) installNativeContextOutput(ctx,{service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor,
+    ...(opts.coordinator&&opts.sessionId?{inheritedSessionFor:async(id:string)=>{
+      const {meta}=await opts.coordinator!.profile(id)
+      if(meta.parentSession!==opts.sessionId||meta.origin!=='subagent'||meta.seedLength===undefined)return undefined
+      const snapshot=await opts.coordinator!.snapshot!(id)
+      return {...snapshot.session,events:snapshot.session.events.slice(0,meta.seedLength)}
+    }}:{}),
+  })
   if (opts.retry) ctx.mount(createRetryGuard(ctx, opts.retry))
   ctx.mount(createTimeoutGuard(ctx))
   ctx.mount(createRepeatToolGuard(ctx))
@@ -838,6 +850,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     for (const tool of createSessionQueryTools(opts.sessionQuery)) tools.register(tool)
   }
   for (const tool of opts.additionalTools ?? []) tools.register(tool)
+  if(opts.contextOutput) for(const tool of createContextOutputTools(opts.contextOutput)) tools.register(tool)
 
   // ── session: coordinator mirror (write-behind) ─────────────────────────────
   // `session` itself is created at the top of the function — the sandbox policy
@@ -1062,6 +1075,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const mountCodeMode = opts.codeModeFactory ?? registerCodeMode
   const codeSpillStore = opts.outputSpill?.spillRoot === undefined ? undefined : createUnifiedSpillStore(opts.outputSpill.spillRoot)
   const codeModeFactory: CodeModeFactory | undefined = codeMode.mode === "off" && typeof opts.codeMode !== "function" ? undefined : (childCtx, childTools, mountOptions) => mountCodeMode(childCtx, childTools, {
+    ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session:mountOptions.session,sessionId:mountOptions.sessionId,sourceFor:opts.contextOutputSourceFor,...(opts.sessionId?{parent:{sessionId:opts.sessionId,session}}:{})})}:{}),
     ...mountOptions,
     config: codeModeNow(),
     ...(codeSpillStore ? { spillStore: mountOptions.spillStore ?? codeSpillStore } : {}),
@@ -1126,6 +1140,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       codeMode, codeModeFactory,
       ...(opts.projectContext ? { inheritedSystemContext: projectContextNow } : {}),
       includeAgentShell: opts.agentShell !== undefined,
+      includeNativeContext: Boolean(opts.contextOutput),
       resolveModel: resolveRoleModel,
       // The gate travels with the resolver it gates, into THIS chain:
       // RegisterSubagentOptions → SubagentToolDeps → spawnChild. The guardian
@@ -1302,6 +1317,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       const projectContext = projectContextNow()
       if (projectContext) text += `\n\n${projectContext}`
       if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
+      if(opts.contextOutput?.status().enabled){
+        const cuts=rewindCuts(session)
+        const refs=session.events.filter(event=>event.type==="context/result-ref" && !cuts.some(cut=>event.seq!==undefined && event.seq>=cut.cutFrom && event.seq<cut.markerSeq)).flatMap(event=>event.type==="context/result-ref"?[event.ref]:[])
+        const recovery=renderContextRecovery(refs.slice(-12),2048)
+        if(recovery) text+=`\n\n${recovery}`
+      }
       return text
     }
 
@@ -1315,6 +1336,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       return call
     })
     if (codeMode.mode !== "off") codeModeMount = mountCodeMode(ctx, tools, {
+      ...(opts.contextOutput ? {retainText:createNativeCodeTextRetention({service:opts.contextOutput,session,sessionId:opts.sessionId,sourceFor:opts.contextOutputSourceFor})}:{}),
       session, sessionId: opts.sessionId, config: codeMode,
       ...(codeSpillStore ? { spillStore: codeSpillStore } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallel: opts.maxParallelToolCalls } : {}),

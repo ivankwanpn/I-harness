@@ -35,8 +35,8 @@ export function createRoleRegistry(): RoleRegistry {
 
 // Built-in roles (patterned on opencode's built-in agent prompts). None carry
 // a model — they inherit the parent ModelClient unless the user edits them.
-export function builtinRoles(options: { agentShell?: boolean } = {}): SubagentRole[] {
-  return [
+export function builtinRoles(options: { agentShell?: boolean; nativeContext?: boolean } = {}): SubagentRole[] {
+  const roles:SubagentRole[] = [
     {
       name: "general",
       description: "General agent for researching questions and executing multi-step tasks.",
@@ -62,4 +62,9 @@ export function builtinRoles(options: { agentShell?: boolean } = {}): SubagentRo
       tools: [...(options.agentShell ? ["shell"] : []), "bash", "pwsh", "read", "write", "list_dir", "grep"],
     },
   ]
+  if(options.nativeContext) for(const role of roles){
+    role.tools.push('context_output_search','context_output_read','context_output_status','code_context_search','code_context_status')
+    if(role.name==='general'||role.name==='worker') role.tools.push('code_context_index')
+  }
+  return roles
 }
