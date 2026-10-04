@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process"
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const ownedParent = resolve(packageRoot, "..", "..", ".tmp")
 const script = join(packageRoot, "scripts", "build-installer.mjs")
+const sourceManifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
 const roots: string[] = []
 const owner = "I-harness Desktop installer builder tests v1"
 
@@ -36,13 +37,13 @@ function fixture() {
     "resources/gateway/cli/src/cli.ts", "resources/gateway/cli/src/host.ts",
     "resources/gateway/node_modules/tsx/dist/loader.mjs",
   ]) put(file, file.endsWith(".exe") ? "MZfixture executable" : "fixture")
-  put("version", "44.4.5")
+  put("version", sourceManifest.devDependencies.electron)
   put("resources/app/package.json", JSON.stringify({
-    name: "@i-harness/desktop", productName: "I-harness Desktop", version: "0.1.0",
+    name: "@i-harness/desktop", productName: "I-harness Desktop", version: sourceManifest.version,
     type: "module", main: "./out/main/index.js",
   }))
   put("resources/gateway/cli/package.json", JSON.stringify({
-    name: "@i-harness/desktop-gateway", version: "0.1.0", type: "module",
+    name: "@i-harness/desktop-gateway", version: sourceManifest.version, type: "module",
     dependencies: { "@i-harness/sdk": "workspace:*" },
   }))
   put("resources/gateway/node_modules/@i-harness/sdk/package.json", JSON.stringify({ name: "@i-harness/sdk", version: "0.1.0" }))
@@ -68,7 +69,7 @@ it("accepts a complete absolute Desktop payload and reports its app and Electron
   const { app } = fixture()
   const result = validate(app)
   expect(result.status, result.stderr).toBe(0)
-  expect(JSON.parse(result.stdout)).toMatchObject({ appDir: app, version: "0.1.0", electronVersion: "44.4.5" })
+  expect(JSON.parse(result.stdout)).toMatchObject({ appDir: app, version: sourceManifest.version, electronVersion: sourceManifest.devDependencies.electron })
 })
 
 it("rejects relative payload paths before resolving them against the build working directory", () => {
