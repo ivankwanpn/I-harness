@@ -125,6 +125,7 @@ const english = {
   "計畫模式已更新": "Plan mode updated", "正在執行命令": "Running command", "命令執行已結束": "Command run ended", "排程已更新": "Schedule updated", "執行記錄已更新": "Run record updated", "會話已回復": "Conversation rewound", "模型回應已中斷": "Model response interrupted", "會話狀態已更新": "Conversation state updated",
   "關閉成果面板": "Close review pane",
   "調整成果面板寬度": "Resize review pane",
+  "調整側欄寬度": "Resize sidebar",
   "會話內容": "Conversation content", "回到最新內容": "Jump to latest", "關閉側欄": "Close sidebar",
   "最小化視窗": "Minimize window", "最大化或還原視窗": "Maximize or restore window", "關閉視窗": "Close window",
   "視窗與通知": "Window and notifications", "背景待處理通知": "Notify when attention is needed",

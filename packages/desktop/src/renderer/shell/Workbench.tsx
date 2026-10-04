@@ -41,6 +41,7 @@ import { NavigationRail } from "./NavigationRail.tsx"
 import { TitleBar } from "./TitleBar.tsx"
 import { useNarrowSidebar } from "./use-narrow-sidebar.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
+import { PaneResizeHandle } from "./PaneResizeHandle.tsx"
 import { PaneTabs } from "../vendor/zcode/PaneTabs.tsx"
 import { SessionModelPicker } from "../session/SessionModelPicker.tsx"
 import type { ImageInput } from "@i-harness/sdk"
@@ -177,6 +178,14 @@ export function Workbench({
   }, [selectedWorkspaceId, drawer.setOpen])
   useAppearance()
   const sidebarCollapsed = usePreferences((state) => state.sidebarCollapsed)
+  const preferredSidebarWidth = useUiStore(state => state.sidebarWidth)
+  const setSidebarWidth = useUiStore(state => state.setSidebarWidth)
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
+  useEffect(() => {
+    const resized = () => setViewportWidth(window.innerWidth)
+    window.addEventListener("resize", resized)
+    return () => window.removeEventListener("resize", resized)
+  }, [])
   const updatePreferences = usePreferences((state) => state.update)
   const [manager, setManager] = useState<{ workspaceId: string; archived?: boolean; sessionId?: string }>()
   const [sidebarRevision, setSidebarRevision] = useState(0)
@@ -291,9 +300,16 @@ export function Workbench({
     else updatePreferences({ sidebarCollapsed: !sidebarCollapsed })
   }
   const navigate = (next: "settings" | "projects" | "plugins" | "search") => { drawer.setOpen(false); setSurface(next) }
+  const rightDocked = reviewOpen && !pageOpen && viewportWidth >= 1180
+  const sidebarMax = Math.max(200, Math.min(520, viewportWidth - 48 - (drawer.narrow ? 16 : 8 + 400 + (rightDocked ? 280 : 0))))
+  const sidebarWidth = Math.min(preferredSidebarWidth, sidebarMax)
+  const visibleSidebarWidth = pageOpen || drawer.narrow || sidebarCollapsed ? 0 : sidebarWidth
+  const reviewMax = Math.max(1, Math.min(1200, viewportWidth - 48 - (rightDocked ? 8 + visibleSidebarWidth + 400 : 24)))
+  const reviewMin = Math.min(280, reviewMax)
+  const actualReviewWidth = Math.min(reviewMax, Math.max(reviewMin, reviewWidth))
 
   return (
-    <div className={reviewOpen && !pageOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={pageOpen || drawer.narrow || sidebarCollapsed} style={{ "--review-width": `${reviewWidth}px` } as CSSProperties}>
+    <div className={reviewOpen && !pageOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={pageOpen || drawer.narrow || sidebarCollapsed} style={{ "--sidebar-width": `${sidebarWidth}px`, "--review-width": `${actualReviewWidth}px` } as CSSProperties}>
       <NavigationRail surface={surface}
         onCreate={() => { void createSession() }} canCreate={canCreate && selectedWorkspaceId !== undefined} onOpenWorkspace={onOpenWorkspace}
         onProjects={onProjectsChanged ? () => navigate("projects") : undefined}
@@ -324,6 +340,7 @@ export function Workbench({
       >
         {dashboard === undefined ? null : <TaskList workspaceId={selectedWorkspaceId} onManage={onManageSession} onCopyId={async (id) => { await navigator.clipboard.writeText(id) }} onOpenFolder={selectedWorkspaceId ? async () => { await bridge.request({ kind: "workspace/reveal", workspaceId: selectedWorkspaceId }) } : undefined} onManageSessions={selectedWorkspaceId && onBatchSessions && capabilities["desktop-sessions"]?.includes("1") ? id => openManager(selectedWorkspaceId, id) : undefined} onManageArchived={selectedWorkspaceId ? () => openManager(selectedWorkspaceId, undefined, true) : undefined} attentionCounts={attentionBySession} dashboard={dashboard} selectedId={selectedSessionId} onSelect={(id) => { drawer.setOpen(false); setMemoryOpen(false); onSelectSession(id) }} />}
       </WorkspaceSidebar>}
+      <PaneResizeHandle side="left" label={t("調整側欄寬度")} width={sidebarWidth} min={200} max={sidebarMax} defaultWidth={240} onResize={setSidebarWidth} />
       </div>
       {settingsPane ?? projectsPane ?? <>
       <main className="center-pane">
@@ -421,7 +438,7 @@ export function Workbench({
         </section>}
       </main>
       {reviewOpen ? <aside className="review-pane" aria-label={t("成果檢查")}>
-        <ReviewResizeHandle width={reviewWidth} onResize={setReviewWidth} />
+        <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={setReviewWidth} />
         <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel }] : []), ...(selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode" }] : []), ...(selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel }] : []), { id: "browser", label: t("瀏覽器") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理") }] : []), ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
