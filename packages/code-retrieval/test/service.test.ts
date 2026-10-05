@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm, readdir } from 'node:fs/promises'
 import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createCodeRetrievalService, createCodeRetrievalTools, type CodeFileSnapshot, type CodeRetrievalService, type CodeSnapshotReader } from '../src/index.ts'
 import { createToolRegistry } from '@i-harness/core-tools'
@@ -9,7 +10,7 @@ import { createContext } from '@i-harness/core-plugin'
 
 const roots: string[] = [], services: CodeRetrievalService[] = []
 async function fixture(extra: Parameters<typeof createCodeRetrievalService>[0]['config'] = {}) {
-  const root = await mkdtemp(resolve(import.meta.dirname, '../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-test-'))
+  const root = await mkdtemp(resolve(tmpdir(), 'code-test-'))
   roots.push(root)
   const data: CodeFileSnapshot[] = [
     {sourceId:'workspace',path:'src/auth/approval.ts',revision:'a',complete:true,text:'// 😀 部署批准\nexport function approveDeployment() {\n  return true\n}\n'},

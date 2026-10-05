@@ -1,12 +1,13 @@
 import { afterEach, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createCodeRetrievalService, type CodeRetrievalService, type CodeEmbeddingConfig } from '../src/index.ts'
 import { embed } from '../src/embedding.ts'
 const roots:string[]=[],services:CodeRetrievalService[]=[]
 afterEach(async()=>{await Promise.all(services.splice(0).map(s=>s.close()));await Promise.all(roots.splice(0).map(r=>rm(r,{recursive:true,force:true})))})
 async function fixture(provider:CodeEmbeddingConfig['provider']='openai-compatible') {
-  const root=await mkdtemp(resolve(import.meta.dirname,'../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-embedding-')); roots.push(root)
+  const root=await mkdtemp(resolve(tmpdir(),'code-embedding-')); roots.push(root)
   let text='export function approveDeployment() { return true }',rev='1',bad=false,requests=0
   const transport:typeof fetch=async(input,init)=>{
     requests++
@@ -40,7 +41,7 @@ it('failed dimension validation preserves the old generation and retry succeeds'
   f.good(); expect((await f.index()).generation).toBe(2)
 })
 it.each(['cancel','clear','disable','close','force'] as const)('%s drains a held provider request and fences its late result',async(action)=>{
-  const root=await mkdtemp(resolve(import.meta.dirname,'../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-drain-'));roots.push(root)
+  const root=await mkdtemp(resolve(tmpdir(),'code-drain-'));roots.push(root)
   let release!:(response:Response)=>void,entered!:()=>void,requestSignal:AbortSignal|undefined
   const started=new Promise<void>(r=>{entered=r})
   let count=0
@@ -61,7 +62,7 @@ it.each(['cancel','clear','disable','close','force'] as const)('%s drains a held
   expect(service.status().metrics!.unreportedRequests).toBeGreaterThanOrEqual(1)
 })
 it('deadline abort is reported while preserving the committed generation',async()=>{
-  const root=await mkdtemp(resolve(import.meta.dirname,'../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-deadline-'));roots.push(root)
+  const root=await mkdtemp(resolve(tmpdir(),'code-deadline-'));roots.push(root)
   const service=createCodeRetrievalService({root,workspaceId:'deadline',config:{enabled:true,deadlineMs:25,mode:'hybrid',embedding:{provider:'ollama',endpoint:'http://controlled.invalid',model:'fixture'}},
     fetch:async(_input,init)=>new Promise((_resolve,reject)=>{init!.signal!.addEventListener('abort',()=>reject(init!.signal!.reason),{once:true})}),
     reader:{async *snapshots(){yield {sourceId:'w',path:'a.ts',revision:'1',text:'const needle = true',complete:true}},async revalidate(){return true}}})
@@ -93,7 +94,7 @@ it.each([
     {root:'unused',workspaceId:'unused',reader:{async *snapshots(){},async revalidate(){return true}},fetch:async()=>new Response(body)},new AbortController().signal)).rejects.toThrow()
 })
 it('rejects oversized staged vectors before they can accumulate beyond the disk budget',async()=>{
-  const root=await mkdtemp(resolve(import.meta.dirname,'../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-vector-cap-'));roots.push(root)
+  const root=await mkdtemp(resolve(tmpdir(),'code-vector-cap-'));roots.push(root)
   let requests=0
   const service=createCodeRetrievalService({root,workspaceId:'cap',config:{enabled:true,maxDiskBytes:128*1024,mode:'hybrid',embedding:{provider:'ollama',endpoint:'http://controlled.invalid',model:'fixture',dimensions:2048}},
     fetch:async(_input,init)=>{requests++;const input=JSON.parse(String(init!.body)).input as string[];return Response.json({embeddings:input.map(()=>Array.from({length:2048},(_,i)=>i/2048))})},

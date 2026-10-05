@@ -1,12 +1,13 @@
 import { afterEach, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { createCodeRetrievalService, type CodeFileSnapshot, type CodeRetrievalOptions, type CodeRetrievalService } from '../src/index.ts'
 
 const roots:string[]=[],services:CodeRetrievalService[]=[]
 afterEach(async()=>{await Promise.all(services.splice(0).map(s=>s.close()));await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})))})
 async function fixture(hybrid=false) {
-  const root=await mkdtemp(resolve(import.meta.dirname,'../../../.superpowers/sdd/2026-10-04-native-context-subsystems/code-review-'));roots.push(root)
+  const root=await mkdtemp(resolve(tmpdir(),'code-review-'));roots.push(root)
   const files:CodeFileSnapshot[]=[
     {sourceId:'A',path:'src/😀/a.ts',revision:'1',text:'const approveDeployment = true',complete:true},
     {sourceId:'B',path:'src/😀-copy/b.ts',revision:'1',text:'const approveDeployment = false',complete:true},

@@ -84,6 +84,20 @@ Those dated plan documents are records of what was true when they were written, 
 rewritten. This audit is the current record: **on 2026-10-05 those four tests are green on this
 host.** Anyone citing them as known-red should re-run them first.
 
+## Finding 4 — the code-retrieval suite could not run on a fresh checkout
+
+Found by this audit's own gate run, not by inspection. Three of its test files rooted `mkdtemp`
+at `…/code-retrieval/.superpowers/sdd/2026-10-04-native-context-subsystems/<prefix>-`. That
+`.superpowers/` directory is **gitignored** (`.gitignore:53`) and `git ls-files .superpowers`
+returns 0 entries, so it exists only on a machine where a superpowers SDD session happened to run
+— and nowhere else. On a fresh clone every fixture fails at setup: 3 files, 40 tests, all
+`ENOENT … mkdtemp`, and it was the ONLY failure in the full `pnpm -r test` run.
+
+The location was scratch space, not workflow output: each file passes the directory to the
+service as its work root and removes it in `afterEach`, and no test reads a spec file from it.
+The roots now sit under `os.tmpdir()`, the pattern `e2e/helpers.ts` already uses. Verified: 40
+failed → 46 passed with every assertion untouched, typecheck green.
+
 ## Suspected and disproved (recorded so nobody re-opens them)
 
 - **ripgrep missing.** `rg` is not on PATH, but the install bundles
