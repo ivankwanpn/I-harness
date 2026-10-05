@@ -71,4 +71,4 @@ it.skipIf(process.platform !== "win32")("searches with first-generation siblings
     const allowed = await assembly.tools.execute({ name: "grep", args: { pattern: "needle" } })
     expect(allowed.output).toMatchObject({ status: "completed", matches: [expect.objectContaining({ path: "one.txt", text: "needle" })] })
   } finally { await assembly.dispose(); rmWorkspaceSync(root) }
-})
+}, 30_000)

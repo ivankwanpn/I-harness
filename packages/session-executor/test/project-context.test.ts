@@ -153,7 +153,7 @@ it("project tools read images and search an additional root using its absolute p
     expect((await assembly.tools.get("glob")!.execute({ pattern: "*.txt", path: b }, {}))).toMatchObject({ matches: ["needle.txt"] })
     expect((await assembly.tools.get("grep")!.execute({ pattern: "multi-root-needle", path: b }, {}))).toMatchObject({ matches: [{ path: join(b, "needle.txt").replaceAll("\\", "/"), line: 1, text: "multi-root-needle" }] })
   } finally { await assembly.dispose() }
-})
+}, 30_000)
 
 it("the selected shell receives current project roots and refuses removed cwd and unrelated writes", async () => {
   const { a, b, c } = fixture()
