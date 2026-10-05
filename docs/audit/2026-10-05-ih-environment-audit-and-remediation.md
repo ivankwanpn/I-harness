@@ -50,10 +50,22 @@ shell's refusal for `command-not-run` therefore quotes the real diagnostic and n
 `danger-full-access`; the `no-backend` sentence is unchanged.
 
 **Still open.** Only the *silent* half is fixed. How to make MSYS programs actually run under a
-restricted token is NOT solved: `Everyone` is already in the restricting list and the create is
-still denied, so the NPFS/named-pipe write path needs its own investigation. `README.md` in
-`packages/sandbox-windows-acl` now records the measurement, the mechanism, and this boundary
-instead of the previous "root cause 未調查".
+restricted token is NOT solved, but the mechanism was identified afterwards and it is NOT the
+named-pipe/NPFS story this section first guessed. Measured in-process inside a confined process
+(`spike-pipes/`, throwaway): `CreateNamedPipeW` succeeds under EVERY explicit DACL tried,
+including one naming only the user, while `CreatePipe` (anonymous) succeeds only when its explicit
+DACL names a SID that is also in the restricting list — `NULL` SA (token default DACL) and
+`Everyone` pass, "user only" and `Administrators` fail with exactly error 5. So `WRITE_RESTRICTED`'s
+pass-2 applies to anonymous pipes, not to named ones, and `msys-2.0.dll` builds no security
+descriptor itself (zero references to the SD-building APIs, no SDDL literals) — it passes a
+statically compiled `SECURITY_ATTRIBUTES`. Since the `Everyone` form SUCCEEDS, Cygwin's SD cannot
+be an Everyone grant; it must name the user/creator. `setTokenDefaultDaclGrant` cannot help,
+because it only affects objects created with no explicit SD. Adding the user SID to the restricting
+list would admit the pipe but also let the confined process write anywhere the user can, i.e.
+abandon write isolation — so the remaining direction is a different Windows mechanism (low
+mandatory integrity level or AppContainer, where pipe creation is not gated by a DACL pass-2),
+which is a re-architecture rather than a tuning change. `README.md` in
+`packages/sandbox-windows-acl` records the measurement, the corrected mechanism, and this boundary.
 
 ## Finding 2 — the non-bash shell surfaces left `bash` to the host PATH
 

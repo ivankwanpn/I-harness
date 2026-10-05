@@ -82,20 +82,38 @@ NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console �
 （M25 前 follow-up；見 test/kill-on-close.e2e.ts 的 descendant-denial pin）。）
 
 **MSYS/Cygwin 子行程在此權杖下無法啟動（2026-10-05 root-caused）**：Git Bash／Rtools bash／
-msys 系工具（`usr/bin/ls.exe` 亦然）在 WRITE_RESTRICTED 權杖下於 **DLL 初始化階段**就死亡——
-MSYS runtime 啟動時必須建立自己的**具名** signal pipe，而該 create 被 restricting-SID 的 write
-檢查拒絕。（既有的 `setTokenDefaultDaclGrant` 救不到它：那是 child 自己 token 的 default DACL，
-只涵蓋匿名 pipe 這條路；具名 pipe 走的是 NPFS／命名空間那一層。）
-量測（Windows 11 26200、Git Bash 5.3.15，透過 provider 自己的 argv）：status `0xC0000142`
-（Node 讀回 unsigned `3221225794`），stderr 為 `*** fatal error - couldn't create signal pipe,
-Win32 error 5`，stdout 空；對照組原生 `cmd.exe`／`node.exe`／`git.exe` 在**同一**權杖下 exit 0；
-read-only 與 workspace-write **皆**失敗，故放寬到 workspace-write 無效，只有 danger-full-access 可跑。
-此為**子行程**failure 而非 runner failure：runner 正常啟動、只 mirror 子行程的 exit code 並讓 stdio
-直通，故它看不到那行 stderr，`windows-acl-run: ` 簽名永遠不出現。因此分類只能發生在 exec 層
-（它捕獲 stderr），現由 provider 的第二條 `runnerFailureRules`（exit-gated **且** signature-gated）
-負責，轉成 `SandboxUnavailableError`（`kind: "command-not-run"`），shell 回可讀的
-`SANDBOX_DENIED` 並附真實診斷與 `danger-full-access` 升級路徑（2026-10-05 修正，見
+msys 系工具（`usr/bin/ls.exe` 亦然）在 WRITE_RESTRICTED 權杖下於 **DLL 初始化階段**就死亡：
+`*** fatal error - couldn't create signal pipe, Win32 error 5`，status `0xC0000142`（Node 讀回
+unsigned `3221225794`），stdout 空。對照組原生 `cmd.exe`／`node.exe`／`git.exe` 在**同一**權杖下
+exit 0；read-only 與 workspace-write **皆**失敗，故放寬到 workspace-write 無效，只有
+danger-full-access 可跑。此為**子行程**failure 而非 runner failure：runner 正常啟動、只 mirror
+子行程的 exit code 並讓 stdio 直通，故它看不到那行 stderr，`windows-acl-run: ` 簽名永不出現。
+分類因此只能發生在 exec 層（它捕獲 stderr），現由 provider 的第二條 `runnerFailureRules`
+（exit-gated **且** signature-gated）負責，轉成 `SandboxUnavailableError`
+（`kind: "command-not-run"`），shell 回可讀的 `SANDBOX_DENIED` 並附真實診斷與
+`danger-full-access` 升級路徑（2026-10-05 修正，見
 `docs/audit/2026-10-05-ih-environment-audit-and-remediation.md`）。
+
+**機制（2026-10-05 量測後更正）**：失敗在**匿名 pipe 的 pass-2 檢查**，不是具名 pipe、也不是
+NPFS 命名空間。以本機受限行程 in-process 實測：
+
+| 建立方式 | `NULL` SA（token default DACL） | DACL = Everyone GA | DACL = 僅使用者自己 | DACL = Administrators |
+|---|---|---|---|---|
+| `CreatePipe`（匿名） | ✅ | ✅ | ❌ **error 5** | ❌ **error 5** |
+| `CreateNamedPipeW`（具名） | ✅ | ✅ | ✅ | ✅ |
+
+即：`WRITE_RESTRICTED` 的 pass-2 只作用在**匿名** pipe，而且**僅當明確 DACL 未列出任何限制
+SID** 時才拒絕 —— 成功／失敗與「DACL 是否含限制 SID（`Everyone` 在 restricting list 內、使用者
+SID 不在）」完全一致。`msys-2.0.dll` 自身**不建構** security descriptor
+（`InitializeSecurityDescriptor`／`SetSecurityDescriptorDacl`／`ConvertStringSecurityDescriptor…`
+皆 0 次；沒有任何 SDDL 字面值），只使用 `SECURITY_ATTRIBUTES`(6) 與 `CreatePipe`(3)，因此它傳的是
+**靜態編譯進去的 SD**。既然「Everyone 版」的 `CreatePipe` 成功而 Cygwin 的失敗，Cygwin 用的
+**不可能**是 Everyone 授權；其 DACL 指向的應是使用者／建立者自身一類的 SID，落在 restricting
+list 之外。既有的 `setTokenDefaultDaclGrant` 救不到它，因為那個修法只影響**未附明確 SD** 的物件。
+（先前的說法——「具名 signal pipe 在 NPFS 層被拒」——已被上表推翻並更正。）
+
 **未解**：上述修正只是把靜默崩潰變成可讀拒絕——**如何讓 MSYS 系程式在受限權杖下真正能跑仍未解**。
-`Everyone` 已在 restricting list 中卻仍被拒，所以不是「再加一個 SID」可解；需要先釐清 NPFS
-命名空間的 write 檢查與 restricting SID 的交集。
+把使用者 SID 加進 restricting list 可以讓這個 pipe 過關，但同時會讓受限行程在使用者有寫入權的
+任何位置都能寫，**等於放棄寫隔離**，因此不可行。剩下的方向是換掉 Windows 的隔離機制（例如改用
+**低 mandatory integrity level** 或 AppContainer，其 pipe 建立不受 DACL pass-2 管制），屬於重新
+架構而非調參。
