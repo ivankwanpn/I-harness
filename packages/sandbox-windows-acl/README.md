@@ -112,8 +112,30 @@ SID 不在）」完全一致。`msys-2.0.dll` 自身**不建構** security descr
 list 之外。既有的 `setTokenDefaultDaclGrant` 救不到它，因為那個修法只影響**未附明確 SD** 的物件。
 （先前的說法——「具名 signal pipe 在 NPFS 層被拒」——已被上表推翻並更正。）
 
-**未解**：上述修正只是把靜默崩潰變成可讀拒絕——**如何讓 MSYS 系程式在受限權杖下真正能跑仍未解**。
-把使用者 SID 加進 restricting list 可以讓這個 pipe 過關，但同時會讓受限行程在使用者有寫入權的
-任何位置都能寫，**等於放棄寫隔離**，因此不可行。剩下的方向是換掉 Windows 的隔離機制（例如改用
-**低 mandatory integrity level** 或 AppContainer，其 pipe 建立不受 DACL pass-2 管制），屬於重新
-架構而非調參。
+**已找到可行的替代機制（2026-10-05 量測）**：問題出在**受限權杖本身**，不在 pipe。以同一套
+行程管線（本 repo 的 `spawnSandboxedInherited`）實測四種權杖，`bash -c 'echo …; uname -s'`：
+
+| 權杖 | bash | node（`child_process` spawn） | 寫入中完整性位置 |
+|---|---|---|---|
+| `DISABLE_MAX_PRIVILEGE｜LUA_TOKEN｜WRITE_RESTRICTED`（現行） | ❌ `0xC0000142` | ❌ **EPERM** | 拒絕（隔離成立） |
+| 同上（去掉 `WRITE_RESTRICTED`） | ❌ 載入器即失敗 | ❌ `0xC0000135`（DLL 找不到） | — |
+| 同上 **＋ 低完整性標籤** | ❌ 完全相同的失敗 | ✅ | — |
+| **不用受限權杖，只降完整性等級（Low IL）** | ✅ **`MINGW64_NT-10.0-26200`** | ✅ **`NESTED_OK`** | ❌ **DENIED**（隔離成立） |
+
+附帶釐清：**`WRITE_RESTRICTED` 的語意是「把 restricting-SID 檢查放寬成只檢查寫入」**；少了它，
+限制 SID 對**所有存取**生效（含讀取），所以裝在 `%LOCALAPPDATA%` 的 node 會以 `0xC0000135` 死亡
+（該目錄的 DACL 不含 `Everyone`）。這是為何本後端必須帶這個旗標。
+
+**根因鏈（可重現）**：①受限權杖下，子行程**連自己的 token 都改不了**——Cygwin 的
+`cygheap_user::init` 呼叫 `NtSetInformationToken(TokenDefaultDacl)` 得到 **`0xC0000022`**
+（token 物件本身的 DACL 不含任何 restricting SID，寫入被 pass-2 拒絕）；②接著它以一個不含
+restricting SID 的 SD 建立匿名 pipe → **error 5**。低完整性等級只改變 ② 的標籤判斷，對 ① 無效，
+所以「加重標籤」救不了它。
+
+**因此真正的工作是換掉隔離機制**（Chrome 模型）：以 **Low integrity** 提供 no-write-up 寫隔離，
+並把工作區與私有 temp **標記為低完整性**（`icacls /setintegritylevel`），而非用 capability SID 授
+ACE。**優點**：MSYS 系程式恢復可用，且 node 子行程 spawn 不再 EPERM（受限權杖下任何會 spawn 的
+node 工具鏈都會壞）。**代價／邊界（誠實標註）**：標籤是**單一全域層級**，不像 ACL 能逐目錄授與，
+所以「哪些路徑可寫」必須改成「哪些路徑降標籤」；低 IL 子行程建立的新物件會繼承低標籤；以及本包
+既有的 ACE 授與／`denialSignatures`／`runnerFailureRules` 機制需要重新設計。這是**重新架構**，不是
+調參 —— 本包未實作，僅以量測記錄方向。
