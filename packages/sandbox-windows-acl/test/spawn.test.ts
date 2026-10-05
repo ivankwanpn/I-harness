@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
-import { buildCommandLine, quoteArg } from "../src/spawn.ts"
+import { buildCommandLine, quoteArg, spawnSandboxedInherited } from "../src/spawn.ts"
+import type { NativePtr, Win32Bindings } from "../src/ffi.ts"
+import { Win32Error } from "../src/errors.ts"
 
 describe("quoteArg (Windows argv quoting)", () => {
   it("quotes empty args", () => {
@@ -21,5 +23,33 @@ describe("quoteArg (Windows argv quoting)", () => {
     expect(buildCommandLine("C:\\bin\\tool.exe", ["plain", "with space"])).toBe(
       'C:\\bin\\tool.exe plain "with space"',
     )
+  })
+})
+
+describe("spawnSandboxedInherited startup failure", () => {
+  it("preserves CreateProcessAsUserW error before stdio restoration overwrites it", () => {
+    let lastError = 0
+    const api = {
+      createJobObjectW: () => 100n,
+      setInformationJobObject: () => 1,
+      getStdHandle: () => 200n,
+      setHandleInformation: (_handle: unknown, _mask: number, flags: number) => {
+        if (flags === 0) lastError = 6
+        return 1
+      },
+      createProcessAsUserW: () => { lastError = 2; return 0 },
+      getLastError: () => lastError,
+      closeHandle: () => { lastError = 6; return 1 },
+      formatMessageW: () => 0,
+    } as unknown as Win32Bindings
+
+    let failure: unknown
+    try {
+      spawnSandboxedInherited(api, 300n as NativePtr, { command: "missing.exe", args: [], cwd: "C:\\owned" })
+    } catch (error) {
+      failure = error
+    }
+    expect(failure).toBeInstanceOf(Win32Error)
+    expect(failure).toMatchObject({ api: "CreateProcessAsUserW", win32Code: 2 })
   })
 })

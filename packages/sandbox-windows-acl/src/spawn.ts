@@ -317,13 +317,13 @@ export function spawnSandboxedInherited(
     null, options.cwd,
     startupInfo, processInfo,
   )
+  const createError = created === 0 ? api.getLastError() : undefined
   restoreInherit(stdIn)
   restoreInherit(stdOut)
   restoreInherit(stdErr)
   if (created === 0) {
-    const win32Code = api.getLastError()
     api.closeHandle(job)
-    throwWin32(api, 'CreateProcessAsUserW', win32Code, `command: ${options.command}, cwd: ${options.cwd}`)
+    throwWin32(api, 'CreateProcessAsUserW', createError!, `command: ${options.command}, cwd: ${options.cwd}`)
   }
 
   const info = decodeProcessInfo(processInfo)
