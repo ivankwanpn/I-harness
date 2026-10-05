@@ -1,8 +1,18 @@
 import { describe, expect, it } from "vitest"
 import { tmpdir } from "node:os"
-import { SandboxUnavailableError } from "@i-harness/sandbox"
+import { classifyRunnerFailure, SandboxUnavailableError } from "@i-harness/sandbox"
 import { createWindowsAclSandbox } from "../src/index.ts"
 import type { SandboxPolicy } from "@i-harness/sandbox"
+
+// Reproduced on this host (Windows 11 26200, Git Bash 5.3.15) with the REAL
+// provider: a confined MSYS/Cygwin program cannot create the named signal pipe
+// its runtime needs, so it dies inside DLL initialization before the command
+// body runs. Verbatim stderr and exit code, captured through `spawnSync` on the
+// provider's own argv.
+const MSYS_SIGNAL_PIPE_FATAL =
+  "      0 [main] bash (16664) C:\\Program Files\\Git\\bin\\..\\usr\\bin\\bash.exe: *** fatal error - couldn't create signal pipe, Win32 error 5"
+/** STATUS_DLL_INIT_FAILED — what Node reports for that death (`status >>> 0`). */
+const DLL_INIT_FAILED = 3221225794
 
 const readOnly: SandboxPolicy = { mode: "read-only", workspaceRoot: process.cwd() }
 
@@ -37,7 +47,42 @@ describe("createWindowsAclSandbox", () => {
     ])
     expect(confined.enforcement).toBe("partial")
     expect(confined.denialSignatures).toEqual(["access is denied", "access to the path", "permission denied"])
-    expect(confined.runnerFailureRules).toEqual([{ allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] }])
+    expect(confined.runnerFailureRules).toEqual([
+      { allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] },
+      { allowedExitCodes: [DLL_INIT_FAILED], fatalSignatures: ["couldn't create signal pipe"] },
+    ])
+  })
+
+  // The child-level counterpart of the runner rule above: the runner STARTED
+  // and mirrored its child's status, so the runner signature never appears —
+  // the evidence is the MSYS fatal line on the child's own stderr. Without a
+  // rule for it, exec hands the caller a bare 0xC0000142 and nothing says the
+  // sandbox is why the command never ran.
+  it("classifies an MSYS child that died in initialization under the token", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "workspace-write" })
+    const confined = provider.confine(["bash.exe", "-c", "echo hi"], { mode: "workspace-write", workspaceRoot: process.cwd() })
+    expect(classifyRunnerFailure({ exitCode: DLL_INIT_FAILED, stderr: { text: MSYS_SIGNAL_PIPE_FATAL } }, confined.runnerFailureRules))
+      .toEqual({ detail: MSYS_SIGNAL_PIPE_FATAL })
+  })
+
+  it("keeps that rule exit-gated: the same fatal under another status is an ordinary failure", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "workspace-write" })
+    const confined = provider.confine(["bash.exe", "-c", "echo hi"], { mode: "workspace-write", workspaceRoot: process.cwd() })
+    // A confined command may legitimately exit non-zero AND print a line that
+    // happens to carry the signature (e.g. `grep "couldn't create signal pipe"`).
+    // Claims about the SANDBOX require the status that only this death produces.
+    expect(classifyRunnerFailure({ exitCode: 1, stderr: { text: MSYS_SIGNAL_PIPE_FATAL } }, confined.runnerFailureRules))
+      .toBeUndefined()
+  })
+
+  it("keeps that rule signature-gated: STATUS_DLL_INIT_FAILED alone stays an ordinary failure", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "workspace-write" })
+    const confined = provider.confine(["bash.exe", "-c", "echo hi"], { mode: "workspace-write", workspaceRoot: process.cwd() })
+    // A native command can die in DLL init for reasons that have nothing to do
+    // with the restriction (a missing dependency, say). Blaming the sandbox for
+    // those would send the model to a wider mode that cannot help.
+    expect(classifyRunnerFailure({ exitCode: DLL_INIT_FAILED, stderr: { text: "The code execution cannot proceed because foo.dll was not found." } }, confined.runnerFailureRules))
+      .toBeUndefined()
   })
 
   it("agentless workspace-write passes no SID flags (the runner owns a fresh private temp per execution)", () => {

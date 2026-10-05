@@ -269,7 +269,7 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
         confined.runnerFailureRules,
       )
       if (failure) {
-        rejectDone(new SandboxUnavailableError(mode, failure.detail))
+        rejectDone(new SandboxUnavailableError(mode, failure.detail, "command-not-run"))
         return
       }
     }
@@ -375,7 +375,7 @@ async function runStream(cmd: ExecCommand, options: ExecStreamRunOptions, sandbo
   const cleanErr = Buffer.concat(stderr).toString("utf8").replace(/\r\n/g, "\n")
   if (metadata.stopReason !== "timeout" && code !== 0 && confined && mode !== undefined) {
     const failure = classifyRunnerFailure({ exitCode: code, stderr: { text: cleanErr } }, confined.runnerFailureRules)
-    if (failure) throw new SandboxUnavailableError(mode, failure.detail)
+    if (failure) throw new SandboxUnavailableError(mode, failure.detail, "command-not-run")
   }
   return { stdout: "", stderr: cleanErr, exitCode: code, timedOut: metadata.stopReason === "timeout", stream: metadata }
 }

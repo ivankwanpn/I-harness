@@ -54,6 +54,29 @@ function refusingExec(): ExecService {
   }
 }
 
+/** An `ExecService` that refuses the way a RUNNER FAILURE does: the backend IS
+ *  composed and started, and the confined COMMAND could not run. Same refusal
+ *  shape as `refusingExec`, a DIFFERENT reason — and the shell has to tell them
+ *  apart, because only one of the two can be fixed by a wider mode. */
+function commandNotRunExec(detail: string): ExecService {
+  const refuse = (cmd: ExecCommand): never => {
+    const policy = cmd.sandbox
+    if (policy === undefined || policy.mode === "danger-full-access") {
+      throw new Error(`commandNotRunExec: no confined policy on this command (sandbox=${String(policy?.mode)})`)
+    }
+    throw new SandboxUnavailableError(policy.mode, detail, "command-not-run")
+  }
+  return {
+    run: async (cmd) => refuse(cmd),
+    runBackground: (cmd) => refuse(cmd),
+    getOutput: () => {
+      throw new Error("commandNotRunExec: getOutput must not be reached")
+    },
+    killJob: () => "already-finished",
+    listJobs: () => [],
+  }
+}
+
 const toolNamed = (name: string): Tool => {
   const tool = createShellTools({
     exec: refusingExec(),
@@ -124,6 +147,49 @@ describe("a sandbox-unavailable refusal is RETURNED on every path", () => {
       sandboxPolicy: () => ({ mode: "read-only", workspaceRoot: "/ws" }),
     }).find((t) => t.name === "pwsh")!
     await expect(pwsh.execute({ command: "true" }, {})).rejects.toThrow("spawn ENOENT")
+  })
+
+  // The OTHER reason a confined command does not run, and the one the model
+  // meets on Windows: the backend starts fine and mirrors its child's status, so
+  // this is not "no backend" — it is "this program cannot run INSIDE the
+  // backend". The difference decides the advice, so it must reach the model.
+  it("a command that could not run is refused with the REAL reason, not a no-backend claim", async () => {
+    const detail =
+      "      0 [main] bash (16664) C:\\Program Files\\Git\\bin\\..\\usr\\bin\\bash.exe: *** fatal error - couldn't create signal pipe, Win32 error 5"
+    const tools = createShellTools({
+      exec: commandNotRunExec(detail),
+      sandboxPolicy: () => ({ mode: "workspace-write", workspaceRoot: "/ws" }),
+      cwd: "/ws",
+    })
+    const result = (await tools.find((t) => t.name === "pwsh")!.execute({ command: "true" }, {})) as { stderr?: string; exitCode?: number }
+    const denial = denialOf(result)
+    expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "workspace-write" })
+    // The diagnostic — the only thing that says WHY the command never ran.
+    expect(denial.reason).toContain("couldn't create signal pipe")
+    // …and appear EXACTLY once. Relaying the error's own MESSAGE as the detail
+    // nested two copies of the same framing ("…could not run this command… :
+    // sandbox mode … could not run this command…"), which is what the first
+    // draft of this change shipped; the refusal has to carry the RAW cause.
+    expect(denial.reason).toBe(
+      `the workspace-write sandbox could not run this pwsh command, so it was not run unconfined: ${detail}`,
+    )
+    // Both of these are FALSE here: a native child DOES run under this backend
+    // (verified: confined cmd.exe/node.exe/git.exe exit 0), and a wider mode is
+    // exactly what fixes it.
+    expect(denial.reason).not.toContain("no sandbox backend is usable on this host")
+    expect(denial.reason).not.toContain("cannot help")
+    // EVERY confined mode refuses this program, so the only mode worth naming is
+    // the unconfined one — denialFor's first-wider-mode default would name a
+    // mode that refuses identically, which is advice the model cannot act on.
+    expect(denial.escalation).toContain('sandbox_permissions set to "danger-full-access"')
+    expect(result.exitCode).toBe(-1)
+  })
+
+  it("the no-backend refusal keeps its verbatim text and its no-hint denial", async () => {
+    // Regression pin: the two reasons must not be collapsed into one sentence.
+    const denial = denialOf(await toolNamed("pwsh").execute({ command: "true" }, {}) as never)
+    expect(denial.reason).toContain("no sandbox backend is usable on this host")
+    expect(denial.escalation).toBeUndefined()
   })
 })
 

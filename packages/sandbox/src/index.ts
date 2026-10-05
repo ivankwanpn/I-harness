@@ -43,16 +43,48 @@ export interface SandboxProvider {
 
 export const SANDBOX_UNAVAILABLE = "SANDBOX_UNAVAILABLE"
 
+/**
+ * WHY a confined command could not run — the distinction a consumer needs to
+ * give the model advice it can ACT on:
+ *
+ *  - `no-backend`: nothing can confine in ANY mode here (no provider composed, a
+ *    missing capability, a backend that failed its own probe or was disposed).
+ *    No mode is worth asking for, so a consumer must NOT carry escalation
+ *    guidance.
+ *  - `command-not-run`: a backend IS composed and it started, and the confined
+ *    COMMAND could not run — the runner failed, or (on Windows) an MSYS/Cygwin
+ *    child died in DLL initialization before its body ran. The backend is not
+ *    broken for everything: a wider mode is exactly the remedy, and `detail`
+ *    names the program-level cause.
+ *
+ * Collapsing the two into one sentence is what made the shell tell the model
+ * "no backend exists for any mode here" about a host whose backend confines
+ * cmd.exe, node.exe and git.exe perfectly well.
+ */
+export type SandboxUnavailableKind = "no-backend" | "command-not-run"
+
 export class SandboxUnavailableError extends Error {
-  constructor(mode: ConfinedSandboxMode, detail?: string) {
+  /** Defaults to `no-backend`: the reason this class was written for, and the
+   * answer for every construction site that cannot know better. */
+  readonly kind: SandboxUnavailableKind
+  /** The RAW cause, or `undefined` when the producer named none. Carried apart
+   * from `message` so a consumer can compose its own sentence WITHOUT nesting
+   * this class's framing inside it — the shell learned that the hard way. */
+  readonly detail: string | undefined
+  constructor(mode: ConfinedSandboxMode, detail?: string, kind: SandboxUnavailableKind = "no-backend") {
     super(
-      `sandbox mode "${mode}" is requested but no sandbox backend is usable on this host; `
-      + "refusing to run the command unconfined. Install bubblewrap (Linux) or ensure the ACL "
-      + "restricted-token runner can start (Windows) — otherwise switch the consumer to "
-      + "danger-full-access."
-      + (detail === undefined ? "" : ` Runner failure: ${detail}`),
+      kind === "command-not-run"
+        ? `sandbox mode "${mode}" could not run this command, so it was NOT run unconfined: `
+          + (detail ?? "the confined command failed before it ran")
+        : `sandbox mode "${mode}" is requested but no sandbox backend is usable on this host; `
+          + "refusing to run the command unconfined. Install bubblewrap (Linux) or ensure the ACL "
+          + "restricted-token runner can start (Windows) — otherwise switch the consumer to "
+          + "danger-full-access."
+          + (detail === undefined ? "" : ` Runner failure: ${detail}`),
     )
     this.name = "SandboxUnavailableError"
+    this.kind = kind
+    this.detail = detail
   }
 }
 

@@ -7,7 +7,8 @@ import type { Tool, ToolExec, PreparedToolIdentity } from "@i-harness/core-tools
 import type { ExecService, PromotedRun } from "@i-harness/exec"
 import { registerExec, registerRetainedOutput, retainedOutputReader } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
-import { ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
+import { denialFor, ESCALATION_TARGETS, SandboxUnavailableError, resolveCallPolicy } from "@i-harness/sandbox"
+import type { SandboxUnavailableKind } from "@i-harness/sandbox"
 import { createTextRetainer, createSpillStore, spillNotice, type RetentionMode, type SpillStore, type SpillStoreOptions } from "@i-harness/output-retention"
 
 export interface ResolvedShell {
@@ -343,27 +344,53 @@ async function resolveShellCall(
  * returns a legible failure for the same class of fact ("this host cannot run
  * what you asked"), and so does this one.
  *
- * TWO THINGS THIS MUST NOT DO.
+ * WHAT IT MUST NOT DO.
  *
- * 1. It must not carry escalation guidance. `denialFor` attaches "retry with
- *    sandbox_permissions set to …" whenever a wider mode exists, and here the
- *    problem is that NO backend is usable — not that the mode is narrow. Sending
- *    the model to ask for a wider mode points it at a request that cannot help.
- *    So the denial is constructed literally. The shared thing is the TYPE
- *    (`SandboxDenial`), which is what the Task 2 corrections settled on.
+ * 1. It must never carry escalation guidance when the reason is `no-backend`:
+ *    there NO backend is usable for ANY mode, so sending the model after a wider
+ *    one points it at a request that cannot help. That denial is constructed
+ *    literally, and the shared thing is the TYPE (`SandboxDenial`), which is what
+ *    the Task 2 corrections settled on. The OTHER reason, `command-not-run`, is
+ *    the opposite fact and takes the opposite advice — see the branch below.
  * 2. It must never fall back to running the command unconfined. Refusing is the
  *    whole point; the confinement boundary is `exec` failing closed, and
  *    swallowing the throw into a spawn would be strictly worse than the crash.
  *
  * `policy` is the policy THIS call handed to exec (the `mode` the model is told
  * about); the fallback only covers the theoretical case where the thunk returns
- * nothing after the throwing call already read a confined policy.
+ * nothing after the throwing call already read a confined policy. `kind` and
+ * `detail` come from the `SandboxUnavailableError` itself, and `kind` is what
+ * decides which of the two facts this refusal is reporting.
  */
 function sandboxUnavailableFailure(
   tool: "bash" | "pwsh" | "shell",
   surface: SandboxSurface,
   policy: SandboxExecutionPolicy | undefined,
+  kind: SandboxUnavailableKind = "no-backend",
+  detail = "",
 ): { stdout: string; stderr: string; exitCode: number } {
+  // A backend that EXISTS and merely could not run THIS program is a different
+  // fact from "no backend exists", and it takes the opposite advice. Measured on
+  // this host: a confined native cmd.exe / node.exe / git.exe all exit 0, so the
+  // sentence at the bottom of this function would be false — while
+  // `danger-full-access` is exactly what runs the program. Every CONFINED mode
+  // refuses such a program (Git Bash dies identically under read-only and under
+  // workspace-write), so the mode worth naming is the unconfined one:
+  // `denialFor`'s first-wider-mode default would name a mode that refuses
+  // identically, which is advice the model cannot act on.
+  if (kind === "command-not-run") {
+    const mode = policy?.mode ?? "read-only"
+    return {
+      stdout: "",
+      stderr: JSON.stringify(denialFor(
+        surface,
+        mode,
+        `the ${mode} sandbox could not run this ${tool} command, so it was not run unconfined: ${detail}`,
+        "danger-full-access",
+      )),
+      exitCode: -1,
+    }
+  }
   const denial: SandboxDenial = {
     code: "SANDBOX_DENIED",
     surface,
@@ -579,7 +606,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         // M62 Step 7: exec refuses this command because no backend is composed
         // for the confined mode now in force. Returning the refusal keeps the
         // turn alive so the model can adapt; see sandboxUnavailableFailure.
-        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("bash", "shell", sandboxResolved)
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("bash", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
         throw err
       }
     },
@@ -624,7 +651,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         return retainedRunResult(result, "pwsh-stdout")
       } catch (err) {
         // M62 Step 7 — see the bash tool above.
-        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved)
+        if (err instanceof SandboxUnavailableError) return sandboxUnavailableFailure("pwsh", "shell", sandboxResolved, err.kind, err.detail ?? err.message)
         throw err
       }
     },
@@ -678,7 +705,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
         const result = deps.backgroundAfterMs === undefined ? await deps.exec.run(command) : await deps.exec.run(command, { backgroundAfterMs: deps.backgroundAfterMs })
         return "promoted" in result ? promotedResult(result, "shell", deps.timeoutMs) : retainedRunResult(result, "shell-stdout")
       } catch (error) {
-        if (error instanceof SandboxUnavailableError) return sandboxUnavailableFailure("shell", "shell", sandbox)
+        if (error instanceof SandboxUnavailableError) return sandboxUnavailableFailure("shell", "shell", sandbox, error.kind, error.detail ?? error.message)
         throw error
       }
     },

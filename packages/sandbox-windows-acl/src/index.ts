@@ -466,13 +466,38 @@ const DENIAL_SIGNATURES = ['access is denied', 'access to the path', 'permission
 const WINDOWS_ACL_RUNNER_FAILURE_EXIT = 127
 
 /**
- * Runner-owned fatal diagnostics: the runner prints `windows-acl-run:
- * <detail>` on every runner-side failure and exits 127 — the rule is
- * exit-gated on that status so a confined command that merely PRINTS the
- * signature (or a runner cleanup failure reported on a non-zero child exit)
- * is never misclassified as "the command did not run".
+ * The CHILD-side death this backend's restriction produces: an MSYS/Cygwin
+ * program cannot create the named signal pipe its runtime starts with, so it
+ * dies inside DLL initialization before the command body runs. Windows reports
+ * STATUS_DLL_INIT_FAILED (0xC0000142); Node reads that back as the unsigned
+ * 3221225794 (verified empirically on this host, Windows 11 26200: the real
+ * provider's confined Git Bash 5.3.15 exits 3221225794 with
+ * "*** fatal error - couldn't create signal pipe, Win32 error 5" on stderr and
+ * nothing on stdout, while a confined native cmd.exe/node/git.exe exits 0). The
+ * runner itself starts fine and mirrors that status, so the runner-owned rule
+ * below never sees it.
  */
-const RUNNER_FAILURE_RULES = [{ allowedExitCodes: [WINDOWS_ACL_RUNNER_FAILURE_EXIT], fatalSignatures: ['windows-acl-run: '] }]
+const WINDOWS_ACL_MSYS_INIT_FAILURE_EXIT = 3221225794
+
+/**
+ * The ways a confined command turns out NEVER to have run — the seam's
+ * `runnerFailureRules`, which exec turns into SandboxUnavailableError instead of
+ * an ordinary nonzero exit. Two dialects, each exit-gated so a confined command
+ * that merely PRINTS a signature (or a runner cleanup failure reported on a
+ * non-zero child exit) is never misclassified as "the command did not run":
+ *
+ *  - the RUNNER's own failure: it prints `windows-acl-run: <detail>` and exits
+ *    127.
+ *  - an MSYS/Cygwin CHILD that died in initialization under the token (the
+ *    signal-pipe fatal above). Both the status AND the signature are required:
+ *    a native command can die in DLL init for reasons the restriction did not
+ *    cause — a missing dependency, say — and blaming the sandbox for those
+ *    would send the model to a wider mode that cannot help it.
+ */
+const RUNNER_FAILURE_RULES = [
+  { allowedExitCodes: [WINDOWS_ACL_RUNNER_FAILURE_EXIT], fatalSignatures: ['windows-acl-run: '] },
+  { allowedExitCodes: [WINDOWS_ACL_MSYS_INIT_FAILURE_EXIT], fatalSignatures: ["couldn't create signal pipe"] },
+]
 
 /** The runner entry argv prefix. Source launch: the package source through
  * tsx. DIST (build-dist defines I_HARNESS_DIST): the sibling bundle entry

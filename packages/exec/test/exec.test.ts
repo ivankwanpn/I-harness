@@ -282,4 +282,36 @@ describe("exec sandbox", () => {
     expect(result.exitCode).toBe(125)
     expect(result.stderr).toContain("command body failed")
   })
+
+  // The refusal has to say WHY, because the two reasons need OPPOSITE advice:
+  // with no backend at all a wider mode is pointless, while a backend that
+  // merely cannot run THIS program is exactly what a wider mode fixes. `kind`
+  // is that discriminator; the shell reads it to pick the right sentence.
+  it("a classified confined failure names the reason: the COMMAND never ran", async () => {
+    const provider: SandboxProvider = {
+      confine(argv, _policy) {
+        return {
+          argv: [process.execPath, "-e", `console.error("*** fatal error - couldn't create signal pipe, Win32 error 5"); process.exit(3221225794)`, ...argv],
+          enforcement: "partial",
+          denialSignatures: [],
+          runnerFailureRules: [{ allowedExitCodes: [3221225794], fatalSignatures: ["couldn't create signal pipe"] }],
+        }
+      },
+    }
+    const exec = registerExec(createContext(), { sandbox: provider })
+    const err = await exec.run({ argv: ["echo", "hi"], sandbox: { mode: "read-only", workspaceRoot: process.cwd() } })
+      .then(() => undefined, (e: unknown) => e)
+    expect(err).toBeInstanceOf(SandboxUnavailableError)
+    expect((err as SandboxUnavailableError).kind).toBe("command-not-run")
+    // The detail is the only thing that explains the death; it must survive.
+    expect((err as SandboxUnavailableError).message).toContain("couldn't create signal pipe")
+  })
+
+  it("no composed backend names the other reason: there is no backend for ANY mode", async () => {
+    const exec = registerExec(createContext()) // no provider
+    const err = await exec.run({ argv: ["echo", "hi"], sandbox: { mode: "read-only", workspaceRoot: process.cwd() } })
+      .then(() => undefined, (e: unknown) => e)
+    expect(err).toBeInstanceOf(SandboxUnavailableError)
+    expect((err as SandboxUnavailableError).kind).toBe("no-backend")
+  })
 })
