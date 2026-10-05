@@ -163,7 +163,7 @@ the execution path uses ordinary `child_process.spawn`. Its permission and cwd
 checks are admission/bookkeeping, not a per-root OS write boundary. Copying that
 spawn path would remove IH's enforcement and is not the selected design.
 
-IH will adopt DSH's native Windows Agent Shell automatic default: PowerShell 7,
+IH now adopts DSH's native Windows Agent Shell automatic default: PowerShell 7,
 then Windows PowerShell, then CMD, or a legible unavailable result. Explicit
 shell choices and interactive terminal auto-selection retain their separate
 behavior. The existing same-user capability ACL/token remains responsible for
@@ -181,6 +181,40 @@ does not establish that the referenced file itself is unreadable. The authority
 gate therefore uses built-in `Get-Content`/`Set-Content` cmdlets and verifies
 actual contents and write outcomes; no language-policy override or extra
 read-only temp write grant is introduced.
+
+## Delivered adaptation and verification
+
+Implemented in local commits `c1b2a220` and `a90879ee` (Windows Agent automatic
+selection and portable fixtures), `ddcc67c5` (native startup error preservation
+and PowerShell authority gate), followed by the documentation commit.
+
+- Windows Agent `auto` selects PS7 → Windows PowerShell → CMD → unavailable.
+  Settings state, model shell dialect and launched argv use that resolved
+  executable. Explicit shell choices and terminal/non-Windows auto behavior
+  retain their separate semantics. No saved setting migration is needed.
+- A failed `CreateProcessAsUserW` saves `GetLastError` before inheritance
+  restoration and Job closure. Its regression failed with code 6 before the
+  fix and passes with the original code 2 after it.
+- The real detected PS7 cmdlet gate passes outside reads, workspace-only writes,
+  and read-only denial on the same workspace after standing grants. Parent-side
+  checks confirm byte-identical outside content and preserved workspace content.
+  Multi-root (3), read visibility (1), and Job behavior (2) native gates pass.
+- Gateway/shell prepared-executable verification: 3 files, 15 tests pass.
+- `pnpm -r typecheck`: exit 0.
+- First sequential all-package test run found only the fresh checkout's missing
+  generated `attachment-reader-worker.mjs`: 17 Desktop failures. The existing
+  `pnpm --filter @i-harness/desktop attachment:build` generated the prerequisite,
+  and Desktop then passed 686 tests with 3 skips. No source change was needed.
+- Fresh `pnpm -r --workspace-concurrency=1 --no-bail test` after that build:
+  **73 packages, 4,811 passed, 13 skipped, 0 failed, exit 0**.
+- Independent task reviews and whole-branch review: no outstanding findings.
+  `git diff --check` passes. The implementation remains on
+  `codex/windows-sandbox-toolchain` in the active checkout.
+
+This delivers the supported native Windows route. Confined MSYS and piped Node
+toolchains retain the documented restrictions; the adaptation does not claim
+their general compatibility. No account, privileged task, service, elevation,
+original-reference ACL mutation, or new Low label was introduced.
 
 ## Evidence and cleanup state
 
