@@ -98,6 +98,44 @@ service as its work root and removes it in `afterEach`, and no test reads a spec
 The roots now sit under `os.tmpdir()`, the pattern `e2e/helpers.ts` already uses. Verified: 40
 failed → 46 passed with every assertion untouched, typecheck green.
 
+## Finding 5 — the aggregate test gate is not reliable on this host
+
+`pnpm -r test` was red in all five runs, and the failing test MOVED:
+
+| run | red | note |
+|---|---|---|
+| 1 | `packages/code-retrieval` — 40 tests, all `ENOENT mkdtemp` | deterministic; that is Finding 4 |
+| 2 | `packages/fs-search` bounded search — `Test timed out in 5000ms` | |
+| 3 | the same test again | |
+| 4 | `packages/terminal` "opens pwsh by its user-facing command name" — `5000ms` | an fs-search timeout bump was applied |
+| 5 | `packages/fs-search` again | bump reverted |
+
+Every one is a test that spawns a real process (ripgrep, or a pwsh ConPTY) and hits vitest's 5s
+default. This host is 8 logical / 4 physical cores; `pnpm -r` already runs four packages at once
+while each package's vitest spawns its own worker pool, and the I-harness Desktop app itself holds
+~760 MB across 5 processes. **Bumping one test's timeout does not fix it** — run 4 proved the
+victim simply moves — so no timeout was left changed and that symptom fix was reverted.
+`--workspace-concurrency=1` does not settle it either: the same four spawn-heavy packages still
+timed out the terminal test at 5s when run one package at a time.
+
+The two remaining failures are not the same kind of thing:
+
+- `packages/fs-search`'s `bounded.test.ts` passes alone (46/46, 4.8s) and beside one sibling
+  package (6.4s), so its timeout is load-only.
+- `packages/terminal`'s "opens pwsh by its user-facing command name" failed 3/3 STANDALONE, with
+  `Error: AttachConsole failed` repeated, and passed in some aggregate runs. It opens the BARE
+  name `pwsh`, which on this host resolves to `…\Microsoft\WindowsApps\pwsh.exe` — an execution
+  alias, and precisely the thing `@i-harness/shell`'s `powerShellExecutableAvailable` probe exists
+  to distrust. Whether the fix is to hand the test a real pwsh path, to tighten its skip
+  precondition, or to give it an explicit timeout is a judgement call, and it was NOT taken here.
+
+Neither is caused by this work: `packages/terminal` appears in none of the four commits, and the
+failing assertions drive `createTerminalService` (node-pty) without reaching the sandbox seam.
+
+What IS green on this host, every run: `pnpm typecheck`, `check-thresholds.mjs`,
+`verify:reachability` and `pnpm e2e` (12 tests across 5 files), plus every package suite when run
+on its own apart from the terminal case above.
+
 ## Suspected and disproved (recorded so nobody re-opens them)
 
 - **ripgrep missing.** `rg` is not on PATH, but the install bundles
