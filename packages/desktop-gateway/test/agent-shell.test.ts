@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join, win32 } from "node:path"
+import { dirname, join, win32 } from "node:path"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { createShellTools, registerShell } from "@i-harness/shell"
@@ -47,7 +47,7 @@ it("preserves explicit Git Bash, terminal auto, and non-Windows Agent auto", asy
   expect(settings.resolve()).toMatchObject({ id: "git-bash", dialect: "posix" })
   const { listDesktopTerminalShellOptions } = await import("../src/terminal-shells.ts")
   expect(listDesktopTerminalShellOptions({ platform: "win32", env: { SystemRoot: "C:\\Windows", PATH: "D:\\PowerShell" }, exists: (candidate) => installed.has(candidate.replaceAll("\\", "/")) })[0]).toMatchObject({ id: "auto", command: "C:\\Program Files\\Git\\bin\\bash.exe" })
-  const unix = createAgentShellSettings(join(path, "unix-settings.json"), { platform: "linux", env: { SHELL: "/bin/bash", PATH: "/bin" }, exists: (candidate) => candidate === "/bin/bash" })
+  const unix = createAgentShellSettings(join(dirname(path), "unix-settings.json"), { platform: "linux", env: { SHELL: "/bin/bash", PATH: "/bin" }, exists: (candidate) => candidate === "/bin/bash" })
   expect(unix.resolve()).toMatchObject({ id: "auto", command: "/bin/bash", dialect: "posix" })
 })
 it("uses the auto-selected native shell in generic shell argv and PowerShell approval tokenization", async () => {
