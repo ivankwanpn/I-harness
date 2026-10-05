@@ -181,6 +181,45 @@ handed to a mock (`createDesktopTerminal("D:/agent-complete/playground", …)` p
 `cwd` assertion): it never touches the filesystem, so it neither breaks nor depends on that path
 existing. It is left alone, and named here so the difference is on the record.
 
+## Build record — the packaged artifact for this branch
+
+Built on 2026-10-05 from this branch (tip `dc855311`) so the fixes above can be exercised in the
+installed Desktop app. Two build prerequisites were NOT present on this machine and were staged
+into the repository's gitignored build directories:
+
+- **electron 44.4.5 binary** — `packages/desktop/node_modules/electron` existed but its `dist/`
+  did not (no `postinstall` in that package, so pnpm never fetched it). Staged with
+  `node node_modules/electron/install.js`.
+- **NSIS 3.11** — not installed, and unlike `scripts/build-installer.mjs` the DESKTOP installer
+  does not download it. Staged to `build/tools/makensis/` (the path that script probes) from
+  `nsis-3.11.zip`; `makensis /VERSION` → `v3.11`.
+
+Commands:
+
+```
+pnpm --filter @i-harness/desktop dist
+pnpm --filter @i-harness/desktop installer -- --nsis <repo>/build/tools/makensis/makensis.exe
+```
+
+Artifacts in `packages/desktop/release/`:
+
+| artifact | size | sha256 |
+|---|---|---|
+| `I-harness-Desktop-Setup-0.1.1.exe` | 138,634,616 B | `de76f592852d92cad608ef98115582ad088ed2a57a4e2fb72df1722e0a8889c1` |
+| `I-harness-Desktop-0.1.1.zip` (portable) | 216,319,835 B | — |
+
+The builder's own record is `I-harness-Desktop-Setup-0.1.1.installer-build.json`
+(payload 7951 files / 577,121,250 B, payloadId `3b28d542…`, payload exe
+`bd14928e…`, makensis `f497e92d…`). The version is still **0.1.1** — it was not bumped, so this
+Setup updates the existing installation in place and is distinguishable only by hash/date.
+
+The packaged payload was verified to CONTAIN this work rather than a stale tree: the shipped
+gateway sources (`resources/gateway/node_modules/@i-harness/*`) carry `SandboxUnavailableKind`,
+`WINDOWS_ACL_MSYS_INIT_FAILURE_EXIT`, `shellCommandEnvironment` and `command-not-run`, and contain
+ZERO occurrences of the pre-fix `bashCommandEnvironment`. Installing it was NOT done here: the
+Desktop refuses to update while it is running — which is the process this audit ran inside — and
+the destination is `C:\Program Files`, requiring elevation.
+
 ## Suspected and disproved (recorded so nobody re-opens them)
 
 - **ripgrep missing.** `rg` is not on PATH, but the install bundles
