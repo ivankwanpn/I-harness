@@ -1,5 +1,12 @@
 # Windows environment audit, toolchain fixes, and the sandbox mechanism — handoff
 
+> **2026-10-05 follow-up review:** retain the measured results below, but do not use
+> §3.1–3.2's named-pipe exclusion or §3.3/§3.5's Low-only replacement claim as an
+> implementation premise. Server creation did not test named-pipe client access;
+> same-user Low labels do not preserve mode downgrade, removed-root denial, or
+> concurrent workspace authority. See [the follow-up audit](../audit/2026-10-05-windows-sandbox-toolchain.md)
+> and the corrected package README. The production backend has not been replaced.
+
 **For:** a reviewer/continuer who is expected to verify this work and keep going.
 **Branch:** `fix/env-audit-findings` (16 commits on top of `2b22e166`), 24 files, +1306/−58.
 **Built artifact handed over:** `packages/desktop/release/I-harness-Desktop-Setup-0.1.1.exe`,

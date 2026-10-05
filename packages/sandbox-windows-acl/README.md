@@ -24,7 +24,7 @@ deepseek-harness Windows backend's documented vocabulary.
 ## No console / window isolation
 
 A hidden console (`CREATE_NO_WINDOW` / `CREATE_NEW_CONSOLE`) is not attainable
-under this restriction scheme — children sharing the host console die with
+under this restriction scheme — children created with those flags die with
 `STATUS_DLL_INIT_FAILED`. Children therefore share the host console (stdio
 redirection is pipe-based and unaffected).
 
@@ -78,8 +78,9 @@ the per-call `SandboxPolicy` is the actual enforcement input.
 
 **已知不可保護向量（pin 成活文檔）**：全域任意路徑讀取不受限；外部 Everyone-ACL 物件寫入；
 NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console 隔離不可得；named-pipe 孫進程。
-（M22 另發現：confined target 無法 spawn 子進程（EPERM）——observed；root cause 未調查
-（M25 前 follow-up；見 test/kill-on-close.e2e.ts 的 descendant-denial pin）。）
+（M22 另發現：confined Node target 的 piped-stdio 子行程建立回 EPERM；這不是所有子行程
+建立皆被拒絕的保證。handoff 對照中 inherited／ignored stdio 及原生行程建立可成功；
+見 test/kill-on-close.e2e.ts 的 descendant-denial pin。）
 
 **MSYS/Cygwin 子行程在此權杖下無法啟動（2026-10-05 root-caused）**：Git Bash／Rtools bash／
 msys 系工具（`usr/bin/ls.exe` 亦然）在 WRITE_RESTRICTED 權杖下於 **DLL 初始化階段**就死亡：
@@ -94,48 +95,62 @@ danger-full-access 可跑。此為**子行程**failure 而非 runner failure：r
 `danger-full-access` 升級路徑（2026-10-05 修正，見
 `docs/audit/2026-10-05-ih-environment-audit-and-remediation.md`）。
 
-**機制（2026-10-05 量測後更正）**：失敗在**匿名 pipe 的 pass-2 檢查**，不是具名 pipe、也不是
-NPFS 命名空間。以本機受限行程 in-process 實測：
+**管線量測與其限制（2026-10-05 審查更正）**：以下保留 handoff 主機上的
+in-process 建立結果。`CreateNamedPipeW` 這一列只量測 server 建立，沒有量測 client
+以 `CreateFileW` 開啟、寫入及讀回，不能據此排除具名管線的存取檢查。
 
 | 建立方式 | `NULL` SA（token default DACL） | DACL = Everyone GA | DACL = 僅使用者自己 | DACL = Administrators |
 |---|---|---|---|---|
 | `CreatePipe`（匿名） | ✅ | ✅ | ❌ **error 5** | ❌ **error 5** |
 | `CreateNamedPipeW`（具名） | ✅ | ✅ | ✅ | ✅ |
 
-即：`WRITE_RESTRICTED` 的 pass-2 只作用在**匿名** pipe，而且**僅當明確 DACL 未列出任何限制
-SID** 時才拒絕 —— 成功／失敗與「DACL 是否含限制 SID（`Everyone` 在 restricting list 內、使用者
-SID 不在）」完全一致。`msys-2.0.dll` 自身**不建構** security descriptor
-（`InitializeSecurityDescriptor`／`SetSecurityDescriptorDacl`／`ConvertStringSecurityDescriptor…`
-皆 0 次；沒有任何 SDDL 字面值），只使用 `SECURITY_ATTRIBUTES`(6) 與 `CreatePipe`(3)，因此它傳的是
-**靜態編譯進去的 SD**。既然「Everyone 版」的 `CreatePipe` 成功而 Cygwin 的失敗，Cygwin 用的
-**不可能**是 Everyone 授權；其 DACL 指向的應是使用者／建立者自身一類的 SID，落在 restricting
-list 之外。既有的 `setTokenDefaultDaclGrant` 救不到它，因為那個修法只影響**未附明確 SD** 的物件。
-（先前的說法——「具名 signal pipe 在 NPFS 層被拒」——已被上表推翻並更正。）
+Microsoft 明確記載 named-pipe client 在 `CreateFile`／`CallNamedPipe` 時會做存取檢查。
+MSYS2 的公開原始碼也顯示 signal pipe 使用 `sec_user_nih`，先 `CreateNamedPipe`，再
+`CreateFile` 開啟 client。因此「pass-2 只作用於匿名管線」及「signal pipe 必定使用靜態
+匿名管線 SD」都不是上表能證明的結論。`setTokenDefaultDaclGrant` 只影響沒有明確 SD 的
+建立操作，不能視為已修復 MSYS 的使用者專屬 SD。
 
-**已找到可行的替代機制（2026-10-05 量測）**：問題出在**受限權杖本身**，不在 pipe。以同一套
-行程管線（本 repo 的 `spawnSandboxedInherited`）實測四種權杖，`bash -c 'echo …; uname -s'`：
+來源：[Microsoft named-pipe security](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights)、
+[MSYS2 signal pipe](https://raw.githubusercontent.com/msys2/msys2-runtime/msys2-3.6.10/winsup/cygwin/sigproc.cc)、
+[MSYS2 pipe server/client](https://raw.githubusercontent.com/msys2/msys2-runtime/msys2-3.6.10/winsup/cygwin/fhandler/pipe.cc)。
+公開版本用於核對機制；這次沒有證明它與已安裝 DLL 的每一行相同。
+
+**相容性對照（handoff 主機的量測，尚非替代後端驗收）**：以同一套行程管線
+（本 repo 的 `spawnSandboxedInherited`）實測四種權杖，`bash -c 'echo …; uname -s'`：
 
 | 權杖 | bash | node（`child_process` spawn） | 寫入中完整性位置 |
 |---|---|---|---|
 | `DISABLE_MAX_PRIVILEGE｜LUA_TOKEN｜WRITE_RESTRICTED`（現行） | ❌ `0xC0000142` | ❌ **EPERM** | 拒絕（隔離成立） |
 | 同上（去掉 `WRITE_RESTRICTED`） | ❌ 載入器即失敗 | ❌ `0xC0000135`（DLL 找不到） | — |
 | 同上 **＋ 低完整性標籤** | ❌ 完全相同的失敗 | ✅ | — |
-| **不用受限權杖，只降完整性等級（Low IL）** | ✅ **`MINGW64_NT-10.0-26200`** | ✅ **`NESTED_OK`** | ❌ **DENIED**（隔離成立） |
+| **不用受限權杖，只降完整性等級（Low IL）** | ✅ **`MINGW64_NT-10.0-26200`** | ✅ **`NESTED_OK`** | ❌ **DENIED**（該 Medium 測試位置） |
 
 附帶釐清：**`WRITE_RESTRICTED` 的語意是「把 restricting-SID 檢查放寬成只檢查寫入」**；少了它，
 限制 SID 對**所有存取**生效（含讀取），所以裝在 `%LOCALAPPDATA%` 的 node 會以 `0xC0000135` 死亡
 （該目錄的 DACL 不含 `Everyone`）。這是為何本後端必須帶這個旗標。
 
-**根因鏈（可重現）**：①受限權杖下，子行程**連自己的 token 都改不了**——Cygwin 的
+**handoff 另記錄的失敗點**：受限權杖下，子行程**連自己的 token 都改不了**——Cygwin 的
 `cygheap_user::init` 呼叫 `NtSetInformationToken(TokenDefaultDacl)` 得到 **`0xC0000022`**
-（token 物件本身的 DACL 不含任何 restricting SID，寫入被 pass-2 拒絕）；②接著它以一個不含
-restricting SID 的 SD 建立匿名 pipe → **error 5**。低完整性等級只改變 ② 的標籤判斷，對 ① 無效，
-所以「加重標籤」救不了它。
+（token 物件本身的 DACL 不含任何 restricting SID，寫入被 pass-2 拒絕）。修正此失敗點仍須
+驗證後續管線 client-open、真正的 Bash／Node 子行程以及寫入範圍，不能由單一呼叫推論
+整條根因鏈已完成驗證。
 
-**因此真正的工作是換掉隔離機制**（Chrome 模型）：以 **Low integrity** 提供 no-write-up 寫隔離，
-並把工作區與私有 temp **標記為低完整性**（`icacls /setintegritylevel`），而非用 capability SID 授
-ACE。**優點**：MSYS 系程式恢復可用，且 node 子行程 spawn 不再 EPERM（受限權杖下任何會 spawn 的
-node 工具鏈都會壞）。**代價／邊界（誠實標註）**：標籤是**單一全域層級**，不像 ACL 能逐目錄授與，
-所以「哪些路徑可寫」必須改成「哪些路徑降標籤」；低 IL 子行程建立的新物件會繼承低標籤；以及本包
-既有的 ACE 授與／`denialSignatures`／`runnerFailureRules` 機制需要重新設計。這是**重新架構**，不是
-調參 —— 本包未實作，僅以量測記錄方向。
+**Low IL 不能直接取代目前的逐範圍寫入授權**：no-write-up 能拒絕上述 Medium 位置，卻不能
+隔離同一使用者其他已降為 Low 的工作區、私有 temp 或既有 Low 目錄。曾授權的根目錄若留著
+Low 標籤，後續唯讀命令或移除該根目錄的命令仍可能寫入；並行會話也可能互相寫入。
+這不是只需標示 `partial` 的相容性調整，而是改變目前模式及權限收回的保證。本包沒有實作
+Low-only 後端，也不應將它描述為已驗收的安全替代方案。
+
+**2026-10-05 原生替代方案驗證**：profile-free AppContainer 試作使用不同 package SID，在
+Medium 測試根目錄的個別 ACE 下成功區分兩個可寫身分與唯讀身分；普通 Low 控制組不能
+寫入這些根目錄。但這條實測路徑的 Git Bash／MSYS 在
+`NtCreateDirectoryObject(\\BaseNamedObjects\\msys-...)` 被拒絕，Node v24.15.0 的同步及
+非同步 piped spawn 皆超過整個 Job 的截止時間。它尚不能支援本次要求的工具鏈。
+此結果不代表所有 AppContainer 配置都已被排除。
+
+獨立 Windows 身分與特權啟動曾列為研究候選；使用者已明確拒絕帳戶／SYSTEM 排程路線。
+本輪改採 DSH 已出貨的 Windows 原生 Shell 選擇：Agent Shell 自動模式優先 PowerShell 7，
+其次 Windows PowerShell，再其次 CMD。手動 Shell 選擇保留；受限模式下明確要求 MSYS
+仍可能取得上述 `SANDBOX_DENIED`，不會偷偷轉成完整存取。這並未宣稱所有 piped Node
+工具鏈已恢复可用。**產品後端仍保留原有 WRITE_RESTRICTED 與 capability ACL 邊界。** 詳見
+[後續審查與原生結果](../../docs/audit/2026-10-05-windows-sandbox-toolchain.md)。
