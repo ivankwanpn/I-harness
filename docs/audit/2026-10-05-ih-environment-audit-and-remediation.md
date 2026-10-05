@@ -100,7 +100,23 @@ failed → 46 passed with every assertion untouched, typecheck green.
 
 ## Finding 5 — the aggregate test gate is not reliable on this host
 
-`pnpm -r test` was red in all five runs, and the failing test MOVED:
+**CORRECTED — read this before quoting the table below.** Two measurement errors sat on top of
+this finding, and both are recorded because they changed the conclusion twice:
+
+1. The first five runs used `pnpm -r test` WITHOUT `--no-bail`, so pnpm bailed at the FIRST
+   failing package and the remaining 60-odd never ran. "The failing test moves" was largely that
+   artifact, and the reasoning built on it — that raising a deadline must be wrong — was wrong
+   with it. Run 6 used the repository's own `pnpm test` (`--no-bail`) and produced the real
+   number, identical in parallel and serial mode: **`Summary: 4 fails, 69 passes`**.
+2. `packages/terminal`'s pwsh test was blamed on the `…\Microsoft\WindowsApps\pwsh.exe` execution
+   alias. It is not: the bare name resolves to the real MSIX pwsh at PATH entry 0, and
+   `Error: AttachConsole failed` is node-pty's `conpty_console_list_agent` noise — it appears in
+   PASSING runs too (e.g. session-executor's PTY test). Driving the same test with
+   `--testTimeout=60000` made it PASS in **5706ms**, which is the actual story: a ConPTY spawn on
+   this host costs seconds. `packages/terminal` and `packages/fs-search` now carry explicit
+   deadlines with every assertion untouched, and neither needs `--testTimeout` any more.
+
+The table below is left as observed, subject to the two corrections above:
 
 | run | red | note |
 |---|---|---|
@@ -113,28 +129,57 @@ failed → 46 passed with every assertion untouched, typecheck green.
 Every one is a test that spawns a real process (ripgrep, or a pwsh ConPTY) and hits vitest's 5s
 default. This host is 8 logical / 4 physical cores; `pnpm -r` already runs four packages at once
 while each package's vitest spawns its own worker pool, and the I-harness Desktop app itself holds
-~760 MB across 5 processes. **Bumping one test's timeout does not fix it** — run 4 proved the
-victim simply moves — so no timeout was left changed and that symptom fix was reverted.
-`--workspace-concurrency=1` does not settle it either: the same four spawn-heavy packages still
-timed out the terminal test at 5s when run one package at a time.
+~760 MB across 5 processes. **Bumping ONE test's timeout is not enough** — run 4 exposed a second spawn-heavy suite waiting
+behind the first — but the cause is systemic and deadline-shaped, so the answer is an explicit
+deadline per affected suite (below), not a single bump.
 
-The two remaining failures are not the same kind of thing:
+**What is red on this host, measured per package — all 73 packages run ALONE, sequentially:
+69 pass, 4 fail, and those 4 fail alone too.** An A/B against the base commit's `src` (reverting
+only this branch's source files) reproduced IDENTICAL counts in both arms, so none of it is
+caused by this work:
 
-- `packages/fs-search`'s `bounded.test.ts` passes alone (46/46, 4.8s) and beside one sibling
-  package (6.4s), so its timeout is load-only.
-- `packages/terminal`'s "opens pwsh by its user-facing command name" failed 3/3 STANDALONE, with
-  `Error: AttachConsole failed` repeated, and passed in some aggregate runs. It opens the BARE
-  name `pwsh`, which on this host resolves to `…\Microsoft\WindowsApps\pwsh.exe` — an execution
-  alias, and precisely the thing `@i-harness/shell`'s `powerShellExecutableAvailable` probe exists
-  to distrust. Whether the fix is to hand the test a real pwsh path, to tighten its skip
-  precondition, or to give it an explicit timeout is a judgement call, and it was NOT taken here.
+| suite | BASE src | this branch's src |
+|---|---|---|
+| `session-executor` | 18 failed / 188 passed | 18 failed / 188 passed |
+| `desktop-gateway` | 7 failed / 294 passed | 7 failed / 294 passed |
+| `guard-approval` | 1 failed / 99 passed | 1 failed / 99 passed |
+| `desktop` | 18 failed / 668 passed | 18 failed / 668 passed |
 
-Neither is caused by this work: `packages/terminal` appears in none of the four commits, and the
-failing assertions drive `createTerminalService` (node-pty) without reaching the sandbox seam.
+Their causes are three different things: host paths (Finding 6), genuine assertion failures
+(`native-context-lifecycle` expects a `ctx_…` reference, `code-mode-store` expects
+`status: 'completed'`, desktop-gateway's `native-context-host` expects `state: 'ready'`), and
+deadlines in suites that hash a shipped-size image or drive a PTY. Two of the three are NOT fixed
+here, deliberately: an assertion failure inside a feature is not a flaky test, and the remaining
+suites' timeout policy is a repository-wide decision rather than a per-file patch.
 
-What IS green on this host, every run: `pnpm typecheck`, `check-thresholds.mjs`,
-`verify:reachability` and `pnpm e2e` (12 tests across 5 files), plus every package suite when run
-on its own apart from the terminal case above.
+Still green on this host, every run: `pnpm typecheck`, `check-thresholds.mjs`,
+`verify:reachability`, and `pnpm e2e` (12 tests across 5 files).
+
+## Finding 6 — three test files rooted their fixtures in the original developer's machine
+
+`packages/session-executor/test/{project-context,scoped-exec,search-code-mode}.test.ts` built
+their fixture parents from `D:/agent-complete/playground` — a path that exists only on the machine
+this repository was developed on. `mkdtempSync` requires its parent to exist, so on every other
+host about eleven tests died at setup: `ENOENT: no such file or directory, mkdtemp
+'D:\agent-complete\playground\project-execution-XXXXXX'`. Same defect class as Finding 4.
+
+The parent cannot simply become `os.tmpdir()`: `project-context.test.ts` carries the reason in its
+own comment — "The unrelated folder must be outside the platform temp grant" — because the
+runner's private temp lives inside `tmpdir()`, so a fixture rooted there would make the tests'
+denial assertions vacuous. Each file now uses the branch its own POSIX arm already used and that
+CI already trusts: `process.cwd()` for `project-context`/`scoped-exec` (outside the temp grant,
+outside the workspace under test, present on every host), and `tmpdir()` for `search-code-mode`,
+whose POSIX arm already used it.
+
+Verified: `packages/session-executor` went from **18 failed / 188 passed** to **7 failed / 199
+passed** with no assertion changed, and every `D:/agent-complete` ENOENT is gone. The seven that
+remain are not this defect — three are the genuine assertion failures named above and four are
+deadlines in suites that drive rg, an assembly or a PTY.
+
+`packages/desktop-gateway/test/terminal.test.ts` mentions the same path, but only as a STRING
+handed to a mock (`createDesktopTerminal("D:/agent-complete/playground", …)` plus the matching
+`cwd` assertion): it never touches the filesystem, so it neither breaks nor depends on that path
+existing. It is left alone, and named here so the difference is on the record.
 
 ## Suspected and disproved (recorded so nobody re-opens them)
 
