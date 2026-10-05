@@ -12,7 +12,7 @@ import { createFsSearchTools } from "@i-harness/fs-search"
 import { append } from "@i-harness/core-session"
 
 it("confines raw background calls and preserves an explicitly approved command policy", async () => {
-  const parent = process.platform === "win32" ? "D:/agent-complete/playground" : process.cwd()
+  const parent = process.cwd() // NOT tmpdir(): the fixtures must sit outside the platform temp grant
   const root = mkdtempSync(join(parent, "scoped-exec-")), a = join(root, "a"), outside = join(root, "outside")
   mkdirSync(a); mkdirSync(outside)
   const assembly = await createSessionAssembly({ workspace: a, modelPolicy: "test-mock", sandbox: "workspace-write" })
@@ -32,7 +32,7 @@ it("confines raw background calls and preserves an explicitly approved command p
 })
 
 it("applies the current scoped policy to streaming helpers and refuses missing confinement", async () => {
-  const parent = process.platform === "win32" ? "D:/agent-complete/playground" : process.cwd()
+  const parent = process.cwd() // NOT tmpdir(): the fixtures must sit outside the platform temp grant
   const root = mkdtempSync(join(parent, "scoped-search-"))
   let policy: SandboxExecutionPolicy = { mode: "danger-full-access", workspaceRoot: root }
   const exec = createScopedExec(registerExec(createContext()), root, () => policy)
@@ -61,7 +61,7 @@ it("streams the provider replacement argv rather than the original executable", 
 })
 
 it.skipIf(process.platform !== "win32")("searches with first-generation siblings under current Windows read-only and workspace-write policy", async () => {
-  const root = mkdtempSync(join("D:/agent-complete/playground", "scoped-rg-policy-"))
+  const root = mkdtempSync(join(process.cwd(), "scoped-rg-policy-"))
   writeFileSync(join(root, "one.txt"), "needle\n")
   const assembly = await createSessionAssembly({ workspace: root, sandbox: "read-only", modelPolicy: "test-mock", approveAll: true })
   try {

@@ -7,7 +7,7 @@ import { append, deriveMessages } from '@i-harness/core-session'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { rmWorkspaceSync } from './helpers.ts'
 
-const parent = process.platform === 'win32' ? 'D:/agent-complete/playground' : tmpdir()
+const parent = tmpdir()
 const waitFor = async (condition: () => boolean, ms = 5000) => {
   const deadline = Date.now() + ms
   while (!condition()) { if (Date.now() >= deadline) throw new Error('search fixture never started'); await new Promise((r) => setTimeout(r, 10)) }

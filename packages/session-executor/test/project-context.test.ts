@@ -16,8 +16,14 @@ import type { WorkflowExecutor } from "@i-harness/workflow"
 const fixtures: string[] = []
 afterEach(() => { for (const fixture of fixtures.splice(0)) rmWorkspaceSync(fixture) })
 function fixture() {
-  // The unrelated folder must be outside the platform temp grant.
-  const parent = process.platform === "win32" ? "D:/agent-complete/playground" : process.cwd()
+  // The unrelated folder must be outside the platform temp grant, so `tmpdir()`
+  // is NOT usable here: the runner's private temp sits inside it, which would
+  // make the denial assertions vacuous. `process.cwd()` is the package
+  // directory — outside the temp grant, outside the workspace under test, and
+  // present on every host. The Windows branch used to name the original
+  // developer's `D:/agent-complete/playground`, so every `mkdtempSync` below
+  // died with ENOENT on any other machine (measured 2026-10-05).
+  const parent = process.cwd()
   const root = mkdtempSync(join(parent, "project-execution-")); fixtures.push(root)
   const a = join(root, "a"), b = join(root, "b"), c = join(root, "unrelated")
   for (const path of [a, b, c]) mkdirSync(path)
