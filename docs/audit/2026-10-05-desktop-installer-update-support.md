@@ -1,0 +1,83 @@
+# Desktop installer: an elevated in-place update over a machine-wide install
+
+Reported from a real attempt: the v0.1.1 Setup was run over the existing
+`C:\Program Files\I-harness Desktop` installation and refused with
+
+> Uninstall the previous copy from Windows Apps or with its Uninstall.exe before using an
+> elevated installer. Then run this setup again. The existing installation was not changed.
+
+That refusal is deliberate (added with the 0.1.1 destination fix), not a defect. The problem it
+leaves is that a machine-wide installation can never be updated in place, which is exactly what
+`C:\Program Files` users need.
+
+## Why the refusal exists
+
+`packages/desktop/installer/desktop.nsi`, at the upgrade branch:
+
+```nsis
+; The old marker authenticates a location, not the executable bytes.
+; Never promote an existing user-writable uninstaller to admin execution.
+```
+
+The upgrade flow runs the PREVIOUS `Uninstall.exe` (`CopyFiles` to `$PLUGINSDIR`, then
+`ExecWait ... _?=$INSTDIR`). With an elevated setup that is admin execution of a binary whose
+directory the marker does not authenticate: an attacker who first installs per-user (the
+documented default, `%LOCALAPPDATA%\Programs\...`, which IS user-writable), replaces that copy's
+uninstaller, and then persuades the user to run an elevated Setup, would get code execution as
+administrator.
+
+## The change
+
+An elevated update is allowed **only when the existing installation sits under a machine-wide
+root** — `$PROGRAMFILES64` or `$PROGRAMFILES`. Every other location keeps the refusal, verbatim.
+
+The security argument is the one the old comment was reaching for: for a root non-administrators
+cannot write, the LOCATION is also a statement about the BYTES, because the prior uninstaller and
+the ownership marker live in that same protected directory. Writing there already requires the
+administrator privilege the setup would be granting.
+
+Matching is case-insensitive (`StrCmp`) and **separator-exact**: `C:\Program FilesExtra` does not
+match `C:\Program Files`. An empty root matches nothing, so a host without the variable stays
+fail-closed.
+
+## Boundary, stated rather than implied
+
+This rests on the machine-wide root carrying the stock Windows ACLs. A root an administrator has
+granted ordinary users write access to is outside the guarantee, and the remedy there is a signed
+build that authenticates the prior uninstaller — which this project has no signing infrastructure
+for. `packages/desktop/installer/README.md` records this in the same words.
+
+## What was NOT changed
+
+- The refusal for every non-machine-wide destination — including the per-user default, which is
+  the dangerous case.
+- The separate fence that refuses to update while the Desktop or its gateway is running.
+- The requirement that the destination's last path component is `I-harness Desktop`, the
+  ownership-marker checks, and the junction/conflict checks.
+
+## Evidence
+
+- RED: the new machine-wide case in `packages/desktop/test/installer-destination.mjs` failed with
+  the exact refusal above (`elevated upgrade of a machine-wide destination must proceed: Uninstall
+  the previous copy ...`).
+- GREEN: after the change, `installer:destination` exits 0 with all of —
+  `elevated setup refuses replaced prior uninstaller before execution or marker mutation` (the old
+  protection, unchanged), `elevated upgrade of a machine-wide destination proceeds and preserves
+  unrelated files`, and `machine-wide matching is separator-exact: a lookalike prefix still
+  refuses`.
+- `test/installer-builder.test.ts` passes.
+- The isolated test drives the real flow without elevation and without writing to a real Program
+  Files: `TestBeforeUpgrade` substitutes a synthetic root via a `MachineWideRoot` control, and the
+  synthetic install lives inside the owned test root.
+
+## Not verified here
+
+`installer:test` (`test/installer-lifecycle.mjs`) fails on this machine, but **not because of this
+change**: with the `.nsi` and hook changes stashed, it fails identically at the same step — an
+`ETIMEDOUT` on line 121, the upgrade that copies the complete 577 MB payload against that
+harness's hard-coded `timeout: 45_000`. Same host-speed class as the other timeouts this audit
+found.
+
+**A real elevated upgrade against a real `C:\Program Files` install was NOT executed** — the test
+build is `RequestExecutionLevel user`, so it cannot elevate, and the Setup refuses to update while
+the Desktop is running (the process this work ran inside). That final confirmation is the user's.

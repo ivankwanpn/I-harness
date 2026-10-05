@@ -76,6 +76,33 @@ assert.deepEqual(readFileSync(join(writable,'.i-harness-desktop-install.ini')),p
 assert.match(readFileSync(join(root,'last-failure.txt'),'utf8'),/uninstall.*before|before.*uninstall/i)
 writeFileSync(join(root,'test-controls.ini'),'[Controls]\n')
 evidence.checks.push('elevated setup refuses replaced prior uninstaller before execution or marker mutation')
+// A machine-wide destination is the one an elevated upgrade MAY trust. The old
+// marker authenticates a LOCATION; for a root non-administrators cannot write,
+// that is also a statement about the executable bytes, because the prior
+// uninstaller and the marker live in the same protected directory. The isolated
+// build substitutes a synthetic root for $PROGRAMFILES64 so the real flow runs
+// without elevation and without touching a real Program Files.
+const machineWide=join(root,'machine-wide','I-harness Desktop');owned(machineWide)
+assert.equal(run(metadata.output,['/S',`/D=${machineWide}`],{windowsVerbatimArguments:true}).status,0,'fixture must install at the synthetic machine-wide root first')
+writeFileSync(join(machineWide,'keep.txt'),'unrelated user file')
+writeFileSync(join(root,'test-controls.ini'),`[Controls]\nSimulateElevatedUpgrade=1\nMachineWideRoot=${join(root,'machine-wide')}\n`)
+const machineWideUpgrade=run(metadata.output,['/S',`/D=${machineWide}`],{windowsVerbatimArguments:true})
+const machineWideDiagnostic=existsSync(join(root,'last-failure.txt'))?readFileSync(join(root,'last-failure.txt'),'utf8'):''
+assert.equal(machineWideUpgrade.status,0,`elevated upgrade of a machine-wide destination must proceed: ${machineWideDiagnostic}`)
+assert(existsSync(join(machineWide,'I-harness Desktop.exe')),'upgraded payload must be present')
+assert.equal(readFileSync(join(machineWide,'keep.txt'),'utf8'),'unrelated user file','upgrade must preserve unrelated files')
+evidence.machineWide={exitCode:machineWideUpgrade.status}
+evidence.checks.push('elevated upgrade of a machine-wide destination proceeds and preserves unrelated files')
+// The separator is load-bearing: a FOLDER whose name merely starts with the
+// machine-wide root is not machine-wide, and must keep the refusal.
+const lookalike=join(root,'machine-wide-extra','I-harness Desktop');owned(lookalike)
+assert.equal(run(metadata.output,['/S',`/D=${lookalike}`],{windowsVerbatimArguments:true}).status,0,'fixture must install at the lookalike root first')
+const lookalikeMarker=readFileSync(join(lookalike,'.i-harness-desktop-install.ini'))
+assert.notEqual(run(metadata.output,['/S',`/D=${lookalike}`],{windowsVerbatimArguments:true}).status,0,'a prefix-only match must still refuse an elevated upgrade')
+assert.match(readFileSync(join(root,'last-failure.txt'),'utf8'),/uninstall.*before|before.*uninstall/i,'the lookalike must be refused for the elevation reason')
+assert.deepEqual(readFileSync(join(lookalike,'.i-harness-desktop-install.ini')),lookalikeMarker,'refused elevation must not mutate the old marker')
+evidence.checks.push('machine-wide matching is separator-exact: a lookalike prefix still refuses')
+writeFileSync(join(root,'test-controls.ini'),'[Controls]\n')
 const unowned=join(root,'unowned','I-harness Desktop');owned(unowned);mkdirSync(unowned,{recursive:true})
 writeFileSync(join(unowned,'keep.txt'),'unrelated user file')
 assert.notEqual(run(metadata.output,['/S',`/D=${unowned}`],{windowsVerbatimArguments:true}).status,0)

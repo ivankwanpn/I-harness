@@ -69,6 +69,13 @@ Var DestinationWritable
 Var DestinationDirectory
 Var DestinationError
 Var SetupElevated
+; The roots an elevated IN-PLACE upgrade may trust, read at the fence so the
+; TEST_HOOKS hook can substitute a synthetic root for the isolated build.
+Var MachineWideRoot
+Var MachineWideRootX86
+Var MachineWideRootCandidate
+Var MachineWideProbe
+Var InstallDirIsMachineWide
 
 !define DESTINATION_PERMISSION_MESSAGE "The installation folder is not writable with the current permissions (Windows error $DestinationError). Use the default LocalAppData folder: $LOCALAPPDATA\Programs\${APP_NAME}, or grant administrator permission to install under Program Files."
 
@@ -140,6 +147,41 @@ FunctionEnd
 !macroend
 !insertmacro LocationFunction ""
 !insertmacro LocationFunction "un."
+
+; 1 when $INSTDIR sits under one of the machine-wide roots, compared with StrCmp
+; (case-insensitive) and requiring the trailing separator, so a FOLDER whose name
+; merely begins with a root — "C:\Program FilesExtra" — never matches. An empty
+; root matches nothing, so a host without the variable stays fail-closed.
+Function IsMachineWideProbeUnderRoot
+  Push $0
+  Push $1
+  ${If} $MachineWideRootCandidate != ""
+    StrLen $0 "$MachineWideRootCandidate"
+    StrCpy $1 "$MachineWideProbe" $0
+    StrCmp $1 "$MachineWideRootCandidate" 0 machine_wide_probe_done
+    StrCpy $1 "$MachineWideProbe" 1 $0
+    StrCmp $1 "\" 0 machine_wide_probe_done
+    StrCpy $InstallDirIsMachineWide 1
+  ${EndIf}
+  machine_wide_probe_done:
+  Pop $1
+  Pop $0
+FunctionEnd
+
+Function IsInstallDirMachineWide
+  Push $0
+  Push $1
+  StrCpy $InstallDirIsMachineWide 0
+  StrCpy $MachineWideProbe "$INSTDIR"
+  StrCpy $MachineWideRootCandidate "$MachineWideRoot"
+  Call IsMachineWideProbeUnderRoot
+  ${If} $InstallDirIsMachineWide == 0
+    StrCpy $MachineWideRootCandidate "$MachineWideRootX86"
+    Call IsMachineWideProbeUnderRoot
+  ${EndIf}
+  Pop $1
+  Pop $0
+FunctionEnd
 
 ; Check create-file/create-directory access on the closest existing directory.
 ; Opening a directory handle does not create a probe file or mutate a folder
@@ -391,13 +433,28 @@ Section "${APP_NAME}" Install
     ${If} $0 != $INSTDIR
       !insertmacro Fail "The installation ownership marker belongs to a different path." 2
     ${EndIf}
+    ; The roots an elevated upgrade may trust. Read HERE — after the ownership
+    ; checks and before the hook below — so the hook can substitute a synthetic
+    ; root for the isolated build.
+    StrCpy $MachineWideRoot "$PROGRAMFILES64"
+    StrCpy $MachineWideRootX86 "$PROGRAMFILES"
 !ifdef TEST_HOOKS
     !insertmacro TestBeforeUpgrade
 !endif
     ${If} $SetupElevated != 0
-      ; The old marker authenticates a location, not the executable bytes.
-      ; Never promote an existing user-writable uninstaller to admin execution.
-      !insertmacro Fail "Uninstall the previous copy from Windows Apps or with its Uninstall.exe before using an elevated installer. Then run this setup again. The existing installation was not changed." 7
+      ; The old marker authenticates a LOCATION, not the executable bytes, so an
+      ; elevated setup must never promote a previous uninstaller it cannot
+      ; authenticate. A machine-wide root IS that authentication: non-
+      ; administrators cannot have written $INSTDIR\Uninstall.exe there, and the
+      ; marker sits in the same protected directory. Anywhere else — a per-user
+      ; install under LocalAppData, a portable folder — keeps the refusal.
+      ; BOUNDARY: this rests on the root carrying the stock Windows ACLs. A root
+      ; an administrator has granted users write access to is outside the
+      ; guarantee; a signed build is what would restore it.
+      Call IsInstallDirMachineWide
+      ${If} $InstallDirIsMachineWide != 1
+        !insertmacro Fail "Uninstall the previous copy from Windows Apps or with its Uninstall.exe before using an elevated installer. Then run this setup again. The existing installation was not changed." 7
+      ${EndIf}
     ${EndIf}
     ${IfNot} ${FileExists} "$INSTDIR\Uninstall.exe"
       !insertmacro Fail "The previous installation has no uninstaller. Restore its installer before upgrading." 2

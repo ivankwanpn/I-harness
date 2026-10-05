@@ -4,6 +4,13 @@
   ${If} $8 == 1
     StrCpy $SetupElevated 1
   ${EndIf}
+  ; Substitute a synthetic machine-wide root so the elevated in-place upgrade can
+  ; be driven without elevation and without writing to a real Program Files.
+  ReadINIStr $8 "${TEST_ROOT}\test-controls.ini" "Controls" "MachineWideRoot"
+  ${If} $8 != ""
+    StrCpy $MachineWideRoot $8
+    StrCpy $MachineWideRootX86 $8
+  ${EndIf}
 !macroend
 
 !macro TestSetupReady

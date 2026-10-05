@@ -58,3 +58,15 @@ pnpm --filter @i-harness/desktop installer:test -- `
 測試紀錄保存在 `.superpowers/sdd/2026-10-04-desktop-installer/`。測試 installer 不應當作正式發行檔；正式 asset 使用沒有 `-test` 後綴的 Setup EXE。
 
 NSIS 的[命令列文件](https://nsis.sourceforge.io/Docs/Chapter3.html)要求 `/D=` 必須放在最後且不加引號，即使目錄包含空格；自動化測試會依照這個格式傳送完整路徑。
+
+## 提權的就地更新（2026-10-05）
+
+**舊行為**：Setup 一旦以管理員權限執行（`highestAvailable`），而目的地存在由本安裝程式擁有的既有安裝，就**直接拒絕**並要求使用者先自行移除。理由是 ownership marker 只證明「位置」、不證明「執行檔位元組」，因此不得把可能位於使用者可寫位置的舊移除程式提權執行。
+
+**現在**：提權的更新**只在既有安裝位於機器級根目錄時允許** —— 即 `$PROGRAMFILES64` 或 `$PROGRAMFILES`（`C:\Program Files`、`C:\Program Files (x86)`）之下。其餘位置（`%LOCALAPPDATA%` 的免提權安裝、可攜資料夾等）**維持原本的拒絕**。
+
+**為什麼這個放寬是安全的**：攻擊要成立，必須先改寫 `$INSTDIR\Uninstall.exe`；在機器級根目錄之下，非管理員寫不進去，而 ownership marker 就躺在同一個受保護目錄。因此在那個位置，「位置」本身就是對「位元組」的保證。比對為**大小寫不敏感且要求分隔符**：`C:\Program FilesExtra` 這類只是名稱前綴的資料夾**不會**被當成機器級。
+
+**邊界（誠實標註）**：此判斷建立在「機器級根目錄保有 Windows 預設 ACL」之上。若管理員把該根目錄放寬給一般使用者寫入，這個保證即不成立；屆時需要的是**程式碼簽章**（驗證舊移除程式的簽章），而本版沒有簽章基礎設施。
+
+更新仍需**先關閉 Desktop**（另一道柵欄，未改變）。測試以 `MachineWideRoot` 控制項替換真實 `$PROGRAMFILES64`，因此在不需要提權、也不寫入真實 Program Files 的前提下，可完整驅動這條路徑（見 `test/installer-destination.mjs`）。
