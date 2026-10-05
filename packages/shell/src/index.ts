@@ -164,12 +164,28 @@ export function resolvePwshExe(
   return exists(windowsPowerShell) ? windowsPowerShell : "powershell"
 }
 
-/** Keep nested #!/usr/bin/env bash scripts in the same native runtime.
- * This changes only the launched command's environment, never global PATH. */
-function bashCommandEnvironment(executable: string): { env?: Record<string, string> } {
-  if (process.platform !== "win32" || win32.basename(executable).toLowerCase() !== "bash.exe") return {}
+/** Keep nested `bash` — a `#!/usr/bin/env bash` script, a `bash -c`, an npm
+ * script that shells out — in the HARNESS's own runtime rather than whatever the
+ * host PATH happens to name first.
+ *
+ * WHY THE DIRECTORY AND NOT A FLAG: on Windows the host PATH lists the WSL
+ * launcher before any real Unix shell (`…\Microsoft\WindowsApps\bash.exe`), so a
+ * bare `bash` runs a DIFFERENT filesystem — measured on this host from the pwsh
+ * tool, `bash -c "uname -s"` printed `Linux` while the bash tool's own child
+ * printed `MINGW64_NT-…`. Prepending the resolved bash's directory makes the
+ * harness's bash win for THIS child only.
+ *
+ * A launched command that IS a bash keeps its OWN directory: an Agent Shell
+ * deliberately set to Rtools/MSYS Bash must keep using it (the 2026-10-01
+ * tooling audit's conclusion). Every other shell gets the harness's resolved
+ * bash, and nothing is prepended when no bash can be resolved at all. This
+ * changes only the launched command's environment, never global PATH. */
+function shellCommandEnvironment(executable: string): { env?: Record<string, string> } {
+  if (process.platform !== "win32") return {}
+  const bash = win32.basename(executable).toLowerCase() === "bash.exe" ? executable : resolveBashExe()
+  if (bash === undefined) return {}
   const key = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH"
-  return { env: { [key]: `${win32.dirname(executable)};${process.env[key] ?? ""}` } }
+  return { env: { [key]: `${win32.dirname(bash)};${process.env[key] ?? ""}` } }
 }
 
 // Minimal shell-quote parser: splits on whitespace, honors single/double
@@ -588,14 +604,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = deps.exec.runBackground({ argv, ...bashCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10: the command spec is built ONCE — the promotion overload takes
         // the very same ExecCommand, so the two calls below differ in nothing
         // but the threshold. The overload (not a second code path) is what
         // keeps a non-promoting call's result shape untouched.
-        const cmd = { argv, ...bashCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const result = deps.backgroundAfterMs === undefined
           ? await deps.exec.run(cmd)
           : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
@@ -639,11 +655,11 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = deps.exec.runBackground({ argv, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10 — same two calls as the bash tool above; see the note there.
-        const cmd = { argv, abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const result = deps.backgroundAfterMs === undefined
           ? await deps.exec.run(cmd)
           : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
@@ -698,7 +714,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const ladder = await resolveShellCall(deps, exec, "shell", args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       const sandbox = ladder.policy
-      const spec = { argv, ...bashCommandEnvironment(selected.command), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
+      const spec = { argv, ...shellCommandEnvironment(selected.command), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
         if (args.background === true) return { job_id: deps.exec.runBackground(spec).jobId }
         const command = { ...spec, abortSignal: exec.abortSignal }

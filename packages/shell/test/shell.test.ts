@@ -177,6 +177,66 @@ describe("createShellTools", () => {
     expect(captured).toEqual([resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Get-Date"])
   })
 
+  // Measured on this host: `where.exe bash` lists
+  // `…\AppData\Local\Microsoft\WindowsApps\bash.exe` FIRST, so a bare `bash`
+  // inside a pwsh command runs the WSL launcher — `bash -c "uname -s"` printed
+  // `Linux`, a different filesystem, silently. The bash tool was already immune
+  // (its child PATH is prepended with its own directory); the pwsh tool spawned
+  // with the untouched host PATH, and the shell tool only shaped it when the
+  // Agent Shell happened to be bash.
+  const firstPathEntry = (env: Record<string, string> | undefined): string | undefined => {
+    if (env === undefined) return undefined
+    const key = Object.keys(env).find((name) => name.toLowerCase() === "path")
+    return key === undefined ? undefined : env[key]!.split(";")[0]
+  }
+
+  function pathRecordingExec(into: Array<Record<string, string> | undefined>): ExecService {
+    return {
+      run: async (cmd) => {
+        into.push(cmd.env)
+        return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
+      },
+      runBackground: (cmd) => {
+        into.push(cmd.env)
+        return { jobId: "none" }
+      },
+      getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+      killJob: () => "already-finished",
+      listJobs: () => [],
+    }
+  }
+
+  it.skipIf(process.platform !== "win32" || !bashAvailable())(
+    "the pwsh tool's child PATH keeps a nested `bash` in the harness's own runtime, never the WSL launcher",
+    async () => {
+      const seen: Array<Record<string, string> | undefined> = []
+      const [, pwsh] = createShellTools({ exec: pathRecordingExec(seen) })
+      await pwsh.execute({ command: "Get-Date" }, {})
+      const first = firstPathEntry(seen[0])
+      expect(first).toBeDefined()
+      // The resolved bash lives INSIDE the first entry, so a bare `bash` finds
+      // the harness's own runtime before anything else on PATH.
+      expect(resolveShell().argv[0]!.startsWith(first!)).toBe(true)
+      expect(first!.toLowerCase()).not.toContain("windowsapps")
+    },
+  )
+
+  it.skipIf(process.platform !== "win32" || !bashAvailable())(
+    "the shell tool shapes it too when the Agent Shell is not bash",
+    async () => {
+      const seen: Array<Record<string, string> | undefined> = []
+      const shell = createShellTools({
+        exec: pathRecordingExec(seen),
+        agentShell: () => ({ id: "pwsh", label: "PowerShell 7", command: resolvePwshExe(), dialect: "powershell" }),
+      }).find((tool) => tool.name === "shell")!
+      await shell.execute({ command: "Get-Date" }, {})
+      const first = firstPathEntry(seen[0])
+      expect(first).toBeDefined()
+      expect(resolveShell().argv[0]!.startsWith(first!)).toBe(true)
+      expect(first!.toLowerCase()).not.toContain("windowsapps")
+    },
+  )
+
   it("bash tool with background:true returns a job id immediately", async () => {
     let ranBackground = false
     const fakeExec: ExecService = {
