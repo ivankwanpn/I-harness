@@ -80,3 +80,22 @@ the per-call `SandboxPolicy` is the actual enforcement input.
 NUL 裝置（`cmd > NUL`）；hard link 外部別名寫；FAT 無 SD；console 隔離不可得；named-pipe 孫進程。
 （M22 另發現：confined target 無法 spawn 子進程（EPERM）——observed；root cause 未調查
 （M25 前 follow-up；見 test/kill-on-close.e2e.ts 的 descendant-denial pin）。）
+
+**MSYS/Cygwin 子行程在此權杖下無法啟動（2026-10-05 root-caused）**：Git Bash／Rtools bash／
+msys 系工具（`usr/bin/ls.exe` 亦然）在 WRITE_RESTRICTED 權杖下於 **DLL 初始化階段**就死亡——
+MSYS runtime 啟動時必須建立自己的**具名** signal pipe，而該 create 被 restricting-SID 的 write
+檢查拒絕。（既有的 `setTokenDefaultDaclGrant` 救不到它：那是 child 自己 token 的 default DACL，
+只涵蓋匿名 pipe 這條路；具名 pipe 走的是 NPFS／命名空間那一層。）
+量測（Windows 11 26200、Git Bash 5.3.15，透過 provider 自己的 argv）：status `0xC0000142`
+（Node 讀回 unsigned `3221225794`），stderr 為 `*** fatal error - couldn't create signal pipe,
+Win32 error 5`，stdout 空；對照組原生 `cmd.exe`／`node.exe`／`git.exe` 在**同一**權杖下 exit 0；
+read-only 與 workspace-write **皆**失敗，故放寬到 workspace-write 無效，只有 danger-full-access 可跑。
+此為**子行程**failure 而非 runner failure：runner 正常啟動、只 mirror 子行程的 exit code 並讓 stdio
+直通，故它看不到那行 stderr，`windows-acl-run: ` 簽名永遠不出現。因此分類只能發生在 exec 層
+（它捕獲 stderr），現由 provider 的第二條 `runnerFailureRules`（exit-gated **且** signature-gated）
+負責，轉成 `SandboxUnavailableError`（`kind: "command-not-run"`），shell 回可讀的
+`SANDBOX_DENIED` 並附真實診斷與 `danger-full-access` 升級路徑（2026-10-05 修正，見
+`docs/audit/2026-10-05-ih-environment-audit-and-remediation.md`）。
+**未解**：上述修正只是把靜默崩潰變成可讀拒絕——**如何讓 MSYS 系程式在受限權杖下真正能跑仍未解**。
+`Everyone` 已在 restricting list 中卻仍被拒，所以不是「再加一個 SID」可解；需要先釐清 NPFS
+命名空間的 write 檢查與 restricting SID 的交集。
