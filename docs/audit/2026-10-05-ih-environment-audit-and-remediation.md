@@ -205,8 +205,13 @@ Artifacts in `packages/desktop/release/`:
 
 | artifact | size | sha256 |
 |---|---|---|
-| `I-harness-Desktop-Setup-0.1.1.exe` | 138,634,616 B | `de76f592852d92cad608ef98115582ad088ed2a57a4e2fb72df1722e0a8889c1` |
+| `I-harness-Desktop-Setup-0.1.1.exe` | 138,607,775 B | `f1ee29b028afc001e19c6afa9a5a18e3c875c58683da2ead12adb41b0d17d910` |
 | `I-harness-Desktop-0.1.1.zip` (portable) | 216,319,835 B | — |
+
+> The Setup EXE was REBUILT after the elevated-update change
+> (`docs/audit/2026-10-05-desktop-installer-update-support.md`), superseding the first build of
+> this artifact (`de76f592…`, 138,634,616 B). Only the NSIS step re-ran: the payload is
+> byte-identical (`payloadExeSha256` `bd14928e…` in both). The table above is the current one.
 
 The builder's own record is `I-harness-Desktop-Setup-0.1.1.installer-build.json`
 (payload 7951 files / 577,121,250 B, payloadId `3b28d542…`, payload exe
