@@ -15,6 +15,10 @@ async function fixture(files: Record<string, string | Buffer>, body: (run: (kind
   finally { rmSync(root, { recursive: true, force: true }) }
 }
 
+// These tests spawn the real ripgrep through a registered Exec, so each one pays
+// a process launch. Measured on 2026-10-05: this file takes 4.8s alone and 6.4s
+// beside one sibling package, against vitest's 5s default — so the deadline, not
+// the assertions, is what fails on a slower host. Every assertion is unchanged.
 describe("bounded model searches through registered Exec", () => {
   it.each(['grep','glob'])('compacts pre-aborted %s metadata within the requested result cap without Exec',async(kind)=>{
     const ctx=createContext(),exec=registerExec(ctx),registry=createToolRegistry(ctx)
@@ -112,4 +116,4 @@ describe("bounded model searches through registered Exec", () => {
       } finally { if (old === undefined) delete process.env.RIPGREP_CONFIG_PATH; else process.env.RIPGREP_CONFIG_PATH = old }
     })
   })
-})
+}, 30_000)

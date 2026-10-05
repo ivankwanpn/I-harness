@@ -15,7 +15,12 @@ let svc: TerminalService
 beforeEach(() => { svc = createTerminalService() })
 afterEach(() => { svc.dispose() })
 
-async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
+// `ms` covers a ConPTY spawn, not just the assertion: measured on 2026-10-05 this
+// host takes ~5.7s to bring up a pwsh pty (a bare `pwsh` resolves to the MSIX
+// package exe on PATH entry 0) and ~4.8s for fs-search's ripgrep suites, so a 5s
+// deadline fails on slowness. The 30_000 ceiling matches the precedent already in
+// workspace-cwd.test.ts for PTY tests.
+async function waitFor(cond: () => boolean, ms = 15_000): Promise<void> {
   const deadline = Date.now() + ms
   while (Date.now() < deadline) { if (cond()) return; await new Promise((r) => setTimeout(r, 20)) }
   throw new Error("timed out waiting")
@@ -43,7 +48,7 @@ it.skipIf(process.platform !== "win32" || !(process.env.PATH ?? "").split(";").s
   const t = svc.open({ command: "pwsh", args: ["-NoLogo", "-NoProfile", "-Command", "Get-Location"] })
   await waitFor(() => svc.read(t.id).data.includes("Path"))
   expect(svc.read(t.id).data).toContain("Path")
-})
+}, 30_000)
 
 it("send: writes to stdin; terminal echo returns through read with offsets", async () => {
   const t = svc.open({ command: process.execPath, args: ["-e", ECHO_SCRIPT] })
