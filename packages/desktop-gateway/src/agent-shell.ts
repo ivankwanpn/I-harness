@@ -34,11 +34,18 @@ function dialect(command: string): AgentShellOption["dialect"] | undefined {
 export function createAgentShellSettings(path: string, environment: Partial<ShellEnvironment> = {}) {
   const env: ShellEnvironment = { env: environment.env ?? process.env, platform: environment.platform ?? process.platform, exists: environment.exists ?? existsSync }
   function options(): AgentShellOption[] {
-    return shellProfiles(env).flatMap((profile) => {
+    const available = shellProfiles(env).flatMap((profile) => {
       const kind = dialect(profile.command)
       const available = kind === "powershell" ? powerShellExecutableAvailable(profile.command, env.exists) : env.exists(profile.command)
       return kind && available ? [{ id: choice(profile.id), label: profile.label, command: profile.command, dialect: kind }] : []
     })
+    if (env.platform !== "win32") return available
+    const automatic = available.find((option) => option.id === "auto")
+    const native = available.find((option) => option.id === "pwsh")
+      ?? available.find((option) => option.id === "powershell")
+      ?? available.find((option) => option.id === "cmd")
+    return available.flatMap((option) => option.id !== "auto" ? [option]
+      : native ? [{ ...native, id: "auto" as const, label: automatic!.label }] : [])
   }
   function selected(): SettingsAgentShell {
     let document: unknown

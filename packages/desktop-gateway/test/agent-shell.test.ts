@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join, win32 } from "node:path"
 import { existsSync } from "node:fs"
 import { spawnSync } from "node:child_process"
-import { registerShell } from "@i-harness/shell"
+import { createShellTools, registerShell } from "@i-harness/shell"
 import type { Tool } from "@i-harness/core-tools"
 import { createContext } from "@i-harness/core-plugin"
 import { createAgentShellSettings } from "../src/agent-shell.ts"
@@ -21,7 +21,7 @@ async function fixture() {
 it("saves detected Agent shells separately and resolves changed disk preferences for subsequent commands", async () => {
   const { settings, path } = await fixture()
   await writeFile(path, JSON.stringify({ compaction: { auto: false } }))
-  expect(settings.resolve()).toMatchObject({ id: "auto", command: "C:\\Program Files\\Git\\bin\\bash.exe", dialect: "posix" })
+  expect(settings.resolve()).toMatchObject({ id: "auto", command: "D:\\PowerShell\\pwsh.exe", dialect: "powershell" })
   const next = await settings.configure({ shell: "pwsh" })
   expect(next).toMatchObject({ selected: "pwsh", resolved: { command: "D:\\PowerShell\\pwsh.exe", dialect: "powershell" } })
   const saved = JSON.parse(await readFile(path, "utf8"))
@@ -29,6 +29,39 @@ it("saves detected Agent shells separately and resolves changed disk preferences
   saved.agentShell = "cmd"
   await writeFile(path, JSON.stringify(saved))
   expect(settings.resolve()).toMatchObject({ id: "cmd", dialect: "cmd" })
+})
+it("prefers detected native Windows shells for Agent auto and falls back in order", async () => {
+  const { settings, installed } = await fixture()
+  expect(settings.resolve()).toMatchObject({ id: "auto", command: "D:\\PowerShell\\pwsh.exe", dialect: "powershell" })
+  installed.delete("D:/PowerShell/pwsh.exe")
+  expect(settings.resolve()).toMatchObject({ id: "auto", command: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", dialect: "powershell" })
+  installed.delete("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")
+  expect(settings.resolve()).toMatchObject({ id: "auto", command: "C:\\Windows\\System32\\cmd.exe", dialect: "cmd" })
+  installed.delete("C:/Windows/System32/cmd.exe")
+  expect(() => settings.resolve()).toThrow(/auto.*unavailable/i)
+})
+it("preserves explicit Git Bash, terminal auto, and non-Windows Agent auto", async () => {
+  const { settings, path, installed } = await fixture()
+  await expect(settings.state()).resolves.toMatchObject({ options: expect.arrayContaining([expect.objectContaining({ id: "git-bash" })]) })
+  await settings.configure({ shell: "git-bash" })
+  expect(settings.resolve()).toMatchObject({ id: "git-bash", dialect: "posix" })
+  const { listDesktopTerminalShellOptions } = await import("../src/terminal-shells.ts")
+  expect(listDesktopTerminalShellOptions({ platform: "win32", env: { SystemRoot: "C:\\Windows", PATH: "D:\\PowerShell" }, exists: (candidate) => installed.has(candidate.replaceAll("\\", "/")) })[0]).toMatchObject({ id: "auto", command: "C:\\Program Files\\Git\\bin\\bash.exe" })
+  const unix = createAgentShellSettings(join(path, "unix-settings.json"), { platform: "linux", env: { SHELL: "/bin/bash", PATH: "/bin" }, exists: (candidate) => candidate === "/bin/bash" })
+  expect(unix.resolve()).toMatchObject({ id: "auto", command: "/bin/bash", dialect: "posix" })
+})
+it("uses the auto-selected native shell in generic shell argv and PowerShell approval tokenization", async () => {
+  const { settings } = await fixture()
+  const selected = settings.resolve()
+  let launched: { argv: string[] } | undefined
+  const exec = { run: async (command: { argv: string[] }) => { launched = command; return { stdout: "", stderr: "", exitCode: 0, timedOut: false } }, runBackground: () => ({ jobId: "job" }), getOutput: () => undefined, killJob: () => "already-finished", listJobs: () => [] }
+  const tool = createShellTools({ exec: exec as never, agentShell: () => selected }).find((tool) => tool.name === "shell")!
+  const args = { command: "Remove-Item -LiteralPath 'C:\\outside\\file.txt' -Force" }
+  expect(tool.getArgv!(args)).toEqual(["Remove-Item", "-LiteralPath", "C:\\outside\\file.txt", "-Force"])
+  expect(tool.approvalIdentity!(args)).toBeUndefined()
+  const result = await tool.execute(args, {})
+  expect(result).toMatchObject({ exitCode: 0 })
+  expect(launched?.argv).toEqual(["D:\\PowerShell\\pwsh.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", args.command])
 })
 it("refuses missing or arbitrary choices and reports a selected executable that disappears", async () => {
   const { settings, path, installed } = await fixture()
