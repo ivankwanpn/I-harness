@@ -8,6 +8,11 @@ use std::{
 };
 use windows_sys::Win32::{Foundation::HANDLE, System::JobObjects::*};
 pub struct Job(pub Handle);
+#[cfg(test)]
+thread_local! {
+    pub static FAIL_NEXT_TERMINATE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};
+    pub static TERMINATE_CALLS:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};
+}
 impl Job {
     pub fn new() -> Result<Self> {
         let handle = Handle::new(
@@ -40,6 +45,13 @@ impl Job {
         }
     }
     pub fn terminate(&self) -> Result<()> {
+        #[cfg(test)]
+        {
+            TERMINATE_CALLS.with(|n| n.set(n.get() + 1));
+            if FAIL_NEXT_TERMINATE.with(|flag| flag.replace(false)) {
+                return Err(Error::native_code("TerminateJobObject", 5));
+            }
+        }
         if unsafe { TerminateJobObject(self.0.0, 137) } == 0 {
             Err(Error::native("TerminateJobObject"))
         } else {

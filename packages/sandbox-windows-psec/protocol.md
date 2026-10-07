@@ -114,6 +114,8 @@ After an explicit cancellation request (cancel, TERM/KILL, active release, contr
 
 Cancellation must never wait for a display consumer or blocked workload stdin. The helper repeatedly cancels synchronous writer I/O while owning/draining readers. Failure to settle cancellation in 10 seconds emits `settlement-incomplete` and answers pending release requests with resourcesReleased:false; while control is open, it retains ownership for cleanup retry without granting another launch. With EOF/fatal channel failure it performs bounded best-effort cleanup and exits unsuccessfully without fabricated tree/I/O/release confirmation. A driver must preserve this incomplete result.
 
+Outstanding Job termination is tracked separately from the cancellation request and root-exit observation. A failed TerminateJobObject remains pending and is retried by cancellation ticks or another cancel/release request while Job accounting remains nonzero, including after a retained root has exited. A successful termination submission still requires independent tree-empty observation; confirmed ActiveProcesses0 prevents further termination calls. Earlier native failure causes remain recorded after successful retry.
+
 ## Errors, discovery and fixtures
 
 ```ts

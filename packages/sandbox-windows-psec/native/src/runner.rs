@@ -45,9 +45,15 @@ struct Running {
     owner: PreparedOwner,
     id: String,
     cancelled: bool,
+    job_termination: JobTermination,
     closing: bool,
     errors: Vec<Error>,
     stop_at: Option<Instant>,
+}
+enum JobTermination {
+    Pending,
+    Submitted,
+    Empty,
 }
 struct PreparedOwner {
     _effective: Effective,
@@ -236,6 +242,7 @@ impl Prepared {
             },
             id,
             cancelled: false,
+            job_termination: JobTermination::Pending,
             closing: false,
             errors: self.errors,
             stop_at: None,
@@ -355,15 +362,25 @@ impl Running {
                 self.remember(Error::native("TerminateProcess(rollback)"));
             }
         }
-        if let Err(e) = self.owner.job.terminate() {
-            self.remember(e);
+        if self.tree_reported {
+            self.job_termination = JobTermination::Empty;
+        }
+        if matches!(self.job_termination, JobTermination::Pending) {
+            match self.owner.job.active() {
+                Ok(0) => self.job_termination = JobTermination::Empty,
+                Ok(_) => match self.owner.job.terminate() {
+                    Ok(()) => self.job_termination = JobTermination::Submitted,
+                    Err(error) => self.remember(error),
+                },
+                Err(error) => self.remember(error),
+            }
         }
     }
     fn stop(&mut self, discard: bool) {
-        if !self.cancelled {
-            self.cancelled = true;
-            self.terminate_owned();
-        }
+        self.cancelled = true;
+        // A prior cancellation request/root exit says nothing about whether a
+        // failed Job termination has been retried. Keep that obligation separate.
+        self.terminate_owned();
         self.io.stop_input();
         if discard {
             self.stop_at.get_or_insert_with(Instant::now);
@@ -375,9 +392,7 @@ impl Running {
             for e in self.io.close_pending_handles() {
                 self.remember(e);
             }
-            if !self.root_reported {
-                self.terminate_owned();
-            }
+            self.terminate_owned();
             self.io.stop_input();
             if self.io.abandoned() {
                 self.io.cancel_output();
@@ -407,6 +422,7 @@ impl Running {
         }
         if !self.tree_reported && self.root_reported && self.owner.job.active()? == 0 {
             self.tree_reported = true;
+            self.job_termination = JobTermination::Empty;
             status(
                 &self.id,
                 "tree-empty",
@@ -828,6 +844,12 @@ pub fn run() -> Result<()> {
 mod tests {
     use super::*;
     fn prepared_fixture(engine: &str) -> (Prepared, std::path::PathBuf) {
+        prepared_fixture_with_argv(engine, None)
+    }
+    fn prepared_fixture_with_argv(
+        engine: &str,
+        argv: Option<Vec<String>>,
+    ) -> (Prepared, std::path::PathBuf) {
         let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../..")
             .canonicalize()
@@ -852,7 +874,8 @@ mod tests {
             .unwrap()
             .strip_prefix("\\\\?\\")
             .unwrap_or(exe.to_str().unwrap());
-        let spec=serde_json::from_value(serde_json::json!({"argv":[exe_text,"--list"],"cwd":cwd,"env":{"SystemRoot":std::env::var("SystemRoot").unwrap(),"LOCALAPPDATA":cwd},"owner":{"sessionId":"native-unit"},"transport":"pipe","lifetime":"retain-tree","argumentEncoding":"crt"})).unwrap();
+        let argv = argv.unwrap_or_else(|| vec![exe_text.into(), "--list".into()]);
+        let spec=serde_json::from_value(serde_json::json!({"argv":argv,"cwd":cwd,"env":{"SystemRoot":std::env::var("SystemRoot").unwrap(),"LOCALAPPDATA":cwd},"owner":{"sessionId":"native-unit"},"transport":"pipe","lifetime":"retain-tree","argumentEncoding":"crt"})).unwrap();
         let policy=serde_json::from_value(serde_json::json!({"mode":if engine=="psec"{"workspace-write"}else{"danger-full-access"},"owner":{"sessionId":"native-unit"},"authorityRevision":"test","authorityKind":"bound","primaryRoot":cwd,"readable":"caller","authorityRoots":[cwd],"writeRoots":[cwd],"referenceRoots":[],"fingerprint":"native-unit"})).unwrap();
         let protection = protocol::Protection {
             read_only_paths: vec![],
@@ -960,5 +983,96 @@ mod tests {
     #[test]
     fn assignment_failure_reaps_unassigned_child_before_release() {
         failed_launch_releases_only_after_observed_exit_and_drain(true);
+    }
+    #[test]
+    fn retained_root_exit_does_not_suppress_failed_job_termination_retry() {
+        let helper = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../artifacts/win32-x64/i-harness-windows-helper.exe")
+            .canonicalize()
+            .unwrap();
+        let helper_text = helper
+            .to_str()
+            .unwrap()
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(helper.to_str().unwrap())
+            .to_owned();
+        let (mut p, path) = prepared_fixture_with_argv(
+            "unrestricted",
+            Some(vec![
+                helper_text,
+                "--self-child".into(),
+                "spawn-descendant".into(),
+                "30000".into(),
+            ]),
+        );
+        let info = p.create_suspended(&p.effective.digest.clone()).unwrap();
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut r = p.into_running(
+            info,
+            "retained-retry".into(),
+            tx,
+            std::fs::File::create(path.join("output.bin")).unwrap(),
+        );
+        r.resume().unwrap();
+        assert_eq!(
+            unsafe { WaitForSingleObject(r.process.0, 5000) },
+            WAIT_OBJECT_0
+        );
+        r.root_reported = true;
+        assert!(
+            r.owner.job.active().unwrap() > 0,
+            "root must leave an actual live descendant"
+        );
+        crate::job::TERMINATE_CALLS.with(|n| n.set(0));
+        crate::job::FAIL_NEXT_TERMINATE.with(|f| f.set(true));
+        r.stop(true);
+        assert_eq!(crate::job::TERMINATE_CALLS.with(|n| n.get()), 1);
+        assert!(r.owner.job.active().unwrap() > 0);
+        assert!(!r.tree_reported);
+        assert!(
+            r.errors
+                .iter()
+                .any(|e| e.api == "TerminateJobObject" && e.native_code == Some(5))
+        );
+        // This is the same retry path used by a later cancel/release request.
+        r.stop(true);
+        assert_eq!(
+            crate::job::TERMINATE_CALLS.with(|n| n.get()),
+            2,
+            "cleanup retry must call the failed native operation even after root exit"
+        );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if r.owner.job.active().unwrap() == 0 {
+                r.tree_reported = true;
+                r.io.close_console();
+            }
+            r.io.stop_input();
+            r.io.cancel_output();
+            while let Ok(event) = rx.try_recv() {
+                if let Event::RetainedHandle(h) = event {
+                    r.io.pending_handles.push(h);
+                }
+            }
+            if r.tree_reported && r.io.settled() {
+                r.io.join().unwrap();
+                r.io_reported = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(r.tree_reported && r.io_reported);
+        r.stop(true);
+        assert_eq!(
+            crate::job::TERMINATE_CALLS.with(|n| n.get()),
+            2,
+            "no further termination after confirmed ActiveProcesses0"
+        );
+        assert!(r.release());
+        assert!(
+            r.errors
+                .iter()
+                .any(|e| e.api == "TerminateJobObject" && e.native_code == Some(5))
+        );
     }
 }
