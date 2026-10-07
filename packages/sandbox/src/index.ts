@@ -1,4 +1,11 @@
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
+export type {
+  ExecutionTransport, ExecutionLifetime, BackendAssurance, StopReason, ExecutionOwner,
+  BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
+  CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
+  ExecutionHandle, PreparedExecution, ExecutionBackend,
+} from "./execution.ts"
+export { checkBackendRequirements } from "./backend-requirements.ts"
 export type ConfinedSandboxMode = Exclude<SandboxMode, "danger-full-access">
 export type SandboxEnforcement = "full" | "partial"
 
