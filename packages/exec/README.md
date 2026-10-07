@@ -63,6 +63,10 @@ preparations, late committed handles and active handle cleanup. Concurrent calls
 share their current attempt. Failed cleanup produces an `AggregateError` with
 collected diagnostics, retains ownership and leaves admission blocked. A later
 call retries the retained cleanup, including a failed preparation rollback.
+Cleanup success and failure are represented separately from a rejection's value.
+`AggregateError.errors` preserves opaque causes exactly, including `undefined`,
+`null`, false, zero and empty strings. A cause that cannot be formatted still
+remains in the diagnostic data and still prevents a successful acknowledgement.
 
 This runtime does not choose a backend, spawn a process, consume output or infer
 native tree observations. Its tests use fake native operations with real public

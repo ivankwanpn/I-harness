@@ -503,3 +503,216 @@ it("supervisor cancel returns the lease's current retry promise without replacin
   expect(f.events.filter(event => event.startsWith("terminate:"))).toEqual(["terminate:timeout"])
   expect(s.list()).toEqual([])
 })
+
+const opaqueCauses = [
+  { label: "undefined", cause: undefined },
+  { label: "null", cause: null },
+  { label: "false", cause: false },
+  { label: "zero", cause: 0 },
+  { label: "empty string", cause: "" },
+  { label: "symbol", cause: Symbol("opaque rejection") },
+  { label: "unprintable object", cause: Object.create(null) as unknown },
+]
+
+async function outcome<T>(promise: Promise<T>) {
+  return promise.then(value => ({ kind: "resolved" as const, value }), cause => ({ kind: "rejected" as const, cause }))
+}
+
+function expectAggregateCause(result: Awaited<ReturnType<typeof outcome>>, cause: unknown): AggregateError {
+  expect(result.kind).toBe("rejected")
+  if (result.kind !== "rejected") throw new Error("Expected cleanup rejection")
+  expect(result.cause).toBeInstanceOf(AggregateError)
+  const error = result.cause as AggregateError
+  expect(error.errors).toHaveLength(1)
+  expect(error.errors[0]).toBe(cause)
+  return error
+}
+
+it.each(opaqueCauses)("pending and retry close preserve $label rollback failure instead of acknowledging cleanup", async ({ cause }) => {
+  const s = supervisor(); const f = fixture(); f.holdPreparation()
+  let attempts = 0
+  f.prepared.rollback = async () => { if (++attempts <= 2) throw cause }
+  const launched = outcome(s.launch(f.input))
+  await turn()
+  const firstClose = outcome(s.closeOwner("owner"))
+  f.preparation.resolve()
+  const launchResult = await launched
+  const closeResult = await firstClose
+  expectAggregateCause(closeResult, cause)
+  expect(launchResult.kind).toBe("rejected")
+  if (launchResult.kind !== "rejected") throw new Error("Expected aborted launch rejection")
+  expect(launchResult.cause).toBeInstanceOf(AggregateError)
+  const launchError = launchResult.cause as AggregateError
+  expect(launchError.errors).toHaveLength(2)
+  expect(launchError.errors[1]).toBe(cause)
+  expectAggregateCause(await outcome(s.closeOwner("owner")), cause)
+  expect(attempts).toBe(2)
+  await expect(s.launch(fixture("blocked").input)).rejects.toThrow(/closed/)
+  await s.closeOwner("owner")
+  expect(attempts).toBe(3)
+  expect(f.events).not.toContain("workload")
+})
+
+it.each(opaqueCauses)("direct handle cleanup preserves $label cancellation rejection across close retry", async ({ cause }) => {
+  const s = supervisor(); const f = fixture()
+  let attempts = 0
+  const commit = f.prepared.commit
+  f.prepared.commit = async validate => {
+    const handle = await commit(validate)
+    return Object.freeze({
+      ...handle,
+      cancel(reason: Parameters<TransportExecutionHandle["cancel"]>[0]) {
+        if (++attempts <= 3) return Promise.reject(cause)
+        return handle.cancel(reason)
+      },
+    })
+  }
+  const execution = await s.launch(f.input)
+  const cancelled = await outcome(s.cancel(execution.id, "cancelled"))
+  expect(cancelled.kind).toBe("rejected")
+  if (cancelled.kind === "rejected") expect(cancelled.cause).toBe(cause)
+  expectAggregateCause(await outcome(s.closeOwner("owner")), cause)
+  expectAggregateCause(await outcome(s.closeOwner("owner")), cause)
+  expect(s.list()).toEqual([execution])
+  expect(attempts).toBe(3)
+  f.finish(); await s.closeOwner("owner")
+  expect(s.list()).toEqual([])
+})
+
+it.each(opaqueCauses)("reconcile stays blocked after pending and retry $label rollback failure until cleanup succeeds", async ({ cause }) => {
+  const s = supervisor(); const f = fixture(); f.holdPreparation()
+  let attempts = 0
+  f.prepared.rollback = async () => { if (++attempts <= 2) throw cause }
+  const launched = outcome(s.launch(f.input)); await turn()
+  const invalid = () => { throw new Error("authority removed") }
+  const reconciled = outcome(s.reconcile("owner", invalid))
+  f.preparation.resolve()
+  await launched
+  expectAggregateCause(await reconciled, cause)
+  await expect(s.launch(fixture("blocked").input)).rejects.toThrow(/blocked/)
+  expectAggregateCause(await outcome(s.reconcile("owner", invalid)), cause)
+  await expect(s.launch(fixture("still-blocked").input)).rejects.toThrow(/blocked/)
+  await s.reconcile("owner", invalid)
+  const next = fixture("after-cleanup"); await s.launch(next.input)
+  next.finish(); await s.dispose()
+  expect(attempts).toBe(3)
+})
+
+it.each(opaqueCauses)("failed receipt cleanup aggregates $label cancellation rejection and remains owned", async ({ cause }) => {
+  const s = supervisor(); const f = fixture(); f.receipt.backendId = "forged"
+  const commit = f.prepared.commit
+  let attempts = 0
+  f.prepared.commit = async validate => {
+    const handle = await commit(validate)
+    return Object.freeze({
+      ...handle,
+      cancel(reason: Parameters<TransportExecutionHandle["cancel"]>[0]) {
+        if (++attempts === 1) return Promise.reject(cause)
+        return handle.cancel(reason)
+      },
+    })
+  }
+  const result = await outcome(s.launch(f.input))
+  expect(result.kind).toBe("rejected")
+  if (result.kind !== "rejected") throw new Error("Expected invalid receipt rejection")
+  expect(result.cause).toBeInstanceOf(AggregateError)
+  const error = result.cause as AggregateError
+  expect(error.errors).toHaveLength(2)
+  expect(error.errors[0]).toMatchObject({ message: expect.stringMatching(/receipt/) })
+  expect(error.errors[1]).toBe(cause)
+  expect(s.list()).toHaveLength(1)
+  f.finish(); await s.dispose()
+  expect(s.list()).toEqual([])
+})
+
+it("disposal preserves every opaque cause as a separate collected failure", async () => {
+  const s = supervisor()
+  const fixtures = opaqueCauses.map(({ label, cause }) => {
+    const f = fixture(label, label)
+    f.holdPreparation()
+    let failed = true
+    f.prepared.rollback = async () => { if (failed) throw cause }
+    return { f, recover() { failed = false } }
+  })
+  const launches = fixtures.map(({ f }) => outcome(s.launch(f.input)))
+  await turn()
+  const disposed = outcome(s.dispose())
+  fixtures.forEach(({ f }) => f.preparation.resolve())
+  await Promise.all(launches)
+  const result = await disposed
+  expect(result.kind).toBe("rejected")
+  if (result.kind !== "rejected") throw new Error("Expected disposal rejection")
+  expect(result.cause).toBeInstanceOf(AggregateError)
+  const error = result.cause as AggregateError
+  expect(error.errors).toHaveLength(opaqueCauses.length)
+  opaqueCauses.forEach(({ cause }, index) => expect(error.errors[index]).toBe(cause))
+  await expect(s.launch(fixture("blocked", "new").input)).rejects.toThrow(/disposed/)
+  fixtures.forEach(({ recover }) => recover())
+  await s.dispose()
+})
+
+it("a close retry rejects undefined even when the original cleanup failure had an Error cause", async () => {
+  const s = supervisor(); const f = fixture(); f.holdPreparation()
+  const original = new Error("first rollback failed")
+  let attempts = 0
+  f.prepared.rollback = async () => {
+    if (++attempts === 1) throw original
+    if (attempts === 2) throw undefined
+  }
+  const launched = outcome(s.launch(f.input)); await turn()
+  const firstClose = outcome(s.closeOwner("owner"))
+  f.preparation.resolve(); await launched
+  expectAggregateCause(await firstClose, original)
+  expectAggregateCause(await outcome(s.closeOwner("owner")), undefined)
+  expect(attempts).toBe(2)
+  await s.closeOwner("owner")
+  expect(attempts).toBe(3)
+})
+
+it("active-handle reconcile never reopens admission after undefined cancellation rejection", async () => {
+  const s = supervisor(); const f = fixture()
+  const commit = f.prepared.commit
+  let attempts = 0
+  f.prepared.commit = async validate => {
+    const handle = await commit(validate)
+    return Object.freeze({
+      ...handle,
+      cancel(reason: Parameters<TransportExecutionHandle["cancel"]>[0]) {
+        if (++attempts <= 2) return Promise.reject(undefined)
+        return handle.cancel(reason)
+      },
+    })
+  }
+  const execution = await s.launch(f.input)
+  const invalid = () => { throw new Error("removed project") }
+  expectAggregateCause(await outcome(s.reconcile("owner", invalid)), undefined)
+  await expect(s.launch(fixture("blocked").input)).rejects.toThrow(/blocked/)
+  expectAggregateCause(await outcome(s.reconcile("owner", invalid)), undefined)
+  await expect(s.launch(fixture("still-blocked").input)).rejects.toThrow(/blocked/)
+  expect(s.list()).toEqual([execution])
+  const recovered = s.reconcile("owner", invalid)
+  f.finish(); await recovered
+  const next = fixture("after-recovery"); await s.launch(next.input)
+  next.finish(); await s.dispose()
+})
+
+it("synchronously thrown undefined from handle cancellation is retained in disposal diagnostics", async () => {
+  const s = supervisor(); const f = fixture()
+  const commit = f.prepared.commit
+  let reject = true
+  f.prepared.commit = async validate => {
+    const handle = await commit(validate)
+    return Object.freeze({
+      ...handle,
+      cancel(reason: Parameters<TransportExecutionHandle["cancel"]>[0]) {
+        if (reject) throw undefined
+        return handle.cancel(reason)
+      },
+    })
+  }
+  const execution = await s.launch(f.input)
+  expectAggregateCause(await outcome(s.dispose()), undefined)
+  expect(s.list()).toEqual([execution])
+  await expect(s.launch(fixture("blocked").input)).rejects.toThrow(/disposed/)
+  reject = false; f.finish(); await s.dispose()
+})

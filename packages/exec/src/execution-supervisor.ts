@@ -38,6 +38,9 @@ interface OwnerState {
   reconciles: number
   closeAttempt?: Promise<void>
 }
+type CleanupOutcome = { kind: "cleaned" } | { kind: "failed"; cause: unknown }
+const cleaned: CleanupOutcome = { kind: "cleaned" }
+
 interface Entry {
   id: string
   owner: string
@@ -48,13 +51,13 @@ interface Entry {
   preparing: boolean
   prepared?: PreparedTransportExecution
   rollbackFailed: boolean
-  completion: Promise<unknown | undefined>
-  complete(error?: unknown): void
+  completion: Promise<CleanupOutcome>
+  complete(outcome: CleanupOutcome): void
   stopReason?: StopReason
   handle?: TransportExecutionHandle
   execution?: SupervisedExecution
   observed: Set<Promise<ExecutionSettlement>>
-  rollbackAttempt?: Promise<unknown | undefined>
+  rollbackAttempt?: Promise<CleanupOutcome>
 }
 
 function sameOwner(a: Readonly<ExecutionOwner>, b: Readonly<ExecutionOwner>): boolean {
@@ -70,9 +73,16 @@ function snapshot(spec: ProcessSpec): ProcessSpec {
   })
 }
 
-function incompleteError(result: ExecutionSettlement): Error | undefined {
+function cleanupOutcome(result: ExecutionSettlement): CleanupOutcome {
   return result.kind === "incomplete"
-    ? new Error(`Execution cleanup incomplete (${result.phase}): ${result.detail}`) : undefined
+    ? { kind: "failed", cause: new Error(`Execution cleanup incomplete (${result.phase}): ${result.detail}`) } : cleaned
+}
+
+function cleanupDetail(cause: unknown): string {
+  // Rejections are opaque values. Diagnostics must not replace their identity
+  // or introduce another failure when a value cannot be converted to text.
+  try { return cause instanceof Error ? cause.message : String(cause) }
+  catch { return "unprintable cleanup cause" }
 }
 
 function stopReason(value: unknown): StopReason {
@@ -154,7 +164,7 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
 
   async function run(entry: Entry, input: ExecutionLaunch, spec: ProcessSpec, requirements: BackendRequirements): Promise<SupervisedExecution> {
     let backendId: string | undefined
-    let cleanupError: unknown
+    let cleanup: CleanupOutcome = cleaned
     const backend: TransportExecutionBackend = {
       async probe() {
         const probe = await input.backend.probe()
@@ -173,7 +183,7 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
               entry.rollbackFailed = false
             } catch (cause) {
               entry.rollbackFailed = true
-              cleanupError = cause
+              cleanup = { kind: "failed", cause }
               throw cause
             }
           },
@@ -201,16 +211,16 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
     } catch (cause) {
       if (entry.handle) {
         try {
-          cleanupError = incompleteError(await cancelEntry(entry, entry.stopReason ?? "cancelled"))
-        } catch (failure) { cleanupError = failure }
+          cleanup = cleanupOutcome(await cancelEntry(entry, entry.stopReason ?? "cancelled"))
+        } catch (failure) { cleanup = { kind: "failed", cause: failure } }
       } else if (!entry.rollbackFailed) remove(entry)
-      if (cleanupError !== undefined) {
-        throw new AggregateError([cause, cleanupError], `Execution launch failed; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`, { cause })
+      if (cleanup.kind === "failed") {
+        throw new AggregateError([cause, cleanup.cause], `Execution launch failed; cleanup failed: ${cleanupDetail(cleanup.cause)}`, { cause })
       }
       throw cause
     } finally {
       entry.preparing = false
-      entry.complete(cleanupError)
+      entry.complete(cleanup)
     }
   }
 
@@ -230,7 +240,7 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
       if (disposed) throw new Error("Execution supervisor disposed")
       if (state.closed) throw new Error("Execution owner closed")
       if (state.blocked || state.reconciles) throw new Error("Execution owner admission blocked")
-      let complete!: (error: unknown | undefined) => void
+      let complete!: (outcome: CleanupOutcome) => void
       const entry: Entry = {
         id: `execution-${++nextId}`, owner: spec.owner.sessionId, policy,
         validateAuthority: input.validateAuthority, controller: new AbortController(), unlink() {},
@@ -260,37 +270,38 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
     }
   }
 
-  async function drain(entry: Entry): Promise<unknown | undefined> {
+  async function drain(entry: Entry): Promise<CleanupOutcome> {
     // A launch already awaiting rollback or a late committed handle performs
     // its own first cleanup. Joining it must not implicitly retry an incomplete
     // attempt and accidentally acknowledge a failed revocation.
     if (entry.preparing) return entry.completion
-    if (!entries.has(entry)) return undefined
+    if (!entries.has(entry)) return cleaned
     if (entry.handle) {
-      try { return incompleteError(await cancelEntry(entry, entry.stopReason ?? "shutdown")) }
-      catch (cause) { return cause }
+      try { return cleanupOutcome(await cancelEntry(entry, entry.stopReason ?? "shutdown")) }
+      catch (cause) { return { kind: "failed", cause } }
     }
     if (entry.rollbackFailed && entry.prepared) {
       if (!entry.rollbackAttempt) {
-        const attempt = Promise.resolve().then(async () => {
+        const attempt = Promise.resolve().then(async (): Promise<CleanupOutcome> => {
           try {
             await entry.prepared!.rollback()
             entry.rollbackFailed = false
             remove(entry)
-            return undefined
-          } catch (cause) { return cause }
+            return cleaned
+          } catch (cause) { return { kind: "failed", cause } }
         })
         entry.rollbackAttempt = attempt
         void attempt.then(() => { if (entry.rollbackAttempt === attempt) entry.rollbackAttempt = undefined })
       }
       return entry.rollbackAttempt
     }
-    return undefined
+    return cleaned
   }
 
   async function drainAll(affected: readonly Entry[], operation: string): Promise<void> {
-    const errors = (await Promise.all(affected.map(drain))).filter(error => error !== undefined)
-    if (errors.length) throw new AggregateError(errors, `${operation} failed: ${errors.map(error => error instanceof Error ? error.message : String(error)).join("; ")}`)
+    const outcomes = await Promise.all(affected.map(drain))
+    const errors = outcomes.flatMap(outcome => outcome.kind === "failed" ? [outcome.cause] : [])
+    if (errors.length) throw new AggregateError(errors, `${operation} failed: ${errors.map(cleanupDetail).join("; ")}`)
   }
 
   function reconcile(owner: string, validateAuthority: ExecutionLaunch["validateAuthority"]): Promise<void> {
