@@ -1,5 +1,6 @@
 import {
   SandboxUnavailableError,
+  assertSandboxCapable,
   type ConfinedArgv,
   type SandboxEnforcement,
   type SandboxPolicy,
@@ -45,18 +46,17 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
       }
     }
     const backend = config.windowsAclBackend
-    return {
+    const provider: SandboxProvider = {
       // M22: honest capability declaration — the Windows ACL backend has no
       // read isolation (WRITE_RESTRICTED is read-visible on Windows).
       capabilities: { readIsolation: false },
       confine(argv, policy) {
-        if (policy.requireReadIsolation === true) {
-          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
-        }
+        assertSandboxCapable(policy, provider)
         // On win32, delegate to the injected backend.
         return { ...backend.confine(argv, policy), enforcement: STATIC_ENFORCEMENT["windows-acl"] }
       },
     }
+    return provider
   }
 
   if (process.platform === "linux") {
@@ -68,7 +68,7 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
         },
       }
     }
-    return {
+    const provider: SandboxProvider = {
       // M22: honest capability declaration — bwrap isolates the filesystem
       // for writes but does not hide/read-block filesystem content, so it has
       // no read isolation either.
@@ -78,9 +78,7 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
         if (runner[0] !== "bwrap") {
           throw new SandboxUnavailableError(policy.mode, `runner override must be bwrap (got ${runner[0]})`)
         }
-        if (policy.requireReadIsolation === true) {
-          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
-        }
+        assertSandboxCapable(policy, provider)
         return {
           argv: [...runner, ...bwrapProfileArgs(policy), "--", ...argv],
           enforcement: STATIC_ENFORCEMENT.bwrap,
@@ -89,6 +87,7 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
         }
       },
     }
+    return provider
   }
 
   // Other platforms: fail closed.

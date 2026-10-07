@@ -1,6 +1,6 @@
 import type { PluginContext } from "@i-harness/core-plugin"
 import type {
-  CompiledSandboxPolicy, ExecutionOwner, ExecutionTransport, ProcessSpec, SandboxExecutionPolicy,
+  CompiledSandboxPolicy, ExecutionOwner, ExecutionTransport, ExecutionLifetime, ProcessSpec, SandboxExecutionPolicy,
   SandboxProvider, StopReason, TransportExecutionBackend, ExecutionSettlement,
 } from "@i-harness/sandbox"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
@@ -86,7 +86,7 @@ export interface ExecServiceOptions {
 /** Terminal requests exact transport facts; the service binds owner, policy and backend. */
 export interface ExecTransportRequest {
   argv: readonly string[]; cwd?: string; env?: Readonly<Record<string, string>>
-  transport: ProcessSpec["transport"]; lifetime: ProcessSpec["lifetime"]
+  transport: ProcessSpec["transport"]; lifetime: ExecutionLifetime
   argumentEncoding: ProcessSpec["argumentEncoding"]
   pty?: ProcessSpec["pty"]
   sandbox?: SandboxExecutionPolicy

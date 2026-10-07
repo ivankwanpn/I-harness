@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto"
 import { readFile, realpath } from "node:fs/promises"
 import { basename, dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { packageAssetRoot as packageRoot } from "./assets.ts"
 
 export interface HelperOptions { helperPath?: string; manifestPath?: string }
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 
 export async function verifyHelper(options: HelperOptions = {}): Promise<{ helperPath: string; sha256: string }> {
   if (process.platform !== "win32") throw new Error("Windows helper unavailable on this platform")
+  if (process.arch !== "x64") throw new Error("Windows helper unavailable for this architecture")
   const manifestPath = options.manifestPath ?? resolve(packageRoot, "artifacts/win32-x64/manifest.json")
   const helperPath = options.helperPath ?? resolve(dirname(manifestPath), "i-harness-windows-helper.exe")
   const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Record<string, unknown>

@@ -40,6 +40,14 @@ it("prefers detected native Windows shells for Agent auto and falls back in orde
   installed.delete("C:/Windows/System32/cmd.exe")
   expect(() => settings.resolve()).toThrow(/auto.*unavailable/i)
 })
+it("keeps an execution alias explicit while auto selects a native Windows executable", async () => {
+  const root=await mkdtemp(join(tmpdir(),"ih-agent-shell-native-"));roots.push(root)
+  const path=join(root,"settings.json")
+  const settings=createAgentShellSettings(path,{platform:"win32",env:{LOCALAPPDATA:"C:\\Users\\fixture\\AppData\\Local",SystemRoot:"C:\\Windows",PATH:"C:\\Users\\fixture\\AppData\\Local\\Microsoft\\WindowsApps"},exists:p=>/WindowsApps[\\/]pwsh.exe$|WindowsPowerShell[\\/]v1.0[\\/]powershell.exe$|System32[\\/]cmd.exe$/i.test(p)})
+  expect(settings.resolve()).toMatchObject({id:"auto",command:"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",dialect:"powershell"})
+  await settings.configure({shell:"pwsh"})
+  expect(settings.resolve().command).toMatch(/WindowsApps[\\/]pwsh.exe$/)
+})
 it("preserves explicit Git Bash, terminal auto, and non-Windows Agent auto", async () => {
   const { settings, path, installed } = await fixture()
   await expect(settings.state()).resolves.toMatchObject({ options: expect.arrayContaining([expect.objectContaining({ id: "git-bash" })]) })
@@ -82,7 +90,7 @@ it("does not silently normalize an invalid on-disk Agent shell to auto", async (
 const nativeAlias = win32.join(process.env.LOCALAPPDATA ?? "C:\\missing", "Microsoft", "WindowsApps", "pwsh.exe")
 const hasNativeAlias = process.platform === "win32" && !existsSync(nativeAlias)
   && spawnSync(nativeAlias, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true }).stdout?.startsWith("PowerShell 7")
-it.skipIf(!hasNativeAlias)("detects and validates a runnable PowerShell alias through the actual Agent Shell settings", async () => {
+it.skipIf(!hasNativeAlias)("preserves an explicit PowerShell alias and its native admission refusal", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-alias-")); roots.push(root)
   const settings = createAgentShellSettings(join(root, "settings.json"), { env: { Path: win32.dirname(nativeAlias), SystemRoot: process.env.SystemRoot }, platform: "win32" })
   expect(await settings.configure({ shell: "pwsh" })).toMatchObject({ resolved: { command: nativeAlias, dialect: "powershell" } })
@@ -91,7 +99,7 @@ it.skipIf(!hasNativeAlias)("detects and validates a runnable PowerShell alias th
   const tools: Tool[] = []
   registerShell(createContext(), { register: (tool) => tools.push(tool) }, { agentShell: () => selected, cwd: root })
   const tool = tools.find((tool) => tool.name === "shell")!
-  const result = await tool.execute({ command: "$PSVersionTable.PSVersion.Major" }, {}) as { stdout: string; stderr: string; exitCode: number }
-  expect(result.exitCode, result.stderr).toBe(0)
-  expect(result.stdout.trim()).toBe("7")
+  // ShellExecute-compatible discovery does not give the native Job driver a
+  // canonical executable file. The explicit selection must not be substituted.
+  await expect(tool.execute({ command: "$PSVersionTable.PSVersion.Major" }, {})).rejects.toThrow(/EACCES|ENOENT/)
 }, 15000)

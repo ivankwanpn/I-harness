@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest"
 import { buildCommandLine, quoteArg, spawnSandboxedInherited } from "../src/spawn.ts"
 import type { NativePtr, Win32Bindings } from "../src/ffi.ts"
 import { Win32Error } from "../src/errors.ts"
+import { STARTUPINFOW } from "../src/ffi.ts"
+import koffi from "koffi"
 
 describe("quoteArg (Windows argv quoting)", () => {
   it("quotes empty args", () => {
@@ -38,8 +40,10 @@ describe("quoteArg (Windows argv quoting)", () => {
 })
 
 describe("spawnSandboxedInherited startup failure", () => {
-  it("preserves CreateProcessAsUserW error before stdio restoration overwrites it", () => {
+  it.each([false, true])("preserves native error and inherited-console startup for windowsHide=%s", (windowsHide) => {
     let lastError = 0
+    let startup: { dwFlags: number; wShowWindow: number; hStdInput: unknown } | undefined
+    let creationFlags: unknown
     const api = {
       createJobObjectW: () => 100n,
       setInformationJobObject: () => 1,
@@ -48,7 +52,7 @@ describe("spawnSandboxedInherited startup failure", () => {
         if (flags === 0) lastError = 6
         return 1
       },
-      createProcessAsUserW: () => { lastError = 2; return 0 },
+      createProcessAsUserW: (...args: unknown[]) => { startup = koffi.decode(args[9], STARTUPINFOW); creationFlags = args[6]; lastError = 2; return 0 },
       getLastError: () => lastError,
       closeHandle: () => { lastError = 6; return 1 },
       formatMessageW: () => 0,
@@ -56,11 +60,13 @@ describe("spawnSandboxedInherited startup failure", () => {
 
     let failure: unknown
     try {
-      spawnSandboxedInherited(api, 300n as NativePtr, { command: "missing.exe", args: [], cwd: "C:\\owned" })
+      spawnSandboxedInherited(api, 300n as NativePtr, { command: "missing.exe", args: [], cwd: "C:\\owned", windowsHide })
     } catch (error) {
       failure = error
     }
     expect(failure).toBeInstanceOf(Win32Error)
     expect(failure).toMatchObject({ api: "CreateProcessAsUserW", win32Code: 2 })
+    expect(creationFlags).toBe(0x00000004) // CREATE_SUSPENDED remains the only creation flag.
+    expect(startup).toMatchObject({ dwFlags: 0x100 | (windowsHide ? 1 : 0), wShowWindow: 0 })
   })
 })

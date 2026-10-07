@@ -41,7 +41,9 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
     })
     if (env.platform !== "win32") return available
     const automatic = available.find((option) => option.id === "auto")
-    const native = available.find((option) => option.id === "pwsh")
+    // Native Job creation cannot execute WindowsApps aliases. Preserve explicit
+    // choices, but bind auto to a regular native executable before command capture.
+    const native = available.find((option) => option.id === "pwsh" && !/[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(option.command))
       ?? available.find((option) => option.id === "powershell")
       ?? available.find((option) => option.id === "cmd")
     return available.flatMap((option) => option.id !== "auto" ? [option]

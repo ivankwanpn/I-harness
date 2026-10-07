@@ -70,6 +70,7 @@ interface ParsedArgs {
   writeSids: string[]
   tempWriteSid: string | undefined
   noTempWrite: boolean
+  windowsHide: boolean
   argumentEncoding: 'crt' | 'cmd-verbatim'
   command: string
   args: string[]
@@ -82,6 +83,7 @@ function parseArgs(raw: string[]): ParsedArgs {
   const writeSids: string[] = []
   let parsedTempWriteSid: string | undefined
   let noTempWrite = false
+  let windowsHide = false
   let argumentEncoding: 'crt' | 'cmd-verbatim' = 'crt'
   let index = 0
   for (; index < raw.length; index++) {
@@ -103,6 +105,10 @@ function parseArgs(raw: string[]): ParsedArgs {
         if (value !== 'true' || noTempWrite) fail('invalid --no-temp-write')
         noTempWrite = true
         break
+      case '--windows-hide':
+        if (value !== 'true' || windowsHide) fail('invalid --windows-hide')
+        windowsHide = true
+        break
       case '--argument-encoding':
         if (value !== 'crt' && value !== 'cmd-verbatim') fail('invalid --argument-encoding')
         argumentEncoding = value
@@ -116,7 +122,7 @@ function parseArgs(raw: string[]): ParsedArgs {
   const argv = raw.slice(index)
   const command = argv[0]
   if (command === undefined) fail('missing command after --')
-  return { workspaces, temp, mode, writeSids, tempWriteSid: parsedTempWriteSid, noTempWrite,
+  return { workspaces, temp, mode, writeSids, tempWriteSid: parsedTempWriteSid, noTempWrite, windowsHide,
     argumentEncoding, command, args: argv.slice(1) }
 }
 
@@ -203,6 +209,7 @@ async function main(): Promise<number> {
       command: parsed.command,
       args: parsed.args,
       argumentEncoding: parsed.argumentEncoding,
+      windowsHide: parsed.windowsHide,
       stdio: 'inherit',
     })
     const result = await child.wait()

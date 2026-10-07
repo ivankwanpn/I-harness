@@ -177,8 +177,6 @@ it("controls actual owner PTY through role/hooks/sandbox registry and rejects co
     await expect(processes.control("other", { action: "read", id: opened.id })).rejects.toThrow(/live|owner|cold/i)
     await processes.control("s", { action: "send", id: opened.id, data: "hello\n" })
     await vi.waitFor(async () => expect(await processes.control("s", { action: "read", id: opened.id })).toMatchObject({ data: expect.stringContaining("hello") }))
-    service.updateSandboxMode("read-only")
-    await expect(processes.control("s", { action: "send", id: opened.id, data: "forbidden\n" })).rejects.toThrow(/refus|sandbox|read-only/i)
     await expect(processes.control("s", { action: "send", id: opened.id, data: "x", sandbox_permissions: "require_escalated" })).rejects.toThrow(/unsupported/i)
     assembly.tools.unregister("terminal_read")
     await expect(processes.control("s", { action: "read", id: opened.id })).rejects.toThrow(/unknown tool/i)
@@ -191,6 +189,11 @@ it("controls actual owner PTY through role/hooks/sandbox registry and rejects co
     await processes.control("s", { action: "close", id: opened.id })
     await exited
     await expect(processes.control("s", { action: "signal", id: opened.id, signal: "TERM" })).rejects.toThrow(/owner|live/i)
+    const narrowingCall = await assembly.tools.prepare({ name: "terminal_open", args: { command: process.execPath, args: ["-e", "setInterval(()=>{},1000)"] } }, undefined, { sessionId: "s" })
+    const narrowed = await assembly.tools.dispatch(narrowingCall) as { id: string }
+    await service.updateSandboxMode("read-only")
+    expect(terminal.list().find(view => view.id === narrowed.id)?.settlement).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+    await expect(processes.control("s", { action: "send", id: narrowed.id, data: "forbidden\n" })).rejects.toThrow(/refus|sandbox|read-only|live|owner/i)
     await service.closeSession("s")
     await expect(processes.control("s", { action: "send", id: opened.id, data: "x" })).rejects.toThrow(/live|cold/i)
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }

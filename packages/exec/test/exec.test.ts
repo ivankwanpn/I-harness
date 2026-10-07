@@ -43,19 +43,24 @@ describe("exec service", () => {
     const exec = registerExec(createContext())
     const controller = new AbortController()
     const started = Date.now()
-    // run() spawns + registers the abort listener synchronously, so schedule
-    // the abort right after and await the promise.
+    let readiness = ""
+    // Admission is asynchronous. Abort only after the real child is running,
+    // so this assertion covers cancellation rather than preparation rollback.
     const pending = exec.run({
-      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+      argv: [process.execPath, "-e", "console.log('ABORT_READY');setTimeout(()=>{}, 60000)"],
       abortSignal: controller.signal,
-    })
-    setTimeout(() => controller.abort(), 200)
-    const result = await pending
-    const elapsed = Date.now() - started
-    expect(elapsed).toBeLessThan(10_000)
-    expect(result.exitCode).not.toBe(0)
-    // An abort is NOT a timeout — callers must see the real exitCode.
-    expect(result.timedOut).toBe(false)
+    }, { stream: { maxBytes: 1024, onStdout: chunk => {
+      readiness += chunk.toString()
+      if (readiness.includes("ABORT_READY")) controller.abort()
+    } } })
+    try {
+      const result = await pending
+      const elapsed = Date.now() - started
+      expect(elapsed).toBeLessThan(10_000)
+      expect(result.exitCode).not.toBe(0)
+      // An abort is NOT a timeout — callers must see the real exitCode.
+      expect(result.timedOut).toBe(false)
+    } finally { await exec.dispose() }
   }, 10_000)
 
   it("aborts immediately when the signal is already aborted before spawn", async () => {

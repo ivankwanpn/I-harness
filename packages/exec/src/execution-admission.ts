@@ -1,6 +1,6 @@
 import { checkBackendRequirements, snapshotProcessSpec } from "@i-harness/sandbox"
 import type {
-  BackendRequirements, CompiledSandboxPolicy, ExecutionBackend, ExecutionHandle, ProcessSpec,
+  BackendRequirements, CompiledSandboxPolicy, ExecutionBackend, ExecutionHandle, ProcessSpec, PreparedExecution,
   TransportExecutionBackend, TransportExecutionHandle,
 } from "@i-harness/sandbox"
 
@@ -49,7 +49,7 @@ export async function launchExecution({ backend, spec, policy, requirements, val
   const decision = checkBackendRequirements(await backend.probe(), requirements)
   if (!decision.ok) throw new ExecutionAdmissionError(decision.missing)
   checkAbort()
-  const prepared = await backend.prepare(preparedSpec, policy, signal)
+  const prepared: PreparedExecution = await backend.prepare(preparedSpec, policy, signal)
   try {
     revalidate()
     return await prepared.commit(revalidate)

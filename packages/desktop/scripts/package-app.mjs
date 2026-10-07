@@ -11,6 +11,8 @@ import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
+import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -28,6 +30,7 @@ for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", 
 }
 
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
+verifyNativeAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-windows-psec"))
 const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("electron"))
 const electronExe = join(electronDist, "electron.exe")
 if (!existsSync(electronExe)) throw new Error(`electron.exe not found at ${electronExe}`)
@@ -52,6 +55,10 @@ writeFileSync(join(resources, "app", "package.json"), `${JSON.stringify({
 }, null, 2)}\n`)
 
 cpSync(gatewayDir, join(resources, "gateway"), { recursive: true, dereference: true })
+// Main-process imports also load Koffi; its loader must retain its package layout.
+for (const name of ["koffi", `@koromix/koffi-${process.platform}-${process.arch}`]) {
+  copyRuntimePackage(runtimePackageRoot(name, join(gatewayDir, "cli")), join(resources, "app/node_modules", ...name.split("/")))
+}
 
 const zipPath = join(releaseDir, `I-harness-Desktop-${manifest.version}.zip`)
 const zip = spawnSync("powershell.exe", [

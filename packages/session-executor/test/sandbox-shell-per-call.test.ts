@@ -19,9 +19,15 @@ async function runTurn(assembly: SessionAssembly): Promise<void> {
   await executor.drain()
 }
 
-function modelCallingBash(command: string) {
+const toolName = process.platform === "win32" ? "shell" : "bash"
+const qualifiedShell = process.platform === "win32" ? { agentShell: () => ({ id: "powershell", label: "Windows PowerShell", dialect: "powershell" as const,
+  command: join(process.env.SystemRoot ?? "C:/Windows", "System32/WindowsPowerShell/v1.0/powershell.exe") }) } : {}
+const mkdirCommand = (path: string) => process.platform === "win32"
+  ? `New-Item -ItemType Directory -Path '${path.replaceAll("'", "''")}' -ErrorAction Stop`
+  : `mkdir -p ${JSON.stringify(path)}`
+function modelCallingShell(command: string) {
   return createMockClient([
-    { role: "assistant", toolCalls: [{ name: "bash", args: { command } }] },
+    { role: "assistant", toolCalls: [{ name: toolName, args: { command } }] },
     { role: "assistant", text: "done" },
   ])
 }
@@ -39,7 +45,8 @@ describe("the assembly hands the shell a per-call policy", () => {
     const assembly = await createSessionAssembly({
       workspace,
       session,
-      model: modelCallingBash(`mkdir -p ${JSON.stringify(trace)}`),
+      model: modelCallingShell(mkdirCommand(trace)),
+      ...qualifiedShell,
       approveAll: true,
       // Permissive at mount — so a value captured at mount can only ever be
       // permissive, whatever happens to the session afterwards.
@@ -50,19 +57,23 @@ describe("the assembly hands the shell a per-call policy", () => {
       // snapshot was taken from.
       append(session, { type: "sandbox/mode", mode: "read-only" })
 
-      // The shell resolved the NEW mode: the command carried a confined policy, so
-      // exec refused to run it unconfined and the child never existed. The turn
-      // RESOLVES: the refusal is a returned tool result the model can read, not a
-      // throw that ends its turn with no `tool/result` at all.
+      // The shell resolves the new mode. On Windows the qualified native shell
+      // starts under the readonly policy and the OS denies its filesystem write.
+      // The turn still resolves with the actual failure as a tool result.
       await expect(runTurn(assembly)).resolves.toBeUndefined()
-      const result = session.events.find((e) => e.type === "tool/result" && e.name === "bash")
+      const result = session.events.find((e) => e.type === "tool/result" && e.name === toolName)
       expect(result, "the model must receive the refusal as a tool result").toBeDefined()
-      const output = (result as { output?: { stderr?: string } }).output
-      const denial = JSON.parse(output!.stderr!) as SandboxDenial
-      expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "read-only" })
-      // A configured backend can report an actual policy denial and an escalation
-      // option; the retired missing-provider path advertised neither.
-      // The independent proof that nothing ran — unchanged by the conversion.
+      const output = (result as { output?: { stderr?: string; exitCode?: number } }).output
+      if (process.platform === "win32") {
+        // A qualified shell reaches the real filesystem denial. Its native
+        // stderr is distinct from the structured failure to initialize MSYS.
+        expect(output!.exitCode).not.toBe(0)
+        expect(output!.stderr).toMatch(/PermissionDenied|CreateDirectoryUnauthorizedAccessError/)
+      } else {
+        const denial = JSON.parse(output!.stderr!) as SandboxDenial
+        expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "read-only" })
+      }
+      // Independent filesystem proof that the forbidden operation did not occur.
       expect(existsSync(trace)).toBe(false)
     } finally {
       await assembly.dispose()
@@ -78,12 +89,12 @@ describe("the assembly hands the shell a per-call policy", () => {
     mkdirSync(workspace, { recursive: true })
     const session = createSession()
     append(session, { type: "user/message", text: "run it" })
+    const trace = join(workspace, "ran-through")
     const assembly = await createSessionAssembly({
       workspace,
       session,
-      // `true` with no dependencies: nothing to resolve against a path, so the
-      // control does not depend on the host's shell beyond bash existing.
-      model: modelCallingBash("true"),
+      model: modelCallingShell(mkdirCommand(trace)),
+      ...qualifiedShell,
       approveAll: true,
       sandbox: "danger-full-access",
     })
@@ -93,14 +104,11 @@ describe("the assembly hands the shell a per-call policy", () => {
       const results = session.events.filter((e) => e.type === "tool/result")
       expect(results.length).toBeGreaterThan(0)
       expect(JSON.stringify(results)).not.toContain("SANDBOX_UNAVAILABLE")
+      expect(existsSync(trace)).toBe(true)
     } finally {
       await assembly.dispose()
       rmSync(base, { recursive: true, force: true })
     }
-    // M62 Task 3 review: the budget is explicit. This case spawns a real
-    // `bash -c true` through a full assembly, and the default 5s left it on the
-    // edge under load — `workspace-cwd.test.ts` gives the identical call 30_000
-    // for the same reason. The refusal case above needs no budget (it never
-    // spawns), so only this one carries the override.
+    // Preserve the existing real-shell control's explicit time budget.
   }, 30_000)
 })

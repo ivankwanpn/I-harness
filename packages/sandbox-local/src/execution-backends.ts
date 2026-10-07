@@ -37,7 +37,7 @@ export function createLocalExecutionBackends(options: LocalExecutionOptions = {}
   const legacy = platform === "win32" ? options.windowsLegacyBackend
     ?? (options.legacyPrivateTempRoot === undefined ? undefined
       : createLegacyWindowsBackend(createWindowsAclSandbox({ writableDirs: [], mode: "read-only",
-          privateTempRoot: options.legacyPrivateTempRoot, disablePrivateTempWrites: true }), legacyNative!)) : undefined
+          privateTempRoot: options.legacyPrivateTempRoot, disablePrivateTempWrites: true, hideChildWindows: true }), legacyNative!)) : undefined
   const posix = platform === "linux" || platform === "darwin" ? options.posixBackend ?? createPosixExecutionBackend() : undefined
   let disposed = false
   return {

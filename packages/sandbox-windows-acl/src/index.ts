@@ -117,6 +117,8 @@ export interface AclSandboxSpawnOptions {
   args?: readonly string[]
   /** CRT by default; cmd-verbatim preserves one raw cmd.exe /d /s /c tail. */
   argumentEncoding?: ProcessSpec['argumentEncoding']
+  /** Trusted hidden-console runner: preserve hidden presentation with inherited stdio. */
+  windowsHide?: boolean
   /** Working directory; defaults to the caller's cwd. */
   cwd?: string
   /**
@@ -377,7 +379,7 @@ export class AclSandbox {
     const cwd = options.cwd ?? process.cwd()
 
     if (options.stdio === 'inherit') {
-      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding })
+      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding, windowsHide: options.windowsHide })
       let exitCodePromise: Promise<number> | undefined
       return {
         pid: native.pid,
@@ -572,7 +574,10 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
   privateTempRoot?: string
   /** Compose only the policy-declared workspace grants. No private temp grant or environment rewrite. */
   disablePrivateTempWrites?: boolean
+  /** Trusted hidden-console composition only; does not change token, grants or console attachment. */
+  hideChildWindows?: boolean
 }): AclSandboxProvider {
+  const hideChildWindows = options.hideChildWindows === true
   // Fail closed at composition: declared writable directories must exist.
   // (The per-policy write-SID derivation and grant materialization happen at
   // confine() — the AclSandbox class requires the SID at construction, so a
@@ -734,7 +739,7 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
     if (argumentEncoding !== 'crt' && argumentEncoding !== 'cmd-verbatim') throw new Error('invalid argument encoding')
     if (argumentEncoding === 'cmd-verbatim') buildCommandLine(argv[0] ?? '', argv.slice(1), argumentEncoding)
     return {
-      argv: [...aclRunnerArgv(policy), ...(argumentEncoding === 'cmd-verbatim' ? ['--argument-encoding', argumentEncoding] : []), '--', ...argv],
+      argv: [...aclRunnerArgv(policy), ...(hideChildWindows ? ['--windows-hide', 'true'] : []), ...(argumentEncoding === 'cmd-verbatim' ? ['--argument-encoding', argumentEncoding] : []), '--', ...argv],
       enforcement: 'partial',
       denialSignatures: DENIAL_SIGNATURES,
       runnerFailureRules: RUNNER_FAILURE_RULES,

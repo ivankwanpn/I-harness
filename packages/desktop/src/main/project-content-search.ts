@@ -1,4 +1,4 @@
-import { normalizeSearchQuery, createSearchStats, type SearchResult, type SearchQuery } from "../../../fs-search/src/index.ts"
+import { normalizeSearchQuery, createSearchStats, type SearchResult, type SearchQuery } from "@i-harness/fs-search"
 import type { ProjectContentSearchResult, ProjectSearchPreview, ContentSearchLimits } from "../../../desktop-gateway/src/project-content-search.ts"
 import { projectRelativePath, type ProjectFileSelection } from "../../../desktop-gateway/src/project-files.ts"
 import { resolveCurrentProjectMembers, runtimeForProjectMember } from "./project-membership.ts"

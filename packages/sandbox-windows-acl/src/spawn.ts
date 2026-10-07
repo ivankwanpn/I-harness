@@ -282,7 +282,7 @@ export interface SpawnedInherited {
 export function spawnSandboxedInherited(
   api: Win32Bindings,
   token: NativePtr,
-  options: { command: string; args: readonly string[]; cwd: string; argumentEncoding?: ProcessSpec['argumentEncoding'] },
+  options: { command: string; args: readonly string[]; cwd: string; argumentEncoding?: ProcessSpec['argumentEncoding']; windowsHide?: boolean },
 ): SpawnedInherited {
   const job = createKillOnCloseJob(api)
   const stdIn = api.getStdHandle(abi.STD_INPUT_HANDLE)
@@ -310,7 +310,8 @@ export function spawnSandboxedInherited(
   const startupInfo = allocStartupInfo()
   encodeStartupInfo(startupInfo, {
     cb: abi.STARTUPINFOW_SIZE,
-    dwFlags: abi.STARTF_USESTDHANDLES,
+    dwFlags: abi.STARTF_USESTDHANDLES | (options.windowsHide ? abi.STARTF_USESHOWWINDOW : 0),
+    ...(options.windowsHide ? { wShowWindow: abi.SW_HIDE } : {}),
     hStdInput: stdIn,
     hStdOutput: stdOut,
     hStdError: stdErr,

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
 import { readFile } from "node:fs/promises"
 import { release as osRelease } from "node:os"
-import { dirname, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { resolve } from "node:path"
+import { packageAssetRoot as packageRoot } from "./assets.ts"
 import { verifyHelper, type HelperOptions } from "./integrity.ts"
 
 export type ObservedSupport = "observed-pass" | "unsupported"
@@ -26,7 +26,6 @@ export interface WindowsQualificationView {
   readonly detail?: string
 }
 
-const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const sha256 = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex")
 function frozenRecord(value: unknown): WindowsQualificationRecord {
   const item = value as Record<string, any>

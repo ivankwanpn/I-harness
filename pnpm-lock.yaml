@@ -381,6 +381,9 @@ importers:
       '@i-harness/desktop-gateway':
         specifier: workspace:*
         version: link:../desktop-gateway
+      '@i-harness/fs-search':
+        specifier: workspace:*
+        version: link:../fs-search
       '@i-harness/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -393,6 +396,9 @@ importers:
       '@xterm/xterm':
         specifier: 5.5.0
         version: 5.5.0
+      koffi:
+        specifier: 3.1.6
+        version: 3.1.6
       lucide-react:
         specifier: 0.469.0
         version: 0.469.0(react@19.1.1)

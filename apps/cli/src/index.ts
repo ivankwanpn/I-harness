@@ -1,10 +1,8 @@
 import { pathToFileURL } from "node:url"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs"
 import { join } from "node:path"
-import { spawnSync } from "node:child_process"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -567,27 +565,46 @@ async function runDistSelfcheck(): Promise<number> {
  * → confine) and mirror its exit code — proves the BUNDLED seam spawns the
  * sibling `runner.mjs`, not the source tsx entry. Returns the child exit. */
 async function probeAclSeam(): Promise<number> {
-  const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
-  const workspace = mkdtempSync(join(tmpdir(), "ih-dist-acl-"))
+  const { createExecService } = await import("@i-harness/exec")
+  const { createLocalExecutionBackends } = await import("@i-harness/sandbox-local")
+  const { compileExecutionPolicy, assertExecutionAuthority } = await import("@i-harness/sandbox-policy")
+  const fixtureRoot = join(process.cwd(), ".tmp")
+  mkdirSync(fixtureRoot, { recursive: true })
+  const fixture = mkdtempSync(join(fixtureRoot, "sandbox-redesign-dist-selfcheck-"))
+  const workspace = join(fixture, "workspace")
+  const privateTempRoot = join(fixture, "private-temp")
+  mkdirSync(workspace); mkdirSync(privateTempRoot)
+  const backends = createLocalExecutionBackends({ windowsSelection: "legacy", legacyPrivateTempRoot: privateTempRoot })
+  const authority = { kind: "unbound" as const, revision: "dist-probe", workspaceRoot: workspace }
+  const execution = createExecService({ execution: {
+    defaultOwner: { sessionId: "dist-selfcheck" },
+    resolvePolicy: (owner, requested) => compileExecutionPolicy({ owner, mode: requested?.mode ?? "danger-full-access", authority }),
+    validateAuthority: policy => assertExecutionAuthority(policy, compileExecutionPolicy({ owner: policy.owner, mode: policy.mode, authority })),
+    selectBackend: (policy, transport) => backends.select(policy, transport),
+    dispose: () => backends.dispose(),
+  } })
   try {
-    const provider = createWindowsAclSandbox({ writableDirs: [workspace], mode: "read-only" })
+    const { createSessionAssembly } = await import("@i-harness/session-executor")
+    let code: Awaited<ReturnType<typeof createSessionAssembly>>
+    code = await createSessionAssembly({ sessionId: "dist-selfcheck", workspace, modelPolicy: "test-mock", sandbox: "danger-full-access", codeMode: { mode: "mixed" },
+      additionalTools: [{ name: "probe", description: "Owned distribution probe", isReadOnly: true, inputSchema: { type: "object" },
+        execute: async () => code.ctx.services.get<import("@i-harness/exec").ExecService>("exec/service").run({ argv: [process.execPath, "-e", "console.log('CODE_WORKER_OK')"], cwd: workspace }) }] })
     try {
-      const confined = provider.confine(
-        [process.execPath, "-e", "process.exit(7)"],
-        { mode: "read-only", workspaceRoot: workspace },
-      )
-      if (process.env.I_HARNESS_DIST === "1" && confined.argv.some((arg) => arg.includes("tsx"))) {
-        throw new Error(`dist confinement still uses tsx: ${JSON.stringify(confined.argv.slice(0, 5))}`)
-      }
-      const result = spawnSync(confined.argv[0]!, confined.argv.slice(1), { stdio: "inherit", timeout: 120_000 })
-      if (result.status !== 7) throw new Error(`confined child exit ${String(result.status)} (expected 7)`)
-      return 7
-    } finally {
-      provider.dispose()
+      const result = await code.tools.execute({ name: "code_exec", args: { code: "text((await tools.probe({})).stdout)" } })
+      if (!JSON.stringify(result).includes("CODE_WORKER_OK")) throw new Error("bundled Code Mode worker failed: " + JSON.stringify(result))
+    } finally { await code.dispose() }
+    for (const mode of ["read-only", "danger-full-access"] as const) {
+      const result = await execution.run({ argv: [process.execPath, "-e", "console.log('SUPERVISED_OK');process.exit(7)"], cwd: workspace, sandbox: { mode, workspaceRoot: workspace } })
+      if (result.exitCode !== 7 || !result.stdout.includes("SUPERVISED_OK")) throw new Error(mode + " native probe failed: " + result.exitCode + " " + result.stderr)
     }
-  } finally {
-    rmSync(workspace, { recursive: true, force: true })
-  }
+    const denied = join(workspace, "readonly-denied")
+    const denial = await execution.run({ argv: [process.execPath, "-e", "try{require('fs').writeFileSync(" + JSON.stringify(denied) + ", 'bad');process.exit(9)}catch{console.log('DENIED_OK')}"], cwd: workspace, sandbox: { mode: "read-only", workspaceRoot: workspace } })
+    if (denial.exitCode !== 0 || !denial.stdout.includes("DENIED_OK") || existsSync(denied)) throw new Error("readonly write denial failed")
+    const allowed = join(workspace, "workspace-write")
+    const write = await execution.run({ argv: [process.execPath, "-e", "require('fs').writeFileSync(" + JSON.stringify(allowed) + ", 'allowed')"], cwd: workspace, sandbox: { mode: "workspace-write", workspaceRoot: workspace } })
+    if (write.exitCode !== 0 || !existsSync(allowed)) throw new Error("workspace write failed: " + write.stderr)
+    return 7
+  } finally { await execution.dispose() }
 }
 
 /** `i-harness sdk` — the SDK stdio server (R-C4). One NDJSON JSON-RPC line

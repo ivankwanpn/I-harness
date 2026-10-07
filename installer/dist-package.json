@@ -2,10 +2,11 @@
   "name": "i-harness-dist",
   "version": "0.1.0",
   "private": true,
-  "description": "M45: deploy manifest for the dist node_modules (the NATIVE pieces esbuild externalizes; everything else is bundled into ih.mjs). build-dist.mjs installs these into <dist>/node_modules. Versions are EXACT pins with a build-time store check (scripts/build-dist.mjs fails loud on drift).",
+  "description": "Pinned external runtime dependencies copied from installed packages by build-dist; no install or download. Windows native helper assets are copied from their owning workspace package.",
   "dependencies": {
     "node-pty": "1.1.0",
     "koffi": "3.1.6",
-    "@vscode/ripgrep": "1.18.0"
+    "@vscode/ripgrep": "1.18.0",
+    "quickjs-emscripten": "0.32.0"
   }
 }

@@ -39,6 +39,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync } fro
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import { verifyNativeAssets } from "./runtime-native-assets.mjs"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const argv = process.argv.slice(2)
@@ -105,6 +106,8 @@ if (!existsSync(OUT)) {
   process.exit(1)
 }
 assert(existsSync(IH), `bundle present: ${IH}`, `missing ${IH}`)
+try { verifyNativeAssets(join(OUT, "sandbox-windows-psec")); assert(true, "native helper/protocol/qualification integrity") }
+catch (error) { fail(error.message) }
 assert(existsSync(join(OUT, "package.json")), "dist package.json present")
 assert(existsSync(join(OUT, "README-dist.txt")), "README-dist.txt present")
 assert(existsSync(join(OUT, "reader.mjs")), "fixed search reader beside the bundle")
@@ -172,21 +175,6 @@ smoke("(c) help", ["help"], (r, detail) => {
 
 /** One real confined spawn through the runner bundle (read-only needs no
  * DACL grants — token creation + restricted spawn + exit mirroring). */
-function aclRunnerSpawn() {
-  const tmp = mkdtempSync(join(tmpdir(), "ih-verify-dist-acl-"))
-  try {
-    const workspace = join(tmp, "ws")
-    mkdirSync(workspace)
-    return spawnSync(
-      process.execPath,
-      [RUNNER, "--workspace", workspace, "--temp", tmp, "--mode", "read-only", "--", process.execPath, "-e", "process.exit(7)"],
-      { cwd: ROOT, encoding: "utf8", timeout: 120_000 },
-    )
-  } finally {
-    rmSync(tmp, { recursive: true, force: true })
-  }
-}
-
 // (d) hidden self-check: the windows-acl confinement probe (M65 T1 removed the
 // three TUI-subject probes; see the header).
 {
@@ -219,13 +207,8 @@ function aclRunnerSpawn() {
     `(e) acl runner failure contract: exit 127 + signature ${getDuration(t)}`,
     `  exit: ${noArgs.status}\n  stderr:\n${noArgs.stderr}`,
   )
-  const t2 = Date.now()
-  const confined = aclRunnerSpawn()
-  assert(
-    confined.status === 7,
-    `(e) confined spawn mirrors the child exit code (7) ${getDuration(t2)}`,
-    `  exit: ${confined.status}\n  stdout:\n${confined.stdout}\n  stderr:\n${confined.stderr}`,
-  )
+  // Real confinement and write denials are exercised through the supervised selfcheck above.
+
 }
 
 // (f) dist-level SDK stdio server — the restored `--attach`-era probe.

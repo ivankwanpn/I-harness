@@ -11,27 +11,19 @@
  *    graph is inlined; the three NATIVES are marked external because their
  *    native binaries cannot live inside the bundle: node-pty, koffi,
  *    @vscode/ripgrep. They resolve from <out>/node_modules at runtime.)
- * 2. native deploy — the manifest at installer/dist-package.json pins the
- *    EXACT native versions (with a build-time check against the pnpm store:
- *    drift fails loud). A scratch standalone project (created under the OS
- *    temp dir — NOT inside the repo, or the workspace would capture it) runs
- *    `pnpm install --prod`, and the resulting node_modules is copied to
- *    <out>/node_modules.
- *    NOTE — pnpm 11's `pnpm deploy` is workspace-only by design:
- *    `pnpm --filter=<pkg> deploy <target>` ships the WHOLE dependency tree
- *    of the selected package (the bundle already inlines the workspace TS,
- *    so shipping all of it again would double the payload — this installs
- *    only the pinned externals instead, which is what the dist needs).
+ * 2. Copy the already installed, pinned external runtime dependency graph.
+ *    No install, download or runtime native compilation occurs. Copy and verify
+ *    the package-owned Windows helper/protocol/provenance/qualification assets.
  * 3. layout — <out>/{ih.mjs, runner.mjs + emitted assets, package.json,
  *    node_modules/, README-dist.txt}. The gate is scripts/verify-dist.mjs
  *    (fails loud).
  */
 
 import { build } from "esbuild"
-import { spawnSync } from "node:child_process"
-import { copyFileSync, cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { copyRuntimePackage, runtimePackageRoot } from "../packages/desktop/scripts/runtime-copy.mjs"
+import { copyNativeAssets } from "./runtime-native-assets.mjs"
+import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { join, resolve, relative, isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
 
 // ---------------------------------------------------------------- constants
@@ -68,6 +60,8 @@ for (let i = 0; i < argv.length; i++) {
   else fail(`unknown argument: ${argv[i]} (usage: node scripts/build-dist.mjs [--out dist])`)
 }
 const OUT = resolve(ROOT, out)
+const outputRelative = relative(ROOT, OUT)
+if (!outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelative)) fail("output must be a child directory of the workspace")
 
 if (!existsSync(CLI_ENTRY)) fail(`entry not found: ${CLI_ENTRY}`)
 if (!existsSync(MANIFEST_PATH)) fail(`deploy manifest not found: ${MANIFEST_PATH} (installer/dist-package.json)`)
@@ -108,30 +102,6 @@ for (const name of NATIVES) {
     )
   }
   log(`native pin ok: ${name}@${resolved}`)
-}
-
-// ------------------------------------------------------ pnpm >= 10 guard
-//
-// The native deploy below installs with `nodeLinker: hoisted` and REQUIRES a
-// flat node_modules holding each dependency's optional PLATFORM package
-// (@koromix/koffi-win32-x64, @vscode/ripgrep-win32-x64) at the top level —
-// koffi/ripgrep resolve them by relative/require.resolve lookups. pnpm 9's
-// hoisted linker silently omits those optional packages (the payload then
-// boot-fails: "Cannot find the native Koffi module"), and the repo's workspace
-// config (allowBuilds / ignoreWorkspaceCycles) is pnpm-10 syntax anyway.
-// Fail loud BEFORE bundling so nobody ships a broken payload.
-{
-  const v = spawnSync("pnpm", ["--version"], { encoding: "utf8", shell: process.platform === "win32" })
-  const raw = (v.stdout ?? "").trim()
-  const major = Number.parseInt(raw.split(".")[0] ?? "", 10)
-  if (!Number.isInteger(major) || major < 10) {
-    fail(
-      `pnpm >= 10 is required for the native deploy (found ${raw === "" ? "no pnpm on PATH" : `pnpm ${raw}`}) — ` +
-        `pnpm 9's hoisted linker omits a dependency's optional platform packages (@koromix/koffi-*, @vscode/ripgrep-*), ` +
-        `so the dist would boot-fail on koffi. Upgrade (e.g. \`npm i -g pnpm@10\`) and re-run.`,
-    )
-  }
-  log(`pnpm ${raw} ok (>= 10 required for the native deploy)`)
 }
 
 // ---------------------------------------------------------------- fresh out
@@ -199,43 +169,22 @@ await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
 
 // ---------------------------------------------------------------- 2. natives
 
-{
-  const t = Date.now()
-  const scratch = mkdtempSync(join(tmpdir(), "ih-dist-deploy-"))
-  try {
-    // standalone project OUTSIDE the workspace (a commit-compatible piece is
-    // installer/dist-package.json; the scratch gets a copy + the build-script
-    // approvals, exactly the workspace's pnpm-workspace.yaml pattern).
-    // nodeLinker: hoisted — the DEPLOY layout must be FLAT: koffi resolves its
-    // native from ../@koromix/koffi-<triplet> and @vscode/ripgrep resolves
-    // @vscode/ripgrep-<triplet> via require.resolve — both look at the TOP
-    // level of node_modules (pnpm's default isolated layout nests them under
-    // .pnpm/<pkg>@<ver>/node_modules, which is invisible to those lookups).
-    writeFileSync(join(scratch, "package.json"), JSON.stringify(manifest, null, 2))
-    // `packages: ["."]` is REQUIRED: pnpm ≥9 rejects a pnpm-workspace.yaml
-    // without a non-empty `packages` field ("packages field missing or empty"),
-    // which made every --prod native deploy fail (and, before the installer
-    // fix, silently produced a payload with no node_modules at all).
-    writeFileSync(
-      join(scratch, "pnpm-workspace.yaml"),
-      'packages:\n  - "."\nnodeLinker: hoisted\nallowBuilds:\n  node-pty: true\n  koffi: true\n',
-    )
-    log(`native install: pnpm install --prod in ${scratch}`)
-    const r = spawnSync("pnpm", ["install", "--prod"], {
-      cwd: scratch,
-      shell: process.platform === "win32",
-      stdio: "inherit",
-      env: process.env,
-    })
-    if (r.status !== 0) fail(`pnpm install --prod exited ${r.status ?? "with a signal"} (stderr above)`)
-    const src = join(scratch, "node_modules")
-    if (!existsSync(src)) fail("pnpm install --prod produced no node_modules")
-    cpSync(src, join(OUT, "node_modules"), { recursive: true })
-    log(`native deploy: node_modules copied (${timing(t)})`)
-  } finally {
-    rmSync(scratch, { recursive: true, force: true })
-  }
+// Package only installed dependencies; no install or download step.
+const copiedNatives = new Set()
+function copyInstalled(name, from, optional = false) {
+  if (copiedNatives.has(name)) return
+  let source
+  try { source = runtimePackageRoot(name, from) } catch (error) { if (optional) return; throw error }
+  copiedNatives.add(name)
+  const pkg = JSON.parse(readFileSync(join(source, "package.json"), "utf8"))
+  if (manifest.dependencies[name] && manifest.dependencies[name] !== pkg.version) fail(`installed runtime pin drift: ${name}@${pkg.version}, expected ${manifest.dependencies[name]}`)
+  copyRuntimePackage(source, join(OUT, "node_modules", ...name.split("/")))
+  for (const child of Object.keys(pkg.dependencies ?? {})) copyInstalled(child, source)
+  for (const child of Object.keys(pkg.optionalDependencies ?? {})) copyInstalled(child, source, true)
 }
+for (const name of NATIVES) copyInstalled(name, join(ROOT, name === "@vscode/ripgrep" ? "packages/fs-search" : name === "koffi" ? "packages/sandbox-windows-acl" : "packages/sandbox-local"))
+copyInstalled("quickjs-emscripten", join(ROOT, "packages/code-mode"))
+copyNativeAssets(join(ROOT, "packages/sandbox-windows-psec"), join(OUT, "sandbox-windows-psec"))
 
 // ------------------------------------------- module-load assets (runtime URLs)
 
@@ -248,6 +197,8 @@ await bundleEntry(RUNNER_ENTRY, join(OUT, "runner.mjs"), "acl runner")
   const assetFiles = [
     { from: join(ROOT, "packages/provider/src/model-catalog.json"), to: join(OUT, "model-catalog.json") },
     { from: join(ROOT, "packages/fs-search/src/reader.mjs"), to: join(OUT, "reader.mjs") },
+    { from: join(ROOT, "packages/code-mode/src/worker.mjs"), to: join(OUT, "worker.mjs") },
+    { from: join(ROOT, "packages/code-mode/src/cpu-budget.mjs"), to: join(OUT, "cpu-budget.mjs") },
   ]
   for (const a of assetFiles) {
     if (!existsSync(a.from)) fail(`asset source missing: ${a.from}`)
@@ -297,7 +248,9 @@ writeFileSync(
     "  ih.mjs            the esbuild bundle (the whole CLI/backend workspace inlined)",
     "  runner.mjs        the windows-acl confinement runner (sibling bundle; the",
     "                    sandbox seam spawns it in dist — no source checkout, no tsx)",
-    "  node_modules/     the NATIVE externals (node-pty, koffi, @vscode/ripgrep)",
+    "  node_modules/     installed native externals and the QuickJS worker runtime",
+    "  sandbox-windows-psec/  fixed helper, manifest/provenance, protocol, historical qualification",
+    "  worker.mjs, cpu-budget.mjs  isolated Code Mode worker assets",
     "  package.json      dist manifest (same dependency pins as installer/dist-package.json)",
     "  model-catalog.json  runtime asset — read as new URL(\"./model-catalog.json\", import.meta.url)",
     "                    by @i-harness/provider at MODULE LOAD; same rule as the bundle, so it",

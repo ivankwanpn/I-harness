@@ -1339,7 +1339,7 @@ describe("headless CLI W10 foreground promotion", () => {
   // under it, the SAME kind of command is handed back as a job id instead, and
   // this is the run the users meet: the CLI's option, the assembly's wiring, the
   // shell tool, the guard and exec's job registry, in one pass.
-  it("a shell call that outlives shellBackgroundAfterMs returns a job id, and the command outlives the run to finish its work", async () => {
+  it("promotes a live shell call and settles its ownership before the headless run returns", async () => {
     const dir = mkdtempSync(join(tmpdir(), "i-harness-w10-cli-"))
     const release = join(dir, "release")
     const servicesBefore = mountedExecServices.list.length
@@ -1381,18 +1381,17 @@ describe("headless CLI W10 foreground promotion", () => {
       const jobList = toolResults.find((e) => e.name === "job_list") as { output: { jobs: { id: string; kind: string; status: string }[] } } | undefined
       expect(jobList).toBeDefined()
       expect(jobList!.output.jobs.some((j) => j.kind === "bash" && j.status === "running")).toBe(true)
-      // THE WORK SURVIVES THE RUN: the foreground call would have been killed at
-      // 5s and lost; released here, it keeps running after runHeadless returned
-      // and finishes what it was doing.
+      // Promotion survives the foreground tool call. Assembly shutdown owns and
+      // drains that same process before runHeadless returns.
       writeFileSync(release, "go")
-      const finished = await pollUntil(async () => (existsSync(donePath) ? true : undefined), 10_000)
-      expect(finished).toBe(true)
       const exec = mountedExecServices.list[servicesBefore]!
       const closed = await pollUntil(async () => {
         const job = exec.getOutput(jobId!)
         return job.status === "running" ? undefined : job
       }, 10_000)
-      expect(closed).toMatchObject({ status: "completed", exitCode: 0 })
+      expect(closed?.exitCode).not.toBe(0)
+      expect(closed?.settlement).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+      expect(existsSync(donePath)).toBe(false)
     } finally {
       // Release even after an assertion failure, and await the real close
       // callback before deleting the process's Windows working directory.

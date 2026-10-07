@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { tmpdir } from "node:os"
 import { relative, isAbsolute, sep } from "node:path"
-import { createExecutionSupervisor, currentExecCaller, withExecCallerScope, type ExecExecutionHost, type ExecutionReconciliationContext } from "@i-harness/exec"
-import { createLocalExecutionBackends, readWindowsQualification } from "@i-harness/sandbox-local"
+import { createExecutionSupervisor, currentExecCaller, withExecCallerScope, type ExecExecutionHost, type ExecutionReconciliationContext, type ExecutionReconciler } from "@i-harness/exec"
+import { createLocalExecutionBackends, readWindowsQualification, type LocalExecutionBackends, type LocalExecutionOptions } from "@i-harness/sandbox-local"
 import { assertExecutionAuthority, compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import type { AuthorityState, CompiledSandboxPolicy, ExecutionOwner, SandboxMode, SandboxExecutionPolicy } from "@i-harness/sandbox"
 
@@ -26,9 +26,10 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
   if (configured !== "legacy" && configured !== "psec") throw new Error("IH_WINDOWS_SANDBOX requires legacy or psec")
   const selected: "legacy" | "psec" = configured
   const supervisor = createExecutionSupervisor()
-  const backends = createLocalExecutionBackends({ windowsSelection: selected,
+  const backendOptions: LocalExecutionOptions = { windowsSelection: selected,
     // A location for the legacy protocol only: no private temp grants or environment rewriting.
-    legacyPrivateTempRoot: options.legacyPrivateTempRoot ?? tmpdir() })
+    legacyPrivateTempRoot: options.legacyPrivateTempRoot ?? tmpdir() }
+  const backends: LocalExecutionBackends = createLocalExecutionBackends(backendOptions)
   const callers = new AsyncLocalStorage<{ validate(): boolean }>()
   const owners = new Set<string>([options.owner.sessionId])
   const parents = new Map<string, string>()
@@ -39,7 +40,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
   const writes = new Set<{ policy: CompiledSandboxPolicy; abort(): void; done: Promise<void> }>()
   let disposed = false
 
-  function validate(policy: CompiledSandboxPolicy, context: ExecutionReconciliationContext = { phase: "preparing" }): void {
+  const validate: ExecutionReconciler & ((policy: CompiledSandboxPolicy) => void) = (policy: CompiledSandboxPolicy, context: ExecutionReconciliationContext = { phase: "preparing" }): void => {
     const captured = captures.get(policy)
     if (disposed || options.ownerAvailable?.() === false || !captured || !captured.validate()) throw new Error("Execution caller authority unavailable or revoked")
     const standing = options.standing()

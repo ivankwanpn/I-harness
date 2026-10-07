@@ -13,6 +13,7 @@ import { cpSync, mkdirSync, readFileSync, rmSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
+import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -27,6 +28,7 @@ function dependenciesOf(root) {
 }
 
 const copied = new Set()
+verifyNativeAssets(join(repoRoot, "packages/sandbox-windows-psec"), { sources: true })
 
 /** Copy one dependency (and its own deps) into the shipped node_modules.
  * Platform packages for other OSes are optional and simply not installed here. */
@@ -61,5 +63,6 @@ for (const dependency of dependenciesOf(gatewayRoot)) {
 
 // tsx transpiles both the gateway and the workspace packages it imports.
 copyDependency("tsx", repoRoot, true)
+verifyNativeAssets(join(modulesDir, "@i-harness/sandbox-windows-psec"))
 
 console.log(`gateway runtime: ${outDir} (${copied.size} packages shipped)`)
