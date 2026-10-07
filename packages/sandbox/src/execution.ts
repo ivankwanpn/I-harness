@@ -34,7 +34,8 @@ export type AuthorityState =
 export interface CompiledSandboxPolicy {
   mode: SandboxMode; owner: Readonly<ExecutionOwner>; authorityRevision: string
   authorityKind: "unbound" | "bound"; primaryRoot: string
-  readable: "caller"; writeRoots: readonly string[]; referenceRoots: readonly string[]
+  readable: "caller"; authorityRoots: readonly string[]
+  writeRoots: readonly string[]; referenceRoots: readonly string[]
   fingerprint: string
 }
 export interface ExecutionReceipt {

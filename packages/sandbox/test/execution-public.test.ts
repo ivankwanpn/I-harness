@@ -14,6 +14,13 @@ it("exposes platform-neutral execution contracts to package consumers", () => {
   expectTypeOf<StopReason>().toEqualTypeOf<"cancelled" | "timeout" | "output-limit" | "authority-revoked" | "shutdown">()
   expectTypeOf<CompiledSandboxPolicy["mode"]>().toEqualTypeOf<SandboxMode>()
   expectTypeOf<CompiledSandboxPolicy["owner"]>().toEqualTypeOf<Readonly<ExecutionOwner>>()
+  expectTypeOf<CompiledSandboxPolicy["authorityRoots"]>().toEqualTypeOf<readonly string[]>()
+  const readOnlyPolicy: CompiledSandboxPolicy = {
+    mode: "read-only", owner: { sessionId: "consumer" }, authorityRevision: "1",
+    authorityKind: "bound", primaryRoot: "/primary", readable: "caller",
+    authorityRoots: ["/primary", "/secondary"], writeRoots: [], referenceRoots: [], fingerprint: "fixture",
+  }
+  expectTypeOf(readOnlyPolicy.authorityRoots).toEqualTypeOf<readonly string[]>()
   expectTypeOf<ExecutionReceipt["owner"]>().toEqualTypeOf<Readonly<ExecutionOwner>>()
   expectTypeOf<ExecutionHandle["rootExited"]>().toEqualTypeOf<Promise<RootExit>>()
   expectTypeOf<ExecutionHandle["settled"]>().toEqualTypeOf<Promise<ExecutionSettlement>>()
