@@ -7,11 +7,12 @@ Date: 2026-10-08 Asia/Hong_Kong. Source: `packages/sandbox-windows-psec/test/qua
 - Host: Windows 11 Pro for Workstations, NT 10.0.26200, x64; Node v24.15.0, pnpm 12.3.4, Git for Windows 2.54.0, Git Bash 5.3.9.
 - Helper: `artifacts/win32-x64/i-harness-windows-helper.exe`, SHA256 `421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395`, 698,880 bytes. Manifest version 1, protocol version 1, Rust 1.94.0, generated MXC schema revision `6cd3d58f05d3447e67109cfb75e042803b843ca4`. The script verifies the helper against the manifest before launching.
 - The harness uses `compileExecutionPolicy` and `assertExecutionAuthority` from the public policy package, `createExecutionSupervisor` from public exec, and the public Windows backend constructors. It does not import private implementation modules, substitute an unrestricted launch for PSEC, or change host/reference ACLs.
-- All mutable inputs and protected reference fixtures are under the new owned `.tmp/sandbox-redesign-qualification-LDbdbc` directory. The program records per-case results and reference before/after hashes, times, size, mode and `icacls` output. The retained JSON contains full argv, cwd, explicit environment, PID, root exit, output and settlement for the Bash matrix.
+- All mutable inputs and protected reference fixtures are under the new owned `.tmp/sandbox-redesign-qualification-LDbdbc` directory. The program records per-case results and reference before/after hashes, times, size, mode and `icacls` output. The retained JSON contains full argv, cwd, environment identity SHA256/key names, PID, root exit, output and settlement for the Bash matrix. The actual environment forwarded to each process was unchanged. The final fixture was sanitized in place to remove five raw environment objects without displaying their values.
+- The package ships `qualification.json`, a sanitized summary with the exact helper/protocol hashes and Windows release. Public `readWindowsQualification(options?)` checks the current helper and protocol identity and returns host applicability plus this frozen record. It is evidence for later displays, not an execution-admission decision.
 
 ## Observed results
 
-The final run reported **38 pass, 0 fail, 4 unsupported**. `pnpm --filter @i-harness/sandbox-windows-psec typecheck` passed; `pnpm --filter @i-harness/sandbox-windows-psec test` passed 33/33 tests. The qualification process exited 2 because Bash support is a required gate (the pnpm wrapper reported command failure with exit code 2). This is an incomplete qualification, despite the 38 passing controls.
+The final behavioral run reported **38 pass, 0 fail, 4 unsupported**. `pnpm --filter @i-harness/sandbox-windows-psec typecheck` passed; the package test suite passed 35/35 tests after the shipped record was added. The qualification process exited 2 because Bash support is a required gate (the pnpm wrapper reported command failure with exit code 2). This is an incomplete qualification, despite the 38 passing controls. `npm pack --dry-run --json` confirmed the package includes the manifest, protocol, qualification record and accessor source.
 
 | Control | Observed result |
 | --- | --- |
@@ -27,7 +28,7 @@ The final run reported **38 pass, 0 fail, 4 unsupported**. `pnpm --filter @i-har
 
 ### Git/MSYS Bash compatibility result
 
-The exact command was `C:\Program Files\Git\bin\bash.exe -c "printf 'bash-qualification\\n'; cat"` with cwd at the owned `workspace`, explicit environment recorded in the JSON, and stdin `stdin-through-bash\n`. Under unrestricted the workload PID 7212 exited 0, stdout contained both expected lines, stderr was empty, and native tree/I/O/release settlement was confirmed. Under PSEC PID 91940 exited **3221225794** (`0xC0000142`), stdout was empty, and stderr reported:
+The exact command was `C:\Program Files\Git\bin\bash.exe -c "printf 'bash-qualification\\n'; cat"` with cwd at the owned `workspace`, explicit environment identity digest/key names recorded in the JSON, and stdin `stdin-through-bash\n`. Under unrestricted the workload PID 7212 exited 0, stdout contained both expected lines, stderr was empty, and native tree/I/O/release settlement was confirmed. Under PSEC PID 91940 exited **3221225794** (`0xC0000142`), stdout was empty, and stderr reported:
 
 ```text
 *** fatal error - NtCreateDirectoryObject(\BaseNamedObjects\msys-2.0S5-1888ae32e00d56aa): 0xC0000022

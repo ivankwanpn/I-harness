@@ -1,0 +1,15 @@
+{
+  "recordVersion": 1,
+  "helperSha256": "421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395",
+  "protocolSha256": "c6bcb90ad924488e5d58df01e681ee899a910156d71f5b267b5ea9ad4aa62594",
+  "windowsRelease": "10.0.26200",
+  "assurance": "experimental",
+  "result": "incomplete",
+  "observed": { "passed": 38, "failed": 0, "unsupported": 4 },
+  "sourceFamilies": {
+    "gitMsysBash": { "psec": "unsupported", "unrestricted": "observed-pass" },
+    "nodeAndTsxPipes": { "psec": "observed-pass", "unrestricted": "observed-pass" },
+    "cmdAndPowerShellPipes": { "psec": "observed-pass", "unrestricted": "observed-pass" },
+    "conPty": { "psec": "unsupported", "unrestricted": "observed-pass" }
+  }
+}

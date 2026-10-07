@@ -61,6 +61,10 @@ const baseEnv: Record<string, string> = {
   PATH: process.env.PATH ?? "", COMSPEC: process.env.ComSpec ?? resolve(process.env.SystemRoot!, "System32/cmd.exe"),
   QUALIFICATION_MARKER: "explicit-env", EMPTY_VALUE: "",
 }
+const environmentIdentity = () => ({
+  sha256: createHash("sha256").update(JSON.stringify(baseEnv)).digest("hex"),
+  keys: Object.keys(baseEnv).sort(), marker: "explicit-env", emptyValueObserved: true,
+})
 type Engine = "psec" | "unrestricted"
 async function run(engine: Engine, mode: SandboxMode, argv: string[], opts: {
   refs?: string[]; backend?: typeof psec; env?: Record<string, string>; cwd?: string; transport?: "pipe" | "pty";
@@ -235,7 +239,7 @@ try {
       const argv = [bash, "-c", "printf 'bash-qualification\\n'; cat"]
       const result = await run(engine, mode, argv, { input: Buffer.from("stdin-through-bash\n") })
       settled(result)
-      const detail = { pid: result.pid, argv, cwd: workspace, env: baseEnv, inputUtf8: "stdin-through-bash\n",
+      const detail = { pid: result.pid, argv, cwd: workspace, envIdentity: environmentIdentity(), inputUtf8: "stdin-through-bash\n",
         root: result.root, settlement: result.settlement, diagnostics: result.diagnostics,
         stdout: result.stdout.toString(), stderr: result.stderr.toString() }
       if (result.root.exitCode === 3221225794 && result.stderr.toString().includes("NtCreateDirectoryObject")
@@ -255,7 +259,7 @@ try {
     const argv = [executable, "-c", "printf 'bash-qualification\\n'; cat"]
     const result = await run("psec", "workspace-write", argv, { lifetime, input: Buffer.from("stdin-through-bash\n") })
     settled(result)
-    const detail = { image, pid: result.pid, argv, cwd: workspace, env: baseEnv, lifetime,
+    const detail = { image, pid: result.pid, argv, cwd: workspace, envIdentity: environmentIdentity(), lifetime,
       root: result.root, settlement: result.settlement, diagnostics: result.diagnostics,
       stdout: result.stdout.toString(), stderr: result.stderr.toString() }
     if (result.root.exitCode === 3221225794 && result.stderr.toString().includes("NtCreateDirectoryObject")

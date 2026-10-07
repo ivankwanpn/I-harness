@@ -10,6 +10,8 @@ import type {
 } from "@i-harness/sandbox"
 import { verifyHelper, type HelperOptions } from "./integrity.ts"
 import { FrameDecoder, StatusDecoder, type NativeError, type Status } from "./protocol.ts"
+export { readWindowsQualification } from "./qualification.ts"
+export type { WindowsQualificationRecord, WindowsQualificationView, ObservedSupport } from "./qualification.ts"
 
 export interface WindowsExecutionOptions extends HelperOptions {
   /** Trusted host configuration, detached when the backend is created. */

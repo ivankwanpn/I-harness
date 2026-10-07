@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Experimental direct Windows PSEC and explicit unrestricted native execution owner",
-  "files": ["src", "artifacts", "protocol.md", "README.md"],
+  "files": ["src", "artifacts", "protocol.md", "qualification.json", "README.md"],
   "exports": { ".": "./src/index.ts" },
   "scripts": {
     "test": "vitest run test",
