@@ -7,7 +7,7 @@ if (Test-Path -LiteralPath $fixture) { throw 'Use a fresh fixture label to prese
 New-Item -ItemType Directory -Path $fixture | Out-Null
 $compiler = Join-Path $env:SystemRoot 'Microsoft.NET/Framework64/v4.0.30319/csc.exe'
 $observer = Join-Path $fixture 'observer.exe'
-& $compiler /nologo /target:winexe /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$observer" (Join-Path $PSScriptRoot 'Observer.cs')
+& $compiler /nologo /target:winexe /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll "/out:$observer" (Join-Path $PSScriptRoot 'Observer.cs') (Join-Path $PSScriptRoot 'WindowClassification.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Owned observer compilation failed' }
 $env:TEMP=$fixture; $env:TMP=$fixture; $env:IH_CONFIG_DIR=Join-Path $fixture 'config'
 $app=Join-Path $repo 'packages/desktop/release-sandbox-task5/I-harness Desktop/I-harness Desktop.exe'

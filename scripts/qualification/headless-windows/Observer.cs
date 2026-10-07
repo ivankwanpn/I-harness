@@ -24,7 +24,7 @@ class Observer {
   [DllImport("user32.dll")] static extern bool GetClientRect(IntPtr hwnd,out Rect rect);
   [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll")] static extern IntPtr GetAncestor(IntPtr hwnd,uint flags);
-  [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd,uint command);
+  [DllImport("user32.dll", SetLastError=true)] static extern IntPtr GetWindow(IntPtr hwnd,uint command);
   [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd,uint attribute,out uint value,uint size);
   [DllImport("user32.dll", CharSet=CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string cls, string title);
   [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindow cb, IntPtr value);
@@ -34,6 +34,7 @@ class Observer {
   [DllImport("kernel32.dll", CharSet=CharSet.Unicode)] static extern bool Process32NextW(IntPtr h, ref Entry entry);
   [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
   [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll")] static extern void SetLastError(uint error);
   [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)] struct Entry {
     public uint size, usage, pid; public UIntPtr heap; public uint module, threads, parent; public int priority; public uint flags;
     [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string exe;
@@ -61,15 +62,39 @@ class Observer {
     for(int i=0;i<5;i++) foreach(var p in all) if(owned.ContainsKey(p.parent) && SameGeneration(p.parent) && !owned.ContainsKey(p.pid)) Add(p.pid,p.parent);
   }
   static bool SameGeneration(uint pid) { try {return Process.GetProcessById((int)pid).StartTime.ToUniversalTime().ToString("o")==starts[pid];}catch{return false;} }
-  class WindowRelation {public bool exists,sameWindow;public uint pid;public string windowClass,processStart;public bool? visible,windowHasArea,clientHasArea,cloaked,processStartedAfterObserver;}
-  static WindowRelation Relation(IntPtr handle,IntPtr original) {
-    if(handle==IntPtr.Zero)return new WindowRelation {exists=false};uint pid;GetWindowThreadProcessId(handle,out pid);
-    var cls=new StringBuilder(256);GetClassName(handle,cls,cls.Capacity);Rect wr,cr;uint cloak;
-    var result=new WindowRelation {exists=true,sameWindow=handle==original,pid=pid,windowClass=cls.ToString(),visible=IsWindow(handle)?(bool?)IsWindowVisible(handle):null,
+  static bool SameWindow(IntPtr handle,uint pid,uint thread) {
+    uint currentPid;var currentThread=GetWindowThreadProcessId(handle,out currentPid);
+    return IsWindow(handle) && pid!=0 && thread!=0 && currentPid==pid && currentThread==thread;
+  }
+  static WindowRelation Relation(IntPtr original,bool owner) {
+    uint originalPid;var originalThread=GetWindowThreadProcessId(original,out originalPid);
+    if(!SameWindow(original,originalPid,originalThread))return new WindowRelation {queryState="unknown-stale"};
+    SetLastError(0);
+    var handle=owner?GetWindow(original,4):GetAncestor(original,2);
+    var lookupError=owner?Marshal.GetLastWin32Error():0;
+    if(!SameWindow(original,originalPid,originalThread))return new WindowRelation {queryState="unknown-stale"};
+    if(handle==IntPtr.Zero) {
+      // A null GW_OWNER is known absence only after a successful lookup on a
+      // still-valid original HWND. Root lookup has no legitimate absent case.
+      return owner && lookupError==0
+        ? new WindowRelation {exists=false,queryState="known-none"}
+        : new WindowRelation {queryState="unknown-lookup"};
+    }
+    uint pid;var thread=GetWindowThreadProcessId(handle,out pid);
+    bool validBefore=SameWindow(handle,pid,thread);
+    var cls=new StringBuilder(256);var classLength=GetClassName(handle,cls,cls.Capacity);Rect wr,cr;uint cloak;
+    var result=new WindowRelation {exists=true,sameWindow=handle==original,pid=pid,windowClass=cls.ToString(),queryState="observed",visible=validBefore?(bool?)IsWindowVisible(handle):null,
       windowHasArea=GetWindowRect(handle,out wr)?(bool?)(wr.right>wr.left&&wr.bottom>wr.top):null,
       clientHasArea=GetClientRect(handle,out cr)?(bool?)(cr.right>cr.left&&cr.bottom>cr.top):null,
-      cloaked=DwmGetWindowAttribute(handle,14,out cloak,4)==0?(bool?)(cloak!=0):null};
+      cloaked=DwmGetWindowAttribute(handle,14,out cloak,4)==0?(bool?)(cloak!=0):null,
+      iconic=validBefore?(bool?)IsIconic(handle):null};
     try{var start=Process.GetProcessById((int)pid).StartTime.ToUniversalTime();result.processStart=start.ToString("o");result.processStartedAfterObserver=start>observerStart;}catch{}
+    SetLastError(0);
+    var after=owner?GetWindow(original,4):GetAncestor(original,2);
+    var afterError=owner?Marshal.GetLastWin32Error():0;
+    if(!validBefore || !SameWindow(handle,pid,thread) || !SameWindow(original,originalPid,originalThread)
+      || after!=handle || lookupError!=0 || afterError!=0)result.queryState="unknown-stale";
+    else if(classLength==0 || !WindowClassification.ObservedRelation(result))result.queryState="unknown-query";
     return result;
   }
   static void Add(uint pid,uint parent) {
@@ -87,18 +112,21 @@ class Observer {
     Rect wr,cr;bool? windowHasArea=GetWindowRect(hwnd,out wr)?(bool?)(wr.right>wr.left&&wr.bottom>wr.top):null;
     bool? clientHasArea=GetClientRect(hwnd,out cr)?(bool?)(cr.right>cr.left&&cr.bottom>cr.top):null;
     uint cloak;bool? cloaked=DwmGetWindowAttribute(hwnd,14,out cloak,4)==0?(bool?)(cloak!=0):null;
-    bool iconic=IsIconic(hwnd);var rootWindow=Relation(GetAncestor(hwnd,2),hwnd);var ownerWindow=Relation(GetWindow(hwnd,4),hwnd);
+    bool iconic=IsIconic(hwnd);var rootWindow=Relation(hwnd,false);var ownerWindow=Relation(hwnd,true);
     bool valid=validBefore && IsWindow(hwnd) && name.Length>0;
     if(kind=="show") Snapshot(); if(!owned.ContainsKey(pid)) return;
     if(!SameGeneration(pid))valid=false;
-    if(kind=="show" && !valid)unknownOwnedShows++;
+    var classification=WindowClassification.Classify(new WindowObservation {valid=valid,windowClass=name,
+      visible=valid?(bool?)visible:null,messageOnly=valid?(bool?)messageOnly:null,windowHasArea=windowHasArea,
+      clientHasArea=clientHasArea,cloaked=cloaked,iconic=valid?(bool?)iconic:null,rootWindow=rootWindow,ownerWindow=ownerWindow});
+    if(kind=="show" && classification.unknown)unknownOwnedShows++;
     if(kind=="sample" && (name!="ConsoleWindowClass" || !sampled.Add(pid+":"+name+":"+visible))) return;
-    if(kind=="show" && visible && pid==desktop && name.StartsWith("Chrome_WidgetWin")) positive++;
-    if(kind=="show" && visible && name=="ConsoleWindowClass") visibleConsole++;
-    if(kind=="show" && visible && name=="PseudoConsoleWindow") {visiblePseudo++;if(messageOnly)messageOnlyPseudo++;}
-    if(kind=="show" && valid && visible && name=="PseudoConsoleWindow" && (messageOnly||windowHasArea==false||cloaked==true))nonDisplayingPseudo++;
-    if(kind=="show" && ownerWindow.visible==true && ownerWindow.windowHasArea==true && ownerWindow.cloaked==false && ownerWindow.processStartedAfterObserver==true)newVisibleHostingWindows++;
-    log.WriteLine(json.Serialize(new { utc=DateTime.UtcNow.ToString("o"), phase=phase, kind=kind, pid=pid, parent=owned[pid], start=starts[pid], windowClass=name, hwnd=hwnd.ToInt64().ToString(), queryState=valid?"observed":"unknown-destroyed", visible=valid?(bool?)visible:null, messageOnly=valid?(bool?)messageOnly:null, windowHasArea=valid?windowHasArea:null,clientHasArea=valid?clientHasArea:null,cloaked=valid?cloaked:null,iconic=valid?(bool?)iconic:null,rootWindow=rootWindow,ownerWindow=ownerWindow })); log.Flush();
+    if(kind=="show" && !classification.unknown && visible && pid==desktop && name.StartsWith("Chrome_WidgetWin")) positive++;
+    if(kind=="show" && classification.visibleConsole)visibleConsole++;
+    if(kind=="show" && classification.visiblePseudo) {visiblePseudo++;if(messageOnly)messageOnlyPseudo++;}
+    if(kind=="show" && classification.nonDisplayingPseudo)nonDisplayingPseudo++;
+    if(kind=="show" && classification.newVisibleHost)newVisibleHostingWindows++;
+    log.WriteLine(json.Serialize(new { utc=DateTime.UtcNow.ToString("o"), phase=phase, kind=kind, pid=pid, parent=owned[pid], start=starts[pid], windowClass=name, hwnd=hwnd.ToInt64().ToString(), queryState=classification.unknown?"unknown-metadata":"observed", mainQueryState=valid?"observed":"unknown-stale", visible=valid?(bool?)visible:null, messageOnly=valid?(bool?)messageOnly:null, windowHasArea=valid?windowHasArea:null,clientHasArea=valid?clientHasArea:null,cloaked=valid?cloaked:null,iconic=valid?(bool?)iconic:null,rootWindow=rootWindow,ownerWindow=ownerWindow })); log.Flush();
   }
   static void Pump() { Snapshot(); Application.DoEvents(); EnumWindows((h,v)=>{Window(h,"sample");return true;},IntPtr.Zero); Thread.Sleep(5); }
   static Process Launch(string exe,string args,string cwd,bool node) {
