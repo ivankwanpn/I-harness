@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
+import { join, resolve } from "node:path"
 import { tmpdir } from "node:os"
 import { classifyRunnerFailure, SandboxUnavailableError } from "@i-harness/sandbox"
-import { createWindowsAclSandbox } from "../src/index.ts"
+import { AclWriteGrant, createWindowsAclSandbox } from "../src/index.ts"
 import type { SandboxPolicy } from "@i-harness/sandbox"
 
 // Reproduced on this host (Windows 11 26200, Git Bash 5.3.15) with the REAL
@@ -51,6 +53,12 @@ describe("createWindowsAclSandbox", () => {
       { allowedExitCodes: [127], fatalSignatures: ["windows-acl-run: "] },
       { allowedExitCodes: [DLL_INIT_FAILED], fatalSignatures: ["couldn't create signal pipe"] },
     ])
+  })
+  it("rejects malformed cmd-verbatim before returning a runner invocation", () => {
+    const provider = createWindowsAclSandbox({ writableDirs: [], mode: "read-only" })
+    expect(() => provider.confineExecution(["C:\\bin\\tool.exe", "/d", "/s", "/c", "echo x"], readOnly,
+      "cmd-verbatim")).toThrow(/cmd-verbatim/)
+    provider.dispose()
   })
 
   // The child-level counterpart of the runner rule above: the runner STARTED
@@ -115,5 +123,24 @@ describe("createWindowsAclSandbox", () => {
   it("dispose() is idempotent (double dispose does not throw, even with no materialized grants)", () => {
     const provider = createWindowsAclSandbox({ writableDirs: [process.cwd()], mode: "read-only" })
     expect(() => { provider.dispose(); provider.dispose() }).not.toThrow()
+  })
+  it("keeps failed no-temp grant teardown reachable for retry and closes new admission", () => {
+    const fixture = mkdtempSync(join(resolve(process.cwd(), "../..", ".tmp"), "sandbox-redesign-acl-retry-"))
+    const project = join(fixture, "project")
+    const scratch = join(fixture, "scratch")
+    mkdirSync(project); mkdirSync(scratch)
+    let attempts = 0
+    const fake = { add() {}, dispose() { attempts++; if (attempts === 1) throw new Error("release failed") } } as unknown as AclWriteGrant
+    const create = vi.spyOn(AclWriteGrant, "create").mockReturnValue(fake)
+    try {
+      const provider = createWindowsAclSandbox({ writableDirs: [], mode: "read-only", privateTempRoot: scratch,
+        disablePrivateTempWrites: true })
+      provider.confineExecution(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", "echo x"],
+        { mode: "workspace-write", workspaceRoot: project, sessionId: "fixture" }, "cmd-verbatim")
+      expect(() => provider.dispose()).toThrow(/grant cleanup/)
+      expect(() => provider.confine(["echo", "x"], { mode: "read-only", workspaceRoot: project })).toThrow(/disposed/)
+      expect(() => provider.dispose()).not.toThrow()
+      expect(attempts).toBe(2)
+    } finally { create.mockRestore(); rmSync(fixture, { recursive: true, force: true }) }
   })
 })

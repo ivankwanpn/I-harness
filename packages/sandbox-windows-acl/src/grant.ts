@@ -32,6 +32,7 @@ export class AclWriteGrant {
   private readonly sidPtr: NativePtr
   private readonly revocablePaths: string[] = []
   private readonly standingPaths: string[] = []
+  private freed = false
 
   private constructor(api: Win32Bindings, sidPtr: NativePtr, writeSid: string) {
     this.api = api
@@ -72,6 +73,7 @@ export class AclWriteGrant {
    *   dispose — the temp-directory lifecycle).
    */
   add(path: string, standing = false): void {
+    if (this.freed) throw new Error('AclWriteGrant has been disposed')
     ;(standing ? this.standingPaths : this.revocablePaths).push(path)
     grantWrite(this.api, path, this.sidPtr)
   }
@@ -83,19 +85,27 @@ export class AclWriteGrant {
 
   /** Revoke every revocable grant (standing ACEs stay) and free the SID; reports every cleanup failure. */
   dispose(): void {
+    if (this.freed) return
     const failures: unknown[] = []
+    const stillGranted: string[] = []
     for (const path of this.revocablePaths) {
       try {
         revokeWrite(this.api, path, this.sidPtr)
       } catch (error) {
         failures.push(error)
+        stillGranted.push(path)
       }
     }
-    try {
-      const freed = this.api.localFree(this.sidPtr)
-      if (!isNullPtr(freed)) throwLastError(this.api, 'LocalFree', 'write SID')
-    } catch (error) {
-      failures.push(error)
+    this.revocablePaths.length = 0
+    this.revocablePaths.push(...stillGranted)
+    if (stillGranted.length === 0) {
+      try {
+        const freed = this.api.localFree(this.sidPtr)
+        if (!isNullPtr(freed)) throwLastError(this.api, 'LocalFree', 'write SID')
+        this.freed = true
+      } catch (error) {
+        failures.push(error)
+      }
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, `AclWriteGrant dispose completed with ${failures.length} cleanup failure(s)`)

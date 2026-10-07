@@ -12,6 +12,7 @@
 import { allocPtrSlot, allocProcessInfo, allocStartupInfo, allocUint32, decodePtr, decodeProcessInfo, decodeUint32, encodeStartupInfo, isNullPtr, throwLastError, throwWin32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 import * as abi from './win32-abi.ts'
+import type { ProcessSpec } from '@i-harness/sandbox'
 
 /**
  * Quote one argument per the CommandLineToArgvW parsing rules: backslashes
@@ -51,7 +52,15 @@ export function quoteArg(argument: string): string {
  * @param args - the remaining argv entries.
  * @returns the joined, quoted command line.
  */
-export function buildCommandLine(program: string, args: readonly string[]): string {
+export function buildCommandLine(program: string, args: readonly string[], argumentEncoding: ProcessSpec['argumentEncoding'] = 'crt'): string {
+  if (argumentEncoding === 'cmd-verbatim') {
+    if (!/^[A-Za-z]:\\/.test(program) || !/\\cmd\.exe$/i.test(program)
+      || args.length !== 4 || args[0]?.toLowerCase() !== '/d'
+      || args[1]?.toLowerCase() !== '/s' || args[2]?.toLowerCase() !== '/c') {
+      throw new Error('cmd-verbatim requires absolute cmd.exe /d /s /c and one raw command argument')
+    }
+    return `${quoteArg(program)} /d /s /c ${args[3]}`
+  }
   return [program, ...args].map(quoteArg).join(' ')
 }
 
@@ -100,7 +109,7 @@ export interface SpawnedNative {
 export function spawnSandboxed(
   api: Win32Bindings,
   token: NativePtr,
-  options: { command: string; args: readonly string[]; cwd: string },
+  options: { command: string; args: readonly string[]; cwd: string; argumentEncoding?: ProcessSpec['argumentEncoding'] },
 ): SpawnedNative {
   const stdIn = createPipe(api)
   const stdOut = createPipe(api)
@@ -121,7 +130,7 @@ export function spawnSandboxed(
   })
 
   const processInfo = allocProcessInfo()
-  const commandLine = buildCommandLine(options.command, options.args)
+  const commandLine = buildCommandLine(options.command, options.args, options.argumentEncoding)
   const created = api.createProcessAsUserW(
     token, null, commandLine,
     null, null,
@@ -273,7 +282,7 @@ export interface SpawnedInherited {
 export function spawnSandboxedInherited(
   api: Win32Bindings,
   token: NativePtr,
-  options: { command: string; args: readonly string[]; cwd: string },
+  options: { command: string; args: readonly string[]; cwd: string; argumentEncoding?: ProcessSpec['argumentEncoding'] },
 ): SpawnedInherited {
   const job = createKillOnCloseJob(api)
   const stdIn = api.getStdHandle(abi.STD_INPUT_HANDLE)
@@ -308,7 +317,7 @@ export function spawnSandboxedInherited(
   })
 
   const processInfo = allocProcessInfo()
-  const commandLine = buildCommandLine(options.command, options.args)
+  const commandLine = buildCommandLine(options.command, options.args, options.argumentEncoding)
   const created = api.createProcessAsUserW(
     token, null, commandLine,
     null, null,

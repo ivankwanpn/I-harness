@@ -966,6 +966,18 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
+      '@i-harness/sandbox-windows-acl':
+        specifier: workspace:*
+        version: link:../sandbox-windows-acl
+      '@i-harness/sandbox-windows-psec':
+        specifier: workspace:*
+        version: link:../sandbox-windows-psec
+      node-pty:
+        specifier: ^1.1.0
+        version: 1.1.0
 
   packages/sandbox-policy:
     dependencies:

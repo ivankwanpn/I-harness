@@ -1,4 +1,4 @@
-import type { SandboxMode } from "./index.ts"
+import type { RunnerFailureRule, SandboxEnforcement, SandboxMode } from "./index.ts"
 
 export type ExecutionTransport = "pipe" | "pty"
 export type ExecutionLifetime = "complete-tree" | "retain-tree"
@@ -76,6 +76,12 @@ export interface ExecutionIo {
 export interface TransportExecutionHandle extends ExecutionHandle {
   readonly pid: number
   readonly io: ExecutionIo
+  /** Descriptive runner classification copied from the selected backend. */
+  readonly runner?: Readonly<{
+    enforcement: SandboxEnforcement
+    denialSignatures: readonly string[]
+    runnerFailureRules: readonly RunnerFailureRule[]
+  }>
 }
 export interface PreparedExecution {
   readonly policy: CompiledSandboxPolicy

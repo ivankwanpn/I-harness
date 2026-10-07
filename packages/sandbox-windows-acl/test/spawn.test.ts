@@ -24,6 +24,17 @@ describe("quoteArg (Windows argv quoting)", () => {
       'C:\\bin\\tool.exe plain "with space"',
     )
   })
+  it("preserves the fifth CMD argument as one raw command line tail", () => {
+    expect(buildCommandLine("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/c", 'echo "雪 空" > "out file.txt"'], "cmd-verbatim"))
+      .toBe('C:\\Windows\\System32\\cmd.exe /d /s /c echo "雪 空" > "out file.txt"')
+    expect(buildCommandLine("C:\\Windows\\System32\\cmd.exe", ["/d", "/s", "/c", ""], "cmd-verbatim"))
+      .toBe("C:\\Windows\\System32\\cmd.exe /d /s /c ")
+  })
+  it("refuses cmd-verbatim outside the exact cmd.exe /d /s /c raw-tail shape", () => {
+    expect(() => buildCommandLine("C:\\bin\\tool.exe", ["/d", "/s", "/c", "echo x"], "cmd-verbatim")).toThrow(/cmd-verbatim/)
+    expect(() => buildCommandLine("C:\\Windows\\System32\\cmd.exe", ["/c", "echo x"], "cmd-verbatim")).toThrow(/cmd-verbatim/)
+    expect(() => buildCommandLine("C:/Windows/System32/cmd.exe", ["/d", "/s", "/c", "echo x"], "cmd-verbatim")).toThrow(/cmd-verbatim/)
+  })
 })
 
 describe("spawnSandboxedInherited startup failure", () => {
