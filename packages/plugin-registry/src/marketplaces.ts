@@ -407,6 +407,7 @@ async function fetchGit(url: string, cacheRoot: string): Promise<{ manifestDir: 
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       timeout: GIT_CLONE_TIMEOUT_MS,
       maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
     })
   } catch (cause) {
     const reason = cause instanceof Error ? cause.message : String(cause)

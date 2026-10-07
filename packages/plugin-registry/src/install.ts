@@ -375,7 +375,7 @@ async function clonePluginRepo(
   await rm(dest, { recursive: true, force: true })
   await mkdir(dirname(dest), { recursive: true })
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" }
-  const gitOpts = { env, timeout: GIT_PLUGIN_CLONE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024 }
+  const gitOpts = { env, timeout: GIT_PLUGIN_CLONE_TIMEOUT_MS, maxBuffer: 10 * 1024 * 1024, windowsHide: true }
   try {
     await execFileAsync("git", ["clone", "--depth", "1", "--", url, dest], gitOpts)
   } catch (cause) {

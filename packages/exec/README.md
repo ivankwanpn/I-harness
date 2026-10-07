@@ -74,3 +74,17 @@ admission, policy compilation and execution leases. The existing exec and PTY
 services have not yet migrated to it. Concrete native drivers, authority producer
 integration and production service migration are subsequent phases; this module
 does not establish confinement or change platform defaults.
+
+## Headless pipe launches on Windows
+
+The existing ordinary exec service requests `windowsHide: true` for direct and
+unconfined pipe commands, including foreground, background and promoted runs.
+It retains pipe capture, environment merging, argument encoding and cancellation.
+Confined wrapper launches retain their previous startup behavior because the
+legacy Windows restricted runner depends on an inherited console. Its compatible
+hidden-console launch and production sandbox migration require separate Windows
+qualification. Streaming exec already requests hidden startup.
+
+These launch options express immediate-child startup intent. Passing pipe and
+process lifecycle tests from a console parent does not prove that a GUI parent
+or native descendants produce no visible console windows.

@@ -154,6 +154,7 @@ export class HarnessClient {
       cwd: opts.cwd,
       env: { ...process.env, ...(opts.env ?? {}) },
       stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
     })
     return new HarnessClient(child.stdout, child.stdin, { child })
   }

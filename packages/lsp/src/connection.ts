@@ -171,7 +171,7 @@ export function spawnLspConnection(
 ): LspConnection {
   return new LspConnection(
     spec,
-    spawner ?? ((s) => spawn(s.command, s.args, { cwd: s.cwd, env: s.env ? { ...process.env, ...s.env } : process.env, stdio: ["pipe", "pipe", "pipe"] })),
+    spawner ?? ((s) => spawn(s.command, s.args, { cwd: s.cwd, env: s.env ? { ...process.env, ...s.env } : process.env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true })),
     onServerRequest,
   )
 }

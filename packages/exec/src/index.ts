@@ -204,6 +204,10 @@ function spawnChild(cmd: ExecCommand, sandboxProvider?: SandboxProvider, spill?:
     cwd: cmd.cwd,
     env: { ...process.env, ...cmd.env },
     stdio: ["pipe", "pipe", "pipe"],
+    // Ordinary pipe commands are headless. A confined wrapper may be the
+    // legacy Windows restricted runner, which still needs an inherited console
+    // until its hidden-console adapter is qualified.
+    windowsHide: confined === undefined,
     // A sandbox wrapper owns its own argv contract. CMD's verbatim request
     // must never change how a replacement runner's arguments are quoted.
     windowsVerbatimArguments: cmd.windowsVerbatimArguments === true && argv[0] === cmd.argv[0],
