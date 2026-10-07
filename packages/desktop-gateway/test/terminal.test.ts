@@ -3,7 +3,12 @@ const mock = vi.hoisted(() => ({ open: vi.fn((_spec: unknown, _owner: unknown) =
 vi.mock("@i-harness/terminal", () => ({ createTerminalService: () => mock }))
 vi.mock("@i-harness/exec", () => ({ createExecService: mock.createExec, withExecCallerScope: (_owner: unknown, call: () => unknown) => call() }))
 import { createDesktopTerminal } from "../src/terminal.ts"
-beforeEach(() => vi.clearAllMocks())
+beforeEach(() => {
+  vi.clearAllMocks()
+  mock.open.mockImplementation((_spec, _owner) => ({ id: "t", pid: 1 }))
+  mock.list.mockImplementation(() => [])
+  mock.dispose.mockImplementation(() => undefined)
+})
 it("discovers installed shell profiles and opens only the selected profile", async () => {
   mock.open.mockClear()
   const terminals = createDesktopTerminal("D:/agent-complete/playground", {
@@ -93,4 +98,58 @@ it("reports incomplete human terminal cleanup and retries before disposing its e
   expect(mock.dispose).toHaveBeenCalledTimes(2)
   expect(mock.disposeExec).toHaveBeenCalledOnce()
   await expect(terminals.request("desktop/terminal/list", {})).rejects.toThrow("closed")
+})
+
+it("reserves all eight slots while opens are still awaiting native admission", async () => {
+  const gates = Array.from({ length: 9 }, () => Promise.withResolvers<{ id: string; pid: number }>())
+  let next = 0
+  mock.open.mockImplementation(() => gates[next++]!.promise as never)
+  const terminals = createDesktopTerminal("D:/workspace")
+  const pending = Array.from({ length: 8 }, () => terminals.request("desktop/terminal/open", { shell: "auto" }))
+  const ninth = terminals.request("desktop/terminal/open", { shell: "auto" })
+  const started = mock.open.mock.calls.length
+  gates.forEach((gate, index) => gate.resolve({ id: `t-${index}`, pid: index + 1 }))
+  await Promise.allSettled([...pending, ninth])
+  await terminals.close()
+  expect(started).toBe(8)
+})
+
+it("keeps a capacity slot when a failed open has unresolved native cleanup", async () => {
+  const committed: unknown[] = []
+  let launches = 0
+  mock.list.mockImplementation(() => committed)
+  mock.open.mockImplementation(() => {
+    launches++
+    if (launches === 8) return Promise.reject(new Error("native cleanup incomplete")) as never
+    const view = { id: `t-${launches}`, pid: launches }
+    committed.push(view)
+    return Promise.resolve(view) as never
+  })
+  const terminals = createDesktopTerminal("D:/workspace")
+  for (let index = 0; index < 7; index++) await terminals.request("desktop/terminal/open", {})
+  await expect(terminals.request("desktop/terminal/open", {})).rejects.toThrow(/incomplete/)
+  const ninth = terminals.request("desktop/terminal/open", {})
+  const started = launches
+  await Promise.allSettled([ninth])
+  await terminals.close()
+  expect(started).toBe(8)
+})
+
+it("releases a reserved slot after a completed admission refusal", async () => {
+  let launches = 0
+  const gates = Array.from({ length: 8 }, () => Promise.withResolvers<{ id: string; pid: number }>())
+  mock.open.mockImplementation(() => {
+    launches++
+    if (launches === 1) return Promise.reject(new Error("executable unavailable")) as never
+    return gates[launches - 2]!.promise as never
+  })
+  const terminals = createDesktopTerminal("D:/workspace")
+  await expect(terminals.request("desktop/terminal/open", {})).rejects.toThrow(/unavailable/)
+  const pending = Array.from({ length: 8 }, () => terminals.request("desktop/terminal/open", {}))
+  const ninth = terminals.request("desktop/terminal/open", {})
+  const started = launches
+  gates.forEach((gate, index) => gate.resolve({ id: `t-${index}`, pid: index + 1 }))
+  await Promise.allSettled([...pending, ninth])
+  expect(started).toBe(9)
+  await terminals.close()
 })

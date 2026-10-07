@@ -388,12 +388,15 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const router = createDesktopRouter(base, options.onWrite, handlers, internalIds)
   let closing: Promise<void> | undefined
+  let shutdownRequested = false
+  let shutdownComplete = false
+  const cleaned = new Set<string>()
   const trustWatcher = watchSettings([resolveHookTrustPath(dirname(settingsPath)), mcpPath], () => {
-    if (!closing) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
+    if (!shutdownRequested) void mcp.refresh().catch(() => { /* Settings surfaces expose live refresh failures. */ })
   })
   let policySync: Promise<void> | undefined
   const syncPolicy = () => {
-    if (closing || policySync) return
+    if (shutdownRequested || policySync) return
     // Both reads own settings file leases. An early failure must not release
     // shutdown's ownership of the other read while it can still create a lock.
     const job = Promise.allSettled([agentSettings.sync(), subagents.state(),contextSubsystems.sync().then(()=>nativeContext.syncAutoRefresh())]).then((results) => {
@@ -407,28 +410,45 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   policyTimer.unref?.()
   syncPolicy()
   return {
-    handleLine: (line) => router.handleLine(line),
-    close: () => closing ??= (async () => {
-      trustWatcher.dispose()
-      clearInterval(policyTimer)
-      interaction.close()
-      await stopPluginObserver()
-      await terminal.close()
-      offInteraction()
-      await input.close()
-      await projectContentSearch.close()
-      await router.close()
-      await sessionSubagents.close()
-      await projects.close()
-      await review.close()
-      await workflow.close()
-      await service.close()
-      await nativeContext.close()
-      await approvals.flush()
-      await plugins.close()
-      await policySync
-      memory.close()
-      await coordinator.close()
-    })(),
+    handleLine: (line) => shutdownRequested ? Promise.reject(new Error("Desktop host is closing")) : router.handleLine(line),
+    close: () => {
+      if (shutdownComplete) return Promise.resolve()
+      if (closing) return closing
+      shutdownRequested = true
+      const attempt = (async () => {
+        const failures: Array<{ name: string; cause: unknown }> = []
+        const once = async (name: string, dispose: () => void | Promise<void>) => {
+          if (cleaned.has(name)) return
+          try { await dispose(); cleaned.add(name) }
+          catch (cause) { failures.push({ name, cause }) }
+        }
+        await once("trust watcher", () => trustWatcher.dispose())
+        await once("policy timer", () => clearInterval(policyTimer))
+        await once("interaction", () => interaction.close())
+        await once("plugin observer", () => stopPluginObserver())
+        await once("terminal", () => terminal.close())
+        await once("interaction subscription", () => offInteraction())
+        await once("input", () => input.close())
+        await once("project content search", () => projectContentSearch.close())
+        await once("router", () => router.close())
+        await once("session subagents", () => sessionSubagents.close())
+        await once("projects", () => projects.close())
+        await once("review", () => review.close())
+        await once("workflow", () => workflow.close())
+        await once("session service", () => service.close())
+        await once("native context", () => nativeContext.close())
+        await once("approvals", () => approvals.flush())
+        await once("plugins", () => plugins.close())
+        await once("policy refresh", async () => { await policySync })
+        await once("memory", () => memory.close())
+        await once("coordinator", () => coordinator.close())
+        if (failures.length) throw new AggregateError(failures.map(item => item.cause),
+          `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
+        shutdownComplete = true
+      })()
+      closing = attempt
+      void attempt.finally(() => { if (closing === attempt) closing = undefined }).catch(() => {})
+      return attempt
+    },
   }
 }
