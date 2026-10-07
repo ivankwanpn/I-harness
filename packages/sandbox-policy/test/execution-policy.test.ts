@@ -12,6 +12,13 @@ const compile = (state: AuthorityState = authority, mode: SandboxMode = "workspa
 const spelling = (path: string) => process.platform === "win32" ? normalize(path).toLowerCase() : normalize(path)
 
 describe("execution authority snapshots", () => {
+  it.each(["read-only", "workspace-write", "danger-full-access"] as const)("retains unbound reference restrictions in %s", mode => {
+    const state = { kind: "unbound" as const, revision: "r1", workspaceRoot: primary, references: [reference] }
+    const policy = compile(state, mode)
+    expect(policy.referenceRoots).toEqual([spelling(reference)])
+    expect(policy.fingerprint).not.toBe(compile({ ...state, references: [] }, mode).fingerprint)
+    expect(() => assertExecutionAuthority(policy, policy)).not.toThrow()
+  })
   it.each(["revoked", "unavailable"] as const)("refuses %s authority", kind => {
     expect(() => compile({ kind, revision: "r2", reason: "removed" })).toThrow(new RegExp(kind))
   })

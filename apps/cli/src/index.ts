@@ -21,6 +21,7 @@ import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/sess
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
 import type { SandboxMode } from "@i-harness/sandbox"
+export { HeadlessCleanupError } from "./run.ts"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
@@ -74,7 +75,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--code-mode off|mixed|only] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--windows-sandbox legacy|psec] [--code-mode off|mixed|only] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
@@ -229,8 +230,8 @@ export async function main(argv: string[]): Promise<number> {
   // out again, and a flag missing from EITHER chain there leaks into the prompt
   // (the `--no-compact` defect: `run "do x" --no-compact` sent the model
   // `do x --no-compact`).
-  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact", "--protocol", "--code-mode"])
-  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--protocol", "--code-mode"])
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--windows-sandbox", "--no-compact", "--protocol", "--code-mode"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--windows-sandbox", "--protocol", "--code-mode"])
   const runArgs = args.slice(1)
   for (let i = 0; i < runArgs.length; i += 1) {
     const a = runArgs[i]!
@@ -292,6 +293,7 @@ export async function main(argv: string[]): Promise<number> {
   // stays an embedder contract where unset means "no sandbox requested", so the
   // hidden __dist-selfcheck and the exported API keep their meaning.
   const sandboxIdx = args.indexOf("--sandbox")
+  const windowsBackendIdx = args.indexOf("--windows-sandbox")
   const noCompact = args.includes("--no-compact")
   let sandboxMode: SandboxMode | undefined
   // Load BEFORE reading either knob: an UNLOADED SettingsStore answers get() with
@@ -301,6 +303,13 @@ export async function main(argv: string[]): Promise<number> {
   const { SettingsStore } = await import("@i-harness/settings")
   const settings = new SettingsStore()
   await settings.load()
+  // Explicit flag, then environment, then persisted choice. Invalid explicit values refuse.
+  const windowsSandboxBackend = windowsBackendIdx >= 0 ? args[windowsBackendIdx + 1]
+    : process.env.IH_WINDOWS_SANDBOX ?? settings.get().windowsSandboxBackend
+  if (windowsSandboxBackend !== "legacy" && windowsSandboxBackend !== "psec") {
+    d.error("--windows-sandbox / IH_WINDOWS_SANDBOX requires legacy or psec (experimental)")
+    return 1
+  }
   if (sandboxIdx !== -1) {
     const value = args[sandboxIdx + 1]
     const allowed: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
@@ -438,6 +447,7 @@ export async function main(argv: string[]): Promise<number> {
     // The rule the (M65-deleted) web path established: explicit flag wins,
     // otherwise the operator's setting.
     sandbox: sandboxMode,
+    windowsSandboxBackend,
     // The window is NOT supplied here — `runHeadless` resolves the model binding
     // and the assembly fills it in. See the resolution above.
     compact: { auto: compactAuto },

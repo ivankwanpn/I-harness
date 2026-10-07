@@ -109,12 +109,17 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     if (!owner?.sessionId) throw new Error("Execution caller scope is missing")
     return Object.freeze({ sessionId: owner.sessionId, ...(owner.parentSessionId === undefined ? {} : { parentSessionId: owner.parentSessionId }) })
   }
+  function canAccess(owner: Readonly<ExecutionOwner>): boolean {
+    const actual = caller()
+    return actual.sessionId === owner.sessionId || host.canAccessOwner?.(actual, owner) === true
+  }
 
-  function launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution> {
+  function launchTransport(request: ExecTransportRequest, automaticPromotion = false): Promise<SupervisedExecution> {
     try {
       if (disposed) throw new Error("Exec service disposed")
       const owner = caller()
       const policy = host.resolvePolicy(owner, request.sandbox)
+      if (automaticPromotion && host.autoPromotionLifetime) request = { ...request, lifetime: host.autoPromotionLifetime(policy) }
       const cwd = resolve(request.cwd ?? options.workspaceRoot ?? process.cwd())
       const env = boundEnvironment(request.env)
       const spec: ProcessSpec = snapshotProcessSpec({
@@ -141,7 +146,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
 
   function cancelExecution(id: string, reason: StopReason): Promise<ExecutionSettlement> {
     const execution = supervisor.list().find(entry => entry.id === id)
-    if (!execution || execution.policy.owner.sessionId !== caller().sessionId) return Promise.reject(new Error("Unknown execution for caller"))
+    if (!execution || !canAccess(execution.policy.owner)) return Promise.reject(new Error("Unknown execution for caller"))
     return supervisor.cancel(id, reason)
   }
 
@@ -168,7 +173,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       argumentEncoding: command.windowsVerbatimArguments ? "cmd-verbatim" : "crt",
       sandbox: command.sandbox, abortSignal: signal.signal,
     }
-    const launch = launchTransport(request)
+    const launch = launchTransport(request, promotable && !background)
     return launch.then(execution => {
       if (command.timeoutMs !== undefined) timer = setTimeout(() => {
         stop ??= "timeout"; signal.abort("timeout")
@@ -365,16 +370,15 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     async runBackground(command) { const capture = await makeCapture(command, undefined, true); return { jobId: registerJob(capture) } },
     getOutput(jobId) {
       const job = jobs.get(jobId)
-      if (!job || job.owner.sessionId !== caller().sessionId) throw new Error(`unknown job: ${jobId}`)
+      if (!job || !canAccess(job.owner)) throw new Error(`unknown job: ${jobId}`)
       return view(job)
     },
     listJobs() {
-      const owner = caller().sessionId
-      return [...jobs.values()].filter(job => job.owner.sessionId === owner).map(view)
+      return [...jobs.values()].filter(job => canAccess(job.owner)).map(view)
     },
     async killJob(jobId) {
       const job = jobs.get(jobId)
-      if (!job || job.owner.sessionId !== caller().sessionId) throw new Error(`unknown job: ${jobId}`)
+      if (!job || !canAccess(job.owner)) throw new Error(`unknown job: ${jobId}`)
       if (await settledAfterRetirement(job)) return "already-finished"
       if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
       let settlement: ExecutionSettlement

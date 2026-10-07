@@ -1,20 +1,20 @@
 import { expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { tmpdir } from 'node:os'
 import type { ExecService, ExecCommand, ExecStreamRunOptions } from '@i-harness/exec'
 import { append, deriveMessages } from '@i-harness/core-session'
 import { createSessionAssembly } from '../src/assembly.ts'
 import { rmWorkspaceSync } from './helpers.ts'
 
-const parent = tmpdir()
+const parent = join(process.cwd(), '.tmp')
+mkdirSync(parent, { recursive: true })
 const waitFor = async (condition: () => boolean, ms = 5000) => {
   const deadline = Date.now() + ms
   while (!condition()) { if (Date.now() >= deadline) throw new Error('search fixture never started'); await new Promise((r) => setTimeout(r, 10)) }
 }
 
 it.each(['mixed','only'] as const)('keeps full mounted %s search traces while JS emits only ten references', async (mode) => {
-  const root = mkdtempSync(join(parent, 'search-code-'))
+  const root = mkdtempSync(join(parent, 'sandbox-redesign-search-code-'))
   for (let n = 0; n < 20; n++) {
     const folder = join(root, `group-${n % 10}`); mkdirSync(folder, { recursive: true })
     writeFileSync(join(folder, `file-${n}.txt`),Array.from({length:12},(_,line)=>`needle ${n} row ${line+1}`).join('\n')+'\n')
@@ -43,7 +43,7 @@ it.each(['mixed','only'] as const)('keeps full mounted %s search traces while JS
 }, 15000)
 
 it.each(['human','code_wait'] as const)('%s stop drains the mounted search before closing and prevents follow-on calls', async (stopKind) => {
-  const root = mkdtempSync(join(parent, 'search-stop-'))
+  const root = mkdtempSync(join(parent, 'sandbox-redesign-search-stop-'))
   for (let n = 0; n < 300; n++) writeFileSync(join(root, `${n}.txt`), `needle ${n}\n`)
   const assembly = await createSessionAssembly({ workspace: root, sandbox: 'danger-full-access', modelPolicy: 'test-mock', approveAll: true, codeMode: { mode: 'only' } })
   const raw=assembly.ctx.services.get<ExecService>('exec/service'), original=raw.run.bind(raw)

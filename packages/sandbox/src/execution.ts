@@ -28,9 +28,10 @@ export interface ProcessSpec {
   pty?: Readonly<{ cols: number; rows: number }>
 }
 export type AuthorityState =
-  | { kind: "unbound"; revision: string; workspaceRoot: string }
+  | { kind: "unbound"; revision: string; workspaceRoot: string; references?: readonly string[] }
   | { kind: "bound"; revision: string; primaryRoot: string; roots: readonly string[]; references: readonly string[] }
-  | { kind: "revoked" | "unavailable"; revision: string; reason: string }
+  | { kind: "revoked"; revision: string; reason: string }
+  | { kind: "unavailable"; revision: string; reason: string }
 export interface CompiledSandboxPolicy {
   mode: SandboxMode; owner: Readonly<ExecutionOwner>; authorityRevision: string
   authorityKind: "unbound" | "bound"; primaryRoot: string

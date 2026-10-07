@@ -52,7 +52,7 @@ export type CallPolicyResolution =
  * one -- and the interaction seam already normalizes a host's `{ approved }` to a
  * bare boolean at the service boundary, so a truthy object cannot fail open.
  */
-export type ApprovalPrompt = (req: { name: string; reason: string }) => Promise<boolean>
+export type ApprovalPrompt = (req: { name: string; reason: string; signal?: AbortSignal }) => Promise<boolean>
 
 /**
  * Adapt the host's boolean approval answerer to the `EscalationApprover` the
@@ -75,6 +75,7 @@ export function createApprovalEscalationApprover(
 ): EscalationApprover<unknown, string> {
   return {
     async request(req): Promise<EscalationOutcome> {
+      if (req.signal?.aborted) return "cancelled"
       let answerer: ApprovalPrompt | undefined
       try {
         answerer = getAnswerer()
@@ -82,7 +83,16 @@ export function createApprovalEscalationApprover(
         return "unavailable"
       }
       if (answerer === undefined) return "unavailable"
-      const approved = await answerer({ name: req.toolName, reason: req.reason })
+      let abort: (() => void) | undefined
+      const cancelled = new Promise<"cancelled">((resolve) => {
+        abort = () => resolve("cancelled")
+        req.signal?.addEventListener("abort", abort, { once: true })
+      })
+      let approved: boolean | "cancelled"
+      try {
+        approved = await Promise.race([answerer({ name: req.toolName, reason: req.reason, ...(req.signal ? { signal: req.signal } : {}) }), cancelled])
+      } finally { if (abort) req.signal?.removeEventListener("abort", abort) }
+      if (approved === "cancelled" || req.signal?.aborted) return "cancelled"
       // Only a literal `true` grants. interaction normalizes `{ approved }` at the
       // service boundary; this is the same guard one layer further in, for a host
       // that reached the service registry by another road.

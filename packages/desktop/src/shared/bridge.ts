@@ -1,21 +1,21 @@
-import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
-import type { PluginCommand } from "@i-harness/desktop-gateway/src/plugins.ts"
+import type { ProviderCommand } from "@i-harness/desktop-gateway"
+import type { PluginCommand } from "@i-harness/desktop-gateway"
 import type { ImageInput, SessionModelSelection } from "@i-harness/sdk"
-import type { AgentDefaults } from "@i-harness/desktop-gateway/src/agent-settings.ts"
-import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway/src/subagent-settings.ts"
-import type { HookSettingsCommand } from "@i-harness/desktop-gateway/src/hook-settings.ts"
-import type { McpSettingsCommand } from "@i-harness/desktop-gateway/src/mcp-settings.ts"
-import type { ResourceKind, ResourceAuthoringRequest } from "@i-harness/desktop-gateway/src/resources.ts"
-import type { HookAuthoringRequest } from "@i-harness/desktop-gateway/src/hook-authoring.ts"
-import type { ProjectFilesRequest } from "@i-harness/desktop-gateway/src/project-files.ts"
+import type { AgentDefaults } from "@i-harness/desktop-gateway"
+import type { SubagentSettingsCommand } from "@i-harness/desktop-gateway"
+import type { HookSettingsCommand } from "@i-harness/desktop-gateway"
+import type { McpSettingsCommand } from "@i-harness/desktop-gateway"
+import type { ResourceKind, ResourceAuthoringRequest } from "@i-harness/desktop-gateway"
+import type { HookAuthoringRequest } from "@i-harness/desktop-gateway"
+import type { ProjectFilesRequest } from "@i-harness/desktop-gateway"
 import type { GlobalProviderRequest, GlobalPreferencesRequest } from "../main/global-provider-settings.ts"
-import type { ExecutionRequest } from "@i-harness/desktop-gateway/src/execution.ts"
-import type { AgentProcessesRequest } from "@i-harness/desktop-gateway/src/agent-processes.ts"
-import type { DiagnosticsRequest } from "@i-harness/desktop-gateway/src/environment-diagnostics.ts"
+import type { ExecutionRequest } from "@i-harness/desktop-gateway"
+import type { AgentProcessesRequest } from "@i-harness/desktop-gateway"
+import type { DiagnosticsRequest } from "@i-harness/desktop-gateway"
 import type { NotificationHistoryRequest } from "../main/notification-history.ts"
-import type { MemoryAuthoringRequest } from "@i-harness/desktop-gateway/src/memory-wire.ts"
+import type { MemoryAuthoringRequest } from "@i-harness/desktop-gateway"
 import type { DraftRequest } from "./attachment-drafts.ts"
-import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway/src/context-subsystems.ts"
+import type { ContextSubsystemRequest } from "@i-harness/desktop-gateway"
 /** Channel names shared by preload and main; nothing else crosses the bridge. */
 export const DESKTOP_REQUEST_CHANNEL = "ih-desktop:request"
 export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
@@ -24,7 +24,7 @@ export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | 
 export type DesktopRequest =
   | ContextSubsystemRequest
   | ProjectFilesRequest | ResourceAuthoringRequest | HookAuthoringRequest | MemoryAuthoringRequest | GlobalProviderRequest | GlobalPreferencesRequest | NotificationHistoryRequest | DraftRequest | ExecutionRequest | AgentProcessesRequest | DiagnosticsRequest
-  | { kind: "desktop/session/batch"; workspaceId: string; command: import("@i-harness/desktop-gateway/src/session-management.ts").SessionBatchCommand; confirmed?: true }
+  | { kind: "desktop/session/batch"; workspaceId: string; command: import("@i-harness/desktop-gateway").SessionBatchCommand; confirmed?: true }
   | { kind: "desktop/approval-rules/state"; workspaceId: string }
   | { kind: "desktop/approval-rules/revoke"; workspaceId: string; ruleId: string }
   | { kind: "desktop/approval-rules/add"; workspaceId: string; requestId: string; sessionId: string; remember: import("@i-harness/desktop-gateway/src/approval-rules.ts").RememberApprovalOptions }

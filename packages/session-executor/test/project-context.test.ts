@@ -7,7 +7,7 @@ import { createSessionService } from "../src/service.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
-import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createDurableSessionLoader } from "../src/durable-session.ts"
 import type { SubagentStateSnapshot } from "@i-harness/subagent"
 import { append } from "@i-harness/core-session"
@@ -23,8 +23,9 @@ function fixture() {
   // present on every host. The Windows branch used to name the original
   // developer's `D:/agent-complete/playground`, so every `mkdtempSync` below
   // died with ENOENT on any other machine (measured 2026-10-05).
-  const parent = process.cwd()
-  const root = mkdtempSync(join(parent, "project-execution-")); fixtures.push(root)
+  const parent = join(process.cwd(), ".tmp")
+  mkdirSync(parent, { recursive: true })
+  const root = mkdtempSync(join(parent, "sandbox-redesign-project-execution-")); fixtures.push(root)
   const a = join(root, "a"), b = join(root, "b"), c = join(root, "unrelated")
   for (const path of [a, b, c]) mkdirSync(path)
   return { root, a, b, c }
@@ -160,7 +161,7 @@ it("the selected shell receives current project roots and refuses removed cwd an
   let context: SessionProjectContext = { id: "p", name: "Shell project", roots: [a, b], primaryRoot: a }
   const powershell = join(process.env.SystemRoot ?? "C:/Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
   const commandFor = (path: string, text: string) => process.platform === "win32"
-    ? `[IO.File]::WriteAllText('${path.replaceAll("'", "''")}', '${text}')`
+    ? `Set-Content -LiteralPath '${path.replaceAll("'", "''")}' -Value '${text}' -NoNewline -ErrorAction Stop`
     : `printf '%s' '${text}' > '${path.replaceAll("'", "'\\''")}'`
   const assembly = await createSessionAssembly({ workspace: a, model: quietModel, approveAll: true, sandbox: "workspace-write", projectContext: () => context,
     agentShell: () => process.platform === "win32" ? { id: "powershell", label: "PowerShell", command: powershell, dialect: "powershell" } : { id: "sh", label: "sh", command: "/bin/sh", dialect: "posix" },
@@ -168,7 +169,8 @@ it("the selected shell receives current project roots and refuses removed cwd an
   try {
     const tool = assembly.tools.get("shell")!
     const allowed = join(b, "shell.txt")
-    expect(await tool.execute({ command: commandFor(allowed, "first") }, {})).toMatchObject({ exitCode: 0 })
+    const first = await tool.execute({ command: commandFor(allowed, "first") }, {}) as { stderr?: string }
+    expect(first, first.stderr).toMatchObject({ exitCode: 0 })
     expect(readFileSync(allowed, "utf8")).toBe("first")
     await tool.execute({ command: commandFor(join(c, "outside.txt"), "outside") }, {})
     expect(existsSync(join(c, "outside.txt"))).toBe(false)

@@ -232,7 +232,8 @@ describe("fs escalation ladder (one ask per call, granted mode reaches the check
       expect(prompts[0]!.reason).toContain(target)
       // The grant is what the guard is asked to judge under. Without it the
       // session's `read-only` mode reaches checkWrite and the write is refused.
-      expect(modesSeen).toEqual(["workspace-write"])
+      // Admission and the final write fence both retain the same one-call grant.
+      expect(modesSeen).toEqual(["workspace-write", "workspace-write"])
     })
   }
 

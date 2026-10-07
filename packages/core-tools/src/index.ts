@@ -157,10 +157,16 @@ export interface PreparedCall {
   exec: ToolExec
   /** Every prepared operation retains its exact registry registration. */
   bindingValidation(): boolean
+  bindingGeneration?: number
   /** Captured for allow, guardian and opaque one-time approval paths too. */
   authorityValidation?(): boolean
   /** Revalidate live authority and prepared identity immediately before launch. */
   approvalValidation?(): boolean
+}
+/** Trusted dispatch metadata. The registry and binding validator are never model JSON. */
+export interface ToolDispatchMetadata {
+  name: string; args: unknown; exec: ToolExec; tool: Tool
+  registry: ToolRegistry; bindingGeneration?: number; validateBinding(): boolean
 }
 
 export interface ToolSchema {
@@ -479,7 +485,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
 
-    return { call, tool, exec, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}) }
+    return { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}) }
   }
 
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
@@ -497,7 +503,8 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     validatePrepared(prepared)
     const output = await ctx.cascade(
       "tools/execute",
-      { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool },
+      { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
+        registry, bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation } satisfies ToolDispatchMetadata,
       async () => {
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.

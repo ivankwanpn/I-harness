@@ -3,11 +3,13 @@ import { readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { derivePlanMode } from "@i-harness/core-session"
 import type { SessionAssembly, SessionProjectContext } from "@i-harness/session-executor"
+import type { AuthorityState } from "@i-harness/sandbox"
 
 /** Current host authority, synchronously reassessed both at prepare and dispatch. */
 export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
   workspace: string; sandbox: string; approval: string
   project: () => SessionProjectContext | undefined
+  executionAuthority?: () => AuthorityState
   hookConfigs: readonly string[]; grantPaths: readonly string[]
   pluginAuthority: unknown
 }): { workspaceId: string; revision: string } | undefined {
@@ -27,6 +29,8 @@ export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
       })]
     })
     const project = options.project()
+    const executionAuthority = options.executionAuthority?.()
+    if (executionAuthority?.kind === "revoked" || executionAuthority?.kind === "unavailable") return undefined
     // Model-facing schema projection is a read; its live presentation metadata
     // is separate from the owned registry catalog fingerprinted below.
     const modelTools = assembly.executionState?.()
@@ -34,6 +38,7 @@ export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
       sandbox: options.sandbox, approval: options.approval, plan: derivePlanMode(assembly.session),
       caller: { role: "main" },
       project: project ?? { roots: [options.workspace], primaryRoot: options.workspace },
+      executionAuthority,
       roles: assembly.subagentState().roles, catalog: assembly.tools.genToolCatalog(), deferred: assembly.tools.deferredSearchIndex(),
       modelTools, plugins: options.pluginAuthority,
       mcp: [...assembly.pluginMcpResults], agents: [...assembly.pluginAgentResults],

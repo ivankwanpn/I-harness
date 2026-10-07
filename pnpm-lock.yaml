@@ -1182,6 +1182,10 @@ importers:
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../workflow
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
 
   packages/session-persistence:
     dependencies:

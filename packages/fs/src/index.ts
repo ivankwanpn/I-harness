@@ -52,9 +52,9 @@ export function resolvePath(workspace: string, path: string): string {
  * awaited ONCE PER CALL in the tool body, and only its resulting mode travels
  * down; `"allowed-once"` means one call, not one hunk.
  */
-function guardWrite(deps: FsToolDeps, target: string, modeOverride?: SandboxMode): void {
+function guardWrite(deps: FsToolDeps, target: string, modeOverride?: SandboxMode, authoritySnapshot?: object): void {
   if (deps.writeGuard === undefined) return
-  const decision = deps.writeGuard(target, modeOverride)
+  const decision = deps.writeGuard(target, modeOverride, authoritySnapshot)
   if (!decision.ok) throw new FsToolError("FS_SANDBOX_DENIED", JSON.stringify(decision.denial))
 }
 
@@ -81,7 +81,7 @@ async function resolveWriteCall(
   toolName: string,
   args: { sandbox_permissions?: string; justification?: string },
   subject: string,
-): Promise<{ kind: "proceed"; mode: SandboxMode | undefined } | { kind: "refused"; failure: FsToolFailure }> {
+): Promise<{ kind: "proceed"; mode: SandboxMode | undefined; authoritySnapshot?: object } | { kind: "refused"; failure: FsToolFailure }> {
   const escalation = deps.escalationApprover === undefined
     ? undefined
     : {
@@ -104,7 +104,7 @@ async function resolveWriteCall(
   }
   // `undefined` when the host requested no sandbox at all (branch 3 of the
   // ladder): there is no mode to hand down, and nothing is confined anyway.
-  return { kind: "proceed", mode: resolution.policy?.mode }
+  return { kind: "proceed", mode: resolution.policy?.mode, authoritySnapshot: resolution.policy?.authoritySnapshot }
 }
 
 /** The model-facing sentence: the reason, plus the recovery route when the
@@ -152,7 +152,7 @@ export interface FsToolDeps {
    *  unrestricted — so refusing a read here would be stricter than the shell
    *  sandbox while `cat` still reached the file: a false claim of isolation
    *  rather than the real absence of it. */
-  writeGuard?: (absPath: string, modeOverride?: SandboxMode) =>
+  writeGuard?: (absPath: string, modeOverride?: SandboxMode, authoritySnapshot?: object) =>
     | { ok: true }
     | { ok: false; denial: import("@i-harness/sandbox").SandboxDenial }
   /**
@@ -261,12 +261,13 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const target = resolvePath(deps.workspace, path)
       const ladder = await resolveWriteCall(deps, exec, "write", { sandbox_permissions, justification }, `write to ${target}`)
       if (ladder.kind === "refused") return ladder.failure
-      guardWrite(deps, target, ladder.mode)
+      guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       // M42 rewind: writeFileAtomic OVERWRITES without reading — when rewind
       // is wired, do one extra read (ENOENT ⇒ new file); otherwise zero cost.
       const captured = deps.rewind !== undefined
         ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
+      guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       await writeFile(target, text, "utf-8")
       const { beforeBytes, preImageRef, isNewFile } = captured
       const out: { ok: boolean; preImageRef?: string; isNewFile?: boolean; change?: TextDiff } = { ok: true }
@@ -311,7 +312,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const target = resolvePath(deps.workspace, path)
       const ladder = await resolveWriteCall(deps, exec, "edit", { sandbox_permissions, justification }, `write to ${target}`)
       if (ladder.kind === "refused") return ladder.failure
-      guardWrite(deps, target, ladder.mode)
+      guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       if (old_string === "") throw new FsToolError("FS_AMBIGUOUS_EDIT", "ambiguous: old_string must not be empty")
       const { stat, readFile } = await import("node:fs/promises")
       let st
@@ -353,6 +354,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
           if (r.blobId !== null) preImageRef = r.blobId
         }
       }
+      guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       await writeFileAtomic(target, finalText)
       return {
         ok: true,
@@ -397,7 +399,7 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
           return rel === null ? { blobId: null, isNewFile: false } : recorder.take(rel, before)
         },
       }
-      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode))
+      const { applied, errors } = await applyPatch((path) => resolvePath(deps.workspace, path), hunks, patchRewind, (target) => guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot))
       // M49: aggregate per-file changes when the parser exposed before/after
       // (update hunks); anything else keeps the original patch text as rawPatch.
       const result: { ok: boolean; applied: { path: string; action: string; change?: TextDiff }[]; errors: { path: string; message: string }[]; change?: TextDiff; changes?: TextDiff[]; rawPatch?: string } = {

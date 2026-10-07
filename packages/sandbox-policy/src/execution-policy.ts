@@ -48,7 +48,7 @@ function content(value: unknown): Content {
   if (result.mode !== "workspace-write" && result.writeRoots.length) fail("mode cannot grant write roots")
   if (!result.authorityRoots.includes(result.primaryRoot)) fail("missing primary authority root")
   if (result.mode === "workspace-write" && JSON.stringify(result.writeRoots) !== JSON.stringify(result.authorityRoots)) fail("write roots differ from authority roots")
-  if (kind === "unbound" && (result.referenceRoots.length || result.authorityRoots.length !== 1)) fail("invalid unbound roots")
+  if (kind === "unbound" && result.authorityRoots.length !== 1) fail("invalid unbound roots")
   for (const writable of result.writeRoots) for (const reference of result.referenceRoots) {
     // First phase cannot implement nested read-only carveouts; refuse either overlap direction.
     if (contains(writable, reference) || contains(reference, writable)) fail("writable/reference overlap is unsupported")
@@ -70,7 +70,7 @@ export function compileExecutionPolicy(input: { mode: SandboxMode; owner: Execut
   let roots: readonly string[]
   let references: readonly string[]
   if (authority.kind === "unbound") {
-    primaryRoot = path(authority.workspaceRoot); roots = [primaryRoot]; references = []
+    primaryRoot = path(authority.workspaceRoot); roots = [primaryRoot]; references = paths(authority.references ?? [])
   } else if (authority.kind === "bound") {
     primaryRoot = path(authority.primaryRoot); roots = paths(authority.roots); references = paths(authority.references)
   } else fail("malformed authority state")

@@ -116,6 +116,14 @@ export async function handleSessionCompactCommand(
   })
 }
 
+/** Keeps the exact failed assembly/coordinator reachable for an explicit host retry. */
+export class HeadlessCleanupError extends Error {
+  constructor(cause: unknown, readonly retryCleanup: () => Promise<void>) {
+    super("Headless process cleanup incomplete; retryCleanup retains its owner", { cause })
+    this.name = "HeadlessCleanupError"
+  }
+}
+
 export interface HeadlessOptions {
   codeMode?: import("@i-harness/settings").SettingsCodeMode
   workspace: string
@@ -198,6 +206,7 @@ export interface HeadlessOptions {
   // dead on every shipped path.
   compact?: CompactionRequest
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
+  windowsSandboxBackend?: "legacy" | "psec"
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
   team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
@@ -612,6 +621,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {}),
+      windowsSandboxBackend: opts.windowsSandboxBackend,
       session,
       // M16 final-review (C1) parity. WHAT PROTECTS THE MODE HERE IS THE
       // ASSEMBLY'S FLOOR SLICE, not `policySession` — rewritten 2026-09-15
@@ -874,7 +884,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
     })
-    if (opts.coordinator) await opts.coordinator.close()
+    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
     // The metrics summary, when the operator asked for observability. On STDERR
     // because stdout carries ONLY the telemetry's NDJSON frames (the same
     // discipline `sdk` and `acp` follow) — a summary printed to stdout would
@@ -943,7 +953,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // close below for the same reason as site ①.
     appendRunEnd(1, "run", err)
     telemetry?.close()
-    if (opts.coordinator) await opts.coordinator.close().catch(() => {})
+    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId).catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } finally {
     // The handlers come off on EVERY exit path. A run that left them behind
@@ -965,9 +975,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         })
       }
     }
-    // The assembly owns every mount's reverse-order unmount + the win32 ACL
-    // sandbox teardown (dispose never throws) — never the coordinator.
-    await assembly?.dispose().catch(() => {})
+    // A process cleanup failure rejects shutdown and retains the coordinator;
+    // success is acknowledged only after the assembly's native owners drain.
+    try { await assembly?.dispose() }
+    catch (cause) {
+      throw new HeadlessCleanupError(cause, async () => { await assembly?.dispose(); await opts.coordinator?.close() })
+    }
     // Disposal joins task/notification save queues and may schedule registry
     // metadata writes. The final store barrier must follow those producers.
     if (opts.coordinator) await opts.coordinator.close().catch((error: unknown) => {

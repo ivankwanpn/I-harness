@@ -27,6 +27,7 @@ export * from './context-subsystems.ts'
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
 export type SettingsSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
+export type SettingsWindowsSandboxBackend = "legacy" | "psec"
 
 /** Completed-turn transcript presentation (dsh settings.transcript). Retained as
  * a vocabulary type after the `transcriptMode` key was retired: it is not one of
@@ -291,6 +292,7 @@ export interface Settings {
   /** Automatic conversation titles. Absent documents retain the existing enabled default. */
   autoTitle?: boolean
   sandboxMode: SettingsSandboxMode
+  windowsSandboxBackend: SettingsWindowsSandboxBackend
   /** Executable preference for new Agent shell commands. */
   agentShell: SettingsAgentShell
   /** Desktop tool approvals; legacy files default to dangerous-only. */
@@ -363,6 +365,7 @@ const SETTINGS_DEFAULTS: Settings = {
   codeMode: { mode: "off" },
   autoTitle: true,
   sandboxMode: "workspace-write",
+  windowsSandboxBackend: "legacy",
   agentShell: "auto",
   approvalMode: "dangerous",
   // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
@@ -735,6 +738,7 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
+    windowsSandboxBackend: oneOf(raw.windowsSandboxBackend, ["legacy", "psec"] as const, base.windowsSandboxBackend),
     contextSubsystems: normalizeContextSubsystems(raw.contextSubsystems),
     codeMode: normalizeCodeMode(raw.codeMode),
     autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,

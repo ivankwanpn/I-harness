@@ -22,6 +22,43 @@ async function setup() {
 }
 
 describe("trusted project scope broker", () => {
+  it("makes authority unavailable when a reference registration cannot be confirmed", async () => {
+    const { coordinator, broker, workspace } = await setup()
+    try {
+      const get = await broker.authorityFor("s1")
+      await expect(broker.configureReferences([join(workspace, "missing")])).rejects.toThrow()
+      expect(get().kind).toBe("unavailable")
+      await broker.configureReferences([])
+      expect(get().kind).toBe("unbound")
+    } finally { await broker.close(); await coordinator.close() }
+  })
+  it("publishes revocation before awaiting process cleanup", async () => {
+    const { coordinator, project, workspace } = await setup()
+    let release!: () => void
+    const gate = new Promise<void>(resolve => { release = resolve })
+    let draining = false
+    let attempts = 0
+    const broker = createProjectScopeBroker(coordinator, workspace, undefined, {
+      async authorityChanged() { draining = true; await gate; if (++attempts === 1) throw new Error("cleanup incomplete") },
+    })
+    await broker.configure(project)
+    await broker.bind("s1", project.id)
+    const get = await broker.authorityFor("s1")
+    const before = get()
+    expect(before.kind).toBe("bound")
+    const revoke = broker.revoke(project.id)
+    expect(get().kind).toBe("revoked")
+    expect(get().revision).not.toBe(before.revision)
+    while (!draining) await new Promise(resolve => setTimeout(resolve, 1))
+    expect(get().kind).toBe("revoked")
+    expect(get().revision).not.toBe(before.revision)
+    release()
+    await expect(revoke).rejects.toThrow("cleanup incomplete")
+    await expect(broker.revoke(project.id)).resolves.toEqual({ revoked: false })
+    await broker.close()
+    expect(get().kind).toBe("unavailable")
+    await coordinator.close()
+  })
   it("persists only project ownership and requires current process confirmation after restart", async () => {
     const { coordinator, broker, project, workspace, sessionDir } = await setup()
     await broker.configure(project)
@@ -37,7 +74,7 @@ describe("trusted project scope broker", () => {
     try {
       expect(await restarted.state("s1")).toEqual({ sessionId: "s1", projectId: "p1" })
       const get = await restarted.forSession("s1")
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
       await restarted.configure(project)
       expect(get()).toEqual(project)
     } finally { await reloaded.close() }
@@ -55,7 +92,7 @@ describe("trusted project scope broker", () => {
       get()!.roots.push("mutated by caller")
       expect(get()!.roots).toEqual([project.primaryRoot, third])
       await broker.revoke("p1")
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
       expect(await broker.projectFor("s1")).toBe("p1")
     } finally { await coordinator.close() }
   })
@@ -97,7 +134,7 @@ describe("trusted project scope broker", () => {
       await broker.bind("s1", "p1")
       const get = await broker.forSession("s1")
       await broker.sync([{ ...project, id: "p2", roots: [second], primaryRoot: second }])
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
       expect(await broker.projectFor("s1")).toBe("p1")
       await broker.sync([project])
       expect(get()).toEqual(project)
@@ -115,8 +152,8 @@ describe("trusted project scope broker", () => {
       expect(get).toThrow("Project has no workspace folders")
       expect(await broker.projectFor("s1")).toBe("p1")
       await expect(broker.bind("s1")).rejects.toThrow("Project has no workspace folders")
-      await broker.sync([]) // deleting the whole grouping retains the legacy base folder
-      expect(get()).toBeUndefined()
+      await broker.sync([]) // deleting the grouping revokes its authority
+      expect(get).toThrow(/revoked/i)
     } finally { await coordinator.close() }
   })
 
@@ -151,9 +188,9 @@ describe("trusted project scope broker", () => {
       await broker.bind("s1", "p1")
       const get = await broker.forSession("s1")
       await Promise.all([broker.sync([project]), broker.sync([])])
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
       await Promise.all([broker.configure(project), broker.sync([])])
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
     } finally { await coordinator.close() }
   })
 
@@ -202,7 +239,7 @@ describe("trusted project scope broker", () => {
       expect(await broker.bind("team-child")).toEqual({ sessionId: "team-child", projectId: "p1" })
       expect((await readdir(sessionDir)).filter((name) => name.includes("session-project"))).toHaveLength(2)
       await broker.sync([])
-      expect(get()).toBeUndefined()
+      expect(get).toThrow(/revoked/i)
     } finally { await coordinator.close() }
   })
 

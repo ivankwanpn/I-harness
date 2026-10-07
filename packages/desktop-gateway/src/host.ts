@@ -97,6 +97,8 @@ async function validateSettingsDocument(path: string): Promise<void> {
     throw new Error("invalid settings: expected an object")
   }
   const mode = (parsed as { sandboxMode?: unknown }).sandboxMode
+  const backend = (parsed as { windowsSandboxBackend?: unknown }).windowsSandboxBackend
+  if (backend !== undefined && backend !== "legacy" && backend !== "psec") throw new Error("invalid settings: unknown Windows sandbox backend")
   if (mode !== undefined && (typeof mode !== "string" || !SANDBOX_MODES.has(mode))) {
     throw new Error("invalid settings: unknown sandboxMode")
   }
@@ -116,6 +118,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const settings = new SettingsStore({ path: settingsPath })
   await settings.load()
   let mode = settings.get().sandboxMode
+  let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let approvalMode = settings.get().approvalMode
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json") })
   await mkdir(options.sessionDir, { recursive: true })
@@ -127,8 +130,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const fence = createSessionManagementFence()
   let management: ReturnType<typeof createSessionManagement>
   const drainSession = async (id: string) => { await service.closeSession(id); await approvals.flush() }
-  const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession })
+  const projects = createProjectScopeBroker(coordinator, options.workspace, createSessionRuntimeVisibility(coordinator), { fence, assertIdle: id => management.assertIdle(id), drainSession,
+    authorityChanged: ids => service.reconcileExecutionAuthority(ids) })
   const projectContexts = new Map<string, () => SessionProjectContext | undefined>()
+  const executionAuthorities = new Map<string, NonNullable<SessionServiceOptions["executionAuthority"]>>()
   const extensionInputs = new Map<string, RuntimeInputs>()
   const approvals = createDesktopApprovalHistory(coordinator)
   const reviewerPool = createIsolatedReviewerPool()
@@ -166,7 +171,11 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     resolveCredential:ref=>nativeCredentials.resolve(ref),
   })
   const contextSubsystems=createContextSubsystemSettings({settingsPath,workspaceKey:nativeContext.workspaceKey,workspaceId:nativeContext.workspaceId,
-    contextOutput:nativeContext.contextOutput,codeRetrieval:nativeContext.codeRetrieval,onReferencesChanged:nativeContext.configureReferences,actionSessionId:nativeContext.humanSessionId})
+    contextOutput:nativeContext.contextOutput,codeRetrieval:nativeContext.codeRetrieval,
+    onReferencesChanged: async references => {
+      await projects.configureReferences(references.map(reference => reference.path))
+      await nativeContext.configureReferences(references)
+    },actionSessionId:nativeContext.humanSessionId})
   await contextSubsystems.sync();nativeContext.syncAutoRefresh()
   const memory = openMemoryStore({ path: join(options.sessionDir, "memory.sqlite"), scope: options.workspace })
   const additionalTools = [...createMemoryTools(memory, () => memory.enabled()), ...createDesktopGoalTools((id) => service.liveSession(id), notifyWorkflow),...createCodeRetrievalTools(nativeContext.codeRetrieval)]
@@ -181,12 +190,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const approvalRules = createApprovalRulesAdapter({ filePath: join(options.sessionDir, "approval-rules-v1.json"), policyIdentity: assembly => {
     const project = assembly.sessionId ? projectContexts.get(assembly.sessionId) : undefined
     const inputs = assembly.sessionId ? extensionInputs.get(assembly.sessionId) : undefined
-    return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project,
+    return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
       hookConfigs: inputs.hookConfigs, grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
   const service: SessionService = createSessionService({
     sessionOperation: fence,
     projectContextFor: async id => { const getter = await projects.forSession(id); projectContexts.set(id, getter); return getter },
+    executionAuthorityFor: async id => { const get = await projects.authorityFor(id); executionAuthorities.set(id, get); return get },
+    windowsSandboxBackendFor: () => windowsSandboxBackend,
     agentShell: agentShell.resolve,
     team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
     codeMode: () => codeSettings.resolve(),
@@ -273,8 +284,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       signal.throwIfAborted()
     },
   })
-  const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
-    onSandboxModeChanged(next) { service.updateSandboxMode(next); mode = next },
+  const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, windowsSandboxBackend, autoCompaction: settings.get().compaction.auto, approvalMode }, {
+    onWindowsSandboxBackendChanged(next) { windowsSandboxBackend = next },
+    executionStatus: () => service.executionBackendStatus(),
+    async onSandboxModeChanged(next) { mode = next; await service.updateSandboxMode(next) },
     onApprovalModeChanged(next) { approvalMode = next },
     onAutoCompactionChanged(next) { autoCompactionEnabled = next },
   })
@@ -441,7 +454,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("plugins", () => plugins.close())
         await once("policy refresh", async () => { await policySync })
         await once("memory", () => memory.close())
-        await once("coordinator", () => coordinator.close())
+        if (cleaned.has("session service")) await once("coordinator", () => coordinator.close())
         if (failures.length) throw new AggregateError(failures.map(item => item.cause),
           `Desktop host cleanup incomplete: ${failures.map(item => item.name).join(", ")}`)
         shutdownComplete = true

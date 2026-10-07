@@ -17,6 +17,25 @@ function deferred<T>() {
 }
 const turn = () => new Promise<void>(resolve => setTimeout(resolve, 0))
 
+it("distinguishes strict pending admission from exposed active reconciliation", async () => {
+  const s = exec.createExecutionSupervisor()
+  const pending = fixture("pending"); pending.holdPreparation()
+  const launched = outcome(s.launch(pending.input)); await turn()
+  const phases: string[] = []
+  const drain = s.reconcile("owner", (_policy, context) => {
+    phases.push(context.phase)
+    if (context.phase === "preparing") throw new Error("generation changed")
+  })
+  pending.preparation.resolve()
+  expect((await launched).kind).toBe("rejected")
+  await drain
+  expect(phases).toContain("preparing")
+  const active = fixture("active"); await s.launch(active.input)
+  await s.reconcile("owner", (_policy, context) => { phases.push(context.phase) })
+  expect(phases).toContain("active")
+  active.finish(); await s.dispose()
+})
+
 // Only native process operations are replaced. Admission, policy snapshots and
 // lease cleanup use the public production packages.
 function fixture(id = "run-1", sessionId = "owner", transport: "pipe" | "pty" = "pipe") {

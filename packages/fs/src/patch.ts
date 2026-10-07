@@ -200,6 +200,7 @@ export async function applyPatch(
           const captured = rewind.take(hunk.path, null)
           if (captured.isNewFile) isNewFile = true
         }
+        guard?.(target)
         await writeFileAtomic(target, hunk.contents ?? "")
         applied.push({ path: hunk.path, action: "added", ...(isNewFile !== undefined ? { isNewFile } : {}) })
       } else if (hunk.kind === "delete") {
@@ -216,6 +217,7 @@ export async function applyPatch(
             // capture skipped — delete proceeds untracked (honest)
           }
         }
+        guard?.(target)
         await unlink(target)
         applied.push({ path: hunk.path, action: "deleted", ...(preImageRef !== undefined ? { preImageRef } : {}) })
       } else {
@@ -244,6 +246,7 @@ export async function applyPatch(
           const r = rewind.take(hunk.path, raw)
           if (r.blobId !== null) preImageRef = r.blobId
         }
+        guard?.(target)
         await writeFileAtomic(target, restoreLineEndings(result.text, style))
         // M49: structured change — the pre-image text and the post-edit text
         // are both known here, so the change can always be built (bounded).

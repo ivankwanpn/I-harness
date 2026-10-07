@@ -8,50 +8,9 @@ import { createSessionExecutor } from "@i-harness/core-agent"
 import type { SandboxDenial } from "@i-harness/sandbox"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 
-/**
- * The SHELL half of per-call resolution: the assembly → shell hand-off.
- *
- * `sandboxPolicyAtMount` was the last mount-time snapshot in the assembly, and it
- * fed `registerShell`. Converting it to `sandboxPolicyNow` was the one line that
- * made the shell half of this task REAL in production — and until this file it had
- * no test that could fail. A thunk over the mount-time value
- * (`() => sandboxPolicyAtMount`) typechecks, passes every session-executor test,
- * and passes the CLI confinement test: every existing test either mounts the mode
- * it means to assert or asserts on the fs guard, so none of them can see whether
- * the SHELL read a stale value.
- *
- * WHY THIS SHAPE. The property under test is "the policy the shell hands to exec
- * on THIS call is the mode in force on THIS call". Observing that from outside
- * needs the command to leave a trace, and the trace must be one the run cannot
- * produce by other means. So:
- *
- *  - mount at `danger-full-access` (no provider is composed for it), then append a
- *    TIGHTENING `sandbox/mode` event. The next bash call therefore carries a
- *    confined policy with no backend to confine it → `exec`'s `resolveArgv` fails
- *    CLOSED with SANDBOX_UNAVAILABLE, before any child process exists.
- *  - a stale mount-time value is `danger-full-access`, which is passthrough, so the
- *    command runs unconfined and echoes normally. The two behaviors are opposite
- *    and both are observable in the model-facing tool result.
- *
- * HOW THE REFUSAL SURFACES (M62 Task 3 changed this; read the change before
- * touching the assertion): it used to be a THROWN `SandboxUnavailableError` that
- * failed the turn, because `exec`'s `resolveArgv` throws synchronously and no
- * `tool/result` was ever appended. That made ONE bash call end the turn and left
- * the model with nothing to adapt to — the opposite of a rule it can follow. The
- * shell tools now CATCH that error and RETURN the refusal as a `SandboxDenial`,
- * so the turn resolves and the model reads why. What did NOT change: no command
- * runs, so `existsSync(trace)` stays false. That check is the independent proof
- * that nothing executed, and it is the part that must survive — a version of
- * this test that only looked at the returned JSON would pass against an
- * implementation that swallowed the refusal and ran the command anyway.
- *
- * This is the escalation-ladder shape in the other direction (a session-mode event
- * tightening a session that started permissive), which is exactly why the snapshot
- * had to go. Reachability note: the assembly composes no provider for
- * danger-full-access, and by design it must not — so "confined policy, no backend"
- * is a real state here, and refusing to run is the honest outcome, not a bug to
- * paper over. Asserting the refusal pins the fail-closed contract at the same time.
- */
+/** Current standing mode must reach the next actual shell invocation. The local
+ * backend is now composed for runtime mode changes, including assemblies that
+ * start unrestricted. The independent trace asserts filesystem denial. */
 
 /** One real turn on the assembly's session, drained to completion. */
 async function runTurn(assembly: SessionAssembly): Promise<void> {
@@ -101,11 +60,8 @@ describe("the assembly hands the shell a per-call policy", () => {
       const output = (result as { output?: { stderr?: string } }).output
       const denial = JSON.parse(output!.stderr!) as SandboxDenial
       expect(denial).toMatchObject({ code: "SANDBOX_DENIED", surface: "shell", mode: "read-only" })
-      // The refusal must NOT advertise an escalation: no backend exists for ANY
-      // mode here, so sending the model to ask for a wider one points it at a
-      // request that cannot help.
-      expect(denial.escalation).toBeUndefined()
-      expect(JSON.stringify(denial)).not.toContain("sandbox_permissions")
+      // A configured backend can report an actual policy denial and an escalation
+      // option; the retired missing-provider path advertised neither.
       // The independent proof that nothing ran — unchanged by the conversion.
       expect(existsSync(trace)).toBe(false)
     } finally {

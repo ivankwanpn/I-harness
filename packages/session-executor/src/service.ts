@@ -95,6 +95,8 @@ export interface SessionServiceOptions extends AssemblyOptions {
   sessionOperation?: { run<T>(id: string, operation: () => Promise<T>): Promise<T>; assertOpen(id: string): void }
   /** Bind the session once; its returned getter follows current membership. */
   projectContextFor?: (sessionId: string) => Promise<() => SessionProjectContext | undefined>
+  executionAuthorityFor?: (sessionId: string) => Promise<NonNullable<AssemblyOptions["executionAuthority"]>>
+  windowsSandboxBackendFor?: () => "legacy" | "psec"
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
@@ -219,7 +221,9 @@ export interface SessionService {
    * (approval/question bridges). */
   onAssembly(hook: (assembly: SessionAssembly) => void): () => void
   /** Changes the standing sandbox on existing and future assemblies. */
-  updateSandboxMode(mode: SandboxMode): void
+  updateSandboxMode(mode: SandboxMode): Promise<void>
+  reconcileExecutionAuthority(sessionIds?: readonly string[]): Promise<void>
+  executionBackendStatus(): Promise<readonly { sessionId: string; status: unknown }[]>
   /** Wait for this session's pending work/build/model resolution, remove its
    * cached state and assembly, and dispose only that assembly. A later
    * request resolves and builds it again. */
@@ -231,6 +235,8 @@ export interface SessionService {
 
 export function createSessionService(opts: SessionServiceOptions): SessionService {
   const assemblies = new Map<string, SessionAssembly>()
+  const mountingAssemblies = new Map<string, SessionAssembly>()
+  const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
   const creating = new Map<string, Promise<SessionAssembly>>()
   const modelBindings = new Map<string, Promise<SessionModelBindingResult>>()
@@ -436,6 +442,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   }
   async function getOrCreateUnfenced(sessionId: string): Promise<SessionAssembly> {
     if (closed) throw new Error("session service closed")
+    if (failedClose.has(sessionId)) throw new Error("Session process cleanup incomplete; retry close before admission")
     const pendingClose = closing.get(sessionId)
     if (pendingClose !== undefined) await pendingClose
     if (closed) throw new Error("session service closed")
@@ -446,7 +453,10 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       pending = (async () => {
         const extensions = await opts.extensionsFor?.(sessionId)
         const projectContext = opts.projectContextFor ? await opts.projectContextFor(sessionId) : opts.projectContext
+        const executionAuthority = opts.executionAuthorityFor ? await opts.executionAuthorityFor(sessionId) : opts.executionAuthority
         let assembly: SessionAssembly
+        const executionCallerAvailable = () => !closed && !closing.has(sessionId) && !failedClose.has(sessionId)
+          && (liveAssembly(sessionId) === assembly || mountingAssemblies.get(sessionId) === assembly)
         let sandboxAtBuild: SandboxMode | undefined
         if (opts.modelBindingFor !== undefined) {
           const result = await bindingFor(sessionId)
@@ -476,6 +486,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
+            executionAuthority,
+            executionCallerAvailable,
+            windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
@@ -510,6 +523,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             sandbox: sandboxAtBuild,
             ...extensions?.options,
             projectContext,
+            executionAuthority,
+            executionCallerAvailable,
+            windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
@@ -518,28 +534,39 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             ...(opts.reasoningEffortFor !== undefined ? { reasoningEffort } : {}),
           })
         }
+        if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode: currentSandbox })
+        mountingAssemblies.set(sessionId, assembly)
         if (extensions?.mount) {
           try {
             const cleanup = await extensions.mount(assembly)
             if (cleanup) {
               extensionCleanups.set(sessionId, cleanup)
             }
-          } catch (error) { await assembly.dispose(); throw error }
+          } catch (error) { await assembly.dispose(); mountingAssemblies.delete(sessionId); throw error }
         }
         if (opts.extensionsFor) {
           const dispose = assembly.dispose.bind(assembly)
           let disposing: Promise<void> | undefined
-          assembly.dispose = () => disposing ??= (async () => {
-            await extensionRefreshes.get(sessionId)?.catch(() => undefined)
-            const current = extensionCleanups.get(sessionId); extensionCleanups.delete(sessionId)
-            try { await current?.() } finally { await dispose() }
-          })()
+          assembly.dispose = () => {
+            if (disposing) return disposing
+            const pending = (async () => {
+              await extensionRefreshes.get(sessionId)?.catch(() => undefined)
+              const failures: unknown[] = []
+              const current = extensionCleanups.get(sessionId)
+              try { await current?.(); extensionCleanups.delete(sessionId) } catch (error) { failures.push(error) }
+              try { await dispose() } catch (error) { failures.push(error) }
+              if (failures.length) throw new AggregateError(failures, "Assembly extension/process cleanup incomplete")
+            })()
+            disposing = pending
+            void pending.then(() => { disposing = undefined }, () => { disposing = undefined })
+            return pending
+          }
         }
         // No await between this reconciliation and publication. A settings
         // change during an asynchronous extension mount must not miss an
         // assembly that was not yet present in the live map.
-        if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode: currentSandbox })
         assemblies.set(sessionId, assembly)
+        mountingAssemblies.delete(sessionId)
         assembly.ctx.on("agent/pre-step", async () => { await extensionRefreshes.get(sessionId)?.catch(() => undefined) })
         // The A-region serial lane over this assembly (tiers; send on submit).
         lanes.set(sessionId, createSessionExecutor({
@@ -831,8 +858,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return { cancelled: true }
   }
 
-  async function close(): Promise<void> {
-    if (closed) return
+  const failedClose = new Set<string>()
+  const liveAssembly = (sessionId: string) => closed || closing.has(sessionId) || failedClose.has(sessionId) ? undefined : assemblies.get(sessionId)
+  let closeAttempt: Promise<void> | undefined
+  function close(): Promise<void> {
+    if (closeAttempt) return closeAttempt
+    const pending = closeAll()
+    closeAttempt = pending
+    void pending.then(() => { closeAttempt = undefined }, () => { closeAttempt = undefined })
+    return pending
+  }
+  async function closeAll(): Promise<void> {
+    if (closed && ownedAssemblies().size === 0) return
     closed = true
     for (const id of assemblies.keys()) stopNotifications(id)
     await Promise.allSettled([
@@ -845,13 +882,14 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     ])
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
-    const handles = [...assemblies.values()]
-    assemblies.clear()
-    lanes.clear()
-    modelBindings.clear()
-    chains.clear()
-    queues.clear()
-    for (const handle of handles) await handle.dispose().catch(() => {})
+    const failures: unknown[] = []
+    for (const [id, handle] of ownedAssemblies()) {
+      try {
+        await handle.dispose()
+        assemblies.delete(id); mountingAssemblies.delete(id); lanes.delete(id); modelBindings.delete(id); chains.delete(id); queues.delete(id); failedClose.delete(id)
+      } catch (error) { failedClose.add(id); failures.push(error) }
+    }
+    if (failures.length) throw new AggregateError(failures, "Session service process cleanup incomplete")
     if (failure !== undefined) throw failure
   }
 
@@ -868,13 +906,15 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
       await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
-      const handle = assemblies.get(sessionId)
+      const handle = assemblies.get(sessionId) ?? mountingAssemblies.get(sessionId)
+      try { await handle?.dispose() } catch (error) { failedClose.add(sessionId); throw error }
+      failedClose.delete(sessionId)
       assemblies.delete(sessionId)
+      mountingAssemblies.delete(sessionId)
       lanes.delete(sessionId)
       modelBindings.delete(sessionId)
       chains.delete(sessionId)
       queues.delete(sessionId)
-      await handle?.dispose().catch(() => {})
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
     })
@@ -917,7 +957,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     contextState,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
-    liveAssembly: (sessionId) => closed || closing.has(sessionId) ? undefined : assemblies.get(sessionId),
+    liveAssembly,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {
       // Count-only compatibility surface (session/status) — derived from the
@@ -946,12 +986,18 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       hooks.add(hook)
       return () => { hooks.delete(hook) }
     },
-    updateSandboxMode: (mode) => {
-      if (closed || currentSandbox === undefined) throw new Error("sandbox mode is unavailable")
-      if (currentSandbox === mode) return
-      currentSandbox = mode
-      for (const assembly of assemblies.values()) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode })
+    reconcileExecutionAuthority: async (ids) => {
+      await Promise.all([...ownedAssemblies()].filter(([id]) => !ids || ids.includes(id)).map(([, assembly]) => assembly.reconcileExecutionAuthority()))
     },
+    updateSandboxMode: async (mode) => {
+      if (closed || currentSandbox === undefined) throw new Error("sandbox mode is unavailable")
+      const changed = currentSandbox !== mode
+      currentSandbox = mode
+      const owned = ownedAssemblies()
+      if (changed) for (const assembly of owned.values()) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode })
+      await Promise.all([...owned.values()].map(assembly => assembly.reconcileExecutionAuthority()))
+    },
+    executionBackendStatus: () => Promise.all([...assemblies].map(async ([sessionId, assembly]) => ({ sessionId, status: await assembly.executionBackendStatus() }))),
     closeSession,
     close,
   }

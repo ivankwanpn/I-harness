@@ -20,13 +20,15 @@ export interface SupervisedExecution {
   readonly handle: TransportExecutionHandle
   readonly policy: CompiledSandboxPolicy
 }
+export interface ExecutionReconciliationContext { readonly phase: "preparing" | "active" }
+export type ExecutionReconciler = (policy: CompiledSandboxPolicy, context: ExecutionReconciliationContext) => void
 
 export interface ExecutionSupervisor {
   launch(request: ExecutionLaunch): Promise<SupervisedExecution>
   list(): readonly SupervisedExecution[]
   cancel(id: string, reason: StopReason): Promise<ExecutionSettlement>
   /** Re-check preparations and active policies; drain invalid ones before returning. */
-  reconcile(ownerSessionId: string, validateAuthority: (policy: CompiledSandboxPolicy) => void): Promise<void>
+  reconcile(ownerSessionId: string, validateAuthority: ExecutionReconciler): Promise<void>
   /** Blocks admission for this owner until preparation and execution ownership drains. */
   closeOwner(ownerSessionId: string): Promise<void>
   dispose(): Promise<void>
@@ -296,7 +298,7 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
     if (errors.length) throw new AggregateError(errors, `${operation} failed: ${errors.map(cleanupDetail).join("; ")}`)
   }
 
-  function reconcile(owner: string, validateAuthority: ExecutionLaunch["validateAuthority"]): Promise<void> {
+  function reconcile(owner: string, validateAuthority: ExecutionReconciler): Promise<void> {
     const state = ownerState(owner)
     const revision = ++state.revision
     state.blocked = true
@@ -304,8 +306,8 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
     const affected: Entry[] = []
     for (const entry of entries) {
       if (entry.owner !== owner) continue
-      entry.validateAuthority = validateAuthority
-      try { validateAuthority(entry.policy) }
+      entry.validateAuthority = policy => validateAuthority(policy, { phase: entry.preparing ? "preparing" : "active" })
+      try { entry.validateAuthority(entry.policy) }
       catch (cause) { markStopped(entry, "authority-revoked", cause) }
       if (entry.stopReason || state.closed || disposed) {
         markStopped(entry, entry.stopReason ?? "shutdown")

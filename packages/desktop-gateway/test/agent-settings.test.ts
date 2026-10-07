@@ -7,6 +7,27 @@ import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { vi } from "vitest"
 
 const roots: string[] = []
+it("persists explicit experimental backend choice for new assemblies", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-backend-settings-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const changed = vi.fn()
+  const settings = createAgentSettings(path, { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous", windowsSandboxBackend: "legacy" }, { onWindowsSandboxBackendChanged: changed })
+  expect(await settings.configure({ windowsSandboxBackend: "psec" })).toMatchObject({ saved: { windowsSandboxBackend: "psec" }, effective: { windowsSandboxBackend: "psec" } })
+  expect(changed).toHaveBeenCalledWith("psec")
+  expect(JSON.parse(await readFile(path, "utf8")).windowsSandboxBackend).toBe("psec")
+  await expect(settings.configure({ windowsSandboxBackend: "automatic" })).rejects.toThrow(/backend/i)
+})
+
+it("rejects a failed drain acknowledgement and awaits the same mode retry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-mode-ack-")); roots.push(root)
+  let attempts = 0
+  const settings = createAgentSettings(join(root, "settings.json"), { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, {
+    async onSandboxModeChanged() { if (++attempts === 1) throw new Error("tree incomplete") },
+  })
+  await expect(settings.configure({ sandboxMode: "read-only" })).rejects.toThrow("tree incomplete")
+  expect(await settings.configure({ sandboxMode: "read-only" })).toMatchObject({ effective: { sandboxMode: "read-only" } })
+  expect(attempts).toBe(2)
+})
 it("applies auto-compaction changes through the live host callback", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-compact-live-")); roots.push(root)
   const path = join(root, "settings.json")

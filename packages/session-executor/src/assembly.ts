@@ -8,9 +8,10 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec } from "./scoped-exec.ts"
+import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
-import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import { createAgent, type Agent, type ReasoningEffort } from "@i-harness/core-agent"
 import { approxTokens, type CompactionConfig, type CompactionRequest, type CompactionResult } from "@i-harness/compaction"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
@@ -66,9 +67,8 @@ import {
   type TeamMountHandle,
   type TeamConfig,
 } from "@i-harness/agent-team"
-import { createLocalSandbox } from "@i-harness/sandbox-local"
 import { checkWrite, createSandboxPolicy, renderPolicyContext } from "@i-harness/sandbox-policy"
-import type { SandboxMode, SandboxProvider } from "@i-harness/sandbox"
+import type { AuthorityState, SandboxMode, BackendProbe } from "@i-harness/sandbox"
 import { createApprovalEscalationApprover, denialFor, type ApprovalPrompt } from "@i-harness/sandbox"
 import { DEFAULT_AGENT_PRESET, parsePreset } from "@i-harness/preset"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -149,6 +149,11 @@ export interface AssemblyOptions {
   sessionId?: string
   workspace: string
   projectContext?: () => SessionProjectContext | undefined
+  executionAuthority?: () => AuthorityState
+  /** Live host owner availability; never constructs an assembly to answer. */
+  executionCallerAvailable?: () => boolean
+  windowsSandboxBackend?: "legacy" | "psec"
+  legacyPrivateTempRoot?: string
   /** Explicit clients always win. Under `required`, absence rejects instead
    * of constructing a mock. Omitted policy is production-safe `required`;
    * tests must opt into `test-mock` explicitly. */
@@ -319,6 +324,8 @@ interface RewindAssemblyHandle {
 }
 
 export interface SessionAssembly {
+  reconcileExecutionAuthority(): Promise<void>
+  executionBackendStatus(): Promise<BackendProbe & { windowsSandboxBackend: "legacy" | "psec" }>
   /** Current owning runtime registries only; reading never mounts or restores work. */
   liveResources?(): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
   /** Reports the actual mounted mode/catalogue; never resolves a model. */
@@ -568,19 +575,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       `[i-harness] subagentStaleAfterMs is ${subagentStaleAfterMs} (not finite), so no sub-agent is EVER past it: the runtime-context "subagents" section never renders, and its silence is indistinguishable from "no agent needs attention". Use a finite threshold — the default is 600_000 (10 min).`,
     )
   }
-  // M16w final review (win32 composition): the sandbox-local wrapper returns a
-  // bare SandboxProvider and DROPS the backend's dispose(), so this compose
-  // site keeps the raw backend and tears it down in dispose() — otherwise the
-  // ACL temp grants would leak in composed use.
-  let winSandbox: (SandboxProvider & { dispose(): void }) | undefined
-  if (process.platform === "win32" && opts.sandbox !== undefined && (opts.sandbox !== "danger-full-access" || opts.allowRuntimeSandboxChanges === true)) {
-    const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
-    winSandbox = createWindowsAclSandbox({ writableDirs: [opts.workspace], mode: "read-only" })
-  }
-  const sandboxProvider =
-    opts.sandbox === undefined || (opts.sandbox === "danger-full-access" && opts.allowRuntimeSandboxChanges !== true)
-      ? undefined
-      : createLocalSandbox({ ...(winSandbox !== undefined ? { windowsAclBackend: winSandbox } : {}) })
   // M16 final-review (C1) → M62: the SERVICE is built once, but the policy is
   // resolved PER CALL instead of once here. `resolve` re-reads the session's LAST
   // `sandbox/mode` event, so a mode change a HOST appends mid-session takes
@@ -628,13 +622,29 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // mode. The ladder is still forbidden from producing this event (call-policy.ts
   // documents that; sandbox-escalation.test.ts pins it).
   if (opts.sandbox !== undefined) append(policyBase, { type: "sandbox/mode", mode: opts.sandbox })
-  const sandboxPolicyNow = () => {
+  const authorityNow = (): AuthorityState => {
+    if (opts.executionAuthority) return opts.executionAuthority()
     const project = opts.projectContext?.()
+    return project
+      ? { kind: "bound", revision: JSON.stringify(project), primaryRoot: project.primaryRoot, roots: project.roots, references: [] }
+      : { kind: "unbound", revision: "configured-workspace", workspaceRoot: opts.workspace }
+  }
+  const standingPolicyNow = () => {
+    const authority = authorityNow()
+    if (authority.kind === "revoked" || authority.kind === "unavailable") throw new Error("Execution authority " + authority.kind + ": " + authority.reason)
     return sandboxPolicyService?.resolve({ session: { ...policyBase, events: policyBase.events.slice(policyFloor) },
-      workspaceRoot: project?.primaryRoot ?? opts.workspace,
-      workspaceRoots: project?.roots ?? [opts.workspace],
+      workspaceRoot: authority.kind === "bound" ? authority.primaryRoot : authority.workspaceRoot,
+      workspaceRoots: authority.kind === "bound" ? [...authority.roots] : [authority.workspaceRoot],
     })
   }
+  const executionRuntime = createAssemblyExecutionRuntime({
+    owner: { sessionId: opts.sessionId ?? "assembly-main" }, authority: authorityNow,
+    ownerAvailable: () => !disposing && opts.executionCallerAvailable?.() !== false,
+    standing: () => ({ mode: standingPolicyNow()?.mode ?? "danger-full-access",
+      generation: JSON.stringify(policyBase.events.slice(policyFloor).filter(event => event.type === "sandbox/mode")) }),
+    windowsSandboxBackend: opts.windowsSandboxBackend, legacyPrivateTempRoot: opts.legacyPrivateTempRoot,
+  })
+  const sandboxPolicyNow = () => { const policy = standingPolicyNow(); return policy ? executionRuntime.bindPolicy(policy) : undefined }
   const projectContextNow = () => renderProjectContext(opts.projectContext?.(), opts.workspace, opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined)
   // M62: the terminal is mounted HERE, not at the top of the environment,
   // because its tools resolve the sandbox policy PER CALL and the resolver is
@@ -661,7 +671,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
   // One assembly execution owner is registered before either transport surface.
-  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, ...(sandboxProvider === undefined ? {} : { sandbox: sandboxProvider }) })
+  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, execution: executionRuntime.execution })
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
     execService: assemblyExec,
     cwd: opts.workspace,
@@ -688,7 +698,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     backgroundAfterMs: shellBackgroundAfterMs,
     retention: opts.shellRetention ?? { maxBytes: 64_000 },
     cwd: opts.workspace,
-    ...(sandboxProvider !== undefined ? { sandbox: sandboxProvider } : {}),
     ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
     escalationApprover,
   })
@@ -786,10 +795,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   //    not the first strictly-wider one: for an out-of-workspace target under
   //    `read-only` those differ, and naming the wider one sent the model to a
   //    retry that failed identically. That was the terminal's bug class on fs.
-  const writeGuard =
-    sandboxPolicyService === undefined
-      ? undefined
-      : (abs: string, modeOverride?: SandboxMode) => {
+  const writeGuard = (abs: string, modeOverride?: SandboxMode, authoritySnapshot?: object) => {
+          if (authoritySnapshot && modeOverride) executionRuntime.validateGrant(authoritySnapshot, modeOverride)
+          const authority = authorityNow()
+          if (authority.kind === "revoked" || authority.kind === "unavailable") throw new Error(`Execution authority ${authority.kind}: ${authority.reason}`)
+          for (const reference of authority.references ?? []) {
+            if (checkWrite({ mode: "workspace-write", workspaceRoot: reference }, abs).ok) throw new Error("Readonly reference authority forbids this write")
+          }
           const policy = sandboxPolicyNow()
           if (policy === undefined) return { ok: true as const }
           const effective = modeOverride === undefined ? policy : { ...policy, mode: modeOverride }
@@ -812,7 +824,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     escalationApprover,
   }
   for (const tool of createFsTools(fsToolsDeps)) tools.register(tool)
-  createApprovalPolicy(ctx, tools, { workspace: opts.workspace, workspaceRoots: () => opts.projectContext?.()?.roots ?? [opts.workspace], ...(opts.approvalMode !== undefined ? { mode: opts.approvalMode } : {}) })
+  createApprovalPolicy(ctx, tools, { workspace: opts.workspace, workspaceRoots: () => { const state = authorityNow(); if (state.kind === "revoked" || state.kind === "unavailable") throw new Error(state.reason); return state.kind === "bound" ? [...state.roots] : [state.workspaceRoot] }, ...(opts.approvalMode !== undefined ? { mode: opts.approvalMode } : {}) })
 
   // M10a guards + M12 retry (retry MUST mount BEFORE timeout — cascade order,
   // first registered = outermost) + M26-B7 registry-level output spill
@@ -1184,8 +1196,59 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.restoredState !== undefined ? { restoredState: opts.restoredState } : {}),
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
+    const ownedToolCaller: NonNullable<SessionAssembly["ownedToolCaller"]> = (input) => {
+        const entry = [...subagent.table.entries().values()].find((row) => row.sessionId === input.sessionId)
+        const registry = entry?.toolRegistry
+        const controller = entry?.controller
+        const valid = () => {
+          if (disposing || opts.executionCallerAvailable?.() === false || !entry || !registry || !controller || !opts.sessionId || !entry.sessionId || !entry.roleName) return false
+          if (subagent.table.get(entry.path) !== entry || entry.toolRegistry !== registry || entry.controller !== controller || entry.status !== "running" || entry.closing || controller.signal.aborted) return false
+          if (entry.session.header?.parentSession !== opts.sessionId || input.registry !== registry || registry.get(input.call.name) !== input.tool || input.validateBinding?.() !== true) return false
+          const role = subagent.roles.get(entry.roleName)
+          if (!role) return false
+          // Child-local Code Mode wrappers already own the restricted registry;
+          // inherited tools must still be the current parent's exact binding.
+          const localWrapper = entry.factoryTools?.includes(input.tool) === true
+          return localWrapper || role.tools.includes(input.call.name) && tools.get(input.call.name) === input.tool
+        }
+        if (!valid()) return undefined
+        const role = subagent.roles.get(entry!.roleName!)!
+        return { sessionId: entry!.sessionId!, role: role.name, snapshot: JSON.stringify({
+          sessionId: entry!.sessionId, parentSessionId: opts.sessionId, role, roleRevision: subagent.roles.revision(role.name), plan: derivePlanMode(entry!.session),
+          catalog: registry!.genToolCatalog(), deferred: registry!.deferredSearchIndex(),
+        }), validate: valid }
+    }
+    ctx.onCascade("tools/execute", async (value, next) => {
+      const dispatch = value as ToolDispatchMetadata
+      const mainId = opts.sessionId ?? "assembly-main"
+      const id = dispatch.exec.sessionId ?? mainId
+      const invoke = () => {
+        if (!["write", "edit", "apply_patch"].includes(dispatch.name)) return next()
+        const stop = new AbortController()
+        dispatch.exec.abortSignal = dispatch.exec.abortSignal ? AbortSignal.any([dispatch.exec.abortSignal, stop.signal]) : stop.signal
+        return executionRuntime.trackWrite(() => stop.abort(), next)
+      }
+      if (dispatch.registry === tools && id === mainId) {
+        const validate = () => !disposing && opts.executionCallerAvailable?.() !== false && dispatch.validateBinding() && tools.get(dispatch.name) === dispatch.tool
+        return executionRuntime.withCaller({ sessionId: mainId }, validate, invoke)
+      }
+      const input: PreparedApprovalInput = { sessionId: id, registry: dispatch.registry, tool: dispatch.tool,
+        call: { name: dispatch.name, args: dispatch.args }, bindingGeneration: dispatch.bindingGeneration, validateBinding: dispatch.validateBinding }
+      const caller = ownedToolCaller(input)
+      if (!caller || !opts.coordinator || !opts.sessionId) throw new Error("Execution caller unavailable: unknown registry or durable owner")
+      const { meta } = await opts.coordinator.profile(id)
+      if (meta.parentSession !== opts.sessionId || !["subagent", "team"].includes(meta.origin ?? "")) throw new Error("Execution caller durable lineage unavailable")
+      const validate = () => { const current = ownedToolCaller(input); return caller.validate() && current?.snapshot === caller.snapshot }
+      return executionRuntime.withCaller({ sessionId: id, parentSessionId: meta.parentSession }, validate, invoke)
+    })
     flushSubagentPersistence = () => subagent.flushPersistence()
     disposeSubagents = () => subagent.dispose()
+    let roleReconciliation: Promise<void> | undefined
+    subagent.roles.onChanged(() => {
+      const pending = executionRuntime.reconcile()
+      roleReconciliation = roleReconciliation ? Promise.all([roleReconciliation, pending]).then(() => {}) : pending
+      void roleReconciliation.catch(() => {})
+    })
     // W11 — the unasked path, registered HERE because this is the first point
     // that holds both the runtime-context service and the agent table the
     // section reads (`subagent.table`, which is the persistence-wrapped table
@@ -1447,6 +1510,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       return { output: first + stderr.slice(0, 131072 - first.length), outputTruncated: stdout.length + stderr.length > 131072 }
     }
     return {
+      reconcileExecutionAuthority: () => executionRuntime.reconcile(),
+      executionBackendStatus: () => executionRuntime.status(),
       ctx,
       tools,
       agent,
@@ -1493,28 +1558,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
-      ownedToolCaller: (input) => {
-        const entry = [...subagent.table.entries().values()].find((row) => row.sessionId === input.sessionId)
-        const registry = entry?.toolRegistry
-        const controller = entry?.controller
-        const valid = () => {
-          if (disposing || !entry || !registry || !controller || !opts.sessionId || !entry.sessionId || !entry.roleName) return false
-          if (subagent.table.get(entry.path) !== entry || entry.toolRegistry !== registry || entry.controller !== controller || entry.status !== "running" || entry.closing || controller.signal.aborted) return false
-          if (entry.session.header?.parentSession !== opts.sessionId || input.registry !== registry || registry.get(input.call.name) !== input.tool || input.validateBinding?.() !== true) return false
-          const role = subagent.roles.get(entry.roleName)
-          if (!role) return false
-          // Child-local Code Mode wrappers already own the restricted registry;
-          // inherited tools must still be the current parent's exact binding.
-          const localWrapper = entry.factoryTools?.includes(input.tool) === true
-          return localWrapper || role.tools.includes(input.call.name) && tools.get(input.call.name) === input.tool
-        }
-        if (!valid()) return undefined
-        const role = subagent.roles.get(entry!.roleName!)!
-        return { sessionId: entry!.sessionId!, role: role.name, snapshot: JSON.stringify({
-          sessionId: entry!.sessionId, parentSessionId: opts.sessionId, role, plan: derivePlanMode(entry!.session),
-          catalog: registry!.genToolCatalog(), deferred: registry!.deferredSearchIndex(),
-        }), validate: valid }
-      },
+      ownedToolCaller,
       liveResources: () => {
         if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
         const terminal = ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")
@@ -1526,7 +1570,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         await codeModeMount.terminateCell(cellId)
       } } : {}),
       backgroundJobs: () => [
-        ...execService.listJobs().map(job => ({ id: job.id, kind: "shell" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: opts.sessionId })),
+        ...execService.listJobs().map(job => ({ id: job.id, kind: "shell" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
         ...workflowMount!.executor.listJobs().filter(job => job.owner === opts.sessionId).map(job => ({ id: job.id, kind: "workflow" as const, status: job.status, ...backgroundOutput(job.stdout, job.stderr), ownerSessionId: job.owner })),
       ],
       // M49 Task 12: the projection owns NO registry object — rows only. The
@@ -1561,7 +1605,12 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         agent.compact?.(instructions) ?? { compacted: false, shadowedSeqs: [] },
       pluginMcpResults,
       pluginAgentResults,
-      updatePluginCapabilities: (options) => pluginCapabilities!.update(options),
+      updatePluginCapabilities: async (options) => {
+        await pluginCapabilities!.update(options)
+        const pending = roleReconciliation
+        roleReconciliation = undefined
+        await (pending ?? executionRuntime.reconcile())
+      },
       ...(rewindStore !== undefined && rewindRecorder !== undefined
         ? { rewind: { store: rewindStore, recorder: rewindRecorder } }
         : {}),
@@ -1605,13 +1654,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     try {
       await terminalMount.dispose()
     } catch (error) { processCleanupFailures.push(error); d.warn(`Terminal disposal failed: ${String(error)}`) }
-    let execSettled = false
-    try { await assemblyExec.dispose(); execSettled = true } catch (error) { processCleanupFailures.push(error); d.warn(`Exec disposal failed: ${String(error)}`) }
-    // M16w: the sandbox-local wrapper dropped the win32 backend's dispose() —
-    // the compose site owns teardown (revocable ACL temp grants).
-    try {
-      if (execSettled) winSandbox?.dispose()
-    } catch (error) { processCleanupFailures.push(error); d.warn(`Legacy sandbox disposal failed: ${String(error)}`) }
+    try { await assemblyExec.dispose() } catch (error) { processCleanupFailures.push(error); d.warn(`Exec disposal failed: ${String(error)}`) }
     // Task documents have their own save chain above the coordinator queue.
     // Join that producer before the owner performs its final store close.
     try { await flushSubagentPersistence?.() }

@@ -13,6 +13,8 @@ export type ConfinedSandboxMode = Exclude<SandboxMode, "danger-full-access">
 export type SandboxEnforcement = "full" | "partial"
 
 export interface SandboxExecutionPolicy {
+  /** Opaque host-created base authority token; retained by per-call grant copies. */
+  authoritySnapshot?: object
   mode: SandboxMode
   workspaceRoot: string
   /** Full approved project folder set. The default workspaceRoot is always included. */

@@ -9,7 +9,7 @@ export { createExecService } from "./service.ts"
 
 export { launchExecution } from "./execution-admission.ts"
 export { createExecutionSupervisor } from "./execution-supervisor.ts"
-export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor } from "./execution-supervisor.ts"
+export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor, ExecutionReconciliationContext, ExecutionReconciler } from "./execution-supervisor.ts"
 export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
 
@@ -66,6 +66,10 @@ export interface ExecExecutionHost {
   selectBackend(policy: CompiledSandboxPolicy, transport: ExecutionTransport): TransportExecutionBackend
   resolvePolicy(owner: Readonly<ExecutionOwner>, requested: SandboxExecutionPolicy | undefined): CompiledSandboxPolicy
   validateAuthority(policy: CompiledSandboxPolicy): void
+  /** Automatic foreground presentation only; explicit background/transport lifetimes remain exact. */
+  autoPromotionLifetime?(policy: CompiledSandboxPolicy): ProcessSpec["lifetime"]
+  /** Trusted durable lineage projection; omitted hosts permit only the exact caller. */
+  canAccessOwner?(caller: Readonly<ExecutionOwner>, target: Readonly<ExecutionOwner>): boolean
   defaultOwner?: Readonly<ExecutionOwner>
   dispose?(): Promise<void>
 }
