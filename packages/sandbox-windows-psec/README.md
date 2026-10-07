@@ -1,6 +1,6 @@
 # Windows native execution owner
 
-This package contains the direct Windows PSEC helper and an explicit unrestricted engine. The TypeScript consumer is a separate implementation task; this native scaffold does not integrate production exec/shell/terminal yet.
+This package contains the direct Windows PSEC helper and an explicit unrestricted engine. Its public TypeScript API is `createWindowsPsecBackend(options?)` and `createWindowsUnrestrictedBackend(options?)`. Both implement the public `TransportExecutionBackend` contract from `@i-harness/sandbox`; callers pass the selected backend to `launchExecution` or `createExecutionSupervisor` from `@i-harness/exec`. The backend never chooses another engine after a failure.
 
 PSEC remains **experimental**. API support discovery is not confinement proof. The current narrow policy uses Microsoft's pinned generated schema directly and has no learning runner, fallback dispatcher, account helper, installation service or elevated setup dependency. `unrestricted` must be selected explicitly; it still owns a non-breakaway Job and transport, but has no filesystem or network isolation. It rejects requested reference/protection locks.
 
@@ -9,6 +9,10 @@ PSEC currently supports **pipes only**. PSEC + ConPTY stalled before real child 
 The private trusted `consoleMode:"hidden-console"` option is available only for unrestricted pipes. It retains a real hidden console for a later legacy adapter, with the same Job and pipe ownership. Default pipes use no-window. Native root/descendant console presence and visibility are verified; arbitrary GUI windows and complete legacy compatibility are not covered by this primitive.
 
 See [protocol.md](protocol.md) for the exact native contract, field schemas, bounded queues, error fields, effective digest, cancellation output abandonment and release sequence.
+
+The driver verifies the shipped helper and protocol against `manifest.json`, probes the selected engine, then prepares one immutable native policy. The final authority callback runs immediately before the one commit command. The helper supplies the actual PID and independent root, tree, I/O and resource-release acknowledgements. Output has one iterator and bounded buffering before it attaches. When a cancellation explicitly discards output, `handle.io.diagnostics?.()` reports `outputAbandoned` and a conservative `discardedOutputBytes` count from both native and driver drainage. A missing diagnostics method on another backend means accounting is unavailable, not zero loss. A helper crash or incomplete frame never confirms cleanup.
+
+The explicit environment is forwarded unchanged, including empty values; the driver adds no TEMP, LOCALAPPDATA or write grant. On the qualified host, missing LOCALAPPDATA in PSEC mode surfaces native error 203. PSEC currently rejects PTY before preparation and keeps experimental assurance. Unrestricted has no filesystem isolation and refuses mandatory reference or deny locks. `hidden-console` is trusted host configuration for unrestricted pipes only.
 
 ## Developer build and native controls
 

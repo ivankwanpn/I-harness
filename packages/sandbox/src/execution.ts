@@ -64,6 +64,10 @@ export interface ExecutionOutput {
 export interface ExecutionIo {
   /** One consumer, retained before that consumer begins; driver must bound buffering. */
   output: AsyncIterable<ExecutionOutput>
+  /** Present only when the producer can account for delivery loss. The count is
+   * conservative payload bytes discarded during cancellation, including native
+   * frames whose partial write cannot be measured exactly. */
+  diagnostics?(): { outputAbandoned: boolean; discardedOutputBytes: number }
   write(data: Uint8Array): Promise<void>
   endInput(): Promise<void>
   resize?(cols: number, rows: number): Promise<void>

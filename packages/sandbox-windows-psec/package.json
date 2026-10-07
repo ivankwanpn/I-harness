@@ -5,10 +5,14 @@
   "type": "module",
   "description": "Experimental direct Windows PSEC and explicit unrestricted native execution owner",
   "files": ["src", "artifacts", "protocol.md", "README.md"],
+  "exports": { ".": "./src/index.ts" },
   "scripts": {
+    "test": "vitest run test",
+    "typecheck": "tsc --noEmit",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
     "test:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Test",
     "smoke:native": "node test/native-helper-smoke.mjs"
   },
-  "dependencies": { "@i-harness/sandbox": "workspace:*" }
+  "dependencies": { "@i-harness/sandbox": "workspace:*" },
+  "devDependencies": { "@i-harness/exec": "workspace:*", "@i-harness/sandbox-policy": "workspace:*" }
 }

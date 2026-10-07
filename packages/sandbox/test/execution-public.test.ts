@@ -5,6 +5,7 @@ import type {
   BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
   CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
   ExecutionHandle, PreparedExecution, ExecutionBackend, SandboxMode, SandboxProvider,
+  ExecutionIo,
 } from "@i-harness/sandbox"
 
 it("exposes platform-neutral execution contracts to package consumers", () => {
@@ -27,6 +28,7 @@ it("exposes platform-neutral execution contracts to package consumers", () => {
   const unknownRoot: RootExit = { exitCode: null, observationError: "root status unavailable" }
   expect(unknownRoot).toEqual({ exitCode: null, observationError: "root status unavailable" })
   expectTypeOf<ExecutionHandle["settled"]>().toEqualTypeOf<Promise<ExecutionSettlement>>()
+  expectTypeOf<ReturnType<NonNullable<ExecutionIo["diagnostics"]>>>().toEqualTypeOf<{ outputAbandoned: boolean; discardedOutputBytes: number }>()
   expectTypeOf<ExecutionHandle["cancel"]>().parameter(0).toEqualTypeOf<StopReason>()
   expectTypeOf<ExecutionHandle["release"]>().returns.toEqualTypeOf<Promise<ExecutionSettlement>>()
   expectTypeOf<PreparedExecution["commit"]>().parameter(0).toEqualTypeOf<() => void>()

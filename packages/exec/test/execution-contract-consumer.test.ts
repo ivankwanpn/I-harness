@@ -10,6 +10,11 @@ import type {
   TransportExecutionBackend, TransportExecutionHandle,
 } from "@i-harness/sandbox"
 
+// A public consumer sees cancellation delivery loss without private Windows types.
+type PublicIoDiagnostics = ReturnType<NonNullable<ExecutionIo["diagnostics"]>>
+const _diagnosticsShape: PublicIoDiagnostics = { outputAbandoned: true, discardedOutputBytes: 12 }
+void _diagnosticsShape
+
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (cause: unknown) => void

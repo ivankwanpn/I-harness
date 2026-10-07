@@ -985,6 +985,19 @@ importers:
         specifier: ^3.1.0
         version: 3.1.6
 
+  packages/sandbox-windows-psec:
+    dependencies:
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+    devDependencies:
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
+
   packages/schedule:
     dependencies:
       '@i-harness/core-session':
