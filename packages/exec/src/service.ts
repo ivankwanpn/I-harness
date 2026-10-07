@@ -68,11 +68,11 @@ function validateInput(command: ExecCommand): void {
   }
 }
 
-function defaultHost(workspaceRoot: string, legacyArgvProvider = false): ExecExecutionHost {
+function defaultHost(workspaceRoot: string, legacyArgvProvider = false, owner: Readonly<ExecutionOwner> = { sessionId: "standalone-exec" }): ExecExecutionHost {
   const backends = createLocalExecutionBackends({ windowsSelection: process.env.IH_WINDOWS_SANDBOX === "psec" ? "psec" : "legacy" })
   const authority = Object.freeze({ kind: "unbound" as const, revision: "standalone-workspace", workspaceRoot })
   return {
-    defaultOwner: Object.freeze({ sessionId: "standalone-exec" }),
+    defaultOwner: Object.freeze({ sessionId: owner.sessionId, ...(owner.parentSessionId === undefined ? {} : { parentSessionId: owner.parentSessionId }) }),
     selectBackend: (policy, transport) => {
       if (legacyArgvProvider && policy.mode !== "danger-full-access") {
         throw new Error("argv-only sandbox provider cannot own a supervised process; compose a transport backend")
@@ -98,7 +98,7 @@ function unknownExit(root: RootExit): number { return root.exitCode ?? -1 }
 function isEpipe(cause: unknown): boolean { return (cause as NodeJS.ErrnoException)?.code === "EPIPE" }
 
 export function createExecService(options: ExecServiceOptions = {}): ExecService {
-  const host = options.execution ?? defaultHost(resolve(options.workspaceRoot ?? process.cwd()), options.sandbox !== undefined)
+  const host = options.execution ?? defaultHost(resolve(options.workspaceRoot ?? process.cwd()), options.sandbox !== undefined, options.standaloneOwner)
   const supervisor = host.supervisor ?? createExecutionSupervisor()
   const jobs = new Map<string, Job>()
   let nextJob = 0

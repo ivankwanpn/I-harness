@@ -380,7 +380,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
       if (message.method.startsWith("desktop/terminal/") && handlers.terminal) {
-        try { send(makeSuccess(message.id, handlers.terminal.request(message.method, message.params))) }
+        try { send(makeSuccess(message.id, await handlers.terminal.request(message.method, message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }

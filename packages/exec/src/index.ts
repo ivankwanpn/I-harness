@@ -5,6 +5,7 @@ import type {
 } from "@i-harness/sandbox"
 import type { ExecutionSupervisor, SupervisedExecution } from "./execution-supervisor.ts"
 import { createExecService } from "./service.ts"
+export { createExecService } from "./service.ts"
 
 export { launchExecution } from "./execution-admission.ts"
 export { createExecutionSupervisor } from "./execution-supervisor.ts"
@@ -71,6 +72,8 @@ export interface ExecExecutionHost {
 export interface ExecServiceOptions {
   execution?: ExecExecutionHost
   workspaceRoot?: string
+  /** Trusted standalone composition only, for human Desktop's separate owner. */
+  standaloneOwner?: Readonly<ExecutionOwner>
   spill?: ExecSpillOptions
   /** Previous argv wrapper dependency is retained in the type for migration diagnostics. */
   sandbox?: SandboxProvider

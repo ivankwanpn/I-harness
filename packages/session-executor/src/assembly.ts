@@ -29,7 +29,7 @@ import { createContextOutputTools, type ContextOutputService, type ContextCaptur
 import { createNativeCodeTextRetention, installNativeContextOutput, renderNativeContextRecovery } from "./context-output.ts"
 import { createTimeoutGuard } from "@i-harness/guard-timeout"
 import { createRepeatToolGuard } from "@i-harness/guard-repeat-tool"
-import type { ExecService } from "@i-harness/exec"
+import { registerExec, type ExecService } from "@i-harness/exec"
 import { registerApprovalAnswerer, registerAskUserInput } from "@i-harness/interaction"
 import { installRuntimeContext } from "@i-harness/runtime-context"
 import { createInstructionsSection } from "@i-harness/instructions"
@@ -660,7 +660,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const escalationApprover = createApprovalEscalationApprover(
     () => ctx.services.get<ApprovalPrompt>("approval/answerer"),
   )
+  // One assembly execution owner is registered before either transport surface.
+  const assemblyExec = registerExec(ctx, { workspaceRoot: opts.workspace, ...(sandboxProvider === undefined ? {} : { sandbox: sandboxProvider }) })
   const terminalMount: TerminalMountHandle = registerTerminal(ctx, tools, {
+    execService: assemblyExec,
     cwd: opts.workspace,
     ...(sandboxPolicyService !== undefined ? { sandboxPolicy: sandboxPolicyNow } : {}),
     escalationApprover,
@@ -1597,23 +1600,23 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // cleanup failure on unmount: disposal continues
       }
     }
+    const processCleanupFailures: unknown[] = []
     // M26-B2: terminal handle disposal (all PTYs).
     try {
-      terminalMount.dispose()
-    } catch {
-      // cleanup failure on dispose: disposal continues
-    }
+      await terminalMount.dispose()
+    } catch (error) { processCleanupFailures.push(error); d.warn(`Terminal disposal failed: ${String(error)}`) }
+    let execSettled = false
+    try { await assemblyExec.dispose(); execSettled = true } catch (error) { processCleanupFailures.push(error); d.warn(`Exec disposal failed: ${String(error)}`) }
     // M16w: the sandbox-local wrapper dropped the win32 backend's dispose() —
     // the compose site owns teardown (revocable ACL temp grants).
     try {
-      winSandbox?.dispose()
-    } catch {
-      // cleanup failure on teardown: disposal continues
-    }
+      if (execSettled) winSandbox?.dispose()
+    } catch (error) { processCleanupFailures.push(error); d.warn(`Legacy sandbox disposal failed: ${String(error)}`) }
     // Task documents have their own save chain above the coordinator queue.
     // Join that producer before the owner performs its final store close.
     try { await flushSubagentPersistence?.() }
     catch (error) { d.warn(`Subagent persistence drain failed: ${String(error)}`) }
+    if (processCleanupFailures.length) throw new AggregateError(processCleanupFailures, "Assembly process cleanup incomplete")
     // NOTE: the coordinator and the telemetry stream are NEVER closed here —
     // the owner (run.ts / createSessionService) owns their lifecycle.
   }

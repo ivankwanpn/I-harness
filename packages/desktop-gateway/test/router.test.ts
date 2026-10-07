@@ -15,6 +15,27 @@ import {
 import { createDesktopRouter, createGatewayWrite } from "../src/router.ts"
 import type { DesktopHandlers } from "../src/types.ts"
 
+it("awaits terminal settlement and returns an async cleanup failure", async () => {
+  const sent: RpcMessage[] = []
+  const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })
+  const result = Promise.withResolvers<unknown>()
+  const request = vi.fn(() => result.promise)
+  const handlers: DesktopHandlers = { terminal: { request } as unknown as NonNullable<DesktopHandlers["terminal"]> }
+  const router = createDesktopRouter(createSdkServer(service, { onWrite: createGatewayWrite(frame => sent.push(frame), handlers) }), frame => sent.push(frame), handlers)
+  try {
+    await router.handleLine(encodeFrame(makeRequest(1, "initialize", {})))
+    const before = sent.length
+    const pending = router.handleLine(encodeFrame(makeRequest(2, "desktop/terminal/close", { id: "term-1" })))
+    await Promise.resolve()
+    expect(request).toHaveBeenCalledWith("desktop/terminal/close", { id: "term-1" })
+    expect(sent).toHaveLength(before)
+    result.reject(new Error("native cleanup incomplete"))
+    await pending
+    expect(isRpcFailure(sent.at(-1))).toBe(true)
+    expect(JSON.stringify(sent.at(-1))).toContain("native cleanup incomplete")
+  } finally { await router.close(); await service.close() }
+})
+
 it("gates the parent-scoped subagent catalog separately from role settings and validates request scope fields", async () => {
   const sent: RpcMessage[] = []
   const service = createSessionService({ workspace: process.cwd(), modelPolicy: "required" })

@@ -413,7 +413,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       clearInterval(policyTimer)
       interaction.close()
       await stopPluginObserver()
-      terminal.close()
+      await terminal.close()
       offInteraction()
       await input.close()
       await projectContentSearch.close()

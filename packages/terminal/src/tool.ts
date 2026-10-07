@@ -1,14 +1,16 @@
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { EscalationApprover, SandboxDenial, SandboxExecutionPolicy, SandboxMode } from "@i-harness/sandbox"
-import { ESCALATION_TARGETS, denialFor, resolveCallPolicy } from "@i-harness/sandbox"
-import { createTerminalService, filterConptyNoise, type TerminalService, type TerminalSignalName } from "./service.ts"
+import type { ExecService } from "@i-harness/exec"
+import { currentExecCaller, withExecCallerScope } from "@i-harness/exec"
+import { ESCALATION_TARGETS, SandboxUnavailableError, denialFor, resolveCallPolicy } from "@i-harness/sandbox"
+import { createTerminalService, type TerminalService, type TerminalSignalName } from "./service.ts"
 
 export interface TerminalToolDeps {
   service: TerminalService
   // D1 (m55): the default cwd for terminal_open/process_spawn — the assembly
   // workspace. An explicit args.cwd from the model still wins; absent (both)
-  // → no cwd field, so node-pty keeps its own contract (inherit the parent).
+  // → no cwd field, so ExecService captures its configured workspace or cwd.
   cwd?: string
   // M62: confinement for the PTY. A RESOLVER, not a value, and read PER CALL —
   // the same thunk shape the shell takes. A mode that changes mid-session must
@@ -23,16 +25,8 @@ export interface TerminalToolDeps {
   escalationApprover?: EscalationApprover<unknown, string>
 }
 
-/**
- * The narrowest mode in which a PTY is permitted AT ALL.
- *
- * `confinement` refuses in EVERY confined mode — read-only and workspace-write
- * alike — because a PTY cannot be kernel-confined. So the target a refusal
- * advertises must be `danger-full-access`: `denialFor`'s default (the first
- * strictly-wider mode) would name "workspace-write" from read-only, and that
- * retry returns the IDENTICAL denial. Advice the model cannot follow is worse
- * than no advice, because it looks like a way out.
- */
+/** Current Windows backends do not support confined PTY. POSIX admission probes
+ * the selected backend through ExecService. */
 const PTY_PERMITTED_MODE: SandboxMode = "danger-full-access"
 
 /**
@@ -86,7 +80,7 @@ async function resolveTerminalCall(
   args: { sandbox_permissions?: string; justification?: string },
   subject: string,
 ): Promise<
-  | { kind: "proceed"; mode: SandboxMode | undefined }
+  | { kind: "proceed"; mode: SandboxMode | undefined; policy: SandboxExecutionPolicy | undefined }
   | { kind: "refused"; refusal: { error: string; code: SandboxDenial["code"]; denial: SandboxDenial } }
 > {
   const escalation = deps.escalationApprover === undefined
@@ -106,60 +100,23 @@ async function resolveTerminalCall(
     ...(escalation !== undefined ? { escalation } : {}),
   })
   if (resolution.kind === "refused") return { kind: "refused", refusal: ladderRefusal(resolution.denial) }
-  return { kind: "proceed", mode: confinement(resolution.policy) }
+  return { kind: "proceed", mode: confinement(resolution.policy), policy: resolution.policy }
 }
 
 /**
  * The confining mode in force for THIS call, or undefined when unconfined.
  *
- * Resolved per call, never cached: a session mounted `danger-full-access` and
- * later tightened must have its NEXT terminal call refused. That is why the
- * tools mount unconditionally and refuse here rather than the terminal being
- * unmounted at mount time. What produces such a change is a HOST appending a
- * `sandbox/mode` event — the escalation ladder is a different path and appends
- * none (it is per-call and transient, spec §3.3 point 1); a granted escalation
- * reaches this function through the policy the ladder returned.
- *
- * It takes the POLICY rather than the deps so the ladder's granted policy can be
- * judged without a second read of the session thunk.
- *
- * `danger-full-access` is the one mode that does not confine — a PTY under it
- * runs exactly as it always did. `workspace-write` DOES confine: the PTY cannot
- * be kernel-confined at all, so it must not inherit a mode that claims to bound
- * writes to the workspace.
+ * Resolved per call, never cached. The granted policy is forwarded to
+ * ExecService so the selected backend can admit or refuse a confined PTY.
  */
 function confinement(policy: SandboxExecutionPolicy | undefined): SandboxMode | undefined {
   if (policy === undefined || policy.mode === "danger-full-access") return undefined
   return policy.mode
 }
 
-/**
- * M27-H-2 error-path guard: node-pty's win32 ConPTY agent noise ("Error:
- * AttachConsole failed" — fork'd conpty_console_list_agent writing to the
- * inherited stderr, exit 0; the subprocess stderr is not interceptable
- * library-side). Tool errors are the only PTY error report escaping the
- * surface, so the guard runs here:
- *  - known-noise lines are stripped from the thrown report,
- *  - a report that is ONLY noise converts to the benign terminal-state
- *    outcome (the pty channel is terminating — the operation did not fail
- *    server-side), never leaking the raw agent text to the tool result.
- */
-async function guardPtyErrors(fn: () => Promise<unknown>): Promise<unknown> {
-  try {
-    return await fn()
-  } catch (err) {
-    const raw = err instanceof Error ? err.message : String(err)
-    const cleaned = filterConptyNoise(raw)
-    if (cleaned.trim() === "") {
-      return { suppressed: "AttachConsole failed", note: "known win32 ConPTY agent noise — the pty is in its terminal state (see node-pty upstream)" }
-    }
-    if (cleaned !== raw) throw new Error(cleaned)
-    throw err
-  }
-}
-
-function noNoiseLeak(tools: Tool[]): Tool[] {
-  return tools.map((t) => ({ ...t, execute: (args, exec) => guardPtyErrors(() => t.execute(args, exec)) }))
+function asTrustedToolCaller<T>(exec: ToolExec, call: () => T): T {
+  if (currentExecCaller() || !exec.sessionId) return call()
+  return withExecCallerScope({ sessionId: exec.sessionId }, call)
 }
 
 // M62: terminal_read, terminal_signal, terminal_close and terminal_list are
@@ -169,7 +126,7 @@ function noNoiseLeak(tools: Tool[]): Tool[] {
 // process_kill and process_resize_pty below are the same class.
 export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return noNoiseLeak([
+  return [
     {
       name: "terminal_open",
       description:
@@ -191,13 +148,12 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
       },
       execute: async (args: { command: string; args?: string[]; cwd?: string; cols?: number; rows?: number; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
         // M62: this call CREATES the capability, so it is the one place a
-        // confined mode can still be honoured — the PTY itself cannot be
-        // confined by the OS sandbox. The ladder runs first: a granted mode
-        // lets the PTY open FOR THIS CALL.
+        // confined mode is checked by the selected backend. Current Windows
+        // backends refuse PTY before launch; POSIX can admit where supported.
         const ladder = await resolveTerminalCall(deps, exec, "terminal_open", args, `open a PTY running ${args.command}`)
         if (ladder.kind === "refused") return ladder.refusal
         const mode = ladder.mode
-        if (mode !== undefined) {
+        if (mode !== undefined && process.platform === "win32") {
           return terminalRefusal(
             mode,
             `refusing to start a PTY under ${mode}: an interactive terminal cannot be confined by the OS sandbox, so it would run unrestricted.`,
@@ -210,8 +166,13 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
           ...(cwd !== undefined ? { cwd } : {}),
           ...(args.cols !== undefined ? { cols: args.cols } : {}),
           ...(args.rows !== undefined ? { rows: args.rows } : {}),
+          ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }),
         }
-        return service.open(spec, { sessionId: exec.sessionId })
+        try { return await asTrustedToolCaller(exec, () => service.open(spec, { sessionId: exec.sessionId, abortSignal: exec.abortSignal })) }
+        catch (cause) {
+          if (mode !== undefined && cause instanceof SandboxUnavailableError) return terminalRefusal(mode, cause.message)
+          throw cause
+        }
       },
     },
     {
@@ -229,21 +190,22 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
         required: ["id", "data"],
       },
       execute: async (args: { id: string; data: string; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
-        // M62: the PTY itself was opened outside this mode (or before it was
-        // tightened), and it is unconfined — so driving it is still unconfined
-        // execution. The refusal names the terminal so the model knows which
-        // handle it may not write to. A granted escalation lets THIS send
-        // through.
+        // Windows confined PTY is unsupported. On POSIX the service compares
+        // the current granted mode with the handle's admitted mode.
         const ladder = await resolveTerminalCall(deps, exec, "terminal_send", args, `write to terminal ${args.id}`)
         if (ladder.kind === "refused") return ladder.refusal
         const mode = ladder.mode
-        if (mode !== undefined) {
+        if (mode !== undefined && process.platform === "win32") {
           return terminalRefusal(
             mode,
             `refusing to write to terminal ${args.id} under ${mode}: the PTY was started outside this mode and driving it would run unrestricted.`,
           )
         }
-        service.send(args.id, args.data, { sessionId: exec.sessionId })
+        try { await service.send(args.id, args.data, { sessionId: exec.sessionId, ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }) }) }
+        catch (cause) {
+          if (mode !== undefined && cause instanceof Error && cause.message.startsWith("TERMINAL_POLICY_MISMATCH")) return terminalRefusal(mode, cause.message)
+          throw cause
+        }
         return { id: args.id, sentChars: args.data.length }
       },
     },
@@ -283,15 +245,15 @@ export function createTerminalTools(deps: TerminalToolDeps): Tool[] {
       description: "List live terminals (the background terminal registry).",
       inputSchema: { type: "object", properties: {} },
       isReadOnly: true,
-      execute: async () => ({ terminals: service.list() }),
+      execute: async (_args, exec: ToolExec) => ({ terminals: service.list({ sessionId: exec.sessionId }) }),
     },
-  ])
+  ]
 }
 
 // M26-B8：進程控制面——terminal service 的薄包（spawn/kill/resize_pty）。
 export function createProcessTools(deps: TerminalToolDeps): Tool[] {
   const { service } = deps
-  return noNoiseLeak([
+  return [
     {
       name: "process_spawn",
       description:
@@ -310,23 +272,24 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
         required: ["command"],
       },
       execute: async (args: { command: string; args?: string[]; cwd?: string; env?: Record<string, string>; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
-        // M62: process_spawn creates the same unconfined capability as
-        // terminal_open (a pty-backed process), so it refuses on the same rule —
-        // and takes the same ladder route out of it.
+        // process_spawn uses the same PTY admission as terminal_open.
         const ladder = await resolveTerminalCall(deps, exec, "process_spawn", args, `spawn a pty-backed process running ${args.command}`)
         if (ladder.kind === "refused") return ladder.refusal
         const mode = ladder.mode
-        if (mode !== undefined) {
+        if (mode !== undefined && process.platform === "win32") {
           return terminalRefusal(
             mode,
             `refusing to spawn a pty-backed process under ${mode}: an interactive terminal cannot be confined by the OS sandbox, so it would run unrestricted.`,
           )
         }
         const cwd = args.cwd ?? deps.cwd
-        return service.open(
-          { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}) },
-          { sessionId: exec.sessionId },
-        )
+        try { return await asTrustedToolCaller(exec, () => service.open(
+          { command: args.command, ...(args.args !== undefined ? { args: args.args } : {}), ...(cwd !== undefined ? { cwd } : {}), ...(args.env !== undefined ? { env: args.env } : {}), ...(ladder.policy === undefined ? {} : { sandbox: ladder.policy }) },
+          { sessionId: exec.sessionId, abortSignal: exec.abortSignal },
+        )) } catch (cause) {
+          if (mode !== undefined && cause instanceof SandboxUnavailableError) return terminalRefusal(mode, cause.message)
+          throw cause
+        }
       },
     },
     {
@@ -347,15 +310,16 @@ export function createProcessTools(deps: TerminalToolDeps): Tool[] {
       execute: async (args: { id: string; cols: number; rows: number }, exec: ToolExec) =>
         service.resize(args.id, args.cols, args.rows, { sessionId: exec.sessionId }),
     },
-  ])
+  ]
 }
 
-export interface TerminalMountHandle { dispose(): void }
+export interface TerminalMountHandle { dispose(): Promise<void> }
 export function registerTerminal(
   ctx: PluginContext,
   tools: { register(t: Tool): void },
   /** D1 (m55): assembly workspace — the default cwd for every PTY. */
   opts?: {
+    execService: ExecService
     cwd?: string
     // M62: the assembly's per-call policy read, passed straight through to the
     // tools. Absent → no sandbox was requested (nothing refused).
@@ -366,7 +330,8 @@ export function registerTerminal(
     escalationApprover?: EscalationApprover<unknown, string>
   },
 ): TerminalMountHandle {
-  const service = createTerminalService()
+  if (!opts?.execService) throw new Error("Terminal requires the assembly ExecService")
+  const service = createTerminalService(opts.execService)
   ctx.services.register("terminal/service", service)
   const deps: TerminalToolDeps = {
     service,

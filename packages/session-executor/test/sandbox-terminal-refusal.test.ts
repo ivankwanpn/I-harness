@@ -165,7 +165,7 @@ describe("the assembly hands the terminal a per-call policy", () => {
       expect(terminals.list().map((v) => v.id)).toContain(opened)
     } finally {
       if (opened !== undefined) {
-        try { terminals.close(opened, { sessionId: "s1" }) } catch { /* already gone */ }
+        try { await terminals.close(opened, { sessionId: "s1" }) } catch { /* already gone */ }
       }
       await assembly.dispose()
       rmWorkspaceSync(workspace)
@@ -200,7 +200,7 @@ describe("the assembly hands the terminal a per-call policy", () => {
       // A live PTY must not outlive the test — dispose() would catch it too, but
       // closing by handle first is what proves the terminal was real.
       if (opened !== undefined) {
-        try { terminals.close(opened, { sessionId: "s1" }) } catch { /* already gone */ }
+        try { await terminals.close(opened, { sessionId: "s1" }) } catch { /* already gone */ }
       }
       await assembly.dispose()
       rmWorkspaceSync(workspace)

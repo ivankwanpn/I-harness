@@ -481,6 +481,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
       '@i-harness/fs-lock':
         specifier: workspace:*
         version: link:../fs-lock
@@ -1352,12 +1355,12 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
-      node-pty:
-        specifier: ^1.1.0
-        version: 1.1.0
 
   packages/text-diff:
     dependencies:

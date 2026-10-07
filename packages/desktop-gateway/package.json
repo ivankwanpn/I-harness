@@ -19,6 +19,7 @@
     "@i-harness/credentials": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
+    "@i-harness/exec": "workspace:*",
     "@i-harness/goal": "workspace:*",
     "@i-harness/hooks": "workspace:*",
     "@i-harness/interaction": "workspace:*",
