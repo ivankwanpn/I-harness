@@ -16,6 +16,8 @@ export interface WindowsExecutionOptions {
   manifestPath?: string
   /** Trusted host configuration, detached/frozen when the backend is created. */
   denyPaths?: readonly string[]
+  /** Trusted legacy adapter only; hidden-console requires unrestricted pipe. */
+  consoleMode?: "no-window" | "hidden-console"
 }
 export function createWindowsPsecBackend(options?: WindowsExecutionOptions): TransportExecutionBackend
 /** Explicitly unrestricted token, still owning the native Job and transport. No PSEC fallback. */
@@ -23,6 +25,10 @@ export function createWindowsUnrestrictedBackend(options?: WindowsExecutionOptio
 ```
 
 PSEC backend accepts only `read-only`/`workspace-write`; unrestricted backend accepts only `danger-full-access`. PSEC probe reports experimental write isolation when API discovery succeeds, caller-visible reads, deny-path availability, pipe/PTY/retained-tree capabilities; unrestricted probe reports no write/read isolation. Failed helper integrity/version/API requirements are unavailable. Never retry with another mode, runner or omitted attributes.
+
+The unrestricted engine refuses mandatory reference/deny/readonly locks because it cannot enforce them. PSEC's automatically derived readonly helper/runtime rules apply only to the PSEC profile; unrestricted uses an empty protection descriptor unless a host explicitly requires locks (in which case it refuses). Hash/protocol/location checks still apply to both, without claiming filesystem protection under full access. A full-access request with mandatory locks is an explicit unsupported combination until a separately reviewed/qualified profile exists; no silent lock drop or mode change.
+
+PSEC currently advertises `pty:false`: real confined ConPTY child application I/O stalled despite creation/resume. Unrestricted ConPTY is qualified separately. The trusted `hidden-console` option preserves real invisible console state for an unrestricted pipe launcher such as the legacy adapter; it cannot turn on confined PTY or change the selected engine. Settings/capability diagnostics must preserve these limits.
 
 Version1 private helper protocol: stdin newline JSON commands; stdout bounded newline JSON status only; stderr binary workload-output frames (`u8 channel`, little-endian u32 byte length, exact bytes; channel0 stdout,1 stderr,2 pty,3 output-end with zero length). No workload may inherit the helper's control/status descriptors. Input bytes travel as bounded JSON byte arrays, not evaluated strings. Per-command/frame bounds, one launch, matching request IDs, explicit errors, deterministic teardown on control EOF, and no partial launch acknowledgment.
 
@@ -40,6 +46,7 @@ Driver-derived readonly helper/runtime roots and trusted immutable `denyPaths` a
 - Pipe child inherits only its three workload handles. ConPTY child uses pseudoconsole attribute, no ordinary stdio inheritance or CREATE_NO_WINDOW. Keep host input/output and HPCON alive after root exit while descendants exist.
 - Output readers run concurrently with root/tree/control. Workload output backpressure cannot block status/cancel. ClosePseudoConsole may emit a final frame; drain concurrently. Release PSEC and native handles only after tree empty and I/O settled. Native failures retain useful API/error codes and cleanup causes. Helper unexpected exit cannot be fabricated into confirmed settlement.
 - Blocking workload stdin writes also run outside the control loop, with a bounded queue and per-request acknowledgement. A child that never reads stdin must not prevent cancel/release commands from being processed. On cancellation, driver drainage may explicitly discard further workload output within recorded limits; it must not silently lose bytes during normal execution or leave an unattached output iterator blocking cleanup forever.
+- Cancellation may interrupt a blocked binary frame write. Only an explicit trusted `io-settled.outputAbandoned=true` acknowledgement with defined discarded-byte accounting permits the decoder to discard a partial tail or missing output-end. Normal completion requires valid framing and channel3. The driver records abandonment separately from successful delivery; it never infers the flag from an arbitrary EOF.
 - Full tree completion kills remaining descendants only for complete-tree lifetime; retain-tree permits natural descendant completion or explicit cancellation. Retaining/transferring presentation never respawns.
 
 ## Task 1: Rust owned native helper
@@ -54,11 +61,12 @@ Driver-derived readonly helper/runtime roots and trusted immutable `denyPaths` a
 
 ## Task 2: TypeScript backend over the real helper
 
-**Own files:** new package src/ (driver, protocol decoder, helper integrity loader), tests, tsconfig, package manifests/workspace lock entry as needed. Update its README. Consume only sandbox public exports.
+**Own files:** new package src/ (driver, protocol decoder, helper integrity loader), tests, tsconfig, package manifests/workspace lock entry as needed. Update its README. A scoped shared addition to sandbox/src/execution.ts/root exports/public consumer test supplies optional platform-neutral I/O diagnostics; no other foundation change. Consume only sandbox public exports.
 
 - [ ] Fake protocol RED: corrupt frames/oversized payload/version/hash mismatch, prepare abort/rollback, authority change just before commit (no workload), duplicate commit/release, early errors, unknown root, incomplete tree/I/O/release and retry. Bound output buffering before the one iterator attaches; apply backpressure without silently dropping bytes.
 - [ ] Real prepare/commit returns actual PID/I/O and `createExecutionLease` driven by native root/tree/I/O/resource facts. Preserve experimental/unrestricted receipt assurance and immutable policy fingerprint/owner. Cancel/release wait for actual acknowledgements. A crashed helper reports incomplete cleanup rather than inferred tree emptiness.
 - [ ] Pipe write/end-input, PTY write/resize/signal route through owned protocol. No IPty/Win32 types escape package. No new backend chosen after failure.
+- [ ] Add optional `ExecutionIo.diagnostics(): { outputAbandoned: boolean; discardedOutputBytes: number }` through the public sandbox contract, documenting the producer/driver accounting represented by the number. Missing diagnostics mean unavailable, not zero. Native driver supplies actual reported cancellation abandonment/discard and preserves complete normal frames. This makes production consumers display/report explicit output loss without importing Windows private status types.
 - [ ] Public consumer typecheck and real helper smoke through `exec.launchExecution`/supervisor (test-only workspace dependency declared). Commit sources/manifests and exact evidence.
 
 ## Task 3: Behavioral qualification and integration requirements
