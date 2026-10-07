@@ -154,4 +154,25 @@ describe("fake protocol ownership", () => {
     expect((await handle.cancel("cancelled")).kind).toBe("settled")
     expect(handle.io.diagnostics?.()).toEqual({ outputAbandoned: true, discardedOutputBytes: 4 })
   })
+
+  it("preserves an unknown root observation with independent tree and I/O settlement", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        client.status(command.id, "started", { pid: 1234 })
+        client.status(command.id, "root-exit", { exitCode: null, observationError: nativeError })
+        client.status(command.id, "tree-empty", { activeProcesses: 0 })
+        client.frameEnd()
+        client.status(command.id, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+      } else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    expect(await handle.rootExited).toMatchObject({ exitCode: null, observationError: expect.stringContaining("203") })
+    expect(await handle.settled).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+    expect((await handle.release()).kind).toBe("settled")
+    expect(child.sent.filter(type => type === "release")).toHaveLength(1)
+  })
 })
