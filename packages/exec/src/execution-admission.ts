@@ -1,6 +1,7 @@
 import { checkBackendRequirements } from "@i-harness/sandbox"
 import type {
   BackendRequirements, CompiledSandboxPolicy, ExecutionBackend, ExecutionHandle, ProcessSpec,
+  TransportExecutionBackend, TransportExecutionHandle,
 } from "@i-harness/sandbox"
 
 class ExecutionAdmissionError extends Error {
@@ -12,20 +13,25 @@ class ExecutionAdmissionError extends Error {
   }
 }
 
-/**
- * Admit one execution through a supplied backend. The backend owns partial
- * preparation failures and must invoke the callback at its final launch fence.
- * Successful commit transfers ownership to the returned handle; every failure
- * after preparation rolls back before rejection, preserving cleanup failures.
- */
-export async function launchExecution({ backend, spec, policy, requirements, validateAuthority, signal }: {
+interface ExecutionAdmissionRequest {
   backend: ExecutionBackend
   spec: ProcessSpec
   policy: CompiledSandboxPolicy
   requirements: BackendRequirements
   validateAuthority(policy: CompiledSandboxPolicy): void
   signal?: AbortSignal
-}): Promise<ExecutionHandle> {
+}
+
+/**
+ * Admit one execution through a supplied backend. The backend owns partial
+ * preparation failures and must invoke the callback at its final launch fence.
+ * Successful commit transfers ownership to the exact backend handle; every
+ * failure after preparation rolls back before rejection, preserving cleanup
+ * failures. A transport backend preserves its refined handle type.
+ */
+export function launchExecution(input: ExecutionAdmissionRequest & { backend: TransportExecutionBackend }): Promise<TransportExecutionHandle>
+export function launchExecution(input: ExecutionAdmissionRequest): Promise<ExecutionHandle>
+export async function launchExecution({ backend, spec, policy, requirements, validateAuthority, signal }: ExecutionAdmissionRequest): Promise<ExecutionHandle> {
   function checkAbort(): void {
     if (signal?.aborted) {
       const error = new Error("Execution admission aborted", { cause: signal.reason })

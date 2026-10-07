@@ -57,6 +57,22 @@ export interface ExecutionHandle {
   cancel(reason: StopReason): Promise<ExecutionSettlement>
   release(): Promise<ExecutionSettlement>
 }
+export interface ExecutionOutput {
+  channel: "stdout" | "stderr" | "pty"
+  data: Uint8Array
+}
+export interface ExecutionIo {
+  /** One consumer, retained before that consumer begins; driver must bound buffering. */
+  output: AsyncIterable<ExecutionOutput>
+  write(data: Uint8Array): Promise<void>
+  endInput(): Promise<void>
+  resize?(cols: number, rows: number): Promise<void>
+  signal?(signal: "INT" | "TERM" | "KILL"): Promise<void>
+}
+export interface TransportExecutionHandle extends ExecutionHandle {
+  readonly pid: number
+  readonly io: ExecutionIo
+}
 export interface PreparedExecution {
   readonly policy: CompiledSandboxPolicy
   /** Trusted supervisor authority fence; native launch atomicity remains a backend responsibility. */
@@ -66,4 +82,10 @@ export interface PreparedExecution {
 export interface ExecutionBackend {
   probe(): Promise<BackendProbe>
   prepare(spec: ProcessSpec, policy: CompiledSandboxPolicy, signal?: AbortSignal): Promise<PreparedExecution>
+}
+export interface PreparedTransportExecution extends PreparedExecution {
+  commit(validateAuthority: () => void): Promise<TransportExecutionHandle>
+}
+export interface TransportExecutionBackend extends ExecutionBackend {
+  prepare(spec: ProcessSpec, policy: CompiledSandboxPolicy, signal?: AbortSignal): Promise<PreparedTransportExecution>
 }

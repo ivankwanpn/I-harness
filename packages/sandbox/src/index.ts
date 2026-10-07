@@ -3,7 +3,8 @@ export type {
   ExecutionTransport, ExecutionLifetime, BackendAssurance, StopReason, ExecutionOwner,
   BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
   CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
-  ExecutionHandle, PreparedExecution, ExecutionBackend,
+  ExecutionHandle, PreparedExecution, ExecutionBackend, ExecutionOutput, ExecutionIo,
+  TransportExecutionHandle, PreparedTransportExecution, TransportExecutionBackend,
 } from "./execution.ts"
 export { checkBackendRequirements } from "./backend-requirements.ts"
 export { createExecutionLease } from "./execution-lease.ts"
