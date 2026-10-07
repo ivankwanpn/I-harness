@@ -19,7 +19,7 @@ export interface WindowsExecutionOptions extends HelperOptions {
   /** Trusted legacy adapter only; hidden-console requires unrestricted pipe. */
   consoleMode?: "no-window" | "hidden-console"
 }
-/** Informational shipped evidence for the selected helper and Windows release. */
+/** Historical observations; applicability checks only Windows release and artifact hashes. */
 export function readWindowsQualification(options?: WindowsExecutionOptions): Promise<WindowsQualificationView> {
   return readQualification(options)
 }
