@@ -25,7 +25,11 @@ around a tool cascade. The scope freezes owner lineage for nested async calls.
 Without a scope the host must provide `defaultOwner`; standalone registration
 uses `standalone-exec`. Background views expose the committed receipt and actual
 owner lineage, root observation and complete settlement separately. Scoped
-callers cannot read or cancel another caller's job.
+callers cannot read or cancel another caller's job. A job whose cleanup is
+incomplete remains `running` and cancelable in the view, with
+`settlement.kind === "incomplete"` and `cleanupDetail` naming the failed
+barrier. Repeated `killJob` calls retry that same supervisor-owned handle; a
+successful retry updates its settlement and preserves captured output.
 
 `launchTransport` is the public owned entrypoint for terminal presentation:
 

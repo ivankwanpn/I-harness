@@ -27,7 +27,7 @@ type Capture = {
 }
 type Job = {
   id: string; capture: Capture; status: BackgroundJobStatus; owner: Readonly<ExecutionOwner>
-  exitCode?: number; root?: RootExit; settlement?: ExecutionSettlement; failure?: string
+  exitCode?: number; root?: RootExit; settlement?: ExecutionSettlement; failure?: string; cleanupDetail?: string
 }
 
 function boundEnvironment(input?: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
@@ -284,6 +284,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }),
       ...(job.root === undefined ? {} : { root: job.root }),
       ...(job.settlement === undefined ? {} : { settlement: job.settlement }),
+      ...(job.cleanupDetail === undefined ? {} : { cleanupDetail: job.cleanupDetail }),
       ...(job.capture.diagnostics() === undefined ? {} : { outputDiagnostics: job.capture.diagnostics() }),
     }
   }
@@ -293,11 +294,25 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     const job: Job = { id, capture, status: "running", owner: capture.execution.policy.owner }
     jobs.set(id, job)
     void capture.execution.handle.rootExited.then(root => { job.root = root }, cause => { job.failure = String(cause) })
-    void capture.execution.handle.settled.then(settlement => { job.settlement = settlement }, cause => { job.failure = String(cause) })
+    void capture.execution.handle.settled.then(settlement => {
+      job.settlement = settlement
+      if (settlement.kind === "incomplete") {
+        job.status = "running"
+        job.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+      }
+    }, cause => { job.status = "running"; job.cleanupDetail = String(cause) })
     void capture.complete.then(result => {
       job.exitCode = result.exitCode
       job.status = result.timedOut ? "killed" : result.exitCode === 0 ? "completed" : "error"
-    }, cause => { job.failure = cause instanceof Error ? cause.message : String(cause); job.status = "error" })
+    }, cause => {
+      if (job.settlement?.kind === "incomplete" || job.cleanupDetail !== undefined) {
+        job.status = "running"
+        if (job.settlement?.kind === "incomplete") job.cleanupDetail = `${job.settlement.phase}: ${job.settlement.detail}`
+      } else {
+        job.failure = cause instanceof Error ? cause.message : String(cause)
+        job.status = "error"
+      }
+    })
     return id
   }
 
@@ -330,21 +345,35 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     async runBackground(command) { const capture = await makeCapture(command, undefined, true); return { jobId: registerJob(capture) } },
     getOutput(jobId) {
       const job = jobs.get(jobId)
-      if (!job || (currentExecCaller() && job.owner.sessionId !== caller().sessionId)) throw new Error(`unknown job: ${jobId}`)
+      if (!job || job.owner.sessionId !== caller().sessionId) throw new Error(`unknown job: ${jobId}`)
       return view(job)
     },
     listJobs() {
-      const scopedOwner = currentExecCaller()?.sessionId
-      return [...jobs.values()].filter(job => scopedOwner === undefined || job.owner.sessionId === scopedOwner).map(view)
+      const owner = caller().sessionId
+      return [...jobs.values()].filter(job => job.owner.sessionId === owner).map(view)
     },
     async killJob(jobId) {
       const job = jobs.get(jobId)
-      if (!job || (currentExecCaller() && job.owner.sessionId !== caller().sessionId)) throw new Error(`unknown job: ${jobId}`)
-      if (job.status !== "running") return "already-finished"
-      const settlement = await supervisor.cancel(job.capture.execution.id, "cancelled")
+      if (!job || job.owner.sessionId !== caller().sessionId) throw new Error(`unknown job: ${jobId}`)
+      if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
+      let settlement: ExecutionSettlement
+      try { settlement = await supervisor.cancel(job.capture.execution.id, "cancelled") }
+      catch (cause) {
+        job.status = "running"
+        job.cleanupDetail = cause instanceof Error ? cause.message : String(cause)
+        throw cause
+      }
       job.settlement = settlement
-      if (settlement.kind !== "settled") throw new Error(`Execution cancellation incomplete: ${settlement.detail}`)
+      if (settlement.kind !== "settled") {
+        job.status = "running"
+        job.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+        throw new Error(`Execution cancellation incomplete: ${settlement.detail}`)
+      }
       await job.capture.complete.catch(() => {})
+      job.root = settlement.root
+      job.exitCode = settlement.root.exitCode ?? -1
+      job.failure = undefined
+      job.cleanupDetail = undefined
       job.status = "killed"
       return "cancellation-requested"
     },

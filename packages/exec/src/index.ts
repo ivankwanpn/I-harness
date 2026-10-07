@@ -47,6 +47,7 @@ export interface ExecStreamRunOptions {
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
 export interface ExecRunOptions { backgroundAfterMs?: number }
 export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: number }
+/** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
   id: string; status: BackgroundJobStatus; stdout: string; stderr: string; exitCode?: number
@@ -54,6 +55,7 @@ export interface BackgroundJobView {
   receipt?: SupervisedExecution["handle"]["receipt"]
   root?: Awaited<SupervisedExecution["handle"]["rootExited"]>
   settlement?: ExecutionSettlement
+  cleanupDetail?: string
   outputDiagnostics?: { outputAbandoned: boolean; discardedOutputBytes: number }
 }
 

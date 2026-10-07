@@ -263,13 +263,19 @@ describe("exec backend admission", () => {
     const exec = registerExec(createContext())
     const ownerA = { sessionId: "owner-a" }, ownerB = { sessionId: "owner-b" }
     const { jobId } = await withExecCallerScope(ownerA, () => exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] }))
-    await withExecCallerScope(ownerB, async () => {
+    try {
+      await withExecCallerScope(ownerB, async () => {
+        expect(exec.listJobs()).toEqual([])
+        expect(() => exec.getOutput(jobId)).toThrow(/unknown job/i)
+        await expect(exec.killJob(jobId)).rejects.toThrow(/unknown job/i)
+      })
       expect(exec.listJobs()).toEqual([])
       expect(() => exec.getOutput(jobId)).toThrow(/unknown job/i)
       await expect(exec.killJob(jobId)).rejects.toThrow(/unknown job/i)
-    })
-    await withExecCallerScope(ownerA, () => exec.killJob(jobId))
-    await exec.dispose()
+    } finally {
+      await withExecCallerScope(ownerA, () => exec.killJob(jobId))
+      await exec.dispose()
+    }
   })
 
   it("settles a public transport cancellation only for its bound owner", async () => {
