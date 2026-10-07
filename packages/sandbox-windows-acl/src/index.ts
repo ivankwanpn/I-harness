@@ -591,6 +591,9 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
     throw new Error(`AclSandbox private temp root does not exist or is not a directory: ${privateTempRoot}`)
   }
   const workspaceGrants = new Map<string, AclWriteGrant>()
+  // A failed post-apply add is never a ready workspace capability. Keep its
+  // native SID owner separately until explicit dispose can finish cleanup.
+  const partialWorkspaceGrants = new Set<AclWriteGrant>()
   const tempCapabilities = new Map<string, AclTempCapability>()
 
   function materializeWorkspaceGrants(roots: string[]): void {
@@ -608,6 +611,8 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
           try {
             grant.dispose()
           } catch (cleanupError) {
+            partialWorkspaceGrants.add(grant)
+            closing = true
             throw new AggregateError([error, cleanupError], 'windows-acl workspace grant failed and its cleanup also failed')
           }
           throw error
@@ -654,8 +659,16 @@ export function createWindowsAclSandbox(options: AclSandboxOptions & {
   }
 
   function revokeAclGrants(): void {
-    if (workspaceGrants.size === 0 && tempCapabilities.size === 0) return
+    if (workspaceGrants.size === 0 && partialWorkspaceGrants.size === 0 && tempCapabilities.size === 0) return
     const failures: unknown[] = []
+    for (const grant of partialWorkspaceGrants) {
+      try {
+        grant.dispose()
+        partialWorkspaceGrants.delete(grant)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
     for (const [root, grant] of workspaceGrants) {
       try {
         grant.dispose()

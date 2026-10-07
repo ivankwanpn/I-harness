@@ -143,4 +143,29 @@ describe("createWindowsAclSandbox", () => {
       expect(attempts).toBe(2)
     } finally { create.mockRestore(); rmSync(fixture, { recursive: true, force: true }) }
   })
+  it("retains a partial workspace grant when add and immediate cleanup both fail", () => {
+    const fixture = mkdtempSync(join(resolve(process.cwd(), "../..", ".tmp"), "sandbox-redesign-acl-partial-"))
+    const project = join(fixture, "project")
+    const scratch = join(fixture, "scratch")
+    mkdirSync(project); mkdirSync(scratch)
+    let releases = 0
+    const fake = { add() { throw new Error("post-apply failure") }, dispose() {
+      releases++
+      if (releases < 3) throw new Error("SID cleanup failed")
+    } } as unknown as AclWriteGrant
+    const create = vi.spyOn(AclWriteGrant, "create").mockReturnValue(fake)
+    try {
+      const provider = createWindowsAclSandbox({ writableDirs: [], mode: "read-only", privateTempRoot: scratch,
+        disablePrivateTempWrites: true })
+      const policy = { mode: "workspace-write" as const, workspaceRoot: project, sessionId: "fixture" }
+      expect(() => provider.confineExecution(["C:\\Windows\\System32\\cmd.exe", "/d", "/s", "/c", "echo x"],
+        policy, "cmd-verbatim")).toThrow(/cleanup also failed/)
+      expect(() => provider.confine(["echo", "x"], policy)).toThrow(/closing/)
+      expect(() => provider.dispose()).toThrow(/grant cleanup incomplete/)
+      expect(() => provider.confine(["echo", "x"], policy)).toThrow(/closing/)
+      expect(() => provider.dispose()).not.toThrow()
+      expect(releases).toBe(3)
+      expect(create).toHaveBeenCalledTimes(1)
+    } finally { create.mockRestore(); rmSync(fixture, { recursive: true, force: true }) }
+  })
 })
