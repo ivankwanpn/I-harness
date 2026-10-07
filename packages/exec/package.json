@@ -8,5 +8,8 @@
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/sandbox": "workspace:*"
+  },
+  "devDependencies": {
+    "@i-harness/sandbox-policy": "workspace:*"
   }
 }

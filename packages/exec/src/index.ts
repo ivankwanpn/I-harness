@@ -3,6 +3,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvider } from "@i-harness/sandbox"
 import { assertSandboxCapable, SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 import { OutputCollector } from "./spill.ts"
+export { launchExecution } from "./execution-admission.ts"
 import { execOutputReader, registerRetainedOutput } from './retained-output.ts'
 export { registerRetainedOutput, retainedOutputReader } from './retained-output.ts'
 

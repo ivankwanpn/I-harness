@@ -582,6 +582,10 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+    devDependencies:
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
 
   packages/fs:
     dependencies:
