@@ -232,6 +232,50 @@ it.each(["before release starts", "during pending release"])("cancel after faile
   expect((await historical).kind).toBe("incomplete")
 })
 
+it.each(["success", "failure"])("cancellation at failed-tree completion cannot escape the next cleanup barrier on termination %s", async outcome => {
+  let trees = 0
+  let cancelled: Promise<ExecutionSettlement> | undefined
+  const f = fixture({ waitTreeEmpty: () => {
+    if (++trees === 1) {
+      queueMicrotask(() => queueMicrotask(() => queueMicrotask(() => {
+        cancelled = f.lease.cancel("timeout")
+      })))
+      return Promise.reject(new Error("transient tree observation"))
+    }
+    return Promise.resolve()
+  } })
+  const historical = f.lease.settled
+  f.root.resolve({ exitCode: 0 })
+  f.io.resolve()
+  f.resources.resolve()
+  expect(await historical).toEqual({ kind: "incomplete", phase: "tree", detail: "transient tree observation" })
+  await turn()
+  expect(cancelled).toBeDefined()
+  const retry = f.lease.release()
+  let retryResult: ExecutionSettlement | undefined
+  let cancelResult: ExecutionSettlement | undefined
+  void retry.then(result => { retryResult = result })
+  void cancelled!.then(result => { cancelResult = result })
+  await turn()
+  expect(retryResult).toBeUndefined()
+  expect(cancelResult).toBeUndefined()
+  expect(f.events).not.toContain("release")
+  if (outcome === "success") f.termination.resolve()
+  else f.termination.reject(new Error("late kill failure"))
+  const result = await cancelled!
+  expect(await retry).toBe(result)
+  if (outcome === "success") {
+    expect(result.kind).toBe("settled")
+    expect(f.events).toEqual(["tree", "terminate:timeout", "tree", "io", "release"])
+  } else {
+    expect(result).toEqual({ kind: "incomplete", phase: "tree", detail: expect.stringContaining("late kill failure") })
+    expect(f.events).not.toContain("release")
+    expect((await f.lease.release()).kind).toBe("settled")
+    expect(f.events).toEqual(["tree", "terminate:timeout", "tree", "io", "release"])
+  }
+  expect(await historical).toEqual({ kind: "incomplete", phase: "tree", detail: "transient tree observation" })
+})
+
 it("successful termination is not repeated after an incomplete tree observation", async () => {
   let treeCalls = 0
   const f = fixture({ waitTreeEmpty: () => ++treeCalls === 1 ? Promise.reject(new Error("tree uncertain")) : Promise.resolve() })

@@ -4,11 +4,16 @@ import type {
 
 type Observation<T> = { ok: true; value: T } | { ok: false; detail: string }
 type Incomplete = Extract<ExecutionSettlement, { kind: "incomplete" }>
+interface Termination {
+  promise: Promise<Observation<void>>
+  result?: Observation<void>
+}
 interface Attempt {
   promise: Promise<ExecutionSettlement>
+  resolve(result: ExecutionSettlement): void
   active: boolean
   releaseReserved: boolean
-  termination?: Promise<Observation<void>>
+  termination?: Termination
 }
 
 function failureDetail(cause: unknown): string {
@@ -47,13 +52,21 @@ export function createExecutionLease(input: {
   let ioSettled = false
   let resourcesReleased = false
   let terminatedReason: StopReason | undefined
+  let nativeTermination: Termination | undefined
   let current: Attempt
 
   function incomplete(phase: Incomplete["phase"], detail: string): Incomplete {
     return { kind: "incomplete", phase, detail }
   }
 
-  async function settle(attempt: Attempt): Promise<ExecutionSettlement> {
+  function complete(attempt: Attempt, result: ExecutionSettlement): void {
+    // Close admission and publish the historical result in the same turn. An
+    // outer await continuation must never leave a completed computation active.
+    attempt.active = false
+    attempt.resolve(result)
+  }
+
+  async function settle(attempt: Attempt): Promise<void> {
     let failure: Incomplete | undefined
     if (!treeEmpty) {
       const tree = await observe(() => input.waitTreeEmpty())
@@ -72,39 +85,39 @@ export function createExecutionLease(input: {
     // Any termination admitted before tree confirmation belongs to this attempt.
     // Resources remain owned until that already-started termination is known.
     if (attempt.termination) {
-      const termination = await attempt.termination
+      const termination = await attempt.termination.promise
       if (!termination.ok) {
-        return incomplete("tree", failure
+        return complete(attempt, incomplete("tree", failure
           ? `termination failed: ${termination.detail}; ${failure.phase}: ${failure.detail}`
-          : `termination failed: ${termination.detail}`)
+          : `termination failed: ${termination.detail}`))
       }
     }
-    if (failure) return failure
+    if (failure) return complete(attempt, failure)
 
     const rootExit = await root
     if (!resourcesReleased) {
       const released = await observe(() => input.releaseResources())
-      if (!released.ok) return incomplete("release", released.detail)
+      if (!released.ok) return complete(attempt, incomplete("release", released.detail))
       resourcesReleased = true
     }
-    return {
+    complete(attempt, {
       kind: "settled", root: rootExit,
       treeEmpty: true, ioSettled: true, resourcesReleased: true,
-    }
+    })
   }
 
   function start(): Attempt {
     let resolve!: (value: ExecutionSettlement) => void
     const attempt: Attempt = {
-      promise: new Promise<ExecutionSettlement>(done => { resolve = done }), active: true,
+      promise: new Promise<ExecutionSettlement>(done => { resolve = done }),
+      resolve, active: true,
       releaseReserved: treeEmpty && ioSettled,
     }
+    // Native ownership outlives an attempt. Carry any unresolved termination
+    // into a new owner before that owner can observe or release resources.
+    if (nativeTermination && nativeTermination.result === undefined) attempt.termination = nativeTermination
     // Publish the attempt before invoking any hook, including synchronous hooks.
-    void Promise.resolve().then(async () => {
-      const result = await settle(attempt)
-      attempt.active = false
-      resolve(result)
-    })
+    void Promise.resolve().then(() => settle(attempt))
     return attempt
   }
 
@@ -117,10 +130,17 @@ export function createExecutionLease(input: {
     const promise = release()
     if (!resourcesReleased && !treeEmpty && !current.releaseReserved
       && terminatedReason === undefined && !current.termination) {
+      if (nativeTermination && nativeTermination.result === undefined) {
+        current.termination = nativeTermination
+        return promise
+      }
       let resolve!: (result: Observation<void>) => void
       // Reserve ownership before a hook can synchronously reenter cancel.
-      current.termination = new Promise(done => { resolve = done })
+      const termination: Termination = { promise: new Promise(done => { resolve = done }) }
+      nativeTermination = termination
+      current.termination = termination
       void observe(() => input.terminate(reason)).then(result => {
+        termination.result = result
         if (result.ok) {
           terminatedReason = reason
         }
