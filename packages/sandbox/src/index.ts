@@ -6,6 +6,7 @@ export type {
   ExecutionHandle, PreparedExecution, ExecutionBackend,
 } from "./execution.ts"
 export { checkBackendRequirements } from "./backend-requirements.ts"
+export { createExecutionLease } from "./execution-lease.ts"
 export type ConfinedSandboxMode = Exclude<SandboxMode, "danger-full-access">
 export type SandboxEnforcement = "full" | "partial"
 
