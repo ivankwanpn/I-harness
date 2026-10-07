@@ -4,6 +4,8 @@ import type { ConfinedArgv, SandboxExecutionPolicy, SandboxPolicy, SandboxProvid
 import { assertSandboxCapable, SandboxUnavailableError, classifyRunnerFailure } from "@i-harness/sandbox"
 import { OutputCollector } from "./spill.ts"
 export { launchExecution } from "./execution-admission.ts"
+export { createExecutionSupervisor } from "./execution-supervisor.ts"
+export type { ExecutionLaunch, SupervisedExecution, ExecutionSupervisor } from "./execution-supervisor.ts"
 import { execOutputReader, registerRetainedOutput } from './retained-output.ts'
 export { registerRetainedOutput, retainedOutputReader } from './retained-output.ts'
 
