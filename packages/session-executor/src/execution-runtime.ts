@@ -33,6 +33,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
   const owners = new Set<string>([options.owner.sessionId])
   const parents = new Map<string, string>()
   const blockedOwners = new Set<string>()
+  const reconciliations = new Map<string, { generation: number; pending: number; successfulGeneration?: number }>()
   const captures = new WeakMap<CompiledSandboxPolicy, { generation: string; mode: SandboxMode; validate(): boolean }>()
   const grants = new WeakMap<object, { policy: CompiledSandboxPolicy; generation: string; mode: SandboxMode; validate(): boolean }>()
   const writes = new Set<{ policy: CompiledSandboxPolicy; abort(): void; done: Promise<void> }>()
@@ -127,13 +128,28 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       // Each call synchronously fences all observed owners before any await.
       const attempts = [...owners].map(owner => {
         blockedOwners.add(owner)
+        let state = reconciliations.get(owner)
+        if (!state) { state = { generation: 0, pending: 0 }; reconciliations.set(owner, state) }
+        const attempt = state
+        const generation = ++attempt.generation
+        attempt.pending++
         const pending: Promise<void>[] = [supervisor.reconcile(owner, validate)]
         for (const write of writes) {
           if (write.policy.owner.sessionId !== owner) continue
           try { validate(write.policy, { phase: "active" }) }
           catch { write.abort(); pending.push(write.done) }
         }
-        return Promise.all(pending).then(() => { blockedOwners.delete(owner) })
+        return Promise.all(pending).then(() => {
+          // An older success cannot retire a newer narrowing/failure fence.
+          if (attempt.generation === generation && !disposed && options.ownerAvailable?.() !== false) attempt.successfulGeneration = generation
+        }).finally(() => {
+          attempt.pending--
+          // Even the current successful attempt cannot reopen while an older
+          // reconciliation still owns cleanup. Its completion only releases the
+          // pending count; the current generation's success remains required.
+          if (attempt.pending === 0 && attempt.successfulGeneration === attempt.generation
+            && !disposed && options.ownerAvailable?.() !== false) blockedOwners.delete(owner)
+        })
       })
       return Promise.all(attempts).then(() => {})
     },
