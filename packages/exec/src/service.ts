@@ -303,6 +303,8 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     }, cause => { job.status = "running"; job.cleanupDetail = String(cause) })
     void capture.complete.then(result => {
       job.exitCode = result.exitCode
+      job.failure = undefined
+      job.cleanupDetail = undefined
       job.status = result.timedOut ? "killed" : result.exitCode === 0 ? "completed" : "error"
     }, cause => {
       if (job.settlement?.kind === "incomplete" || job.cleanupDetail !== undefined) {
@@ -314,6 +316,24 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       }
     })
     return id
+  }
+
+  async function settledAfterRetirement(job: Job): Promise<boolean> {
+    if (job.settlement?.kind === "settled") {
+      job.cleanupDetail = undefined
+      return true
+    }
+    // The supervisor removes entries only after the driver's full settlement.
+    // Its observer can retire the entry before this job-view observer runs.
+    if (supervisor.list().some(entry => entry.id === job.capture.execution.id)) return false
+    const settlement = await job.capture.execution.handle.settled
+    job.settlement = settlement
+    if (settlement.kind !== "settled") {
+      job.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+      throw new Error("Execution owner retired an incomplete settlement")
+    }
+    job.cleanupDetail = undefined
+    return true
   }
 
   async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
@@ -355,10 +375,12 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     async killJob(jobId) {
       const job = jobs.get(jobId)
       if (!job || job.owner.sessionId !== caller().sessionId) throw new Error(`unknown job: ${jobId}`)
+      if (await settledAfterRetirement(job)) return "already-finished"
       if (job.status !== "running" && job.settlement?.kind !== "incomplete") return "already-finished"
       let settlement: ExecutionSettlement
       try { settlement = await supervisor.cancel(job.capture.execution.id, "cancelled") }
       catch (cause) {
+        if (await settledAfterRetirement(job)) return "already-finished"
         job.status = "running"
         job.cleanupDetail = cause instanceof Error ? cause.message : String(cause)
         throw cause
