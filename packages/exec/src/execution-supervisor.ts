@@ -3,6 +3,7 @@ import type {
   PreparedTransportExecution, ProcessSpec, StopReason, TransportExecutionBackend,
   TransportExecutionHandle,
 } from "@i-harness/sandbox"
+import { snapshotProcessSpec } from "@i-harness/sandbox"
 import { launchExecution } from "./execution-admission.ts"
 
 export interface ExecutionLaunch {
@@ -62,15 +63,6 @@ interface Entry {
 
 function sameOwner(a: Readonly<ExecutionOwner>, b: Readonly<ExecutionOwner>): boolean {
   return a.sessionId === b.sessionId && a.parentSessionId === b.parentSessionId
-}
-
-function snapshot(spec: ProcessSpec): ProcessSpec {
-  return Object.freeze({
-    argv: Object.freeze([...spec.argv]), cwd: spec.cwd,
-    env: Object.freeze({ ...spec.env }), owner: Object.freeze({ ...spec.owner }),
-    transport: spec.transport, lifetime: spec.lifetime, argumentEncoding: spec.argumentEncoding,
-    ...(spec.pty === undefined ? {} : { pty: Object.freeze({ ...spec.pty }) }),
-  })
 }
 
 function cleanupOutcome(result: ExecutionSettlement): CleanupOutcome {
@@ -226,7 +218,7 @@ export function createExecutionSupervisor(): ExecutionSupervisor {
 
   function launch(input: ExecutionLaunch): Promise<SupervisedExecution> {
     try {
-      const spec = snapshot(input.spec)
+      const spec = snapshotProcessSpec(input.spec)
       const requirements = Object.freeze({ ...input.requirements })
       const policy = input.policy
       if (requirements.transport !== spec.transport || requirements.lifetime !== spec.lifetime) {

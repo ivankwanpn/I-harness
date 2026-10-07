@@ -83,7 +83,8 @@ function lifecycleFixture(transport: ExecutionTransport = "pipe") {
     async probe() { events.push("probe"); return probe },
     async prepare(actualSpec, actualPolicy, signal) {
       events.push("prepare")
-      expect(actualSpec).toBe(spec)
+      expect(actualSpec).toEqual(spec)
+      expect(actualSpec).not.toBe(spec)
       expect(actualPolicy).toBe(policy)
       expect(signal).toBe(controller.signal)
       return prepared
@@ -195,6 +196,41 @@ it("keeps a base lifecycle backend's public return type without fabricating tran
   expect(handle).toBe(f.handle)
   expect(handle).not.toHaveProperty("pid")
   expect(handle).not.toHaveProperty("io")
+  f.root.resolve({ exitCode: 0 }); f.tree.resolve(); f.io.resolve(); f.resources.resolve()
+  expect((await handle.settled).kind).toBe("settled")
+})
+
+it("captures every process field at direct admission before probe completion", async () => {
+  const f = lifecycleFixture("pty")
+  const gate = deferred<BackendProbe>()
+  const argv = [...f.input.spec.argv]
+  const env = { ...f.input.spec.env }
+  const owner = { ...f.input.spec.owner }
+  const pty = { cols: 80, rows: 24 }
+  const spec: ProcessSpec = { ...f.input.spec, argv, env, owner, pty }
+  f.input.spec = spec
+  let captured: ProcessSpec | undefined
+  f.backend.probe = () => gate.promise
+  f.backend.prepare = async actual => { captured = actual; return f.prepared }
+  const launched = launchExecution(f.input)
+  argv[1] = "changed"
+  env.CONTRACT = "changed"
+  owner.sessionId = "changed"
+  spec.cwd = "changed"
+  spec.transport = "pipe"
+  spec.lifetime = "complete-tree"
+  spec.argumentEncoding = "cmd-verbatim"
+  pty.cols = 123
+  gate.resolve(f.probe)
+  const handle = await launched
+  expect(captured).toEqual({
+    argv: ["fake-workload", "an exact argument"], cwd: resolve("contract-primary"),
+    env: { CONTRACT: "unchanged" }, owner: { sessionId: "consumer", parentSessionId: "parent" },
+    transport: "pty", lifetime: "retain-tree", argumentEncoding: "crt", pty: { cols: 80, rows: 24 },
+  })
+  expect(captured).not.toBe(spec)
+  expect(Object.isFrozen(captured)).toBe(true)
+  expect(Object.isFrozen(captured?.argv)).toBe(true)
   f.root.resolve({ exitCode: 0 }); f.tree.resolve(); f.io.resolve(); f.resources.resolve()
   expect((await handle.settled).kind).toBe("settled")
 })

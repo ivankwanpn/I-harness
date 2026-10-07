@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto"
 import { realpath } from "node:fs/promises"
 import { sep } from "node:path"
 import { promisify } from "node:util"
-import { createExecutionLease } from "@i-harness/sandbox"
+import { createExecutionLease, snapshotProcessSpec } from "@i-harness/sandbox"
 import type {
   BackendProbe, CompiledSandboxPolicy, ExecutionOutput, PreparedTransportExecution,
   ProcessSpec, RootExit, StopReason, TransportExecutionBackend, TransportExecutionHandle,
@@ -142,6 +142,9 @@ class Session {
   private localDiscarded = 0
   private nativeDiscarded = 0
   private nativeAbandoned = false
+  private helperExit?: string
+  private statusClosed = false
+  private statusDrainTimer?: ReturnType<typeof setTimeout>
   readonly output: AsyncIterable<ExecutionOutput>
 
   constructor(helperPath: string, private readonly onReleased: (session: Session) => void) {
@@ -152,6 +155,8 @@ class Session {
     this.child.stdout.on("data", (chunk: Buffer) => {
       try { for (const status of this.status.push(chunk)) this.receive(status) } catch (error) { this.fatal(error) }
     })
+    this.child.stdout.on("end", () => this.closeStatus())
+    this.child.stdout.on("close", () => this.closeStatus())
     this.child.stderr.on("data", (chunk: Buffer) => {
       if (!this.nativeAbandoned) {
         try { for (const frame of this.frames.push(chunk)) this.enqueue(frame) } catch (error) { this.fatal(error) }
@@ -160,7 +165,14 @@ class Session {
     })
     this.child.stderr.on("end", () => { this.binaryEof = true; this.maybeSettleIo() })
     this.child.on("error", error => this.fatal(error))
-    this.child.on("exit", (code, signal) => this.fatal(new Error(`helper exited before confirmed cleanup (${code ?? signal})`)))
+    this.child.on("exit", (code, signal) => {
+      if (this.releaseComplete || this.failed) return
+      this.helperExit = String(code ?? signal)
+      if (this.statusClosed) this.fatal(new Error(`helper exited before confirmed cleanup (${this.helperExit})`))
+      else this.statusDrainTimer = setTimeout(() => {
+        this.fatal(new Error(`helper status drain timed out after exit (${this.helperExit})`))
+      }, 1000)
+    })
     this.output = { [Symbol.asyncIterator]: () => {
       if (this.consumerAttached) fail("output supports one consumer")
       this.consumerAttached = true
@@ -199,8 +211,17 @@ class Session {
     this.child.stderr.resume()
     this.wake()
   }
+  private closeStatus() {
+    if (this.statusClosed) return
+    this.statusClosed = true
+    try { this.status.finish() } catch (error) { this.fatal(error); return }
+    if (!this.releaseComplete) this.fatal(new Error(this.helperExit === undefined
+      ? "helper status channel closed before confirmed cleanup"
+      : `helper exited before confirmed cleanup (${this.helperExit})`))
+  }
   private fatal(cause: unknown) {
     if (this.failed || this.releaseComplete) return
+    if (this.statusDrainTimer) clearTimeout(this.statusDrainTimer)
     this.failed = cause instanceof Error ? cause : new Error(String(cause))
     for (const item of this.pending.values()) item.response.reject(this.failed)
     this.pending.clear()
@@ -247,6 +268,8 @@ class Session {
       fail(`unexpected helper response ${status.id}`)
     }
     this.pending.delete(status.id)
+    if (waiter.type === "release" && status.type === "released"
+      && status.resourcesReleased === true && Array.isArray(status.errors)) this.markReleased(status)
     if (status.type === "error") waiter.response.reject(new Error(nativeDetail(status.error as NativeError)))
     else waiter.response.resolve(status)
   }
@@ -323,6 +346,7 @@ class Session {
   }
   private markReleased(status: Status): void {
     if (this.releaseComplete) return
+    if (this.statusDrainTimer) clearTimeout(this.statusDrainTimer)
     this.releaseComplete = true
     this.confirmedReleaseStatus = status
     const ended = new Error("helper released before pending response")
@@ -390,8 +414,9 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Wi
     async prepare(spec, policy, signal): Promise<PreparedTransportExecution> {
       if (disposed) fail("backend disposed")
       if (signal?.aborted) fail("preparation aborted")
+      const preparedSpec = snapshotProcessSpec(spec)
       const helper = await verifyHelper(options)
-      const payload = await preparePayload(engine, spec, policy, options, helper.helperPath, helper.sha256)
+      const payload = await preparePayload(engine, preparedSpec, policy, options, helper.helperPath, helper.sha256)
       const fingerprint = payload.policy.fingerprint
       const preparedOwner = payload.policy.owner
       const policySnapshot = JSON.stringify(policy)
@@ -440,7 +465,10 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Wi
               releaseResources: () => session.release(),
               terminate: reason => session.cancel(reason),
             })
-            return Object.freeze({ ...lease, pid: Number(started.pid), io: session.ioObject(spec),
+            return Object.freeze({
+              receipt: lease.receipt, rootExited: lease.rootExited,
+              get settled() { return lease.settled },
+              cancel: lease.cancel, pid: Number(started.pid), io: session.ioObject(preparedSpec),
               async release() {
                 try { await session.release() }
                 catch (cause) { return { kind: "incomplete" as const, phase: "release" as const,

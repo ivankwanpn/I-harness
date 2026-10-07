@@ -11,6 +11,7 @@ import { compileExecutionPolicy, assertExecutionAuthority } from "@i-harness/san
 import { createExecutionSupervisor } from "@i-harness/exec"
 import type { AuthorityState, ProcessSpec, SandboxMode } from "@i-harness/sandbox"
 import { createWindowsPsecBackend, createWindowsUnrestrictedBackend } from "../src/index.ts"
+import { recordTeardownFailures } from "./qualification-teardown.ts"
 
 if (process.platform !== "win32") throw new Error("Windows qualification requires Windows")
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
@@ -308,13 +309,17 @@ try {
   const after = { reference: snapshot(referenceFile), denied: snapshot(deniedFile) }
   const unchanged = JSON.stringify(before) === JSON.stringify(after)
   results.push({ name: "protected-reference-content-metadata-acl", outcome: unchanged ? "pass" : "fail", detail: { before, after } })
+  await recordTeardownFailures(results, [
+    { name: "supervisor", dispose: () => supervisor.dispose() },
+    { name: "psec", dispose: () => psec.dispose() },
+    { name: "psec-no-deny", dispose: () => psecNoDeny.dispose() },
+    { name: "unrestricted", dispose: () => unrestricted.dispose() },
+  ])
   const evidence = { generatedAt: new Date().toISOString(), fixture, packageRoot, helper, helperSha256: helperHash,
     manifest, platform: process.platform, node: process.version, windowsRelease: osRelease(), windowsVersion: osVersion(), junction,
     protectedBefore: before, protectedAfter: after, protectedUnchanged: unchanged, results }
   writeFileSync(resolve(fixture, "qualification-results.json"), JSON.stringify(evidence, null, 2))
   console.log(`Evidence: ${resolve(fixture, "qualification-results.json")}`)
-  await supervisor.dispose().catch(error => console.error(`Supervisor cleanup: ${String(error)}`))
-  await Promise.all([psec.dispose(), psecNoDeny.dispose(), unrestricted.dispose()]).catch(error => console.error(`Backend cleanup: ${String(error)}`))
 }
 // A required source family remaining unsupported is a qualification gate, not green CI.
 if (results.some(result => result.outcome === "fail")) process.exitCode = 1

@@ -1,4 +1,4 @@
-import { checkBackendRequirements } from "@i-harness/sandbox"
+import { checkBackendRequirements, snapshotProcessSpec } from "@i-harness/sandbox"
 import type {
   BackendRequirements, CompiledSandboxPolicy, ExecutionBackend, ExecutionHandle, ProcessSpec,
   TransportExecutionBackend, TransportExecutionHandle,
@@ -32,6 +32,7 @@ interface ExecutionAdmissionRequest {
 export function launchExecution(input: ExecutionAdmissionRequest & { backend: TransportExecutionBackend }): Promise<TransportExecutionHandle>
 export function launchExecution(input: ExecutionAdmissionRequest): Promise<ExecutionHandle>
 export async function launchExecution({ backend, spec, policy, requirements, validateAuthority, signal }: ExecutionAdmissionRequest): Promise<ExecutionHandle> {
+  const preparedSpec = snapshotProcessSpec(spec)
   function checkAbort(): void {
     if (signal?.aborted) {
       const error = new Error("Execution admission aborted", { cause: signal.reason })
@@ -48,7 +49,7 @@ export async function launchExecution({ backend, spec, policy, requirements, val
   const decision = checkBackendRequirements(await backend.probe(), requirements)
   if (!decision.ok) throw new ExecutionAdmissionError(decision.missing)
   checkAbort()
-  const prepared = await backend.prepare(spec, policy, signal)
+  const prepared = await backend.prepare(preparedSpec, policy, signal)
   try {
     revalidate()
     return await prepared.commit(revalidate)

@@ -8,6 +8,7 @@ export type {
 } from "./execution.ts"
 export { checkBackendRequirements } from "./backend-requirements.ts"
 export { createExecutionLease } from "./execution-lease.ts"
+export { snapshotProcessSpec } from "./process-spec.ts"
 export type ConfinedSandboxMode = Exclude<SandboxMode, "danger-full-access">
 export type SandboxEnforcement = "full" | "partial"
 

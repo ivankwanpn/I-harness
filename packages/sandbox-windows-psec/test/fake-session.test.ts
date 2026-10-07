@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path"
 import { PassThrough, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
 import { describe, expect, it, vi } from "vitest"
-import { launchExecution } from "@i-harness/exec"
+import { createExecutionSupervisor, launchExecution } from "@i-harness/exec"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
 
 const state = vi.hoisted(() => ({ spawn: undefined as undefined | (() => unknown) }))
@@ -298,10 +298,99 @@ describe("fake protocol ownership", () => {
     })
     state.spawn = () => child
     const f = input()
-    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    const supervisor = createExecutionSupervisor()
+    const { handle } = await supervisor.launch({ ...f, validateAuthority: () => {} })
     expect(await handle.settled).toMatchObject({ kind: "incomplete", phase: "release" })
+    expect(supervisor.list()).toHaveLength(1)
     expect(await handle.release()).toMatchObject({ kind: "settled", resourcesReleased: true })
+    expect(await handle.settled).toMatchObject({ kind: "settled", resourcesReleased: true })
+    await vi.waitFor(() => expect(supervisor.list()).toHaveLength(0))
     expect(child.sent.filter(type => type === "release")).toHaveLength(2)
+  })
+
+  it("drains a released acknowledgement after helper exit before retiring ownership", async () => {
+    let releaseId: string | undefined
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") releaseId = command.id
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const disposal = f.backend.dispose()
+    await vi.waitFor(() => expect(releaseId).toBeDefined())
+    child.emit("exit", 0, null)
+    child.status(releaseId!, "released", { resourcesReleased: true, errors: [] })
+    child.stdout.end()
+    await expect(disposal).resolves.toBeUndefined()
+  })
+
+  it("retains incomplete ownership when helper exit closes status without a release acknowledgement", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const disposal = f.backend.dispose()
+    await vi.waitFor(() => expect(child.sent).toContain("release"))
+    child.emit("exit", 1, null)
+    child.stdout.end()
+    await expect(disposal).rejects.toThrow(/cleanup incomplete/)
+  })
+
+  it("bounds status draining when a dead helper never closes its status pipe", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    vi.useFakeTimers()
+    try {
+      const disposal = f.backend.dispose()
+      expect(child.sent).toContain("release")
+      child.emit("exit", 1, null)
+      const failure = expect(disposal).rejects.toThrow(/cleanup incomplete/)
+      await vi.advanceTimersByTimeAsync(2000)
+      await failure
+    } finally { vi.useRealTimers() }
+  })
+
+  it("captures the complete caller spec before asynchronous helper verification", async () => {
+    let nativeSpec: Record<string, any> | undefined
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") {
+        nativeSpec = command.spec
+        client.status(command.id, "ready", { effectivePolicyDigest: "0".repeat(64),
+          policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      } else if (command.type === "commit") client.status(command.id, "started", { pid: 1234 })
+      else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const mutable: ProcessSpec = { ...f.spec, argv: [...f.spec.argv], env: { ...f.spec.env }, owner: { ...f.spec.owner } }
+    const preparation = f.backend.prepare(mutable, f.policy)
+    ;(mutable.argv as string[])[1] = "changed-argument"
+    ;(mutable.env as Record<string, string>).EMPTY = "changed-environment"
+    ;(mutable.owner as { sessionId: string }).sessionId = "changed-owner"
+    mutable.cwd = dirname(helper)
+    mutable.transport = "pty"
+    mutable.lifetime = "retain-tree"
+    mutable.argumentEncoding = "cmd-verbatim"
+    mutable.pty = { cols: 123, rows: 45 }
+    const prepared = await preparation
+    const handle = await prepared.commit(() => {})
+    expect(nativeSpec?.argv).toEqual([helper, "--self-child", "basic"])
+    expect(nativeSpec?.env).toEqual({ EMPTY: "" })
+    expect(nativeSpec).toMatchObject({ cwd: f.spec.cwd, owner: { sessionId: "fake-session" },
+      transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt" })
+    expect(nativeSpec?.pty).toBeUndefined()
+    expect(handle.io.resize).toBeUndefined()
+    await f.backend.dispose()
   })
 
   it("normal I/O refuses a missing output-end even after io-settled", async () => {
