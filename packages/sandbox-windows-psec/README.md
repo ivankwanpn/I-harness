@@ -1,0 +1,31 @@
+# Windows native execution owner
+
+This package contains the direct Windows PSEC helper and an explicit unrestricted engine. The TypeScript consumer is a separate implementation task; this native scaffold does not integrate production exec/shell/terminal yet.
+
+PSEC remains **experimental**. API support discovery is not confinement proof. The current narrow policy uses Microsoft's pinned generated schema directly and has no learning runner, fallback dispatcher, account helper, installation service or elevated setup dependency. `unrestricted` must be selected explicitly; it still owns a non-breakaway Job and transport, but has no filesystem or network isolation. It rejects requested reference/protection locks.
+
+PSEC currently supports **pipes only**. PSEC + ConPTY stalled before real child output in native controls and is rejected before launch; its probe reports `pty:false`. Unrestricted ConPTY has passing input, output, resize, retention and cleanup controls. This explicit capability limit must remain visible to the selecting driver.
+
+The private trusted `consoleMode:"hidden-console"` option is available only for unrestricted pipes. It retains a real hidden console for a later legacy adapter, with the same Job and pipe ownership. Default pipes use no-window. Native root/descendant console presence and visibility are verified; arbitrary GUI windows and complete legacy compatibility are not covered by this primitive.
+
+See [protocol.md](protocol.md) for the exact native contract, field schemas, bounded queues, error fields, effective digest, cancellation output abandonment and release sequence.
+
+## Developer build and native controls
+
+On Windows x64 with installed Rust 1.94+ and VS2022 BuildTools:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File packages/sandbox-windows-psec/scripts/build-native.ps1 -Test
+powershell -NoProfile -ExecutionPolicy Bypass -File packages/sandbox-windows-psec/scripts/build-native.ps1
+node packages/sandbox-windows-psec/test/native-helper-smoke.mjs
+```
+
+The build uses `cargo --locked`, writes only this package's native target and artifact directories, copies the release executable to `artifacts/win32-x64/`, and records hashes/tool versions in `manifest.json`. Runtime consumers ship and verify that existing executable; they do not invoke Cargo or download a helper. The only Git dependency is generated `process_security_environment_spec` at Microsoft/mxc `6cd3d58f05d3447e67109cfb75e042803b843ca4`; flatbuffers 25.12.19 and windows-sys 0.61.2 are exact pins. Cargo.lock records all transitive versions.
+
+The smoke creates a fresh owned workspace fixture and saves `results.json` there. Set `SANDBOX_HELPER` to test another explicit helper build. `SANDBOX_ENV_OMIT` is a qualification-only comma-separated environment omission control. Native execution forwards the explicit environment exactly. On Windows 26200, missing LOCALAPPDATA caused PSEC CreateProcessW to fail with error 203; the fixture supplies LOCALAPPDATA within its own directory, without any implicit policy grant.
+
+## Native ownership
+
+Rust sources are split by responsibility: `ffi` owns the System32 DLL, boxed PSEC handle and aligned attribute list; `policy` validates/canonicalizes filesystem identities and serializes the schema; `command_line` implements CRT quoting; `job` owns Job accounting and termination; `transport` owns private descriptors, bounded worker queues and ConPTY; `runner` owns preparation/commit/lifecycle; `protocol` defines strict input types and bounds. `self_child` implements explicit fixture workloads.
+
+Workloads start suspended and enter the Job before resuming. Handle lists exclude protocol descriptors. A root exit retains descendants for retain-tree, with native Job ActiveProcesses determining actual completion. PSEC/Job/HPCON remain owned until tree and I/O settlement. Cancel, control EOF and failed launches trigger teardown, never unrestricted retry. See the task report for actual observed gates and remaining qualification limits; this package does not establish a verified Windows security boundary.

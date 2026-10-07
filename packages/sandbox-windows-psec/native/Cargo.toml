@@ -1,0 +1,18 @@
+[package]
+name = "i-harness-windows-helper"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+
+[dependencies]
+process_security_environment_spec = { git = "https://github.com/microsoft/mxc", rev = "6cd3d58f05d3447e67109cfb75e042803b843ca4" }
+flatbuffers = "=25.12.19"
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_IO", "Win32_System_Console", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_UI_WindowsAndMessaging"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.145"
+sha2 = "=0.10.9"
+
+[profile.release]
+panic = "abort"
+strip = true
+lto = true

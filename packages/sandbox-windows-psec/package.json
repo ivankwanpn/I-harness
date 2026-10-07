@@ -1,0 +1,14 @@
+{
+  "name": "@i-harness/sandbox-windows-psec",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental direct Windows PSEC and explicit unrestricted native execution owner",
+  "files": ["src", "artifacts", "protocol.md", "README.md"],
+  "scripts": {
+    "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
+    "test:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Test",
+    "smoke:native": "node test/native-helper-smoke.mjs"
+  },
+  "dependencies": { "@i-harness/sandbox": "workspace:*" }
+}
