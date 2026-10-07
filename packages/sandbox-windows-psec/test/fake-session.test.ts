@@ -25,15 +25,19 @@ class FakeChild extends EventEmitter {
   stderr = new PassThrough()
   stdin: Writable
   sent: string[] = []
-  constructor(private readonly onCommand: (command: Record<string, any>, child: FakeChild) => void) {
+  private pendingWrite?: (error?: Error) => void
+  constructor(private readonly onCommand: (command: Record<string, any>, child: FakeChild) => void,
+    private readonly holdWrite = false) {
     super()
     this.stdin = new Writable({ write: (bytes, _encoding, done) => {
       const command = JSON.parse(Buffer.from(bytes).toString()) as Record<string, any>
       this.sent.push(command.type)
+      if (this.holdWrite) { this.pendingWrite = done; return }
       this.onCommand(command, this)
       done()
     } })
   }
+  failWrite(error: Error) { this.pendingWrite!(error) }
   status(id: string, type: string, fields: Record<string, unknown> = {}) {
     this.stdout.write(JSON.stringify({ version: 1, id, type, ...fields }) + "\n")
   }
@@ -55,6 +59,144 @@ function input() {
 }
 
 describe("fake protocol ownership", () => {
+  it("owns stdin error events so a failed pipe write cannot crash the host", async () => {
+    const child = new FakeChild(() => {}, true)
+    state.spawn = () => child
+    const f = input()
+    const preparation = f.backend.prepare(f.spec, f.policy)
+    await vi.waitFor(() => expect(child.sent).toContain("prepare"))
+    expect(child.stdin.listenerCount("error")).toBeGreaterThan(0)
+    child.failWrite(new Error("stdin fault"))
+    const failure = await preparation.catch(cause => cause as AggregateError)
+    expect(failure).toBeInstanceOf(AggregateError)
+    expect((failure as AggregateError).errors[0]).toMatchObject({ message: "stdin fault" })
+  })
+
+  it("aborts while native prepare is awaiting ready and acknowledges rollback", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const controller = new AbortController()
+    const preparation = f.backend.prepare(f.spec, f.policy, controller.signal)
+    await vi.waitFor(() => expect(child.sent).toContain("prepare"))
+    controller.abort("owner closed")
+    await expect(Promise.race([
+      preparation,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("prepare abort stalled")), 1000)),
+    ])).rejects.toThrow(/aborted/)
+    expect(child.sent).toEqual(["prepare", "release"])
+  })
+
+  it("backend dispose retries cleanup retained after public admission loses preparation", async () => {
+    let releases = 0
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") client.status(command.id, "error", { error: nativeError })
+      else if (command.type === "release") client.status(command.id, "released", {
+        resourcesReleased: ++releases === 2, errors: [nativeError],
+      })
+    })
+    state.spawn = () => child
+    const f = input()
+    await expect(launchExecution({ ...f, validateAuthority: () => {} })).rejects.toThrow(/rollback failed/)
+    await (f.backend as typeof f.backend & { dispose(): Promise<void> }).dispose()
+    expect(child.sent).toEqual(["prepare", "commit", "release", "release"])
+  })
+
+  it("concurrent dispose shares one native release and closes future admission", async () => {
+    let releaseId: string | undefined
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") releaseId = command.id
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const backend = f.backend as typeof f.backend & { dispose(): Promise<void> }
+    const first = backend.dispose()
+    const second = backend.dispose()
+    await vi.waitFor(() => expect(releaseId).toBeDefined())
+    expect(child.sent.filter(type => type === "release")).toHaveLength(1)
+    child.status(releaseId!, "released", { resourcesReleased: true, errors: [] })
+    await Promise.all([first, second])
+    await expect(backend.prepare(f.spec, f.policy)).rejects.toThrow(/disposed/)
+  })
+
+  it("dispose preserves a false native release for a later retry", async () => {
+    let releases = 0
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") client.status(command.id, "released", {
+        resourcesReleased: ++releases === 2, errors: [nativeError],
+      })
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const backend = f.backend as typeof f.backend & { dispose(): Promise<void> }
+    const firstFailure = await backend.dispose().catch(cause => cause as AggregateError)
+    expect(firstFailure).toBeInstanceOf(AggregateError)
+    expect((firstFailure as AggregateError).errors[0]).toMatchObject({ message: expect.stringContaining("203") })
+    expect(child.sent.filter(type => type === "release")).toHaveLength(1)
+    await backend.dispose()
+    expect(child.sent.filter(type => type === "release")).toHaveLength(2)
+    await backend.dispose()
+    expect(child.sent.filter(type => type === "release")).toHaveLength(2)
+  })
+
+  it("a late successful release after timeout still clears backend ownership", async () => {
+    const releaseIds: string[] = []
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") {
+        releaseIds.push(command.id)
+        if (releaseIds.length > 1) client.status(command.id, "released", { resourcesReleased: false, errors: [nativeError] })
+      }
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const backend = f.backend as typeof f.backend & { dispose(): Promise<void> }
+    vi.useFakeTimers()
+    try {
+      const first = backend.dispose()
+      expect(releaseIds).toHaveLength(1)
+      const failure = expect(first).rejects.toThrow(/cleanup incomplete/)
+      await vi.advanceTimersByTimeAsync(12000)
+      await failure
+      child.status(releaseIds[0]!, "released", { resourcesReleased: true, errors: [] })
+      for (let turn = 0; turn < 10; turn++) await Promise.resolve()
+      await backend.dispose()
+      expect(releaseIds).toHaveLength(1)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("malformed released status cannot retire cleanup ownership", async () => {
+    let releases = 0
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") {
+        releases++
+        client.status(command.id, "released", releases === 1
+          ? { resourcesReleased: true } : { resourcesReleased: true, errors: [] })
+      }
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const backend = f.backend as typeof f.backend & { dispose(): Promise<void> }
+    await expect(backend.dispose()).rejects.toThrow(/cleanup incomplete/)
+    await backend.dispose()
+    expect(releases).toBe(2)
+  })
+
   it("failed commit keeps lifecycle ownership and sends release without a second launch", async () => {
     const child = new FakeChild((command, client) => {
       if (command.type === "prepare") client.status(command.id, "ready", {

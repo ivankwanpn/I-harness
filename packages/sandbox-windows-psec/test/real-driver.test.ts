@@ -1,10 +1,13 @@
 import { mkdtempSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { launchExecution, createExecutionSupervisor } from "@i-harness/exec"
 import type { CompiledSandboxPolicy, ProcessSpec } from "@i-harness/sandbox"
-import { createWindowsPsecBackend, createWindowsUnrestrictedBackend } from "../src/index.ts"
+import { createWindowsPsecBackend, createWindowsUnrestrictedBackend, type WindowsExecutionBackend } from "../src/index.ts"
+
+expectTypeOf<WindowsExecutionBackend["dispose"]>().returns.toEqualTypeOf<Promise<void>>()
+expectTypeOf<ReturnType<typeof createWindowsPsecBackend>>().toExtend<WindowsExecutionBackend>()
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 const helper = resolve(repo, "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe")
@@ -100,6 +103,17 @@ describe.skipIf(process.platform !== "win32")("real Windows helper through publi
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("active release stalled")), 3000)),
     ])
     expect(released.kind).toBe("settled")
+  }, 10000)
+
+  it("backend dispose releases an active helper and rejects new admission", async () => {
+    const f = fixture("unrestricted", false, "flood")
+    const handle = await launchExecution({ backend: f.backend, spec: f.spec, policy: f.policy,
+      requirements: f.requirements, validateAuthority: () => {} })
+    await new Promise(resolve => setTimeout(resolve, 100))
+    await f.backend.dispose()
+    expect((await handle.settled).kind).toBe("settled")
+    await expect(f.backend.prepare(f.spec, f.policy)).rejects.toThrow(/disposed/)
+    expect((await f.backend.probe()).availability).toBe("unavailable")
   }, 10000)
 
   it("rejects PSEC PTY and unrestricted mandatory reference locks before launch", async () => {

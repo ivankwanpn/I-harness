@@ -17,6 +17,11 @@ export interface WindowsExecutionOptions extends HelperOptions {
   /** Trusted legacy adapter only; hidden-console requires unrestricted pipe. */
   consoleMode?: "no-window" | "hidden-console"
 }
+/** Owns every helper session until native resourcesReleased:true is confirmed. */
+export interface WindowsExecutionBackend extends TransportExecutionBackend {
+  /** Retry incomplete native cleanup; failed sessions remain owned for another call. */
+  dispose(): Promise<void>
+}
 type Engine = "psec" | "unrestricted"
 const execFileAsync = promisify(execFile)
 const backendId = (engine: Engine) => `windows-${engine}`
@@ -127,8 +132,11 @@ class Session {
   private nativeAbandoned = false
   readonly output: AsyncIterable<ExecutionOutput>
 
-  constructor(helperPath: string) {
+  constructor(helperPath: string, private readonly onReleased: (session: Session) => void) {
     this.child = spawn(helperPath, [], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
+    this.child.stdin.on("error", error => this.fatal(error))
+    this.child.stdout.on("error", error => this.fatal(error))
+    this.child.stderr.on("error", error => this.fatal(error))
     this.child.stdout.on("data", (chunk: Buffer) => {
       try { for (const status of this.status.push(chunk)) this.receive(status) } catch (error) { this.fatal(error) }
     })
@@ -187,7 +195,7 @@ class Session {
     this.root.reject(this.failed)
     this.tree.reject(this.failed)
     this.io.reject(this.failed)
-    this.child.stdin.end()
+    try { this.child.stdin.end() } catch { /* original channel failure remains primary */ }
     this.child.stderr.resume()
     this.wake()
   }
@@ -267,13 +275,34 @@ class Session {
   }
   private async performRelease(): Promise<void> {
     if (!this.ioStatus || (!this.frames.outputEnded && !this.nativeAbandoned)) this.allowDiscard()
-    const status = await this.expect("release", {}, "released")
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("native release acknowledgment timed out")), 12000)
+    })
+    let status: Status
+    // A confirmed response can arrive after the caller's bounded wait. It still
+    // retires native ownership; a timeout alone never does.
+    const confirmation = this.expect("release", {}, "released").then(value => {
+      if (value.resourcesReleased === true && Array.isArray(value.errors)) this.markReleased()
+      return value
+    })
+    try { status = await Promise.race([confirmation, timeout]) }
+    finally { if (timer) clearTimeout(timer) }
+    if (!Array.isArray(status.errors)) throw new Error("malformed native released status")
     if (status.resourcesReleased !== true) {
-      const errors = status.errors as NativeError[] | undefined
-      throw new Error(`native release incomplete${errors?.length ? `: ${errors.map(nativeDetail).join("; ")}` : ""}`)
+      const errors = status.errors as NativeError[]
+      throw new Error(`native release incomplete${errors.length ? `: ${errors.map(nativeDetail).join("; ")}` : ""}`)
     }
+    this.markReleased()
+  }
+  private markReleased(): void {
+    if (this.releaseComplete) return
     this.releaseComplete = true
-    this.child.stdin.end()
+    const ended = new Error("helper released before pending response")
+    for (const item of this.pending.values()) item.reject(ended)
+    this.pending.clear()
+    this.onReleased(this)
+    try { this.child.stdin.end() } catch { /* native resource release remains confirmed */ }
   }
   ioObject(spec: ProcessSpec) {
     return {
@@ -295,13 +324,19 @@ class Session {
   }
 }
 
-function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): TransportExecutionBackend {
+function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): WindowsExecutionBackend {
   const options = Object.freeze({
     helperPath: source.helperPath, manifestPath: source.manifestPath,
     denyPaths: Object.freeze([...(source.denyPaths ?? [])]), consoleMode: source.consoleMode,
   })
+  const sessions = new Set<Session>()
+  let disposed = false
+  let disposeFlight: Promise<void> | undefined
   return {
     async probe(): Promise<BackendProbe> {
+      if (disposed) return { id: backendId(engine), availability: "unavailable", assurance: "unverified",
+        features: { writeIsolation: false, readIsolation: false, denyPaths: false, pipes: false, pty: false, retainedTree: false },
+        detail: "Windows backend disposed" }
       try {
         const helper = await verifyHelper(options)
         const { stdout } = await execFileAsync(helper.helperPath, ["--probe"], { timeout: 10000, maxBuffer: 65536, windowsHide: true })
@@ -321,6 +356,7 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Tr
       }
     },
     async prepare(spec, policy, signal): Promise<PreparedTransportExecution> {
+      if (disposed) fail("backend disposed")
       if (signal?.aborted) fail("preparation aborted")
       const helper = await verifyHelper(options)
       const payload = await preparePayload(engine, spec, policy, options, helper.helperPath, helper.sha256)
@@ -328,11 +364,22 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Tr
       const preparedOwner = payload.policy.owner
       const policySnapshot = JSON.stringify(policy)
       if (signal?.aborted) fail("preparation aborted")
-      const session = new Session(helper.helperPath)
+      if (disposed) fail("backend disposed")
+      const session = new Session(helper.helperPath, released => { sessions.delete(released) })
+      sessions.add(session)
       let committed = false
       let rolledBack = false
+      let onAbort: (() => void) | undefined
       try {
-        const ready = await session.expect("prepare", payload, "ready")
+        const aborted = new Promise<never>((_, reject) => {
+          onAbort = () => reject(new Error("preparation aborted", { cause: signal?.reason }))
+          signal?.addEventListener("abort", onAbort, { once: true })
+          if (signal?.aborted) onAbort()
+        })
+        if (signal?.aborted) fail("preparation aborted")
+        const ready = await Promise.race([session.expect("prepare", payload, "ready"), aborted])
+        if (signal?.aborted) fail("preparation aborted")
+        if (disposed) fail("backend disposed")
         if (ready.policyFingerprint !== fingerprint || ready.helperSha256 !== helper.sha256
           || typeof ready.effectivePolicyDigest !== "string" || !/^[0-9a-f]{64}$/.test(ready.effectivePolicyDigest)) {
           fail("ready policy fingerprint, helper hash or digest mismatch")
@@ -341,6 +388,7 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Tr
         return {
           policy,
           async commit(validateAuthority) {
+            if (disposed) fail("backend disposed")
             if (committed) fail("duplicate commit")
             if (rolledBack) fail("commit after rollback")
             if (signal?.aborted) fail("commit aborted")
@@ -375,14 +423,27 @@ function createBackend(engine: Engine, source: WindowsExecutionOptions = {}): Tr
         try { await session.release() }
         catch (cleanup) { throw new AggregateError([cause, cleanup], "Native preparation failed and rollback failed", { cause }) }
         throw cause
+      } finally {
+        if (onAbort && signal) signal.removeEventListener("abort", onAbort)
       }
+    },
+    async dispose(): Promise<void> {
+      disposed = true
+      if (disposeFlight) return disposeFlight
+      const flight = (async () => {
+        const outcomes = await Promise.allSettled([...sessions].map(session => session.release()))
+        const errors = outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")
+        if (errors.length) throw new AggregateError(errors.map(outcome => outcome.reason), "Windows backend cleanup incomplete")
+      })()
+      disposeFlight = flight
+      try { await flight } finally { if (disposeFlight === flight) disposeFlight = undefined }
     },
   }
 }
 
-export function createWindowsPsecBackend(options?: WindowsExecutionOptions): TransportExecutionBackend {
+export function createWindowsPsecBackend(options?: WindowsExecutionOptions): WindowsExecutionBackend {
   return createBackend("psec", options)
 }
-export function createWindowsUnrestrictedBackend(options?: WindowsExecutionOptions): TransportExecutionBackend {
+export function createWindowsUnrestrictedBackend(options?: WindowsExecutionOptions): WindowsExecutionBackend {
   return createBackend("unrestricted", options)
 }
