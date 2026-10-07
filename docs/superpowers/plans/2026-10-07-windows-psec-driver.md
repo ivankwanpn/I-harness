@@ -11,7 +11,12 @@ Create `packages/sandbox-windows-psec/` with public TypeScript exports, package 
 Public exports:
 
 ```ts
-export interface WindowsExecutionOptions { helperPath?: string; manifestPath?: string }
+export interface WindowsExecutionOptions {
+  helperPath?: string
+  manifestPath?: string
+  /** Trusted host configuration, detached/frozen when the backend is created. */
+  denyPaths?: readonly string[]
+}
 export function createWindowsPsecBackend(options?: WindowsExecutionOptions): TransportExecutionBackend
 /** Explicitly unrestricted token, still owning the native Job and transport. No PSEC fallback. */
 export function createWindowsUnrestrictedBackend(options?: WindowsExecutionOptions): TransportExecutionBackend
@@ -21,9 +26,11 @@ PSEC backend accepts only `read-only`/`workspace-write`; unrestricted backend ac
 
 Version1 private helper protocol: stdin newline JSON commands; stdout bounded newline JSON status only; stderr binary workload-output frames (`u8 channel`, little-endian u32 byte length, exact bytes; channel0 stdout,1 stderr,2 pty,3 output-end with zero length). No workload may inherit the helper's control/status descriptors. Input bytes travel as bounded JSON byte arrays, not evaluated strings. Per-command/frame bounds, one launch, matching request IDs, explicit errors, deterministic teardown on control EOF, and no partial launch acknowledgment.
 
-Commands: `prepare` supplies immutable spec/policy and explicit engine (`psec`/`unrestricted`); helper creates its owned Job/PSEC/transport and replies `ready`, with no workload. `commit` consumes the one prepared specification; create suspended, assign Job before resume, then reply `started` with actual PID. `input`, `end-input`, `resize`, `signal`, `cancel`, `release` act on that one workload. Status includes `root-exit`, `tree-empty`, `io-settled`, `released` and structured sanitized failure diagnostics. Driver commit runs the final authority/abort fence immediately before sending the single commit command. Abort, control EOF or commit failure triggers owned rollback/termination, never an unconfined retry.
+Commands use `{version:1,id:string,type:string,...}`; statuses use the same version/id plus type and bounded structured fields. `prepare` supplies immutable spec/policy and explicit engine (`psec`/`unrestricted`); helper creates its owned Job/PSEC/transport and replies `ready`, with no workload. `commit` consumes the one prepared specification; create suspended, assign Job before resume, then reply `started` with actual PID. `input`, `end-input`, `resize`, `signal`, `cancel`, `release` act on that one workload. Status includes `root-exit`, `tree-empty`, `io-settled`, `released` and structured sanitized failure diagnostics. Driver commit runs the final authority/abort fence immediately before sending the single commit command. Abort, control EOF or commit failure triggers owned rollback/termination, never an unconfined retry. The Rust task writes a complete `protocol.md` field schema/examples for the TypeScript consumer; no implicit field names are left to guess. `--probe` is readonly discovery; a separate `--self-child` fixture mode is for native controls and never entered by an untrusted protocol command.
 
 Capture exact executable, argv, `argumentEncoding` (`crt` or `cmd-verbatim`), cwd, explicit environment and PTY dimensions. Reject malformed/NUL/relative platform paths and invalid sizes. Validate all policy roots and canonicalize existing filesystem identities before prepare; compare again before commit. Do not turn lexical normalization into a reparse-safety claim. No implicit writable TEMP in readonly; workspace-write only writes declared roots. Read visibility uses available volume roots under the ambient caller token, not a new read credential. Keep references readonly; reject overlapping reference/write roots per compiler contract. Protect helper/runtime inputs from workload mutation when they sit within a writable root; unsupported carveout/deny behavior fails admission rather than dropping protection.
+
+Driver-derived readonly helper/runtime roots and trusted immutable `denyPaths` are additional restrictions, not model-provided grants. Include their canonical rules and helper identity in a separately recorded native effective-policy digest returned by `ready` and validate that digest at commit. The common policy fingerprint remains the authority compiler's fingerprint; it must not be relabeled as a digest of platform-derived rules. The private prepare schema has explicit `protection` fields for these restrictions, so native deny-subtree controls can test real enforcement. Never accept runtime changes that remove protection on an existing prepared/active driver.
 
 ## Native resource rules
 
@@ -36,7 +43,7 @@ Capture exact executable, argv, `argumentEncoding` (`crt` or `cmd-verbatim`), cw
 
 ## Task 1: Rust owned native helper
 
-**Own files:** new package `native/` Rust sources/Cargo.toml/Cargo.lock, helper build script, native artifact/provenance manifest, package.json scaffold and README native design. No edits to existing packages. Split Rust into ffi/policy/command-line/job/transport/runner modules; one entrypoint delegates, not one giant source file.
+**Own files:** new package `native/` Rust sources/Cargo.toml/Cargo.lock, helper build script, native artifact/provenance manifest, package.json scaffold, README native design, protocol.md, and a focused native-helper smoke script under its test/. No edits to existing packages. Split Rust into ffi/policy/command-line/job/transport/runner modules; one entrypoint delegates, not one giant source file.
 
 - [ ] Compile and unit-test argument quoting, malformed protocol/spec rejection, finite bounds, lifecycle ownership and schema serialization. Capture RED/GREEN where behavior is testable without Windows API.
 - [ ] Implement native protocol above and probe mode with readonly API discovery. The explicit unrestricted engine shares ownership/I/O but never instantiates a PSEC, and cannot accept confined policies.
