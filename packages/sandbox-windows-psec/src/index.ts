@@ -10,7 +10,7 @@ import type {
 } from "@i-harness/sandbox"
 import { verifyHelper, type HelperOptions } from "./integrity.ts"
 import { FrameDecoder, StatusDecoder, type NativeError, type Status } from "./protocol.ts"
-export { readWindowsQualification } from "./qualification.ts"
+import { readWindowsQualification as readQualification, type WindowsQualificationView } from "./qualification.ts"
 export type { WindowsQualificationRecord, WindowsQualificationView, ObservedSupport } from "./qualification.ts"
 
 export interface WindowsExecutionOptions extends HelperOptions {
@@ -18,6 +18,10 @@ export interface WindowsExecutionOptions extends HelperOptions {
   denyPaths?: readonly string[]
   /** Trusted legacy adapter only; hidden-console requires unrestricted pipe. */
   consoleMode?: "no-window" | "hidden-console"
+}
+/** Informational shipped evidence for the selected helper and Windows release. */
+export function readWindowsQualification(options?: WindowsExecutionOptions): Promise<WindowsQualificationView> {
+  return readQualification(options)
 }
 /** Owns every helper session until native resourcesReleased:true is confirmed. */
 export interface WindowsExecutionBackend extends TransportExecutionBackend {

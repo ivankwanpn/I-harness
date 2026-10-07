@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, expectTypeOf, it } from "vitest"
 import { release as osRelease } from "node:os"
-import { readWindowsQualification } from "../src/index.ts"
+import { readWindowsQualification, type WindowsExecutionOptions } from "../src/index.ts"
+
+expectTypeOf<Parameters<typeof readWindowsQualification>[0]>().toEqualTypeOf<WindowsExecutionOptions | undefined>()
 
 describe.skipIf(process.platform !== "win32")("shipped Windows qualification record", () => {
   it("ties the incomplete outcome to this helper, protocol and Windows release", async () => {
