@@ -59,14 +59,19 @@ export type AuthorityState =
 export interface CompiledSandboxPolicy {
   mode: SandboxMode; owner: Readonly<ExecutionOwner>; authorityRevision: string
   authorityKind: "unbound" | "bound"; primaryRoot: string
-  readable: "caller"; writeRoots: readonly string[]; referenceRoots: readonly string[]
+  readable: "caller"; authorityRoots: readonly string[]
+  writeRoots: readonly string[]; referenceRoots: readonly string[]
   fingerprint: string
 }
 export interface ExecutionReceipt {
   executionId: string; backendId: string; policyFingerprint: string
   owner: Readonly<ExecutionOwner>; assurance: BackendAssurance
 }
-export interface RootExit { exitCode: number | null; signal?: string }
+export interface RootExit {
+  exitCode: number | null; signal?: string
+  /** Driver-sanitized root status observation failure; null code is explicitly unknown. */
+  observationError?: string
+}
 export type ExecutionSettlement =
   | { kind: "settled"; root: RootExit; treeEmpty: true; ioSettled: true; resourcesReleased: true }
   | { kind: "incomplete"; phase: "tree" | "io" | "release"; detail: string }
@@ -123,7 +128,7 @@ export function assertExecutionAuthority(
 ): void
 ```
 
-- [ ] Write RED tests for revoked and unavailable states; unbound workspace; bound primary root not lost; references always separate from write roots; readonly has no write roots; dangerous-full-access retains explicit mode without claiming restrictions; detached nested arrays/owner; stable fingerprint under root/reference ordering and duplicate entries; different owner/revision/mode/roots/reference changes invalidate authority. Invalid mode, blank revision/session ID, relative/NUL paths and malformed states refuse. Use native-platform absolute fixtures (`resolve(...)`) rather than assuming Unix paths on Windows.
+- [ ] Write RED tests for revoked and unavailable states; unbound workspace; bound primary root not lost; references always separate from write roots; readonly has no write roots; dangerous-full-access retains explicit mode without claiming restrictions; detached nested arrays/owner; stable fingerprint under root/reference ordering and duplicate entries; different owner/revision/mode/roots/reference changes invalidate authority in EVERY mode. Keep `authorityRoots` independent of `writeRoots`, including read-only/full-access. Invalid mode, blank revision/session ID, relative/NUL paths and malformed states refuse. Use native-platform absolute fixtures (`resolve(...)`) rather than assuming Unix paths on Windows.
 
 ```ts
 expect(() => compileExecutionPolicy({ mode: "workspace-write", owner,
@@ -133,7 +138,7 @@ expect(() => assertExecutionAuthority(before, { ...before, authorityRevision: "r
 ```
 
 - [ ] Normalize absolute paths through existing package utilities or Node path. These are compiler spellings, not a claim that lexical normalization prevents reparse races. Sort/deduplicate deterministic roots with platform-appropriate case handling; retain primaryRoot separately. Reject any reference overlapping an allowed writable root until the later native policy can implement nested read-only carveouts; do not silently remove a root or broaden access.
-- [ ] Build fingerprint from canonical mode, owner, authority kind/revision, primary root, write roots and reference roots using Node SHA-256. Copy/freeze every public nested value; ensure caller mutation cannot change compiled policy. Do not change existing createSandboxPolicy.resolve behavior yet.
+- [ ] Build fingerprint from canonical mode, owner, authority kind/revision, primary root, all authority roots, write roots and reference roots using Node SHA-256. Copy/freeze every public nested value; ensure caller mutation cannot change compiled policy. Do not change existing createSandboxPolicy.resolve behavior yet.
 - [ ] Authority comparison checks the canonical prepared/current content and recomputed fingerprint, not only a supplied string. No automatic broadening/snapshot refresh inside this assertion.
 - [ ] Run policy and sandbox suites/typechecks; commit only task files. Document unsupported overlapping references as an explicit first-phase constraint.
 
@@ -151,17 +156,29 @@ export function createExecutionLease(input: {
 }): ExecutionHandle
 ```
 
-- [ ] Write RED tests with deferred real promises: root exit alone does not resolve settled; tree must become empty then I/O settles then resources release. Cancel is idempotent, concurrent cancel/release shares a cleanup, terminate failure is recorded and does not skip attempts to settle/release. Native release never begins until tree and I/O settlement are confirmed. Incomplete tree/I/O retains resources for recovery, reports the exact phase and permits a later explicit retry. Successful lease releases once. Receipt and owner cannot be mutated by callers. Attach rejection handlers so an early native failure cannot become an unhandled rejection while waiting for another phase.
-- [ ] Implement an explicit per-lease promise/state machine in this focused module. Distinguish normal root exit from cancellation; no kill operation on a naturally completed/settled handle. Preserve first successful termination reason, return deterministic incomplete details, and avoid swallowing errors. No native API, stream collector or job registry belongs here.
+- [ ] Write RED tests with deferred real promises: root exit alone does not resolve settled; tree must become empty then I/O settles then resources release. Cancel is idempotent, concurrent cancel/release shares a cleanup, terminate failure is reported without skipping safe tree/I/O checks. Never claim settlement after an unconfirmed tree or output phase. Native release never begins until tree and I/O settlement are confirmed. Incomplete tree/I/O retains resources for recovery, reports the exact phase and permits a later explicit retry. Successful lease releases once. Receipt and owner cannot be mutated by callers. Attach rejection handlers so an early native failure cannot become an unhandled rejection while waiting for another phase. Root observation rejection normalizes to `{ exitCode: null, observationError: detail }`; actual tree/I/O confirmation remains mandatory, and successful release retains this diagnostic rather than permanently stranding resources.
+- [ ] Implement an explicit per-lease promise/state machine in this focused module. `settled` is a readonly getter for the current settlement-attempt promise: after an incomplete result an explicit release retry installs a new attempt; callers already holding the earlier promise retain its historical result. Concurrent operations share the active attempt. A terminate-hook failure prevents a success claim for that cancel attempt and must be returned as `incomplete/tree` with its cause; tree/I/O observations may proceed, but resources remain owned until explicit retry confirms cleanup. Retry failed termination only while tree emptiness is unconfirmed. Once tree emptiness is confirmed, no new native termination may start, including after prior failure or during resource release/retry. Reserve the resource-release phase synchronously and await any already-started termination; late cancel joins cleanup without invoking native hooks. Distinguish normal root exit from cancellation; no kill on a naturally completed/settled handle. Preserve first successful termination reason and observation diagnostics. No native API, stream collector or job registry belongs here.
 - [ ] Run sandbox suite/typecheck and existing exec/terminal tests to catch public export regressions; commit only task files.
 
 ## Task 4: Foundation contract integration and package boundary gate
 
-**Files:** Add `packages/exec/test/execution-contract-consumer.test.ts`; update `packages/sandbox/README.md` and `packages/sandbox-policy/README.md` with supported APIs and limits. Create missing READMEs if necessary.
+**Files:** Create `packages/exec/src/execution-admission.ts`, export from `src/index.ts`, add `test/execution-contract-consumer.test.ts`; add test-only `@i-harness/sandbox-policy: workspace:*` to `packages/exec/package.json` devDependencies and update `pnpm-lock.yaml` importer; update `packages/sandbox/README.md` and `packages/sandbox-policy/README.md` with supported APIs and limits. Create missing READMEs if necessary.
 
-- [ ] Through public package imports only, compose a compiled policy, negotiated fake backend, prepared execution and lease. Revalidate authority after asynchronous preparation; a removed project/revision change calls rollback and never commits. A valid call returns one owned handle, cancellation resolves only after tree/I/O/resources, and promotion keeps that same handle. This is a contract test, not native-enforcement evidence.
+**Produces:**
+
+```ts
+export function launchExecution(input: {
+  backend: ExecutionBackend; spec: ProcessSpec; policy: CompiledSandboxPolicy
+  requirements: BackendRequirements; validateAuthority(policy: CompiledSandboxPolicy): void
+  signal?: AbortSignal
+}): Promise<ExecutionHandle>
+```
+
+The helper performs real common admission orchestration, without selecting a backend or spawning a process itself. Check a pre-aborted signal and authority before probe; refuse failed capability negotiation before prepare. After prepare, check abort and authority again and pass the same revalidation callback into `commit` for the backend's final execution fence. Preparation/commit failures must rollback owned prepared resources; a rollback error is preserved alongside the original failure, not masked or swallowed. There is no backend retry or automatic policy refresh. Preserve supplied immutable policy and exact spec; no copy that silently changes a prepared command. Later supervisor migration consumes this public function.
+
+- [ ] Write public consumer RED tests for missing `launchExecution`; through declared package imports compose a compiled policy, negotiated fake backend, prepared execution and lease. Revalidate authority after asynchronous preparation; a removed project/revision change calls rollback and never commits. Pre-abort performs no probe/prepare, abort during prepare rolls back, capability failure performs no prepare, commit/rollback failures preserve both causes, and the callback given to commit is invoked before its fake workload marker. A valid call returns one owned handle, cancellation resolves only after tree/I/O/resources, and presentation/promotion retains that same handle. This proves production admission helper behavior with a fake process boundary, not native enforcement.
 - [ ] Add type-level public-consumer compile checks for pipe/PTY and receipts; do not instantiate Win32 types or import any other package's src.
-- [ ] Run affected package tests/typechecks and root typecheck. Run package-boundary searches on changed files for cross-package src imports and native API leakage.
+- [ ] Implement minimal helper using public `checkBackendRequirements`, the supplied validator, AbortSignal and typed failure messages. No reference to sandbox-policy runtime is needed; its dependency is test-only. Update lockfile only for the workspace dev dependency, avoiding unrelated resolution changes. Run affected package tests/typechecks and root typecheck. Run package-boundary searches on changed files for cross-package src imports and native API leakage.
 - [ ] Independent task reviews and whole-phase review; fix findings. Record exact tests and limitations in the READMEs. Commit task files and finish the foundation ledger.
 
 ## Next plans (same authorized redesign)

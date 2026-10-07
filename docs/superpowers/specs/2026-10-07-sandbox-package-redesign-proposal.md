@@ -100,13 +100,15 @@ flowchart TD
 
 ## 6. 執行契約與資源擁有者
 
-這些是提議的契約名稱，尚非已實作 API：
+以下描述完整目標契約。第一階段已提供 `ExecutionBackend`、`PreparedExecution`、基礎 `ExecutionHandle`、不可變政策與共用 admission；workload I/O、程序 registry 和正式 driver 依後續計畫接入：
 
-- `SandboxBackend.probe()`：回傳 host availability、政策 primitives、transport 與生命週期支援，附診斷與版本。
-- `SandboxBackend.prepare(request, policy)`：驗證並回傳 `PreparedExecution`；沒有暗中縮減／放寬政策。
-- `PreparedExecution.commit(LaunchPermit)`：完成非同步準備後，由可信 supervisor 在權限 commit fence 內重新驗證，再發出並消費一次性 permit；回傳 `ExecutionHandle`，由 `exec` registry 持有。取消或失效的準備結果必須 `rollback()`。
+- `ExecutionBackend.probe()`：回傳 host availability、政策 primitives、transport 與生命週期支援，附診斷與版本。
+- `ExecutionBackend.prepare(request, policy)`：驗證並回傳 `PreparedExecution`；沒有暗中縮減／放寬政策。
+- `PreparedExecution.commit(validateAuthority)`：完成非同步準備後，在可信 validator 的最後權限 fence 重新驗證；driver 只消費一次準備結果，再啟動並回傳 handle。不是可序列化授權密鑰，也不代表 JavaScript callback 本身就是原子 OS 啟動。Native driver 的 suspended child、Job 與 resume 順序另作實測。取消或失效的準備結果必須 `rollback()`。
 - `ExecutionHandle`：工作負載 stdin／stdout／stderr 或 PTY stream、`resize`、`rootExited`、`settled`、冪等 `cancel(reason)` 和 `release()`。
 - `settled`：整個執行樹結束、輸出已 drain／依明確規則丟棄、政策與 native 資源已釋放；不能等同 Node wrapper 的 `close`。
+
+Root 的 exit status 讀取失敗與執行樹未結束須分開：狀態未知用 `exitCode: null` 及 driver 已遮蔽敏感內容的 observation diagnostic 表達；只有 tree emptiness 與 I/O 已確認後才能關閉資源。不能因固定的 root observation promise 拒絕，而永久保留一棵已排空執行樹的資源。樹已確認為空或進入資源關閉後，不得再啟動另一個 native termination；取消需加入同一個清理結果。
 
 Node process、POSIX process group、Windows Job、PSEC handle 與 ConPTY 都由其 driver 處理；共同層只操作平台中立 handle。共同的 completion receipt 包含實際後端、政策 ID、是否已 resume、root exit、tree settlement、drain、release 結果及錯誤階段。
 
@@ -167,10 +169,10 @@ Codex 固定的 Microsoft MXC README 記載早期預覽、已知過度寬鬆政�
 ## 11. 遷移順序
 
 1. 確定共用政策、authority state、執行 handle 和 receipt 契約；以假 driver 做平台中立生命週期契約測試。平台 driver 同時跑其自己的原生 gate，不能用假 driver 證明強制效果。
-2. 以 legacy／POSIX／明確無限制 driver 接入新 `exec`，保持既有 shell、串流、背景輸出與單次核准行為；原有 argv seam 只留有期限的 compatibility adapter，不再提供旁路。
-3. 將 terminal 啟動轉至共同 runtime；不支援原生隔離的 backend 明確拒絕。保留終端 UI 和 ring-buffer API 的相容層。
-4. 製作 PSEC 原生可行性與權限驗證工具；全部新 native 執行只落在已標記的 owned fixtures，不修改真正參考專案 ACL。
-5. 接入明確 experimental 的 Windows PSEC driver，先通過工具鏈、權限和生命週期 gates；Settings 顯示实际後端與可用／已驗證狀態。
+2. 補充 workload transport 與唯一 `exec` supervisor，先用有延遲的假邊界驗證 preparation、取消與撤權的順序。
+3. 製作 PSEC 原生 driver／可行性與權限驗證工具；先取得真正的 Windows Job／I/O／政策生命週期證據，再替換既有 Windows 啟動。全部新 native 執行只落在已標記的 owned fixtures，不修改真正參考專案 ACL。
+4. 以 legacy／POSIX／明確無限制 driver 接入新 `exec`，保持既有 shell、串流、背景輸出與單次核准行為；將 terminal 轉至共同 runtime。原有 argv seam 只留有期限的 compatibility adapter，不再提供旁路。不支援原生隔離的 backend 明確拒絕。
+5. 接入明確 experimental 的 Windows PSEC 選擇與版本化 authority／撤權 acknowledgement；先通過工具鏈、權限和生命週期 gates。Settings 顯示实际後端與可用／已驗證狀態。
 6. 移除 assembly 的平台例外資源管理；確認所有工具、Code Mode、插件與背景呼叫使用共同 admission。滿足驗收与成熟度後再討論預設後端。
 
 開發按逐套件實作計畫進行，保持原有預設政策與發行檔，直到相應阶段完成驗收。PSEC 仍受本文件的 experimental／能力／成熟度要求約束；使用者沒有授權帳戶或特權佈建。
