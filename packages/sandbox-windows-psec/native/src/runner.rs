@@ -21,15 +21,22 @@ use std::{
 };
 use windows_sys::Win32::{Foundation::*, System::Threading::*};
 static STATUS: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+#[cfg(test)]
+thread_local! {static FAIL_RESUME:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
+#[cfg(test)]
+thread_local! {static FAIL_ASSIGN:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
 
 struct Prepared {
     effective: Effective,
     psec: Option<Psec>,
-    job: Job,
+    job: Option<Job>,
     io: PreparedIo,
+    errors: Vec<Error>,
 }
 struct Running {
     process: Handle,
+    primary_thread: Handle,
+    assigned: bool,
     pid: u32,
     root_reported: bool,
     tree_reported: bool,
@@ -62,34 +69,47 @@ impl Prepared {
             protection,
             console_mode.unwrap_or_else(|| "no-window".into()),
         )?;
-        let psec = if engine == "psec" {
+        Ok(Self {
+            effective,
+            psec: None,
+            job: None,
+            io: PreparedIo::empty(),
+            errors: vec![],
+        })
+    }
+    fn initialize(&mut self, engine: &str) -> Result<()> {
+        self.psec = if engine == "psec" {
             let api = PsecApi::load()?;
             if api.flags & 1 == 0 {
                 return Err(Error::native_code("PSEC support flags", 50));
             }
-            if !effective.protection.deny_paths.is_empty() && api.flags & 2 == 0 {
+            if !self.effective.protection.deny_paths.is_empty() && api.flags & 2 == 0 {
                 return Err(Error::native_code("PSEC deny paths unsupported", 50));
             }
-            Some(api.create(&effective.bytes)?)
+            Some(api.create(&self.effective.bytes)?)
         } else {
             None
         };
-        let job = Job::new()?;
-        let io = PreparedIo::new(&effective.spec)?;
-        Ok(Self {
-            effective,
-            psec,
-            job,
-            io,
-        })
+        self.job = Some(Job::new()?);
+        self.job.as_ref().unwrap().configure()?;
+        self.io.initialize(&self.effective.spec)
     }
-    fn launch(
-        mut self,
-        id: String,
-        digest: &str,
-        events: SyncSender<Event>,
-        output: std::fs::File,
-    ) -> Result<Running> {
+    fn release(&mut self) -> bool {
+        let mut errors = self.io.release();
+        if let Some(job) = self.job.as_mut() {
+            if let Err(e) = job.0.close() {
+                errors.push(e);
+            }
+        }
+        errors.extend(self.effective.release());
+        let released = errors.is_empty();
+        self.errors.extend(errors);
+        if released {
+            self.psec.take();
+        }
+        released
+    }
+    fn create_suspended(&mut self, digest: &str) -> Result<PROCESS_INFORMATION> {
         if digest != self.effective.digest {
             return Err(Error::state("effective policy digest mismatch"));
         }
@@ -187,67 +207,23 @@ impl Prepared {
                 &mut info,
             )
         };
-        if created == 0 {
-            return Err(Error::native("CreateProcessW"));
-        }
-        let process = Handle(info.hProcess);
-        let primary_thread = Handle(info.hThread);
-        // No security attribute may be removed on failure, and no unassigned suspended child survives.
-        if let Err(mut e) = self.job.assign(process.0) {
-            rollback_process(&process, &mut e);
-            return Err(e);
-        }
+        // LastError is captured before DeleteProcThreadAttributeList. The list is
+        // gone before any backing owner moves into the running/rollback state.
+        attrs.finish_create(created)?;
+        Ok(info)
+    }
+    fn into_running(
+        self,
+        info: PROCESS_INFORMATION,
+        id: String,
+        events: SyncSender<Event>,
+        output: std::fs::File,
+    ) -> Running {
         let io = self.io.start(events, output);
-        if unsafe { ResumeThread(primary_thread.0) } == u32::MAX {
-            let mut e = Error::native("ResumeThread");
-            rollback_process(&process, &mut e);
-            drop(primary_thread);
-            let mut running = Running {
-                process,
-                pid: info.dwProcessId,
-                root_reported: false,
-                tree_reported: false,
-                io_reported: false,
-                io,
-                owner: PreparedOwner {
-                    _effective: self.effective,
-                    _psec: self.psec,
-                    job: self.job,
-                },
-                id,
-                cancelled: false,
-                closing: true,
-                errors: vec![],
-                stop_at: None,
-            };
-            running.stop(true);
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !running.io.settled() && Instant::now() < deadline {
-                running.io.stop_input();
-                running.io.cancel_output();
-                if running.owner.job.active().ok() == Some(0) {
-                    running.tree_reported = true;
-                    running.io.close_console();
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            if running.io.settled() {
-                if let Err(cleanup) = running.io.join() {
-                    e.cleanup.push(cleanup);
-                }
-                running.io_reported = true;
-            } else {
-                e.cleanup.push(Error::state(
-                    "resume failure cleanup incomplete after 10 seconds",
-                ));
-            }
-            e.cleanup.append(&mut running.errors);
-            return Err(e);
-        }
-        drop(primary_thread);
-        drop(attrs);
-        Ok(Running {
-            process,
+        Running {
+            process: Handle(info.hProcess),
+            primary_thread: Handle(info.hThread),
+            assigned: false,
             pid: info.dwProcessId,
             root_reported: false,
             tree_reported: false,
@@ -256,27 +232,14 @@ impl Prepared {
             owner: PreparedOwner {
                 _effective: self.effective,
                 _psec: self.psec,
-                job: self.job,
+                job: self.job.expect("initialized job"),
             },
             id,
             cancelled: false,
             closing: false,
-            errors: vec![],
+            errors: self.errors,
             stop_at: None,
-        })
-    }
-}
-fn rollback_process(process: &Handle, error: &mut Error) {
-    if unsafe { TerminateProcess(process.0, 137) } == 0 {
-        error
-            .cleanup
-            .push(Error::native("TerminateProcess(rollback)"));
-    }
-    if unsafe { WaitForSingleObject(process.0, 5000) } != WAIT_OBJECT_0 {
-        error.cleanup.push(Error::native_code(
-            "WaitForSingleObject(rollback)",
-            WAIT_TIMEOUT,
-        ));
+        }
     }
 }
 fn status(id: &str, kind: &str, fields: serde_json::Value) -> Result<()> {
@@ -357,13 +320,49 @@ fn controls(file: std::fs::File) -> Receiver<Control> {
     rx
 }
 impl Running {
+    fn resume(&mut self) -> Result<()> {
+        let errors = self.io.close_pending_handles();
+        if !errors.is_empty() {
+            let mut error = Error::state("failed to close parent workload endpoints");
+            error.cleanup = errors;
+            return Err(error);
+        }
+        #[cfg(test)]
+        if FAIL_ASSIGN.with(|flag| flag.replace(false)) {
+            return Err(Error::native_code("AssignProcessToJobObject", 5));
+        }
+        self.owner.job.assign(self.process.0)?;
+        self.assigned = true;
+        #[cfg(test)]
+        if FAIL_RESUME.with(|flag| flag.replace(false)) {
+            return Err(Error::native_code("ResumeThread", 6));
+        }
+        if unsafe { ResumeThread(self.primary_thread.0) } == u32::MAX {
+            return Err(Error::native("ResumeThread"));
+        }
+        self.primary_thread.close()
+    }
+    fn remember(&mut self, error: Error) {
+        if self.errors.len() < 16 {
+            self.errors.push(error);
+        }
+    }
+    fn terminate_owned(&mut self) {
+        // Assignment can fail after process creation. Such a suspended process is
+        // not in the Job, so Job termination alone is never treated as rollback.
+        if !self.assigned && unsafe { WaitForSingleObject(self.process.0, 0) } != WAIT_OBJECT_0 {
+            if unsafe { TerminateProcess(self.process.0, 137) } == 0 {
+                self.remember(Error::native("TerminateProcess(rollback)"));
+            }
+        }
+        if let Err(e) = self.owner.job.terminate() {
+            self.remember(e);
+        }
+    }
     fn stop(&mut self, discard: bool) {
         if !self.cancelled {
             self.cancelled = true;
-            if let Err(e) = self.owner.job.terminate() {
-                self.errors.push(e);
-                self.stop_at = Some(Instant::now());
-            }
+            self.terminate_owned();
         }
         self.io.stop_input();
         if discard {
@@ -373,6 +372,12 @@ impl Running {
     }
     fn tick(&mut self) -> Result<()> {
         if self.cancelled {
+            for e in self.io.close_pending_handles() {
+                self.remember(e);
+            }
+            if !self.root_reported {
+                self.terminate_owned();
+            }
             self.io.stop_input();
             if self.io.abandoned() {
                 self.io.cancel_output();
@@ -400,7 +405,7 @@ impl Running {
                 return Err(Error::native("WaitForSingleObject(root)"));
             }
         }
-        if !self.tree_reported && self.owner.job.active()? == 0 {
+        if !self.tree_reported && self.root_reported && self.owner.job.active()? == 0 {
             self.tree_reported = true;
             status(
                 &self.id,
@@ -416,14 +421,32 @@ impl Running {
         Ok(())
     }
     fn release(&mut self) -> bool {
+        if !self.root_reported || !self.tree_reported || !self.io_reported {
+            return false;
+        }
         let mut released = true;
         // No process can use PSEC/Job now: tree accounting and I/O joins were both confirmed.
-        self.owner._psec.take();
-        for handle in [&mut self.process, &mut self.owner.job.0] {
+        for e in self.io.close_pending_handles() {
+            self.errors.push(e);
+            released = false;
+        }
+        for handle in [
+            &mut self.primary_thread,
+            &mut self.process,
+            &mut self.owner.job.0,
+        ] {
             if let Err(e) = handle.close() {
                 self.errors.push(e);
                 released = false;
             }
+        }
+        let errors = self.owner._effective.release();
+        if !errors.is_empty() {
+            released = false;
+            self.errors.extend(errors);
+        }
+        if released {
+            self.owner._psec.take();
         }
         released
     }
@@ -432,16 +455,22 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if !self.tree_reported {
-            let _ = self.owner.job.terminate();
+            self.terminate_owned();
         }
         if self.io_reported {
             return;
         }
         let deadline = Instant::now() + Duration::from_secs(5);
         while Instant::now() < deadline {
+            for e in self.io.close_pending_handles() {
+                self.remember(e);
+            }
             self.io.stop_input();
             self.io.cancel_output();
-            if self.tree_reported || self.owner.job.active().ok() == Some(0) {
+            if self.tree_reported
+                || (unsafe { WaitForSingleObject(self.process.0, 0) } == WAIT_OBJECT_0
+                    && self.owner.job.active().ok() == Some(0))
+            {
                 self.io.close_console();
             }
             if self.io.settled() {
@@ -450,12 +479,27 @@ impl Drop for Running {
             }
             thread::sleep(Duration::from_millis(10));
         }
+        // A fatal channel/EOF failure can prevent further release retries. Never
+        // explicitly close PSEC while an observed tree or drain is incomplete.
+        let tree_empty = self.tree_reported
+            || (unsafe { WaitForSingleObject(self.process.0, 0) } == WAIT_OBJECT_0
+                && self.owner.job.active().ok() == Some(0));
+        if !tree_empty || !self.io.settled() {
+            if let Some(psec) = self.owner._psec.take() {
+                std::mem::forget(psec);
+            }
+        }
     }
 }
 
 fn drain_events(events: &Receiver<Event>, running: &mut Option<Running>) -> Result<()> {
     while let Ok(event) = events.try_recv() {
         match event {
+            Event::RetainedHandle(handle) => {
+                if let Some(r) = running.as_mut() {
+                    r.io.pending_handles.push(handle);
+                }
+            }
             Event::Input(id, result) => match result {
                 Ok(()) => status(&id, "ack", serde_json::json!({}))?,
                 Err(e) => failure(&id, e)?,
@@ -485,6 +529,7 @@ pub fn run() -> Result<()> {
     let mut prepared: Option<Prepared> = None;
     let mut running: Option<Running> = None;
     let mut prepared_once = false;
+    let mut commit_allowed = false;
     let mut ids = HashSet::new();
     let mut eof = false;
     let mut release_ids = vec![];
@@ -523,11 +568,10 @@ pub fn run() -> Result<()> {
         if running.as_ref().is_some_and(|r| {
             r.root_reported && r.tree_reported && r.io_reported && (r.closing || eof)
         }) {
-            let mut r = running.take().unwrap();
+            let r = running.as_mut().unwrap();
             let released = r.release();
             let errors = r.errors.clone();
             let id = r.id.clone();
-            drop(r);
             if release_ids.is_empty() {
                 release_ids.push(id);
             }
@@ -538,7 +582,18 @@ pub fn run() -> Result<()> {
                     serde_json::json!({"resourcesReleased":released,"errors":errors}),
                 )?;
             }
-            return Ok(());
+            if released {
+                running.take();
+                return Ok(());
+            }
+            if eof {
+                let mut e = Error::state("release failed after control EOF");
+                e.cleanup = errors;
+                return Err(e);
+            }
+            // Preserve the owner and all failed handles. A new release request is
+            // a cleanup retry, never permission to prepare/launch again.
+            running.as_mut().unwrap().closing = false;
         }
         if let Some(r) = running.as_ref() {
             if r.stop_at
@@ -549,11 +604,31 @@ pub fn run() -> Result<()> {
                     Error::state("native cancellation did not settle within 10 seconds");
                 error.code = "settlement-incomplete";
                 error.cleanup = r.errors.clone();
-                return Err(error);
+                if eof {
+                    return Err(error);
+                }
+                failure(&r.id, error.clone())?;
+                for release_id in release_ids.drain(..) {
+                    status(
+                        &release_id,
+                        "released",
+                        serde_json::json!({"resourcesReleased":false,"errors":[error]}),
+                    )?;
+                }
+                let r = running.as_mut().unwrap();
+                r.closing = false;
+                r.stop_at = None;
             }
         }
         if eof && running.is_none() {
-            drop(prepared.take());
+            if let Some(p) = prepared.as_mut() {
+                if !p.release() {
+                    let mut error = Error::state("prepared rollback failed after control EOF");
+                    error.cleanup = p.errors.clone();
+                    return Err(error);
+                }
+            }
+            prepared.take();
             return Ok(());
         }
         let control = match controls.recv_timeout(Duration::from_millis(10)) {
@@ -567,8 +642,6 @@ pub fn run() -> Result<()> {
                 if let Some(r) = running.as_mut() {
                     r.closing = true;
                     r.stop(true);
-                } else {
-                    drop(prepared.take());
                 }
             }
             Control::Command(Err(e)) => {
@@ -577,8 +650,6 @@ pub fn run() -> Result<()> {
                 if let Some(r) = running.as_mut() {
                     r.closing = true;
                     r.stop(true);
-                } else {
-                    drop(prepared.take());
                 }
             }
             Control::Command(Ok(command)) => {
@@ -600,30 +671,63 @@ pub fn run() -> Result<()> {
                                 return Err(Error::state("only one prepare is permitted"));
                             }
                             prepared_once = true;
-                            let p = Prepared::new(engine, spec, policy, protection, console_mode)?;
+                            let p = Prepared::new(
+                                engine.clone(),
+                                spec,
+                                policy,
+                                protection,
+                                console_mode,
+                            )?;
+                            prepared = Some(p);
+                            let p = prepared.as_mut().unwrap();
+                            if let Err(mut error) = p.initialize(&engine) {
+                                p.release();
+                                error.cleanup.extend(p.errors.clone());
+                                return Err(error);
+                            }
                             status(
                                 &id,
                                 "ready",
                                 serde_json::json!({"effectivePolicyDigest":p.effective.digest,"policyFingerprint":p.effective.policy.fingerprint,"helperSha256":p.effective.protection.helper_sha256}),
                             )?;
-                            prepared = Some(p);
+                            commit_allowed = true;
                         }
                         Action::Commit {
                             effective_policy_digest,
                         } => {
+                            if !commit_allowed {
+                                return Err(Error::state(
+                                    "commit requires unconsumed prepared state",
+                                ));
+                            }
+                            commit_allowed = false;
                             let p = prepared
-                                .take()
-                                .ok_or_else(|| Error::state("commit requires prepared state"))?;
-                            let r = p.launch(
+                                .as_mut()
+                                .ok_or_else(|| Error::state("prepared owner missing"))?;
+                            let info = match p.create_suspended(&effective_policy_digest) {
+                                Ok(info) => info,
+                                Err(mut error) => {
+                                    p.release();
+                                    error.cleanup.extend(p.errors.clone());
+                                    return Err(error);
+                                }
+                            };
+                            let p = prepared.take().unwrap();
+                            let r = p.into_running(
+                                info,
                                 id.clone(),
-                                &effective_policy_digest,
                                 events_tx.clone(),
-                                output
-                                    .take()
-                                    .ok_or_else(|| Error::state("output already consumed"))?,
-                            )?;
-                            status(&id, "started", serde_json::json!({"pid":r.pid}))?;
+                                output.take().expect("one commit consumes private output"),
+                            );
                             running = Some(r);
+                            let r = running.as_mut().unwrap();
+                            if let Err(mut error) = r.resume() {
+                                r.remember(error.clone());
+                                r.stop(true);
+                                error.cleanup.extend(r.errors.iter().skip(1).cloned());
+                                return Err(error);
+                            }
+                            status(&id, "started", serde_json::json!({"pid":r.pid}))?;
                         }
                         Action::Input { data } => running
                             .as_mut()
@@ -674,7 +778,15 @@ pub fn run() -> Result<()> {
                             if let Some(r) = running.as_mut() {
                                 r.stop(true);
                             } else {
-                                drop(prepared.take());
+                                commit_allowed = false;
+                                if let Some(p) = prepared.as_mut() {
+                                    if !p.release() {
+                                        let mut error =
+                                            Error::state("prepared cancellation cleanup failed");
+                                        error.cleanup = p.errors.clone();
+                                        return Err(error);
+                                    }
+                                }
                             }
                             status(&id, "ack", serde_json::json!({}))?;
                         }
@@ -684,13 +796,21 @@ pub fn run() -> Result<()> {
                                 r.stop(true);
                                 release_ids.push(id.clone());
                             } else {
-                                drop(prepared.take());
+                                commit_allowed = false;
+                                let (released, errors) = if let Some(p) = prepared.as_mut() {
+                                    (p.release(), p.errors.clone())
+                                } else {
+                                    (true, vec![])
+                                };
                                 status(
                                     &id,
                                     "released",
-                                    serde_json::json!({"resourcesReleased":true,"errors":[]}),
+                                    serde_json::json!({"resourcesReleased":released,"errors":errors}),
                                 )?;
-                                eof = true;
+                                if released {
+                                    prepared.take();
+                                    eof = true;
+                                }
                             }
                         }
                     }
@@ -701,5 +821,144 @@ pub fn run() -> Result<()> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn prepared_fixture(engine: &str) -> (Prepared, std::path::PathBuf) {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = repo.join(format!(
+            ".tmp/sandbox-redesign-native-unit-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let cwd = path
+            .to_str()
+            .unwrap()
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(path.to_str().unwrap());
+        let exe = std::env::current_exe().unwrap();
+        let exe_text = exe
+            .to_str()
+            .unwrap()
+            .strip_prefix("\\\\?\\")
+            .unwrap_or(exe.to_str().unwrap());
+        let spec=serde_json::from_value(serde_json::json!({"argv":[exe_text,"--list"],"cwd":cwd,"env":{"SystemRoot":std::env::var("SystemRoot").unwrap(),"LOCALAPPDATA":cwd},"owner":{"sessionId":"native-unit"},"transport":"pipe","lifetime":"retain-tree","argumentEncoding":"crt"})).unwrap();
+        let policy=serde_json::from_value(serde_json::json!({"mode":if engine=="psec"{"workspace-write"}else{"danger-full-access"},"owner":{"sessionId":"native-unit"},"authorityRevision":"test","authorityKind":"bound","primaryRoot":cwd,"readable":"caller","authorityRoots":[cwd],"writeRoots":[cwd],"referenceRoots":[],"fingerprint":"native-unit"})).unwrap();
+        let protection = protocol::Protection {
+            read_only_paths: vec![],
+            deny_paths: vec![],
+            helper_sha256: crate::policy::file_hash(&exe).unwrap(),
+        };
+        let mut p = Prepared::new(engine.into(), spec, policy, protection, None).unwrap();
+        p.initialize(engine).unwrap();
+        (p, path)
+    }
+    #[test]
+    fn prepared_owner_reports_close_failure_and_recovers_without_drop() {
+        let (mut p, _path) = prepared_fixture("psec");
+        crate::ffi::FAIL_NEXT_CLOSE.with(|flag| flag.set(true));
+        assert!(!p.release());
+        assert_eq!(p.errors[0].api, "CloseHandle");
+        assert_eq!(p.errors[0].native_code, Some(5));
+        assert!(
+            p.psec.is_some(),
+            "PSEC must remain owned until every retained handle is closed"
+        );
+        assert!(p.release());
+        assert!(p.psec.is_none());
+        assert!(
+            !p.errors.is_empty(),
+            "retry preserves the earlier close cause"
+        );
+    }
+    fn failed_launch_releases_only_after_observed_exit_and_drain(assign_failure: bool) {
+        let (mut p, path) = prepared_fixture("psec");
+        let digest = p.effective.digest.clone();
+        let info = p.create_suspended(&digest).unwrap();
+        assert_eq!(
+            crate::ffi::live_attributes(),
+            0,
+            "attribute list must be destroyed before the PSEC backing owner moves"
+        );
+        let (tx, rx) = mpsc::sync_channel(64);
+        let mut r = p.into_running(
+            info,
+            "failed-commit".into(),
+            tx,
+            std::fs::File::create(path.join("output.bin")).unwrap(),
+        );
+        if assign_failure {
+            FAIL_ASSIGN.with(|flag| flag.set(true));
+        } else {
+            FAIL_RESUME.with(|flag| flag.set(true));
+        }
+        let error = r.resume().unwrap_err();
+        assert_eq!(
+            error.api,
+            if assign_failure {
+                "AssignProcessToJobObject"
+            } else {
+                "ResumeThread"
+            }
+        );
+        assert!(
+            !r.release(),
+            "a created process cannot be released before verified settlement"
+        );
+        assert!(r.owner._psec.is_some());
+        r.stop(true);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            r.io.stop_input();
+            r.io.cancel_output();
+            assert!(r.io.close_pending_handles().is_empty());
+            r.root_reported = unsafe { WaitForSingleObject(r.process.0, 0) } == WAIT_OBJECT_0;
+            if r.root_reported && r.owner.job.active().unwrap() == 0 {
+                r.tree_reported = true;
+                r.io.close_console();
+            }
+            while let Ok(event) = rx.try_recv() {
+                if let Event::RetainedHandle(handle) = event {
+                    r.io.pending_handles.push(handle);
+                }
+            }
+            if r.tree_reported && r.io.settled() {
+                r.io.join().unwrap();
+                while let Ok(event) = rx.try_recv() {
+                    if let Event::RetainedHandle(handle) = event {
+                        r.io.pending_handles.push(handle);
+                    }
+                }
+                r.io_reported = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(r.root_reported && r.tree_reported && r.io_reported);
+        assert!(r.owner._psec.is_some());
+        crate::ffi::FAIL_NEXT_CLOSE.with(|flag| flag.set(true));
+        assert!(!r.release());
+        assert!(r.owner._psec.is_some());
+        assert_eq!(r.errors.last().unwrap().api, "CloseHandle");
+        assert!(r.release());
+        assert!(r.owner._psec.is_none());
+    }
+    #[test]
+    fn resume_failure_retains_owner_until_retryable_release() {
+        failed_launch_releases_only_after_observed_exit_and_drain(false);
+    }
+    #[test]
+    fn assignment_failure_reaps_unassigned_child_before_release() {
+        failed_launch_releases_only_after_observed_exit_and_drain(true);
     }
 }

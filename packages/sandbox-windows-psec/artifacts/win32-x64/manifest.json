@@ -3,8 +3,8 @@
     "protocolVersion":  1,
     "target":  "x86_64-pc-windows-msvc",
     "helperFile":  "i-harness-windows-helper.exe",
-    "helperSha256":  "064b14412ae95b0e32f422c7f9c89d1af731749f2ed38dd8cabd107322cb9e03",
-    "protocolSha256":  "e764dca5de1e499abc3994ea15175be4673551180d923c02a3c3b1cc32e06811",
+    "helperSha256":  "9e6d53325197e369c05c2564adfc2c71c281332b29ab973b6cef353458e40e18",
+    "protocolSha256":  "021990f704fb1cd0a65f33861617cd2366e163cd2d897908b2028c70baf96a38",
     "rustc":  "rustc 1.94.0 (4a4ef493e 2026-03-02)",
     "cargo":  "cargo 1.94.0 (85eff7c80 2026-01-15)",
     "compilerSetup":  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat",
@@ -26,13 +26,13 @@
                     "native/Cargo.toml":  "d6a943af1098daf1223c106436791fbe573bece36ea3b1378c0e3dac20d34154",
                     "native/src/command_line.rs":  "622ef7333194e52be7a3737c1f847338dda86fb6edebba0afc18c05d52471dd1",
                     "native/src/error.rs":  "270e71523edbe0dc256cd91c5b2bca0b1eb85ee935ae1a0245eeae7548c9faa4",
-                    "native/src/ffi.rs":  "67415e154841fe499cc2744ce731079f72e27fe062f297d4383ec37ed610fe45",
-                    "native/src/job.rs":  "7742ebc0b846d0a76d0c8465cae610a8be8b5b6e331a5e91cec6e83c76769889",
+                    "native/src/ffi.rs":  "164f29b04c5280b1069035a292237ee2a75b6977c4c7a6f3e6502b3c266a5e5e",
+                    "native/src/job.rs":  "15e8216587024afdc6c217a35bcab3c6b4cbd2ad8358e07c7885b9a0ba430d5d",
                     "native/src/main.rs":  "89e982b29c8c2656d3396595864b5020d7264dfb96794bd65609f3016ca14ab5",
-                    "native/src/policy.rs":  "e839901243be2595b03180646ab7c04566f8c6a789322d36f23f8847e2a9fdf4",
+                    "native/src/policy.rs":  "65c6ce2c666f16b611d372979bebe0a2859f8eb44839e9073b34e6281043aef5",
                     "native/src/protocol.rs":  "c6fc34fb83c98744b1babf8da6eec22171d05ca10e1f503cb356073673bee9e4",
-                    "native/src/runner.rs":  "cc92dabdce83e547ef8ebb5d601e6c0583fd03e4c1982d4eb74cff45bdc517c0",
+                    "native/src/runner.rs":  "4d8c32897ffb2c4a538cea6eba97d014b5c2fc78a4895dbd0af3c1c561f73036",
                     "native/src/self_child.rs":  "3af9cf29b7b814cefda8e4b1746167a7d9125f986961c720ad7c0eb3fecf5a86",
-                    "native/src/transport.rs":  "6a09070e674291788dad3ffa06fd5cfa73b4395e5c56bda928ae34d5dd3a472a"
+                    "native/src/transport.rs":  "e4085bd102d40793b8611aa3f21cf0dfbe99d3cd3d9d360835a1bd15724b5b3d"
                 }
 }

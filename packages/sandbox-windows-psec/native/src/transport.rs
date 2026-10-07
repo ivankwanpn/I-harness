@@ -5,7 +5,7 @@ use crate::{
 };
 use std::{
     io::{Read, Write},
-    os::windows::io::{AsRawHandle, FromRawHandle},
+    os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle},
     ptr::null_mut,
     sync::{
         Arc,
@@ -24,6 +24,7 @@ use windows_sys::Win32::{
 };
 pub const CHUNK: usize = 16384;
 pub enum Event {
+    RetainedHandle(Handle),
     Input(String, Result<()>),
     Reader(Result<()>),
     Output(Result<()>),
@@ -70,6 +71,25 @@ fn into_file(handle: Handle) -> std::fs::File {
     let raw = handle.0;
     std::mem::forget(handle);
     unsafe { std::fs::File::from_raw_handle(raw) }
+}
+fn close_worker_file(file: std::fs::File, events: &SyncSender<Event>) -> Result<()> {
+    let mut handle = Handle(file.into_raw_handle());
+    match handle.close() {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = events.send(Event::RetainedHandle(handle));
+            Err(error)
+        }
+    }
+}
+fn with_cleanup(result: Result<()>, cleanup: Result<()>) -> Result<()> {
+    match (result, cleanup) {
+        (Ok(()), result) | (result, Ok(())) => result,
+        (Err(mut error), Err(cause)) => {
+            error.cleanup.push(cause);
+            Err(error)
+        }
+    }
 }
 pub struct PrivateIo {
     pub control: std::fs::File,
@@ -134,12 +154,43 @@ pub struct PreparedIo {
     pub console: Option<Console>,
 }
 impl PreparedIo {
-    pub fn new(spec: &Spec) -> Result<Self> {
+    pub fn empty() -> Self {
+        Self {
+            child: vec![],
+            input: None,
+            outputs: vec![],
+            console: None,
+        }
+    }
+    pub fn release(&mut self) -> Vec<Error> {
+        let mut errors = vec![];
+        for handle in self
+            .child
+            .iter_mut()
+            .chain(self.input.iter_mut())
+            .chain(self.outputs.iter_mut().map(|(_, h)| h))
+        {
+            if let Err(e) = handle.close() {
+                errors.push(e);
+            }
+        }
+        // No workload was resumed in PreparedIo. Closing its readers first lets a
+        // prepared pseudoconsole's final bytes fail promptly instead of blocking.
+        if errors.is_empty() {
+            self.console.take();
+        }
+        errors
+    }
+    pub fn initialize(&mut self, spec: &Spec) -> Result<()> {
         let pty = spec.transport == "pty";
         let (input_read, input_write) = pipe(!pty)?;
+        self.child.push(input_read);
+        self.input = Some(input_write);
         let (output_read, output_write) = pipe(!pty)?;
-        private(&input_write)?;
-        private(&output_read)?;
+        self.child.push(output_write);
+        self.outputs.push((if pty { 2 } else { 0 }, output_read));
+        private(self.input.as_ref().unwrap())?;
+        private(&self.outputs[0].1)?;
         if pty {
             let size = spec
                 .pty
@@ -152,8 +203,8 @@ impl PreparedIo {
                         X: size.cols,
                         Y: size.rows,
                     },
-                    input_read.0,
-                    output_write.0,
+                    self.child[0].0,
+                    self.child[1].0,
                     0,
                     &mut console,
                 )
@@ -161,26 +212,23 @@ impl PreparedIo {
             if hr < 0 {
                 return Err(Error::native_code("CreatePseudoConsole", hr as u32));
             }
-            drop((input_read, output_write));
-            Ok(Self {
-                child: vec![],
-                input: Some(input_write),
-                outputs: vec![(2, output_read)],
-                console: Some(Console(console)),
-            })
+            self.console = Some(Console(console));
+            // Keep even these parent-side pseudoconsole endpoint closes fallible.
+            for h in &mut self.child {
+                h.close()?;
+            }
+            self.child.clear();
+            Ok(())
         } else {
             let (error_read, error_write) = pipe(true)?;
-            private(&error_read)?;
-            Ok(Self {
-                child: vec![input_read, output_write, error_write],
-                input: Some(input_write),
-                outputs: vec![(0, output_read), (1, error_read)],
-                console: None,
-            })
+            self.child.push(error_write);
+            self.outputs.push((1, error_read));
+            private(&self.outputs[1].1)?;
+            Ok(())
         }
     }
     pub fn start(mut self, events: SyncSender<Event>, mut out: std::fs::File) -> RunningIo {
-        self.child.clear();
+        let pending_handles = std::mem::take(&mut self.child);
         let discard = Arc::new(AtomicBool::new(false));
         let stop_input = Arc::new(AtomicBool::new(false));
         let dropped = Arc::new(AtomicU64::new(0));
@@ -213,6 +261,7 @@ impl PreparedIo {
                 }
                 Ok(())
             })();
+            let result = with_cleanup(result, close_worker_file(out, &out_events));
             let _ = out_events.send(Event::Output(result));
         });
         let mut readers = vec![];
@@ -255,6 +304,7 @@ impl PreparedIo {
                     }
                     Ok(())
                 })();
+                let result = with_cleanup(result, close_worker_file(file, &events));
                 drop(tx);
                 let _ = events.send(Event::Reader(result));
             }));
@@ -278,8 +328,8 @@ impl PreparedIo {
                         let _ = input_events.send(Event::Input(id, result));
                     }
                     Ok(Input::End(id)) => {
-                        drop(file);
-                        let _ = input_events.send(Event::Input(id, Ok(())));
+                        let result = close_worker_file(file, &input_events);
+                        let _ = input_events.send(Event::Input(id, result));
                         let _ = input_events.send(Event::InputClosed);
                         return;
                     }
@@ -291,10 +341,13 @@ impl PreparedIo {
                     }
                 }
             }
-            drop(file);
+            if let Err(error) = close_worker_file(file, &input_events) {
+                let _ = input_events.send(Event::Reader(Err(error)));
+            }
             let _ = input_events.send(Event::InputClosed);
         });
         RunningIo {
+            pending_handles,
             input_tx: Some(input_tx),
             input: Some(input),
             output: Some(output),
@@ -310,6 +363,7 @@ impl PreparedIo {
     }
 }
 pub struct RunningIo {
+    pub pending_handles: Vec<Handle>,
     pub input_tx: Option<SyncSender<Input>>,
     input: Option<JoinHandle<()>>,
     output: Option<JoinHandle<()>>,
@@ -323,6 +377,16 @@ pub struct RunningIo {
     input_ended: bool,
 }
 impl RunningIo {
+    pub fn close_pending_handles(&mut self) -> Vec<Error> {
+        let mut errors = vec![];
+        for h in &mut self.pending_handles {
+            if let Err(e) = h.close() {
+                errors.push(e);
+            }
+        }
+        self.pending_handles.retain(|h| !h.0.is_null());
+        errors
+    }
     pub fn send(&mut self, input: Input) -> Result<()> {
         if self.input_ended {
             return Err(Error::state("input already ended"));
@@ -416,5 +480,30 @@ impl RunningIo {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn prepared_close_failure_keeps_handle_for_retry() {
+        let (read, write) = pipe(false).unwrap();
+        let mut io = PreparedIo {
+            child: vec![read],
+            input: Some(write),
+            outputs: vec![],
+            console: None,
+        };
+        crate::ffi::FAIL_NEXT_CLOSE.with(|flag| flag.set(true));
+        let errors = io.release();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].api, "CloseHandle");
+        assert!(
+            !io.child[0].0.is_null(),
+            "failed close must retain the actual handle"
+        );
+        assert!(io.release().is_empty());
+        assert!(io.child[0].0.is_null());
     }
 }

@@ -26,12 +26,22 @@ impl Handle {
         if self.0.is_null() {
             return Ok(());
         }
+        #[cfg(test)]
+        if FAIL_NEXT_CLOSE.with(|flag| flag.replace(false)) {
+            return Err(Error::native_code("CloseHandle", 5));
+        }
         if unsafe { CloseHandle(self.0) } == 0 {
             return Err(Error::native("CloseHandle"));
         }
         self.0 = null_mut();
         Ok(())
     }
+}
+#[cfg(test)]
+thread_local! {pub static FAIL_NEXT_CLOSE:std::cell::Cell<bool>=const {std::cell::Cell::new(false)}; static LIVE_ATTRIBUTES:std::cell::Cell<usize>=const {std::cell::Cell::new(0)};}
+#[cfg(test)]
+pub fn live_attributes() -> usize {
+    LIVE_ATTRIBUTES.with(|n| n.get())
 }
 impl Drop for Handle {
     fn drop(&mut self) {
@@ -184,10 +194,23 @@ impl Attributes {
             return Err(Error::native("InitializeProcThreadAttributeList"));
         }
         this.initialized = true;
+        #[cfg(test)]
+        LIVE_ATTRIBUTES.with(|n| n.set(n.get() + 1));
         Ok(this)
     }
     pub fn ptr(&mut self) -> LPPROC_THREAD_ATTRIBUTE_LIST {
         self.storage.as_mut_ptr().cast()
+    }
+    /// Capture CreateProcessW's error before cleanup can overwrite LastError, and
+    /// destroy the list before the caller can move any of its borrowed value storage.
+    pub fn finish_create(self, created: i32) -> Result<()> {
+        let error = if created == 0 {
+            Some(Error::native("CreateProcessW"))
+        } else {
+            None
+        };
+        drop(self);
+        error.map_or(Ok(()), Err)
     }
     // Caller owns each stable value until this attribute list is dropped.
     pub unsafe fn add(&mut self, key: usize, value: *const c_void, bytes: usize) -> Result<()> {
@@ -207,6 +230,24 @@ impl Drop for Attributes {
             unsafe {
                 DeleteProcThreadAttributeList(self.ptr());
             }
+            #[cfg(test)]
+            LIVE_ATTRIBUTES.with(|n| n.set(n.get() - 1));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn create_failure_destroys_attributes_before_backing_can_be_released() {
+        let attrs = Attributes::new(1).unwrap();
+        assert_eq!(LIVE_ATTRIBUTES.with(|n| n.get()), 1);
+        unsafe {
+            SetLastError(203);
+        }
+        let error = attrs.finish_create(0).unwrap_err();
+        assert_eq!(error.native_code, Some(203));
+        assert_eq!(LIVE_ATTRIBUTES.with(|n| n.get()), 0);
     }
 }

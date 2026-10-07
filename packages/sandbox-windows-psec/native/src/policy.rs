@@ -1,5 +1,6 @@
 use crate::{
     error::{Error, Result},
+    ffi::Handle,
     protocol::{Policy, Protection, Spec},
 };
 use process_security_environment_spec::process_security_environment_layout::*;
@@ -7,7 +8,10 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
     io::Read,
-    os::windows::{fs::OpenOptionsExt, io::AsRawHandle},
+    os::windows::{
+        fs::OpenOptionsExt,
+        io::{AsRawHandle, IntoRawHandle},
+    },
     path::Path,
 };
 use windows_sys::Win32::Storage::FileSystem::*;
@@ -63,7 +67,7 @@ pub struct Identity {
     canonical: String,
     serial: u32,
     index: u64,
-    _file: File,
+    _file: Handle,
 }
 impl Identity {
     fn read(path: &str) -> Result<Self> {
@@ -83,7 +87,7 @@ impl Identity {
             canonical,
             serial: info.dwVolumeSerialNumber,
             index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
-            _file: file,
+            _file: Handle(file.into_raw_handle()),
         })
     }
     fn check(&self) -> Result<()> {
@@ -108,6 +112,15 @@ pub struct Effective {
     identities: Vec<Identity>,
 }
 impl Effective {
+    pub fn release(&mut self) -> Vec<Error> {
+        let mut errors = vec![];
+        for identity in &mut self.identities {
+            if let Err(e) = identity._file.close() {
+                errors.push(e);
+            }
+        }
+        errors
+    }
     pub fn new(
         engine: &str,
         mut spec: Spec,

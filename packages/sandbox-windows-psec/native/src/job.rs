@@ -14,11 +14,14 @@ impl Job {
             unsafe { CreateJobObjectW(null(), null()) },
             "CreateJobObjectW",
         )?;
+        Ok(Self(handle))
+    }
+    pub fn configure(&self) -> Result<()> {
         let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
         info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
         if unsafe {
             SetInformationJobObject(
-                handle.0,
+                self.0.0,
                 JobObjectExtendedLimitInformation,
                 (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
                 size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
@@ -27,7 +30,7 @@ impl Job {
         {
             return Err(Error::native("SetInformationJobObject"));
         }
-        Ok(Self(handle))
+        Ok(())
     }
     pub fn assign(&self, process: HANDLE) -> Result<()> {
         if unsafe { AssignProcessToJobObject(self.0.0, process) } == 0 {
