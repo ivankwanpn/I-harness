@@ -101,7 +101,8 @@ export async function runScopedModelSearch({ exec, rgPath, cwd, root, kind, quer
     try {
       const input = JSON.stringify({path:candidate.absolute,maxBytes:allowance})
       if (Buffer.byteLength(input)>64*1024) throw new Error('reader control exceeds 64 KiB')
-      const ran = await exec.run(command({argv:[process.execPath,fileURLToPath(new URL('./reader.mjs',import.meta.url))],input,env:{ELECTRON_RUN_AS_NODE:'1'}},readers.signal), {stream:{maxBytes:allowance+metadataAllowance,onStdout(chunk) {
+      const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined))
+      const ran = await exec.run(command({argv:[process.execPath,fileURLToPath(new URL('./reader.mjs',import.meta.url))],input,env:{...inherited,ELECTRON_RUN_AS_NODE:'1'}},readers.signal), {stream:{maxBytes:allowance+metadataAllowance,onStdout(chunk) {
         const count = Math.min(chunk.length,allowance-received)
         if (count) { chunks.push(Buffer.from(chunk.subarray(0,count))); received+=count }
         if (count<chunk.length) return 'stop'

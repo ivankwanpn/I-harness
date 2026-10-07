@@ -5,14 +5,20 @@ import { SandboxUnavailableError } from "@i-harness/sandbox"
 import type { Tool } from "@i-harness/core-tools"
 import { bashAvailable, createShellTools } from "../src/index.ts"
 
+const unusedTransport = {
+  launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
+  cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
+  dispose: async (): Promise<void> => {},
+}
+
 /**
  * M62 Task 3 (Step 7): ALL FOUR refusal call sites must RETURN, not throw.
  *
  * The brief was explicit that there are "four call sites, not two": `exec`'s
- * `resolveArgv` throws `SandboxUnavailableError` SYNCHRONOUSLY
- * (`packages/exec/src/index.ts:112,122`) and the background path reaches it
- * through `spawnChild`, in `runBackground`, from a DIFFERENT call site than the
- * foreground `run` — four in all: `runBackground` and `run` in each of the bash
+ * The supervised backend refuses with `SandboxUnavailableError` during
+ * asynchronous admission, and the background path reaches that refusal from
+ * `runBackground`, a DIFFERENT call site than foreground `run` — four in all:
+ * `runBackground` and `run` in each of the bash
  * and pwsh tool bodies of `packages/shell/src/index.ts`. (Named by SYMBOL, not by
  * line number: this comment has now cited three different sets of numbers as the
  * file moved under it — the pre-M62 ones, then the ones from before
@@ -30,7 +36,7 @@ import { bashAvailable, createShellTools } from "../src/index.ts"
  */
 
 /** An `ExecService` that refuses every call exactly as `exec` refuses one:
- *  SYNCHRONOUSLY from `runBackground`, and as a rejected promise from `run`. */
+ *  as rejected promises from both `runBackground` and `run`. */
 function refusingExec(): ExecService {
   const refuse = (cmd: ExecCommand): never => {
     // Only a confined policy can produce this in production (`resolveArgv` is a
@@ -41,16 +47,17 @@ function refusingExec(): ExecService {
     if (policy === undefined || policy.mode === "danger-full-access") {
       throw new Error(`refusingExec: no confined policy on this command (sandbox=${String(policy?.mode)})`)
     }
-    throw new SandboxUnavailableError(policy.mode, "no sandbox provider composed (registerExec(ctx, { sandbox }))")
+    throw new SandboxUnavailableError(policy.mode, "no transport backend composed")
   }
   return {
     run: async (cmd) => refuse(cmd),
-    runBackground: (cmd) => refuse(cmd),
+    runBackground: async (cmd) => refuse(cmd),
     getOutput: () => {
       throw new Error("refusingExec: getOutput must not be reached")
     },
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
 }
 
@@ -68,12 +75,13 @@ function commandNotRunExec(detail: string): ExecService {
   }
   return {
     run: async (cmd) => refuse(cmd),
-    runBackground: (cmd) => refuse(cmd),
+    runBackground: async (cmd) => refuse(cmd),
     getOutput: () => {
       throw new Error("commandNotRunExec: getOutput must not be reached")
     },
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
 }
 
@@ -136,11 +144,13 @@ describe("a sandbox-unavailable refusal is RETURNED on every path", () => {
   it("a NON-sandbox failure still rejects (the catch is not a blanket swallow)", async () => {
     const boom = new Error("spawn ENOENT")
     const exec: ExecService = {
+    ...unusedTransport,
       run: async () => { throw boom },
-      runBackground: () => { throw boom },
+      runBackground: async () => { throw boom },
       getOutput: () => { throw boom },
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const pwsh = createShellTools({
       exec,
@@ -209,17 +219,19 @@ describe("a sandbox-unavailable refusal is RETURNED on every path", () => {
 function recordingExec() {
   const policies: Array<{ mode?: string } | undefined> = []
   const exec: ExecService = {
+    ...unusedTransport,
     run: async (cmd) => {
       policies.push(cmd.sandbox as { mode?: string } | undefined)
       return { stdout: "ran", stderr: "", exitCode: 0, timedOut: false }
     },
-    runBackground: (cmd) => {
+    runBackground: async (cmd) => {
       policies.push(cmd.sandbox as { mode?: string } | undefined)
       return { jobId: "job-1" }
     },
     getOutput: () => { throw new Error("recordingExec: getOutput must not be reached") },
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
   return { exec, policies }
 }

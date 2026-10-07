@@ -5,6 +5,12 @@ import type { Tool } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { createShellTools, registerShell } from "../src/index.ts"
 
+const unusedTransport = {
+  launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
+  cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
+  dispose: async (): Promise<void> => {},
+}
+
 /**
  * M62: the shell must resolve the session's sandbox policy at EACH CALL.
  *
@@ -26,17 +32,19 @@ import { createShellTools, registerShell } from "../src/index.ts"
 function fakeExec(seen: Array<SandboxExecutionPolicy | undefined>) {
   const record = (cmd: ExecCommand) => { seen.push(cmd.sandbox) }
   const exec: ExecService = {
+    ...unusedTransport,
     run: async (cmd) => {
       record(cmd)
       return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
     },
-    runBackground: (cmd) => {
+    runBackground: async (cmd) => {
       record(cmd)
       return { jobId: "job-1" }
     },
     getOutput: () => ({ id: "job-1", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
   return exec
 }

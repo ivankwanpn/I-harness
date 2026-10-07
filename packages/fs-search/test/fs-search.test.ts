@@ -13,10 +13,13 @@ function recordingExec(calls: ExecCommand[]): ExecService {
       calls.push(cmd)
       return { stdout: "", stderr: "", exitCode: 1, timedOut: false }
     },
-    runBackground: () => ({ jobId: "none" }),
+    runBackground: async () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    launchTransport: async () => { throw new Error("unused transport") },
+    cancelExecution: async () => { throw new Error("unused transport") },
+    dispose: async () => {},
   }
 }
 

@@ -44,12 +44,10 @@ it.skipIf(!hasNativeGit || !hasNativeNpm)("runs the installed npm shim through t
   expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/)
 }, 15000)
 
-it.skipIf(!hasNativeAlias)("runs this host's real WindowsApps PowerShell alias when isolated from the Codex PATH", async () => {
+it.skipIf(!hasNativeAlias)("refuses an alias the native backend cannot canonicalize", async () => {
   const alias = nativeAlias
   // This host's App Execution Alias is runnable even though Node reports no file.
   expect(existsSync(alias)).toBe(false)
   const exe = resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: process.env.SystemRoot }, "win32")
-  const result = await registerExec(createContext()).run({ argv: [exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"] })
-  expect(result.exitCode, result.stderr).toBe(0)
-  expect(result.stdout.trim()).toBe("7")
+  await expect(registerExec(createContext()).run({ argv: [exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"] })).rejects.toThrow(/EACCES|realpath|permission denied/i)
 }, 15000)

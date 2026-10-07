@@ -6,6 +6,12 @@ import { readFileSync, mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
+const unusedTransport = {
+  launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
+  cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
+  dispose: async (): Promise<void> => {},
+}
+
 function fakeExec(
   runResult: {
     stdout: string
@@ -18,10 +24,11 @@ function fakeExec(
 ): ExecService {
   return {
     run: async () => ({ ...runResult, timedOut: false }),
-    runBackground: () => ({ jobId: "none" }),
+    runBackground: async () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
 }
 

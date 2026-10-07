@@ -4,7 +4,7 @@ import type {
   TransportExecutionBackend, TransportExecutionHandle,
 } from "@i-harness/sandbox"
 
-class ExecutionAdmissionError extends Error {
+export class ExecutionAdmissionError extends Error {
   readonly missing: readonly string[]
   constructor(missing: readonly string[]) {
     super(`Execution admission refused: missing backend requirements: ${missing.join(", ")}`)

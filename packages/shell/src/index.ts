@@ -185,7 +185,8 @@ function shellCommandEnvironment(executable: string): { env?: Record<string, str
   const bash = win32.basename(executable).toLowerCase() === "bash.exe" ? executable : resolveBashExe()
   if (bash === undefined) return {}
   const key = Object.keys(process.env).find((name) => name.toLowerCase() === "path") ?? "PATH"
-  return { env: { [key]: `${win32.dirname(bash)};${process.env[key] ?? ""}` } }
+  const inherited = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined))
+  return { env: { ...inherited, [key]: `${win32.dirname(bash)};${process.env[key] ?? ""}` } }
 }
 
 // Minimal shell-quote parser: splits on whitespace, honors single/double
@@ -604,7 +605,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10: the command spec is built ONCE — the promotion overload takes
@@ -655,7 +656,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10 — same two calls as the bash tool above; see the note there.
@@ -716,7 +717,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandbox = ladder.policy
       const spec = { argv, ...shellCommandEnvironment(selected.command), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
-        if (args.background === true) return { job_id: deps.exec.runBackground(spec).jobId }
+        if (args.background === true) return { job_id: (await deps.exec.runBackground(spec)).jobId }
         const command = { ...spec, abortSignal: exec.abortSignal }
         const result = deps.backgroundAfterMs === undefined ? await deps.exec.run(command) : await deps.exec.run(command, { backgroundAfterMs: deps.backgroundAfterMs })
         return "promoted" in result ? promotedResult(result, "shell", deps.timeoutMs) : retainedRunResult(result, "shell-stdout")
@@ -752,8 +753,11 @@ export function registerShell(
     cwd?: string
   },
 ): void {
-  registerExec(ctx, { sandbox: opts?.sandbox })
-  const exec = ctx.services.get<ExecService>("exec/service")
+  // Assembly owns the service when supplied; standalone shell mounting composes
+  // a local service bound to its configured workspace.
+  let exec: ExecService
+  try { exec = ctx.services.get<ExecService>("exec/service") }
+  catch { exec = registerExec(ctx, { workspaceRoot: opts?.cwd ?? process.cwd(), sandbox: opts?.sandbox }) }
   const tools = createShellTools({
     exec,
     ...(opts?.agentShell !== undefined ? { agentShell: opts.agentShell } : {}),

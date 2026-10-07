@@ -28,6 +28,7 @@ describe("registered bounded Exec stream", () => {
     expect(result.stream?.bytesAdmitted).toEqual({ stdout: 4, stderr: 3 })
     expect(result.stream?.bytesRead.stdout).toBeGreaterThanOrEqual(6)
     expect(result.stream?.stopReason).toBe("output-limit")
+    expect(result.outputDiagnostics?.discardedOutputBytes).toBeGreaterThanOrEqual(2)
   })
 
   it.each(["stop", "throw", "abort"] as const)("awaits grandchild termination after consumer %s", async (cause) => {
@@ -77,6 +78,8 @@ describe("registered bounded Exec stream", () => {
     const exec = registerExec(createContext()), argv = [process.execPath, "-e", ""]
     for (const maxBytes of [0, -1, NaN, Infinity, 1.5]) await expect(exec.run({ argv }, stream(() => {}, maxBytes))).rejects.toThrow(/maxBytes/)
     await expect(exec.run({ argv }, { ...stream(() => {}), backgroundAfterMs: 1 } as never)).rejects.toThrow(/promotion/)
+    const aborted = new AbortController(); aborted.abort()
+    await expect(exec.run({ argv, abortSignal: aborted.signal }, stream(() => {}, 0))).rejects.toThrow(/maxBytes/)
   })
 
   it('accepts the bounded derived UTF8 transport and rejects its next byte before spawn',async()=>{

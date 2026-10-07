@@ -504,7 +504,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         return { outcome: deps.jobs.kill(args.job_id) }
       } catch (e) {
         if (!(e instanceof Error) || !/unknown job/i.test(e.message)) throw e
-        return { outcome: deps.exec.killJob(args.job_id) }
+        return { outcome: await deps.exec.killJob(args.job_id) }
       }
     },
   }
