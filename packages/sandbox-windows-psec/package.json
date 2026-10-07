@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "build:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1",
     "test:native": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Test",
-    "smoke:native": "node test/native-helper-smoke.mjs"
+    "smoke:native": "node test/native-helper-smoke.mjs",
+    "qualify:windows": "tsx test/qualification.mts"
   },
   "dependencies": { "@i-harness/sandbox": "workspace:*" },
   "devDependencies": { "@i-harness/exec": "workspace:*", "@i-harness/sandbox-policy": "workspace:*" }

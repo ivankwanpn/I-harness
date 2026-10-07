@@ -14,6 +14,14 @@ The driver verifies the shipped helper and protocol against `manifest.json`, pro
 
 The explicit environment is forwarded unchanged, including empty values; the driver adds no TEMP, LOCALAPPDATA or write grant. On the qualified host, missing LOCALAPPDATA in PSEC mode surfaces native error 203. PSEC currently rejects PTY before preparation and keeps experimental assurance. Unrestricted has no filesystem isolation and refuses mandatory reference or deny locks. `hidden-console` is trusted host configuration for unrestricted pipes only.
 
+## Behavioral qualification
+
+Run `pnpm --filter @i-harness/sandbox-windows-psec qualify:windows` on a Windows x64 host after installing workspace dependencies. It uses the public policy compiler, execution supervisor and backend exports with the shipped manifest and helper. Each run creates a new `.tmp/sandbox-redesign-qualification-*` fixture containing the exact observed results, environment, helper identity, reference content hashes, file metadata and ACL snapshots. The runner reports `pass`, `fail` and `unsupported` separately. Its direct process exit code is 0 only when every control passes, 1 for a failed control and 2 when a required source family is unsupported. Fixtures are retained for review.
+
+On Windows 11 build 26200 with helper SHA256 `421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395`, PSEC passed the listed filesystem, Node/tsx, CMD, PowerShell, Git executable, Job, pipe and local loopback denial controls. **Git/MSYS Bash failed under PSEC during MSYS initialization** with `NtCreateDirectoryObject(\BaseNamedObjects\msys-...): 0xC0000022`; the same argv, cwd, explicit environment and pipe input succeeded under explicitly selected unrestricted execution. The same failure occurred using Git's direct `usr/bin/bash.exe` image and retain-tree lifetime. This is an observed compatibility limit, so do not route Bash to PSEC or claim the original Bash issue fixed. Unrestricted ConPTY passed real input, resize and descendant retention; PSEC PTY remains rejected before workload launch.
+
+See [the qualification audit](../../docs/audit/2026-10-07-windows-psec-qualification.md) for the exact host, results and limitations. These checks support only the observed cases. PSEC remains opt-in and experimental; production exec/terminal selection and GUI/packaged application checks are separate work. The existing Windows default must not change on this qualification alone.
+
 ## Developer build and native controls
 
 On Windows x64 with installed Rust 1.94+ and VS2022 BuildTools:
