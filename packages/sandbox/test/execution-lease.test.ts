@@ -186,10 +186,14 @@ it("termination failure checks tree and I/O but reports its cause and retains re
   expect(f.events).toEqual(["terminate:timeout", "tree", "io", "release"])
 })
 
-it("failed termination can be retried by cancel and concurrent callers share the retry", async () => {
+it("failed termination can be retried while tree emptiness remains unconfirmed", async () => {
   let kills = 0
+  let trees = 0
   const retryKill = deferred<void>()
-  const f = fixture({ terminate: () => ++kills === 1 ? Promise.reject(new Error("first kill failed")) : retryKill.promise })
+  const f = fixture({
+    terminate: () => ++kills === 1 ? Promise.reject(new Error("first kill failed")) : retryKill.promise,
+    waitTreeEmpty: () => ++trees === 1 ? Promise.reject(new Error("tree unknown")) : Promise.resolve(),
+  })
   const first = f.lease.cancel("timeout")
   finish(f)
   expect((await first).kind).toBe("incomplete")
@@ -200,7 +204,32 @@ it("failed termination can be retried by cancel and concurrent callers share the
   expect(f.events).not.toContain("release")
   retryKill.resolve()
   expect((await retry).kind).toBe("settled")
-  expect(f.events).toEqual(["terminate:timeout", "tree", "io", "terminate:authority-revoked", "release"])
+  expect(f.events).toEqual(["terminate:timeout", "tree", "terminate:authority-revoked", "tree", "io", "release"])
+})
+
+it.each(["before release starts", "during pending release"])("cancel after failed termination joins recovery %s without a new native termination", async timing => {
+  let kills = 0
+  const f = fixture({ terminate: () => {
+    kills++
+    return Promise.reject(new Error(kills === 1 ? "first kill failure" : "late kill failure"))
+  } })
+  const historical = f.lease.cancel("timeout")
+  f.root.resolve({ exitCode: 0 })
+  f.tree.resolve()
+  f.io.resolve()
+  expect(await historical).toEqual({ kind: "incomplete", phase: "tree", detail: expect.stringContaining("first kill failure") })
+  const recovery = f.lease.release()
+  if (timing === "during pending release") {
+    await turn()
+    expect(f.events).toEqual(["terminate:timeout", "tree", "io", "release"])
+  }
+  const cancel = f.lease.cancel("shutdown")
+  expect(cancel).toBe(recovery)
+  expect(f.lease.settled).toBe(recovery)
+  f.resources.resolve()
+  expect((await cancel).kind).toBe("settled")
+  expect(f.events).toEqual(["terminate:timeout", "tree", "io", "release"])
+  expect((await historical).kind).toBe("incomplete")
 })
 
 it("successful termination is not repeated after an incomplete tree observation", async () => {
@@ -243,7 +272,7 @@ it("early rejected termination is handled while tree emptiness is still pending"
   } finally { process.off("unhandledRejection", observe) }
 })
 
-it("early root rejection is handled, reported, and never releases resources", async () => {
+it("early root rejection is handled and retained as unknown status while confirmed cleanup releases resources", async () => {
   const unhandled: unknown[] = []
   const observe = (cause: unknown) => { unhandled.push(cause) }
   process.on("unhandledRejection", observe)
@@ -253,14 +282,35 @@ it("early root rejection is handled, reported, and never releases resources", as
     await turn()
     await turn()
     expect(unhandled).toEqual([])
+    expect(await f.lease.rootExited).toEqual({ exitCode: null, observationError: "root status lost" })
+    expect(f.events).toEqual(["tree"])
     f.tree.resolve()
+    await turn()
+    expect(f.events).toEqual(["tree", "io"])
     f.io.resolve()
     f.resources.resolve()
-    expect(await f.lease.settled).toEqual({ kind: "incomplete", phase: "tree", detail: expect.stringContaining("root status lost") })
-    expect(f.events).toEqual(["tree", "io"])
-    expect((await f.lease.release()).kind).toBe("incomplete")
-    expect(f.events).not.toContain("release")
+    expect(await f.lease.settled).toEqual({
+      kind: "settled", root: { exitCode: null, observationError: "root status lost" },
+      treeEmpty: true, ioSettled: true, resourcesReleased: true,
+    })
+    expect(f.lease.release()).toBe(f.lease.settled)
+    expect(f.events).toEqual(["tree", "io", "release"])
   } finally { process.off("unhandledRejection", observe) }
+})
+
+it("root observation diagnostics are sanitized without treating unknown status as an empty tree", async () => {
+  const f = fixture()
+  f.root.reject(new Error("root\u0000 status\r\nlost\u001b"))
+  expect(await f.lease.rootExited).toEqual({ exitCode: null, observationError: "root status lost" })
+  await turn()
+  expect(f.events).toEqual(["tree"])
+  f.tree.resolve()
+  f.io.resolve()
+  f.resources.resolve()
+  expect(await f.lease.settled).toEqual({
+    kind: "settled", root: { exitCode: null, observationError: "root status lost" },
+    treeEmpty: true, ioSettled: true, resourcesReleased: true,
+  })
 })
 
 it("receipt and owner are copied and frozen so caller mutations cannot transfer ownership", async () => {

@@ -7,6 +7,7 @@ type Incomplete = Extract<ExecutionSettlement, { kind: "incomplete" }>
 interface Attempt {
   promise: Promise<ExecutionSettlement>
   active: boolean
+  releaseReserved: boolean
   termination?: Promise<Observation<void>>
 }
 
@@ -36,12 +37,16 @@ export function createExecutionLease(input: {
   const receipt = Object.freeze({
     ...input.receipt, owner: Object.freeze({ ...input.receipt.owner }),
   })
-  const root = observe(() => input.rootExited)
+  // Unknown root status is a reporting failure, independent of tree/I/O facts.
+  // Normalize it immediately so public observers retain a diagnostic as data.
+  const root: Promise<RootExit> = input.rootExited.then(value => value, cause => ({
+    exitCode: null,
+    observationError: failureDetail(cause).replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").replace(/\s+/g, " ").trim(),
+  }))
   let treeEmpty = false
   let ioSettled = false
   let resourcesReleased = false
   let terminatedReason: StopReason | undefined
-  let terminationFailed = false
   let current: Attempt
 
   function incomplete(phase: Incomplete["phase"], detail: string): Incomplete {
@@ -61,8 +66,11 @@ export function createExecutionLease(input: {
       else failure = incomplete("io", io.detail)
     }
 
-    // Cancellation may join while tree/I/O observations are pending. Its failure
-    // is part of this attempt, so no resources can release until it is known.
+    // Reserve closure synchronously before awaiting a termination or root
+    // observation. Once the tree is empty, late cancellation only joins cleanup.
+    if (treeEmpty && ioSettled) attempt.releaseReserved = true
+    // Any termination admitted before tree confirmation belongs to this attempt.
+    // Resources remain owned until that already-started termination is known.
     if (attempt.termination) {
       const termination = await attempt.termination
       if (!termination.ok) {
@@ -74,14 +82,13 @@ export function createExecutionLease(input: {
     if (failure) return failure
 
     const rootExit = await root
-    if (!rootExit.ok) return incomplete("tree", `root exit observation failed: ${rootExit.detail}`)
     if (!resourcesReleased) {
       const released = await observe(() => input.releaseResources())
       if (!released.ok) return incomplete("release", released.detail)
       resourcesReleased = true
     }
     return {
-      kind: "settled", root: rootExit.value,
+      kind: "settled", root: rootExit,
       treeEmpty: true, ioSettled: true, resourcesReleased: true,
     }
   }
@@ -90,6 +97,7 @@ export function createExecutionLease(input: {
     let resolve!: (value: ExecutionSettlement) => void
     const attempt: Attempt = {
       promise: new Promise<ExecutionSettlement>(done => { resolve = done }), active: true,
+      releaseReserved: treeEmpty && ioSettled,
     }
     // Publish the attempt before invoking any hook, including synchronous hooks.
     void Promise.resolve().then(async () => {
@@ -107,16 +115,15 @@ export function createExecutionLease(input: {
 
   function cancel(reason: StopReason): Promise<ExecutionSettlement> {
     const promise = release()
-    if (!resourcesReleased && terminatedReason === undefined && !current.termination
-      && (!treeEmpty || terminationFailed)) {
+    if (!resourcesReleased && !treeEmpty && !current.releaseReserved
+      && terminatedReason === undefined && !current.termination) {
       let resolve!: (result: Observation<void>) => void
       // Reserve ownership before a hook can synchronously reenter cancel.
       current.termination = new Promise(done => { resolve = done })
       void observe(() => input.terminate(reason)).then(result => {
         if (result.ok) {
           terminatedReason = reason
-          terminationFailed = false
-        } else terminationFailed = true
+        }
         resolve(result)
       })
     }
@@ -125,7 +132,7 @@ export function createExecutionLease(input: {
 
   current = start()
   return Object.freeze({
-    receipt, rootExited: input.rootExited,
+    receipt, rootExited: root,
     get settled() { return current.promise },
     cancel, release,
   })

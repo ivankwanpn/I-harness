@@ -23,6 +23,9 @@ it("exposes platform-neutral execution contracts to package consumers", () => {
   expectTypeOf(readOnlyPolicy.authorityRoots).toEqualTypeOf<readonly string[]>()
   expectTypeOf<ExecutionReceipt["owner"]>().toEqualTypeOf<Readonly<ExecutionOwner>>()
   expectTypeOf<ExecutionHandle["rootExited"]>().toEqualTypeOf<Promise<RootExit>>()
+  expectTypeOf<RootExit["observationError"]>().toEqualTypeOf<string | undefined>()
+  const unknownRoot: RootExit = { exitCode: null, observationError: "root status unavailable" }
+  expect(unknownRoot).toEqual({ exitCode: null, observationError: "root status unavailable" })
   expectTypeOf<ExecutionHandle["settled"]>().toEqualTypeOf<Promise<ExecutionSettlement>>()
   expectTypeOf<ExecutionHandle["cancel"]>().parameter(0).toEqualTypeOf<StopReason>()
   expectTypeOf<ExecutionHandle["release"]>().returns.toEqualTypeOf<Promise<ExecutionSettlement>>()

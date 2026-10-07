@@ -42,7 +42,11 @@ export interface ExecutionReceipt {
   executionId: string; backendId: string; policyFingerprint: string
   owner: Readonly<ExecutionOwner>; assurance: BackendAssurance
 }
-export interface RootExit { exitCode: number | null; signal?: string }
+export interface RootExit {
+  exitCode: number | null; signal?: string
+  /** Driver-sanitized root status observation failure; null code is explicitly unknown. */
+  observationError?: string
+}
 export type ExecutionSettlement =
   | { kind: "settled"; root: RootExit; treeEmpty: true; ioSettled: true; resourcesReleased: true }
   | { kind: "incomplete"; phase: "tree" | "io" | "release"; detail: string }
