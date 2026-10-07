@@ -177,6 +177,53 @@ describe("fake protocol ownership", () => {
     } finally { vi.useRealTimers() }
   })
 
+  it("overlapping timed-out and retry releases join one confirmed cleanup", async () => {
+    const releaseIds: string[] = []
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "release") releaseIds.push(command.id)
+    })
+    state.spawn = () => child
+    const f = input()
+    await f.backend.prepare(f.spec, f.policy)
+    const backend = f.backend as typeof f.backend & { dispose(): Promise<void> }
+    vi.useFakeTimers()
+    try {
+      const first = backend.dispose()
+      expect(releaseIds).toHaveLength(1)
+      const firstFailure = expect(first).rejects.toThrow(/cleanup incomplete/)
+      await vi.advanceTimersByTimeAsync(12000)
+      await firstFailure
+      const second = backend.dispose()
+      expect(releaseIds).toHaveLength(2)
+      const confirmed = expect(second).resolves.toBeUndefined()
+      child.status(releaseIds[0]!, "released", { resourcesReleased: true, errors: [nativeError] })
+      await confirmed
+      child.status(releaseIds[1]!, "released", { resourcesReleased: true, errors: [nativeError] })
+      await backend.dispose()
+      expect(releaseIds).toHaveLength(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("confirmed cleanup still rejects unrelated unfinished input", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") client.status(command.id, "started", { pid: 1234 })
+      else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const prepared = await f.backend.prepare(f.spec, f.policy)
+    const handle = await prepared.commit(() => {})
+    const writing = handle.io.write(Buffer.from("unacknowledged"))
+    await vi.waitFor(() => expect(child.sent).toContain("input"))
+    const failure = expect(writing).rejects.toThrow(/released before pending response/)
+    await (f.backend as typeof f.backend & { dispose(): Promise<void> }).dispose()
+    await failure
+  })
+
   it("malformed released status cannot retire cleanup ownership", async () => {
     let releases = 0
     const child = new FakeChild((command, client) => {

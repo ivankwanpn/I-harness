@@ -40,6 +40,10 @@ function deferred<T>() {
   void promise.catch(() => {})
   return { promise, resolve, reject }
 }
+interface PendingStatus {
+  type: string
+  response: ReturnType<typeof deferred<Status>>
+}
 function absoluteLocal(path: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(path) && !path.includes("\0") && !path.includes(":", 2)
 }
@@ -113,11 +117,13 @@ class Session {
   readonly root = deferred<RootExit>()
   readonly tree = deferred<void>()
   readonly io = deferred<void>()
-  private readonly pending = new Map<string, ReturnType<typeof deferred<Status>>>()
+  private readonly pending = new Map<string, PendingStatus>()
+  private readonly retiredReleaseIds = new Set<string>()
   private nextId = 0
   private failed?: Error
   private commitId?: string
   private releaseComplete = false
+  private confirmedReleaseStatus?: Status
   private releaseFlight?: Promise<void>
   private ioStatus?: Status
   private binaryEof = false
@@ -190,7 +196,7 @@ class Session {
   private fatal(cause: unknown) {
     if (this.failed || this.releaseComplete) return
     this.failed = cause instanceof Error ? cause : new Error(String(cause))
-    for (const item of this.pending.values()) item.reject(this.failed)
+    for (const item of this.pending.values()) item.response.reject(this.failed)
     this.pending.clear()
     this.root.reject(this.failed)
     this.tree.reject(this.failed)
@@ -224,10 +230,19 @@ class Session {
       this.fatal(new Error(status.type === "error" ? nativeDetail(status.error as NativeError) : "helper fatal status")); return
     }
     const waiter = this.pending.get(status.id)
-    if (!waiter) fail(`unexpected helper response ${status.id}`)
+    if (!waiter) {
+      if (this.retiredReleaseIds.has(status.id)) {
+        if (status.type !== "released" || status.resourcesReleased !== true || !Array.isArray(status.errors)) {
+          fail("contradictory queued release response")
+        }
+        this.retiredReleaseIds.delete(status.id)
+        return
+      }
+      fail(`unexpected helper response ${status.id}`)
+    }
     this.pending.delete(status.id)
-    if (status.type === "error") waiter.reject(new Error(nativeDetail(status.error as NativeError)))
-    else waiter.resolve(status)
+    if (status.type === "error") waiter.response.reject(new Error(nativeDetail(status.error as NativeError)))
+    else waiter.response.resolve(status)
   }
   private maybeSettleIo() {
     if (!this.ioStatus) return
@@ -251,10 +266,15 @@ class Session {
     const bytes = Buffer.from(JSON.stringify({ version: 1, id, type, ...fields }) + "\n")
     if (bytes.length > 262144) fail("helper command too long")
     const response = deferred<Status>()
-    this.pending.set(id, response)
+    this.pending.set(id, { type, response })
     try {
       await new Promise<void>((done, reject) => this.child.stdin.write(bytes, error => error ? reject(error) : done()))
-    } catch (cause) { this.pending.delete(id); this.fatal(cause); throw cause }
+    } catch (cause) {
+      this.pending.delete(id)
+      if (type === "release" && this.confirmedReleaseStatus) return { ...this.confirmedReleaseStatus, id }
+      this.fatal(cause)
+      throw cause
+    }
     return response.promise
   }
   async expect(type: string, fields: Record<string, unknown>, response: string): Promise<Status> {
@@ -283,7 +303,7 @@ class Session {
     // A confirmed response can arrive after the caller's bounded wait. It still
     // retires native ownership; a timeout alone never does.
     const confirmation = this.expect("release", {}, "released").then(value => {
-      if (value.resourcesReleased === true && Array.isArray(value.errors)) this.markReleased()
+      if (value.resourcesReleased === true && Array.isArray(value.errors)) this.markReleased(value)
       return value
     })
     try { status = await Promise.race([confirmation, timeout]) }
@@ -293,13 +313,19 @@ class Session {
       const errors = status.errors as NativeError[]
       throw new Error(`native release incomplete${errors.length ? `: ${errors.map(nativeDetail).join("; ")}` : ""}`)
     }
-    this.markReleased()
+    this.markReleased(status)
   }
-  private markReleased(): void {
+  private markReleased(status: Status): void {
     if (this.releaseComplete) return
     this.releaseComplete = true
+    this.confirmedReleaseStatus = status
     const ended = new Error("helper released before pending response")
-    for (const item of this.pending.values()) item.reject(ended)
+    for (const [id, item] of this.pending) {
+      if (item.type === "release") {
+        this.retiredReleaseIds.add(id)
+        item.response.resolve({ ...status, id })
+      } else item.response.reject(ended)
+    }
     this.pending.clear()
     this.onReleased(this)
     try { this.child.stdin.end() } catch { /* native resource release remains confirmed */ }
