@@ -186,10 +186,36 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         stderr: new OutputCollector({ maxBytes: options.spill.maxOutputBytes ?? 64_000, maxSpillBytes: options.spill.maxSpillBytes, spillRoot: options.spill.spillRoot, label: "stderr" }),
       } : undefined
       const raw: Record<Channel, Buffer[]> = { stdout: [], stderr: [] }
+      let finalized = false
+      const finalizeOutput = (): unknown[] => {
+        if (finalized) return []
+        finalized = true
+        const failures: unknown[] = []
+        if (collected) for (const collector of [collected.stdout, collected.stderr]) {
+          try { collector.finalize() } catch (cause) { failures.push(cause) }
+        }
+        return failures
+      }
       let observerFailure: unknown
       let observerFailed = false
       let discardedAfterStop = 0
       let cancellation: Promise<ExecutionSettlement> | undefined
+      let captureStopped = false
+      const captureWaiters = new Set<() => void>()
+      const stopCapture = () => {
+        captureStopped = true
+        for (const stop of captureWaiters) stop()
+        captureWaiters.clear()
+      }
+      // Remove the stop subscription after every completed frame/write. Racing
+      // each frame against one unresolved promise would retain every old waiter.
+      const waitForCapture = <T>(pending: Promise<T>): Promise<T | undefined> => new Promise((resolve, reject) => {
+        const stopped = () => resolve(undefined)
+        if (captureStopped) stopped()
+        else captureWaiters.add(stopped)
+        void pending.then(value => { captureWaiters.delete(stopped); resolve(value) }, cause => { captureWaiters.delete(stopped); reject(cause) })
+      })
+      const iterator = handle.io.output[Symbol.asyncIterator]()
       const askStop = (reason: NonNullable<StreamMetadata["stopReason"]>) => {
         if (stop !== undefined) return
         stop = reason
@@ -198,7 +224,16 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         void cancellation.catch(() => {})
       }
       const consume = (async () => {
-        for await (const frame of handle.io.output) {
+        while (!captureStopped) {
+          const next = iterator.next()
+          const item = await waitForCapture(next)
+          if (item === undefined) {
+            // A pending native read is still owned by the retained handle. Do
+            // not request another frame or treat presentation stop as native EOF.
+            break
+          }
+          if (item.done) break
+          const frame = item.value
           if (frame.channel !== "stdout" && frame.channel !== "stderr") throw new Error("Pipe backend returned a PTY output frame")
           const channel: Channel = frame.channel
           const bytes = Buffer.from(frame.data)
@@ -221,16 +256,24 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
             collected?.[channel].push(bytes)
           }
         }
-      })().catch(cause => {
+      })().catch(async cause => {
         askStop("consumer")
+        // Preserve for-await's iterator-close behavior for processing failures.
+        // Settlement failure already requested return without awaiting native EOF.
+        if (!captureStopped && iterator.return) {
+          try { await iterator.return() }
+          catch (cleanup) { throw new AggregateError([cause, cleanup], "Output consumption and iterator cleanup failed") }
+        }
         throw cause
       })
       void consume.catch(() => {})
       const writeInput = (async () => {
         try {
           if (input?.length) for (let offset = 0; offset < input.length; offset += 16_384) {
-            await handle.io.write(input.subarray(offset, Math.min(input.length, offset + 16_384)))
+            if (captureStopped) return
+            await waitForCapture(handle.io.write(input.subarray(offset, Math.min(input.length, offset + 16_384))))
           }
+          if (captureStopped) return
           await handle.io.endInput()
         } catch (cause) {
           if (!isEpipe(cause)) {
@@ -249,14 +292,45 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         let failed = false
         let primary: unknown
         try {
-          // Join readers/writers before closing their collectors on any path.
-          const outcomes = await Promise.allSettled([handle.rootExited, handle.settled, consume, writeInput] as const)
+          // Failed native settlement must stop presentation even if the native
+          // channel stays open. The supervisor retains that handle for retries.
+          const iteratorFailures: unknown[] = []
+          const stopFailedCapture = () => {
+            stopCapture()
+            cancellation ??= supervisor.cancel(execution.id, "cancelled")
+            void cancellation.catch(() => {})
+            if (iterator.return) {
+              // Async generators queue return behind next. Request closure and
+              // observe it, but do not make capture depend on native EOF again.
+              try { void Promise.resolve(iterator.return()).catch(cause => { iteratorFailures.push(cause) }) }
+              catch (cause) { iteratorFailures.push(cause) }
+            }
+          }
+          const settlement = handle.settled.then(result => {
+            if (result.kind !== "settled") stopFailedCapture()
+            return result
+          }, cause => { stopFailedCapture(); throw cause })
+          const outcomes = await Promise.allSettled([
+            waitForCapture(handle.rootExited), settlement,
+            consume, waitForCapture(writeInput),
+          ] as const)
           const failures: unknown[] = observerFailed ? [observerFailure] : []
           for (const outcome of outcomes) if (outcome.status === "rejected" && !failures.includes(outcome.reason)) failures.push(outcome.reason)
-          if (cancellation) try { await cancellation } catch (cause) { if (!failures.includes(cause)) failures.push(cause) }
           if (outcomes[1].status === "fulfilled" && outcomes[1].value.kind !== "settled") {
             failures.push(new Error(`Execution settlement incomplete: ${outcomes[1].value.detail}`))
           }
+          // Spill ownership ends with stopped presentation, even if an ongoing
+          // native cancellation still needs time to report its cleanup result.
+          if (captureStopped) failures.push(...finalizeOutput())
+          if (cancellation) try {
+            const cancelled = await cancellation
+            const initial = outcomes[1]
+            if (cancelled.kind === "incomplete" && !(initial.status === "fulfilled" && initial.value.kind === "incomplete"
+              && initial.value.phase === cancelled.phase && initial.value.detail === cancelled.detail)) {
+              failures.push(new Error(`Execution cancellation incomplete: ${cancelled.detail}`))
+            }
+          } catch (cause) { if (!failures.includes(cause)) failures.push(cause) }
+          for (const cause of iteratorFailures) if (!failures.includes(cause)) failures.push(cause)
           if (failures.length === 1) throw failures[0]
           if (failures.length > 1) throw new AggregateError(failures, "Execution and cleanup failed")
           const root = (outcomes[0] as PromiseFulfilledResult<RootExit>).value
@@ -286,10 +360,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         } finally {
           if (timer !== undefined) clearTimeout(timer)
           command.abortSignal?.removeEventListener("abort", externalAbort)
-          const cleanup: unknown[] = []
-          if (collected) for (const collector of [collected.stdout, collected.stderr]) {
-            try { collector.finalize() } catch (cause) { cleanup.push(cause) }
-          }
+          const cleanup = finalizeOutput()
           if (cleanup.length) throw new AggregateError(failed ? [primary, ...cleanup] : cleanup, "Execution output cleanup failed")
         }
       })()

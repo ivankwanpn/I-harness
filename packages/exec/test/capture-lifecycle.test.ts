@@ -6,6 +6,7 @@ import { createExecutionLease, type ExecutionOutput, type TransportExecutionBack
 import { compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import { createExecService } from "../src/service.ts"
 import { retainedOutputReader } from "../src/retained-output.ts"
+import { createExecutionSupervisor } from "../src/execution-supervisor.ts"
 
 const opened = vi.hoisted(() => [] as number[])
 const closeFailure = vi.hoisted(() => ({ cause: undefined as Error | undefined, descriptors: [] as number[] }))
@@ -16,8 +17,9 @@ vi.mock("node:fs", async importOriginal => {
 })
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>(done => { resolve = done })
-  return { promise, resolve }
+  let reject!: (cause: unknown) => void
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail })
+  return { promise, resolve, reject }
 }
 function fixture(options: { output: AsyncIterable<ExecutionOutput>; inputError?: unknown; incomplete?: boolean; heldCancel?: boolean; spill?: boolean }) {
   const root = deferred<{ exitCode: number }>(), cancelled = deferred<void>(), releaseCancel = deferred<void>()
@@ -108,6 +110,17 @@ it.each([undefined, { opaque: "observer" }, new Error("observer")])("joins cance
   expect(f.counts().releases).toBe(1)
   await f.exec.dispose()
 })
+it("closes the output iterator on frame-processing failure before native IO settlement", async () => {
+  let closed = false
+  const f = fixture({ output: (async function* () {
+    try { yield { channel: "pty", data: Buffer.from("invalid pipe frame") } }
+    finally { closed = true }
+  })() })
+  await expect(f.exec.run({ argv: ["fixture"] })).rejects.toThrow("Pipe backend returned a PTY output frame")
+  expect(closed).toBe(true)
+  expect(f.counts().releases).toBe(1)
+  await f.exec.dispose()
+})
 it.each(["incomplete", "output", "input"])("closes real spill descriptors when %s fails after output", async failure => {
   const outputError = new Error("output failure"), inputError = new Error("input failure")
   const pushed = deferred<void>()
@@ -131,4 +144,75 @@ it.each(["incomplete", "output", "input"])("closes real spill descriptors when %
   expect(descriptors).toHaveLength(2)
   for (const fd of descriptors) expect(() => fstatSync(fd)).toThrow(/EBADF/)
   await f.exec.dispose().catch(() => {})
+})
+
+it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rejection and close failures"])("stops capture and closes spills before native EOF after %s, retaining the owner for retry", async mode => {
+  const supervisor = createExecutionSupervisor()
+  const nativeEof = deferred<void>(), pushed = deferred<void>()
+  const failed = deferred<import("@i-harness/sandbox").ExecutionSettlement>()
+  const incomplete = { kind: "incomplete" as const, phase: "tree" as const, detail: "tree still owned" }
+  const cancellationError = { opaque: "cancel failure" }
+  const collectorError = new Error("collector close failure")
+  let cancelCalls = 0, returnCalls = 0, reads = 0, nativeClosed = false, recovered = false
+  const backend: TransportExecutionBackend = {
+    async probe() { return { id: "open-capture", availability: "available", assurance: "unverified", features: { writeIsolation: false, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: true } } },
+    async prepare(spec, policy) { return { policy, rollback: async () => {}, async commit(validate) {
+      validate()
+      const receipt = { executionId: "open-capture-1", backendId: "open-capture", policyFingerprint: policy.fingerprint, owner: spec.owner, assurance: "unverified" as const }
+      const cancel = async () => {
+        cancelCalls++
+        if (!recovered) { if (mode.startsWith("opaque rejection")) throw cancellationError; return incomplete }
+        await nativeEof.promise
+        return { kind: "settled" as const, root: { exitCode: 0 }, treeEmpty: true as const, ioSettled: true as const, resourcesReleased: true as const }
+      }
+      const output: AsyncIterable<ExecutionOutput> = { [Symbol.asyncIterator]() { return {
+          async next() {
+            reads++
+            if (reads <= 2) return { done: false as const, value: { channel: reads === 1 ? "stdout" as const : "stderr" as const, data: Buffer.alloc(64, 120) } }
+            pushed.resolve()
+            await nativeEof.promise
+            return { done: true as const, value: undefined }
+          },
+          async return() { returnCalls++; return { done: true as const, value: undefined } },
+        } } }
+      return { pid: 43212, receipt, rootExited: Promise.resolve({ exitCode: 0 }), settled: failed.promise, cancel, release: cancel,
+        io: { output: mode === "queued iterator return" ? (async function* () { yield* output })() : output,
+          write: async () => {}, endInput: async () => {} } }
+    } } },
+  }
+  const spillRoot = mkdtempSync(join(tmpdir(), "sandbox-redesign-open-capture-"))
+  const exec = createExecService({ spill: { maxOutputBytes: 16, spillRoot }, execution: {
+    supervisor, defaultOwner: { sessionId: "open-owner" }, selectBackend: () => backend,
+    resolvePolicy: owner => compileExecutionPolicy({ mode: "danger-full-access", owner, authority: { kind: "unbound", revision: "open", workspaceRoot: resolve(".") } }), validateAuthority: () => {},
+  } })
+  const start = opened.length
+  const outcome = exec.run({ argv: ["fixture"] }).then(value => ({ kind: "success", value }), error => ({ kind: "failure", error }))
+  try {
+    await pushed.promise
+    if (mode.endsWith("close failures")) closeFailure.cause = collectorError
+    if (mode.startsWith("opaque rejection")) failed.reject(undefined)
+    else failed.resolve(incomplete)
+    const result = await Promise.race([outcome, new Promise<{ kind: "pending" }>(resolve => setTimeout(() => resolve({ kind: "pending" }), 150))])
+    expect(result.kind).toBe("failure")
+    expect(cancelCalls).toBe(1)
+    expect(returnCalls).toBe(mode === "queued iterator return" ? 0 : 1)
+    expect(nativeClosed).toBe(false)
+    expect(supervisor.list()).toHaveLength(1)
+    const descriptors = opened.slice(start)
+    expect(descriptors).toHaveLength(2)
+    for (const fd of descriptors) expect(() => fstatSync(fd)).toThrow(/EBADF/)
+    if (result.kind === "failure" && "error" in result) {
+      if (mode.startsWith("opaque rejection")) expect(result.error.errors).toEqual(mode.endsWith("close failures")
+        ? [undefined, collectorError, collectorError, cancellationError] : [undefined, cancellationError])
+      else expect(String(result.error)).toContain("tree still owned")
+    }
+    recovered = true
+    const retry = supervisor.cancel(supervisor.list()[0]!.id, "cancelled")
+    expect(supervisor.list()).toHaveLength(1)
+    nativeClosed = true; nativeEof.resolve()
+    expect(await retry).toMatchObject({ kind: "settled", treeEmpty: true, ioSettled: true, resourcesReleased: true })
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(reads).toBe(3)
+    expect(supervisor.list()).toHaveLength(0)
+  } finally { closeFailure.cause = undefined; recovered = true; nativeEof.resolve(); await outcome; await exec.dispose() }
 })

@@ -21,7 +21,10 @@ it("keeps an incomplete background handle owned and retries cleanup without rela
           receipt: { executionId: "retry-fixture-1", backendId: "retry-fixture", policyFingerprint: policy.fingerprint,
             owner: spec.owner, assurance: "unverified" },
           rootExited: Promise.resolve({ exitCode: 0 }),
-          async waitTreeEmpty() { if (++treeAttempts <= 2) throw new Error("tree observation unavailable") },
+          async waitTreeEmpty() {
+            await outputConsumed // This fixture's retained output precedes its failed tree observation.
+            if (++treeAttempts <= 3) throw new Error("tree observation unavailable")
+          },
           settleIo: () => outputConsumed,
           async releaseResources() { releases++ },
           async terminate() {},
@@ -53,6 +56,7 @@ it("keeps an incomplete background handle owned and retries cleanup without rela
   expect(incomplete.settlement?.kind).toBe("incomplete")
   expect(incomplete.cleanupDetail).toContain("tree observation unavailable")
   expect(incomplete.stdout).toBe("before-retry\n")
+  expect(treeAttempts).toBe(2) // Initial observation plus automatic capture-failure cancellation.
   await expect(exec.killJob(jobId)).rejects.toThrow(/cancellation incomplete/i)
   expect(exec.getOutput(jobId)).toMatchObject({ status: "running", settlement: { kind: "incomplete" } })
   expect(await exec.killJob(jobId)).toBe("cancellation-requested")
@@ -63,7 +67,7 @@ it("keeps an incomplete background handle owned and retries cleanup without rela
   expect(recovered.stderr).toBe("")
   expect(recovered.root?.exitCode).toBe(0)
   expect(commits).toBe(1)
-  expect(treeAttempts).toBe(3)
+  expect(treeAttempts).toBe(4)
   expect(releases).toBe(1)
   await exec.dispose()
 })
