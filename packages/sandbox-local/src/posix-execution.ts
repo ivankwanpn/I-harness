@@ -126,6 +126,9 @@ class PosixSession {
     await Promise.race([this.rootExited, this.overflow.promise, this.stopDeadline.promise])
     if (this.pid < 1) throw new Error("POSIX process group ID unavailable")
     if (this.overflowFailure) throw this.overflowFailure
+    // Complete-tree owns the remaining group after root exit. Preserve queued
+    // output: normal lifetime completion must still drain it before release.
+    if (this.spec.lifetime === "complete-tree" && groupAlive(this.pid)) this.killGroup()
     while (groupAlive(this.pid)) {
       if (this.overflowFailure) throw this.overflowFailure
       await Promise.race([delay(25), this.stopDeadline.promise])
@@ -143,6 +146,9 @@ class PosixSession {
   }
   async terminate(_reason: StopReason): Promise<void> {
     this.abandon()
+    this.killGroup()
+  }
+  private killGroup(): void {
     if (this.pid < 1) throw new Error("POSIX process group ID unavailable")
     if (!this.stopTimer) this.stopTimer = setTimeout(() => this.stopDeadline.reject(new Error("POSIX process-group cleanup timed out")), 12000)
     try { process.kill(-this.pid, "SIGKILL") }
@@ -222,7 +228,7 @@ export function createPosixExecutionBackend(): PosixExecutionBackend {
             throw cause
           }
           const lease = createExecutionLease({
-            receipt: { executionId: randomUUID(), backendId: policy.mode === "danger-full-access" ? "posix-unrestricted" : "linux-bwrap",
+            receipt: { executionId: randomUUID(), backendId: "posix-local",
               policyFingerprint: policy.fingerprint, owner: spec.owner, assurance: "unverified" },
             rootExited: session.rootExited, waitTreeEmpty: () => session.waitTreeEmpty(), settleIo: () => session.settleIo(),
             releaseResources: () => session.releaseResources(), terminate: reason => session.terminate(reason),

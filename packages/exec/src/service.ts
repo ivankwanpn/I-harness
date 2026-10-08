@@ -10,7 +10,7 @@ import { assertExecutionAuthority, compileExecutionPolicy } from "@i-harness/san
 import { currentExecCaller } from "./caller-scope.ts"
 import { ExecutionAdmissionError } from "./execution-admission.ts"
 import { createExecutionSupervisor, type SupervisedExecution } from "./execution-supervisor.ts"
-import { OutputCollector } from "./spill.ts"
+import { OutputCollector, type CollectResult } from "./spill.ts"
 import { execOutputReader, registerRetainedOutput } from "./retained-output.ts"
 import type {
   BackgroundJobStatus, BackgroundJobView, ExecCommand, ExecExecutionHost, ExecResult,
@@ -22,7 +22,7 @@ type Channel = "stdout" | "stderr"
 type Capture = {
   readonly complete: Promise<ExecResult>
   readonly execution: SupervisedExecution
-  text(): { stdout: string; stderr: string }
+  output(): { stdout: CollectResult; stderr: CollectResult }
   diagnostics(): { outputAbandoned: boolean; discardedOutputBytes: number } | undefined
 }
 type Job = {
@@ -181,12 +181,13 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       const { handle } = execution
       const stream = optionsForRun?.stream
       const metadata: StreamMetadata | undefined = stream ? { bytesRead: { stdout: 0, stderr: 0 }, bytesAdmitted: { stdout: 0, stderr: 0 } } : undefined
-      const collected = options.spill && !stream && !background ? {
+      const collected = options.spill && !stream ? {
         stdout: new OutputCollector({ maxBytes: options.spill.maxOutputBytes ?? 64_000, maxSpillBytes: options.spill.maxSpillBytes, spillRoot: options.spill.spillRoot, label: "stdout" }),
         stderr: new OutputCollector({ maxBytes: options.spill.maxOutputBytes ?? 64_000, maxSpillBytes: options.spill.maxSpillBytes, spillRoot: options.spill.spillRoot, label: "stderr" }),
       } : undefined
       const raw: Record<Channel, Buffer[]> = { stdout: [], stderr: [] }
       let observerFailure: unknown
+      let observerFailed = false
       let discardedAfterStop = 0
       let cancellation: Promise<ExecutionSettlement> | undefined
       const askStop = (reason: NonNullable<StreamMetadata["stopReason"]>) => {
@@ -211,16 +212,20 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
               metadata.bytesAdmitted[channel] += length
               if (channel === "stderr") raw.stderr.push(accepted)
               else try { if (stream!.onStdout(accepted) === "stop") askStop("consumer") }
-                catch (cause) { observerFailure = cause; askStop("consumer") }
+                catch (cause) { observerFailed = true; observerFailure = cause; askStop("consumer") }
             }
             discardedAfterStop += bytes.length - length
             if (length < bytes.length || metadata.bytesAdmitted.stdout + metadata.bytesAdmitted.stderr === stream!.maxBytes) askStop("output-limit")
           } else {
-            if (!collected || promotable) raw[channel].push(bytes)
+            if (!collected) raw[channel].push(bytes)
             collected?.[channel].push(bytes)
           }
         }
-      })()
+      })().catch(cause => {
+        askStop("consumer")
+        throw cause
+      })
+      void consume.catch(() => {})
       const writeInput = (async () => {
         try {
           if (input?.length) for (let offset = 0; offset < input.length; offset += 16_384) {
@@ -236,17 +241,26 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         }
       })()
       void writeInput.catch(() => {})
+      const output = () => ({
+        stdout: collected?.stdout.snapshot() ?? { text: Buffer.concat(raw.stdout).toString("utf8"), truncated: false, spillPath: undefined, lossy: false },
+        stderr: collected?.stderr.snapshot() ?? { text: Buffer.concat(raw.stderr).toString("utf8"), truncated: false, spillPath: undefined, lossy: false },
+      })
       const complete = (async (): Promise<ExecResult> => {
+        let failed = false
+        let primary: unknown
         try {
-          const root = await handle.rootExited
-          const settlement = await handle.settled
-          await consume
-          await writeInput
-          if (cancellation) await cancellation
-          if (settlement.kind !== "settled") throw new Error(`Execution settlement incomplete: ${settlement.detail}`)
-          if (observerFailure !== undefined) throw observerFailure
-          const sOut = collected?.stdout.finalize() ?? { text: Buffer.concat(raw.stdout).toString("utf8"), truncated: false, spillPath: undefined, lossy: false }
-          const sErr = collected?.stderr.finalize() ?? { text: Buffer.concat(raw.stderr).toString("utf8"), truncated: false, spillPath: undefined, lossy: false }
+          // Join readers/writers before closing their collectors on any path.
+          const outcomes = await Promise.allSettled([handle.rootExited, handle.settled, consume, writeInput] as const)
+          const failures: unknown[] = observerFailed ? [observerFailure] : []
+          for (const outcome of outcomes) if (outcome.status === "rejected" && !failures.includes(outcome.reason)) failures.push(outcome.reason)
+          if (cancellation) try { await cancellation } catch (cause) { if (!failures.includes(cause)) failures.push(cause) }
+          if (outcomes[1].status === "fulfilled" && outcomes[1].value.kind !== "settled") {
+            failures.push(new Error(`Execution settlement incomplete: ${outcomes[1].value.detail}`))
+          }
+          if (failures.length === 1) throw failures[0]
+          if (failures.length > 1) throw new AggregateError(failures, "Execution and cleanup failed")
+          const root = (outcomes[0] as PromiseFulfilledResult<RootExit>).value
+          const { stdout: sOut, stderr: sErr } = output()
           const driverDiagnostics = handle.io.diagnostics?.()
           const discardedOutputBytes = discardedAfterStop + (driverDiagnostics?.discardedOutputBytes ?? 0)
           const result: ExecResult = {
@@ -265,13 +279,22 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
             if (failure) throw new SandboxUnavailableError(execution.policy.mode, failure.detail, "command-not-run")
           }
           return result
+        } catch (cause) {
+          failed = true
+          primary = cause
+          throw cause
         } finally {
           if (timer !== undefined) clearTimeout(timer)
           command.abortSignal?.removeEventListener("abort", externalAbort)
+          const cleanup: unknown[] = []
+          if (collected) for (const collector of [collected.stdout, collected.stderr]) {
+            try { collector.finalize() } catch (cause) { cleanup.push(cause) }
+          }
+          if (cleanup.length) throw new AggregateError(failed ? [primary, ...cleanup] : cleanup, "Execution output cleanup failed")
         }
       })()
       void complete.catch(() => {})
-      return { execution, complete, text: () => ({ stdout: Buffer.concat(raw.stdout).toString("utf8"), stderr: Buffer.concat(raw.stderr).toString("utf8") }),
+      return { execution, complete, output,
         diagnostics: () => handle.io.diagnostics?.() }
     }, cause => {
       if (timer !== undefined) clearTimeout(timer)
@@ -281,9 +304,11 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
   }
 
   function view(job: Job): BackgroundJobView {
-    const text = job.capture.text()
-    return {
-      id: job.id, status: job.status, stdout: clean(text.stdout), stderr: clean(job.failure ?? text.stderr),
+    const { stdout, stderr } = job.capture.output()
+    const result: BackgroundJobView = {
+      id: job.id, status: job.status, stdout: clean(stdout.text), stderr: clean(job.failure ?? stderr.text),
+      ...(stdout.truncated || stderr.truncated ? { stdoutSpillPath: stdout.spillPath, stderrSpillPath: stderr.spillPath,
+        truncated: { stdout: stdout.truncated, stderr: stderr.truncated } } : {}),
       owner: job.owner.sessionId, ...(job.owner.parentSessionId === undefined ? {} : { parentSessionId: job.owner.parentSessionId }),
       receipt: job.capture.execution.handle.receipt,
       ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }),
@@ -292,6 +317,8 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       ...(job.cleanupDetail === undefined ? {} : { cleanupDetail: job.cleanupDetail }),
       ...(job.capture.diagnostics() === undefined ? {} : { outputDiagnostics: job.capture.diagnostics() }),
     }
+    registerRetainedOutput(result, execOutputReader([stdout, stderr]))
+    return result
   }
 
   function registerJob(capture: Capture): string {

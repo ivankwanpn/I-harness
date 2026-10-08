@@ -3,11 +3,11 @@ import { compileExecutionPolicy } from "@i-harness/sandbox-policy"
 import { createPosixExecutionBackend } from "../src/index.ts"
 
 describe("POSIX execution driver", () => {
-  it.skipIf(process.platform === "linux")("refuses POSIX launch on a non-POSIX host", async () => {
+  it("advertises POSIX availability on Linux and macOS", async () => {
     const backend = createPosixExecutionBackend()
-    expect((await backend.probe()).availability).toBe("unavailable")
+    expect((await backend.probe()).availability).toBe(process.platform === "linux" || process.platform === "darwin" ? "available" : "unavailable")
   })
-  it.skipIf(process.platform !== "linux")("runs a pipe with exact environment, cwd, and owned output", async () => {
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("runs a pipe with exact environment, cwd, and owned output", async () => {
     const backend = createPosixExecutionBackend()
     const policy = compileExecutionPolicy({ mode: "danger-full-access", owner: { sessionId: "owner" },
       authority: { kind: "unbound", revision: "r1", workspaceRoot: process.cwd() } })
@@ -26,7 +26,7 @@ describe("POSIX execution driver", () => {
     await backend.dispose()
   })
 
-  it.skipIf(process.platform !== "linux")("refuses PTY environment injection and runs with caller-declared PWD and TERM", async () => {
+  it.skipIf(process.platform !== "linux" && process.platform !== "darwin")("refuses PTY environment injection and runs with caller-declared PWD and TERM", async () => {
     const backend = createPosixExecutionBackend()
     const policy = compileExecutionPolicy({ mode: "danger-full-access", owner: { sessionId: "owner" },
       authority: { kind: "unbound", revision: "r1", workspaceRoot: process.cwd() } })

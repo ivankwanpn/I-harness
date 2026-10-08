@@ -52,6 +52,9 @@ export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: n
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
   id: string; status: BackgroundJobStatus; stdout: string; stderr: string; exitCode?: number
+  stdoutSpillPath?: string
+  stderrSpillPath?: string
+  truncated?: { stdout: boolean; stderr: boolean }
   owner?: string; parentSessionId?: string
   receipt?: SupervisedExecution["handle"]["receipt"]
   root?: Awaited<SupervisedExecution["handle"]["rootExited"]>
