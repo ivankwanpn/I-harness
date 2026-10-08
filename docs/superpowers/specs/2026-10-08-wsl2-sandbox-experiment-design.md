@@ -43,19 +43,24 @@ Worker-to-host types:
 - `output`: `{channel:"stdout"|"stderr", data:string}` where data is bounded base64.
 - `root`: `{exitCode:number|null, signal?:string}` for the bubblewrap command status.
 - `settled`: namespace/child cleanup and pipe EOF are complete.
+- `refused`: a known prelaunch validation refusal; the worker has no workload process, closes captured resources, then sends `settled` and exits zero. The requested operation rejects while cleanup can complete.
 - `error`: a sanitized failure, never request/environment contents or a traceback.
 
 Maximum line size is 256 KiB; command-output chunks are at most 32 KiB. Unknown versions, nonces, types, malformed base64, oversized frames and impossible phase transitions fail closed. Command output is encoded inside output frames and cannot become control messages. Launcher stderr is bounded diagnostic metadata, not workload stderr.
 
 ## Filesystem policy and identity
 
-Accept only `read-only` or `workspace-write`, exact owner match, `transport=pipe`, `lifetime=complete-tree`, `argumentEncoding=crt`, absolute Linux command paths and absolute existing local-drive Windows cwd/authority/write/reference roots. Do not reinterpret native Windows argv as Linux argv. Capture policy/spec before awaiting. Validate write roots against authority roots and reject writable roots that overlap reference roots; nested references can instead be rebound read-only after writable mounts. Cwd must belong to captured authority.
+Accept only `read-only` or `workspace-write`, exact owner match, `transport=pipe`, `lifetime=complete-tree`, `argumentEncoding=crt`, absolute Linux command paths and absolute existing local-drive Windows cwd/authority/write/reference roots. Do not reinterpret native Windows argv as Linux argv. Capture policy/spec before awaiting. Validate write roots against authority roots and reject writable/reference overlap in either direction, matching the existing compiler. Cwd must belong to captured authority.
 
-The guest resolves and captures every root's physical path and directory identity; before commit it rejects a changed path/inode. Prefer pinned directory descriptors as bubblewrap mount sources so rename/symlink races cannot redirect a captured grant. Target mount paths remain the captured physical guest paths. Root filesystem is bound read-only; workspace-write rebinds only captured write roots. References are read-only, including aliases. A private tmpfs `/tmp` is explicit in workspace-write. Read-only has no writable temp.
+The guest resolves and captures every root's physical path and directory identity; before commit it rejects a changed path/inode. Prefer pinned directory descriptors as bubblewrap mount sources so rename/symlink races cannot redirect a captured grant. Target mount paths remain the captured physical guest paths. Root filesystem is bound read-only; workspace-write rebinds only captured write roots. Nonoverlapping references are read-only, including aliases. A private tmpfs `/tmp` is explicit in workspace-write. Read-only has no writable temp.
 
 ## Linux isolation
 
 Use PID, mount, user, network, IPC and UTS isolation via bubblewrap; a new session, namespace `/proc`, private `/dev`, die-with-parent and no new privileges. Mask `/init` and `/run/WSL`, strip/reject WSL interop environment and use Linux argv/env. Add an x86_64 seccomp filter denying AF_UNIX socket creation and io_uring entry points; reject unsupported architecture or filter setup rather than continue without it. Network is disabled through its namespace. Do not modify distribution-wide interop/AppArmor settings.
+
+The trusted bubblewrap launcher receives only the fixed safe environment. The requested workload environment is applied through bubblewrap's `--clearenv`/`--setenv` after sandbox startup, so loader variables cannot execute code in the unsandboxed launcher.
+
+Writable roots use a bounded descriptor/no-follow inventory at preparation and commit. Require regular-file link count one and an unchanged inventory; refuse unreadable, special, cross-device, over-depth or over-budget layouts. Initial bounds are 4096 entries, 512 directories, depth 32 and a cooperative two-second scan. Concurrent trusted host filesystem mutation after the final scan is outside the experiment's guarantee; the backend does not provide an atomic host filesystem snapshot.
 
 ## Ownership and failure
 
