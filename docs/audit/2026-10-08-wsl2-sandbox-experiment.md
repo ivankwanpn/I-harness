@@ -47,7 +47,7 @@ EOF and bounded cleanup without inventing successful tree termination.
 
 | Check | Recorded result |
 | --- | --- |
-| Full real Ubuntu worker suite | 32 tests passed; final run 40.640 seconds, exit 0 |
+| Full real Ubuntu worker suite | 35 tests passed; final run 43.586 seconds, exit 0 |
 | Full controller suite | 44 tests passed, including six actual Ubuntu integrations |
 | Actual supervisor qualification | 12 cases passed, exit 0 |
 | Existing requirement/lease/supervisor baseline | 155 tests passed |
@@ -61,9 +61,10 @@ construction. Its real consumer is the explicit qualification script. Its
 factory/backend/diagnostic names have dated reachability explanations, not a
 claim of shipped default wiring.
 
-The final supervisor record is
-`.tmp/wsl2-qualification-Gor4SC/qualification.json`. An earlier passing record
-is `.tmp/wsl2-qualification-UN53Rf/qualification.json`; the first compiled-policy
+The final supervisor record after the mount-ID supplement is
+`.tmp/wsl2-qualification-RDK5UP/qualification.json`. Earlier passing records
+are `.tmp/wsl2-qualification-Gor4SC/qualification.json` and
+`.tmp/wsl2-qualification-UN53Rf/qualification.json`; the first compiled-policy
 failure remains `.tmp/wsl2-qualification-tddIMh/qualification.json` and is not
 counted as passing evidence. Worker/controller RED, GREEN and review records
 are preserved in `.superpowers/sdd/2026-10-08-wsl2-sandbox-experiment/`.
@@ -96,8 +97,22 @@ not the outcomes of unexecuted platform or product tests.
   acknowledgement, write deadlines and immediate pipe destruction now have
   focused regressions and truthful incomplete-ownership behavior.
 
-Task reviews accepted the worker and controller after these fixes. Whole-branch
-review is the remaining review gate before final branch delivery.
+Task reviews accepted the worker and controller after these fixes. The final
+whole-branch static review accepted local experimental delivery with no open
+Critical or Important code findings. Its worker digest matches the final source:
+`122bfcfcce229a99365d45a1819e6f7b7bffae382b5e68083344485020eb629e`.
+
+A supplemental native nested-mount witness was blocked by the tool's safety
+restriction (reported possible cybersecurity risk) and was not executed or
+retried. Read-only upstream bubblewrap 0.9.0 source confirms recursive directory
+binds. The worker therefore takes a conservative admission rule: pinned/reopened
+root and every inventory descriptor must match a captured Linux mount ID;
+unknown metadata or any nested mount refuses before launch. Ordinary fdinfo
+metadata and rejection logic have focused RED/GREEN tests, and the complete
+35/44/12 suites passed again after this change. This is not a claim that the
+blocked native alias witness ran or reproduced an escape. References:
+[bubblewrap 0.9.0 source](https://raw.githubusercontent.com/containers/bubblewrap/v0.9.0/bubblewrap.c),
+[Linux descriptor mount metadata](https://man7.org/linux/man-pages/man5/proc_pid_fdinfo.5.html).
 
 ## Reproduce
 
@@ -124,6 +139,8 @@ levels, 8192 examined entries and a cooperative two-second budget per distinct
 directory. Larger/changing/hardlinked/special/cross-device layouts refuse;
 blocking filesystem operations can exceed cooperative timing. These are
 experimental compatibility limits, including for some dependency trees.
+Each writable root is additionally restricted to one existing mount; nested
+mounts, even on the same device, and missing mount-ID metadata refuse.
 
 Descriptor pinning and final validation are not an atomic host filesystem
 snapshot. Concurrent trusted host filesystem changes after the final scan are

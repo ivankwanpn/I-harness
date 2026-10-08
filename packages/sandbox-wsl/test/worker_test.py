@@ -107,6 +107,52 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(frame['nonce'], self.session.nonce)
         self.assertGreater(frame['workerPid'], 0)
 
+    def worker_module(self):
+        module = {'__name__': 'worker_metadata_test'}
+        exec(compile(WORKER.read_bytes(), '<captured-worker>', 'exec'), module)
+        return module
+
+    def test_actual_descriptor_mount_metadata_and_mismatch_refusal(self):
+        self.hello()
+        module = self.worker_module()
+        self.assertTrue(callable(module.get('read_mount_id')), 'worker lacks descriptor mount admission')
+        self.assertTrue(callable(module.get('require_same_mount')), 'worker lacks same-mount refusal')
+        root = os.open(self.work, os.O_PATH | os.O_DIRECTORY)
+        regular = os.open(self.reference / 'sentinel', os.O_RDONLY)
+        try:
+            observed = module['read_mount_id'](root)
+            self.assertIsInstance(observed, int)
+            self.assertGreater(observed, 0)
+            module['require_same_mount'](regular, observed)
+            with self.assertRaises(module['Refusal']):
+                module['require_same_mount'](regular, observed + 1)
+        finally:
+            os.close(regular)
+            os.close(root)
+
+    def test_unknown_or_ambiguous_mount_metadata_is_refused(self):
+        self.hello()
+        module = self.worker_module()
+        self.assertTrue(callable(module.get('parse_mount_id')), 'worker lacks strict mount metadata parsing')
+        self.assertEqual(module['parse_mount_id']('pos:\t0\nmnt_id:\t42\nflags:\t012000000\n'), 42)
+        for invalid in ('pos:\t0\n', 'mnt_id:\t0\n', 'mnt_id:\t-1\n',
+                        'mnt_id:\tunknown\n', 'mnt_id:\t42\nmnt_id:\t42\n'):
+            with self.subTest(invalid=invalid), self.assertRaises(module['Refusal']):
+                module['parse_mount_id'](invalid)
+
+    def test_captured_root_mount_identity_is_revalidated(self):
+        self.hello()
+        module = self.worker_module()
+        directory = module['Directory'](windows(self.work))
+        try:
+            self.assertTrue(hasattr(directory, 'mount_identity'), 'directory lacks captured mount identity')
+            directory.validate()
+            directory.mount_identity += 1
+            with self.assertRaises(module['Refusal']):
+                directory.validate()
+        finally:
+            directory.close()
+
     def prepare(self, script, mode='workspace-write', env=None, argv=None):
         owner = {'sessionId': 'worker-test'}
         spec = {'argv': argv or ['/bin/bash', '-c', script], 'cwd': windows(self.work),
@@ -350,6 +396,7 @@ captured=module['Directory'].__new__(module['Directory'])
 captured.fd=os.open('/tmp/A/parent/write',os.O_PATH|os.O_DIRECTORY)
 captured.mapped='/tmp/A/parent/write'
 captured.identity=captured.key(os.fstat(captured.fd))
+captured.mount_identity=module['read_mount_id'](captured.fd)
 captured.physical,captured.ancestors=module['canonical_directory'](captured.fd)
 try:
  os.rename('/tmp/A/parent','/tmp/S/parent');os.symlink('/tmp/S/parent','/tmp/A/parent')

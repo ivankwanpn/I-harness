@@ -62,6 +62,8 @@ The trusted bubblewrap launcher receives only the fixed safe environment. The re
 
 Writable roots use a bounded descriptor/no-follow inventory at preparation and commit. Require regular-file link count one and an unchanged inventory; refuse unreadable, special, cross-device, over-depth or over-budget layouts. Initial bounds are 4096 entries, 512 directories, depth 32 and a cooperative two-second scan. Concurrent trusted host filesystem mutation after the final scan is outside the experiment's guarantee; the backend does not provide an atomic host filesystem snapshot.
 
+Capture each root's Linux mount ID from bounded `/proc/self/fdinfo` metadata and recheck it on pinned and reopened descriptors at the final fence. Every inventory directory, regular file and no-follow symlink descriptor must use the writable root's mount ID. Missing/malformed metadata and nested mounts, including same-device mounts, are unsupported and refuse before launch. This conservative layout restriction does not depend on an unexecuted native alias experiment.
+
 ## Ownership and failure
 
 The host's commit invokes the existing authority validator immediately before remote commit; the guest rechecks captured filesystem identities before spawn. Authority revocation uses cancellation and awaits genuine guest settlement. Python owns bubblewrap, command pipe readers and termination. EOF/loss of the control pipe cancels the owned execution. PID namespace destruction must cover children that detach from their process group.

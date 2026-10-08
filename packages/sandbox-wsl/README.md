@@ -94,6 +94,9 @@ Desktop or CLI default consumer.
   layouts and changed inventories. Limits are 4096 entries, 512 directories,
   depth 32 and a cooperative two-second scan across writable roots. This can
   refuse larger repositories and dependency trees.
+- Each writable root must stay on one existing mount. Pinned/reopened root,
+  directory, regular-file and no-follow symlink descriptor mount IDs are checked;
+  nested mounts, including same-device mounts, and unavailable metadata refuse.
 - Canonical directory resolution is bounded to 128 ancestor levels, 8192
   examined entries and a cooperative two-second budget per distinct captured
   directory. Blocking filesystem operations can outlast a cooperative budget.

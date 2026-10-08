@@ -50,6 +50,30 @@ def unique_object(pairs):
     return result
 
 
+def parse_mount_id(info):
+    values = [line.split(':', 1)[1].strip() for line in info.splitlines() if line.startswith('mnt_id:')]
+    require(len(values) == 1 and re.fullmatch(r'[0-9]{1,20}', values[0]) is not None,
+            'descriptor mount identity unavailable')
+    identity = int(values[0])
+    require(0 < identity < 2 ** 64, 'descriptor mount identity unavailable')
+    return identity
+
+
+def read_mount_id(fd):
+    try:
+        with open('/proc/self/fdinfo/' + str(fd), 'rb') as info:
+            data = info.read(8193)
+        require(len(data) <= 8192, 'descriptor mount metadata oversized')
+        return parse_mount_id(data.decode('ascii'))
+    except (OSError, UnicodeError):
+        raise Refusal('descriptor mount identity unavailable') from None
+
+
+def require_same_mount(fd, expected):
+    require(type(expected) is int and expected > 0 and read_mount_id(fd) == expected,
+            'writable inventory crosses mount identity')
+
+
 def canonical_directory(fd):
     """Resolve spelling from verified directory entries, preserving Linux case rules."""
     current = os.dup(fd)
@@ -101,6 +125,7 @@ class Directory:
         self.fd = os.open(self.physical, os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
         self.identity = self.key(os.fstat(self.fd))
         try:
+            self.mount_identity = read_mount_id(self.fd)
             if canonical_cache is not None and self.identity in canonical_cache:
                 self.physical, self.ancestors = canonical_cache[self.identity]
             else:
@@ -121,6 +146,15 @@ class Directory:
             require(self.key(os.stat(self.mapped)) == self.identity
                     and self.key(os.stat(self.physical)) == self.identity
                     and self.key(os.fstat(self.fd)) == self.identity, 'directory identity changed')
+            require_same_mount(self.fd, self.mount_identity)
+            # A same-inode mount replacement at either spelling must not pass the fence.
+            for path in (os.path.realpath(self.mapped, strict=True), self.physical):
+                current_fd = os.open(path, os.O_PATH | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                try:
+                    require_same_mount(current_fd, self.mount_identity)
+                    require(self.key(os.fstat(current_fd)) == self.identity, 'directory identity changed')
+                finally:
+                    os.close(current_fd)
             if canonical_cache is not None and self.identity in canonical_cache:
                 current = canonical_cache[self.identity]
             else:
@@ -149,12 +183,13 @@ def write_inventory(roots):
         digest.update(json.dumps([root, relative, stamp(info), link], ensure_ascii=True,
                                  separators=(',', ':')).encode() + b'\n')
 
-    def walk(fd, root, relative, device, depth):
+    def walk(fd, root, relative, device, mount_identity, depth):
         nonlocal count, directories
         directories += 1
         require(directories <= MAX_INVENTORY_DIRECTORIES and depth <= MAX_INVENTORY_DEPTH
                 and time.monotonic() <= deadline, 'writable inventory limit exceeded')
         before = os.fstat(fd)
+        require_same_mount(fd, mount_identity)
         require(stat.S_ISDIR(before.st_mode) and before.st_dev == device, 'unsupported writable inventory')
         record(root, relative, before)
         with os.scandir(fd) as entries:
@@ -173,7 +208,7 @@ def write_inventory(roots):
                 child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
                 try:
                     require(stamp(os.fstat(child)) == stamp(initial), 'writable inventory changed')
-                    walk(child, root, path, device, depth + 1)
+                    walk(child, root, path, device, mount_identity, depth + 1)
                     require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(os.fstat(child)),
                             'writable inventory changed')
                 finally:
@@ -183,6 +218,7 @@ def write_inventory(roots):
                 child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
                 try:
                     current = os.fstat(child)
+                    require_same_mount(child, mount_identity)
                     require(stat.S_ISREG(current.st_mode) and stamp(current) == stamp(initial),
                             'writable inventory changed')
                     require(current.st_nlink == 1, 'writable hardlink refused')
@@ -193,20 +229,28 @@ def write_inventory(roots):
                     os.close(child)
             elif stat.S_ISLNK(initial.st_mode):
                 # Symlink targets retain the surrounding mount policy; never walk them.
-                link = os.readlink(name, dir_fd=fd)
-                require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(initial),
-                        'writable inventory changed')
-                record(root, path, initial, link)
+                child = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
+                try:
+                    require_same_mount(child, mount_identity)
+                    require(stamp(os.fstat(child)) == stamp(initial), 'writable inventory changed')
+                    link = os.readlink(name, dir_fd=fd)
+                    require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(initial),
+                            'writable inventory changed')
+                    record(root, path, initial, link)
+                finally:
+                    os.close(child)
             else:
                 raise Refusal('unsupported writable inventory')
         require(stamp(os.fstat(fd)) == stamp(before), 'writable inventory changed')
+        require_same_mount(fd, mount_identity)
 
     try:
         for root in sorted(roots, key=lambda value: value.physical):
             fd = os.open('.', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=root.fd)
             try:
                 require(Directory.key(os.fstat(fd)) == root.identity, 'writable inventory identity changed')
-                walk(fd, root.physical, '', os.fstat(fd).st_dev, 0)
+                require_same_mount(fd, root.mount_identity)
+                walk(fd, root.physical, '', os.fstat(fd).st_dev, root.mount_identity, 0)
             finally:
                 os.close(fd)
         return digest.hexdigest()
