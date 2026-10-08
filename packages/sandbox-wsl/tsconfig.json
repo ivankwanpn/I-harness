@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "paths": { "@i-harness/sandbox": ["../sandbox/src/index.ts"] } },
+  "include": ["src/**/*.ts", "test/**/*.test.ts", "vitest.config.ts"]
+}
