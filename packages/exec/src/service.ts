@@ -216,6 +216,16 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         void pending.then(value => { captureWaiters.delete(stopped); resolve(value) }, cause => { captureWaiters.delete(stopped); reject(cause) })
       })
       const iterator = handle.io.output[Symbol.asyncIterator]()
+      const iteratorFailures: unknown[] = []
+      let iteratorReturn: Promise<unknown> | undefined
+      const requestIteratorReturn = (): Promise<unknown> => {
+        if (!iteratorReturn) {
+          try { iteratorReturn = Promise.resolve(iterator.return?.()) }
+          catch (cause) { iteratorReturn = Promise.reject(cause) }
+          void iteratorReturn.catch(cause => { iteratorFailures.push(cause) })
+        }
+        return iteratorReturn
+      }
       const askStop = (reason: NonNullable<StreamMetadata["stopReason"]>) => {
         if (stop !== undefined) return
         stop = reason
@@ -223,8 +233,10 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         cancellation = supervisor.cancel(execution.id, reason === "output-limit" ? "output-limit" : "cancelled")
         void cancellation.catch(() => {})
       }
+      let processingFrame = false
       const consume = (async () => {
         while (!captureStopped) {
+          processingFrame = false
           const next = iterator.next()
           const item = await waitForCapture(next)
           if (item === undefined) {
@@ -233,6 +245,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
             break
           }
           if (item.done) break
+          processingFrame = true
           const frame = item.value
           if (frame.channel !== "stdout" && frame.channel !== "stderr") throw new Error("Pipe backend returned a PTY output frame")
           const channel: Channel = frame.channel
@@ -258,11 +271,11 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         }
       })().catch(async cause => {
         askStop("consumer")
-        // Preserve for-await's iterator-close behavior for processing failures.
-        // Settlement failure already requested return without awaiting native EOF.
-        if (!captureStopped && iterator.return) {
-          try { await iterator.return() }
-          catch (cleanup) { throw new AggregateError([cause, cleanup], "Output consumption and iterator cleanup failed") }
+        // for-await closes on body failures, not on rejected next(). Even a
+        // body-failure return must release this wait if native settlement fails.
+        if (processingFrame && !captureStopped) {
+          try { await waitForCapture(requestIteratorReturn()) }
+          catch { /* The shared return observer preserves the cleanup cause. */ }
         }
         throw cause
       })
@@ -294,17 +307,13 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         try {
           // Failed native settlement must stop presentation even if the native
           // channel stays open. The supervisor retains that handle for retries.
-          const iteratorFailures: unknown[] = []
           const stopFailedCapture = () => {
             stopCapture()
             cancellation ??= supervisor.cancel(execution.id, "cancelled")
             void cancellation.catch(() => {})
-            if (iterator.return) {
-              // Async generators queue return behind next. Request closure and
-              // observe it, but do not make capture depend on native EOF again.
-              try { void Promise.resolve(iterator.return()).catch(cause => { iteratorFailures.push(cause) }) }
-              catch (cause) { iteratorFailures.push(cause) }
-            }
+            // Async generators may queue return behind next. Request it once,
+            // without making failed capture depend on native EOF again.
+            void requestIteratorReturn()
           }
           const settlement = handle.settled.then(result => {
             if (result.kind !== "settled") stopFailedCapture()

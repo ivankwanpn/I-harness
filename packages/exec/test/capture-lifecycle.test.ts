@@ -146,13 +146,14 @@ it.each(["incomplete", "output", "input"])("closes real spill descriptors when %
   await f.exec.dispose().catch(() => {})
 })
 
-it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rejection and close failures"])("stops capture and closes spills before native EOF after %s, retaining the owner for retry", async mode => {
+it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rejection and close failures", "read failure incomplete", "read failure rejected", "processing failure incomplete"])("stops capture and closes spills before native EOF after %s, retaining the owner for retry", async mode => {
   const supervisor = createExecutionSupervisor()
   const nativeEof = deferred<void>(), pushed = deferred<void>()
   const failed = deferred<import("@i-harness/sandbox").ExecutionSettlement>()
   const incomplete = { kind: "incomplete" as const, phase: "tree" as const, detail: "tree still owned" }
   const cancellationError = { opaque: "cancel failure" }
   const collectorError = new Error("collector close failure")
+  const readError = { opaque: "read failure" }
   let cancelCalls = 0, returnCalls = 0, reads = 0, nativeClosed = false, recovered = false
   const backend: TransportExecutionBackend = {
     async probe() { return { id: "open-capture", availability: "available", assurance: "unverified", features: { writeIsolation: false, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: true } } },
@@ -161,6 +162,10 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
       const receipt = { executionId: "open-capture-1", backendId: "open-capture", policyFingerprint: policy.fingerprint, owner: spec.owner, assurance: "unverified" as const }
       const cancel = async () => {
         cancelCalls++
+        if (!recovered && (mode.startsWith("read failure") || mode.startsWith("processing failure"))) {
+          if (mode.endsWith("rejected")) { failed.reject(undefined); throw cancellationError }
+          failed.resolve(incomplete)
+        }
         if (!recovered) { if (mode.startsWith("opaque rejection")) throw cancellationError; return incomplete }
         await nativeEof.promise
         return { kind: "settled" as const, root: { exitCode: 0 }, treeEmpty: true as const, ioSettled: true as const, resourcesReleased: true as const }
@@ -170,10 +175,12 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
             reads++
             if (reads <= 2) return { done: false as const, value: { channel: reads === 1 ? "stdout" as const : "stderr" as const, data: Buffer.alloc(64, 120) } }
             pushed.resolve()
+            if (mode.startsWith("read failure")) throw readError
+            if (mode.startsWith("processing failure")) return { done: false as const, value: { channel: "pty" as const, data: Buffer.from("invalid pipe frame") } }
             await nativeEof.promise
             return { done: true as const, value: undefined }
           },
-          async return() { returnCalls++; return { done: true as const, value: undefined } },
+          async return() { returnCalls++; if (mode.startsWith("read failure") || mode.startsWith("processing failure")) await nativeEof.promise; return { done: true as const, value: undefined } },
         } } }
       return { pid: 43212, receipt, rootExited: Promise.resolve({ exitCode: 0 }), settled: failed.promise, cancel, release: cancel,
         io: { output: mode === "queued iterator return" ? (async function* () { yield* output })() : output,
@@ -190,7 +197,8 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
   try {
     await pushed.promise
     if (mode.endsWith("close failures")) closeFailure.cause = collectorError
-    if (mode.startsWith("opaque rejection")) failed.reject(undefined)
+    if (mode.startsWith("read failure") || mode.startsWith("processing failure")) { /* Consumption triggers cancellation's failed settlement. */ }
+    else if (mode.startsWith("opaque rejection")) failed.reject(undefined)
     else failed.resolve(incomplete)
     const result = await Promise.race([outcome, new Promise<{ kind: "pending" }>(resolve => setTimeout(() => resolve({ kind: "pending" }), 150))])
     expect(result.kind).toBe("failure")
@@ -202,7 +210,15 @@ it.each(["incomplete", "opaque rejection", "queued iterator return", "opaque rej
     expect(descriptors).toHaveLength(2)
     for (const fd of descriptors) expect(() => fstatSync(fd)).toThrow(/EBADF/)
     if (result.kind === "failure" && "error" in result) {
-      if (mode.startsWith("opaque rejection")) expect(result.error.errors).toEqual(mode.endsWith("close failures")
+      if (mode.startsWith("read failure")) {
+        expect(result.error.errors).toContain(readError)
+        if (mode.endsWith("rejected")) {
+          expect(result.error.errors).toContain(undefined)
+          expect(result.error.errors).toContain(cancellationError)
+        }
+      } else if (mode.startsWith("processing failure")) {
+        expect(result.error.errors.some((cause: unknown) => String(cause).includes("Pipe backend returned a PTY output frame"))).toBe(true)
+      } else if (mode.startsWith("opaque rejection")) expect(result.error.errors).toEqual(mode.endsWith("close failures")
         ? [undefined, collectorError, collectorError, cancellationError] : [undefined, cancellationError])
       else expect(String(result.error)).toContain("tree still owned")
     }
