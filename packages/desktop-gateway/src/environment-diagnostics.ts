@@ -68,7 +68,8 @@ export function createDesktopDiagnostics(service: Pick<SessionService, "liveAsse
       const shellArgs = shell.resolved?.dialect === "cmd" ? ["/d", "/c", "ver"]
         : shell.resolved?.dialect === "powershell" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.ToString()"] : ["--version"]
       const specs = [{ name: "Agent Shell", command: shell.resolved?.command, args: shellArgs }, { name: "Node.js", command: process.execPath, args: ["--version"] }, { name: "Git", command: "git", args: ["--version"] }, { name: "ripgrep", command: "rg", args: ["--version"] }]
-      const executables = probe ? await Promise.all(specs.map(spec => probeExecutable(spec.name, spec.command, spec.args)))
+      const executables = probe ? await Promise.all(specs.map(spec => spec.name === "Agent Shell" && shell.executionTarget === "wsl"
+        ? Promise.resolve({ name: spec.name, command: spec.command, status: "untested" as const, error: "Use WSL diagnostics to inspect the Linux executable." }) : probeExecutable(spec.name, spec.command, spec.args)))
         : specs.map(spec => ({ name: spec.name, command: spec.command, status: spec.command ? "untested" as const : "unconfigured" as const }))
       if (!shell.resolved && shell.error) executables[0] = { name: "Agent Shell", status: "unavailable", error: shell.error }
       return { live: Boolean(assembly), ...(sessionId ? { sessionId } : {}), ...(state ? { effectiveMode: state.codeMode } : {}), tools,

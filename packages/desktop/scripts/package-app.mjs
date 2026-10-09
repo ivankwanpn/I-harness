@@ -12,6 +12,7 @@ import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
+import { verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -31,6 +32,7 @@ for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", 
 
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
 verifyNativeAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-windows-psec"))
+verifyWslAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-wsl/worker"))
 const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("electron"))
 const electronExe = join(electronDist, "electron.exe")
 if (!existsSync(electronExe)) throw new Error(`electron.exe not found at ${electronExe}`)

@@ -1,11 +1,13 @@
 """Captured, standard-library WSL2 worker. One admitted execution per process."""
 import base64
+import ctypes
 import errno
 import hashlib
 import json
 import os
 import platform
 import re
+import select
 import selectors
 import signal
 import stat
@@ -18,14 +20,42 @@ MAX_FRAME = 256 * 1024
 CHUNK = 32 * 1024
 MAX_PENDING = 4 * 1024 * 1024
 MAX_INPUT = 1024 * 1024
-MAX_INVENTORY_ENTRIES = 4096
-MAX_INVENTORY_DIRECTORIES = 512
-MAX_INVENTORY_DEPTH = 32
-MAX_INVENTORY_SECONDS = 2.0
+MAX_INVENTORY_ENTRIES = 1_000_000
+MAX_INVENTORY_DIRECTORIES = 100_000
+MAX_INVENTORY_DEPTH = 128
+MAX_INVENTORY_SECONDS = 45.0
 SAFE_ENV = {'PATH': '/usr/bin:/bin', 'LANG': 'C'}
+
+# Linux statx gives metadata and the kernel mount ID in one descriptor-relative
+# lookup. Never replace the mount ID with st_dev: same-device binds must refuse.
+LIBC = ctypes.CDLL(None, use_errno=True)
+LIBC.statx.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_uint, ctypes.c_void_p]
+LIBC.statx.restype = ctypes.c_int
+
+
+def metadata(fd, name=''):
+    data = ctypes.create_string_buffer(256)
+    flags = 0x100 | (0x1000 if not name else 0)  # NOFOLLOW, EMPTY_PATH
+    if LIBC.statx(fd, os.fsencode(name), flags, 0x7ff | 0x1000, data) != 0:
+        raise OSError(ctypes.get_errno(), 'statx unavailable')
+    mask, = struct.unpack_from('I', data.raw, 0)
+    require(mask & 0x1000 and mask & 0x7ff == 0x7ff, 'kernel mount metadata unavailable')
+    nlink, = struct.unpack_from('I', data.raw, 16)
+    mode, = struct.unpack_from('H', data.raw, 28)
+    ino, size = struct.unpack_from('QQ', data.raw, 32)
+    devmajor, devminor = struct.unpack_from('II', data.raw, 136)
+    mount, = struct.unpack_from('Q', data.raw, 144)
+    csec, cnsec = struct.unpack_from('qI', data.raw, 96)
+    msec, mnsec = struct.unpack_from('qI', data.raw, 112)
+    return (os.makedev(devmajor, devminor), ino, mode, nlink, size,
+            msec * 1_000_000_000 + mnsec, csec * 1_000_000_000 + cnsec), mount
 
 
 class Refusal(Exception):
+    pass
+
+
+class AdmissionCancelled(Exception):
     pass
 
 
@@ -61,11 +91,10 @@ def parse_mount_id(info):
 
 def read_mount_id(fd):
     try:
-        with open('/proc/self/fdinfo/' + str(fd), 'rb') as info:
-            data = info.read(8193)
-        require(len(data) <= 8192, 'descriptor mount metadata oversized')
-        return parse_mount_id(data.decode('ascii'))
-    except (OSError, UnicodeError):
+        identity = metadata(fd)[1]
+        require(identity > 0, 'descriptor mount identity unavailable')
+        return identity
+    except OSError:
         raise Refusal('descriptor mount identity unavailable') from None
 
 
@@ -114,11 +143,16 @@ def directory_contains(root, child):
 
 
 class Directory:
-    def __init__(self, windows_path, canonical_cache=None):
-        require(text(windows_path) and re.fullmatch(r'[A-Za-z]:[\\/].*', windows_path) is not None
-                and not any(c in windows_path for c in '\r\n'), 'invalid local-drive directory')
-        mapped = subprocess.run(['/usr/bin/wslpath', '-u', windows_path], env=SAFE_ENV,
-                                capture_output=True, timeout=5, check=True).stdout.decode().strip()
+    def __init__(self, windows_path, canonical_cache=None, linux=False):
+        if linux:
+            require(text(windows_path) and windows_path.startswith('/')
+                    and not any(c in windows_path for c in '\r\n:'), 'invalid runtime directory')
+            mapped = windows_path
+        else:
+            require(text(windows_path) and re.fullmatch(r'[A-Za-z]:[\\/].*', windows_path) is not None
+                    and not any(c in windows_path for c in '\r\n'), 'invalid local-drive directory')
+            mapped = subprocess.run(['/usr/bin/wslpath', '-u', windows_path], env=SAFE_ENV,
+                                    capture_output=True, timeout=5, check=True).stdout.decode().strip()
         require(mapped.startswith('/'), 'invalid mapped directory')
         self.mapped = mapped
         self.physical = os.path.realpath(mapped, strict=True)
@@ -169,79 +203,69 @@ class Directory:
         os.close(self.fd)
 
 
-def write_inventory(roots):
-    """Refuse writable inode aliases; inventory via pinned, no-follow descriptors."""
+def write_inventory(roots, checkpoint=lambda: None, statistics=None):
+    """Inventory every entry, including dependencies, using pinned no-follow statx."""
     deadline = time.monotonic() + MAX_INVENTORY_SECONDS
     count, directories = 0, 0
     digest = hashlib.sha256()
-
-    def stamp(info):
-        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
-                info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    aliases, seen_entries = {}, set()
 
     def record(root, relative, info, link=None):
-        digest.update(json.dumps([root, relative, stamp(info), link], ensure_ascii=True,
+        digest.update(json.dumps([root, relative, info, link], ensure_ascii=True,
                                  separators=(',', ':')).encode() + b'\n')
 
     def walk(fd, root, relative, device, mount_identity, depth):
         nonlocal count, directories
+        checkpoint()
         directories += 1
         require(directories <= MAX_INVENTORY_DIRECTORIES and depth <= MAX_INVENTORY_DEPTH
                 and time.monotonic() <= deadline, 'writable inventory limit exceeded')
-        before = os.fstat(fd)
-        require_same_mount(fd, mount_identity)
-        require(stat.S_ISDIR(before.st_mode) and before.st_dev == device, 'unsupported writable inventory')
+        before, mount = metadata(fd)
+        require(mount == mount_identity, 'writable inventory crosses mount identity')
+        require(stat.S_ISDIR(before[2]) and before[0] == device, 'unsupported writable inventory')
         record(root, relative, before)
         with os.scandir(fd) as entries:
             names = []
             for entry in entries:
+                checkpoint()
                 count += 1
                 require(count <= MAX_INVENTORY_ENTRIES and time.monotonic() <= deadline,
                         'writable inventory limit exceeded')
                 names.append(entry.name)
         for name in sorted(names):
+            checkpoint()
             require(time.monotonic() <= deadline, 'writable inventory limit exceeded')
-            initial = os.stat(name, dir_fd=fd, follow_symlinks=False)
+            initial, mount = metadata(fd, name)
             path = relative + '/' + name
-            require(initial.st_dev == device, 'unsupported writable inventory')
-            if stat.S_ISDIR(initial.st_mode):
+            require(initial[0] == device, 'unsupported writable inventory')
+            require(mount == mount_identity, 'writable inventory crosses mount identity')
+            if stat.S_ISDIR(initial[2]):
                 child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
                 try:
-                    require(stamp(os.fstat(child)) == stamp(initial), 'writable inventory changed')
+                    require(metadata(child) == (initial, mount), 'writable inventory changed')
                     walk(child, root, path, device, mount_identity, depth + 1)
-                    require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(os.fstat(child)),
+                    require(metadata(fd, name) == metadata(child),
                             'writable inventory changed')
                 finally:
                     os.close(child)
-            elif stat.S_ISREG(initial.st_mode):
-                # NONBLOCK avoids a raced-in FIFO blocking the trusted worker.
-                child = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=fd)
-                try:
-                    current = os.fstat(child)
-                    require_same_mount(child, mount_identity)
-                    require(stat.S_ISREG(current.st_mode) and stamp(current) == stamp(initial),
-                            'writable inventory changed')
-                    require(current.st_nlink == 1, 'writable hardlink refused')
-                    record(root, path, current)
-                    require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(current)
-                            and stamp(os.fstat(child)) == stamp(current), 'writable inventory changed')
-                finally:
-                    os.close(child)
-            elif stat.S_ISLNK(initial.st_mode):
+            elif stat.S_ISREG(initial[2]):
+                identity = initial[:2]
+                entry_identity = (before[:2], name)
+                if entry_identity not in seen_entries:
+                    seen_entries.add(entry_identity)
+                    links, expected = aliases.get(identity, (0, initial[3]))
+                    require(expected == initial[3], 'writable inventory changed')
+                    aliases[identity] = (links + 1, expected)
+                record(root, path, initial)
+                require(metadata(fd, name) == (initial, mount), 'writable inventory changed')
+            elif stat.S_ISLNK(initial[2]):
                 # Symlink targets retain the surrounding mount policy; never walk them.
-                child = os.open(name, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=fd)
-                try:
-                    require_same_mount(child, mount_identity)
-                    require(stamp(os.fstat(child)) == stamp(initial), 'writable inventory changed')
-                    link = os.readlink(name, dir_fd=fd)
-                    require(stamp(os.stat(name, dir_fd=fd, follow_symlinks=False)) == stamp(initial),
-                            'writable inventory changed')
-                    record(root, path, initial, link)
-                finally:
-                    os.close(child)
+                link = os.readlink(name, dir_fd=fd)
+                require(metadata(fd, name) == (initial, mount), 'writable inventory changed')
+                record(root, path, initial, link)
             else:
                 raise Refusal('unsupported writable inventory')
-        require(stamp(os.fstat(fd)) == stamp(before), 'writable inventory changed')
+        require(metadata(fd) == (before, mount_identity), 'writable inventory changed')
         require_same_mount(fd, mount_identity)
 
     try:
@@ -253,13 +277,16 @@ def write_inventory(roots):
                 walk(fd, root.physical, '', os.fstat(fd).st_dev, root.mount_identity, 0)
             finally:
                 os.close(fd)
+        require(all(found == expected for found, expected in aliases.values()), 'external writable hardlink refused')
+        if statistics is not None:
+            statistics.update(entries=count, directories=directories)
         return digest.hexdigest()
     except OSError:
         raise Refusal('writable inventory unreadable or changed') from None
 
 
 class Prepared:
-    def __init__(self, spec, policy):
+    def __init__(self, spec, policy, configuration=None, checkpoint=lambda: None):
         self.directories = []
         try:
             require(isinstance(spec, dict) and isinstance(policy, dict), 'invalid request')
@@ -267,7 +294,7 @@ class Prepared:
                     and text(spec['owner'].get('sessionId'))
                     and set(spec['owner']) <= {'sessionId', 'parentSessionId'}
                     and ('parentSessionId' not in spec['owner'] or text(spec['owner']['parentSessionId'])), 'invalid owner')
-            require(policy.get('mode') in ('read-only', 'workspace-write')
+            require(policy.get('mode') in ('read-only', 'workspace-write', 'danger-full-access')
                     and policy.get('readable') == 'caller'
                     and policy.get('authorityKind') in ('bound', 'unbound')
                     and text(policy.get('authorityRevision')) and text(policy.get('fingerprint')), 'unsupported policy')
@@ -283,8 +310,19 @@ class Prepared:
                     and not k.upper().startswith('WSL') for k, v in environment.items()), 'invalid Linux environment')
             self.argv, self.env = list(argv), dict(environment)
             self.mode, self.fingerprint = policy['mode'], policy['fingerprint']
+            configuration = configuration or {}
+            require(set(configuration) <= {'networkAccess', 'runtimePath'}
+                    and type(configuration.get('networkAccess', False)) is bool, 'invalid runtime configuration')
+            runtime_path = configuration.get('runtimePath', [])
+            require(isinstance(runtime_path, list) and len(runtime_path) <= 16
+                    and all(text(path) and path.startswith('/') and ':' not in path for path in runtime_path), 'invalid runtime PATH')
+            self.network_access = configuration.get('networkAccess', False)
+            self.runtimes = []
+            if runtime_path:
+                self.env['PATH'] = ':'.join(runtime_path + [self.env.get('PATH', SAFE_ENV['PATH'])])
             canonical_cache = {}
             def capture(path):
+                checkpoint()
                 entry = Directory(path, canonical_cache)
                 self.directories.append(entry)
                 return entry
@@ -295,8 +333,23 @@ class Prepared:
             self.authority = roots('authorityRoots')
             self.writes = roots('writeRoots')
             self.references = roots('referenceRoots')
+            require(self.mode != 'danger-full-access' or not self.references, 'full access cannot protect references')
             self.primary = capture(policy.get('primaryRoot'))
             self.cwd = capture(spec.get('cwd'))
+            for path in runtime_path:
+                checkpoint()
+                path = path.rstrip('/') or '/'
+                root = os.path.dirname(path) if os.path.basename(path) == 'bin' else path
+                require(root not in ('/', '/usr', '/bin', '/tmp', '/proc', '/dev', '/run/WSL'), 'unsupported runtime directory')
+                try:
+                    directory = Directory(root, canonical_cache, linux=True)
+                    self.directories.append(directory)
+                    binary_directory = Directory(path, canonical_cache, linux=True)
+                    self.directories.append(binary_directory)
+                except OSError:
+                    raise Refusal('managed runtime directory unavailable or changed') from None
+                require(directory_contains(directory, binary_directory), 'managed runtime bin escapes release')
+                self.runtimes.append(directory)
             require(self.authority and any(a.identity == self.primary.identity for a in self.authority), 'missing primary authority')
             require(policy['authorityKind'] != 'unbound' or len(self.authority) == 1, 'invalid unbound authority')
             require(any(directory_contains(a, self.cwd) for a in self.authority), 'cwd outside authority')
@@ -306,17 +359,21 @@ class Prepared:
                         for w in self.writes for r in self.references), 'write overlaps reference')
             require(all(not contains('/tmp', d.physical) and not contains('/run/WSL', d.physical)
                         and d.physical not in ('/', '/proc', '/dev') for d in self.directories), 'unsupported root location')
-            self.inventory = write_inventory(self.writes)
+            self.inventory_statistics = {}
+            self.inventory = write_inventory(self.writes, checkpoint, self.inventory_statistics)
+            self.runtime_inventory = write_inventory(self.runtimes, checkpoint)
         except Exception:
             self.close()
             raise
 
-    def validate(self):
+    def validate(self, checkpoint=lambda: None):
         # Each admission fence recomputes location/ancestry; never reuse preparation's cache.
         canonical_cache = {}
         for directory in self.directories:
+            checkpoint()
             directory.validate(canonical_cache)
-        require(write_inventory(self.writes) == self.inventory, 'writable inventory changed')
+        require(write_inventory(self.writes, checkpoint) == self.inventory, 'writable inventory changed')
+        require(write_inventory(self.runtimes, checkpoint) == self.runtime_inventory, 'managed runtime inventory changed')
 
     def close(self):
         for directory in self.directories:
@@ -342,7 +399,10 @@ def seccomp_fd():
 
 def command(prepared, filter_fd, root_fd):
     args = ['/usr/bin/bwrap', '--unshare-all', '--new-session', '--die-with-parent', '--cap-drop', 'ALL',
-            '--ro-bind-fd', str(root_fd), '/', '--dev', '/dev', '--proc', '/proc']
+            '--bind-fd' if prepared is not None and prepared.mode == 'danger-full-access' else '--ro-bind-fd',
+            str(root_fd), '/', '--dev', '/dev', '--proc', '/proc']
+    if prepared is not None and (prepared.mode == 'danger-full-access' or prepared.network_access):
+        args += ['--share-net']
     if os.path.exists('/init'):
         args += ['--ro-bind', '/dev/null', '/init']
     if os.path.exists('/run/WSL'):
@@ -356,6 +416,8 @@ def command(prepared, filter_fd, root_fd):
         for root in sorted(prepared.writes, key=lambda r: len(r.physical)):
             args += ['--bind-fd', str(root.fd), root.physical]
         for root in sorted(prepared.references, key=lambda r: len(r.physical)):
+            args += ['--ro-bind-fd', str(root.fd), root.physical]
+        for root in sorted(getattr(prepared, 'runtimes', []), key=lambda r: len(r.physical)):
             args += ['--ro-bind-fd', str(root.fd), root.physical]
         args += ['--chdir', prepared.cwd.physical]
     args += ['--seccomp', str(filter_fd), '--']
@@ -394,6 +456,39 @@ class Worker:
         self.failed = False
         self.admitting = False
         self.streams = 0
+        self.admission_deadline = 0
+        self.progress_at = 0
+
+    def checkpoint(self):
+        now = time.monotonic()
+        require(now <= self.admission_deadline, 'preparation deadline exceeded')
+        # The main loop pauses for descriptor-safe enumeration; poll its bounded
+        # control buffer at every entry so cancellation/EOF remain responsive.
+        if select.select([0], [], [], 0)[0]:
+            data = os.read(0, CHUNK)
+            if not data:
+                raise AdmissionCancelled()
+            self.control.extend(data)
+        require(len(self.control) < MAX_FRAME, 'oversized protocol frame')
+        while b'\n' in self.control:
+            line, _, rest = self.control.partition(b'\n')
+            self.control = bytearray(rest)
+            frame = json.loads(line, object_pairs_hook=unique_object)
+            require(isinstance(frame, dict) and type(frame.get('v')) is int and frame['v'] == 1
+                    and frame.get('nonce') == self.nonce and set(frame) == {'v', 'nonce', 'type'}
+                    and frame.get('type') in ('cancel', 'shutdown'), 'invalid admission control')
+            raise AdmissionCancelled()
+        if now >= self.progress_at:
+            self.emit('progress', stage='preparing' if self.phase == 'preparing' else 'validating')
+            self.progress_at = now + 0.25
+        if self.pending:
+            try:
+                count = os.write(1, self.pending)
+                del self.pending[:count]
+                if not self.pending:
+                    self.selector.unregister(1)
+            except BlockingIOError:
+                pass
 
     def emit(self, kind, **fields):
         line = (json.dumps({'v': 1, 'nonce': self.nonce, 'type': kind, **fields}, separators=(',', ':')) + '\n').encode()
@@ -460,21 +555,28 @@ class Worker:
         elif kind == 'prepare':
             require(self.phase == 'idle', 'invalid protocol phase')
             self.admitting = True
-            self.prepared = Prepared(frame.get('spec'), frame.get('policy'))
+            self.phase = 'preparing'
+            self.admission_deadline, self.progress_at = time.monotonic() + 55, 0
+            self.prepared = Prepared(frame.get('spec'), frame.get('policy'), frame.get('configuration'), self.checkpoint)
             self.admitting = False
             self.phase = 'prepared'
-            self.emit('prepared', policyFingerprint=self.prepared.fingerprint)
+            self.emit('prepared', policyFingerprint=self.prepared.fingerprint,
+                      inventoryEntries=self.prepared.inventory_statistics['entries'],
+                      inventoryDirectories=self.prepared.inventory_statistics['directories'])
         elif kind == 'commit':
             require(self.phase == 'prepared', 'invalid protocol phase')
             self.admitting = True
+            self.admission_deadline, self.progress_at = time.monotonic() + 55, 0
+            self.phase = 'validating'
             require(probe()[0], 'isolation startup unavailable')
-            self.prepared.validate()
+            self.prepared.validate(self.checkpoint)
+            self.checkpoint()
             fd = seccomp_fd()
             root_fd = os.open('/', os.O_PATH | os.O_DIRECTORY | os.O_CLOEXEC)
             try:
                 self.child = subprocess.Popen(command(self.prepared, fd, root_fd), env=SAFE_ENV,
                                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                              pass_fds=(fd, root_fd, *(d.fd for d in self.prepared.writes + self.prepared.references)),
+                                              pass_fds=(fd, root_fd, *(d.fd for d in self.prepared.writes + self.prepared.references + self.prepared.runtimes)),
                                               start_new_session=True)
                 self.admitting = False
             finally:
@@ -592,6 +694,17 @@ class Worker:
                         else:
                             self.input.clear()
                             self.close_input()
+                    except AdmissionCancelled:
+                        if self.prepared is not None:
+                            self.prepared.close()
+                            self.prepared = None
+                        self.admitting = False
+                        self.phase, self.exiting = 'settled', True
+                        self.emit('settled')
+                        try:
+                            self.selector.unregister(0)
+                        except KeyError:
+                            pass
                     except Refusal as error:
                         if self.admitting and self.child is None:
                             self.refuse(str(error))

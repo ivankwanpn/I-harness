@@ -27,6 +27,8 @@ import { createDesktopTerminal } from "./terminal.ts"
 import { createDesktopSchedules } from "./schedules.ts"
 import { createDesktopWorkState } from "./work-state.ts"
 import { createAgentSettings } from "./agent-settings.ts"
+import { createWslSettings, type WslSettingsOptions } from "./wsl-settings.ts"
+import { validateExecutionSettings } from "./settings-file.ts"
 import { createSubagentSettings } from "./subagent-settings.ts"
 import { createHookSettings } from "./hook-settings.ts"
 import { createDesktopMcp } from "./mcp-settings.ts"
@@ -65,6 +67,8 @@ export interface DesktopHostOptions {
   sessionDir: string
   settingsPath?: string
   credentialsPath?: string
+  wslSettings?: WslSettingsOptions
+  workspaceRuntime?: ReturnType<typeof import("@i-harness/workspace-runtime").createWorkspaceRuntime>
   onWrite: (frame: RpcMessage) => void
 }
 
@@ -97,8 +101,7 @@ async function validateSettingsDocument(path: string): Promise<void> {
     throw new Error("invalid settings: expected an object")
   }
   const mode = (parsed as { sandboxMode?: unknown }).sandboxMode
-  const backend = (parsed as { windowsSandboxBackend?: unknown }).windowsSandboxBackend
-  if (backend !== undefined && backend !== "legacy" && backend !== "psec") throw new Error("invalid settings: unknown Windows sandbox backend")
+  validateExecutionSettings(parsed as Record<string, unknown>)
   if (mode !== undefined && (typeof mode !== "string" || !SANDBOX_MODES.has(mode))) {
     throw new Error("invalid settings: unknown sandboxMode")
   }
@@ -119,6 +122,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await settings.load()
   let mode = settings.get().sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
+  let wslExecution = { ...settings.get().wslExecution }
+  let webSearchMode = settings.get().webSearchMode
   let approvalMode = settings.get().approvalMode
   const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json") })
   await mkdir(options.sessionDir, { recursive: true })
@@ -138,6 +143,16 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const approvals = createDesktopApprovalHistory(coordinator)
   const reviewerPool = createIsolatedReviewerPool()
   const agentShell = createAgentShellSettings(settingsPath)
+  let workspaceRuntime: Promise<NonNullable<DesktopHostOptions["workspaceRuntime"]>> | undefined
+  const managedRuntime = () => options.workspaceRuntime ? Promise.resolve(options.workspaceRuntime)
+    : (workspaceRuntime ??= import("@i-harness/workspace-runtime").then(module => module.createWorkspaceRuntime({ cacheRoot: join(dirname(settingsPath), "workspace-runtime") })))
+  const wslSettings = createWslSettings(settingsPath, {
+    listDistributions: async () => (await import("@i-harness/sandbox-wsl")).listWslDistributions(),
+    inspectRuntime: async distribution => (await import("@i-harness/sandbox-wsl")).inspectWslRuntime(distribution, [options.workspace]),
+    diagnoseDependencies: async configuration => (await managedRuntime()).diagnose(configuration),
+    repairDependencies: async configuration => (await managedRuntime()).repair(configuration),
+    ...options.wslSettings,
+  })
   const notifyWorkflow = (sessionId: string) => options.onWrite(makeNotification("desktop/workflow/changed", { sessionId }))
   const modelBindingFor: NonNullable<SessionServiceOptions["modelBindingFor"]> = async (sessionId, meta) => {
     const state = await runtime.resolveModel(meta?.modelSelection === undefined
@@ -198,6 +213,17 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     projectContextFor: async id => { const getter = await projects.forSession(id); projectContexts.set(id, getter); return getter },
     executionAuthorityFor: async id => { const get = await projects.authorityFor(id); executionAuthorities.set(id, get); return get },
     windowsSandboxBackendFor: () => windowsSandboxBackend,
+    wslExecutionFor: () => {
+      const captured = { ...wslExecution }
+      if (windowsSandboxBackend !== "wsl" || !captured.workspaceDependencies) return captured
+      return managedRuntime().then(async runtime => {
+        const resolved = await runtime.resolve(captured, { installIfMissing: true })
+        if (resolved.status === "missing" || resolved.status === "unavailable") throw new Error(resolved.detail)
+        return { ...captured, ...(resolved.runtimePath ? { runtimePath: [...resolved.runtimePath] } : {}) }
+      })
+    },
+    webSearchModeFor: () => webSearchMode,
+    webCacheRoot: join(options.sessionDir, "web-cache"),
     agentShell: agentShell.resolve,
     team: {}, concurrentSessionTeams: true, jobStatusEvents: true,
     codeMode: () => codeSettings.resolve(),
@@ -284,8 +310,10 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       signal.throwIfAborted()
     },
   })
-  const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, windowsSandboxBackend, autoCompaction: settings.get().compaction.auto, approvalMode }, {
+  const agentSettings = createAgentSettings(settingsPath, { sandboxMode: mode, windowsSandboxBackend, wslExecution, webSearchMode, autoCompaction: settings.get().compaction.auto, approvalMode }, {
     onWindowsSandboxBackendChanged(next) { windowsSandboxBackend = next },
+    onWslExecutionChanged(next) { wslExecution = { ...next } },
+    onWebSearchModeChanged(next) { webSearchMode = next },
     executionStatus: () => service.executionBackendStatus(),
     async onSandboxModeChanged(next) { mode = next; await service.updateSandboxMode(next) },
     onApprovalModeChanged(next) { approvalMode = next },
@@ -325,7 +353,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     diagnostics: createDesktopDiagnostics(service, { shell: agentShell }),
     draftSession: createDraftSession(coordinator),
     contextPicker: createContextPicker(options.workspace, coordinator, review, { visible: isConversation, projectFor: projects.projectFor, query: createConversationQuery(coordinator, sessionQuery) }),
-    workflow, agentShell, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
+    workflow, agentShell, wslSettings, input, projects: { ...projects, bind: (id, projectId) => fence.run(id, () => projects.bind(id, projectId)) },
     resources,
     projectFiles: createProjectFiles(options.workspace, review),
     projectContentSearch,
@@ -444,6 +472,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
+        await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once("projects", () => projects.close())
         await once("review", () => review.close())

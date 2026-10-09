@@ -7,6 +7,7 @@ export const WSL_EXE = "C:\\Windows\\System32\\wsl.exe"
 const OUTPUT_LIMIT = 1024 * 1024
 const DIAGNOSTIC_LIMIT = 16 * 1024
 const CONTROL_TIMEOUT_MS = 10_000
+const PREPARATION_TIMEOUT_MS = 60_000
 
 // This code is constant. Source and request material arrive only over the bounded pipe.
 export const BOOTSTRAP = `import sys,os,json,base64,hashlib
@@ -34,11 +35,11 @@ export function deferred<T>() {
   void promise.catch(() => {})
   return { promise, resolve, reject }
 }
-async function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
+async function bounded<T>(promise: Promise<T>, label: string, timeout = CONTROL_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([promise, new Promise<never>((_yes, no) => {
-      timer = setTimeout(() => no(new Error(`WSL ${label} timed out; guest cleanup unconfirmed`)), CONTROL_TIMEOUT_MS)
+      timer = setTimeout(() => no(new Error(`WSL ${label} timed out; guest cleanup unconfirmed`)), timeout)
     })])
   } finally { clearTimeout(timer) }
 }
@@ -114,6 +115,9 @@ export class WorkerClient {
   private rootDrainTimer?: ReturnType<typeof setTimeout>
   private inputEnded = false
   private inputBytes = 0
+  private preparationStage?: "preparing" | "validating"
+  private inventoryEntries?: number
+  private inventoryDirectories?: number
   private inputChain: Promise<void> = Promise.resolve()
   private readonly bootstrapWritten: Promise<void>
 
@@ -175,7 +179,10 @@ export class WorkerClient {
     switch (frame.type) {
       case "hello": this.hello.resolve(); break
       case "probe": this.probeReply.resolve(frame); break
-      case "prepared": this.prepared.resolve(frame.policyFingerprint); break
+      case "prepared":
+        this.inventoryEntries = frame.inventoryEntries; this.inventoryDirectories = frame.inventoryDirectories
+        this.prepared.resolve(frame.policyFingerprint); break
+      case "progress": this.preparationStage = frame.stage; break
       case "started": this.started.resolve(frame.pid); break
       case "output": this.output.push({ channel: frame.channel, data: decodeBase64(frame.data) }); break
       case "root":
@@ -223,9 +230,9 @@ export class WorkerClient {
   async probe(): Promise<Extract<WorkerFrame, { type: "probe" }>> {
     await this.send("probe"); return bounded(this.probeReply.promise, "probe")
   }
-  async prepare(spec: unknown, policy: unknown): Promise<string> {
-    await this.send("prepare", { spec, policy })
-    return bounded(Promise.race([this.prepared.promise, this.interrupted.promise]), "preparation")
+  async prepare(spec: unknown, policy: unknown, configuration: unknown = {}): Promise<string> {
+    await this.send("prepare", { spec, policy, configuration })
+    return bounded(Promise.race([this.prepared.promise, this.interrupted.promise]), "preparation", PREPARATION_TIMEOUT_MS)
   }
   interrupt(): void { this.interrupted.reject(new Error("WSL execution admission aborted")) }
   async commit(receipt: ExecutionReceipt, validateAuthority: () => void): Promise<TransportExecutionHandle> {
@@ -233,7 +240,7 @@ export class WorkerClient {
     validateAuthority()
     const committed = this.send("commit")
     await committed
-    const pid = await bounded(this.started.promise, "commit")
+    const pid = await bounded(Promise.race([this.started.promise, this.interrupted.promise]), "commit", PREPARATION_TIMEOUT_MS)
     const lease = createExecutionLease({ receipt, rootExited: this.root.promise,
       waitTreeEmpty: async () => { await this.acknowledged.promise; await this.waitClosed(); if (this.failure) throw this.failure },
       settleIo: async () => { await this.waitClosed(); if (this.failure) throw this.failure },
@@ -296,6 +303,9 @@ export class WorkerClient {
     if (this.failure) throw this.failure
   }
   diagnostics() {
-    return { launcherStderr: decodeLauncherText(this.diagnostic), discardedLauncherStderrBytes: this.diagnosticsDiscarded, ...this.output.diagnostics() }
+    return { launcherStderr: decodeLauncherText(this.diagnostic), discardedLauncherStderrBytes: this.diagnosticsDiscarded,
+      ...(this.preparationStage ? { preparationStage: this.preparationStage } : {}),
+      ...(this.inventoryEntries !== undefined ? { inventoryEntries: this.inventoryEntries } : {}),
+      ...(this.inventoryDirectories !== undefined ? { inventoryDirectories: this.inventoryDirectories } : {}), ...this.output.diagnostics() }
   }
 }

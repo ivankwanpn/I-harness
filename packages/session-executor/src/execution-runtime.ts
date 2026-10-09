@@ -4,14 +4,15 @@ import { relative, isAbsolute, sep } from "node:path"
 import { createExecutionSupervisor, currentExecCaller, withExecCallerScope, type ExecExecutionHost, type ExecutionReconciliationContext, type ExecutionReconciler } from "@i-harness/exec"
 import { createLocalExecutionBackends, readWindowsQualification, type LocalExecutionBackends, type LocalExecutionOptions } from "@i-harness/sandbox-local"
 import { assertExecutionAuthority, compileExecutionPolicy } from "@i-harness/sandbox-policy"
-import type { AuthorityState, CompiledSandboxPolicy, ExecutionOwner, SandboxMode, SandboxExecutionPolicy } from "@i-harness/sandbox"
+import { snapshotProcessSpec, type AuthorityState, type CompiledSandboxPolicy, type ExecutionOwner, type SandboxMode, type SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 export interface ExecutionRuntimeOptions {
   owner: ExecutionOwner
   ownerAvailable?(): boolean
   authority(): AuthorityState
   standing(): { mode: SandboxMode; generation: string }
-  windowsSandboxBackend?: "legacy" | "psec"
+  windowsSandboxBackend?: "legacy" | "psec" | "wsl"
+  wslExecution?: LocalExecutionOptions["wslExecution"]
   legacyPrivateTempRoot?: string
 }
 const rank = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 }
@@ -23,10 +24,13 @@ function contains(root: string, path: string): boolean {
 /** Assembly-owned authority and backend composition. No process operation lives here. */
 export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions) {
   const configured = options.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX ?? "legacy"
-  if (configured !== "legacy" && configured !== "psec") throw new Error("IH_WINDOWS_SANDBOX requires legacy or psec")
-  const selected: "legacy" | "psec" = configured
+  if (configured !== "legacy" && configured !== "psec" && configured !== "wsl") throw new Error("IH_WINDOWS_SANDBOX requires legacy, psec or wsl")
+  const selected: "legacy" | "psec" | "wsl" = configured
+  const wslExecution = Object.freeze({ distribution: options.wslExecution?.distribution ?? "Ubuntu", networkAccess: options.wslExecution?.networkAccess ?? false,
+    workspaceDependencies: options.wslExecution?.workspaceDependencies ?? true,
+    ...(options.wslExecution?.runtimePath === undefined ? {} : { runtimePath: Object.freeze([...options.wslExecution.runtimePath]) }) })
   const supervisor = createExecutionSupervisor()
-  const backendOptions: LocalExecutionOptions = { windowsSelection: selected,
+  const backendOptions: LocalExecutionOptions = { windowsSelection: selected, wslExecution,
     // A location for the legacy protocol only: no private temp grants or environment rewriting.
     legacyPrivateTempRoot: options.legacyPrivateTempRoot ?? tmpdir() }
   const backends: LocalExecutionBackends = createLocalExecutionBackends(backendOptions)
@@ -59,7 +63,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
   }
   const execution: ExecExecutionHost = {
     supervisor, defaultOwner: Object.freeze({ ...options.owner }),
-    selectBackend: (policy, transport) => backends.select(policy, transport),
+    selectBackend: (policy, transport, spec) => backends.select(policy, transport, spec),
     resolvePolicy(owner, requested) {
       if (disposed) throw new Error("Execution runtime disposed")
       if (blockedOwners.has(owner.sessionId)) throw new Error("Execution owner admission blocked by reconciliation")
@@ -79,7 +83,7 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       return policy
     },
     validateAuthority: validate,
-    autoPromotionLifetime: policy => process.platform === "win32" && selected === "legacy"
+    autoPromotionLifetime: policy => process.platform === "win32" && (selected === "legacy" || selected === "wsl" && policy.referenceRoots.length === 0)
       && policy.mode !== "danger-full-access" ? "complete-tree" : "retain-tree",
     canAccessOwner(caller, target) {
       const visited = new Set<string>()
@@ -98,6 +102,8 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
     },
   }
   return {
+    windowsSandboxBackend: selected,
+    wslExecution,
     execution,
     trackWrite<T>(abort: () => void, call: () => Promise<T>): Promise<T> {
       const policy = execution.resolvePolicy(currentExecCaller() ?? options.owner, undefined)
@@ -156,10 +162,15 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
     },
     async status() {
       const policy = compileExecutionPolicy({ mode: options.standing().mode, owner: options.owner, authority: options.authority() })
-      const probe = await backends.select(policy, "pipe").probe()
+      const spec = selected === "wsl" ? snapshotProcessSpec({ executionTarget: "wsl", argv: ["/bin/bash", "--version"], cwd: policy.primaryRoot,
+        env: { PATH: [...(wslExecution.runtimePath ?? []), "/usr/bin", "/bin"].join(":"), LANG: "C" }, owner: policy.owner,
+        transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt" }) : undefined
+      const probe = await backends.select(policy, "pipe", spec).probe()
+      const nativeBackend = selected === "wsl" ? await backends.select(policy, "pipe").probe() : undefined
       const qualification = process.platform === "win32" ? await readWindowsQualification() : undefined
-      return { windowsSandboxBackend: selected, ...probe, qualification, activeExecutions: supervisor.list().map(execution => execution.handle.receipt),
+      return { windowsSandboxBackend: selected, wslExecution, ...probe, ...(nativeBackend ? { nativeBackend } : {}), qualification, activeExecutions: supervisor.list().map(execution => execution.handle.receipt),
         limits: probe.id === "windows-acl-legacy" ? "Root-bound complete-tree; no PTY, retained descendants or private writable temp. PowerShell may use ConstrainedLanguage."
+          : selected === "wsl" ? "Linux Bash pipes and root-bound complete-tree background jobs; no WSL PTY or retained descendants. Native tools use a separate Windows backend."
           : "Qualification is historical evidence from one host; matching OS/artifacts do not establish current security or promote an experimental backend." }
     },
   }

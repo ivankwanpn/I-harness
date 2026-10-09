@@ -18,6 +18,10 @@ export interface ResolvedShell {
 
 type AgentShellDialect = "posix" | "powershell" | "cmd"
 export interface ResolvedAgentShell {
+  executionTarget?: "host" | "wsl"
+  env?: Readonly<Record<string, string>>
+  executionContext?: string
+  workspacePath?: string
   id: string
   label: string
   command: string
@@ -26,7 +30,27 @@ export interface ResolvedAgentShell {
   validate?(): void
 }
 
+/** Immutable trusted Linux binding. Paths for file tools remain Windows paths. */
+export function resolveWslAgentShell(options: { distribution: string; networkAccess: boolean; workspaceDependencies: boolean; runtimePath?: readonly string[] }, workspacePath?: string): ResolvedAgentShell {
+  const captured = Object.freeze({ ...options, ...(options.runtimePath ? { runtimePath: Object.freeze([...options.runtimePath]) } : {}) })
+  return Object.freeze({ id: `wsl:${captured.distribution}`, label: `Linux Bash (WSL2 ${captured.distribution})`, command: "/bin/bash", dialect: "posix",
+    executionTarget: "wsl", env: Object.freeze({ PATH: [...(captured.runtimePath ?? []), "/usr/bin", "/bin"].join(":"), LANG: "C" }),
+    executionContext: JSON.stringify(captured), ...(workspacePath ? { workspacePath } : {}) })
+}
+function capturedShell(shell: ResolvedAgentShell): ResolvedAgentShell {
+  return Object.freeze({ ...shell, ...(shell.env === undefined ? {} : { env: Object.freeze({ ...shell.env }) }) })
+}
+function boundShellEnvironment(shell: ResolvedAgentShell) {
+  return shell.executionTarget === "wsl" ? { executionTarget: "wsl" as const, env: { ...(shell.env ?? { PATH: "/usr/bin:/bin", LANG: "C" }) } }
+    : shellCommandEnvironment(shell.command)
+}
+function shellFlags(shell: ResolvedAgentShell): string[] {
+  return shell.dialect === "powershell" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
+    : shell.dialect === "cmd" ? ["/d", "/s", "/c"] : shell.executionTarget === "wsl" ? ["--noprofile", "--norc", "-c"] : ["-c"]
+}
+
 export function agentShellPrompt(shell: ResolvedAgentShell): string {
+  if (shell.executionTarget === "wsl") return `Agent Shell: ${shell.label} (${shell.command}). Use POSIX syntax and Linux paths. ${shell.workspacePath ? `Linux workspace: ${shell.workspacePath}. ` : "The Windows workspace is mapped by WSL at launch. "}File tools continue to use Windows workspace paths. Captured WSL options: ${shell.executionContext}. Background jobs are root-bound: descendants are cleaned up when the root command exits. The pwsh and native terminal tools run on the Windows host with their own sandbox capabilities. Settings changes apply to new assemblies.`
   const syntax = shell.dialect === "powershell" ? "PowerShell syntax (cmdlets, $variables, backtick escaping)"
     : shell.dialect === "cmd" ? "Windows CMD syntax (%VARIABLES%, caret escaping)"
       : "POSIX shell syntax"
@@ -248,6 +272,8 @@ export interface ShellRetentionOptions {
 }
 
 export interface ShellToolDeps {
+  /** Assembly-captured WSL Bash binding, also used by explicit bash. */
+  wslShell?: ResolvedAgentShell
   exec: ExecService
   /** Live host preference. Only the generic shell tool uses this resolver. */
   agentShell?: () => ResolvedAgentShell
@@ -552,7 +578,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   // refusal's most important field sat outside the declared output shape.
   const bash: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "bash",
-    description: "run a bash command (background: true returns a job id instead of waiting)",
+    description: deps.wslShell ? `Run Linux Bash in ${deps.wslShell.label}. Background jobs remain alive only until the root command exits; descendants are then cleaned up.` : "run a bash command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
       properties: {
@@ -569,6 +595,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     timeoutMs: deps.timeoutMs,
     getArgv: (args: { command: string }) => getArgv(args.command),
     approvalIdentity: (args) => {
+      if (deps.wslShell) return undefined
       const executable = bashBindings.get(args) ?? resolveBashExe()
       if (!executable) return undefined
       bashBindings.set(args, executable)
@@ -581,7 +608,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     execute: async (args: { command: string; background?: boolean; sandbox_permissions?: string; justification?: string }, exec: ToolExec) => {
       // M59: legible failure instead of a silent spawn-fail (-1 with empty
       // output) — the model can then pick the pwsh tool immediately.
-      if (!bashAvailable()) {
+      if (!deps.wslShell && !bashAvailable()) {
         return {
           stdout: "",
           stderr:
@@ -590,12 +617,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           exitCode: -1,
         }
       }
-      const argv = [bashBindings.get(args) ?? resolveBashExe()!, "-c", args.command]
+      const argv = deps.wslShell ? [deps.wslShell.command, ...shellFlags(deps.wslShell), args.command] : [bashBindings.get(args) ?? resolveBashExe()!, "-c", args.command]
       bashBindings.delete(args)
       // M62: the ladder runs BEFORE exec is called and AFTER the availability
       // check — asking a human to widen the sandbox for a command this host
       // cannot run at all would be a prompt with no possible outcome.
-      const ladder = await resolveShellCall(deps, exec, "bash", args, `run command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
+      const ladder = await resolveShellCall(deps, exec, "bash", args, `run command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}${deps.wslShell ? ` in ${deps.wslShell.label}; captured options ${deps.wslShell.executionContext}` : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       // Per CALL, never cached: the assembly's resolver re-reads the session's
       // last `sandbox/mode` event, so a mode change a HOST appends mid-session
@@ -605,14 +632,14 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const sandboxResolved = ladder.policy
       try {
         if (args.background === true) {
-          const { jobId } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
+          const { jobId } = await deps.exec.runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
         // W10: the command spec is built ONCE — the promotion overload takes
         // the very same ExecCommand, so the two calls below differ in nothing
         // but the threshold. The overload (not a second code path) is what
         // keeps a non-promoting call's result shape untouched.
-        const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
+        const cmd = { argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
         const result = deps.backgroundAfterMs === undefined
           ? await deps.exec.run(cmd)
           : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
@@ -630,7 +657,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
   }
   const pwsh: Tool<{ command: string; background?: boolean }, { stdout?: string; stderr?: string; exitCode?: number; job_id?: string; promoted?: true; ran_foreground_ms?: number }> = {
     name: "pwsh",
-    description: "run a PowerShell command (background: true returns a job id instead of waiting)",
+    description: deps.wslShell ? "Run native Windows PowerShell using the host sandbox backend. WSL Linux paths and capabilities do not apply here; background or PTY support depends on the selected native backend." : "run a PowerShell command (background: true returns a job id instead of waiting)",
     inputSchema: {
       type: "object",
       properties: {
@@ -681,7 +708,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     const existing = bindings.get(args)
     if (existing) return existing
     let binding: Binding
-    try { binding = { shell: { ...deps.agentShell!() } } }
+    try { binding = { shell: capturedShell(deps.agentShell!()) } }
     catch (error) { binding = { error: error instanceof Error ? error.message : String(error) } }
     bindings.set(args, binding)
     return binding
@@ -700,7 +727,7 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     approvalIdentity: (args) => {
       const binding = bindingFor(args)
-      return "error" in binding ? undefined : versionIdentity(args, binding.shell.command, binding.shell.dialect)
+      return "error" in binding || binding.shell.executionTarget === "wsl" ? undefined : versionIdentity(args, binding.shell.command, binding.shell.dialect)
     },
     execute: async (args, exec) => {
       const binding = bindingFor(args)
@@ -709,13 +736,12 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       const selected = binding.shell
       try { selected.validate?.() }
       catch (error) { return { stdout: "", stderr: error instanceof Error ? error.message : String(error), exitCode: -1 } }
-      const flags = selected.dialect === "powershell" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
-        : selected.dialect === "cmd" ? ["/d", "/s", "/c"] : ["-c"]
+      const flags = shellFlags(selected)
       const argv = [selected.command, ...flags, selected.dialect === "cmd" ? `"${args.command}"` : args.command]
-      const ladder = await resolveShellCall(deps, exec, "shell", args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}`)
+      const ladder = await resolveShellCall(deps, exec, "shell", args, `run ${selected.label} command ${args.command.slice(0, 2048)}${args.command.length > 2048 ? "… [truncated]" : ""}${selected.executionContext ? `; target ${selected.executionTarget}, captured options ${selected.executionContext}` : ""}`)
       if (ladder.kind === "refused") return ladder.refusal
       const sandbox = ladder.policy
-      const spec = { argv, ...shellCommandEnvironment(selected.command), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
+      const spec = { argv, ...boundShellEnvironment(selected), ...(selected.dialect === "cmd" ? { windowsVerbatimArguments: true } : {}), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandbox !== undefined ? { sandbox } : {}) }
       try {
         if (args.background === true) return { job_id: (await deps.exec.runBackground(spec)).jobId }
         const command = { ...spec, abortSignal: exec.abortSignal }
@@ -734,6 +760,7 @@ export function registerShell(
   ctx: PluginContext,
   registry: { register(t: Tool): void },
   opts?: {
+    wslShell?: ResolvedAgentShell
     agentShell?: () => ResolvedAgentShell
     timeoutMs?: number
     /** W10: the foreground promotion threshold, forwarded to both tools — see
@@ -760,6 +787,7 @@ export function registerShell(
   catch { exec = registerExec(ctx, { workspaceRoot: opts?.cwd ?? process.cwd(), sandbox: opts?.sandbox }) }
   const tools = createShellTools({
     exec,
+    ...(opts?.wslShell ? { wslShell: capturedShell(opts.wslShell) } : {}),
     ...(opts?.agentShell !== undefined ? { agentShell: opts.agentShell } : {}),
     timeoutMs: opts?.timeoutMs,
     backgroundAfterMs: opts?.backgroundAfterMs,

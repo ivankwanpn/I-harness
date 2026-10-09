@@ -129,12 +129,23 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
       if (!["enable", "role/set", "role/clear"].includes(String(command.action))) throw new Error("invalid subagent settings action")
       return { ...command }
     }
+    case "desktop/wsl/state":
+    case "desktop/wsl/diagnose":
+    case "desktop/wsl/repair": return {}
     case "desktop/agent-settings/state": return {}
     case "desktop/agent-settings/configure": {
       if (!value.patch || typeof value.patch !== "object" || Array.isArray(value.patch)) throw new Error("invalid agent settings patch")
       const patch = value.patch as Record<string, unknown>
-      if (Object.keys(patch).some((key) => !["sandboxMode", "autoCompaction", "approvalMode", "windowsSandboxBackend"].includes(key))) throw new Error("unknown agent setting")
-      if (patch.windowsSandboxBackend !== undefined && !["legacy", "psec"].includes(String(patch.windowsSandboxBackend))) throw new Error("invalid Windows sandbox backend")
+      if (Object.keys(patch).some((key) => !["sandboxMode", "autoCompaction", "approvalMode", "windowsSandboxBackend", "wslExecution", "webSearchMode"].includes(key))) throw new Error("unknown agent setting")
+      if (patch.windowsSandboxBackend !== undefined && !["legacy", "psec", "wsl"].includes(String(patch.windowsSandboxBackend))) throw new Error("invalid Windows sandbox backend")
+      if (patch.webSearchMode !== undefined && !["disabled", "cached", "indexed", "live"].includes(String(patch.webSearchMode))) throw new Error("invalid web search mode")
+      if (patch.wslExecution !== undefined) {
+        if (!patch.wslExecution || typeof patch.wslExecution !== "object" || Array.isArray(patch.wslExecution)) throw new Error("invalid WSL settings")
+        const input = patch.wslExecution as Record<string, unknown>
+        if (Object.keys(input).some(key => !["distribution", "networkAccess", "workspaceDependencies"].includes(key))) throw new Error("unknown WSL setting")
+        if (typeof input.distribution !== "string" || !input.distribution.trim() || input.distribution.length > 256 || /[\u0000-\u001f\u007f]/.test(input.distribution)) throw new Error("invalid WSL distribution")
+        if (typeof input.networkAccess !== "boolean" || typeof input.workspaceDependencies !== "boolean") throw new Error("invalid WSL option")
+      }
       if (patch.sandboxMode !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(String(patch.sandboxMode))) throw new Error("invalid sandbox mode")
       if (patch.autoCompaction !== undefined && typeof patch.autoCompaction !== "boolean") throw new Error("invalid auto compaction")
       if (patch.approvalMode !== undefined && !["dangerous", "ask-all", "delegate", "full-access"].includes(String(patch.approvalMode))) throw new Error("invalid approval mode")

@@ -22,6 +22,7 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | import("@i-harness/desktop-gateway").WslSettingsRequest
   | ContextSubsystemRequest
   | ProjectFilesRequest | ResourceAuthoringRequest | HookAuthoringRequest | MemoryAuthoringRequest | GlobalProviderRequest | GlobalPreferencesRequest | NotificationHistoryRequest | DraftRequest | ExecutionRequest | AgentProcessesRequest | DiagnosticsRequest
   | { kind: "desktop/session/batch"; workspaceId: string; command: import("@i-harness/desktop-gateway").SessionBatchCommand; confirmed?: true }

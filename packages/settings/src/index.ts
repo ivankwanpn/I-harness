@@ -27,7 +27,22 @@ export * from './context-subsystems.ts'
 /** Sandbox mode: mirrors the @i-harness/sandbox union (kept local to stay
  * dependency-free — the settings package must not import sandbox). */
 export type SettingsSandboxMode = "read-only" | "workspace-write" | "danger-full-access"
-export type SettingsWindowsSandboxBackend = "legacy" | "psec"
+export type SettingsWindowsSandboxBackend = "legacy" | "psec" | "wsl"
+export type SettingsWebSearchMode = "disabled" | "cached" | "indexed" | "live"
+export interface SettingsWslExecution {
+  distribution: string
+  networkAccess: boolean
+  workspaceDependencies: boolean
+}
+export function normalizeWslExecution(raw: unknown): SettingsWslExecution {
+  const value = isRecord(raw) ? raw : {}
+  const distribution = typeof value.distribution === "string" ? value.distribution.trim() : ""
+  return {
+    distribution: distribution && distribution.length <= 256 && !/[\u0000-\u001f\u007f]/.test(distribution) ? distribution : "Ubuntu",
+    networkAccess: booleanOf(value.networkAccess, false),
+    workspaceDependencies: booleanOf(value.workspaceDependencies, true),
+  }
+}
 
 /** Completed-turn transcript presentation (dsh settings.transcript). Retained as
  * a vocabulary type after the `transcriptMode` key was retired: it is not one of
@@ -293,6 +308,8 @@ export interface Settings {
   autoTitle?: boolean
   sandboxMode: SettingsSandboxMode
   windowsSandboxBackend: SettingsWindowsSandboxBackend
+  wslExecution: SettingsWslExecution
+  webSearchMode: SettingsWebSearchMode
   /** Executable preference for new Agent shell commands. */
   agentShell: SettingsAgentShell
   /** Desktop tool approvals; legacy files default to dangerous-only. */
@@ -366,6 +383,8 @@ const SETTINGS_DEFAULTS: Settings = {
   autoTitle: true,
   sandboxMode: "workspace-write",
   windowsSandboxBackend: "legacy",
+  wslExecution: normalizeWslExecution(undefined),
+  webSearchMode: "cached",
   agentShell: "auto",
   approvalMode: "dangerous",
   // ON by default, matching the engine's own default (`deps.compact?.auto ?? true`)
@@ -723,6 +742,7 @@ export function normalizeSettings(raw: unknown): Settings {
   if (!isRecord(raw)) {
     return {
       ...base,
+      wslExecution: { ...base.wslExecution },
       contextSubsystems: normalizeContextSubsystems(undefined),
       plugins: { ...base.plugins },
       agents: normalizeAgents(undefined, base.agents),
@@ -738,7 +758,10 @@ export function normalizeSettings(raw: unknown): Settings {
   const tuiRaw = isRecord(raw.tui) ? raw.tui : {}
   return {
     sandboxMode: oneOf(raw.sandboxMode, SANDBOX_MODES, base.sandboxMode),
-    windowsSandboxBackend: oneOf(raw.windowsSandboxBackend, ["legacy", "psec"] as const, base.windowsSandboxBackend),
+    windowsSandboxBackend: oneOf(raw.windowsSandboxBackend, ["legacy", "psec", "wsl"] as const, base.windowsSandboxBackend),
+    wslExecution: normalizeWslExecution(raw.wslExecution),
+    // Older documents fetched live. Fresh stores use the cached default above.
+    webSearchMode: Object.hasOwn(raw, "webSearchMode") ? oneOf(raw.webSearchMode, ["disabled", "cached", "indexed", "live"] as const, base.webSearchMode) : "live",
     contextSubsystems: normalizeContextSubsystems(raw.contextSubsystems),
     codeMode: normalizeCodeMode(raw.codeMode),
     autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,
@@ -1256,6 +1279,7 @@ export class LayeredSettingsStore {
   async load(): Promise<Settings> {
     this.rawsByPath.clear()
     for (const source of this.resolvedRoots) {
+      source.raws = undefined
       if (source.path === null) continue
       const text = await readFile(source.path, "utf8").catch(() => undefined)
       if (text === undefined) continue
@@ -1266,7 +1290,7 @@ export class LayeredSettingsStore {
     const master = this.masterSource()
     const masterRaw = master !== undefined ? this.rawsByPath.get(master.path!) : undefined
     this.revision = loadRevisionMeta(masterRaw)
-    this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots]))
+    this.current = normalizeSettings(this.rawsByPath.size === 0 ? undefined : mergeRawLayers([...this.resolvedRoots]))
     this.loaded = true
     this.ensureWatcher()
     return this.current
@@ -1274,6 +1298,9 @@ export class LayeredSettingsStore {
 
   async set(patch: Partial<Settings>): Promise<Settings> {
     if (!this.loaded) await this.load()
+    // The first durable write must carry the new-store web default. Otherwise
+    // that newly created partial document would look like an older live policy.
+    if (this.rawsByPath.size === 0 && patch.webSearchMode === undefined) patch = { ...patch, webSearchMode: this.current.webSearchMode }
     this.current = normalizeSettings(mergeRawLayers([...this.resolvedRoots, { raws: patch }]))
     if ("llm" in patch) this.revision.llm = (this.revision.llm ?? 0) + 1
     if ("onboarding" in patch) this.revision.onboarding = (this.revision.onboarding ?? 0) + 1
@@ -1352,6 +1379,7 @@ export class LayeredSettingsStore {
     await writeFile(tmp, text, "utf8")
     await rename(tmp, master.path)
     this.rawsByPath.set(master.path, doc)
+    master.raws = doc
   }
 
   /** Polling watcher (500ms default — no fs events, no chokidar): when a

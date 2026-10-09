@@ -2,11 +2,12 @@
 
 `@i-harness/sandbox-wsl` provides an explicitly constructed Windows-to-WSL2
 backend for IH's existing execution supervisor. Linux Bash and Linux tools run
-inside bubblewrap, with a read-only root filesystem, captured writable project
-roots, PID namespaces, no network, seccomp and Windows interop masking.
+inside bubblewrap, with captured writable project roots, PID namespaces,
+explicit networking, seccomp and Windows interop masking.
 
-This package is an experiment on `codex/wsl2-sandbox-experiment`. It does not
-change Desktop settings, default shell selection or published releases.
+The backend keeps experimental assurance while the CLI and Desktop integration
+expose WSL selection. Construction captures the distribution, networking option,
+managed runtime PATH and exact worker bytes for each new assembly.
 
 ## Existing-runtime requirements
 
@@ -15,8 +16,8 @@ change Desktop settings, default shell selection or published releases.
   `--bind-fd`, `--ro-bind-fd` and seccomp support at `/usr/bin/bwrap`.
 - The distribution must permit the user/PID/mount/network namespaces exercised
   by the real startup probe. An unavailable runtime or profile refuses execution.
-- No Linux Node runtime is needed. Network is disabled; this experiment does not
-  use a proxy or require socat.
+- Linux Node/npm are optional system or managed dependencies. Socat is optional;
+  command networking uses the guest network namespace without a proxy.
 
 The package does not install packages or change WSL/AppArmor/interop settings.
 The worker's Python source is captured once by the controller, hashed, sent over
@@ -42,7 +43,7 @@ and pre-existing hardlinks. It performs no installation or global configuration.
 ```ts
 import { createWslExecutionBackend } from "@i-harness/sandbox-wsl"
 
-const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
+const backend = createWslExecutionBackend({ distribution: "Ubuntu", networkAccess: false })
 const probe = await backend.probe()
 // Supply this backend to createExecutionSupervisor().launch(...).
 await backend.dispose()
@@ -56,11 +57,14 @@ and directory identities. Argv must name a Linux executable, such as
 The workload environment is explicit, is checked for interop variables and is
 applied only after bubblewrap starts under a trusted safe environment.
 
-Supported requests are `read-only` or `workspace-write`, pipes,
+Supported requests are `read-only`, `workspace-write` or `danger-full-access`, pipes,
 `complete-tree` lifetime and CRT argument-list encoding. The backend reports
 `assurance: "experimental"`, caller-visible reads, write isolation, no PTY,
-no retained-tree mode and no general read/deny-path isolation. It refuses
-`danger-full-access`; it never retries through another backend.
+no retained-tree mode and no general read/deny-path isolation. It advertises
+reference protection separately. Full access with protected references refuses.
+Networking defaults off in RO/WW and on in full access; `networkAccess:true`
+enables networking in RO/WW. Unix sockets, io_uring and Windows interop remain
+restricted in every mode. No error-triggered backend retry occurs.
 
 Root exit, Linux settlement acknowledgement, output EOF and Windows launcher
 closure are separate observations. The execution lease waits for the required
@@ -70,42 +74,59 @@ rejects the request and acknowledges empty cleanup, without fabricating a root
 exit or execution handle. Launcher diagnostics are bounded and separate from
 the command's stdout/stderr.
 
-## Public API scope
+## Runtime discovery and packaged assets
 
-The three exported names are deliberate opt-in library contracts:
-`createWslExecutionBackend` constructs the backend, `WslExecutionBackend` names
-its disposable interface, and `WslDiagnostics` names its bounded diagnostic
-result. The real consumer in `scripts/qualification/wsl2-sandbox/run.mts`
-constructs the backend through the existing supervisor. That script is outside
-the production-source reachability scanner, so each name has an individual
-dated declaration in its allowlist. These declarations do not assert a shipped
-Desktop or CLI default consumer.
+`listWslDistributions()` returns exact names, WSL versions and states.
+`inspectWslRuntime(distribution, paths?)` reports real isolation availability,
+Python/Bash/bubblewrap/Node/npm/socat/git statuses and Windows-to-Linux path
+mappings. These APIs use hidden fixed `C:\\Windows\\System32\\wsl.exe`, isolated
+Python and no shell startup profiles or installation. Dependency status means
+present on the fixed system runtime PATH; managed runtime status is supplied by
+the separate runtime manager. Launcher diagnostics never contain the workload
+environment.
+
+Source/Desktop TS loading captures `../worker/runner.py` relative to this
+package's source module. Bundled CLI loading with `I_HARNESS_DIST=1` requires
+`./wsl-assets/runner.py` and `./wsl-assets/manifest.json` relative to the bundle.
+The manifest schema is `{schema:1,protocol:1,worker:"runner.py",sha256}` and must
+match the captured bytes. A source worker manifest, when present, is also checked.
+Missing or mismatched assets refuse construction.
+
+Trusted `runtimePath` options supply absolute Linux bin directories. A release's
+`bin` parent is pinned and rebound read-only after writable project mounts; its
+inventory and ancestry are revalidated before launch, with outside hardlink
+aliases refused. Missing managed paths refuse admission.
 
 ## Experimental compatibility limits
 
 - Linux toolchains must exist in the selected distribution. Windows toolchain
   executables do not become Linux executables through path conversion.
-- All network access is disabled. Workflows requiring package downloads need a
-  future separately designed network policy and relay.
 - Reads remain visible as specified by IH's caller-readable policy. The backend
   is not a whole-application or whole-WSL security boundary.
 - Writable/reference overlap is refused in either direction. Writable inventory
-  admission also refuses regular-file hardlinks, unreadable/special/cross-device
-  layouts and changed inventories. Limits are 4096 entries, 512 directories,
-  depth 32 and a cooperative two-second scan across writable roots. This can
-  refuse larger repositories and dependency trees.
+  admission counts every regular inode link across captured writable roots.
+  Internal hardlinks are admitted only when all links are accounted for; outside
+  aliases, unreadable/special/cross-device layouts and changed inventories refuse.
+  Limits are 1,000,000 entries, 100,000 directories, depth 128 and a cooperative
+  45-second scan. Preparation/commit admission have a 55-second guest deadline
+  and a 60-second controller response deadline; control writes remain bounded
+  to ten seconds. Progress and cancellation are serviced during enumeration.
+  All dependency and git directories are scanned; no persistent authority cache
+  or omitted-directory shortcut is used.
 - Each writable root must stay on one existing mount. Pinned/reopened root,
-  directory, regular-file and no-follow symlink descriptor mount IDs are checked;
-  nested mounts, including same-device mounts, and unavailable metadata refuse.
+  directory and no-follow entry mount IDs use kernel statx relative to pinned
+  descriptors; nested mounts, including same-device mounts, and unavailable
+  metadata refuse. The previously blocked native nested-mount witness is not
+  needed or repeated by the metadata tests.
 - Canonical directory resolution is bounded to 128 ancestor levels, 8192
   examined entries and a cooperative two-second budget per distinct captured
   directory. Blocking filesystem operations can outlast a cooperative budget.
 - Descriptor pinning and final revalidation protect captured roots; they do not
   create an atomic filesystem snapshot or lock out concurrent trusted host
   filesystem modifications after the final scan.
-- This version has source/WSL qualification only, with the exact host/runtime
-  documented in the acceptance report. It has no Desktop UI, installer or
-  packaged-release qualification.
+- A measured Desktop project preparation included its dependency tree within
+  the bounded budget. Filesystem latency and concurrent trusted changes can
+  still cause refusal; descriptor pinning is not an atomic snapshot.
 
 ## Tests
 
@@ -122,6 +143,7 @@ Use the fixed hidden WSL launcher or an existing Ubuntu terminal to run:
 
 ```bash
 python3 -I -B packages/sandbox-wsl/test/worker_test.py
+python3 -I -B packages/sandbox-wsl/test/product_worker_test.py ProductWorkerTests
 ```
 
 The worker tests do not use Linux-home or shared system-temp fixtures. Their

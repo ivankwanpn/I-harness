@@ -20,6 +20,7 @@ import type {
 type StreamMetadata = NonNullable<ExecResult["stream"]>
 type Channel = "stdout" | "stderr"
 type Capture = {
+  readonly lifetime?: ProcessSpec["lifetime"]
   readonly complete: Promise<ExecResult>
   readonly execution: SupervisedExecution
   output(): { stdout: CollectResult; stderr: CollectResult }
@@ -30,10 +31,10 @@ type Job = {
   exitCode?: number; root?: RootExit; settlement?: ExecutionSettlement; failure?: string; cleanupDetail?: string
 }
 
-function boundEnvironment(input?: Readonly<Record<string, string>>): Readonly<Record<string, string>> {
-  const source = input === undefined ? process.env : input
+function boundEnvironment(input?: Readonly<Record<string, string>>, target: "host" | "wsl" = "host"): Readonly<Record<string, string>> {
+  const source = input === undefined ? target === "wsl" ? { PATH: "/usr/bin:/bin", LANG: "C" } : process.env : input
   const environment: Record<string, string> = {}
-  if (process.platform === "win32") {
+  if (process.platform === "win32" && target !== "wsl") {
     const keys = new Map<string, string>()
     for (const [key, value] of Object.entries(source)) {
       if (value === undefined) continue
@@ -69,15 +70,21 @@ function validateInput(command: ExecCommand): void {
 }
 
 function defaultHost(workspaceRoot: string, legacyArgvProvider = false, owner: Readonly<ExecutionOwner> = { sessionId: "standalone-exec" }): ExecExecutionHost {
-  const backends = createLocalExecutionBackends({ windowsSelection: process.env.IH_WINDOWS_SANDBOX === "psec" ? "psec" : "legacy" })
+  const configured = process.env.IH_WINDOWS_SANDBOX ?? "legacy"
+  if (configured !== "legacy" && configured !== "psec" && configured !== "wsl") throw new Error("IH_WINDOWS_SANDBOX requires legacy, psec or wsl")
+  const network = process.env.IH_WSL_NETWORK
+  if (network !== undefined && network !== "allow" && network !== "deny") throw new Error("IH_WSL_NETWORK requires allow or deny")
+  const backends = createLocalExecutionBackends({ windowsSelection: configured, wslExecution: {
+    distribution: process.env.IH_WSL_DISTRIBUTION ?? "Ubuntu", networkAccess: process.env.IH_WSL_NETWORK === "allow", workspaceDependencies: true,
+  } })
   const authority = Object.freeze({ kind: "unbound" as const, revision: "standalone-workspace", workspaceRoot })
   return {
     defaultOwner: Object.freeze({ sessionId: owner.sessionId, ...(owner.parentSessionId === undefined ? {} : { parentSessionId: owner.parentSessionId }) }),
-    selectBackend: (policy, transport) => {
+    selectBackend: (policy, transport, spec) => {
       if (legacyArgvProvider && policy.mode !== "danger-full-access") {
         throw new Error("argv-only sandbox provider cannot own a supervised process; compose a transport backend")
       }
-      return backends.select(policy, transport)
+      return backends.select(policy, transport, spec)
     },
     resolvePolicy: (owner, requested) => compileExecutionPolicy({ mode: requested?.mode ?? "danger-full-access", owner, authority }),
     validateAuthority: policy => assertExecutionAuthority(policy, compileExecutionPolicy({ mode: policy.mode, owner: policy.owner, authority })),
@@ -88,7 +95,7 @@ function defaultHost(workspaceRoot: string, legacyArgvProvider = false, owner: R
 function requirements(policy: CompiledSandboxPolicy, request: ExecTransportRequest): BackendRequirements {
   return Object.freeze({
     writeIsolation: policy.mode !== "danger-full-access", readIsolation: request.sandbox?.requireReadIsolation === true,
-    denyPaths: policy.referenceRoots.length > 0, transport: request.transport, lifetime: request.lifetime,
+    denyPaths: false, referenceProtection: policy.referenceRoots.length > 0, transport: request.transport, lifetime: request.lifetime,
     minimumAssurance: "unverified" as const,
   })
 }
@@ -121,15 +128,18 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       const policy = host.resolvePolicy(owner, request.sandbox)
       if (automaticPromotion && host.autoPromotionLifetime) request = { ...request, lifetime: host.autoPromotionLifetime(policy) }
       const cwd = resolve(request.cwd ?? options.workspaceRoot ?? process.cwd())
-      const env = boundEnvironment(request.env)
+      const target = request.executionTarget ?? "host"
+      if (target !== "host" && target !== "wsl") throw new Error("Invalid trusted execution target")
+      const env = boundEnvironment(request.env, target)
       const spec: ProcessSpec = snapshotProcessSpec({
-        argv: resolveExecutable(request.argv, cwd, env), cwd,
+        ...(request.executionTarget === undefined ? {} : { executionTarget: target }),
+        argv: target === "wsl" ? request.argv : resolveExecutable(request.argv, cwd, env), cwd,
         env, owner, transport: request.transport,
         lifetime: request.lifetime, argumentEncoding: request.argumentEncoding,
         ...(request.pty === undefined ? {} : { pty: request.pty }),
       })
       let backend: ReturnType<ExecExecutionHost["selectBackend"]>
-      try { backend = host.selectBackend(policy, spec.transport) }
+      try { backend = host.selectBackend(policy, spec.transport, spec) }
       catch (cause) {
         if (policy.mode !== "danger-full-access") throw new SandboxUnavailableError(policy.mode, cause instanceof Error ? cause.message : String(cause))
         throw cause
@@ -167,13 +177,14 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     if (command.abortSignal?.aborted) externalAbort()
     let timer: ReturnType<typeof setTimeout> | undefined
     const request: ExecTransportRequest = {
+      ...(command.executionTarget === undefined ? {} : { executionTarget: command.executionTarget }),
       argv: [...command.argv], cwd: command.cwd,
       ...(command.env === undefined ? {} : { env: { ...command.env } }),
-      transport: "pipe", lifetime: background || promotable ? "retain-tree" : "complete-tree",
+      transport: "pipe", lifetime: command.executionTarget === "wsl" ? "complete-tree" : background || promotable ? "retain-tree" : "complete-tree",
       argumentEncoding: command.windowsVerbatimArguments ? "cmd-verbatim" : "crt",
       sandbox: command.sandbox, abortSignal: signal.signal,
     }
-    const launch = launchTransport(request, promotable && !background)
+    const launch = launchTransport(request, promotable && !background && command.executionTarget !== "wsl")
     return launch.then(execution => {
       if (command.timeoutMs !== undefined) timer = setTimeout(() => {
         stop ??= "timeout"; signal.abort("timeout")
@@ -374,7 +385,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         }
       })()
       void complete.catch(() => {})
-      return { execution, complete, output,
+      return { execution, complete, output, ...(request.executionTarget === "wsl" ? { lifetime: "complete-tree" as const } : {}),
         diagnostics: () => handle.io.diagnostics?.() }
     }, cause => {
       if (timer !== undefined) clearTimeout(timer)
@@ -387,6 +398,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     const { stdout, stderr } = job.capture.output()
     const result: BackgroundJobView = {
       id: job.id, status: job.status, stdout: clean(stdout.text), stderr: clean(job.failure ?? stderr.text),
+      ...(job.capture.lifetime === undefined ? {} : { lifetime: job.capture.lifetime }),
       ...(stdout.truncated || stderr.truncated ? { stdoutSpillPath: stdout.spillPath, stderrSpillPath: stderr.spillPath,
         truncated: { stdout: stdout.truncated, stderr: stderr.truncated } } : {}),
       owner: job.owner.sessionId, ...(job.owner.parentSessionId === undefined ? {} : { parentSessionId: job.owner.parentSessionId }),

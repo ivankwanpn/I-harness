@@ -11,17 +11,21 @@ export interface BackendProbe {
   assurance: BackendAssurance
   features: Readonly<{
     writeIsolation: boolean; readIsolation: boolean; denyPaths: boolean
+    referenceProtection?: boolean
     pipes: boolean; pty: boolean; retainedTree: boolean
   }>
   detail?: string
 }
 export interface BackendRequirements {
   writeIsolation: boolean; readIsolation: boolean; denyPaths: boolean
+  referenceProtection?: boolean
   transport: ExecutionTransport; lifetime: ExecutionLifetime
   minimumAssurance: BackendAssurance
 }
 export type BackendDecision = { ok: true } | { ok: false; missing: readonly string[] }
 export interface ProcessSpec {
+  /** Trusted composition only. Omission means native host execution. */
+  executionTarget?: "host" | "wsl"
   argv: readonly string[]; cwd: string; env: Readonly<Record<string, string>>
   owner: Readonly<ExecutionOwner>; transport: ExecutionTransport
   lifetime: ExecutionLifetime; argumentEncoding: "crt" | "cmd-verbatim"

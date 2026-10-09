@@ -25,8 +25,8 @@ export function AgentShellSettings({ bridge, workspaceId }: { bridge: DesktopBri
     ? [...available, { id: state.selected, label: t("已選擇的 Shell 目前不可用") }] : available
   return <>
     <h2>{t("Agent Shell")}</h2>
-    <SettingsGroup><SettingsRow label={t("Agent Shell")} description={t("儲存後套用到下一個 Agent 命令；正在執行或等候核準的命令保持原 Shell。使用所選 Shell 的命令語法。")}
-      control={<select aria-label={t("Agent Shell")} value={state?.selected ?? "auto"} disabled={busy || !state || available.length === 0} onChange={(event) => {
+    <SettingsGroup><SettingsRow label={t("Agent Shell")} description={t(state?.executionTarget === "wsl" ? "WSL 新組裝使用所選發行版的 Linux Bash 與 Linux 路徑；既有組裝保留原 Shell。原生 PowerShell 工具與人類終端仍在 Windows 主機執行。可在執行設定診斷 WSL。" : "儲存後套用到下一個 Agent 命令；正在執行或等候核準的命令保持原 Shell。使用所選 Shell 的命令語法。")}
+      control={<select aria-label={t("Agent Shell")} value={state?.selected ?? "auto"} disabled={busy || !state || available.length === 0 || state.executionTarget === "wsl"} onChange={(event) => {
         if (lock.current) return
         lock.current = true; setBusy(true); setError(undefined)
         const current = version.current
@@ -35,7 +35,7 @@ export function AgentShellSettings({ bridge, workspaceId }: { bridge: DesktopBri
         }).catch((reason: unknown) => { if (current === version.current) setError(String(reason)) })
           .finally(() => { if (current === version.current) { lock.current = false; setBusy(false) } })
       }}>{visible.map((option) => <option key={option.id} value={option.id}>{option.id === "auto" ? t("自動選擇") : option.label}</option>)}</select>} />
-      {state?.resolved ? <p className="settings-shell-path" role="status">{t("目前執行檔")}：<code>{state.resolved.command}</code></p> : null}
+      {state?.resolved ? <p className="settings-shell-path" role="status">{t(state.executionTarget === "wsl" ? "新組裝使用的 Linux 執行檔" : "目前執行檔")}：<code>{state.resolved.command}</code></p> : null}
     </SettingsGroup>
     {!state && !error ? <p role="status">{t("正在讀取…")}</p> : null}
     {error || state?.error ? <p role="alert" className="error-text">{error ?? state?.error}<button disabled={busy} onClick={() => setReload((value) => value + 1)}>{t("重新整理")}</button></p> : null}

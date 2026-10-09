@@ -188,6 +188,9 @@ importers:
       '@i-harness/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
+      '@i-harness/workspace-runtime':
+        specifier: workspace:*
+        version: link:../../packages/workspace-runtime
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
@@ -532,6 +535,9 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
       '@i-harness/schedule':
         specifier: workspace:*
         version: link:../schedule
@@ -571,6 +577,9 @@ importers:
       '@i-harness/todo':
         specifier: workspace:*
         version: link:../todo
+      '@i-harness/workspace-runtime':
+        specifier: workspace:*
+        version: link:../workspace-runtime
       ignore:
         specifier: 7.0.12
         version: 7.0.12
@@ -986,6 +995,9 @@ importers:
       '@i-harness/sandbox-windows-psec':
         specifier: workspace:*
         version: link:../sandbox-windows-psec
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
       node-pty:
         specifier: ^1.1.0
         version: 1.1.0
@@ -1453,6 +1465,15 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
+
+  packages/workspace-runtime:
+    dependencies:
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
 
 packages:
 

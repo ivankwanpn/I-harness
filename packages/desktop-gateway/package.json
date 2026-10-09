@@ -30,6 +30,8 @@
     "@i-harness/provider-runtime": "workspace:*",
     "@i-harness/rewind": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
+    "@i-harness/sandbox-wsl": "workspace:*",
+    "@i-harness/workspace-runtime": "workspace:*",
     "@i-harness/schedule": "workspace:*",
     "@i-harness/sdk": "workspace:*",
     "@i-harness/session-executor": "workspace:*",

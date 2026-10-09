@@ -9,6 +9,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec } from "./scoped-exec.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
+import { inspectWslRuntime } from "@i-harness/sandbox-local"
 import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
 import { RewindError, RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { createToolRegistry, registerContextRemaining, type PreparedApprovalInput, type ToolDispatchMetadata, type Tool, type ToolRegistry } from "@i-harness/core-tools"
@@ -17,9 +18,9 @@ import { approxTokens, type CompactionConfig, type CompactionRequest, type Compa
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
-import { agentShellPrompt, registerShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
+import { agentShellPrompt, registerShell, resolveWslAgentShell, type ShellRetentionOptions, type ResolvedAgentShell } from "@i-harness/shell"
 import { registerTerminal, type TerminalMountHandle } from "@i-harness/terminal"
-import { registerWeb } from "@i-harness/web"
+import { registerWeb, createWebCache, type WebAccessMode } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
 import { createTodoTool, renderTodoContext } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
@@ -152,7 +153,11 @@ export interface AssemblyOptions {
   executionAuthority?: () => AuthorityState
   /** Live host owner availability; never constructs an assembly to answer. */
   executionCallerAvailable?: () => boolean
-  windowsSandboxBackend?: "legacy" | "psec"
+  windowsSandboxBackend?: "legacy" | "psec" | "wsl"
+  wslExecution?: { distribution: string; networkAccess: boolean; workspaceDependencies: boolean; runtimePath?: readonly string[] }
+  webSearchMode?: WebAccessMode
+  /** IH-owned local cache; records are scoped to this workspace. */
+  webCacheRoot?: string
   legacyPrivateTempRoot?: string
   /** Explicit clients always win. Under `required`, absence rejects instead
    * of constructing a mock. Omitted policy is production-safe `required`;
@@ -325,7 +330,7 @@ interface RewindAssemblyHandle {
 
 export interface SessionAssembly {
   reconcileExecutionAuthority(): Promise<void>
-  executionBackendStatus(): Promise<BackendProbe & { windowsSandboxBackend: "legacy" | "psec" }>
+  executionBackendStatus(): Promise<BackendProbe & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
   /** Current owning runtime registries only; reading never mounts or restores work. */
   liveResources?(): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
   /** Reports the actual mounted mode/catalogue; never resolves a model. */
@@ -457,6 +462,9 @@ const bindAuthRefreshStatus =
   }
 
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
+  // Structural configuration belongs to this assembly, including while setup awaits.
+  opts = { ...opts, windowsSandboxBackend: opts.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX as AssemblyOptions["windowsSandboxBackend"],
+    ...(opts.wslExecution ? { wslExecution: Object.freeze({ ...opts.wslExecution, ...(opts.wslExecution.runtimePath ? { runtimePath: Object.freeze([...opts.wslExecution.runtimePath]) } : {}) }) } : {}) }
   // Resolve before mounting resources so a required-but-missing model cannot
   // leave a partially initialized assembly behind.
   //
@@ -642,8 +650,11 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     ownerAvailable: () => !disposing && opts.executionCallerAvailable?.() !== false,
     standing: () => ({ mode: standingPolicyNow()?.mode ?? "danger-full-access",
       generation: JSON.stringify(policyBase.events.slice(policyFloor).filter(event => event.type === "sandbox/mode")) }),
-    windowsSandboxBackend: opts.windowsSandboxBackend, legacyPrivateTempRoot: opts.legacyPrivateTempRoot,
+    windowsSandboxBackend: opts.windowsSandboxBackend, wslExecution: opts.wslExecution, legacyPrivateTempRoot: opts.legacyPrivateTempRoot,
   })
+  const wslRuntime = executionRuntime.windowsSandboxBackend === "wsl" ? await inspectWslRuntime(executionRuntime.wslExecution.distribution, [opts.workspace]) : undefined
+  const wslShell = executionRuntime.windowsSandboxBackend === "wsl" ? resolveWslAgentShell(executionRuntime.wslExecution, wslRuntime?.paths.find(path => path.windows === opts.workspace)?.linux) : undefined
+  const agentShell = wslShell ? () => wslShell : opts.agentShell
   const sandboxPolicyNow = () => { const policy = standingPolicyNow(); return policy ? executionRuntime.bindPolicy(policy) : undefined }
   const projectContextNow = () => renderProjectContext(opts.projectContext?.(), opts.workspace, opts.rewindStoreRoot !== undefined && opts.sessionId !== undefined)
   // M62: the terminal is mounted HERE, not at the top of the environment,
@@ -691,7 +702,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // standing mode (spec §3.3 point 1). It reaches a tool through its own
   // arguments and the approver below, not through this resolver.
   registerShell(ctx, tools, {
-    ...(opts.agentShell ? { agentShell: opts.agentShell } : {}),
+    ...(agentShell ? { agentShell } : {}),
+    ...(wslShell ? { wslShell } : {}),
     timeoutMs: shellTimeoutMs,
     // W10: the pair travels together — the shell layer needs both to keep the
     // threshold under the deadline it declares to guard-timeout.
@@ -702,7 +714,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     escalationApprover,
   })
   // M26-B3: web surface (webfetch + websearch) — no provider → fail closed.
-  registerWeb(ctx, tools)
+  registerWeb(ctx, tools, {mode: opts.webSearchMode, cache: createWebCache({root: opts.webCacheRoot, scope: opts.workspace})})
   // M42 G1: rewind engine — Store+Recorder created BEFORE the fs tools (they
   // receive the pre-image sink in their deps). Requires a sessionId (storage
   // keys on it); the recorder subscription is wired below once the live
@@ -1099,6 +1111,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let workflowMount: WorkflowMountHandle | undefined
   const inheritedSystemContext=(childSession?:Session)=>[
     projectContextNow(),
+    ...(wslShell ? [agentShellPrompt(wslShell)] : []),
     childSession&&opts.contextOutput?renderNativeContextRecovery(opts.contextOutput,childSession):'',
   ].filter(Boolean).join('\n\n')
 
@@ -1157,8 +1170,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }))
     const subagent = registerSubagent(ctx, tools, {
       codeMode, codeModeFactory,
-      ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
-      includeAgentShell: opts.agentShell !== undefined,
+      ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
+      includeAgentShell: agentShell !== undefined,
       includeNativeContext: Boolean(opts.contextOutput),
       resolveModel: resolveRoleModel,
       // The gate travels with the resolver it gates, into THIS chain:
@@ -1281,7 +1294,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await pluginCapabilities.update(opts, false)
     if (opts.guardian) {
       await registerGuardian(ctx, {
-        ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
+        ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
         subagents: {
           roles: subagent.roles,
           jobs: subagent.jobs,
@@ -1332,7 +1345,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           codeMode, codeModeFactory,
-          ...(opts.projectContext || opts.contextOutput ? { inheritedSystemContext } : {}),
+          ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
           table: subagent.table,
           jobs: subagent.jobs,
           roles: subagent.roles,
@@ -1381,7 +1394,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       const policy = sandboxPolicyNow()
       let text = policy === undefined ? baseSystemPrompt : `${baseSystemPrompt}\n\n${renderPolicyContext(policy)}`
       if (derivePlanMode(session).active || opts.planMode && !session.events.some((event) => event.type === "plan/mode")) text += `\n\n${PLAN_MODE_SYSTEM_PROMPT}`
-      if (opts.agentShell) { try { text += `\n\n${agentShellPrompt(opts.agentShell())}` } catch { text += "\n\nThe selected Agent shell is unavailable. Ask the user to repair its setting before shell execution." } }
+      if (agentShell) { try { text += `\n\n${agentShellPrompt(agentShell())}` } catch { text += "\n\nThe selected Agent shell is unavailable. Ask the user to repair its setting before shell execution." } }
       const todoContext = renderTodoContext(session)
       if (todoContext) text += `\n\n${todoContext}`
       const projectContext = projectContextNow()

@@ -90,7 +90,7 @@ class Session:
 
 class WorkerTests(unittest.TestCase):
     def setUp(self):
-        self.fixture = pathlib.Path(tempfile.mkdtemp(prefix='wsl2-worker-', dir=REPO / '.tmp'))
+        self.fixture = pathlib.Path(tempfile.mkdtemp(prefix='wsl-product-engine-worker-', dir=REPO / '.tmp'))
         self.work = self.fixture / 'work'
         self.sibling = self.fixture / 'sibling'
         self.reference = self.fixture / 'reference'
@@ -309,7 +309,7 @@ print(json.dumps({'different':entries[0].physical!=entries[1].physical,'contains
     def test_excessive_inventory_depth_is_refused(self):
         self.hello()
         directory = self.work
-        for _ in range(33):
+        for _ in range(129):
             directory = directory / 'd'
             directory.mkdir()
         self.prepare('touch marker')
@@ -557,9 +557,17 @@ print(escaped)
         frame = json.loads(self.session.process.stdout.readline())
         self.assertEqual(frame['type'], 'hello')
         self.prepare('', argv=['/usr/bin/python3', '-I', '-c', "import os;os.write(1,b'X'*(32*1024*1024))"])
-        self.assertEqual(json.loads(self.session.process.stdout.readline())['type'], 'prepared')
+        while True:
+            prepared = json.loads(self.session.process.stdout.readline())
+            if prepared['type'] != 'progress':
+                self.assertEqual(prepared['type'], 'prepared')
+                break
         self.session.send('commit')
-        self.assertEqual(json.loads(self.session.process.stdout.readline())['type'], 'started')
+        while True:
+            started = json.loads(self.session.process.stdout.readline())
+            if started['type'] != 'progress':
+                self.assertEqual(started['type'], 'started')
+                break
         time.sleep(0.5)
         self.session.reader.start()
         self.assertIn('overflow', self.session.wait('error')['detail'])

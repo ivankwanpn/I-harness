@@ -9,17 +9,23 @@
 // provider model catalogue, tsx loader). Copying the actual package trees with
 // their resolved dependencies keeps the packaged runtime identical to the
 // launch path the e2e tests already exercise.
-import { cpSync, mkdirSync, readFileSync, rmSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs"
+import { dirname, isAbsolute, join, relative, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
+import { copyWslAssets, verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
 const repoRoot = resolve(packageRoot, "..", "..")
 const gatewayRoot = join(repoRoot, "packages", "desktop-gateway")
-const outDir = join(packageRoot, ".gateway-dist")
+const args = process.argv.slice(2)
+if (args.length && (args.length !== 2 || args[0] !== "--out" || !args[1])) throw new Error("Usage: build-gateway.mjs [--out NEW_REPOSITORY_DIRECTORY]")
+const outDir = args.length ? resolve(repoRoot, args[1]) : join(packageRoot, ".gateway-dist")
+const tail = relative(repoRoot, outDir)
+if (!tail || tail === ".." || tail.startsWith("..") || isAbsolute(tail)) throw new Error("Gateway output must remain within the repository")
+if (args.length && existsSync(outDir)) throw new Error("Explicit gateway candidate output must be a new directory")
 const modulesDir = join(outDir, "node_modules")
 
 function dependenciesOf(root) {
@@ -64,5 +70,8 @@ for (const dependency of dependenciesOf(gatewayRoot)) {
 // tsx transpiles both the gateway and the workspace packages it imports.
 copyDependency("tsx", repoRoot, true)
 verifyNativeAssets(join(modulesDir, "@i-harness/sandbox-windows-psec"))
+const wslWorker = join(modulesDir, "@i-harness/sandbox-wsl/worker")
+copyWslAssets(join(repoRoot, "packages/sandbox-wsl/worker/runner.py"), wslWorker)
+verifyWslAssets(wslWorker)
 
 console.log(`gateway runtime: ${outDir} (${copied.size} packages shipped)`)

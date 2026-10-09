@@ -83,6 +83,34 @@ const policy = (): CompiledSandboxPolicy => ({ mode: "read-only", owner: { sessi
 beforeEach(() => { state.mode = "normal"; state.commands.length = 0; state.launches.length = 0; state.close = undefined; state.prepared = undefined })
 afterEach(() => vi.useRealTimers())
 
+it("preparation can exceed short control deadlines and stays abortable", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] })
+  state.mode = "preparing"
+  const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
+  const controller = new AbortController()
+  const pending = backend.prepare(spec(), policy(), controller.signal)
+  let done = false
+  void pending.then(() => { done = true }, () => { done = true })
+  for (let i=0;i<30;i++) await Promise.resolve()
+  await vi.advanceTimersByTimeAsync(10_001)
+  expect(done).toBe(false)
+  controller.abort()
+  await expect(pending).rejects.toThrow(/aborted/)
+  await backend.dispose()
+})
+
+it("captures network and managed PATH configuration once and advertises reference protection", async () => {
+  const options = { distribution: "Ubuntu", networkAccess: true, runtimePath: ["/opt/ih/node/bin"] }
+  const backend = createWslExecutionBackend(options)
+  options.networkAccess = false
+  options.runtimePath[0] = "/changed"
+  expect((await backend.probe()).features).toMatchObject({ referenceProtection: true, denyPaths: false })
+  const prepared = await backend.prepare(spec(), policy())
+  expect(state.commands.find(command => command.type === "prepare")!.configuration).toEqual({ networkAccess: true, runtimePath: ["/opt/ih/node/bin"] })
+  await prepared.rollback()
+  await backend.dispose()
+})
+
 it("launches the fixed captured worker and preserves binary output and experimental receipt", async () => {
   const backend = createWslExecutionBackend({ distribution: "Ubuntu" })
   const prepared = await backend.prepare(spec(), policy())

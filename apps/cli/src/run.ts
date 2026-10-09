@@ -31,6 +31,7 @@ import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-r
 import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 import { registerCliSecrets } from "./diagnostics-bootstrap.ts"
 import { diagnosticsFor, fromError, type DiagnosticPhase, type Redactor } from "@i-harness/diagnostics"
+import { createWorkspaceRuntime } from "@i-harness/workspace-runtime"
 
 // W6 T5: one module-scope handle, and the phase is the SEAM rather than the
 // file: all five migrated sites here are the plugin/hook/mcp mount's own
@@ -206,7 +207,11 @@ export interface HeadlessOptions {
   // dead on every shipped path.
   compact?: CompactionRequest
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
-  windowsSandboxBackend?: "legacy" | "psec"
+  windowsSandboxBackend?: "legacy" | "psec" | "wsl"
+  wslExecution?: { distribution: string; networkAccess: boolean; workspaceDependencies: boolean; runtimePath?: readonly string[] }
+  workspaceRuntimeCacheRoot?: string
+  webSearchMode?: AssemblyOptions["webSearchMode"]
+  webCacheRoot?: string
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
   team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
@@ -346,6 +351,8 @@ let crashSession: string | undefined
 export function diagnosticSessionId(): string | undefined { return crashSession }
 
 export async function runHeadless(task: string, opts: HeadlessOptions): Promise<HeadlessResult> {
+  opts = { ...opts, windowsSandboxBackend: opts.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX as HeadlessOptions["windowsSandboxBackend"],
+    ...(opts.wslExecution ? { wslExecution: Object.freeze({ ...opts.wslExecution, ...(opts.wslExecution.runtimePath ? { runtimePath: Object.freeze([...opts.wslExecution.runtimePath]) } : {}) }) } : {}) }
   const activeId = opts.resumeSessionId ?? opts.sessionId
   // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
   // host asks for it (`--telemetry` → opts.telemetry === "jsonl"). JSONL sink
@@ -603,6 +610,17 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       d.warn(`[plugins] agent ${missed.role} declares an unusable tool (${missed.reason}): ${missed.tool}`)
     }
 
+    runSignal.throwIfAborted()
+    if (opts.windowsSandboxBackend === "wsl") {
+      const configuration = opts.wslExecution ?? { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }
+      if (configuration.workspaceDependencies && configuration.runtimePath === undefined) {
+        const managed = await createWorkspaceRuntime({ cacheRoot: opts.workspaceRuntimeCacheRoot ?? join(resolveHarnessHome(), "workspace-runtime") })
+          .resolve(configuration, { installIfMissing: true, signal: runSignal })
+        if (managed.status === "missing" || managed.status === "unavailable") throw new Error(managed.detail)
+        opts = { ...opts, wslExecution: Object.freeze({ ...configuration, ...(managed.runtimePath ? { runtimePath: managed.runtimePath } : {}) }) }
+      }
+    }
+    runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
       ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
       workspace: opts.workspace,
@@ -622,6 +640,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {}),
       windowsSandboxBackend: opts.windowsSandboxBackend,
+      wslExecution: opts.wslExecution,
+      webSearchMode: opts.webSearchMode,
+      webCacheRoot: opts.webCacheRoot,
       session,
       // M16 final-review (C1) parity. WHAT PROTECTS THE MODE HERE IS THE
       // ASSEMBLY'S FLOOR SLICE, not `policySession` — rewritten 2026-09-15

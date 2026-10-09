@@ -66,3 +66,19 @@ of the already committed handle and preserves output from before handback.
 The supervisor owns pending preparations, committed handles and retryable
 cleanup. Its `reconcile`, `closeOwner` and `dispose` fences are the authority
 and lifecycle operations used by host assemblies.
+
+Trusted tool composition may assign `executionTarget: "wsl"`; omission means
+the native host. Selection receives the frozen process specification as an
+optional third argument, so existing two-argument hosts remain compatible.
+WSL targets use case-sensitive Linux environment keys, preserve explicit Linux
+argv, and omit host PATH executable resolution. Their omitted environment is
+the minimal `{ PATH: "/usr/bin:/bin", LANG: "C" }` snapshot. Shell bindings also
+capture the distribution and runtime options before approval waits.
+
+`runBackground` and foreground promotion use root-bound `complete-tree` for
+WSL: the root command may run after presentation returns, and descendants are
+cleaned up when it exits. Job views report this lifetime. `launchTransport`
+continues to require the exact requested lifetime and transport; a WSL
+`retain-tree` or PTY request refuses. Reference authority requires the optional
+`referenceProtection` capability; older drivers advertising `denyPaths` remain
+compatible without claiming that WSL implements general deny-path isolation.

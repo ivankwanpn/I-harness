@@ -12,6 +12,7 @@ export { createLocalExecutionBackends, type LocalExecutionBackends, type LocalEx
 export { createLegacyWindowsBackend, type LegacyWindowsBackend } from "./windows-legacy.ts"
 export { createPosixExecutionBackend, type PosixExecutionBackend } from "./posix-execution.ts"
 export { readWindowsQualification } from "@i-harness/sandbox-windows-psec"
+export { inspectWslRuntime, listWslDistributions } from "@i-harness/sandbox-wsl"
 
 export interface LocalSandboxConfig {
   runnerCommand?: string[]

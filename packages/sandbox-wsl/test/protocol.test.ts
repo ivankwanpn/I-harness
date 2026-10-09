@@ -34,6 +34,26 @@ describe("bounded worker framing", () => {
 })
 
 describe("strict worker phases", () => {
+  it("validates inventory counters on the prepared receipt", () => {
+    const protocol = new WorkerProtocol(nonce, digest)
+    protocol.receive(frame("hello", { sha256: digest, workerPid: 1 }))
+    protocol.send("prepare")
+    expect(protocol.receive(frame("prepared", { policyFingerprint: "fp", inventoryEntries: 9000, inventoryDirectories: 1000 }))).toMatchObject({ inventoryEntries: 9000 })
+  })
+  it("accepts bounded progress during prepare and commit without granting admission", () => {
+    const protocol = new WorkerProtocol(nonce, digest)
+    protocol.receive(frame("hello", { sha256: digest, workerPid: 1 }))
+    protocol.send("prepare")
+    expect(protocol.receive(frame("progress", { stage: "preparing" })).type).toBe("progress")
+    expect(protocol.phase).toBe("preparing")
+    protocol.receive(frame("prepared", { policyFingerprint: "fp" }))
+    protocol.send("commit")
+    expect(protocol.receive(frame("progress", { stage: "validating" })).type).toBe("progress")
+    expect(protocol.phase).toBe("committing")
+    expect(() => protocol.receive(frame("progress", { stage: "secret" }))).toThrow()
+    protocol.send("shutdown")
+    expect(protocol.receive(frame("settled")).type).toBe("settled")
+  })
   it("refuses a foreign nonce, version, digest and impossible phase", () => {
     expect(() => new WorkerProtocol(nonce, digest).receive({ ...frame("hello"), nonce: "foreign" })).toThrow()
     expect(() => new WorkerProtocol(nonce, digest).receive({ ...frame("hello"), v: 2 })).toThrow()

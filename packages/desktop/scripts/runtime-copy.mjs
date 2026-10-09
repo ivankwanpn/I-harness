@@ -27,7 +27,7 @@ export function copyRuntimePackage(source, target) {
     recursive: true, dereference: true,
     filter(path) {
       const parts = relative(source, path).split(sep)
-      if (parts.some((part) => ["node_modules", ".git", ".vite", ".tmp", "target", "test", "tests"].includes(part))) return false
+      if (parts.some((part) => ["node_modules", ".git", ".vite", ".tmp", "target", "test", "tests", "__pycache__"].includes(part))) return false
       return !declared || parts[0] === "" || parts[0] === "package.json" || declared.includes(parts[0])
     },
   })

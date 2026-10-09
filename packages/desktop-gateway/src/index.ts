@@ -1,5 +1,6 @@
 /** Public Desktop transport DTOs. */
 export type { AgentDefaults, AgentSettingsState } from "./agent-settings.ts"
+export type { WslSettingsState, WslSettingsRequest, WslSettingsOptions } from "./wsl-settings.ts"
 export type { ProviderCommand } from "./provider-wire.ts"
 export type { PluginCommand } from "./plugins.ts"
 export type { SubagentSettingsCommand } from "./subagent-settings.ts"

@@ -76,7 +76,7 @@ function expectedPopulation() {
  *  minutes must not look like a hang). Returns { code, text }. */
 function run(cmd, args) {
   return new Promise((done) => {
-    const child = spawn(cmd, args, { cwd: ROOT, shell: true })
+    const child = spawn(cmd, args, { cwd: ROOT, shell: true, windowsHide: true })
     let text = ""
     const sink = (chunk) => {
       const s = chunk.toString()
@@ -93,9 +93,11 @@ const readings = {}
 let failed = false
 
 // ── 1/5 · the recursive suite, captured so its POPULATION can be counted ──────
-rule("1/5 · pnpm -r --no-bail test")
+rule("1/5 · pnpm -r --no-bail --stream --workspace-concurrency=1 test")
 const expected = expectedPopulation()
-const suite = await run("pnpm", ["-r", "--no-bail", "test"])
+// Native integration fixtures have finite deadlines. Keep workspace suites
+// serial so another package's process workload cannot consume their budget.
+const suite = await run("pnpm", ["-r", "--no-bail", "--stream", "--workspace-concurrency=1", "test"])
 const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map((m) => m[1]))].sort()
 const verdicts = [...suite.text.matchAll(/^(\S+) test: (Done|Failed)$/gm)]
 const failedProjects = verdicts.filter((m) => m[2] === "Failed").map((m) => m[1]).sort()

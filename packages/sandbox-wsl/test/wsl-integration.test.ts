@@ -15,7 +15,7 @@ const spec = (argv: string[]): ProcessSpec => ({ argv, cwd: root, env: { PATH: "
 function ownedFixture() {
   const parent = join(root, ".tmp")
   mkdirSync(parent, { recursive: true })
-  const fixture = mkdtempSync(join(parent, "wsl2-controller-"))
+  const fixture = mkdtempSync(join(parent, "wsl-product-engine-controller-"))
   const work = join(fixture, "workspace"), reference = join(fixture, "reference")
   mkdirSync(work); mkdirSync(reference)
   const compiled = compileExecutionPolicy({ mode: "workspace-write", owner: policy.owner,

@@ -23,6 +23,21 @@ function backend(id: string, disposed: string[]): TransportExecutionBackend & { 
 }
 
 describe("local execution composition", () => {
+  it("routes only explicit WSL targets to the captured WSL backend, preserving native host helpers", async () => {
+    const disposed: string[] = []
+    const native = backend("native", disposed), psec = backend("psec", disposed), wsl = backend("wsl", disposed), legacy = backend("legacy", disposed)
+    const local = createLocalExecutionBackends({ platform: "win32", windowsSelection: "wsl",
+      wslExecution: { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true },
+      windowsWslBackend: wsl, windowsPsecBackend: psec, windowsUnrestrictedBackend: native, windowsLegacyBackend: legacy })
+    expect(local.select(policy("read-only"), "pipe", { executionTarget: "wsl" } as ProcessSpec)).toBe(wsl)
+    expect(local.select(policy("danger-full-access"), "pipe", { executionTarget: "wsl" } as ProcessSpec)).toBe(wsl)
+    expect(local.select(policy("read-only"), "pipe")).toBe(legacy)
+    expect(local.select({ ...policy("read-only"), referenceRoots: ["reference"] }, "pipe")).toBe(psec)
+    expect(local.select(policy("read-only"), "pty")).toBe(psec)
+    expect(local.select(policy("danger-full-access"), "pty")).toBe(native)
+    await local.dispose()
+    expect(disposed).toContain("wsl")
+  })
   it("selects the explicit Windows confined engine once and does not retry another backend", async () => {
     const disposed: string[] = []
     const native = backend("native", disposed)

@@ -40,6 +40,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { verifyNativeAssets } from "./runtime-native-assets.mjs"
+import { verifyWslAssets } from "./runtime-wsl-assets.mjs"
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url))
 const argv = process.argv.slice(2)
@@ -107,6 +108,8 @@ if (!existsSync(OUT)) {
 }
 assert(existsSync(IH), `bundle present: ${IH}`, `missing ${IH}`)
 try { verifyNativeAssets(join(OUT, "sandbox-windows-psec")); assert(true, "native helper/protocol/qualification integrity") }
+catch (error) { fail(error.message) }
+try { verifyWslAssets(join(OUT, "wsl-assets")); assert(true, "WSL worker/protocol manifest integrity") }
 catch (error) { fail(error.message) }
 assert(existsSync(join(OUT, "package.json")), "dist package.json present")
 assert(existsSync(join(OUT, "README-dist.txt")), "README-dist.txt present")

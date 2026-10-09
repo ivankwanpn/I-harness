@@ -2,12 +2,24 @@ import { expect, it, vi } from "vitest"
 import { resolve } from "node:path"
 import { createExecService } from "@i-harness/exec"
 import { createExecutionLease, type AuthorityState, type TransportExecutionBackend, type RootExit } from "@i-harness/sandbox"
-const injected = vi.hoisted(() => ({ backend: undefined as unknown as TransportExecutionBackend, releases: 0 }))
-vi.mock("@i-harness/sandbox-local", () => ({ createLocalExecutionBackends: () => ({ select: () => injected.backend, async dispose() { injected.releases++ } }), readWindowsQualification: async () => undefined }))
+const injected = vi.hoisted(() => ({ backend: undefined as unknown as TransportExecutionBackend, releases: 0, options: [] as any[], specs: [] as any[] }))
+vi.mock("@i-harness/sandbox-local", () => ({ createLocalExecutionBackends: (options: any) => { injected.options.push(options); return { select: (_policy: any, _transport: any, spec: any) => { injected.specs.push(spec); return injected.backend }, async dispose() { injected.releases++ } } }, readWindowsQualification: async () => undefined }))
 import { createAssemblyExecutionRuntime } from "../src/execution-runtime.ts"
 
 function gate<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes }); return { promise, resolve } }
 const turn = () => new Promise(resolve => setTimeout(resolve, 0))
+
+it("captures WSL options for the assembly and forwards the trusted target spec", async () => {
+  const options = { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }
+  const runtime = createAssemblyExecutionRuntime({ owner: { sessionId: "main" }, windowsSandboxBackend: "wsl", wslExecution: options,
+    authority: () => ({ kind: "unbound", revision: "1", workspaceRoot: process.cwd() }), standing: () => ({ mode: "workspace-write", generation: "1" }) })
+  options.distribution = "changed"; options.networkAccess = true
+  expect(injected.options.at(-1)).toMatchObject({ windowsSelection: "wsl", wslExecution: { distribution: "Ubuntu", networkAccess: false } })
+  const spec = { executionTarget: "wsl" } as any
+  runtime.execution.selectBackend(runtime.execution.resolvePolicy({ sessionId: "main" }, undefined), "pipe", spec)
+  expect(injected.specs.at(-1)).toBe(spec)
+  await runtime.execution.dispose!()
+})
 
 it.each(["pending", "failed"] as const)("keeps filesystem admission fenced when older compatible reconciliation succeeds while newer narrowing is %s", async phase => {
   const a = resolve("a"), b = resolve("b")

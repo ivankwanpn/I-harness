@@ -51,3 +51,22 @@ captured exact environment, this driver admits a PTY only when the caller
 already supplies `PWD` equal to `cwd` and a nonempty `TERM`; it passes the
 supplied `TERM` as the PTY name. Missing or different entries refuse before
 spawn. PTY output uses node-pty's supported `encoding: null` byte stream.
+
+Windows composition also accepts `windowsSelection: "wsl"` and immutable
+`wslExecution: { distribution, networkAccess, workspaceDependencies, runtimePath? }`.
+Only a trusted process specification with `executionTarget: "wsl"` selects the
+WSL backend, including in full-access mode. Native helpers and PowerShell keep
+a host target. For confined native pipes without references, the composed
+legacy backend is selected when present; references or PTY select the explicit
+native PSEC surface. Full-access native requests use the native unrestricted
+backend. Selection occurs before preparation and never retries another backend
+after failure. WSL has Linux pipes and root-bound complete-tree jobs; its PTY
+and retained-tree capabilities remain unavailable.
+
+CLI selection uses `--windows-sandbox wsl`, `--wsl-distribution NAME`,
+`--wsl-network allow|deny` and `--wsl-workspace-dependencies true|false`.
+Equivalent `IH_WINDOWS_SANDBOX`, `IH_WSL_DISTRIBUTION`, `IH_WSL_NETWORK` and
+`IH_WSL_WORKSPACE_DEPENDENCIES` overrides are validated before a run starts.
+New assemblies capture changed configuration; running executions retain their
+backend and environment. Managed runtime paths are supplied by trusted host
+composition, never by a model permission parameter.

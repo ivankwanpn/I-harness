@@ -175,7 +175,7 @@ export async function dispatchDesktopRequest(
       const navigation = await runtime.client.request("desktop/session/navigation/state", {})
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
     }
-    const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh"].includes(value.kind)
+    const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh", "desktop/wsl/repair", "desktop/wsl/diagnose"].includes(value.kind)
     return runtime.client.request(value.kind, contextParams, longOperation ? 600000 : 30000)
   }
 

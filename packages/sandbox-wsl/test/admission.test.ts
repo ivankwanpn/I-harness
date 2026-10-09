@@ -30,7 +30,7 @@ it("refuses unsupported transports, policies, argv, ownership and roots locally"
     [{ ...spec(), argv: ["C:\\Windows\\System32\\cmd.exe"] }, policy()],
     [{ ...spec(), argv: ["/mnt/c/Windows/System32/cmd.exe"] }, policy()],
     [{ ...spec(), env: { WSL_INTEROP: "socket" } }, policy()],
-    [spec(), { ...policy(), mode: "danger-full-access" }],
+    [spec(), { ...policy(), mode: "danger-full-access", referenceRoots: [root] }],
     [spec(), { ...policy(), owner: { sessionId: "foreign" } }],
     [{ ...spec(), cwd: "C:\\Windows" }, policy()],
     [spec(), { ...policy(), writeRoots: [root] }],
@@ -40,6 +40,11 @@ it("refuses unsupported transports, policies, argv, ownership and roots locally"
     [spec(), Object.assign(policy(), { denyPaths: [root] })],
   ]
   for (const [s, p] of requests) expect(() => captureRequest(s, p)).toThrow()
+})
+
+it("admits full caller access but refuses full access with protected references", () => {
+  expect(captureRequest(spec(), { ...policy(), mode: "danger-full-access" }).policy.mode).toBe("danger-full-access")
+  expect(() => captureRequest(spec(), { ...policy(), mode: "danger-full-access", referenceRoots: [root] })).toThrow(/reference/)
 })
 
 it("requires the exact requested WSL2 inventory entry, including UTF16 launcher output", () => {

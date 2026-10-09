@@ -1,18 +1,27 @@
 import { execFile } from "node:child_process"
 import { randomBytes, randomUUID, createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import type { BackendProbe, CompiledSandboxPolicy, PreparedTransportExecution, ProcessSpec, TransportExecutionBackend, TransportExecutionHandle } from "@i-harness/sandbox"
-import { captureRequest, parseWslInventory, validDistribution } from "./admission.ts"
+import { captureRequest, decodeWslInventory, validDistribution } from "./admission.ts"
 import { MAX_LINE_BYTES } from "./protocol.ts"
 import { WorkerClient, WSL_EXE, deferred } from "./transport.ts"
 
 const BACKEND_ID = "wsl2-bubblewrap-experimental"
-const FEATURES = Object.freeze({ writeIsolation: true, readIsolation: false, denyPaths: false, pipes: true, pty: false, retainedTree: false })
+const FEATURES = Object.freeze({ writeIsolation: true, readIsolation: false, denyPaths: false, referenceProtection: true, pipes: true, pty: false, retainedTree: false })
+export interface WslExecutionOptions {
+  distribution: string
+  networkAccess?: boolean
+  /** Captured absolute Linux bin directories supplied by the trusted runtime manager. */
+  runtimePath?: readonly string[]
+}
 export interface WslDiagnostics {
   launcherStderr: string
   discardedLauncherStderrBytes: number
   outputAbandoned: boolean
   discardedOutputBytes: number
+  preparationStage?: "preparing" | "validating"
+  inventoryEntries?: number
+  inventoryDirectories?: number
 }
 export interface WslExecutionBackend extends TransportExecutionBackend {
   dispose(): Promise<void>
@@ -26,20 +35,108 @@ interface Entry {
   completion: ReturnType<typeof deferred<void>>
 }
 async function verifyDistribution(distribution: string): Promise<void> {
-  if (process.platform !== "win32") throw new Error("Experimental WSL backend requires Windows")
+  if (!(await listWslDistributions()).some(row => row.name === distribution && row.version === 2)) throw new Error("Requested exact WSL2 distribution is unavailable")
+}
+export interface WslDistribution { name: string; version: number; state: string }
+export interface WslDependencyStatus { available: boolean; path?: string; detail?: string }
+export interface WslRuntimeInfo {
+  distribution: string
+  available: boolean
+  detail: string
+  dependencies: Record<"python" | "bash" | "bubblewrap" | "node" | "npm" | "socat" | "git", WslDependencyStatus>
+  paths: readonly { windows: string; linux: string }[]
+}
+export async function listWslDistributions(): Promise<WslDistribution[]> {
+  if (process.platform !== "win32") throw new Error("WSL backend requires Windows")
   const inventory = await new Promise<Buffer>((resolve, reject) => {
     execFile(WSL_EXE, ["--list", "--verbose"], { encoding: "buffer", windowsHide: true, timeout: 10_000, maxBuffer: 256 * 1024 },
       (error, stdout) => { if (error) reject(new Error("WSL inventory unavailable")); else resolve(stdout) })
   })
-  if (!parseWslInventory(inventory, distribution)) throw new Error("Requested exact WSL2 distribution is unavailable")
+  return decodeWslInventory(inventory)
+}
+
+// Diagnostics execute fixed Python without startup profiles or caller env. Only
+// local path inputs are passed; versions/tools are not executed during discovery.
+const INSPECT = `import base64,json,os,shutil,subprocess,sys
+p=json.loads(base64.b64decode(sys.argv[1],validate=True))
+tools={'python':'python3','bash':'/bin/bash','bubblewrap':'bwrap','node':'node','npm':'npm','socat':'socat','git':'git'}
+d={}
+for key,tool in tools.items():
+ path=shutil.which(tool,path='/usr/bin:/bin');d[key]={'available':bool(path),**({'path':path} if path else {'detail':'Not present on the system runtime PATH'})}
+paths=[]
+for path in p:
+ result=subprocess.run(['/usr/bin/wslpath','-u',path],env={'PATH':'/usr/bin:/bin','LANG':'C'},capture_output=True,check=True,timeout=5)
+ mapped=result.stdout.decode().strip()
+ if not mapped.startswith('/') or '\\0' in mapped: raise ValueError()
+ paths.append({'windows':path,'linux':os.path.realpath(mapped)})
+print(json.dumps({'dependencies':d,'paths':paths},separators=(',',':')))`
+export async function inspectWslRuntime(distribution: string, paths: readonly string[] = []): Promise<WslRuntimeInfo> {
+  if (!validDistribution(distribution)) throw new Error("Invalid WSL distribution name")
+  const capturedPaths = [...paths]
+  if (capturedPaths.length > 64 || capturedPaths.some(path => typeof path !== "string" || !/^[A-Za-z]:[\\/]/.test(path)
+    || /[\x00-\x1f<>"|?*]/.test(path) || path.split(/[\\/]/).some(part => part === "." || part === ".."))) throw new Error("Invalid WSL diagnostic paths")
+  const missing = (): WslRuntimeInfo["dependencies"] => Object.fromEntries(["python", "bash", "bubblewrap", "node", "npm", "socat", "git"].map(key => [key, { available: false, detail: "Runtime not inspected" }])) as WslRuntimeInfo["dependencies"]
+  const result: WslRuntimeInfo = { distribution, available: false, detail: "Requested exact WSL2 distribution is unavailable", dependencies: missing(), paths: [] }
+  try {
+    await verifyDistribution(distribution)
+    const payload = Buffer.from(JSON.stringify(capturedPaths)).toString("base64")
+    const output = await new Promise<Buffer>((resolve, reject) => {
+      execFile(WSL_EXE, ["--distribution", distribution, "--exec", "/usr/bin/env", "-i", "PATH=/usr/bin:/bin", "LANG=C", "/usr/bin/python3", "-I", "-B", "-c", INSPECT, payload],
+        { encoding: "buffer", windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+          if (error) reject(new Error("WSL Python runtime inspection unavailable; install system Python3, Bash and bubblewrap manually"))
+          else resolve(stdout)
+        })
+    })
+    const response = JSON.parse(output.toString("utf8")) as Pick<WslRuntimeInfo, "dependencies" | "paths">
+    for (const key of Object.keys(result.dependencies) as (keyof WslRuntimeInfo["dependencies"])[]) {
+      const value = response.dependencies?.[key]
+      if (!value || typeof value.available !== "boolean" || (value.path !== undefined && (typeof value.path !== "string" || !value.path.startsWith("/")))) throw new Error("Invalid WSL runtime inspection")
+      result.dependencies[key] = { available: value.available, ...(value.path ? { path: value.path } : {}), ...(value.detail ? { detail: value.detail } : {}) }
+    }
+    if (!Array.isArray(response.paths) || response.paths.length !== capturedPaths.length
+      || response.paths.some((entry, i) => entry.windows !== capturedPaths[i] || typeof entry.linux !== "string" || !entry.linux.startsWith("/") || /[\x00-\x1f]/.test(entry.linux))) throw new Error("Invalid WSL path inspection")
+    result.paths = response.paths
+    const missingRequired = (["python", "bash", "bubblewrap"] as const).filter(key => !result.dependencies[key].available)
+    if (missingRequired.length) {
+      result.detail = `Missing required WSL runtime dependencies: ${missingRequired.join(", ")}; install them manually in the selected distribution`
+      return result
+    }
+    const backend = createWslExecutionBackend({ distribution })
+    try {
+      const probe = await backend.probe()
+      result.available = probe.availability === "available"
+      result.detail = probe.detail ?? "WSL isolation inspection completed"
+    } finally { await backend.dispose() }
+  } catch (cause) { result.detail = cause instanceof Error ? cause.message : "WSL runtime inspection unavailable" }
+  return result
+}
+
+function captureWorker(): Buffer {
+  const source = new URL("../worker/runner.py", import.meta.url)
+  const packaged = process.env.I_HARNESS_DIST === "1" || !existsSync(source)
+  const worker = packaged ? new URL("./wsl-assets/runner.py", import.meta.url) : source
+  const manifest = packaged ? new URL("./wsl-assets/manifest.json", import.meta.url) : new URL("../worker/manifest.json", import.meta.url)
+  const bytes = readFileSync(worker)
+  if (packaged || existsSync(manifest)) {
+    try {
+      const value = JSON.parse(readFileSync(manifest).toString("utf8")) as Record<string, unknown>
+      if (Object.keys(value).sort().join(",") !== "protocol,schema,sha256,worker" || value.schema !== 1 || value.protocol !== 1 || value.worker !== "runner.py"
+        || value.sha256 !== createHash("sha256").update(bytes).digest("hex")) throw new Error()
+    } catch { throw new Error("WSL worker manifest is missing, incompatible or does not match the packaged worker") }
+  }
+  return bytes
 }
 
 /** Explicit experimental construction; this package does not register a default backend. */
-export function createWslExecutionBackend(options: { distribution: string }): WslExecutionBackend {
+export function createWslExecutionBackend(options: WslExecutionOptions): WslExecutionBackend {
   const distribution = options.distribution
   if (!validDistribution(distribution)) throw new Error("Invalid WSL distribution name")
+  if (options.networkAccess !== undefined && typeof options.networkAccess !== "boolean") throw new Error("Invalid WSL network configuration")
+  const runtimePath = Object.freeze([...(options.runtimePath ?? [])])
+  if (runtimePath.length > 16 || runtimePath.some(path => typeof path !== "string" || !/^\/(?!\/)/.test(path) || /[:\x00-\x1f]/.test(path) || path.split("/").some(part => part === "." || part === ".."))) throw new Error("Invalid WSL runtime PATH")
+  const configuration = Object.freeze({ networkAccess: options.networkAccess ?? false, runtimePath })
   // Capture exactly once. Only immutable strings derived from these owned bytes survive construction.
-  const captured = readFileSync(new URL("../worker/runner.py", import.meta.url))
+  const captured = captureWorker()
   const source = captured.toString("base64")
   const digest = createHash("sha256").update(captured).digest("hex")
   const envelope = (nonce: string) => JSON.stringify({ v: 1, nonce, source, sha256: digest }) + "\n"
@@ -105,7 +202,7 @@ export function createWslExecutionBackend(options: { distribution: string }): Ws
     void entry.completion.promise.finally(() => signal?.removeEventListener("abort", onAbort)).catch(() => {})
     try {
       const client = await open(entry)
-      const fingerprint = await client.prepare(capturedRequest.spec, capturedRequest.policy)
+      const fingerprint = await client.prepare(capturedRequest.spec, capturedRequest.policy, configuration)
       check(entry)
       if (fingerprint !== capturedRequest.policy.fingerprint) throw new Error("WSL prepared policy fingerprint mismatch")
       let committed = false

@@ -8,10 +8,10 @@ it("saves an explicit experimental Windows backend choice for new assemblies", a
   const initial = { saved: defaults, effective: defaults, source: "settings", restartRequired: false }
   const request = vi.fn(async action => action.kind === "desktop/approval-rules/state" ? { rules: [], candidates: [] } : action.kind === "desktop/agent-settings/state" ? initial : { ...initial, saved: { ...defaults, windowsSandboxBackend: "psec" }, effective: { ...defaults, windowsSandboxBackend: "psec" } })
   render(<AgentSettings workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)
-  fireEvent.change(await screen.findByRole("combobox", { name: "Windows sandbox backend" }), { target: { value: "psec" } })
+  fireEvent.change(await screen.findByRole("combobox", { name: "Windows 執行後端" }), { target: { value: "psec" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/agent-settings/configure", workspaceId: "w", patch: { windowsSandboxBackend: "psec" } })
-  expect(screen.getByText(/PSEC is experimental/)).toBeTruthy()
+  expect(screen.getByText(/PSEC 是實驗性後端/)).toBeTruthy()
 })
 it("saves automatic compaction live without a restart notice", async () => {
   const initial = { saved: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, effective: { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, restartRequired: false, source: "settings" }

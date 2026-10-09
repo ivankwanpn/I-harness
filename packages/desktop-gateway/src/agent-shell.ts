@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs"
-import { powerShellExecutableAvailable } from "@i-harness/shell"
+import { powerShellExecutableAvailable, resolveWslAgentShell } from "@i-harness/shell"
 import { AGENT_SHELL_CHOICES, type SettingsAgentShell } from "@i-harness/settings"
 import { shellProfiles, type ShellEnvironment } from "./terminal-shells.ts"
 import { withDesktopSettings } from "./settings-file.ts"
@@ -9,8 +9,13 @@ export interface AgentShellOption {
   label: string
   command: string
   dialect: "posix" | "powershell" | "cmd"
+  executionTarget?: "host" | "wsl"
+  env?: Readonly<Record<string, string>>
+  executionContext?: string
 }
 export interface AgentShellSettingsState {
+  executionTarget?: "host" | "wsl"
+  nativeSelected?: SettingsAgentShell
   selected: SettingsAgentShell
   options: AgentShellOption[]
   resolved?: AgentShellOption
@@ -37,7 +42,7 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
     const available = shellProfiles(env).flatMap((profile) => {
       const kind = dialect(profile.command)
       const available = kind === "powershell" ? powerShellExecutableAvailable(profile.command, env.exists) : env.exists(profile.command)
-      return kind && available ? [{ id: choice(profile.id), label: profile.label, command: profile.command, dialect: kind }] : []
+      return kind && available ? [{ id: choice(profile.id), label: `${profile.label}（主機）`, command: profile.command, dialect: kind, executionTarget: "host" as const }] : []
     })
     if (env.platform !== "win32") return available
     const automatic = available.find((option) => option.id === "auto")
@@ -67,7 +72,12 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
     catch (error) { return { selected: shell, options: available, error: error instanceof Error ? error.message : String(error) } }
   }
   return {
-    state: () => withDesktopSettings(path, async () => snapshot(selected())),
+    state: () => withDesktopSettings(path, async store => {
+      const settings = store.get()
+      if (settings.windowsSandboxBackend !== "wsl") return { ...snapshot(selected()), executionTarget: "host" as const }
+      const binding: AgentShellOption = { ...resolveWslAgentShell(settings.wslExecution), id: "bash", label: `Linux Bash（WSL2 ${settings.wslExecution.distribution}）` }
+      return { selected: "bash" as const, nativeSelected: selected(), executionTarget: "wsl" as const, options: [binding], resolved: binding }
+    }),
     resolve: (): AgentShellOption & { validate(): void } => {
       const resolved = resolveChoice(selected(), options())
       return { ...resolved, validate() {
@@ -80,6 +90,7 @@ export function createAgentShellSettings(path: string, environment: Partial<Shel
       if (Object.keys(command).some((key) => key !== "shell")) throw new Error("Unknown Agent shell setting")
       const shell = choice(command.shell)
       return withDesktopSettings(path, async (store) => {
+        if (store.get().windowsSandboxBackend === "wsl") throw new Error("WSL uses Linux Bash for new assemblies. Select a native backend to configure a host Agent Shell.")
         resolveChoice(shell, options())
         await store.set({ agentShell: shell })
         return snapshot(shell)

@@ -5,7 +5,8 @@ export const MAX_CHUNK_BYTES = 32 * 1024
 export type WorkerFrame =
   | { type: "hello"; sha256: string; workerPid: number }
   | { type: "probe"; available: boolean; detail: string }
-  | { type: "prepared"; policyFingerprint: string }
+  | { type: "prepared"; policyFingerprint: string; inventoryEntries?: number; inventoryDirectories?: number }
+  | { type: "progress"; stage: "preparing" | "validating" }
   | { type: "started"; pid: number }
   | { type: "output"; channel: "stdout" | "stderr"; data: string }
   | { type: "root"; exitCode: number | null; signal?: string }
@@ -92,9 +93,15 @@ export class WorkerProtocol {
         if (typeof f.available !== "boolean" || !shortText(f.detail)) throw new Error("Invalid worker probe")
         this.phase = "probed"; break
       case "prepared":
-        phase("preparing"); fields("policyFingerprint")
+        phase("preparing"); fields("policyFingerprint", "inventoryEntries", "inventoryDirectories")
         if (!shortText(f.policyFingerprint) || !f.policyFingerprint) throw new Error("Invalid worker policy fingerprint")
+        if ((f.inventoryEntries !== undefined && (!Number.isSafeInteger(f.inventoryEntries) || (f.inventoryEntries as number) < 0 || (f.inventoryEntries as number) > 1_000_000))
+          || (f.inventoryDirectories !== undefined && (!Number.isSafeInteger(f.inventoryDirectories) || (f.inventoryDirectories as number) < 0 || (f.inventoryDirectories as number) > 100_000))) throw new Error("Invalid writable inventory counters")
         this.phase = "prepared"; break
+      case "progress":
+        phase("preparing", "committing"); fields("stage")
+        if (f.stage !== (this.phase === "preparing" ? "preparing" : "validating")) throw new Error("Invalid preparation progress")
+        break
       case "started":
         phase("committing"); fields("pid")
         if (!positivePid(f.pid)) throw new Error("Invalid worker launcher PID")
@@ -110,7 +117,7 @@ export class WorkerProtocol {
         if (f.signal !== undefined && (typeof f.signal !== "string" || !/^[A-Z][A-Z0-9]{0,15}$/.test(f.signal))) throw new Error("Invalid root signal")
         this.phase = "root"; break
       case "settled":
-        if (this.stopping) phase("preparing", "prepared", "root", "refused")
+        if (this.stopping) phase("preparing", "prepared", "committing", "root", "refused")
         else phase("root", "refused")
         fields(); this.phase = "settled"; break
       case "refused":

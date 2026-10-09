@@ -27,7 +27,8 @@ export function captureRequest(inputSpec: ProcessSpec, inputPolicy: CompiledSand
   })
   if (spec.transport !== "pipe" || spec.lifetime !== "complete-tree" || spec.argumentEncoding !== "crt" || spec.pty !== undefined)
     throw new Error("WSL sandbox supports only pipes, complete-tree lifetime and Linux argv")
-  if (policy.mode !== "read-only" && policy.mode !== "workspace-write") throw new Error("Unsupported WSL sandbox mode")
+  if (!["read-only", "workspace-write", "danger-full-access"].includes(policy.mode)) throw new Error("Unsupported WSL sandbox mode")
+  if (policy.mode === "danger-full-access" && policy.referenceRoots.length) throw new Error("WSL full access cannot protect reference roots")
   if (policy.readable !== "caller" || !["bound", "unbound"].includes(policy.authorityKind) || !policy.authorityRevision || !policy.fingerprint)
     throw new Error("Invalid WSL sandbox authority")
   if (!spec.owner.sessionId || spec.owner.sessionId !== policy.owner.sessionId || spec.owner.parentSessionId !== policy.owner.parentSessionId)
@@ -57,8 +58,13 @@ export function decodeLauncherText(bytes: Buffer): string {
 }
 export function parseWslInventory(bytes: Buffer, distribution: string): boolean {
   if (!validDistribution(distribution)) return false
-  return decodeLauncherText(bytes).split(/\r?\n/).some(line => {
-    const row = /^\s*\*?\s*(.*?)\s{2,}\S+\s+(\d+)\s*$/.exec(line)
-    return row?.[1] === distribution && row[2] === "2"
-  })
+  return decodeWslInventory(bytes).some(row => row.name === distribution && row.version === 2)
+}
+export function decodeWslInventory(bytes: Buffer): { name: string; version: number; state: string }[] {
+  const rows = []
+  for (const line of decodeLauncherText(bytes).split(/\r?\n/)) {
+    const row = /^\s*\*?\s*(.*?)\s{2,}(\S+)\s+(\d+)\s*$/.exec(line)
+    if (row && validDistribution(row[1]!) && ["1", "2"].includes(row[3]!)) rows.push({ name: row[1]!, version: Number(row[3]), state: row[2]! })
+  }
+  return rows
 }

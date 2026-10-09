@@ -11,6 +11,12 @@ const requirements: BackendRequirements = {
 }
 
 describe("package-root backend negotiation", () => {
+  it("accepts reference protection separately from general deny paths, with legacy compatibility", () => {
+    const references = { ...requirements, denyPaths: false, referenceProtection: true }
+    expect(checkBackendRequirements({ ...probe, features: { ...probe.features, denyPaths: false, referenceProtection: true } }, references)).toEqual({ ok: true })
+    expect(checkBackendRequirements(probe, references)).toEqual({ ok: true })
+    expect(checkBackendRequirements({ ...probe, features: { ...probe.features, denyPaths: false } }, references)).toEqual({ ok: false, missing: ["reference-protection"] })
+  })
   it("accepts fully satisfied requirements", () => {
     expect(checkBackendRequirements(probe, requirements)).toEqual({ ok: true })
   })

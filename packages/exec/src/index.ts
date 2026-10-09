@@ -14,6 +14,8 @@ export { withExecCallerScope, currentExecCaller } from "./caller-scope.ts"
 export { registerRetainedOutput, retainedOutputReader } from "./retained-output.ts"
 
 export interface ExecCommand {
+  /** Assigned by trusted tool registration, never exposed as model permission input. */
+  executionTarget?: "host" | "wsl"
   argv: string[]
   windowsVerbatimArguments?: boolean
   cwd?: string
@@ -51,6 +53,8 @@ export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: n
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
+  /** WSL jobs end and clean descendants when their root command exits. */
+  lifetime?: ExecutionLifetime
   id: string; status: BackgroundJobStatus; stdout: string; stderr: string; exitCode?: number
   stdoutSpillPath?: string
   stderrSpillPath?: string
@@ -66,7 +70,7 @@ export interface BackgroundJobView {
 /** Host functions are trusted composition, never values from tool/model JSON. */
 export interface ExecExecutionHost {
   supervisor?: ExecutionSupervisor
-  selectBackend(policy: CompiledSandboxPolicy, transport: ExecutionTransport): TransportExecutionBackend
+  selectBackend(policy: CompiledSandboxPolicy, transport: ExecutionTransport, spec?: ProcessSpec): TransportExecutionBackend
   resolvePolicy(owner: Readonly<ExecutionOwner>, requested: SandboxExecutionPolicy | undefined): CompiledSandboxPolicy
   validateAuthority(policy: CompiledSandboxPolicy): void
   /** Automatic foreground presentation only; explicit background/transport lifetimes remain exact. */
@@ -88,6 +92,7 @@ export interface ExecServiceOptions {
 
 /** Terminal requests exact transport facts; the service binds owner, policy and backend. */
 export interface ExecTransportRequest {
+  executionTarget?: "host" | "wsl"
   argv: readonly string[]; cwd?: string; env?: Readonly<Record<string, string>>
   transport: ProcessSpec["transport"]; lifetime: ExecutionLifetime
   argumentEncoding: ProcessSpec["argumentEncoding"]

@@ -46,6 +46,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
+    if (handlers.wslSettings) capabilities["desktop-wsl-settings"] = ["1"]
     if (handlers.resources) capabilities["desktop-resources"] = ["1"]
     if (handlers.resources?.write) capabilities["desktop-resource-authoring"] = ["1"]
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
@@ -351,6 +352,16 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
       if ((message.method === "desktop/subagents/state" || message.method === "desktop/subagents/mutate") && handlers.subagents) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.subagents.state() : await handlers.subagents.mutate(message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
+        return
+      }
+      if (["desktop/wsl/state", "desktop/wsl/diagnose", "desktop/wsl/repair"].includes(message.method)) {
+        try {
+          if (!handlers.wslSettings) throw new Error("WSL settings unavailable")
+          const params = asRecord(message.params)
+          if (params && Object.keys(params).length) throw new Error("Unknown WSL settings action parameter")
+          const result = message.method.endsWith("/state") ? await handlers.wslSettings.state() : message.method.endsWith("/diagnose") ? await handlers.wslSettings.diagnose() : await handlers.wslSettings.repair()
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_REQUEST, error instanceof Error ? error.message : String(error))) }
         return
       }
       if ((message.method === "desktop/agent-settings/state" || message.method === "desktop/agent-settings/configure") && handlers.agentSettings) {

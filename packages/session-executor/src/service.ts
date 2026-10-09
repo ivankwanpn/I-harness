@@ -96,7 +96,9 @@ export interface SessionServiceOptions extends AssemblyOptions {
   /** Bind the session once; its returned getter follows current membership. */
   projectContextFor?: (sessionId: string) => Promise<() => SessionProjectContext | undefined>
   executionAuthorityFor?: (sessionId: string) => Promise<NonNullable<AssemblyOptions["executionAuthority"]>>
-  windowsSandboxBackendFor?: () => "legacy" | "psec"
+  windowsSandboxBackendFor?: () => "legacy" | "psec" | "wsl"
+  wslExecutionFor?: () => AssemblyOptions["wslExecution"] | Promise<AssemblyOptions["wslExecution"]>
+  webSearchModeFor?: () => AssemblyOptions["webSearchMode"]
   transformPrompt?: (assembly: SessionAssembly, prompt: string) => Promise<string>
   /** Host-owned post-turn work runs within this session's submit lane. Failure
    * is reported but never changes a successfully completed Agent turn. */
@@ -489,6 +491,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             executionAuthority,
             executionCallerAvailable,
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
+            wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
+            webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,
@@ -526,6 +530,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
             executionAuthority,
             executionCallerAvailable,
             windowsSandboxBackend: opts.windowsSandboxBackendFor?.() ?? opts.windowsSandboxBackend,
+            wslExecution: await (opts.wslExecutionFor?.() ?? opts.wslExecution),
+            webSearchMode: opts.webSearchModeFor?.() ?? opts.webSearchMode,
             parentNotify: parentNotifyFor(sessionId, () => assembly),
             sessionId,
             session: resolvedSession,

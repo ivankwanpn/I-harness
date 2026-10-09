@@ -22,6 +22,7 @@
 import { build } from "esbuild"
 import { copyRuntimePackage, runtimePackageRoot } from "../packages/desktop/scripts/runtime-copy.mjs"
 import { copyNativeAssets } from "./runtime-native-assets.mjs"
+import { copyWslAssets } from "./runtime-wsl-assets.mjs"
 import { copyFileSync, existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve, relative, isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -185,6 +186,7 @@ function copyInstalled(name, from, optional = false) {
 for (const name of NATIVES) copyInstalled(name, join(ROOT, name === "@vscode/ripgrep" ? "packages/fs-search" : name === "koffi" ? "packages/sandbox-windows-acl" : "packages/sandbox-local"))
 copyInstalled("quickjs-emscripten", join(ROOT, "packages/code-mode"))
 copyNativeAssets(join(ROOT, "packages/sandbox-windows-psec"), join(OUT, "sandbox-windows-psec"))
+copyWslAssets(join(ROOT, "packages/sandbox-wsl/worker/runner.py"), join(OUT, "wsl-assets"))
 
 // ------------------------------------------- module-load assets (runtime URLs)
 
@@ -210,7 +212,7 @@ copyNativeAssets(join(ROOT, "packages/sandbox-windows-psec"), join(OUT, "sandbox
   // the `./runner.mjs` sibling-bundle branch, so it is not a missing asset.
   const bundleText = readFileSync(join(OUT, "ih.mjs"), "utf8")
   const staticUrls = [...bundleText.matchAll(/new URL\("((?:\.\.?\/)[^")]+)", import\.meta\.url\)/g)].map((m) => m[1])
-  const SOURCE_ONLY_SPAWN_ENTRIES = new Set(["./runner.ts"])
+  const SOURCE_ONLY_SPAWN_ENTRIES = new Set(["./runner.ts", "../worker/runner.py", "../worker/manifest.json"])
   const unhandled = staticUrls.filter(
     (p) => !p.startsWith("../../../") && !SOURCE_ONLY_SPAWN_ENTRIES.has(p) && !existsSync(join(OUT, p)),
   )
@@ -250,6 +252,7 @@ writeFileSync(
     "                    sandbox seam spawns it in dist — no source checkout, no tsx)",
     "  node_modules/     installed native externals and the QuickJS worker runtime",
     "  sandbox-windows-psec/  fixed helper, manifest/provenance, protocol, historical qualification",
+    "  wsl-assets/       captured WSL worker and strict protocol/digest manifest",
     "  worker.mjs, cpu-budget.mjs  isolated Code Mode worker assets",
     "  package.json      dist manifest (same dependency pins as installer/dist-package.json)",
     "  model-catalog.json  runtime asset — read as new URL(\"./model-catalog.json\", import.meta.url)",

@@ -6,6 +6,7 @@
   "exports": { ".": "./src/index.ts" },
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
+    "@i-harness/sandbox-wsl": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
     "@i-harness/sandbox-policy": "workspace:*",
     "@i-harness/sandbox-windows-acl": "workspace:*",
