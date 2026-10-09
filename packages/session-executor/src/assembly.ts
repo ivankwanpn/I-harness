@@ -328,9 +328,16 @@ interface RewindAssemblyHandle {
   recorder: RewindRecorder
 }
 
+export interface UnavailableExecutionAuthorityStatus {
+  authority: "revoked" | "unavailable"
+  availability: "unavailable"
+  detail: string
+}
+
 export interface SessionAssembly {
   reconcileExecutionAuthority(): Promise<void>
-  executionBackendStatus(): Promise<BackendProbe & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
+  /** An unavailable owner is reported without claiming backend probe results. */
+  executionBackendStatus(): Promise<(BackendProbe | UnavailableExecutionAuthorityStatus) & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
   /** Current owning runtime registries only; reading never mounts or restores work. */
   liveResources?(): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
   /** Reports the actual mounted mode/catalogue; never resolves a model. */
@@ -461,6 +468,16 @@ const bindAuthRefreshStatus =
     onStatus({ server: serverName, state: state ?? "ready", authRefreshFailed: message })
   }
 
+/** Fresh parent semantics: a coordinator mirrors new events, but never loads
+ * or recovers a parent unless the caller supplies that session explicitly. */
+export function createAssemblySession(opts: Pick<AssemblyOptions, "coordinator" | "sessionId">): Session {
+  return createSession((ev) => {
+    if (opts.coordinator === undefined || opts.sessionId === undefined) return
+    opts.coordinator.enqueue(opts.sessionId, [ev])
+    if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
+  })
+}
+
 export async function createSessionAssembly(opts: AssemblyOptions): Promise<SessionAssembly> {
   // Structural configuration belongs to this assembly, including while setup awaits.
   opts = { ...opts, windowsSandboxBackend: opts.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX as AssemblyOptions["windowsSandboxBackend"],
@@ -516,11 +533,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // resolver below re-reads this session's `sandbox/mode` events (and its
   // `policyFloor` is that session's length), so the session has to exist first.
   // Nothing here depends on the mounts.
-  const session = opts.session ?? createSession((ev) => {
-    if (opts.coordinator === undefined || opts.sessionId === undefined) return
-    opts.coordinator.enqueue(opts.sessionId, [ev])
-    if (ev.type === "turn/end") void opts.coordinator.flush(opts.sessionId).catch(() => {})
-  })
+  const session = opts.session ?? createAssemblySession(opts)
 
   // ── execution environment + policy ─────────────────────────────────────────
   // D1 (m55): every exec-spawning tool gets the assembly workspace as its

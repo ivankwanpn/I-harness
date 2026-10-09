@@ -49,15 +49,17 @@ function Directory({ root, path, selection, request, onOpen, refresh, initialOpe
 function FilenameExplorer({ roots, selection, request, onOpen, refresh }: ExplorerProps) {
   const pf = useProjectFilesText()
   const [query, setQuery] = useState(""), [results, setResults] = useState<Record<string, ProjectFilePage>>({}), [error, setError] = useState<string>()
+  const [searching, setSearching] = useState(false)
   const identity = JSON.stringify([selection, roots, query, refresh])
   const current = useRef(identity), paging = useRef(new Set<string>())
   current.current = identity
   useEffect(() => () => { current.current = "" }, [])
   useEffect(() => {
-    if (!query.trim()) return
+    setError(undefined)
+    if (!query.trim()) { setSearching(false); return }
     let current = true
-    setResults({}); setError(undefined)
-    Promise.all(roots.map(async (root) => [root.workspaceId, checkedPage(await request({ ...selection, kind: "desktop/project-files/search", ref: { workspaceId: root.workspaceId, path: "" }, query, offset: 0 }))] as const)).then((rows) => { if (current) setResults(Object.fromEntries(rows)) }).catch((error) => { if (current) setError(reasonOf(error)) })
+    setResults({}); setSearching(true)
+    Promise.all(roots.map(async (root) => [root.workspaceId, checkedPage(await request({ ...selection, kind: "desktop/project-files/search", ref: { workspaceId: root.workspaceId, path: "" }, query, offset: 0 }))] as const)).then((rows) => { if (current) setResults(Object.fromEntries(rows)) }).catch((error) => { if (current) setError(reasonOf(error)) }).finally(() => { if (current) setSearching(false) })
     return () => { current = false }
   }, [identity, request])
   async function more(root: ProjectFileRoot) {
@@ -75,6 +77,8 @@ function FilenameExplorer({ roots, selection, request, onOpen, refresh }: Explor
   return <>
     <input aria-label={pf("搜尋專案檔名")} placeholder={pf("搜尋檔名或相對路徑")} maxLength={512} value={query} onChange={(event) => setQuery(event.target.value)} />
     {error ? <p role="alert" className="notice error-text">{error}</p> : null}
+    {query.trim() && searching ? <p role="status">{pf("正在搜尋檔案…")}</p> : null}
+    {query.trim() && !searching && !error && roots.every(root => results[root.workspaceId]?.entries.length === 0) ? <p className="muted">{pf("沒有符合的檔案")}</p> : null}
     {!query.trim() ? <ul>{roots.map((root) => <Directory key={`${root.workspaceId}:${JSON.stringify(selection)}`} root={root} path="" initialOpen selection={selection} request={request} onOpen={onOpen} refresh={refresh} />)}</ul>
       : roots.map((root) => <div key={root.workspaceId}><p className="row-label">{root.label}</p><ul>{results[root.workspaceId]?.entries.map((entry: ProjectFileEntry) => <li key={entry.path}><button type="button" className="link-button" onClick={() => onOpen({ workspaceId: root.workspaceId, path: entry.path })}>{entry.path}</button></li>)}</ul>
         {results[root.workspaceId]?.nextOffset != null ? <button type="button" onClick={() => void more(root)}>{pf("載入更多搜尋結果")}</button> : null}

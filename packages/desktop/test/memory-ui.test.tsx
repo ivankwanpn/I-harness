@@ -82,4 +82,21 @@ describe("workspace memory", () => {
     fireEvent.click(screen.getByRole("button", { name: "新增筆記" }))
     expect((screen.getByLabelText("標題") as HTMLInputElement).value).toBe("未完成草稿")
   })
+
+  it("preserves a changed note when single deletion no longer matches its read revision", async () => {
+    const note = { id: "n1", title: "Saved note", text: "read version", revision: "revision-a" }
+    const request = vi.fn(async (input: DesktopRequest) => input.kind === "desktop/memory/state" ? { enabled: true }
+      : input.kind === "desktop/memory/list" ? { notes: [note] }
+      : input.kind === "desktop/memory/read" ? { note } : {})
+    const author = vi.fn().mockResolvedValue({ kind: "conflict" })
+    render(<MemoryPane bridge={{ request, onEvent: () => () => {} }} workspaceId="owned" onAuthoringRequest={author} />)
+    fireEvent.click(await screen.findByRole("button", { name: "Saved note" }))
+    fireEvent.click(await screen.findByRole("button", { name: "刪除筆記" }))
+    fireEvent.click(screen.getByRole("button", { name: "確認刪除此筆記" }))
+    await waitFor(() => expect(author).toHaveBeenCalledWith({ kind: "desktop/memory/forget-many", workspaceId: "owned", confirmed: true, targets: [{ id: "n1", expectedRevision: "revision-a" }] }))
+    expect((await screen.findByRole("alert")).textContent).toContain("筆記已變更")
+    expect(screen.getByText("read version")).toBeTruthy()
+    expect(request.mock.calls.some(([input]) => input.kind === "desktop/memory/forget")).toBe(false)
+    expect(screen.getByRole("button", { name: "重新讀取筆記" })).toBeTruthy()
+  })
 })

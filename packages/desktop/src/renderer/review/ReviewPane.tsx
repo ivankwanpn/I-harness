@@ -1,7 +1,8 @@
 import { LightweightDiffPreview } from "../vendor/zcode/LightweightDiffPreview.tsx"
 import { ReviewFileRow } from "../vendor/zcode/ReviewFileRow.tsx"
 import { useText, type Message } from "../design/i18n.ts"
-import { useState } from "react"
+import { useRef, useState } from "react"
+import { SettingsDraftScope, useSettingsDraft } from "../settings/settings-drafts.tsx"
 import { SourceFileEditor, type ReviewSaveResult } from "./SourceFileEditor.tsx"
 import { ProjectFilesPane, type ProjectFilesPaneProps } from "./ProjectFilesPane.tsx"
 import "./review-editor.css"
@@ -26,6 +27,7 @@ export type ReviewText =
   | { kind: "unavailable"; reason: string }
 
 export interface ReviewPaneProps {
+  draftOwner?: object
   workspaceId?: string
   projectFiles?: ProjectFilesPaneProps
   changes?: ReviewChanges
@@ -86,16 +88,20 @@ function TextBlock({ value, label }: { value: ReviewText; label: string }) {
 }
 
 /** Workspace review with explicit human source edits and local Git actions. */
-export function ReviewPane({ workspaceId, projectFiles, changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit }: ReviewPaneProps) {
+export function ReviewPane(props: ReviewPaneProps) {
+  const fallback = useRef({})
+  return <SettingsDraftScope owner={props.draftOwner ?? fallback.current}><ReviewPaneContent key={props.workspaceId ?? "legacy"} {...props} /></SettingsDraftScope>
+}
+function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit }: ReviewPaneProps) {
   const t = useText()
-  const [sourcePath, setSourcePath] = useState("")
-  const [message, setMessage] = useState("")
+  const [sourcePath, setSourcePath] = useSettingsDraft(["review", workspaceId ?? "legacy", "path"], "")
+  const [message, setMessage] = useSettingsDraft(["review", workspaceId ?? "legacy", "commit"], "")
   const [busy, setBusy] = useState(false)
   const [mutationError, setMutationError] = useState<string>()
   const [committed, setCommitted] = useState<string>()
   const stagedCount = changes?.kind === "ok" ? changes.files.filter((row) => row.staged).length : 0
 
-  async function mutate(operation: () => Promise<ReviewGitResult | ReviewCommitResult>) {
+  async function mutate(operation: () => Promise<ReviewGitResult | ReviewCommitResult>, submittedMessage?: string) {
     if (busy) return
     setBusy(true)
     setMutationError(undefined)
@@ -108,7 +114,7 @@ export function ReviewPane({ workspaceId, projectFiles, changes, error, selected
           : result.reason === "not-found" ? t("找不到檔案")
           : t("Git 操作失敗，請檢查本機 Git 設定後重試。"))
       } else {
-        if (result.kind === "committed") { setMessage(""); setCommitted(result.commit) }
+        if (result.kind === "committed") { setMessage(current => current === submittedMessage ? "" : current); setCommitted(result.commit) }
         onRefresh()
       }
     } catch (reason) { setMutationError(reason instanceof Error ? reason.message : String(reason)) }
@@ -129,7 +135,7 @@ export function ReviewPane({ workspaceId, projectFiles, changes, error, selected
         <button type="submit" className="link-button" disabled={!sourcePath.trim()}>{t("開啟檔案")}</button>
       </form> : null}
       {changes === undefined ? (
-        <p className="muted">{t("正在讀取變更…")}</p>
+        !error ? <p className="muted">{t("正在讀取變更…")}</p> : null
       ) : changes.kind === "unavailable" ? (
         <p className="notice">{CHANGE_REASONS[changes.reason] ? t(CHANGE_REASONS[changes.reason]!) : `${t("無法讀取")} (${changes.reason})`}</p>
       ) : changes.files.length === 0 ? (
@@ -168,7 +174,7 @@ export function ReviewPane({ workspaceId, projectFiles, changes, error, selected
           {onSaveFile ? <div hidden={selected.mode !== "preview"}><SourceFileEditor workspaceId={workspaceId} path={selected.path} value={preview} onSave={onSaveFile} onReload={(path) => onSelect(path, "preview")} /></div> : null}
         </div>
       )}
-      {onCommit ? <form className="review-commit" onSubmit={(event) => { event.preventDefault(); if (message.trim() && stagedCount > 0) void mutate(() => onCommit(message)) }}>
+      {onCommit ? <form className="review-commit" onSubmit={(event) => { event.preventDefault(); if (message.trim() && stagedCount > 0) void mutate(() => onCommit(message), message) }}>
         <span className="row-meta">{t("已暫存 {count} 個檔案", { count: stagedCount })}</span>
         <label>{t("提交訊息")}<textarea value={message} disabled={busy} onChange={(event) => setMessage(event.target.value)} /></label>
         <button type="submit" disabled={busy || stagedCount === 0 || !message.trim()}>{t("提交已暫存變更")}</button>

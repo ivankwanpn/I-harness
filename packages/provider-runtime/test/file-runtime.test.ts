@@ -5,6 +5,20 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createFileProviderRuntime } from "../src/file-runtime.ts"
 
 const roots: string[] = []
+it("reports the saved default selection separately from route fallback metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-provider-default-ui-")); roots.push(root)
+  const runtime = createFileProviderRuntime({ settingsPath: join(root, "settings.json"), credentialsPath: join(root, "credentials.json") })
+  await runtime.createProvider("first", { protocol: "openai-completions" })
+  await runtime.createProvider("second", { protocol: "openai-completions" })
+  await runtime.setDefaultModel({ provider: "first", model: "chosen-first" })
+  let rows = await runtime.directory()
+  expect(rows.find(row => row.id === "first")).toMatchObject({ selectedDefaultModel: "chosen-first" })
+  expect(rows.find(row => row.id === "second")?.selectedDefaultModel).toBeUndefined()
+  await runtime.setDefaultModel({ provider: "second", model: "chosen-second" })
+  rows = await runtime.directory()
+  expect(rows.find(row => row.id === "first")?.selectedDefaultModel).toBeUndefined()
+  expect(rows.find(row => row.id === "second")).toMatchObject({ selectedDefaultModel: "chosen-second" })
+})
 afterEach(async () => { vi.unstubAllGlobals(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 5 }) })
 it("releases shared settings locks while a provider network probe waits", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-provider-probe-")); roots.push(root)

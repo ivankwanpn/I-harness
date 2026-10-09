@@ -2,23 +2,29 @@ import { useEffect, useRef, useState } from "react"
 import { Compass, Plus, LoaderCircle } from "lucide-react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
+import { errorMessage } from "../design/error-message.ts"
 import type { EditableModel } from "./ProviderEditor.tsx"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
+import { SettingsDraftScope, useSettingsDraft } from "./settings-drafts.tsx"
 
-export function ProviderDiscovery({ bridge, workspaceId, id, onSave }: { bridge: DesktopBridge; workspaceId: string; id: string; onSave(command: ProviderCommand): Promise<void> }) {
+interface ProviderDiscoveryProps { bridge: DesktopBridge; workspaceId: string; id: string; onSave(command: ProviderCommand): Promise<void>; active?: boolean }
+export function ProviderDiscovery(props: ProviderDiscoveryProps) {
+  return <SettingsDraftScope owner={props.bridge}><ProviderDiscoveryContent key={JSON.stringify([props.workspaceId, props.id])} {...props} /></SettingsDraftScope>
+}
+function ProviderDiscoveryContent({ bridge, workspaceId, id, onSave, active = true }: ProviderDiscoveryProps) {
   const t = useText()
   const token = useRef<string | undefined>(undefined)
   const mounted = useRef(true)
   const importing = useRef(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
-  const [rows, setRows] = useState<EditableModel[]>()
-  const [selected, setSelected] = useState<string[]>([])
-  const [imported, setImported] = useState(0)
-  const [query, setQuery] = useState("")
-  const [page, setPage] = useState(0)
+  const [rows, setRows] = useSettingsDraft<EditableModel[] | undefined>(["providers", workspaceId, id, "discovery-rows"], undefined)
+  const [selected, setSelected] = useSettingsDraft<string[]>(["providers", workspaceId, id, "discovery-selected"], [])
+  const [imported, setImported] = useSettingsDraft(["providers", workspaceId, id, "discovery-imported"], 0)
+  const [query, setQuery] = useSettingsDraft(["providers", workspaceId, id, "discovery-query"], "")
+  const [page, setPage] = useSettingsDraft(["providers", workspaceId, id, "discovery-page"], 0)
   const matches = rows?.filter((row) => `${row.id} ${row.name ?? ""}`.toLowerCase().includes(query.toLowerCase())) ?? []
   useEffect(() => {
     mounted.current = true
@@ -31,13 +37,13 @@ export function ProviderDiscovery({ bridge, workspaceId, id, onSave }: { bridge:
     try {
       const result = await bridge.request({ kind: "desktop/provider/probe", workspaceId, id, token: attempt }) as EditableModel[]
       if (mounted.current && token.current === attempt) setRows(result)
-    } catch (reason) { if (mounted.current && token.current === attempt) setError(reason instanceof Error ? reason.message : String(reason)) }
+    } catch (reason) { if (mounted.current && token.current === attempt) setError(errorMessage(reason)) }
     finally { if (token.current === attempt) token.current = undefined; if (mounted.current) setBusy(false) }
   }
-  return <section className="provider-discovery">
+  return <section hidden={!active} className="provider-discovery">
     <header className="provider-discovery-heading"><div><h4>{t("模型探索")}</h4><p className="muted">{t("從提供商取得可用模型，選取後加入列表。")}</p></div>
       <div className="provider-actions"><Button variant="secondary" size="small" icon={busy && token.current ? <LoaderCircle size={15} /> : <Compass size={15} />} disabled={busy} onClick={() => { void probe() }}>{t(busy && token.current ? "探索中…" : "探索模型")}</Button>
-        {busy && token.current ? <Button variant="ghost" size="small" onClick={() => { if (token.current) void bridge.request({ kind: "desktop/provider/probe/cancel", workspaceId, token: token.current }).catch((reason: unknown) => setError(String(reason))) }}>{t("取消")}</Button> : null}
+        {busy && token.current ? <Button variant="ghost" size="small" onClick={() => { if (token.current) void bridge.request({ kind: "desktop/provider/probe/cancel", workspaceId, token: token.current }).catch((reason: unknown) => setError(errorMessage(reason))) }}>{t("取消")}</Button> : null}
       </div></header>
     {error ? <div className="provider-discovery-error"><p role="alert">{error}</p><p className="muted">{t("也可以使用新增模型，手動設定模型 ID 與協議。")}</p></div> : null}
     {rows ? <>
@@ -51,11 +57,11 @@ export function ProviderDiscovery({ bridge, workspaceId, id, onSave }: { bridge:
         void (async () => {
           for (const row of rows.filter((item) => selected.includes(item.id))) {
             if (!mounted.current) break
-            const fields = { ...(row.name ? { name: row.name } : {}), ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}), ...(row.maxTokens ? { maxTokens: row.maxTokens } : {}), ...(row.protocol ? { protocol: row.protocol } : {}) }
+            const fields = { ...(row.name ? { name: row.name } : {}), ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}), ...(row.maxTokens ? { maxTokens: row.maxTokens } : {}), ...(row.protocol ? { protocol: row.protocol } : {}), ...(row.inputModalities ? { inputModalities: row.inputModalities } : {}) }
             await onSave({ action: "model/add", id, model: row.id, fields })
             if (mounted.current) { setImported((value) => value + 1); setSelected((values) => values.filter((value) => value !== row.id)) }
           }
-        })().catch((reason: unknown) => { if (mounted.current) setError(String(reason)) }).finally(() => { importing.current = false; if (mounted.current) setBusy(false) })
+        })().catch((reason: unknown) => { if (mounted.current) setError(errorMessage(reason)) }).finally(() => { importing.current = false; if (mounted.current) setBusy(false) })
       }}>{t("加入所選模型")}</Button>
     </> : null}
     {imported > 0 ? <p role="status">{t("已加入 {count} 個模型", { count: imported })}</p> : null}

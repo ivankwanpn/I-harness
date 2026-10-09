@@ -104,6 +104,8 @@ export interface ProviderRuntimeEntry {
   }
   models: ModelDescriptor[]
   defaultModel?: string
+  /** Persisted user choice for this route, distinct from a catalog fallback. */
+  selectedDefaultModel?: string
   discovery: "available" | "manual-only"
   /** The card family this route declared, if it declared one. ABSENT means the
    * route name IS the family (the default — see ProviderProfile.catalog), which
@@ -347,6 +349,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
   return {
     async directory() {
       const rows: ProviderRuntimeEntry[] = []
+      const selectedDefault = canonicalLlm(options.settings).defaultModel
       for (const view of providers().values()) {
         const ref = authRef(view)
         const authInfo = ref === undefined
@@ -368,6 +371,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
             return { ...model, ...(modalities ? { inputModalities: [...modalities] } : {}) }
           }),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
+          ...(selectedDefault.provider === view.id && selectedDefault.model ? { selectedDefaultModel: selectedDefault.model } : {}),
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
           cardFamily: cardFamilyOf(view),
           ...(view.catalog !== undefined ? { catalog: view.catalog } : {}),

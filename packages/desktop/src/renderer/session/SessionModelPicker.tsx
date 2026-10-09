@@ -3,9 +3,11 @@ import { createPortal } from "react-dom"
 import { Brain, Check, ChevronDown, Search } from "lucide-react"
 import type { SessionModelSelection, SessionModelState } from "@i-harness/sdk"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
+import { listenForegroundEscape } from "../design/foreground-escape.ts"
 
-interface Route { id: string; displayName: string; configured?: boolean; auth?: { configured: boolean }; models: { id: string }[] }
+export interface ModelDirectoryRoute { id: string; displayName: string; configured?: boolean; auth?: { configured: boolean }; models: { id: string; inputModalities?: string[] }[] }
+type Route = ModelDirectoryRoute
 type Panel = "model" | "effort" | null
 const effortOptions = [
   { value: "", label: "Default" },
@@ -19,8 +21,11 @@ const effortOptions = [
 
 export function SessionModelPicker({ bridge, workspaceId, current, disabled, onSelect }: { bridge: DesktopBridge; workspaceId: string; current?: SessionModelState; disabled: boolean; onSelect(selection: SessionModelSelection): Promise<void> }) {
   const t = useText()
+  const en = useLocale(state => state.locale) === "en"
   const [panel, setPanel] = useState<Panel>(null)
-  const [routes, setRoutes] = useState<Route[]>([])
+  const [directory, setDirectory] = useState<{ bridge: DesktopBridge; workspaceId: string; rows: Route[] }>()
+  const [loading, setLoading] = useState(true)
+  const routes = directory?.bridge === bridge && directory.workspaceId === workspaceId ? directory.rows : undefined
   const [search, setSearch] = useState("")
   const [custom, setCustom] = useState(false)
   const [customProvider, setCustomProvider] = useState("")
@@ -38,7 +43,7 @@ export function SessionModelPicker({ bridge, workspaceId, current, disabled, onS
   const effort = ready?.reasoningEffort ?? ""
   const error = applyError ?? loadError
   const effortLabel = effortOptions.find((option) => option.value === effort)?.label ?? "Default"
-  const configured = routes.filter((route) => route.configured || route.auth?.configured)
+  const configured = (routes ?? []).filter((route) => route.configured || route.auth?.configured)
   const query = search.trim().toLocaleLowerCase()
   const visible = configured.map((route) => ({
     route,
@@ -74,23 +79,23 @@ export function SessionModelPicker({ bridge, workspaceId, current, disabled, onS
     popover.current?.querySelector<HTMLInputElement>("input[type=search]")?.focus()
     if (panel === "effort") popover.current?.querySelector<HTMLButtonElement>(".model-effort-options button")?.focus()
     const outside = (event: PointerEvent) => { if (!popover.current?.contains(event.target as Node) && !trigger?.contains(event.target as Node)) setPanel(null) }
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); close() } }
+    const removeEscape = listenForegroundEscape(popover.current, close, () => locked.current)
     document.addEventListener("pointerdown", outside)
-    document.addEventListener("keydown", escape)
-    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape) }
+    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); document.removeEventListener("pointerdown", outside); removeEscape() }
   }, [panel])
 
   useEffect(() => {
     if (panel !== "model") return
     let active = true
+    setLoading(true)
     void bridge.request({ kind: "desktop/provider/directory", workspaceId }).then((result) => {
       if (!active) return
       const rows = result as Route[]
-      setRoutes(rows)
+      setDirectory({ bridge, workspaceId, rows })
       setLoadError(undefined)
       const available = rows.filter((route) => route.configured || route.auth?.configured)
       if (!ready && available.length === 1) setCustomProvider(available[0]!.id)
-    }).catch((reason: unknown) => { if (active) setLoadError(String(reason)) })
+    }).catch((reason: unknown) => { if (active) setLoadError(String(reason)) }).finally(() => { if (active) setLoading(false) })
     return () => { active = false }
   }, [bridge, workspaceId, panel, retry])
 
@@ -110,10 +115,11 @@ export function SessionModelPicker({ bridge, workspaceId, current, disabled, onS
       {panel === "model" ? <>
         <label className="model-picker-search"><Search size={15} aria-hidden="true" /><input type="search" aria-label={t("搜尋模型")} placeholder={t("搜尋模型")} value={search} onChange={(event) => setSearch(event.target.value)} /></label>
         <div className="model-picker-list">
-          {visible.length ? visible.map(({ route, models }) => <section key={route.id} className="model-picker-group" aria-label={route.displayName}>
+          {loading && routes !== undefined ? <p className="muted" role="status">{en ? "Refreshing models…" : "正在更新模型清單…"}</p> : null}
+          {routes === undefined && !loadError ? <p className="model-picker-empty" role="status">{en ? "Loading models…" : "讀取模型清單中…"}</p> : visible.length ? visible.map(({ route, models }) => <section key={route.id} className="model-picker-group" aria-label={route.displayName}>
             <div className="model-picker-group-title">{route.displayName}</div>
             {models.map((model) => <button key={model.id} type="button" disabled={busy} aria-pressed={ready?.providerId === route.id && ready.modelId === model.id} className="model-picker-option" onClick={() => apply({ provider: route.id, model: model.id })}><span>{model.id}</span>{ready?.providerId === route.id && ready.modelId === model.id ? <Check size={14} aria-hidden="true" /> : null}</button>)}
-          </section>) : <p className="model-picker-empty">{t("沒有符合的模型")}</p>}
+          </section>) : !loadError ? <p className="model-picker-empty">{configured.some(route => route.models.length) ? t("沒有符合的模型") : en ? "No models are configured. Open Models and providers in Settings." : "尚未設定可用模型；請到模型與提供商設定。"}</p> : null}
         </div>
         <button type="button" className="model-picker-custom-toggle" disabled={busy} onClick={() => setCustom(!custom)}>{t("自訂模型 ID")}</button>
         {custom ? <div className="model-picker-custom">

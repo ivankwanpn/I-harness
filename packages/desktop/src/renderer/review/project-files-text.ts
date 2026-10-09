@@ -2,6 +2,7 @@ import { useLocale } from "../design/i18n.ts"
 
 // Kept with this slice so parallel central dictionary edits do not conflict.
 const english: Record<string, string> = {
+  "關閉對話框": "Close dialog", "正在搜尋檔案…": "Searching files…", "沒有符合的檔案": "No matching files",
   "專案檔案": "Project files", "專案檔案與編輯": "Project files and editor", "重新整理專案檔案": "Refresh project files",
   "專案檔案樹": "Project file tree", "搜尋專案檔名": "Search project filenames", "搜尋檔名或相對路徑": "Search filename or relative path",
   "正在讀取檔案…": "Loading files…", "載入更多檔案": "Load more files", "載入更多搜尋結果": "Load more search results",

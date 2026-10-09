@@ -6,6 +6,26 @@ import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(() => { cleanup(); localStorage.clear(); vi.unstubAllGlobals(); useUiStore.setState({ surface: "conversation", reviewOpen: false, locale: "zh-TW" }) })
+it("offers image attachments only for the selected model's declared image input", async () => {
+  const request = vi.fn(async (input: any) => {
+    if (input.kind === "desktop/provider/directory") return [{ id: "fixture", displayName: "Fixture", configured: true, models: [{ id: "text-model", inputModalities: ["text"] }, { id: "vision-model", inputModalities: ["text", "image"] }] }]
+    if (input.kind === "workspace/attachments/pick") return { paths: [], images: [], texts: [] }
+  })
+  render(<Workbench bridge={{ request, onEvent: () => () => {} }} workspaces={[{ id: "modality-draft", label: "Fixture", path: "D:/fixture" }]} selectedWorkspaceId="modality-draft"
+    capabilities={{ "session-create": ["1"], "desktop-draft-create": ["1"], "desktop-input": ["1"], "prompt-context": ["1"], "prompt-images": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} />)
+  fireEvent.click(screen.getByRole("button", { name: "選擇模型" }))
+  fireEvent.click(await screen.findByRole("button", { name: "text-model" }))
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "選擇模型" })).toBeNull())
+  fireEvent.click(screen.getByRole("button", { name: "新增附件" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "workspace/attachments/pick", workspaceId: "modality-draft", allowImages: false }))
+  fireEvent.click(screen.getByRole("button", { name: "text-model" }))
+  fireEvent.click(await screen.findByRole("button", { name: "vision-model" }))
+  await waitFor(() => expect(screen.queryByRole("dialog", { name: "選擇模型" })).toBeNull())
+  fireEvent.click(screen.getByRole("button", { name: "新增附件" }))
+  await waitFor(() => expect(request).toHaveBeenLastCalledWith({ kind: "workspace/attachments/pick", workspaceId: "modality-draft", allowImages: true }))
+  expect(request.mock.calls.some(([input]) => input.kind === "session/create")).toBe(false)
+})
+
 it("keeps model, effort, text and attachment as a draft until submit; failed admission retries the same session and token", async () => {
   vi.stubGlobal("crypto", webcrypto)
   let attempt = 0

@@ -20,9 +20,9 @@
 .source-editor-toolbar .row-meta { margin-right: auto; }
 .source-editor-toolbar button { display: inline-flex; align-items: center; gap: 4px; }
 .source-editor-body { display: flex; overflow: hidden; height: 360px; max-height: 640px; min-height: 240px; resize: vertical; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-surface, transparent); }
-.source-editor-lines { flex-shrink: 0; overflow: hidden; height: 100%; padding: 8px 10px; color: var(--ih-muted); text-align: right; user-select: none; font: 12px/20px Consolas, monospace; border-right: 1px solid var(--ih-divider); box-sizing: border-box; }
+.source-editor-lines { flex-shrink: 0; overflow: hidden; height: 100%; padding: 8px 10px; color: var(--ih-muted); text-align: right; user-select: none; font-family: Consolas, monospace; font-size: inherit; line-height: inherit; border-right: 1px solid var(--ih-divider); box-sizing: border-box; }
 .source-editor-lines span { display: block; }
-.source-editor-body textarea { flex: 1; min-width: 0; height: 100%; border: 0; border-radius: 0; resize: none; padding: 8px; margin: 0; background: transparent; color: var(--ih-text); font: 12px/20px Consolas, monospace; tab-size: 2; white-space: pre; overflow: auto; box-sizing: border-box; }
+.source-editor-body textarea { flex: 1; min-width: 0; height: 100%; border: 0; border-radius: 0; resize: none; padding: 8px; margin: 0; background: transparent; color: var(--ih-text); font-family: Consolas, monospace; font-size: inherit; line-height: inherit; tab-size: 2; white-space: pre; overflow: auto; box-sizing: border-box; }
 .source-editor-body textarea:focus-visible { outline: 1px solid var(--ih-accent); outline-offset: -1px; }
 .project-files-pane { border-bottom: 1px solid var(--ih-divider); padding-bottom: 16px; margin-bottom: 16px; }
 .project-explorer { max-height: 300px; overflow: auto; border: 1px solid var(--ih-divider); border-radius: 6px; padding: 8px; }

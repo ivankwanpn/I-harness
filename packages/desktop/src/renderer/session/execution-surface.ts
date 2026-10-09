@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
 /** Every request belongs to a mount/scope generation, including mutations. */
-export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: string, poll = false) {
+export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: string, poll = false, active = true) {
   const [state, setState] = useState<T>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
@@ -18,12 +18,18 @@ export function useExecutionSurface<T>(read: () => Promise<unknown>, scope: stri
     generation.current++; ticket.current++; pending.current = false
     setState(undefined); setError(undefined); setBusy(false)
     void refresh()
-    const timer = poll ? setInterval(() => { if (!pending.current) void refresh() }, 1500) : undefined
-    return () => { generation.current++; ticket.current++; if (timer) clearInterval(timer) }
-  }, [scope, poll, refresh])
+    return () => { generation.current++; ticket.current++ }
+  }, [scope, refresh])
+  useEffect(() => {
+    if (!poll || !active) return
+    const timer = setInterval(() => { if (!pending.current) void refresh() }, 1500)
+    return () => clearInterval(timer)
+  }, [scope, poll, active, refresh])
   async function act(run: () => Promise<unknown>, after?: (value: unknown) => void, refreshAfter = true) {
     if (pending.current) return false
     pending.current = true; setBusy(true); setError(undefined)
+    // Reads begun before this operation cannot replace its newer result.
+    ticket.current++
     const current = generation.current
     try {
       const value = await run()

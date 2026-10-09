@@ -8,7 +8,7 @@ type OutcomeRow = Extract<TimelineRow, { kind: "outcome" }>
 describe("projectTimeline", () => {
   it("keeps searchable text visible when a historical window starts after the tool call", () => {
     const row = projectHistoryTimeline([{ type: "tool/result", name: "read", callId: "old", seq: 900, output: "old searchable output" }])[0]!
-    expect(row).toMatchObject({ seqs: [900], kind: "other", detail: '"old searchable output"' })
+    expect(row).toMatchObject({ seqs: [900], kind: "tool", name: "read", output: "old searchable output", resultReceived: true })
   })
   it("shows a live reasoning block and replaces it with its canonical record using a stable row id", () => {
     const chunks: WireEvent[] = [

@@ -92,6 +92,7 @@ export type DesktopRequest =
   | { kind: "desktop/provider/probe/cancel"; workspaceId: string; token: string }
   | { kind: "desktop/provider/mutate"; workspaceId: string; command: ProviderCommand }
   | { kind: "window/control"; action: "minimize" | "toggle-maximize" | "close" }
+  | { kind: "window/state" }
   | { kind: "window/reset-bounds" | "desktop/local/state" }
   | { kind: "desktop/local/configure"; notifications?: boolean; locale?: "zh-TW" | "en"; terminalShell?: TerminalShellChoice; terminalFontFamily?: string; followupDelivery?: "queue" | "steer" }
   | { kind: "desktop/session/search"; workspaceId: string; query: string; sessionId?: string; limit?: number }
@@ -135,6 +136,7 @@ export type DesktopRequest =
   | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
 export type DesktopEvent =
+  | { kind: "window/state"; maximized: boolean }
   | {
       kind: "sdk/notification"
       workspaceId: string

@@ -161,7 +161,15 @@ export function createAssemblyExecutionRuntime(options: ExecutionRuntimeOptions)
       return Promise.all(attempts).then(() => {})
     },
     async status() {
-      const policy = compileExecutionPolicy({ mode: options.standing().mode, owner: options.owner, authority: options.authority() })
+      const authority = options.authority()
+      // Revocation is an observed session state, not a failed settings read.
+      // Do not compile a grant or probe a backend for an unavailable owner.
+      if (authority.kind === "revoked" || authority.kind === "unavailable") return {
+        authority: authority.kind, windowsSandboxBackend: selected, wslExecution, availability: "unavailable" as const,
+        detail: `Execution authority ${authority.kind}: ${authority.reason}`,
+        activeExecutions: supervisor.list().map(execution => execution.handle.receipt),
+      }
+      const policy = compileExecutionPolicy({ mode: options.standing().mode, owner: options.owner, authority })
       const spec = selected === "wsl" ? snapshotProcessSpec({ executionTarget: "wsl", argv: ["/bin/bash", "--version"], cwd: policy.primaryRoot,
         env: { PATH: [...(wslExecution.runtimePath ?? []), "/usr/bin", "/bin"].join(":"), LANG: "C" }, owner: policy.owner,
         transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt" }) : undefined

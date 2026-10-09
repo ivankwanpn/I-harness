@@ -9,27 +9,30 @@ import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wi
 import { Button } from "../vendor/opencode/Button.tsx"
 import { SearchInput } from "../vendor/zcode/SearchInput.tsx"
 import { SettingsDialog } from "./SettingsDialog.tsx"
+import { SettingsDraftScope, useSettingsDraft } from "./settings-drafts.tsx"
 
 /** Displays the backend directory; loading never probes a provider endpoint. */
-export function ProviderDirectory({ bridge, workspaceId, showHeading = true }: { bridge: DesktopBridge; workspaceId: string; showHeading?: boolean }) {
-  return <ProviderDirectoryContent key={workspaceId} bridge={bridge} workspaceId={workspaceId} showHeading={showHeading} />
+export function ProviderDirectory({ bridge, workspaceId, showHeading = true, active = true }: { bridge: DesktopBridge; workspaceId: string; showHeading?: boolean; active?: boolean }) {
+  return <SettingsDraftScope owner={bridge}><ProviderDirectoryContent key={workspaceId} bridge={bridge} workspaceId={workspaceId} showHeading={showHeading} active={active} /></SettingsDraftScope>
 }
 
-function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge: DesktopBridge; workspaceId: string; showHeading: boolean }) {
+function ProviderDirectoryContent({ bridge, workspaceId, showHeading, active }: { bridge: DesktopBridge; workspaceId: string; showHeading: boolean; active: boolean }) {
   const t = useText()
   const [rows, setRows] = useState<DirectoryRow[]>()
   const [error, setError] = useState<string>()
   const [reload, setReload] = useState(0)
-  const [adding, setAdding] = useState(false)
+  const [adding, setAdding] = useSettingsDraft(["providers", workspaceId, "adding"], false)
   const [addingBusy, setAddingBusy] = useState(false)
   const addTrigger = useRef<HTMLButtonElement>(null)
   const [saved, setSaved] = useState(false)
   const [capabilityNotice, setCapabilityNotice] = useState(false)
-  const [selectedId, setSelectedId] = useState<string>()
-  const [query, setQuery] = useState("")
+  const [selectedId, setSelectedId] = useSettingsDraft<string | undefined>(["providers", workspaceId, "selected"], undefined)
+  const [query, setQuery] = useSettingsDraft(["providers", workspaceId, "query"], "")
+  const [visited, setVisited] = useState<ReadonlySet<string>>(() => new Set())
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const visibleRows = rows?.filter((row) => !normalizedQuery || `${row.displayName} ${row.id}`.toLocaleLowerCase().includes(normalizedQuery))
   const selected = visibleRows?.find((row) => row.id === selectedId) ?? visibleRows?.find((row) => row.configured) ?? visibleRows?.[0]
+  useEffect(() => { if (selected) setVisited(previous => previous.has(selected.id) ? previous : new Set([...previous, selected.id])) }, [selected?.id])
   const save = async (command: ProviderCommand) => {
     setSaved(false)
     await bridge.request({ kind: "desktop/provider/mutate", workspaceId, command })
@@ -54,12 +57,12 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
     })
     return () => { active = false }
   }, [bridge, workspaceId, reload])
-  return <section className="provider-directory" aria-label={t("模型與提供商")}>
+  return <section hidden={!active} className="provider-directory" aria-label={t("模型與提供商")}>
     <header className="provider-directory-heading">{showHeading ? <h2>{t("模型與提供商")}</h2> : <span />}
     <Button variant="secondary" size="small" icon={<Plus size={16} />} onClick={(event) => { addTrigger.current = event.currentTarget; setAddingBusy(false); setAdding(true) }}>{t("新增提供商")}</Button></header>
     {saved ? <p role="status">{t("設定已儲存")}</p> : null}
     {capabilityNotice ? <p className="provider-capability-notice" role="status">{t("輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。")}</p> : null}
-    {adding ? <SettingsDialog title={t("新增提供商")} closeLabel={t("關閉新增提供商")} busy={addingBusy} onClose={closeAdding} initialFocusSelector=".provider-editor input:not(:disabled)"><ProviderEditor onSave={save} onClose={closeAdding} onBusyChange={setAddingBusy} /></SettingsDialog> : null}
+    {adding ? <SettingsDialog active={active} title={t("新增提供商")} closeLabel={t("關閉新增提供商")} busy={addingBusy} onClose={closeAdding} initialFocusSelector=".provider-editor input:not(:disabled)"><ProviderEditor draftIdentity={["providers", workspaceId, "new"]} onSave={save} onClose={closeAdding} onBusyChange={setAddingBusy} /></SettingsDialog> : null}
     {error ? <div role="alert"><p>{error}</p><button onClick={() => setReload((value) => value + 1)}>{t("重試")}</button></div> : null}
     {rows === undefined ? error ? null : <p role="status">{t("讀取提供商目錄中…")}</p>
       : rows.length === 0 ? <p>{t("沒有可用的提供商")}</p>
@@ -69,7 +72,7 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading }: { bridge
             <Server size={16} aria-hidden="true" /><span>{row.displayName}<small>{row.id}</small></span>
           </button>) : <p className="muted">{t("沒有符合的提供商")}</p>}
         </nav>
-        <div className="provider-detail">{selected ? <ProviderCard key={selected.id} row={selected} onSave={save} bridge={bridge} workspaceId={workspaceId} /> : null}</div>
+        <div className="provider-detail">{rows.filter(row => row.id === selected?.id || visited.has(row.id)).map(row => <ProviderCard key={row.id} active={active && row.id === selected?.id} row={row} onSave={save} bridge={bridge} workspaceId={workspaceId} />)}</div>
       </div></>}
   </section>
 }

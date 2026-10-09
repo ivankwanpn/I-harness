@@ -26,12 +26,27 @@ it("shows an attached user image after sending and opens a larger preview", () =
   fireEvent.click(screen.getByRole("button", { name: "probe.png" }))
   const dialog = screen.getByRole("dialog")
   expect(dialog.querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,iVBORw0KGgo=")
-  expect(dialog.parentElement).toBe(document.body)
+  expect(dialog.parentElement?.parentElement).toBe(document.body)
   viewport.visible = false
   view.rerender(<Timeline rows={[...rows]} />)
   expect(screen.getByRole("dialog")).toBeTruthy()
   fireEvent.keyDown(document, { key: "Escape" })
   expect(screen.queryByRole("dialog")).toBeNull()
+})
+
+it("owns image preview focus and preserves IME composition before restoring the trigger", () => {
+  render(<Timeline rows={[{ id: "image", kind: "message", role: "user", text: "Image", images: [{ mediaType: "image/png", dataBase64: "iVBORw0KGgo=", name: "focus.png" }] }]} />)
+  const trigger = screen.getByRole("button", { name: "focus.png" })
+  trigger.focus(); fireEvent.click(trigger)
+  const dialog = screen.getByRole("dialog", { name: "focus.png" })
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "關閉" }))
+  fireEvent.compositionStart(dialog)
+  fireEvent.keyDown(document, { key: "Escape", isComposing: true })
+  expect(screen.getByRole("dialog")).toBe(dialog)
+  fireEvent.compositionEnd(dialog)
+  fireEvent.click(screen.getByRole("button", { name: "關閉" }))
+  expect(screen.queryByRole("dialog")).toBeNull()
+  expect(document.activeElement).toBe(trigger)
 })
 
 it("collapses intermediate work while keeping the final reply visible", () => {
@@ -43,6 +58,26 @@ it("collapses intermediate work while keeping the final reply visible", () => {
   expect(screen.getByRole("button", { name: "工具詳情 read" })).toBeTruthy()
   expect(screen.getByText("Final reply")).toBeTruthy()
   expect(screen.getByText("Task")).toBeTruthy()
+})
+
+it("creates the completed work disclosure only after the turn ends while keeping ongoing exchanges visible", () => {
+  const events = [{type:"turn/start" as const,seq:0},{type:"user/message" as const,text:"Task",seq:1},
+    {type:"assistant/message" as const,text:"Checking files",seq:2},
+    {type:"tool/call" as const,callId:"r",name:"read",args:{path:"a.md"},seq:3},
+    {type:"user/message" as const,text:"Also check the dialogs",seq:4}]
+  const view=render(<Timeline rows={projectTimeline(events)} running />)
+  expect(screen.queryByRole("button",{name:"工作過程"})).toBeNull()
+  expect(screen.getByText("Checking files")).toBeTruthy()
+  expect(screen.getByText("Also check the dialogs")).toBeTruthy()
+  expect(screen.getByRole("button",{name:"工具詳情 read"})).toBeTruthy()
+  view.rerender(<Timeline rows={projectTimeline([...events,{type:"assistant/message",text:"Final reply",seq:5},{type:"turn/end",seq:6}])} />)
+  expect(screen.getByRole("button",{name:"工作過程"}).getAttribute("aria-expanded")).toBe("false")
+  expect(screen.queryByText("Checking files")).toBeNull()
+  expect(screen.getByText("Final reply")).toBeTruthy()
+  expect(screen.getByText("Also check the dialogs")).toBeTruthy()
+  fireEvent.click(screen.getByRole("button",{name:"工作過程"}))
+  expect(screen.getByText("Checking files")).toBeTruthy()
+  expect(screen.getByRole("button",{name:"工具詳情 read"})).toBeTruthy()
 })
 
 it("shows persisted model reasoning inside expandable work details", () => {

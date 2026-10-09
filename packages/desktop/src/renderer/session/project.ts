@@ -3,18 +3,22 @@ import type { Message } from "../design/i18n.ts"
 import { mergeReasoningChunks, type ReasoningChunk } from "./reasoning-progress.ts"
 
 export type WireEvent = HistoryRange["events"][number]
+export type ToolResultReference = Extract<WireEvent, { type: "context/result-ref" }>["ref"]
+export type RecordedCodeEvent = Extract<WireEvent, { type: "code/cell" | "code/output" | "code/store" }>
 
 export type TimelineRow = (
   | { id: string; kind: "message"; role: "user" | "assistant"; text: string; images?: ImageInput[]; transient?: true }
-  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; groupScope?: string }
+  | { id: string; kind: "tool"; name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; dispatched?: true; cellId?: string; parentCallId?: string; resultRefs?: ToolResultReference[]; groupScope?: string }
   | { id: string; kind: "outcome"; flags: { refused?: true; truncated?: true; empty?: true } }
-  | { id: string; kind: "other"; label: string; title?: string; detail?: string; transient?: true }
+  | { id: string; kind: "other"; label: string; title?: string; detail?: string; codeActivity?: RecordedCodeEvent; transient?: true }
 ) & { turn?: { id: string; complete: boolean }; seqs?: number[] }
 
 /** Pure fold of durable records and live chunks, with stable rendered ids. */
 export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   const rows: TimelineRow[] = []
   const toolIndex = new Map<string, number>()
+  const referenceCalls = new Map<string, Set<number>>()
+  const resultReferences: Array<{ event: Extract<WireEvent, { type: "context/result-ref" }>; rowId: string }> = []
   const reasoningIndex = new Map<string, number>()
   const reasoningChunks = new Map<string, ReasoningChunk[]>()
   const completedReasoning = new Set<string>()
@@ -31,8 +35,7 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
     if (event.type === "agent/input/admitted") { admittedInputs.set(event.inputId, event); continue }
     if (event.type === "agent/input/promoted") { promotedInput = admittedInputs.get(event.inputId); continue }
     if (event.type === "agent/input/cancelled") { admittedInputs.delete(event.inputId); if (promotedInput?.inputId === event.inputId) promotedInput = undefined; continue }
-    if (event.type === "tool/dispatch" || event.type === "session/title" || event.type === "context/result-ref"
-      || event.type === "sandbox/mode") continue
+    if (event.type === "session/title" || event.type === "sandbox/mode") continue
     if (event.type === "reasoning" || event.type === "reasoning/chunk") {
       const streamId = event.streamId
       if (event.type === "reasoning/chunk" && completedReasoning.has(event.streamId)) continue
@@ -62,13 +65,44 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
         if (streamId !== undefined) reasoningIndex.set(streamId, rows.length)
         appendRow(row)
       } else rows[rowIndex] = row
-    } else if (event.type === "tool/call") {
-      toolIndex.set(event.callId, rows.length)
-      appendRow({ id: `tool:${event.callId}`, kind: "tool", name: event.name, args: event.args, output: undefined, ...(groupScope ? { groupScope } : {}) })
-    } else if (event.type === "tool/result" && toolIndex.has(event.callId)) {
-      const rowIndex = toolIndex.get(event.callId)!
-      const previous = rows[rowIndex]
-      if (previous?.kind === "tool") rows[rowIndex] = { ...previous, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}) }
+    } else if (event.type === "tool/call" || event.type === "code/call") {
+      const nested = event.type === "code/call"
+      const id = nested ? `code-tool:${event.cellId}:${event.callId}` : `tool:${event.callId}`
+      toolIndex.set(id, rows.length)
+      const calls = referenceCalls.get(event.callId) ?? new Set<number>(); calls.add(rows.length); referenceCalls.set(event.callId, calls)
+      appendRow({ id, kind: "tool", name: event.name, args: event.args, output: undefined,
+        ...(nested ? { cellId: event.cellId, ...(event.parentCallId ? { parentCallId: event.parentCallId } : {}), groupScope: `${groupScope ?? "recorded"}:cell:${event.cellId}:parent:${event.parentCallId ?? "unknown"}` } : groupScope ? { groupScope } : {}) })
+    } else if (event.type === "tool/dispatch" || event.type === "code/dispatch") {
+      const id = event.type === "code/dispatch" ? `code-tool:${event.cellId}:${event.callId}` : `tool:${event.callId}`
+      const rowIndex = toolIndex.get(id)
+      const previous = rowIndex === undefined ? undefined : rows[rowIndex]
+      if (previous?.kind === "tool") rows[rowIndex!] = { ...previous, dispatched: true }
+      else appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, title: `${event.type} · ${event.callId}`, detail: JSON.stringify(event, null, 2) })
+    } else if (event.type === "tool/result" || event.type === "code/result") {
+      const nested = event.type === "code/result"
+      const id = nested ? `code-tool:${event.cellId}:${event.callId}` : `tool:${event.callId}`
+      const rowIndex = toolIndex.get(id)
+      const previous = rowIndex === undefined ? undefined : rows[rowIndex]
+      if (previous?.kind === "tool") rows[rowIndex!] = { ...previous, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}) }
+      else {
+        toolIndex.set(id, rows.length)
+        const calls = referenceCalls.get(event.callId) ?? new Set<number>(); calls.add(rows.length); referenceCalls.set(event.callId, calls)
+        appendRow({ id, kind: "tool", name: event.name, output: event.output, resultReceived: true, ...(event.isError ? { isError: true as const } : {}),
+          ...(nested ? { cellId: event.cellId, groupScope: `${groupScope ?? "recorded"}:cell:${event.cellId}` } : groupScope ? { groupScope } : {}) })
+      }
+    } else if (event.type === "context/result-ref") {
+      // Older/opaque bookkeeping has no readable owner or label. Do not
+      // manufacture a result card from that incomplete marker.
+      if (typeof event.ref.callId !== "string" || typeof event.ref.label !== "string") continue
+      const rowId = `event:${event.seq ?? index}`
+      resultReferences.push({ event, rowId })
+      appendRow({ id: rowId, kind: "other", label: event.type, title: `Retained result · ${event.ref.label}`, detail: JSON.stringify(event.ref, null, 2) })
+    } else if (event.type === "code/cell" || event.type === "code/output" || event.type === "code/store") {
+      const title = event.type === "code/cell" ? `Code Mode · ${event.cellId} · ${event.state}` : event.type === "code/store" ? `Code Mode store candidate · ${event.cellId}` : `Code Mode output · ${event.cellId}`
+      // Source, errors, emitted media and candidate values can be large. Keep
+      // the durable payload intact for the lazy renderer instead of eagerly
+      // formatting it or mounting it in the generic activity disclosure.
+      appendRow({ id: `event:${event.seq ?? index}`, kind: "other", label: event.type, title, codeActivity: event })
     } else if (event.type === "step/end" && (event.refused === true || event.truncated === true || event.empty === true)) {
       appendRow({
         id: `step:${event.seq ?? index}`,
@@ -124,7 +158,18 @@ export function projectTimeline(events: readonly WireEvent[]): TimelineRow[] {
   }
   // Tool-only rounds still persist an assistant/message for provider replay.
   // They carry no visible prose and must not become empty final bubbles.
-  return rows.filter(row => row.kind !== "message" || row.role !== "assistant" || row.text.trim().length > 0)
+  const attachedReferences = new Set<string>()
+  for (const { event, rowId } of resultReferences) {
+    const candidates = referenceCalls.get(event.ref.callId)
+    // A bounded historical window may omit the owner. Ambiguous nested IDs
+    // remain separate metadata instead of attaching to an arbitrary call.
+    if (candidates?.size !== 1) continue
+    const rowIndex = [...candidates][0]!, row = rows[rowIndex]
+    if (row?.kind !== "tool") continue
+    rows[rowIndex] = { ...row, resultRefs: [...(row.resultRefs ?? []), event.ref] }
+    attachedReferences.add(rowId)
+  }
+  return rows.filter(row => !attachedReferences.has(row.id) && (row.kind !== "message" || row.role !== "assistant" || row.text.trim().length > 0))
 }
 
 function readableEventDetail(event: WireEvent): string | undefined {
@@ -143,7 +188,10 @@ export function projectHistoryTimeline(events: readonly WireEvent[]): TimelineRo
   const byId = new Map(rows.map(row => [row.id, row]))
   for (const event of events) {
     if (event.seq === undefined) continue
-    const groupedId = event.type === "tool/call" || event.type === "tool/result" ? `tool:${event.callId}` : event.type === "reasoning" && event.streamId ? `reasoning:${event.streamId}` : undefined
+    const groupedId = event.type === "tool/call" || event.type === "tool/result" || event.type === "tool/dispatch" ? `tool:${event.callId}`
+      : event.type === "code/call" || event.type === "code/result" || event.type === "code/dispatch" ? `code-tool:${event.cellId}:${event.callId}`
+        : event.type === "context/result-ref" ? rows.find(row => row.kind === "tool" && row.resultRefs?.some(ref => ref === event.ref))?.id
+          : event.type === "reasoning" && event.streamId ? `reasoning:${event.streamId}` : undefined
     const row = (groupedId && byId.get(groupedId)) || byId.get(`message:${event.seq}`) || byId.get(`event:${event.seq}`) || byId.get(`step:${event.seq}`) || byId.get(`chunk:${event.seq}`)
     if (!row) continue
     row.seqs.push(event.seq)

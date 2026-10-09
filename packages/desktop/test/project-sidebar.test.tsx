@@ -20,7 +20,7 @@ const dashboard = (title: string): SessionDashboardResult => ({ sessions: [{ id:
 function fixture(handle?: (request: DesktopRequest) => unknown) {
   const listeners = new Set<(event: DesktopEvent) => void>()
   const bridge: DesktopBridge = {
-    request: vi.fn(async (request) => handle?.(request) ?? (request.kind === "session/dashboard" ? dashboard(`Chat ${request.workspaceId}`) : {})),
+    request: vi.fn(async (request) => handle?.(request) ?? (request.kind === "session/dashboard" ? dashboard(`Chat ${request.workspaceId}`) : request.kind === "desktop/session/navigation/state" ? { s1: { pinned: false, unread: false } } : {})),
     onEvent: vi.fn((listener) => { listeners.add(listener); return () => { listeners.delete(listener) } }),
   }
   const props: ProjectSidebarProps = {
@@ -38,7 +38,7 @@ describe("project sidebar hierarchy", () => {
     expect(Array.from(view.container.querySelectorAll(".project-sidebar-project-name")).map((row) => row.textContent)).toEqual(["Pinned", "Product"])
     expect(screen.getByText("主要資料夾")).toBeTruthy()
     expect(screen.getByText("未分類資料夾")).toBeTruthy()
-    expect(screen.getByText("Current chat")).toBeTruthy()
+    expect(await screen.findByText("Current chat")).toBeTruthy()
     await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/navigation/state", workspaceId: "w1" }))
     expect(bridge.request).not.toHaveBeenCalledWith({ kind: "session/dashboard", workspaceId: "w1" })
     expect((bridge.request as ReturnType<typeof vi.fn>).mock.calls.every(([request]) => request.workspaceId === "w1" || request.kind === "desktop/session/navigation/state")).toBe(true)
@@ -60,7 +60,7 @@ describe("project sidebar hierarchy", () => {
   it("uses the latest parent dashboard for the selected folder", async () => {
     const { props } = fixture()
     const view = render(<ProjectSidebar {...props} />)
-    expect(screen.getByText("Current chat")).toBeTruthy()
+    expect(await screen.findByText("Current chat")).toBeTruthy()
     view.rerender(<ProjectSidebar {...props} dashboard={dashboard("Latest selected chat")} />)
     expect(screen.getByText("Latest selected chat")).toBeTruthy()
     expect(screen.queryByText("Current chat")).toBeNull()
@@ -179,4 +179,47 @@ it("shows a moved conversation in its destination project through its original s
   fireEvent.click(chat)
   expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", "p2")
   expect(props.onManageSession).toHaveBeenCalledWith("w1", "s1", "read")
+})
+
+it("keeps a confirmed removed-project conversation discoverable without changing its saved owner", async () => {
+  const stored = { s1: { projectId: "removed-project", pinned: false, unread: false }, s2: { pinned: false, unread: false } }
+  const { props, bridge } = fixture(request => request.kind === "desktop/session/navigation/state" ? stored : request.kind === "session/dashboard" ? { sessions: [{ id: "s1", title: "Chat w1", live: false }, { id: "s2", title: "Ordinary unbound chat", live: false }] } : undefined)
+  const removed = { ...projects[0]!, id: "removed-project", name: "Removed group", workspaceIds: ["w1"] }
+  const view = render(<ProjectSidebar {...props} projects={[removed, ...projects]} selectedProjectId={removed.id} workspaces={[workspaces[0]!]} />)
+  await screen.findByText("Current chat")
+  view.rerender(<ProjectSidebar {...props} projects={projects} selectedProjectId={undefined} selectedWorkspaceId={undefined} selectedSessionId={undefined} dashboard={undefined} workspaces={[workspaces[0]!]} />)
+  const ungrouped = await screen.findByRole("button", { name: "未分類資料夾" })
+  fireEvent.click(ungrouped)
+  const folder = within(ungrouped.closest("li")! as HTMLElement)
+  fireEvent.click(folder.getByRole("button", { name: "Frontend" }))
+  const conversation = await folder.findByText("Chat w1")
+  expect(folder.queryByText("Ordinary unbound chat")).toBeNull()
+  fireEvent.click(conversation)
+  expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", undefined)
+  expect(stored.s1.projectId).toBe("removed-project")
+  expect((bridge.request as ReturnType<typeof vi.fn>).mock.calls.every(([request]) => request.kind !== "desktop/session/project/bind" && request.kind !== "desktop/session/batch")).toBe(true)
+})
+
+it.each(["rejected", "missing-row", "malformed-owner"] as const)("excludes %s owner lookup rather than showing the conversation as unassigned", async kind => {
+  const { props } = fixture(request => {
+    if (request.kind !== "desktop/session/navigation/state") return undefined
+    if (kind === "rejected") return Promise.reject(new Error("Owner lookup failed"))
+    return kind === "missing-row" ? {} : { s1: { pinned: false, unread: false, projectId: null } }
+  })
+  render(<ProjectSidebar {...props} projects={[]} workspaces={[workspaces[0]!]} selectedProjectId={undefined} />)
+  if (kind === "rejected") await screen.findAllByText(/Owner lookup failed/)
+  else await screen.findByText("尚無會話")
+  expect(screen.queryByText("Current chat")).toBeNull()
+  expect(props.onSelectSession).not.toHaveBeenCalled()
+})
+
+it("invalidates a previously confirmed row when the refreshed owner lookup fails", async () => {
+  let fail = false
+  const { props, emit } = fixture(request => request.kind === "desktop/session/navigation/state" && fail ? Promise.reject(new Error("Owner lookup failed")) : undefined)
+  render(<ProjectSidebar {...props} projects={[]} workspaces={[workspaces[0]!]} selectedProjectId={undefined} />)
+  await screen.findByText("Current chat")
+  fail = true
+  emit({ kind: "sdk/notification", workspaceId: "w1", method: "desktop/session/navigation/changed", params: {} })
+  await screen.findAllByText(/Owner lookup failed/)
+  await waitFor(() => expect(screen.queryByText("Current chat")).toBeNull())
 })

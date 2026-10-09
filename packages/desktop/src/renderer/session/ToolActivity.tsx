@@ -1,61 +1,51 @@
-import { useMemo, useState } from "react"
+import { useState } from "react"
+import { Braces, FileSearch, FileText, Globe, PencilLine, Plug, Terminal, Wrench } from "lucide-react"
 import { ToolSummaryRow } from "../vendor/zcode/ToolSummaryRow.tsx"
 import { useText } from "../design/i18n.ts"
-import { toolExternalFileTarget, toolFilePath, toolProjectFileRef, type FileNavigation } from "./file-navigation.ts"
-import { useProjectFilesText } from "../review/project-files-text.ts"
+import type { FileNavigation } from "./file-navigation.ts"
+import type { ToolResultReference } from "./project.ts"
+import { RecordedFileLink } from "./RecordedFileLink.tsx"
+import { RecordedToolOutput } from "./RecordedToolOutput.tsx"
+import { toolFamily, toolState, toolSummary, type ToolFamily, type ToolState } from "./tool-presentation.ts"
+import { useToolText } from "./tool-text.ts"
+import "./tool-output.css"
 
-type ToolImage = { mediaType: string; dataBase64: string; name?: string; width?: number; height?: number }
+const icons = { command: Terminal, read: FileText, write: PencilLine, search: FileSearch, web: Globe, code: Braces, mcp: Plug, other: Wrench }
+const titles: Record<ToolFamily, [string, string]> = { command: ["終端", "Terminal"], read: ["讀取", "Read"], write: ["檔案變更", "File changes"], search: ["搜尋", "Search"], web: ["網頁", "Web"], code: ["Code Mode", "Code Mode"], mcp: ["MCP", "MCP"], other: ["工具", "Tool"] }
+const statuses: Record<ToolState, [string, string]> = { pending: ["尚未回報結果", "No result recorded yet"], dispatched: ["已派發，等待結果", "Dispatched, awaiting result"], received: ["已收到結果", "Result received"], running: ["執行中", "Running"], failed: ["執行失敗", "Failed"], cancelled: ["已取消", "Cancelled"], stopped: ["已停止", "Stopped"], interrupted: ["已中斷", "Interrupted"] }
 
-function resultImages(output: unknown): ToolImage[] {
-  if (!output || typeof output !== "object" || Array.isArray(output)) return []
-  const images = (output as { images?: unknown }).images
-  if (!Array.isArray(images)) return []
-  return images.filter((item): item is ToolImage =>
-    item !== null && typeof item === "object" && typeof item.mediaType === "string" && item.mediaType.startsWith("image/") && typeof item.dataBase64 === "string")
+export interface ToolActivityProps {
+  name: string
+  args?: unknown
+  output?: unknown
+  resultReceived?: true
+  isError?: true
+  dispatched?: true
+  cellId?: string
+  parentCallId?: string
+  resultRefs?: ToolResultReference[]
+  expanded?: boolean
+  onToggle?(): void
+  navigation?: FileNavigation
+  onPreview?(preview: { src: string; name: string }): void
 }
 
-function resultFailed(output: unknown): boolean {
-  if (!output || typeof output !== "object" || Array.isArray(output)) return false
-  const row = output as Record<string, unknown>
-  return (row.error !== undefined && row.error !== null && row.error !== "") || row.ok === false
-    || (typeof row.exitCode === "number" && row.exitCode !== 0)
-}
-
-function displayOutput(output: unknown, images: ToolImage[]): string {
-  if (typeof output === "string") return output
-  try {
-    if (images.length === 0) return JSON.stringify(output, null, 2)
-    const { images: _images, ...rest } = output as Record<string, unknown>
-    return JSON.stringify({ ...rest, images: images.map(({ dataBase64, ...image }) => ({
-      ...image,
-      bytes: Math.floor(dataBase64.length * 3 / 4) - (dataBase64.match(/=+$/)?.[0].length ?? 0),
-    })) }, null, 2)
-  } catch { return String(output) }
-}
-
-export function ToolActivity({ name, args, output, resultReceived, isError, expanded: controlled, onToggle, navigation }: { name: string; args?: unknown; output?: unknown; resultReceived?: true; isError?: true; expanded?: boolean; onToggle?(): void; navigation?: FileNavigation }) {
-  const t = useText()
-  const pf = useProjectFilesText()
+/** Read-only presentation of captured calls. Opening a card never runs a tool. */
+export function ToolActivity({ name, args, output, resultReceived, isError, dispatched, cellId, parentCallId, resultRefs, expanded: controlled, onToggle, navigation, onPreview }: ToolActivityProps) {
+  const t = useText(), tt = useToolText()
   const [localExpanded, setExpanded] = useState(false)
   const expanded = controlled ?? localExpanded
-  const projectNavigation = !!navigation?.projectRoots && !!navigation.onOpenProjectFile
-  const projectFile = navigation?.workspaceId && navigation.projectRoots && navigation.onOpenProjectFile ? toolProjectFileRef(name, args, navigation.workspaceId, navigation.projectRoots) : undefined
-  const path = projectFile?.path ?? (navigation && !projectNavigation ? toolFilePath(name, args, navigation.workspacePath) : undefined)
-  const external = !path && navigation?.onOpenExternalFile ? toolExternalFileTarget(name, args) : undefined
-  const images = useMemo(() => expanded ? resultImages(output) : [], [expanded, output])
-  const input = useMemo(() => {
-    if (!expanded || args === undefined) return undefined
-    if (typeof args === "string") return args
-    try { return JSON.stringify(args, null, 2) } catch { return String(args) }
-  }, [expanded, args])
-  const text = useMemo(() => {
-    if (!expanded || output === undefined) return undefined
-    return displayOutput(output, images)
-  }, [expanded, output, images])
-  return <div className="tool-activity">
-    <div className="tool-activity-heading"><ToolSummaryRow name={name} status={t(isError || resultFailed(output) ? "執行失敗" : resultReceived || output !== undefined ? "已收到結果" : "尚未回報結果")}
-      label={`${t("工具詳情")} ${name}`} expanded={expanded} onToggle={onToggle ?? (() => setExpanded((value) => !value))} />
-      {path && navigation ? <button type="button" className="tool-file-link link-button" title={projectFile ? `${projectFile.workspaceId} · ${path}` : path} aria-label={t("在成果面板開啟 {path}", { path })} onClick={() => projectFile && navigation.onOpenProjectFile ? navigation.onOpenProjectFile({ ...projectFile }) : navigation.onOpenFile(path)}>{path}</button> : external && navigation?.onOpenExternalFile ? <button type="button" className="tool-file-link link-button" title={external.reference.path} aria-label={pf("唯讀開啟 {path}", { path: external.reference.path })} onClick={() => navigation.onOpenExternalFile?.({ reference: { ...external.reference } })}>{external.reference.path} · {pf("唯讀")}</button> : null}</div>
-    {expanded ? <div className="tool-expanded-content">{input !== undefined ? <><div className="tool-detail-label">{t("呼叫參數")}</div><pre className="tool-output">{input}</pre></> : null}<div className="tool-detail-label">{t("執行輸出")}</div><pre className="tool-output">{text ?? t(isError ? "執行失敗" : resultReceived ? "已收到結果" : "尚未回報結果")}</pre>{images.length > 0 ? <div className="tool-result-images">{images.map((image, index) => <img key={index} src={`data:${image.mediaType};base64,${image.dataBase64}`} alt={image.name || `${t("圖片")} ${index + 1}`} loading="lazy" decoding="async" />)}</div> : null}</div> : null}
+  const family = toolFamily(name), state = toolState(name, output, resultReceived, isError, dispatched), Icon = icons[family]
+  const summary = toolSummary(name, args, output) ?? (family === "other" || family === "mcp" ? name : undefined)
+  return <div className="tool-activity tool-activity-recorded" data-tool-family={family} data-tool-state={state}>
+    <div className="tool-activity-heading">
+      <ToolSummaryRow name={name} title={tt(...titles[family])} summary={summary} status={tt(...statuses[state])} icon={<Icon size={15} aria-hidden="true" />} state={state}
+        label={`${t("工具詳情")} ${name}`} expanded={expanded} onToggle={onToggle ?? (() => setExpanded(value => !value))} />
+      <RecordedFileLink name={name} args={args} navigation={navigation} compact />
+    </div>
+    {expanded ? <div className="tool-expanded-content">
+      {cellId || parentCallId ? <div className="tool-result-metadata">{cellId ? <span>{tt("執行單元", "Cell")} <code>{cellId}</code></span> : null}{parentCallId ? <span>{tt("父呼叫", "Parent call")} <code>{parentCallId}</code></span> : null}</div> : null}
+      <RecordedToolOutput name={name} args={args} output={output} resultReceived={resultReceived} navigation={navigation} resultRefs={resultRefs} onPreview={onPreview} />
+    </div> : null}
   </div>
 }

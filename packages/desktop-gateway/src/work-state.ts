@@ -47,16 +47,20 @@ function validatedInput(input: DesktopTodoWriteInput): DesktopTodoWriteInput {
 /** Session events own Todo and Goal state. Reads scan the full log. Human
  * replacements carry their displayed revision so a stale editor cannot erase
  * a newer human or model snapshot. Hosts should share sessionFor with their
- * SessionService to keep cold edits and simultaneous model startup on one log. */
+ * SessionService to keep cold edits and simultaneous model startup on one log.
+ * Read-only inspection never enters that writable loader. */
 export function createDesktopWorkState(coordinator: SessionCoordinator, service: SessionService, options: { sessionFor?: (sessionId: string) => Promise<Session> } = {}) {
   const sessionFor = options.sessionFor ?? createDurableSessionLoader(coordinator)
   const writes = new Map<string, Promise<void>>()
   return {
     async read(sessionId: string): Promise<DesktopWorkStateView> {
       await coordinator.profile(sessionId)
-      const session = service.liveSession(sessionId) ?? (options.sessionFor
-        ? await sessionFor(sessionId)
-        : (await (coordinator.snapshot?.(sessionId) ?? coordinator.load(sessionId))).session)
+      let session = service.liveSession(sessionId)
+      if (!session) {
+        if (!coordinator.snapshot) throw new Error("Read-only work-state snapshots unavailable")
+        const saved = (await coordinator.snapshot(sessionId)).session
+        session = service.liveSession(sessionId) ?? saved
+      }
       return view(session)
     },
     async writeTodos(sessionId: string, input: DesktopTodoWriteInput): Promise<DesktopWorkStateView> {
@@ -67,8 +71,8 @@ export function createDesktopWorkState(coordinator: SessionCoordinator, service:
       await previous
       try {
         await coordinator.profile(sessionId)
-        const restored = service.liveSession(sessionId) ?? await sessionFor(sessionId)
-        const session = service.liveSession(sessionId) ?? restored
+        const restored = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? await sessionFor(sessionId)
+        const session = await service.writableSessionFor?.(sessionId, sessionFor) ?? service.liveSession(sessionId) ?? restored
         const actualRevision = view(session).todosRevision!
         if (actualRevision !== expectedRevision) throw new TodoRevisionConflictError(expectedRevision, actualRevision)
         // No await between compare and append: a live model tool cannot write

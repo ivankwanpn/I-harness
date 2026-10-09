@@ -301,9 +301,38 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   // resumed session has no predecessor to compare with and claims none.
   let prevFingerprints: string[] | undefined
 
+  type TurnLifecycle = { turnOpen: boolean; stepOpen: boolean; providerCompleted: boolean; stepFailed: boolean }
   async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
+    const lifecycle: TurnLifecycle = { turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false }
+    try { return await executeTurn(lifecycle, message, signal, images, inputId) }
+    catch (error) {
+      // Preparation hooks and context getters can refuse before the provider
+      // stream opens. Close only this run's live boundaries; cold recovery and
+      // tool outcomes remain owned by their existing paths.
+      if (lifecycle.turnOpen) {
+        try {
+          if (lifecycle.stepOpen) {
+            // An incomplete provider step must not replay partial tool calls.
+            // A completed provider/tool result keeps its existing provenance.
+            if (!lifecycle.providerCompleted && !lifecycle.stepFailed) append(deps.session, { type: "step/failed" })
+            append(deps.session, { type: "step/end" })
+          }
+          append(deps.session, { type: "turn/end" })
+          await deps.flush?.()
+        } catch (cause) {
+          const actionReason = error instanceof Error ? error.message : String(error)
+          const savingReason = cause instanceof Error ? cause.message : String(cause)
+          throw new AggregateError([error, cause], `${actionReason}; session saving failed: ${savingReason}`, { cause: error })
+        }
+      }
+      throw error
+    }
+  }
+
+  async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
     const abort = signal ?? deps.signal
     append(deps.session, { type: "turn/start" })
+    lifecycle.turnOpen = true
     // M25: host telemetry beside the session-log append (independent stream —
     // the session log itself is untouched; agent-invisible).
     deps.telemetry?.emit({ type: "turn/start", ts: Date.now(), data: { message } })
@@ -327,6 +356,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       deps.stepInputs?.claimAtStepBoundary()
       const stepStartSeq = deps.session.events.length
       append(deps.session, { type: "step/start" })
+      lifecycle.stepOpen = true
+      lifecycle.providerCompleted = false
+      lifecycle.stepFailed = false
 
       // M11 compaction: pressure check at the step boundary, before the model sees
       // the derived surface. Compaction only ever runs between steps.
@@ -584,10 +616,12 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         contextMeter.invalidate()
         flushReasoning()
         append(deps.session, { type: "step/failed" })
+        lifecycle.stepFailed = true
         throw error
       } finally {
         flushReasoning()
       }
+      lifecycle.providerCompleted = true
 
       // M5 T2: emitted ONLY on a completed round-trip, and only if something was
       // actually reported. The event count is the denominator for every number
@@ -661,6 +695,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: steps } })
 
       append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
+      lifecycle.stepOpen = false
 
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a
@@ -669,6 +704,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     }
 
     append(deps.session, { type: "turn/end" })
+    lifecycle.turnOpen = false
     // M25: turn/end + token/usage at the turn boundary. The token count is the
     // SAME estimate the M20 budget check uses (activeTokens over the derived
     // surface); guarded so an absent telemetry never pays for it.

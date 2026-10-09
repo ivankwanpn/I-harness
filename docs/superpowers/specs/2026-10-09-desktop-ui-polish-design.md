@@ -65,7 +65,7 @@ disposition, to validate through runtime operations:
 | Notifications | Keep notification preference/history/read/target workflow discoverable; no new duplicated bell/toolbar surface solely to reduce page count. |
 | Models/providers | Keep independent durable model, protocol and connection workflow. |
 | Execution/context | Rename to execution/permissions; keep runtime defaults, approval, sandbox, WSL, web and Code Mode. Put operational diagnostics in existing diagnostic surface or subordinate disclosure. |
-| Context/retrieval | Keep independent; retain explicit context-mode and renamed Code Context/claude-context origin labels requested by user. Human units, structured reference-folder rows, common action/maintenance/status treatments. |
+| Context/retrieval | User clarification on 2026-10-10: native Context Mode and Code Context have only on/off switches at the top of execution settings. Remove the separate destination and extra configuration controls; retain context-mode and claude-context origin labels and existing backend configuration. |
 | Subagents, Hooks, MCP | Keep separate coherent model/role, trust/script and server/connection workflows. |
 | Skills + Commands | Shared Resources destination with named persistent Skills/Commands tabs and searchable direct aliases; preserve kind/source/authoring/use semantics, drafts and deep navigation. |
 | Memory, Plugins | Keep independent durable data/package management workflows. |
@@ -75,6 +75,21 @@ disposition, to validate through runtime operations:
 Settings search covers field/function aliases as well as headings. Capability
 loading, missing workspace and truly unavailable service are distinct. Keep one
 concise contextual explanation rather than repeated navigation paragraphs.
+
+Confirmed context disposition, 2026-10-10: the settings destination count is
+**11**. Stored `context-subsystems`, `context-mode` and `claude-context` selections
+resolve to execution; function search aliases remain discoverable there.
+The former complex context page is not retained as a hidden product surface.
+Backend configuration, authored data, indexing and output metadata remain under
+their existing authority. Removing the advanced context UI does not reset or
+delete those settings or data.
+
+Unsaved provider, resource, hook, MCP and memory forms are retained by their real
+identity for the renderer app session. Private drafts are kept in memory, never
+in browser storage or a global settings file. Visited form bodies and pending
+editor owners survive navigation; inactive dialogs release modal ownership and
+hide their portals. Explicit operation readback remains valid while hidden,
+while hidden polling and notification-history subscriptions are paused.
 
 ### Normal agent workflow
 
@@ -92,6 +107,13 @@ pickers, queue/stop/retry, stages, subtasks, jobs, Todo, code/logs, pending appr
 and structured questions all receive the same visual/interaction treatment.
 Missing detail interfaces must be added where the backend actually supplies
 the capability, and every added action receives real operation evidence.
+
+User correction from the paired Codex screenshots: a work-stage disclosure is
+created only when the response turn finishes. While execution is active, show
+thinking/commentary/tools in their actual order without an early aggregate
+work-stage header. Completed work collapses into the summary above the separate
+final answer; expansion restores the intermediate recorded content. Preserve
+reader choices and never invent an elapsed duration when records lack time.
 
 ## Boundaries
 

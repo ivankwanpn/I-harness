@@ -26,6 +26,7 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
   useEffect(() => () => { draftVersion.current++ }, [])
   const existing = draft?.id ? projects.find((project) => project.id === draft.id) : undefined
   const staleDraft = !!(draft?.expectedUpdatedAt && existing && existing.updatedAt !== draft.expectedUpdatedAt && !busy)
+  const filteredProjects = projects.filter(project => project.name.toLowerCase().includes(query.trim().toLowerCase()))
   function closeEditor() { draftVersion.current++; setDraft(undefined); setConfirmRemoval(undefined); setError(undefined); trigger.current?.focus() }
   function edit(project?: ProjectEntry) {
     trigger.current = document.activeElement as HTMLElement
@@ -55,13 +56,14 @@ export function ProjectManager({ bridge, projects, workspaces, onChanged, onOpen
     {error && !draft && !confirmRemoval ? <p role="alert" className="error-text">{error}</p> : null}
     <p className="project-description">{t("每個會話可存取專案內全部資料夾；主要資料夾作為新會話的預設起點。")}</p>
     <div className="projects-list">
-      {projects.filter((project) => project.name.toLowerCase().includes(query.toLowerCase())).map((project) => <article className="project-list-row" key={project.id}>
+      {filteredProjects.map((project) => <article className="project-list-row" key={project.id}>
         <button type="button" className="project-open" disabled={busy} onClick={() => onOpen(project)}><Folder size={18} /><span><strong>{project.name}</strong><small>{project.workspaceIds.length ? project.workspaceIds.map((id) => folderMap.get(id)?.label ?? id).join(" · ") : t("尚未加入資料夾")}</small></span></button>
         <time className="muted">{new Date(project.updatedAt).toLocaleDateString()}</time>
         <button type="button" className="icon-button" aria-label={t(project.pinned ? "取消釘選專案 {name}" : "釘選專案 {name}", { name: project.name })} aria-pressed={project.pinned === true} disabled={busy} onClick={() => { void action(async () => { await bridge.request({ kind: "projects/save", input: { ...project, expectedUpdatedAt: project.updatedAt, pinned: !project.pinned } }); await onChanged() }) }}><Pin size={15} /></button>
         <button type="button" className="icon-button" disabled={busy} aria-label={t("編輯專案 {name}", { name: project.name })} onClick={() => edit(project)}><Pencil size={15} /></button>
       </article>)}
       {projects.length === 0 ? <div className="project-empty"><FolderPlus size={28} /><p>{t("建立專案，集中管理資料夾與會話。")}</p></div> : null}
+      {projects.length > 0 && filteredProjects.length === 0 ? <p className="muted">{t("沒有符合的專案")}</p> : null}
     </div>
     {draft ? <SettingsDialog title={t(draft.id ? "編輯專案" : "新增專案")} closeLabel={t("關閉")} busy={busy} initialFocusSelector="input[name='project-name']" onClose={closeEditor}>
       <form className="project-editor" onSubmit={(event) => { event.preventDefault(); if (staleDraft) return; void action(async () => { const saved = await bridge.request({ kind: "projects/save", input: draft }) as ProjectEntry & { runtimeSyncError?: string }; if (saved?.id) setDraft({ id: saved.id, name: saved.name ?? draft.name, workspaceIds: saved.workspaceIds ?? draft.workspaceIds, primaryWorkspaceId: saved.primaryWorkspaceId ?? draft.primaryWorkspaceId, pinned: saved.pinned ?? draft.pinned, expectedUpdatedAt: saved.updatedAt }); await onChanged(); if (saved.runtimeSyncError) throw new Error(saved.runtimeSyncError); closeEditor() }) }}>

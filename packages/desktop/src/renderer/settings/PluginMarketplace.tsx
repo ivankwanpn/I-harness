@@ -11,7 +11,7 @@ function descriptionPreview(value: string): string {
   const characters = Array.from(value.trim())
   return characters.length > 120 ? `${characters.slice(0, 120).join("").trimEnd()}…` : value
 }
-export function PluginMarketplace({ bridge, workspaceId, embedded = false, initialQuery = "" }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean; initialQuery?: string }) {
+export function PluginMarketplace({ bridge, workspaceId, embedded = false, initialQuery = "", queryRequest }: { bridge: DesktopBridge; workspaceId: string; embedded?: boolean; initialQuery?: string; queryRequest?: { value: string; nonce: number } }) {
   const t = useText()
   const [state, setState] = useState<State>()
   const [error, setError] = useState<string>()
@@ -25,6 +25,10 @@ export function PluginMarketplace({ bridge, workspaceId, embedded = false, initi
   const [reload, setReload] = useState(0)
   const [page, setPage] = useState(0)
   const lock = useRef(false)
+  useEffect(() => {
+    if (!queryRequest) return
+    setQuery(queryRequest.value); setPage(0)
+  }, [queryRequest?.nonce])
   useEffect(() => {
     let active = true
     void bridge.request({ kind: "desktop/plugins/state", workspaceId }).then((value) => { if (active) { setState(value as State); setLoadError(undefined) } }).catch((reason: unknown) => { if (active) setLoadError(String(reason)) })
@@ -60,7 +64,7 @@ export function PluginMarketplace({ bridge, workspaceId, embedded = false, initi
       {state?.sources.map((entry) => <SettingsGroup key={entry.name}><SettingsRow label={entry.name} description={entry.source} control={<div className="provider-actions"><button disabled={busy} onClick={() => { void run({ action: "source/refresh", name: entry.name }) }}>{t("重新整理")}</button><button disabled={busy} onClick={() => remove({ action: "source/remove", name: entry.name }, `source:${entry.name}`)}>{t(confirm === `source:${entry.name}` ? "確認移除來源" : "移除來源")}</button></div>} />{entry.error ? <p role="alert">{entry.error}</p> : null}</SettingsGroup>)}
     </details>
     <div className="marketplace-filter"><SearchInput aria-label={t("搜尋插件")} placeholder={t("搜尋插件")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(0) }} clearLabel={t("清除搜尋")} onClear={() => { setQuery(""); setPage(0) }} /><label className="marketplace-installed-filter"><input type="checkbox" checked={installed} onChange={(event) => { setInstalled(event.target.checked); setPage(0) }} />{t("僅顯示已安裝")}</label></div>
-    {!state ? <p role="status">{t("正在讀取插件目錄…")}</p> : rows.length === 0 ? <p>{t("沒有符合的插件；可先加入市場來源。")}</p> : null}
+    {!state ? !loadError ? <p role="status">{t("正在讀取插件目錄…")}</p> : null : rows.length === 0 ? <p>{t(query.trim() || installed ? "沒有符合的插件" : "尚未加入插件；可先加入市場來源。")}</p> : null}
     {rows.length ? <div className="marketplace-list">{rows.slice(page * 50, (page + 1) * 50).map((plugin) => <article className="marketplace-item" key={plugin.id}>
       <div className="marketplace-item-main">
         <span className="marketplace-item-icon"><Puzzle size={16} aria-hidden="true" /></span>

@@ -72,7 +72,7 @@ app.whenReady().then(() => {
       globalProviders,
       notifications,
       drafts,
-      about: { info: applicationInfo, copy: () => { clipboard.writeText(JSON.stringify(applicationInfo(), null, 2)); return { copied: true } } },
+      about: { info: applicationInfo, copy: async () => { await clipboard.writeText(JSON.stringify(applicationInfo(), null, 2)); return { copied: true } } },
       pickSkill: async () => {
         const result = await dialog.showOpenDialog(window, { properties: ["openFile"], filters: [{ name: "SKILL.md", extensions: ["md"] }] })
         return result.canceled ? undefined : result.filePaths[0]

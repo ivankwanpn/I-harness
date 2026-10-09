@@ -12,6 +12,41 @@ import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0 }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it.each(["task", "queue", "resume"] as const)("reports a rejected %s action in the selected conversation", async action => {
+  fixture(request => ["session/tasks/cancel", "session/queue/cancel", "desktop/session/input/resume"].includes(request.kind) ? Promise.reject(new Error("operation unavailable")) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.tasks).toEqual([]))
+  await act(async () => {
+    if (action === "task") captured.props!.conversation!.onCancelTask("t1")
+    else if (action === "queue") captured.props!.conversation!.onCancelQueue("q1")
+    else await captured.props!.conversation!.onResumeQueue!().catch(() => undefined)
+  })
+  await waitFor(() => expect(captured.props!.conversation!.taskError).toContain("operation unavailable"))
+})
+it("distinguishes pending capability discovery from a completed empty capability map", async () => {
+  const reply = defer()
+  fixture(request => request.kind === "desktop/capabilities" ? reply.promise : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  expect(captured.props?.capabilitiesReady).toBe(false)
+  await act(async () => { reply.resolve({}); await reply.promise })
+  expect(captured.props?.capabilitiesReady).toBe(true)
+  expect(captured.props?.capabilities).toEqual({})
+})
+it("binds capability readiness to the selected workspace and ignores a late earlier reply", async () => {
+  const first = defer(), second = defer()
+  fixture(request => request.kind === "desktop/capabilities" ? request.workspaceId === "w1" ? first.promise : second.promise : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectWorkspace("w2"))
+  expect(captured.props?.capabilitiesReady).toBe(false)
+  await act(async () => { first.resolve({ "desktop-agent-settings": ["1"] }); await first.promise })
+  expect(captured.props?.selectedWorkspaceId).toBe("w2")
+  expect(captured.props?.capabilitiesReady).toBe(false)
+  expect(captured.props?.capabilities).toEqual({})
+  await act(async () => { second.resolve({ "desktop-memory": ["1"] }); await second.promise })
+  expect(captured.props?.capabilitiesReady).toBe(true)
+  expect(captured.props?.capabilities).toEqual({ "desktop-memory": ["1"] })
+})
 it("clears renderer drafts only for confirmed successful native permanent deletions", async () => {
   writeDraft("w1", "delete-ok", "delete me"); writeDraft("w1", "delete-failed", "keep failure"); writeDraft("w1", "new-task:unassigned", "keep new task")
   fixture(request => request.kind === "desktop/session/batch" ? Promise.resolve({ results: [{ sessionId: "delete-ok", ok: true }, { sessionId: "delete-failed", ok: false, sessionDeleted: true, error: "Native cleanup failed" }] }) : undefined)

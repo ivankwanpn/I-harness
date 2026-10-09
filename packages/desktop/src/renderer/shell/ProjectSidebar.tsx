@@ -37,13 +37,20 @@ export interface ProjectSidebarProps {
   onManageArchived(workspaceId: string): void
 }
 
-function FolderSessions({ bridge, revision, foreign, onManageSessions, workspaceId, projectId, dashboard, selectedSessionId, attentionBySession, onSelectSession, onManageSession, onManageArchived }: {
+type FolderNavigation = SessionNavigation & { projectId?: string }
+const confirmedNavigation = (row: unknown): row is FolderNavigation => !!row && typeof row === "object"
+  && typeof (row as FolderNavigation).pinned === "boolean" && typeof (row as FolderNavigation).unread === "boolean"
+  && ((row as FolderNavigation).projectId === undefined || typeof (row as FolderNavigation).projectId === "string" && (row as FolderNavigation).projectId !== "")
+
+function FolderSessions({ bridge, revision, foreign, orphanOnly, onManageSessions, workspaceId, projectId, knownProjectIds, dashboard, selectedSessionId, attentionBySession, onSelectSession, onManageSession, onManageArchived }: {
   bridge: DesktopBridge
   revision?: number
   foreign?: boolean
+  orphanOnly?: boolean
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
   workspaceId: string
   projectId?: string
+  knownProjectIds: ReadonlySet<string>
   dashboard?: SessionDashboardResult
   selectedSessionId?: string
   attentionBySession?: Record<string, number>
@@ -52,8 +59,9 @@ function FolderSessions({ bridge, revision, foreign, onManageSessions, workspace
   onManageArchived: ProjectSidebarProps["onManageArchived"]
 }) {
   const t = useText()
+  const en = useLocale(state => state.locale) === "en"
   const [loaded, setLoaded] = useState<SessionDashboardResult>()
-  const [navigation, setNavigation] = useState<Record<string, SessionNavigation>>()
+  const [navigation, setNavigation] = useState<Record<string, FolderNavigation>>()
   const [error, setError] = useState<string>()
   const active = useRef(false)
   const epoch = useRef(0)
@@ -72,16 +80,18 @@ function FolderSessions({ bridge, revision, foreign, onManageSessions, workspace
     if (!active.current || scope !== epoch.current || request !== ticket.current) return
     const [sessions, nav] = results
     if (sessions.status === "fulfilled" && sessions.value !== undefined) setLoaded(sessions.value as SessionDashboardResult)
-    if (nav.status === "fulfilled") setNavigation(nav.value as Record<string, SessionNavigation>)
+    const validNavigation = nav.status === "fulfilled" && !!nav.value && typeof nav.value === "object" && !Array.isArray(nav.value)
+    setNavigation(validNavigation ? nav.value as Record<string, FolderNavigation> : undefined)
     const failed = results.find((result) => result.status === "rejected")
-    setError(failed?.status === "rejected" ? failed.reason instanceof Error ? failed.reason.message : String(failed.reason) : undefined)
-  }, [bridge, workspaceId])
+    setError(failed?.status === "rejected" ? failed.reason instanceof Error ? failed.reason.message : String(failed.reason) : validNavigation ? undefined : en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
+  }, [bridge, workspaceId, en])
 
   useEffect(() => {
     active.current = true
     epoch.current++
     const refresh = createRefreshScheduler(() => read())
     const unsubscribe = bridge.onEvent((event) => {
+      if (event.kind === "window/state") return
       if (event.workspaceId !== workspaceId) return
       if (event.kind === "sdk/disconnected") { setError(event.message); return }
       if (event.method === "desktop/session/navigation/changed") { refresh.schedule(); return }
@@ -93,10 +103,17 @@ function FolderSessions({ bridge, revision, foreign, onManageSessions, workspace
   }, [bridge, workspaceId, read, revision])
 
   const rawView = dashboard ?? loaded
-  const view = rawView ? { ...rawView, sessions: rawView.sessions.filter(session => { const owner = (navigation?.[session.id] as SessionNavigation & { projectId?: string } | undefined)?.projectId; return projectId ? owner === projectId || (!foreign && !owner) : !owner }) } : rawView
+  const view = rawView && navigation ? { ...rawView, sessions: rawView.sessions.filter(session => {
+    if (!Object.hasOwn(navigation, session.id) || !confirmedNavigation(navigation[session.id])) return false
+    const owner = navigation[session.id]!.projectId
+    // This fallback is only a display destination. The saved owner and backend
+    // authority remain intact; unknown/failed ownership is never unassigned.
+    if (projectId) return owner === projectId || (!foreign && owner === undefined)
+    return owner === undefined ? !orphanOnly : !knownProjectIds.has(owner)
+  }) } : undefined
   return <div className="project-sidebar-folder-sessions">
     {error ? <p role="alert" className="notice error-text">{error}<button type="button" className="link-button" onClick={() => void read()}>{t("重試")}</button></p> : null}
-    {view === undefined ? <p className="notice">{t("正在讀取會話…")}</p> : <TaskList
+    {view === undefined ? error ? null : <p className="notice">{t("正在讀取會話…")}</p> : <TaskList
       workspaceId={workspaceId} dashboard={view} navigation={navigation} selectedId={selectedSessionId} attentionCounts={attentionBySession}
       onSelect={(id) => {
         const scope = epoch.current
@@ -136,13 +153,14 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     async function readOwners() {
       const own = ++version
       const results = await Promise.allSettled(workspaces.map(async workspace => {
-        const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id }) as Record<string, { projectId?: string }>
-        return { workspaceId: workspace.id, projects: [...new Set(Object.values(rows ?? {}).flatMap(row => row.projectId ? [row.projectId] : []))] }
+        const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id }) as Record<string, FolderNavigation>
+        if (!rows || typeof rows !== "object" || Array.isArray(rows)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
+        return { workspaceId: workspace.id, projects: [...new Set(Object.values(rows).flatMap(row => confirmedNavigation(row) && row.projectId ? [row.projectId] : []))] }
       }))
       if (!active || own !== version) return
       setOwnerFolders(previous => {
         const next = { ...previous }
-        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.projects; else if (workspaces[index] && !next[workspaces[index]!.id]) next[workspaces[index]!.id] = [] })
+        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.projects; else if (workspaces[index]) next[workspaces[index]!.id] = [] })
         return next
       })
       const failed = results.find(result => result.status === "rejected")
@@ -152,9 +170,10 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
     const unsubscribe = bridge.onEvent(event => { if (event.kind === "sdk/notification" && (event.method === "desktop/session/navigation/changed" || event.method === "session/status")) refresh.schedule() })
     void readOwners()
     return () => { active = false; version++; refresh.dispose(); unsubscribe() }
-  }, [bridge, workspaceKey, props.revision])
+  }, [bridge, workspaceKey, props.revision, en])
   const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
-  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id))
+  const knownProjectIds = new Set(projects.map(project => project.id))
+  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || ownerFolders[workspace.id]?.some(id => !knownProjectIds.has(id)))
   const effectiveProjectId = selectedProjectId ?? projects.find((project) => project.workspaceIds.includes(selectedWorkspaceId ?? ""))?.id
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(selectedWorkspaceId || selectedProjectId ? [projectKey(effectiveProjectId)] : []))
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(() => new Set(selectedWorkspaceId ? [folderKey(selectedWorkspaceId, effectiveProjectId)] : []))
@@ -186,7 +205,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
             {workspace.id === project?.primaryWorkspaceId ? <span className="project-sidebar-primary">{t("主要資料夾")}</span> : null}
           </div>
           {project && !project.workspaceIds.includes(workspace.id) ? <small className="muted">{en ? "Execution starting folder" : "執行起始資料夾"} · {workspace.path}</small> : null}
-          {expanded ? <FolderSessions key={scope} bridge={bridge} revision={props.revision} foreign={!!project && !project.workspaceIds.includes(workspace.id)} onManageSessions={props.onManageSessions} workspaceId={workspace.id} projectId={project?.id}
+          {expanded ? <FolderSessions key={scope} bridge={bridge} revision={props.revision} foreign={!!project && !project.workspaceIds.includes(workspace.id)} orphanOnly={!project && assigned.has(workspace.id)} onManageSessions={props.onManageSessions} workspaceId={workspace.id} projectId={project?.id} knownProjectIds={knownProjectIds}
             dashboard={selected ? props.dashboard : undefined} selectedSessionId={selected ? selectedSessionId : undefined}
             attentionBySession={workspace.id === selectedWorkspaceId ? props.attentionBySession : undefined}
             onSelectSession={props.onSelectSession} onManageSession={props.onManageSession} onManageArchived={props.onManageArchived} /> : null}
@@ -197,7 +216,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
 
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
     <div className="sidebar-header">
-    <div className="brand">I-harness <span>Desktop</span></div>
+    <div className="brand">I-harness</div>
     <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!props.canCreate || !selectedWorkspaceId} onClick={props.onCreate}>{t("新增會話")}</Button>
     {props.onPlugins ? <Button variant="ghost" className="sidebar-open" icon={<Puzzle size={16} />} onClick={props.onPlugins}>{t("插件市場")}</Button> : null}
     <div className="project-sidebar-heading"><h2 className="sidebar-title">{t("專案")}</h2><button type="button" className="link-button" onClick={props.onProjects}>{t("管理專案")}</button></div>

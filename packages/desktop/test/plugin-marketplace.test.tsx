@@ -24,7 +24,7 @@ it("reads cached state and requires confirmation before uninstalling", async () 
 it("filling the official source does not install or fetch it", async () => {
   const request = vi.fn().mockResolvedValue({ sources: [], plugins: [] })
   render(<PluginMarketplace bridge={{ request, onEvent: () => () => {} }} workspaceId="w" />)
-  await screen.findByText("沒有符合的插件；可先加入市場來源。")
+  await screen.findByText("尚未加入插件；可先加入市場來源。")
   fireEvent.click(screen.getByText("管理市場來源"))
   fireEvent.click(screen.getByRole("button", { name: "填入官方市場來源" }))
   expect((screen.getByLabelText("來源網址或本機路徑") as HTMLInputElement).value).toBe("anthropics/claude-plugins-official")

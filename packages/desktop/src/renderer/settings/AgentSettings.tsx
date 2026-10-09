@@ -27,10 +27,11 @@ function SessionExecutionStatus({ value }: { value: unknown }) {
       {wsl ? <><p>{t("命令網路存取")}：{t(wsl.networkAccess === true ? "已啟用" : "唯讀與工作區寫入關閉；完整存取允許")}</p><p>{t("工作區依賴")}：{t(wsl.workspaceDependencies === true ? "已啟用" : "已停用")}</p></> : null}
     </div>;
 }
-export function AgentSettings({ bridge, workspaceId, onSandboxChange }: {
+export function AgentSettings({ bridge, workspaceId, onSandboxChange, onExecutionBindingSaved }: {
     bridge: DesktopBridge;
     workspaceId: string;
     onSandboxChange?(mode: AgentDefaults["sandboxMode"]): void;
+    onExecutionBindingSaved?(): void;
 }) {
     const t = useText();
     const [state, setState] = useState<AgentSettingsState>(), [draft, setDraft] = useState<AgentDefaults>();
@@ -105,7 +106,8 @@ export function AgentSettings({ bridge, workspaceId, onSandboxChange }: {
                 setBusy(true);
                 setError(undefined);
                 void bridge.request({ kind: "desktop/agent-settings/configure", workspaceId, patch }).then(value => { if (current !== version.current)
-                    return; const next = value as AgentSettingsState; setState(next); setDraft(next.saved); if (next.effective.sandboxMode !== state.effective.sandboxMode)
+                    return; const next = value as AgentSettingsState; setState(next); setDraft(next.saved); if (!same(next.saved.windowsSandboxBackend, state.saved.windowsSandboxBackend) || !same(next.saved.wslExecution, state.saved.wslExecution))
+                    onExecutionBindingSaved?.(); if (next.effective.sandboxMode !== state.effective.sandboxMode)
                     onSandboxChange?.(next.effective.sandboxMode); }).catch(reason => { if (current === version.current)
                     setError(String(reason)); }).finally(() => { if (current === version.current) {
                     lock.current = false;

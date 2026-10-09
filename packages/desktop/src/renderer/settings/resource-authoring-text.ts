@@ -1,6 +1,8 @@
 import { useCallback } from "react"
 import { useLocale, useText, type Message } from "../design/i18n.ts"
 const english = {
+  "尚未建立筆記": "No notes yet", "重新讀取筆記": "Reload note",
+  "筆記已變更；已保留。請重新讀取後再決定是否刪除。": "The note changed and was retained. Reload it before deciding whether to delete it.",
   "批次刪除（{count}）": "Forget selected ({count})", "清除選取": "Clear selection", "確認刪除選取筆記": "Confirm forgetting selected notes",
   "永久刪除選取筆記；若其中一筆已變更，整批會保留。": "Permanently forget selected notes. If a note changed, the entire batch is retained.",
   "筆記已變更；整批已保留。請重新讀取後選取。": "A note changed. The entire batch is retained. Reload and select again.",
@@ -15,6 +17,10 @@ const english = {
   "驗證並保存 Hooks": "Validate and save hooks", "腳本名稱": "Script name", "讀取或建立腳本": "Read or create script", "Hook 腳本內容": "Hook script content", "保存腳本": "Save script", "保存後的 SHA-256：": "Saved SHA-256: ",
   "關閉本機 Hooks 編輯器": "Close local hook editor", "編輯本機 Hooks": "Edit local hooks", "目前有效的 Hooks": "Effective hooks",
   "資源編輯器": "Resource editor", "複製插件到本機": "Copy plugin content locally", "編輯本機內容": "Edit local content", "建立資源": "Create resource",
+  "尚未建立技能": "No skills yet", "尚未建立命令": "No commands yet",
+  "參數的 JSON 格式有誤；請使用字串陣列。": "Arguments contain invalid JSON. Use an array of strings.",
+  "參數必須是 JSON 字串陣列。": "Arguments must be a JSON array of strings.",
+  "進階設定的 JSON 格式有誤；請使用物件。": "Advanced settings contain invalid JSON. Use an object.",
   "此內容會建立本機版本，來源插件仍可辨識。": "This creates a local version with the source plugin still identified.", "名稱": "Name", "完整 Markdown（含 frontmatter）": "Complete Markdown (including frontmatter)",
   "最多 128 KiB；技能需含相符名稱及描述的 frontmatter。": "Maximum 128 KiB. Skills require frontmatter with a matching name and description.",
   "儲存資源": "Save resource", "保留草稿並關閉": "Keep draft and close", "移除本機版本": "Remove local version", "確認移除本機版本": "Confirm removing local version",

@@ -1,0 +1,307 @@
+/* SPDX-License-Identifier: MIT
+ * Shared IH controls adapted from OpenCode 1.18.30 V2 button/text-input/dialog
+ * treatments and DSH 0.2.0-rc.2 modal composition. Scope and semantic token
+ * mapping are Desktop adaptations. Source hashes and MIT notices are retained
+ * in CONTROL_SOURCES.md and LICENSE.controls.txt. No upstream global reset.
+ */
+
+:is(.oc-button, .ih-control, .ih-control-scope, .settings-content, .settings-dialog, .pending-panel) {
+  --ih-control-background: color-mix(in srgb, var(--ih-panel) 80%, var(--ih-bg));
+  --ih-control-hover: color-mix(in srgb, var(--ih-text) 7%, var(--ih-panel));
+  --ih-control-pressed: color-mix(in srgb, var(--ih-text) 12%, var(--ih-panel));
+  --ih-control-border: color-mix(in srgb, var(--ih-divider) 86%, var(--ih-text));
+  --ih-control-danger: #efa49c;
+  --ih-control-shadow: color-mix(in srgb, var(--ih-bg) 36%, transparent);
+}
+
+:root[data-theme="light"] :is(.oc-button, .ih-control, .ih-control-scope, .settings-content, .settings-dialog, .pending-panel) {
+  --ih-control-danger: #a63730;
+  --ih-control-shadow: rgb(0 0 0 / 5%);
+}
+
+.oc-button {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: .429rem;
+  max-width: 100%;
+  border: 1px solid transparent;
+  border-radius: .5rem;
+  font-family: inherit;
+  font-size: .929rem;
+  font-weight: 500;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  text-decoration: none;
+  white-space: normal;
+  text-align: center;
+  user-select: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+
+.oc-button[data-size="normal"] { min-height: 2.429rem; padding: .429rem .786rem; font-size: .929rem; }
+.oc-button[data-size="small"] { min-height: 2rem; padding: .286rem .571rem; font-size: .857rem; }
+.oc-button-icon { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
+.oc-button-icon > svg { display: block; }
+
+.oc-button[data-variant="secondary"], .oc-button[data-variant="danger"] {
+  color: var(--ih-text);
+  background: var(--ih-control-background);
+  border-color: var(--ih-control-border);
+  box-shadow: 0 1px 2px var(--ih-control-shadow);
+}
+.oc-button[data-variant="danger"] { color: var(--ih-control-danger); }
+.oc-button[data-variant="primary"] { color: var(--ih-bg); background: var(--ih-text); border-color: var(--ih-text); }
+.oc-button[data-variant="ghost"] { color: var(--ih-text); background: transparent; border-color: transparent; box-shadow: none; }
+
+:is(.oc-button, .settings-content .oc-button, .settings-dialog .oc-button):is([data-variant="secondary"], [data-variant="danger"]):hover:not(:disabled) {
+  background: var(--ih-control-hover);
+  border-color: color-mix(in srgb, var(--ih-control-border) 65%, var(--ih-muted));
+}
+:is(.oc-button, .settings-content .oc-button, .settings-dialog .oc-button)[data-variant="primary"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ih-text) 88%, var(--ih-bg));
+  opacity: 1;
+}
+:is(.oc-button, .settings-content .oc-button, .settings-dialog .oc-button)[data-variant="ghost"]:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ih-text) 7%, transparent);
+}
+.oc-button:is([data-variant="secondary"], [data-variant="danger"]):active:not(:disabled) { background: var(--ih-control-pressed); box-shadow: none; }
+.oc-button[data-variant="primary"]:active:not(:disabled) { background: color-mix(in srgb, var(--ih-text) 80%, var(--ih-bg)); }
+.oc-button[data-variant="ghost"]:is([aria-pressed="true"], [aria-expanded="true"], :active):not(:disabled) { background: color-mix(in srgb, var(--ih-text) 10%, transparent); }
+.oc-button[aria-pressed="true"] { border-color: var(--ih-accent); }
+.oc-button:disabled { cursor: not-allowed; opacity: .5; box-shadow: none; }
+.oc-button[data-loading="true"]:disabled { cursor: wait; opacity: .85; }
+.oc-button:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+
+.oc-button-spinner {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 1em;
+  height: 1em;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: ih-control-spin 800ms linear infinite;
+}
+@keyframes ih-control-spin { to { transform: rotate(360deg); } }
+
+/* Older Desktop forms still use native controls. This scope gives them the
+ * same field states while preserving checkbox/radio/range/file behavior. */
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), select, textarea
+), :is(input, select, textarea).ih-control {
+  min-width: 0;
+  max-width: 100%;
+  min-height: 2.429rem;
+  padding: .429rem .714rem;
+  border: 1px solid var(--ih-control-border);
+  border-radius: .5rem;
+  background: var(--ih-control-background);
+  color: var(--ih-text);
+  font: inherit;
+  font-size: .929rem;
+  line-height: 1.5;
+  color-scheme: inherit;
+  box-shadow: inset 0 1px 2px var(--ih-control-shadow);
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea):hover:not(:disabled):not(:read-only), .ih-control:hover:not(:disabled):not(:read-only) {
+  border-color: var(--ih-muted);
+}
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea):focus-visible, .ih-control:focus-visible {
+  border-color: var(--ih-accent);
+  outline: 2px solid var(--ih-accent);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea)[aria-invalid="true"], .ih-control[aria-invalid="true"] {
+  border-color: var(--ih-control-danger);
+}
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea)[aria-invalid="true"]:focus-visible, .ih-control[aria-invalid="true"]:focus-visible {
+  outline-color: var(--ih-control-danger);
+}
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea):disabled, .ih-control:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+:is(.settings-content, .settings-dialog, .pending-panel, .ih-control-scope) :is(input, textarea)::placeholder, .ih-control::placeholder {
+  color: var(--ih-muted);
+  opacity: .8;
+}
+:is(.settings-content, .settings-dialog) input[type="number"], input[type="number"].ih-control {
+  width: 11rem;
+  font-variant-numeric: tabular-nums;
+}
+.settings-content .zc-settings-row input[type="number"] { width: 100%; max-width: 12rem; }
+.settings-dialog .provider-editor input[type="number"] { width: 100%; }
+:is(.settings-content, .settings-dialog, .ih-control-scope) textarea, textarea.ih-control { width: 100%; min-height: 6rem; resize: vertical; }
+:is(.settings-content, .settings-dialog) .zc-search-input { padding-inline: 2.429rem; }
+.settings-content .settings-search { width: 100%; }
+:is(.settings-content, .settings-dialog) .resource-editor textarea { font-family: ui-monospace, Consolas, monospace; font-size: .857rem; line-height: 1.65; }
+
+/* Native action buttons keep their form semantics and receive the shared frame.
+ * Navigation, resource cards, model icon actions, and search-clear controls own
+ * their existing layout. */
+:is(.settings-content, .settings-dialog) :is(
+  button:not([class]):not(.provider-list button):not(.provider-model-actions button),
+  .primary-button,
+  .provider-actions > button:not(.oc-button),
+  .settings-save-bar > button:not(.oc-button),
+  .zc-settings-row button:not(.oc-button)
+) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .429rem;
+  min-height: 2.429rem;
+  max-width: 100%;
+  padding: .429rem .786rem;
+  border: 1px solid var(--ih-control-border);
+  border-radius: .5rem;
+  background: var(--ih-control-background);
+  color: var(--ih-text);
+  font: inherit;
+  font-size: .929rem;
+  line-height: 1.45;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 1px 2px var(--ih-control-shadow);
+}
+:is(.settings-content, .settings-dialog) :is(button:not([class]), .primary-button, .provider-actions > button:not(.oc-button), .settings-save-bar > button:not(.oc-button)):hover:not(:disabled) {
+  background: var(--ih-control-hover);
+  border-color: var(--ih-muted);
+}
+:is(.settings-content, .settings-dialog) :is(button, summary):focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+:is(.settings-content, .settings-dialog) button:disabled { opacity: .5; cursor: not-allowed; }
+.settings-dialog .provider-actions > .primary-button[type="submit"] { background: var(--ih-text); color: var(--ih-bg); border-color: var(--ih-text); }
+.settings-dialog .provider-actions > .primary-button[type="submit"]:hover:not(:disabled) { background: color-mix(in srgb, var(--ih-text) 88%, var(--ih-bg)); }
+.settings-content .zc-settings-group > button:not(.oc-button) { margin: .571rem 1.143rem 1.143rem; }
+.settings-content .zc-settings-group > p[role="status"] { margin: 0; padding: .786rem 1.143rem; color: var(--ih-muted); font-size: .857rem; line-height: 1.65; overflow-wrap: anywhere; }
+.settings-content .zc-settings-row-grid > div:last-child { flex-wrap: wrap; min-width: 0; }
+.settings-content .zc-settings-row-grid > div:last-child > :is(input, select) { max-width: 100%; }
+.settings-content .settings-save-bar, .settings-dialog .provider-actions { flex-wrap: wrap; gap: .571rem; }
+:is(.settings-content, .settings-dialog) :is([role="alert"], .error-text) { color: var(--ih-control-danger); overflow-wrap: anywhere; }
+
+.settings-capability-status {
+  margin: 0;
+  padding: 1.143rem 1.286rem;
+  border: 1px solid var(--ih-divider);
+  border-radius: .714rem;
+  background: var(--ih-control-background);
+  color: var(--ih-muted);
+  font-size: .929rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.settings-search-empty { display: grid; justify-items: start; gap: .429rem; padding: 1rem .857rem; }
+.settings-search-empty p { margin: 0; font-size: .857rem; line-height: 1.6; }
+.settings-preference-actions { display: flex; align-items: center; flex-wrap: wrap; gap: .857rem; margin: .857rem 0 1.714rem; }
+.settings-preference-actions p { flex: 1 1 14rem; margin: 0; font-size: .857rem; line-height: 1.65; }
+.settings-resource-tabs > .zc-pane-tabs {
+  display: inline-flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  gap: .286rem;
+  margin-bottom: 1.429rem;
+  padding: .286rem;
+  border: 1px solid var(--ih-divider);
+  border-radius: .714rem;
+  background: var(--ih-control-background);
+}
+.settings-resource-tabs .zc-pane-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.286rem;
+  padding: .429rem 1rem;
+  border: 1px solid transparent;
+  border-radius: .5rem;
+  background: transparent;
+  color: var(--ih-muted);
+  font: inherit;
+  font-size: .929rem;
+  line-height: 1.45;
+  cursor: pointer;
+}
+.settings-resource-tabs .zc-pane-tab[aria-selected="true"] { border-color: var(--ih-control-border); background: var(--ih-panel); color: var(--ih-text); box-shadow: 0 1px 3px var(--ih-control-shadow); }
+.settings-resource-tabs .zc-pane-tab:hover { color: var(--ih-text); }
+.settings-resource-tabs > [role="tabpanel"]:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 4px; border-radius: .286rem; }
+
+.settings-dialog-backdrop {
+  padding: clamp(1rem, 3vw, 1.714rem);
+  background: color-mix(in srgb, var(--ih-bg) 54%, rgb(0 0 0 / 65%));
+  backdrop-filter: blur(3px);
+}
+.settings-dialog-backdrop[hidden] { display: none !important; }
+.settings-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--ih-control-border);
+  border-radius: .929rem;
+  background: var(--ih-bg);
+  box-shadow: 0 16px 64px rgb(0 0 0 / 34%), 0 2px 8px rgb(0 0 0 / 18%);
+}
+.settings-dialog:focus { outline: none; }
+.settings-dialog:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 3px; }
+.settings-dialog:has(.resource-detail) { width: min(860px, 100%); }
+.settings-dialog:has(.resource-editor) { width: min(760px, 100%); }
+.settings-dialog-header {
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .857rem;
+  padding: 1.143rem 1.429rem;
+  border-bottom: 1px solid var(--ih-divider);
+}
+.settings-dialog-header h2 { min-width: 0; margin: 0; font-size: 1.143rem; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.settings-dialog-header .settings-dialog-close.oc-button {
+  flex: 0 0 auto;
+  width: 2.286rem;
+  height: 2.286rem;
+  min-height: 2.286rem;
+  padding: 0;
+  border: 0;
+  border-radius: .5rem;
+  font-size: .929rem;
+  line-height: 1;
+  color: var(--ih-muted);
+}
+.settings-dialog-header .settings-dialog-close:hover:not(:disabled) { color: var(--ih-text); }
+.settings-dialog-content { min-width: 0; min-height: 0; padding: 1.429rem 1.714rem 1.714rem; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.settings-dialog-content > .resource-detail { padding: 0; }
+.settings-dialog-content > form > h2:first-child { margin: 0 0 1rem; font-size: 1.05rem; }
+.settings-dialog .resource-editor textarea { height: clamp(12rem, 36vh, 22rem); min-height: 8rem; }
+.settings-dialog-content > .memory-editor { margin: 0; }
+.settings-dialog-content > .error-text { margin-top: 0; }
+.settings-dialog .provider-editor > fieldset > label:first-of-type { margin-top: 0; }
+.settings-dialog .provider-actions { margin-bottom: 0; padding-top: .429rem; }
+
+@container (max-width: 480px) {
+  .settings-content .zc-settings-row-grid > div:last-child { justify-content: flex-start; }
+}
+@media (max-width: 480px) {
+  .settings-dialog-header { padding: 1rem; }
+  .settings-dialog-content { padding: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oc-button, .ih-control, :is(.settings-content, .settings-dialog, .pending-panel) :is(input, select, textarea) { transition: none; }
+  .oc-button-spinner { animation: none; }
+}
+@media (forced-colors: active) {
+  .oc-button, .ih-control, :is(.settings-content, .settings-dialog) :is(input, select, textarea, button) { border-color: ButtonText; box-shadow: none; }
+  .oc-button:focus-visible, .ih-control:focus-visible, :is(.settings-content, .settings-dialog) :is(input, select, textarea, button, summary):focus-visible { outline-color: Highlight; }
+}
+.context-switches { margin-bottom: 24px; }
+.settings-dialog .session-manager-heading { display: none; }
+.session-manager .zc-settings-row .text-foreground-subtle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

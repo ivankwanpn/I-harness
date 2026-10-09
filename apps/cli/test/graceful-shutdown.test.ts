@@ -93,6 +93,25 @@ describe("graceful shutdown — an interrupted run unwinds instead of being kill
     expect(process.listenerCount("SIGINT")).toBe(sigintBefore)
     expect(process.listenerCount("SIGTERM")).toBe(sigtermBefore)
   }, 30_000)
+
+  it("names both the interrupted action and failed saving when abort finalization cannot flush", async () => {
+    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    await coordinator.create({ sessionId: "s-abort-save" })
+    const { model, release, started } = gatedModel(), controller = new AbortController()
+    const actualFlush = coordinator.flush.bind(coordinator)
+    coordinator.flush = async id => {
+      if (controller.signal.aborted) throw new Error("Owned abort finalization storage failure")
+      await actualFlush(id)
+    }
+    const running = runHeadless("Owned interrupted action", { workspace: root, sessionId: "s-abort-save", coordinator, model, signal: controller.signal })
+    try { await started; controller.abort() }
+    finally { release() }
+    const result = await running
+    expect(result.exitCode).toBe(1)
+    expect(result.finalText).toBe("")
+    expect(result.error).toMatch(/abort/i)
+    expect(result.error).toContain("Owned abort finalization storage failure")
+  }, 30_000)
 })
 
 // The other half of "fail-loud crash handling": what the process PRINTS when it

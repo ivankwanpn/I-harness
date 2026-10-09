@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { App } from "./app.tsx"
 import "./design/tokens.css"
 import "./vendor/zcode/styles.css"
+import "./design/controls.css"
 
 const root = document.getElementById("root")
 if (!root) throw new Error("Desktop root missing")

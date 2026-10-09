@@ -2,14 +2,16 @@ import { useMemo } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import type { GlobalProviderRequest } from "../../main/global-provider-settings.ts"
 import { ProviderDirectory } from "./ProviderDirectory.tsx"
+import { SettingsDraftScope } from "./settings-drafts.tsx"
 
 const scope = "__ih_global_settings__"
 
 /** Reuses the full provider UI with a narrow global provider transport. */
-export function GlobalProviderDirectory({ bridge, request, showHeading = true }: {
+export function GlobalProviderDirectory({ bridge, request, showHeading = true, active = true }: {
   bridge: DesktopBridge
   request(input: GlobalProviderRequest): Promise<unknown>
   showHeading?: boolean
+  active?: boolean
 }) {
   const globalBridge = useMemo<DesktopBridge>(() => ({
     ...bridge,
@@ -23,5 +25,5 @@ export function GlobalProviderDirectory({ bridge, request, showHeading = true }:
       }
     },
   }), [bridge, request])
-  return <ProviderDirectory bridge={globalBridge} workspaceId={scope} showHeading={showHeading} />
+  return <SettingsDraftScope owner={bridge}><ProviderDirectory bridge={globalBridge} workspaceId={scope} showHeading={showHeading} active={active} /></SettingsDraftScope>
 }

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from
 import { createPortal } from "react-dom"
 import { Archive, Copy, FolderOpen, GitBranch, Mail, MailOpen, Pencil, Pin, PinOff } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { listenForegroundEscape } from "../design/foreground-escape.ts"
 import "./session-actions.css"
 
 export type SessionAction = "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread"
@@ -31,6 +32,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
   const composing = useRef(false)
   const close = () => { onClose(); if (anchor.element.isConnected) anchor.element.focus() }
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  useEffect(() => listenForegroundEscape(root.current, close, () => lock.current), [renaming])
   useLayoutEffect(() => {
     const element = root.current
     if (!element) return
@@ -60,7 +62,8 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
     finally { lock.current = false; if (alive.current) setBusy(false) }
   }
   function keyboard(event: KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") { event.preventDefault(); if (!lock.current) close(); return }
+    if (event.nativeEvent.isComposing || event.keyCode === 229 || composing.current) return
+    if (event.key === "Escape") return
     const items = Array.from(root.current?.querySelectorAll<HTMLElement>(renaming ? "input:not(:disabled),button:not(:disabled)" : '[role="menuitem"]:not(:disabled)') ?? [])
     if (!items.length) return
     const current = items.indexOf(document.activeElement as HTMLElement)
@@ -92,7 +95,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
       <button type="button" role="menuitem" disabled={structuralBusy || session.turnCount === 0} title={session.turnCount === 0 ? t("完成一輪後才能建立分支") : undefined} onClick={() => manage("fork")}><GitBranch size={15} />{t("建立分支")}</button>
       <button type="button" role="menuitem" disabled={structuralBusy} onClick={() => manage("archive")}><Archive size={15} />{t("封存會話")}</button>
     </> : null}
-    {onManageSession ? <button type="button" role="menuitem" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Archive size={15} />管理此會話</button> : null}
+    {onManageSession ? <button type="button" role="menuitem" disabled={busy} onClick={() => { onManageSession(session.id); close() }}><Archive size={15} />{t("管理此會話")}</button> : null}
     {onCopyId || onOpenFolder ? <div className="session-menu-separator" role="separator" /> : null}
     {onCopyId ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(() => onCopyId(session.id)) }}><Copy size={15} />{t("複製會話 ID")}</button> : null}
     {onOpenFolder ? <button type="button" role="menuitem" disabled={busy} onClick={() => { void run(onOpenFolder) }}><FolderOpen size={15} />{t("開啟工作區資料夾")}</button> : null}

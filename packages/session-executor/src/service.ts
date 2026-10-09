@@ -41,6 +41,7 @@ import { breakdown } from "@i-harness/token-meter"
 const d = diagnosticsFor("session")
 import {
   createSessionAssembly,
+  createAssemblySession,
   ModelUnavailableError,
   type AssemblyOptions,
   type SessionAssembly,
@@ -188,6 +189,10 @@ export interface SessionService {
    * sessions and active agent tasks reject rebind rather than mixing models. */
   rebindModel(sessionId: string, binding: ReadyModelBinding): boolean
   liveSession(sessionId: string): Session | undefined
+  /** Writable document ownership for this service lifecycle, including while
+   * an assembly is preparing or mounting. Never constructs an Agent or model.
+   * Optional for older embedders; read-only paths must not call this method. */
+  writableSessionFor?(sessionId: string, fallback?: (sessionId: string) => Promise<Session | undefined>): Promise<Session | undefined>
   /** Synchronous observation only; never resolves a model or constructs an Agent. */
   liveAssembly(sessionId: string): SessionAssembly | undefined
   hasAssembly(sessionId: string): boolean
@@ -238,6 +243,8 @@ export interface SessionService {
 export function createSessionService(opts: SessionServiceOptions): SessionService {
   const assemblies = new Map<string, SessionAssembly>()
   const mountingAssemblies = new Map<string, SessionAssembly>()
+  const writableSessions = new Map<string, Session>()
+  const loadingWriters = new Map<string, Promise<Session | undefined>>()
   const ownedAssemblies = () => new Map([...mountingAssemblies, ...assemblies])
   const lanes = new Map<string, SessionTurnLane>()
   const creating = new Map<string, Promise<SessionAssembly>>()
@@ -414,7 +421,17 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (model.status !== "ready") return { kind: "unavailable", reason: model.reason }
     const window = model.binding.contextWindow
     if (window === undefined) return { kind: "unavailable", reason: "This model has no configured context window" }
-    const session = assemblies.get(sessionId)?.session ?? await opts.sessionFor?.(sessionId) ?? opts.session
+    // A per-ID writer overrides the static session for assembly construction.
+    // Cold readers preserve that identity without invoking the writer loader.
+    let session = assemblies.get(sessionId)?.session ?? (opts.sessionFor === undefined ? opts.session : undefined)
+    if (session === undefined && opts.coordinator !== undefined) {
+      if (!opts.coordinator.snapshot) return { kind: "unavailable", reason: "Read-only session snapshots are unavailable" }
+      const saved = (await opts.coordinator.snapshot(sessionId)).session
+      // A cold inspection can overlap assembly startup. The owned sessionFor
+      // loader belongs to writers; prefer a live session published while this
+      // immutable read was awaiting its durable prefix.
+      session = assemblies.get(sessionId)?.session ?? saved
+    }
     if (session === undefined) return { kind: "unavailable", reason: "Session history is unavailable" }
     const measured = breakdown(session)
     const roleTokens = { user: 0, assistant: 0, tool: 0 }
@@ -437,6 +454,39 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (assembly === undefined) return false
     assembly.modelLabel = binding.label
     return true
+  }
+
+  function assertWritableOpen(sessionId: string): void {
+    if (closed) throw new Error("session service closed")
+    if (closing.has(sessionId)) throw new Error(`session closing: ${sessionId}`)
+    if (failedClose.has(sessionId)) throw new Error("Session process cleanup incomplete; retry close before admission")
+    opts.sessionOperation?.assertOpen(sessionId)
+  }
+
+  function writableSessionFor(sessionId: string, fallback?: (sessionId: string) => Promise<Session | undefined>): Promise<Session | undefined> {
+    return opts.sessionOperation ? opts.sessionOperation.run(sessionId, () => writableSessionUnfenced(sessionId, fallback)) : writableSessionUnfenced(sessionId, fallback)
+  }
+  async function writableSessionUnfenced(sessionId: string, fallback?: (sessionId: string) => Promise<Session | undefined>): Promise<Session | undefined> {
+    assertWritableOpen(sessionId)
+    const owned = assemblies.get(sessionId)?.session ?? mountingAssemblies.get(sessionId)?.session ?? writableSessions.get(sessionId)
+    if (owned) return owned
+    let pending = loadingWriters.get(sessionId)
+    if (!pending) {
+      pending = (async () => {
+        const session = opts.sessionFor ? await opts.sessionFor(sessionId) : opts.session ?? await fallback?.(sessionId)
+        // Close owns the pending load. Its late completion cannot install a
+        // writer in the next lifecycle or publish an execution assembly.
+        assertWritableOpen(sessionId)
+        // Explicit session/sessionFor retain their caller-owned hooks. Only a
+        // metadata producer's supplied fallback restores a cold document; a
+        // coordinator alone keeps the assembly's original fresh-parent mirror.
+        const writer = session ?? createAssemblySession({ coordinator: opts.coordinator, sessionId })
+        writableSessions.set(sessionId, writer)
+        return writer
+      })().finally(() => { if (loadingWriters.get(sessionId) === pending) loadingWriters.delete(sessionId) })
+      loadingWriters.set(sessionId, pending)
+    }
+    return pending
   }
 
   function getOrCreate(sessionId: string): Promise<SessionAssembly> {
@@ -481,7 +531,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
                 "The binding is authoritative — a window from the config is not used to override its absence.",
             )
           }
-          const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
+          const resolvedSession = await writableSessionFor(sessionId)
           sandboxAtBuild = currentSandbox
           assembly = await createSessionAssembly({
             ...opts,
@@ -508,7 +558,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           // modelBindingFor so state and construction share one resolution.
           const meta = opts.loadMeta === undefined ? undefined : await opts.loadMeta(sessionId)
           const model = opts.modelBuilder === undefined ? undefined : await opts.modelBuilder(sessionId, meta)
-          const resolvedSession = opts.sessionFor === undefined ? opts.session : await opts.sessionFor(sessionId)
+          const resolvedSession = await writableSessionFor(sessionId)
           // M31 T3: per-session window (meta-aware) — a defined contextWindowFor
           // decides even when it resolves to undefined (fail-closed).
           const contextWindow = opts.contextWindowFor === undefined
@@ -541,6 +591,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           })
         }
         if (currentSandbox !== sandboxAtBuild && currentSandbox !== undefined) append(opts.policySession ?? assembly.session, { type: "sandbox/mode", mode: currentSandbox })
+        writableSessions.set(sessionId, assembly.session)
         mountingAssemblies.set(sessionId, assembly)
         if (extensions?.mount) {
           try {
@@ -549,6 +600,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
               extensionCleanups.set(sessionId, cleanup)
             }
           } catch (error) { await assembly.dispose(); mountingAssemblies.delete(sessionId); throw error }
+        }
+        if (closed || closing.has(sessionId)) {
+          await assembly.dispose()
+          mountingAssemblies.delete(sessionId)
+          throw new Error(closed ? "session service closed" : `session closing: ${sessionId}`)
         }
         if (opts.extensionsFor) {
           const dispose = assembly.dispose.bind(assembly)
@@ -589,7 +645,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         try { await assembly.drainParentNotifications?.() }
         catch (error) { d.warn(`[i-harness] parent notification recovery failed: ${error instanceof Error ? error.message : String(error)}`) }
         return assembly
-      })().finally(() => { creating.delete(sessionId) })
+      })().catch(error => {
+        // Failed setup cleanup still owns its mounted resources. A retry must
+        // acknowledge that close before another assembly can replace them.
+        if (mountingAssemblies.has(sessionId)) failedClose.add(sessionId)
+        throw error
+      }).finally(() => { creating.delete(sessionId) })
       creating.set(sessionId, pending)
     }
     return pending
@@ -875,12 +936,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     return pending
   }
   async function closeAll(): Promise<void> {
-    if (closed && ownedAssemblies().size === 0) return
+    if (closed && ownedAssemblies().size === 0 && writableSessions.size === 0 && loadingWriters.size === 0) return
     closed = true
     for (const id of assemblies.keys()) stopNotifications(id)
     await Promise.allSettled([
       ...active,
       ...creating.values(),
+      ...loadingWriters.values(),
       ...modelBindings.values(),
       ...closing.values(),
       ...notificationAdmissions.values(),
@@ -896,6 +958,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       } catch (error) { failedClose.add(id); failures.push(error) }
     }
     if (failures.length) throw new AggregateError(failures, "Session service process cleanup incomplete")
+    writableSessions.clear()
     if (failure !== undefined) throw failure
   }
 
@@ -909,6 +972,8 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (turn !== undefined) await Promise.allSettled([turn])
       const build = creating.get(sessionId)
       if (build !== undefined) await build.catch(() => undefined)
+      const writer = loadingWriters.get(sessionId)
+      if (writer !== undefined) await writer.catch(() => undefined)
       const binding = modelBindings.get(sessionId)
       if (binding !== undefined) await Promise.allSettled([binding])
       await Promise.allSettled([...(notificationAdmissions.has(sessionId) ? [notificationAdmissions.get(sessionId)!] : []), ...notificationStops])
@@ -917,6 +982,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       failedClose.delete(sessionId)
       assemblies.delete(sessionId)
       mountingAssemblies.delete(sessionId)
+      writableSessions.delete(sessionId)
       lanes.delete(sessionId)
       modelBindings.delete(sessionId)
       chains.delete(sessionId)
@@ -963,6 +1029,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     contextState,
     rebindModel,
     liveSession: (sessionId) => assemblies.get(sessionId)?.session,
+    writableSessionFor,
     liveAssembly,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
     queueState: (sessionId) => {
