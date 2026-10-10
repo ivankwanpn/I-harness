@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { createCodeModeRuntime } from '../src/runtime.js'
 import type { CodeModeOrigin, CodeModeRuntimeOptions } from '../src/types.js'
+import { PNG } from '../../image-validation/test/fixtures.ts'
+import { readFileSync } from 'node:fs'
 const read = {name:'read',description:'read',inputSchema:{type:'object'}}
 const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRuntime({tools:()=>[read],invoke:async()=>({value:7}), ...options})
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -165,12 +167,14 @@ describe('isolated Code Mode runtime', () => {
   it('forwards bounded image and audio items without duplicating base64 in text', async () => {
     const r = make()
     try {
-      const out = await r.exec({code:`image({type:'image',mimeType:'image/png',data:'YQ=='}); audio({type:'audio',mimeType:'audio/wav',data:'YQ=='});`})
+      const out = await r.exec({code:`image({type:'image',mimeType:'image/png',data:'${PNG}'}); audio({type:'audio',mimeType:'audio/wav',data:'YQ=='});`,yield_time_ms:5000})
       expect(out.status).toBe('completed'); expect(out.text).toBe('')
-      expect(out.items).toEqual([{type:'image',image:{mediaType:'image/png',dataBase64:'YQ=='}},{type:'audio',audioUrl:'data:audio/wav;base64,YQ=='}])
-      const large=await r.exec({code:`image({mediaType:'image/png',dataBase64:'YWFh'.repeat(8192)});`})
+      expect(out.items).toEqual([{type:'image',image:{mediaType:'image/png',dataBase64:PNG}},{type:'audio',audioUrl:'data:audio/wav;base64,YQ=='}])
+      const largePng = readFileSync(new URL('../../image-validation/test/large.png',import.meta.url)).toString('base64')
+      expect(largePng.length).toBeGreaterThan(32768)
+      const large=await r.exec({code:`image({mediaType:'image/png',dataBase64:'${largePng}'});`,yield_time_ms:5000})
       expect(large.status).toBe('completed');expect(large.truncated).toBe(false);expect(large.text).toBe('')
-      expect(large.items[0]).toMatchObject({type:'image',image:{dataBase64:'YWFh'.repeat(8192)}})
+      expect(large.items[0]).toMatchObject({type:'image',image:{dataBase64:largePng}})
     } finally { await r.dispose() }
   })
   it('successful completion wins later termination and commits concurrent store writes in completion order', async () => {

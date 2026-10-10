@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -113,7 +113,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
-      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      const messages = await projectImagesForProvider(request.messages, vision, request.signal)
       const body: Record<string, unknown> = {
         model: config.model,
         instructions: request.systemPrompt,

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest"
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, truncateSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { readPickedAttachments } from "../src/main/file-attachments.ts"
@@ -26,8 +26,50 @@ const imageHeaders = [
   ["jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 2, 0xff, 0xd9])],
   ["webp", "image/webp", Buffer.from("524946460c000000574542505650384c00000000", "hex")],
 ] as const
+const videoHeaders = [
+  ["mp4", "video/mp4", Buffer.from("000000186674797069736f6d0000020069736f6d6d703432", "hex")],
+  ["mov", "video/quicktime", Buffer.from("0000001466747970717420200000020071742020", "hex")],
+  ["webm", "video/webm", Buffer.from("1a45dfa3874282847765626d", "hex")],
+] as const
 
 describe("native picked file attachments", () => {
+  it.each(videoHeaders)("admits workspace and external %s as bounded local references", async (extension, contentType, header) => {
+    const { workspace, outside } = fixture()
+    const paths = [join(workspace, `inside.${extension}`), join(outside, `outside.${extension}`)]
+    paths.forEach(path => writeFileSync(path, header))
+    const result = await readPickedAttachments(workspace, paths, false)
+    expect(result.paths).toEqual([])
+    expect(result.images).toEqual([])
+    expect(result.texts).toHaveLength(2)
+    result.texts.forEach((entry, index) => {
+      expect(entry.contentType).toBe(contentType)
+      expect(JSON.parse(entry.text)).toEqual({ kind: "video-reference", path: realpathSync(paths[index]!).replaceAll("\\", "/"), contentType, bytes: header.length })
+      expect(entry.bytes).toBe(header.length)
+      expect(entry.text.length).toBeLessThan(1024)
+      expect(entry.text).not.toContain("base64")
+    })
+  })
+  it("rejects spoofed video extensions, empty video, and files beyond 256 MiB", async () => {
+    const { workspace, outside } = fixture()
+    for (const root of [workspace, outside]) {
+      const path = join(root, "spoof.mp4")
+      for (const bytes of [Buffer.from("not a video"), png, Buffer.alloc(0)]) {
+        writeFileSync(path, bytes)
+        await expect(readPickedAttachments(workspace, [path], true)).rejects.toThrow(/video|container/i)
+      }
+      writeFileSync(path, videoHeaders[0][2])
+      truncateSync(path, 256 * 1024 * 1024 + 1)
+      await expect(readPickedAttachments(workspace, [path], true)).rejects.toThrow(/256 MiB/)
+    }
+  })
+  it("requires WebM document type and a supported MP4 major brand", async () => {
+    const { workspace, outside } = fixture()
+    const webm = join(outside, "spoof.webm"), mp4 = join(outside, "spoof.mp4")
+    writeFileSync(webm, Buffer.from("1a45dfa3847765626d", "hex"))
+    const avif = Buffer.from(videoHeaders[0][2]); avif.write("avif", 8, "ascii"); writeFileSync(mp4, avif)
+    await expect(readPickedAttachments(workspace, [webm], false)).rejects.toThrow(/video|WebM/i)
+    await expect(readPickedAttachments(workspace, [mp4], false)).rejects.toThrow(/video|container/i)
+  })
   it("returns canonical workspace references and external UTF-8 context in one mixed batch", async () => {
     const { workspace, outside } = fixture()
     mkdirSync(join(workspace, "src"))

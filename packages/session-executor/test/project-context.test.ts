@@ -146,11 +146,12 @@ it.each(["legacy", "binding"] as const)("passes session-local live project gette
 
 it("project tools read images and search an additional root using its absolute path", async () => {
   const { a, b } = fixture()
+  const { PNG } = await import('../../image-validation/test/fixtures.ts')
   writeFileSync(join(b, "needle.txt"), "multi-root-needle")
-  writeFileSync(join(b, "image.png"), Buffer.from([1, 2, 3]))
+  writeFileSync(join(b, "image.png"), Buffer.from(PNG, 'base64'))
   const assembly = await createSessionAssembly({ workspace: a, model: quietModel, sandbox: "read-only", projectContext: () => ({ id: "p", name: "Read project", roots: [a, b], primaryRoot: a }) })
   try {
-    expect((await assembly.tools.execute({ name: "read_image", args: { path: join(b, "image.png") } })).output).toMatchObject({ images: [{ mediaType: "image/png", dataBase64: "AQID" }] })
+    expect((await assembly.tools.execute({ name: "read_image", args: { path: join(b, "image.png") } })).output).toMatchObject({ images: [{ mediaType: "image/png", dataBase64: PNG }] })
     expect((await assembly.tools.get("glob")!.execute({ pattern: "*.txt", path: b }, {}))).toMatchObject({ matches: ["needle.txt"] })
     expect((await assembly.tools.get("grep")!.execute({ pattern: "multi-root-needle", path: b }, {}))).toMatchObject({ matches: [{ path: join(b, "needle.txt").replaceAll("\\", "/"), line: 1, text: "multi-root-needle" }] })
   } finally { await assembly.dispose() }

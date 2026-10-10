@@ -1,3 +1,4 @@
+import { requestVideoAudio, type VideoAudioInput, type VideoAudioResult } from "./video-audio.ts"
 import {
   createProviderAuthResolver,
   type CredentialStore,
@@ -84,6 +85,7 @@ export interface SessionModelBinding {
 }
 
 export interface ProviderRuntimeEntry {
+  videoAudioModel?: string
   id: string
   displayName: string
   baseURL?: string
@@ -121,6 +123,8 @@ export interface ProviderRuntimeEntry {
 }
 
 export interface ProviderRuntime {
+  setVideoAudioModel?(selection: { provider: string; model: string } | null): Promise<void>
+  analyzeVideoAudio?(input: VideoAudioInput): Promise<VideoAudioResult>
   directory(): Promise<ProviderRuntimeEntry[]>
   upsertProvider(id: string, config: SettingsProviderConfig): Promise<void>
   /** Create a route. Refuses an id that already exists — `patchProvider` is the
@@ -261,7 +265,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
   }
 
   async function persistLlm(next: SettingsLlm): Promise<void> {
-    await options.settings.set({ llm: next })
+    await options.settings.set({ llm: { ...canonicalLlm(options.settings), ...next } })
   }
 
   /** One probe, one credential resolution, no writes. The single implementation
@@ -371,6 +375,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
             return { ...model, ...(modalities ? { inputModalities: [...modalities] } : {}) }
           }),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
+          ...(options.settings.get().llm.videoAudio?.provider === view.id ? { videoAudioModel: options.settings.get().llm.videoAudio!.model } : {}),
           ...(selectedDefault.provider === view.id && selectedDefault.model ? { selectedDefaultModel: selectedDefault.model } : {}),
           discovery: view.protocol === "bedrock" ? "manual-only" : "available",
           cardFamily: cardFamilyOf(view),
@@ -593,6 +598,35 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       })
     },
 
+    async setVideoAudioModel(selection) {
+      if (selection !== null) {
+        if (!selection.provider.trim() || !selection.model.trim() || selection.model.length > 256) throw new Error("Invalid video audio model")
+        const view = provider(selection.provider)
+        if (!view || !["openai-completions", "openai-responses"].includes(view.protocol ?? "")) throw new Error("Select an OpenAI Chat-compatible provider for video audio")
+      }
+      const next = { ...canonicalLlm(options.settings) }
+      if (selection) next.videoAudio = { provider: selection.provider, model: selection.model }
+      else delete next.videoAudio
+      await options.settings.set({ llm: next })
+    },
+    async analyzeVideoAudio(input) {
+      input.signal?.throwIfAborted()
+      const selection = options.settings.get().llm.videoAudio
+      if (!selection) return { status: "unconfigured", reason: "Select a video audio model in Settings > Models and providers to analyze speech and sounds." }
+      const view = provider(selection.provider)
+      if (!view || !["openai-completions", "openai-responses"].includes(view.protocol ?? "")) return { status: "unsupported", reason: "The selected video audio provider must support OpenAI Chat audio input." }
+      const ref = authRef(view)
+      if (!ref || !view.baseURL) return { status: "unconfigured", reason: "Configure the video audio provider endpoint and API key." }
+      try {
+        const key = authValue(await auth.resolve(ref, { providerId: selection.provider, purpose: "inference", signal: input.signal }))
+        input.signal?.throwIfAborted()
+        if (!key) return { status: "unconfigured", reason: "Configure an API key for the selected video audio provider." }
+        return await requestVideoAudio(input, { ...selection, baseURL: view.baseURL, apiKey: key, headers: view.headers })
+      } catch {
+        input.signal?.throwIfAborted()
+        return { status: "failed", reason: "Unable to resolve the video audio provider credentials." }
+      }
+    },
     async resolveModel(input) {
       const selection = selectModel(input, options.settings.get().llm.defaultModel)
       if ("state" in selection) return selection.state
@@ -1003,6 +1037,7 @@ function canonicalLlm(settings: SettingsStoreSurface): SettingsLlm {
         Object.entries(mutationBase.providers).map(([id, config]) => [id, cloneProviderConfig(config)]),
       ),
       defaultModel: { ...mutationBase.defaultModel },
+      ...(mutationBase.videoAudio ? { videoAudio: { ...mutationBase.videoAudio } } : {}),
     }
   }
   const llm = settings.get().llm
@@ -1011,6 +1046,7 @@ function canonicalLlm(settings: SettingsStoreSurface): SettingsLlm {
       Object.entries(llm.providers).map(([id, config]) => [id, cloneProviderConfig(config)]),
     ),
     defaultModel: { ...llm.defaultModel },
+    ...(llm.videoAudio ? { videoAudio: { ...llm.videoAudio } } : {}),
   }
 }
 

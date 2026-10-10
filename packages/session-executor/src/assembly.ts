@@ -24,6 +24,7 @@ import { registerWeb, createWebCache, type WebAccessMode } from "@i-harness/web"
 import { createFsTools } from "@i-harness/fs"
 import { createTodoTool, renderTodoContext } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
+import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
 import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
@@ -143,6 +144,7 @@ function cyclicMockClient(script: MockStep[]): ModelClient {
 }
 
 export interface AssemblyOptions {
+  videoAudioAnalyzer?: VideoAudioAnalyzer
   codeMode?: CodeModeConfig | (() => CodeModeConfig)
   codeModeFactory?: CodeModeFactory
   /** Session id — telemetry attribution + subagent persist stateId. A one-shot
@@ -328,6 +330,8 @@ export interface AssemblyOptions {
 interface RewindAssemblyHandle {
   store: RewindStore
   recorder: RewindRecorder
+  /** Join already scheduled turn-end writes; never recover an unfinished turn. */
+  drain?(): Promise<void>
 }
 
 export interface UnavailableExecutionAuthorityStatus {
@@ -340,8 +344,9 @@ export interface SessionAssembly {
   reconcileExecutionAuthority(): Promise<void>
   /** An unavailable owner is reported without claiming backend probe results. */
   executionBackendStatus(): Promise<(BackendProbe | UnavailableExecutionAuthorityStatus) & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
-  /** Current owning runtime registries only; reading never mounts or restores work. */
-  liveResources?(): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
+  /** Current owning runtime registries only; reading never mounts or restores work.
+   * A child owner may be supplied to inspect its terminals in this shared runtime. */
+  liveResources?(terminalOwnerSessionId?: string): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
   /** Reports the actual mounted mode/catalogue; never resolves a model. */
   executionState?(): { codeMode: "off" | "mixed" | "only"; modelTools: string[] }
   /** Cancels only an owned live cell without competing with its model observer. */
@@ -940,6 +945,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   // workspace-resolved path → ImageInput { mediaType, dataBase64 }).
   tools.register(createTodoTool({ session }))
   tools.register(createReadImageTool({ workspace: opts.workspace }))
+  tools.register(createReadVideoTool({ workspace: opts.workspace, analyzeAudio: opts.videoAudioAnalyzer }))
 
   // E9 schedule (spec 2026-09-20-schedule-design §4.2/§4.6): the delivery mount. Gated on the
   // DURABLE path — coordinator + sessionId — because the acceptance contract IS "dispatch +
@@ -1590,10 +1596,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
       ownedToolCaller,
-      liveResources: () => {
+      liveResources: (terminalOwnerSessionId = opts.sessionId) => {
         if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
         const terminal = ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")
-        return { codeCells: codeModeMount?.liveCells?.() ?? [], terminals: (terminal?.list() ?? []).filter(row => row.ownerSessionId === opts.sessionId) }
+        return { codeCells: codeModeMount?.liveCells?.() ?? [], terminals: (terminal?.list() ?? []).filter(row => row.ownerSessionId === terminalOwnerSessionId) }
       },
       executionState: () => ({ codeMode: codeMode.mode, modelTools: modelToolSchemas().map(tool => tool.name) }),
       ...(codeModeMount?.terminateCell ? { async stopCodeCell(cellId: string) {
@@ -1643,7 +1649,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         await (pending ?? executionRuntime.reconcile())
       },
       ...(rewindStore !== undefined && rewindRecorder !== undefined
-        ? { rewind: { store: rewindStore, recorder: rewindRecorder } }
+        ? { rewind: { store: rewindStore, recorder: rewindRecorder, drain: () => rewindDrain } }
         : {}),
       dispose,
     }

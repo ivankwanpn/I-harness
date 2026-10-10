@@ -12,6 +12,32 @@ import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("restores running from the authoritative queue on selection and retains it until cancellation settles", async () => {
+  fixture(request => request.kind === "session/cancel" ? Promise.resolve({ cancelled: true })
+    : request.kind === "session/queue" ? Promise.resolve([{ id: "active", text: "active", delivery: "queue", intent: "user", state: "running", order: 1 }]) : undefined)
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.queue?.[0]?.state).toBe("running"))
+  expect(captured.props!.conversation!.running).toBe(true)
+  await act(async () => captured.props!.conversation!.onCancel())
+  expect(captured.props!.conversation!.running).toBe(true)
+})
+it.each(["queued", "idle"] as const)("does not replace a newer %s notification with an earlier queue snapshot", async status => {
+  const pending = defer()
+  let queueReads = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(request => request.kind === "session/queue" ? (++queueReads, pending.promise) : undefined,
+    listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(queueReads).toBeGreaterThan(0))
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "a", status } }))
+  await act(async () => {
+    pending.resolve(status === "queued" ? [] : [{ id: "old", state: "running" }])
+    await pending.promise
+  })
+  expect(captured.props!.conversation!.running).toBe(status === "queued")
+})
 it.each(["task", "queue", "resume"] as const)("reports a rejected %s action in the selected conversation", async action => {
   fixture(request => ["session/tasks/cancel", "session/queue/cancel", "desktop/session/input/resume"].includes(request.kind) ? Promise.reject(new Error("operation unavailable")) : undefined)
   await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))

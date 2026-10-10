@@ -1,6 +1,8 @@
 import { setTimeout as delay } from "node:timers/promises"
-import type { LLMMessage, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
+import type { LLMMessage, LLMContentPart, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
+import { createHash } from 'node:crypto'
+import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
 /**
  * M5 T2: the provider's OWN usage report for one round-trip.
@@ -420,11 +422,40 @@ export function projectImagesForTextModel(messages: LLMMessage[]): LLMMessage[] 
       ...m,
       content: m.content.map((part) =>
         part.type === "image"
-          ? { type: "text" as const, text: `[image omitted: model is text-only; base64:${part.image.dataBase64.slice(0, 8)}]` }
+          ? { type: "text" as const, text: `[image omitted: model is text-only; base64:${typeof part.image?.dataBase64 === 'string' ? part.image.dataBase64.slice(0, 8) : 'invalid'}]` }
           : part,
       ),
     }
   })
+}
+
+/** Transport-only quarantine. Original events and deriveMessages remain immutable evidence. */
+export async function projectImagesForProvider(messages: LLMMessage[], vision: boolean, signal?: AbortSignal): Promise<LLMMessage[]> {
+  if (!vision) return projectImagesForTextModel(messages)
+  const result: LLMMessage[] = []
+  let count = 0, bytes = 0
+  for (const message of messages) {
+    if (typeof message.content === 'string' || message.role === 'assistant') { result.push(message); continue }
+    const content: LLMContentPart[] = []
+    for (const part of message.content) {
+      if (part.type !== 'image') { content.push(part); continue }
+      signal?.throwIfAborted()
+      try {
+        count++
+        bytes += typeof part.image?.dataBase64 === 'string' ? Math.ceil(part.image.dataBase64.length * .75) : 0
+        if (count > 200 || bytes > 200 * 1024 * 1024) throw new InvalidImageError('request image count or byte limit exceeded')
+        await validateImage(part.image, { signal })
+        content.push(part)
+      } catch (error) {
+        if (!(error instanceof InvalidImageError)) throw error
+        const data = typeof part.image?.dataBase64 === 'string' ? part.image.dataBase64 : ''
+        const hash = createHash('sha256').update(data).digest('hex').slice(0, 16)
+        content.push({ type: 'text', text: `[Image unavailable: ${error.message}; reference ${hash}. Original attachment is preserved in session history. Re-read or regenerate the image.]` })
+      }
+    }
+    result.push({ ...message, content })
+  }
+  return result
 }
 
 /**

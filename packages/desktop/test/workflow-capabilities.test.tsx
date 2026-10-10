@@ -33,7 +33,7 @@ it("unmounts an open workflow when capability disappears and retains an unavaila
   const calls = request.mock.calls.filter(([input]) => input.kind.startsWith("desktop/session/workflow/")).length
   view.rerender(<Workbench {...props} capabilities={{}} />)
   await waitFor(() => expect(screen.queryByRole("textbox", { name: "目標內容" })).toBeNull())
-  expect(screen.getByRole("status").textContent).toContain("目前工作區後端未提供此功能。")
+  expect(screen.getByText("目前工作區後端未提供此功能。").getAttribute("role")).toBe("status")
   expect(screen.queryByRole("tab", { name: "工作流程" })).toBeNull()
   expect(request.mock.calls.filter(([input]) => input.kind.startsWith("desktop/session/workflow/"))).toHaveLength(calls)
 })

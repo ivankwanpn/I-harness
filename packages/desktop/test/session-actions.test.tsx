@@ -91,7 +91,7 @@ describe("sidebar session actions", () => {
     expect(screen.getByRole("dialog", { name: "重新命名" })).toBeTruthy()
     fireEvent.change(screen.getByLabelText("會話名稱"), { target: { value: "Updated" } })
     fireEvent.click(screen.getByRole("button", { name: "儲存" }))
-    expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Session is busy")
+    expect((await screen.findByRole("alert")).textContent).toContain("請先停止目前執行")
     expect(manage).toHaveBeenCalledWith("s2", "rename", "Updated")
     expect((screen.getByLabelText("會話名稱") as HTMLInputElement).value).toBe("Updated")
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" })

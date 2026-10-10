@@ -12,6 +12,7 @@
   },
   "devDependencies": { "@i-harness/session-persistence-jsonl": "workspace:*" },
   "dependencies": {
+    "@i-harness/media": "workspace:*",
     "@i-harness/code-mode": "workspace:*",
     "@i-harness/agent-team": "workspace:*",
     "@i-harness/attachment": "workspace:*",

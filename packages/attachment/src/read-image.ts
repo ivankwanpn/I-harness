@@ -4,7 +4,8 @@
 // (mime + canonical base64) — the host's provider chain already carries
 // `{type:"image", image}` parts (M14). Bytes stay inline on the wire; no store
 // write happens here (the attachment store is the host-published upload path).
-import { readFile } from "node:fs/promises"
+import { open } from "node:fs/promises"
+import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 import { extname } from "node:path"
 import { FsToolError, resolvePath, softFail } from "@i-harness/fs"
 import type { FsToolFailure } from "@i-harness/fs"
@@ -38,17 +39,30 @@ export function createReadImageTool(deps: ReadImageToolDeps): Tool<{ path: strin
     // M61: an fs failure is RETURNED, never thrown — a throwing tool body fails
     // the whole turn (core-agent M13/M25) and the call sits in the scrollback
     // with no result at all, which read as "read_image hung".
-    execute: async ({ path }) => softFail(async () => {
+    execute: async ({ path }, exec) => softFail(async () => {
       const resolved = resolvePath(deps.workspace, path)
       const mediaType = MIME_BY_EXT[extname(resolved).toLowerCase()]
       if (mediaType === undefined) {
         throw new FsToolError("FS_NOT_FOUND", `read_image: unsupported image type for ${path} (only png/jpeg/gif/webp)`)
       }
-      const data = await readFile(resolved)
-      if (data.byteLength > maxImageBytes) {
-        throw new FsToolError("FS_TOO_LARGE", `read_image: image is ${data.byteLength} bytes (max ${maxImageBytes})`)
-      }
-      return { images: [{ mediaType, dataBase64: data.toString("base64") }] }
+      const handle = await open(resolved, 'r')
+      let data: Buffer
+      try {
+        if ((await handle.stat()).size > maxImageBytes) throw new FsToolError('FS_TOO_LARGE', `read_image: image exceeds ${maxImageBytes} bytes`)
+        const buffer = Buffer.alloc(maxImageBytes + 1)
+        let size = 0
+        while (size < buffer.length) {
+          const read = await handle.read(buffer, size, buffer.length - size, null)
+          if (!read.bytesRead) break
+          size += read.bytesRead
+        }
+        if (size > maxImageBytes) throw new FsToolError('FS_TOO_LARGE', `read_image: image exceeds ${maxImageBytes} bytes`)
+        data = buffer.subarray(0, size)
+      } finally { await handle.close() }
+      const image = { mediaType, dataBase64: data.toString('base64') }
+      try { await validateImage(image, { signal: exec.abortSignal }) }
+      catch (error) { if (error instanceof InvalidImageError) throw new FsToolError('FS_IO_ERROR', `read_image: ${error.message}`); throw error }
+      return { images: [image] }
     }),
   }
 }

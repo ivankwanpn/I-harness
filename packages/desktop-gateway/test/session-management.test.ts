@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { afterEach, describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import type { SessionService } from "@i-harness/session-executor"
@@ -248,4 +248,73 @@ describe("session navigation metadata", () => {
       expect(await manager.archived()).toEqual([])
     } finally { await coordinator.close() }
   })
+})
+
+it("archives an idle reusable child without changing its durable state", async () => {
+  const { coordinator, service } = await setup()
+  try {
+    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+    await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, { type: "turn/end", seq: 1 }])
+    const saved = { formatVersion: 1, jobs: [{ status: "completed" }], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: [] }], roles: [] }
+    await coordinator.putDocument("s1", saved)
+    await createSessionManagement(coordinator, service).mutate("s1", "archive")
+    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
+    expect(await coordinator.getDocument("s1")).toEqual(saved)
+  } finally { await coordinator.close() }
+})
+it.each(["inbox", "turn", "mailbox", "cell", "missing"])("keeps reusable-child archive blocked by %s", async (blocker: string) => {
+  const { coordinator, service } = await setup()
+  try {
+    if (blocker !== "missing") {
+      await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+      await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, ...(blocker === "turn" ? [] : [{ type: "turn/end", seq: 1 }]),
+        ...(blocker === "inbox" ? [{ type: "subagent/inbox", seq: 2, from: "root", message: "pending" }] : []),
+        ...(blocker === "cell" ? [{ type: "code/cell", seq: 2, cellId: "c", state: "started", source: "" }] : [])] as never)
+    }
+    await coordinator.putDocument("s1", { formatVersion: 1, jobs: [], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: blocker === "mailbox" ? ["pending"] : [] }], roles: [] })
+    await expect(createSessionManagement(coordinator, service).mutate("s1", "archive")).rejects.toThrow()
+    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+  } finally { await coordinator.close() }
+})
+it.each([undefined, "Named conversation"])("preserves an unresolved rewind sidecar regardless of title %s", async (title: string | undefined) => {
+  const { root, coordinator, service } = await setup()
+  try {
+    await coordinator.create({ sessionId: "rewind-title", ...(title ? { title } : {}) })
+    const store = new RewindStore({ root, workspace: root, sessionId: "rewind-title" })
+    const pending = { version: 1 as const, anchorSeq: 0, promptPreview: "unfinished", startedAt: 1, entries: [] }
+    await store.writePending(pending)
+    await expect(createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("rewind-title", "archive")).rejects.toThrow("Session has a pending rewind recording")
+    expect(await store.readPending()).toEqual(pending)
+  } finally { await coordinator.close() }
+})
+
+it("awaits the live rewind finalizer before judging a settled turn's sidecar", async () => {
+  const { root, coordinator, service } = await setup()
+  let release!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
+  await store.writePending({ version: 1, anchorSeq: 0, promptPreview: "done", startedAt: 1, entries: [] })
+  const finalized = gate.then(() => store.appendPoint({ turnIndex: 0, anchorSeq: 0, promptPreview: "done", files: [] }))
+  const drain = vi.fn(() => finalized)
+  const live = { ...service, liveAssembly: () => ({ liveResources: () => ({ codeCells: [], terminals: [] }), rewind: { drain } }) } as unknown as SessionService
+  const archive = createSessionManagement(coordinator, live, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")
+  void archive.catch(() => {})
+  try {
+    await vi.waitFor(() => expect(drain).toHaveBeenCalled())
+    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+    release()
+    await archive
+    expect((await coordinator.profile("s1")).meta.archived).toBe(true)
+  } finally { release(); await Promise.allSettled([archive, finalized]); await coordinator.close() }
+})
+
+it("keeps archive blocked by a reusable child's terminal owned by the parent runtime", async () => {
+  const { coordinator, service } = await setup()
+  try {
+    await coordinator.create({ sessionId: "idle-child", origin: "subagent", parentSession: "s1" })
+    await coordinator.append("idle-child", [{ type: "turn/start", seq: 0 }, { type: "turn/end", seq: 1 }])
+    await coordinator.putDocument("s1", { formatVersion: 1, jobs: [], agentTable: [{ path: "root/child", sessionId: "idle-child", status: "waiting", mailbox: [] }], roles: [] })
+    const live = { ...service, liveAssembly: (id: string) => id === "s1" ? { liveResources: (owner?: string) => ({ codeCells: [], terminals: owner === "idle-child" ? [{ status: "running" }] : [] }) } : undefined } as unknown as SessionService
+    await expect(createSessionManagement(coordinator, live).mutate("s1", "archive")).rejects.toThrow("active Code Mode cells or processes")
+  } finally { await coordinator.close() }
 })

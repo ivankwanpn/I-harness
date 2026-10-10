@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { Worker } from 'node:worker_threads'
 import { createUnifiedSpillStore } from '@i-harness/output-retention'
+import { validateImage } from '@i-harness/image-validation'
 import type { CodeModeConfig, CodeModeItem, CodeModeObservation, CodeModeOrigin, CodeModeRuntime, CodeModeRuntimeOptions, CodeModeStatus, CodeModeStoreEntries, CodeModeTextRetention } from './types.js'
 
 const TEXT_CAP = 16 * 1024
@@ -100,6 +101,9 @@ interface Cell {
   commitStop: AbortController
   retentionStop: AbortController
   textIncomplete: boolean
+  admission: Promise<void>
+  pendingBytes: number
+  pendingItems: number
 }
 
 /** Each admission owns a fresh WASM worker. Only JSON crosses its boundary. */
@@ -173,16 +177,26 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     if (cell.status !== 'running') return
     const item = JSON.parse(encoded) as CodeModeItem
     const bytes = Buffer.byteLength(encoded)
-    if (cell.items.length >= ITEM_CAP || cell.bytes + bytes > config.maxResultBytes) {
+    if (cell.items.length + cell.pendingItems >= ITEM_CAP || cell.bytes + cell.pendingBytes + bytes > config.maxResultBytes) {
       cell.truncated = true
       cell.textIncomplete ||= item.type === 'text'
       return
     }
-    cell.items.push(item)
-    cell.bytes += bytes
-    if (item.type === 'text') cell.textBytes += Buffer.byteLength(item.text)
-    const pending = event({type:'output',cellId:cell.id,item,origin:cell.origin})
-    if (pending) track(Promise.resolve(pending).catch(error => close(cell,'failed',message(error))),cell)
+    // Reserve before asynchronous decoding. All following output shares the same
+    // order, and completion waits for this barrier before committing any store.
+    cell.pendingBytes += bytes; cell.pendingItems++
+    cell.admission = cell.admission.then(async () => {
+      if (cell.status !== 'running') return
+      if (item.type === 'image') await validateImage(item.image, { signal: cell.commitStop.signal })
+      if (cell.status !== 'running') return
+      cell.items.push(item)
+      cell.bytes += bytes
+      if (item.type === 'text') cell.textBytes += Buffer.byteLength(item.text)
+      await event({type:'output',cellId:cell.id,item,origin:cell.origin})
+    }).catch(error => { if (cell.status === 'running') close(cell,'failed',message(error)) }).finally(() => {
+      cell.pendingBytes -= bytes; cell.pendingItems--
+    })
+    track(cell.admission,cell)
   }
   function call(cell: Cell, id: string, name: string, encoded: string) {
     if (cell.status !== 'running' || cell.finishing) return
@@ -231,6 +245,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     catch (error) { close(cell,'failed',message(error)); return }
     const finalize = async () => {
       try {
+        await cell.admission
         if (cell.status !== 'running') return
         const merged = currentStore(cell.origin)
         for (const [key,value] of writes) merged.set(key,value)
@@ -359,7 +374,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       if (textRetention) textRetention.omittedBytes = textRetention.admittedBytes - Buffer.byteLength(text)
       // A slow spill can overlap later output and guest completion. Keep the
       // observation cursor available until that later window is consumed.
-      const status = cell.items.length || cell.truncated || cell.textIncomplete ? 'running' : cell.status
+      const status = cell.items.length || cell.truncated || cell.textIncomplete || cell.status === 'running' && cell.pendingItems ? 'running' : cell.status
       const out: CodeModeObservation = {cellId:cell.id,status,items,text,truncated,
         ...(textRetention ? {textRetention} : {}),
         ...(error === undefined ? {} : {error}), ...(cell.policyRefusal ? {policyRefusal:true} : {})}
@@ -433,7 +448,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
       finally { admissions-- }
       const worker = new Worker(new URL('./worker.mjs',import.meta.url),{workerData:{code:input.code,cellId:id,catalog:catalogJson,store:initialStoreJson,config},execArgv:[]})
-      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false}
+      const cell: Cell = {id,worker,origin,status:'running',items:[],bytes:0,textBytes:0,truncated:false,observer:false,yielded:false,calls:new Map(),producers:new Set(),knownTools:names,finishing:false,commitStop:new AbortController(),retentionStop:new AbortController(),textIncomplete:false,admission:Promise.resolve(),pendingBytes:0,pendingItems:0}
       cells.set(id,cell)
       worker.on('message',data => receive(cell,data))
       worker.on('error',error => close(cell,'failed',message(error)))

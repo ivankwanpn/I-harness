@@ -6,6 +6,20 @@ import { createRequire } from "node:module"
 // @ts-expect-error The packaging helper runs directly as native ESM JavaScript.
 import { copyRuntimePackage, runtimePackageRoot } from "../scripts/runtime-copy.mjs"
 
+it("ships native packages exposing only a package subpath and native binary", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-native-package-root-"))
+  const pkg = join(root, "node_modules", "@img", "native")
+  try {
+    mkdirSync(pkg, { recursive: true })
+    writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "@img/native", exports: { "./package": "./package.json", "./sharp.node": "./sharp.node" } }))
+    writeFileSync(join(pkg, "sharp.node"), "native-fixture")
+    const source = runtimePackageRoot("@img/native", root)
+    expect(source).toBe(pkg)
+    copyRuntimePackage(source, join(root, "shipped"))
+    expect(existsSync(join(root, "shipped", "sharp.node"))).toBe(true)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
 it("ships declared native assets without workspace fixtures or compiler outputs", () => {
   const root=mkdtempSync(join(tmpdir(),"ih-runtime-assets-")), source=join(root,"source"),target=join(root,"out")
   try {

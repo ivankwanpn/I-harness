@@ -209,6 +209,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       hookConfigs: inputs.hookConfigs, grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
   const service: SessionService = createSessionService({
+    videoAudioAnalyzer: input => runtime.analyzeVideoAudio?.(input) ?? Promise.resolve({ status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." }),
     sessionOperation: fence,
     projectContextFor: async id => { const getter = await projects.forSession(id); projectContexts.set(id, getter); return getter },
     executionAuthorityFor: async id => { const get = await projects.authorityFor(id); executionAuthorities.set(id, get); return get },

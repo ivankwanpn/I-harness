@@ -238,6 +238,8 @@ interface SettingsAgents {
 export interface SettingsLlm {
   providers: Record<string, SettingsProviderConfig>
   defaultModel: SettingsDefaultModel
+  /** Explicit secondary Chat audio model used by read_video. */
+  videoAudio?: { provider: string; model: string }
 }
 
 /** M46b G1: the grok default word-separator set (text_selection.rs:
@@ -658,6 +660,8 @@ function normalizeLlm(raw: unknown, base: SettingsLlm): SettingsLlm {
   const dm = isRecord(raw.defaultModel) ? raw.defaultModel : {}
   return {
     providers,
+    ...(isRecord(raw.videoAudio) && isNonEmptyString(raw.videoAudio.provider) && isNonEmptyString(raw.videoAudio.model)
+      ? { videoAudio: { provider: raw.videoAudio.provider, model: raw.videoAudio.model } } : {}),
     defaultModel: {
       provider: isNonEmptyString(dm.provider) ? dm.provider : base.defaultModel.provider,
       model: isNonEmptyString(dm.model) ? dm.model : base.defaultModel.model,
@@ -678,6 +682,7 @@ function normalizeLlmWithLegacy(raw: unknown, legacyRaw: unknown, base: Settings
     providers[id] = { ...providers[id], ...config }
   }
   return {
+    ...(canonical.videoAudio ? { videoAudio: { ...canonical.videoAudio } } : {}),
     providers,
     defaultModel: {
       ...canonical.defaultModel,

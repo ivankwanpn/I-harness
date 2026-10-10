@@ -2,6 +2,16 @@ import { expect, it, vi } from "vitest"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { providerCommand } from "../src/provider-wire.ts"
 
+it("validates and routes the separate video audio selection", async () => {
+  const setVideoAudioModel = vi.fn(async () => {})
+  const runtime = { setVideoAudioModel } as unknown as ProviderRuntime
+  await providerCommand(runtime, { action: "video-audio/set", id: "audio", model: "audio-model" })
+  expect(setVideoAudioModel).toHaveBeenLastCalledWith({ provider: "audio", model: "audio-model" })
+  await expect(providerCommand(runtime, { action: "video-audio/set", id: "audio", model: "" })).rejects.toThrow()
+  await providerCommand(runtime, { action: "video-audio/set", id: "audio", model: null })
+  expect(setVideoAudioModel).toHaveBeenLastCalledWith(null)
+})
+
 it("rejects malformed commands before invoking the runtime", async () => {
   const setModel = vi.fn()
   const runtime = { setModel } as unknown as ProviderRuntime

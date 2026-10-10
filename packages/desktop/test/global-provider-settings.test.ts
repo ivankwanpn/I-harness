@@ -7,9 +7,11 @@ describe("global provider setup without a selected workspace", () => {
     const settings = createGlobalProviderSettings(async () => ({ request: async (method: string, params: unknown) => { calls.push({ method, params }); return { ok: true } } }))
     await settings.request({ kind: "desktop/global-provider/directory" })
     await settings.request({ kind: "desktop/global-provider/mutate", command: { action: "model/add", id: "local", model: "model-a", fields: { protocol: "openai-responses" } } })
+    await settings.request({ kind: "desktop/global-provider/mutate", command: { action: "video-audio/set", id: "local", model: "audio-model" } })
     expect(calls).toEqual([
       { method: "desktop/provider/directory", params: {} },
       { method: "desktop/provider/mutate", params: { action: "model/add", id: "local", model: "model-a", fields: { protocol: "openai-responses" } } },
+      { method: "desktop/provider/mutate", params: { action: "video-audio/set", id: "local", model: "audio-model" } },
     ])
   })
   it("does not start a runtime for unknown operations or malformed probe identifiers", async () => {
