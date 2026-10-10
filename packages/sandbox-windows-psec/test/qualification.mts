@@ -12,6 +12,7 @@ import { createExecutionSupervisor } from "@i-harness/exec"
 import type { AuthorityState, ProcessSpec, SandboxMode } from "@i-harness/sandbox"
 import { createWindowsPsecBackend, createWindowsUnrestrictedBackend } from "../src/index.ts"
 import { recordTeardownFailures } from "./qualification-teardown.ts"
+import { resolveWindowsMsysPty } from "../../exec/src/windows-msys-pty.ts"
 
 if (process.platform !== "win32") throw new Error("Windows qualification requires Windows")
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
@@ -77,9 +78,10 @@ async function run(engine: Engine, mode: SandboxMode, argv: string[], opts: {
   const authority: AuthorityState = { kind: "bound", revision: "qualification-1", primaryRoot: workspace,
     roots: [workspace], references: opts.refs ?? [] }
   const policy = compileExecutionPolicy({ mode, owner, authority })
-  const spec: ProcessSpec = { argv, cwd: opts.cwd ?? workspace, env: opts.env ?? baseEnv, owner,
+  let spec: ProcessSpec = { argv, cwd: opts.cwd ?? workspace, env: opts.env ?? baseEnv, owner,
     transport: opts.transport ?? "pipe", lifetime: opts.lifetime ?? "complete-tree", argumentEncoding: opts.encoding ?? "crt",
     ...(opts.transport === "pty" ? { pty: { cols: 80, rows: 24 } } : {}) }
+  if (engine === "unrestricted") spec = resolveWindowsMsysPty(spec)
   const requirements = { writeIsolation: engine === "psec", readIsolation: false, denyPaths: engine === "psec" && backend === psec,
     transport: spec.transport, lifetime: spec.lifetime, minimumAssurance: "unverified" as const }
   const launched = await supervisor.launch({ backend, spec, policy, requirements, validateAuthority: current => assertExecutionAuthority(policy, current) })
@@ -289,6 +291,16 @@ try {
     assert.equal(result.root.exitCode, 17)
     assert.equal(readFileSync(marker, "utf8"), "descendant-finished")
     return { root: result.root, markerAfterRoot: true, settlement: result.settlement }
+  })
+  await test("unrestricted-msys-pty-absolute-runtime-input-resize", async () => {
+    const result = await run("unrestricted", "danger-full-access", [bash, "--noprofile", "--norc", "-c", "IFS= read -r line; printf 'MSYS_INPUT:%s\\n' \"$line\"; tput cols; tput lines"], {
+      transport: "pty", lifetime: "complete-tree", env: { ...baseEnv, TERM: "xterm-256color", HISTFILE: resolve(workspace, "msys-history") },
+      input: Buffer.from("exact-msys-input\r"), resize: [143, 37],
+    })
+    settled(result); assert.equal(result.root.exitCode, 0)
+    assert.match(result.pty.toString(), /MSYS_INPUT:exact-msys-input\r?\n143\r?\n37/)
+    return { root: result.root, output: result.pty.toString(), settlement: result.settlement,
+      templateSha256: manifest.msysPty.sha256, runtimeSha256: createHash("sha256").update(readFileSync(resolve(dirname(bashDirect), "msys-2.0.dll"))).digest("hex") }
   })
   const server = createServer(socket => socket.end("ok"))
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))

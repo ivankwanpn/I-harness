@@ -30,6 +30,7 @@ struct Prepared {
     effective: Effective,
     psec: Option<Psec>,
     job: Option<Job>,
+    workload_job: Option<Job>,
     io: PreparedIo,
     errors: Vec<Error>,
 }
@@ -49,6 +50,8 @@ struct Running {
     closing: bool,
     errors: Vec<Error>,
     stop_at: Option<Instant>,
+    msys_done: bool,
+    msys_root: Option<u32>,
 }
 enum JobTermination {
     Pending,
@@ -59,6 +62,7 @@ struct PreparedOwner {
     _effective: Effective,
     _psec: Option<Psec>,
     job: Job,
+    workload_job: Option<Job>,
 }
 impl Prepared {
     fn new(
@@ -79,6 +83,7 @@ impl Prepared {
             effective,
             psec: None,
             job: None,
+            workload_job: None,
             io: PreparedIo::empty(),
             errors: vec![],
         })
@@ -98,6 +103,17 @@ impl Prepared {
         };
         self.job = Some(Job::new()?);
         self.job.as_ref().unwrap().configure()?;
+        if self.effective.spec.msys_pty.is_some() {
+            self.workload_job = Some(Job::new()?);
+            let job = self.workload_job.as_ref().unwrap();
+            job.configure()?;
+            if unsafe { SetHandleInformation(job.0.0, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                return Err(Error::native("SetHandleInformation(MSYS workload Job)"));
+            }
+            self.effective.prepare_msys_image(job.0.0 as usize)?;
+        }
         self.io.initialize(&self.effective.spec)
     }
     fn release(&mut self) -> bool {
@@ -108,6 +124,11 @@ impl Prepared {
             }
         }
         errors.extend(self.effective.release());
+        if let Some(job) = self.workload_job.as_mut() {
+            if let Err(e) = job.0.close() {
+                errors.push(e);
+            }
+        }
         let released = errors.is_empty();
         self.errors.extend(errors);
         if released {
@@ -121,10 +142,16 @@ impl Prepared {
         }
         self.effective.recheck()?;
         let spec = &self.effective.spec;
+        let argv = self.effective.spawn_argv.as_ref().unwrap_or(&spec.argv);
         let line = if spec.argument_encoding == "crt" {
-            spec.argv
-                .iter()
-                .map(|s| quote(s))
+            argv.iter()
+                .map(|s| {
+                    if spec.msys_pty.is_some() {
+                        crate::command_line::quote_always(s)
+                    } else {
+                        quote(s)
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(" ")
         } else {
@@ -134,7 +161,7 @@ impl Prepared {
             return Err(Error::invalid("command line exceeds 32766 UTF16 units"));
         }
         let mut command = wide(&line);
-        let executable = wide(&spec.argv[0]);
+        let executable = wide(&argv[0]);
         let cwd = wide(&spec.cwd);
         let mut env = vec![];
         let mut keys = spec.env.keys().collect::<Vec<_>>();
@@ -149,6 +176,9 @@ impl Prepared {
         }
         let pty = self.io.console.is_some();
         let mut inherited: Vec<HANDLE> = self.io.child.iter().map(|h| h.0).collect();
+        if let Some(job) = &self.workload_job {
+            inherited.push(job.0.0);
+        }
         let mut attrs = Attributes::new(1 + u32::from(self.psec.is_some()))?;
         if let Some(psec) = &mut self.psec {
             unsafe {
@@ -239,6 +269,7 @@ impl Prepared {
                 _effective: self.effective,
                 _psec: self.psec,
                 job: self.job.expect("initialized job"),
+                workload_job: self.workload_job,
             },
             id,
             cancelled: false,
@@ -246,6 +277,8 @@ impl Prepared {
             closing: false,
             errors: self.errors,
             stop_at: None,
+            msys_done: false,
+            msys_root: None,
         }
     }
 }
@@ -400,9 +433,17 @@ impl Running {
         }
         if !self.root_reported {
             let wait = unsafe { WaitForSingleObject(self.process.0, 0) };
-            if wait == WAIT_OBJECT_0 {
+            let adapter = self.owner._effective.spec.msys_pty.is_some();
+            if self.msys_root.is_some() || (wait == WAIT_OBJECT_0 && (!adapter || self.msys_done)) {
                 let mut exit = 0;
-                let observation = if unsafe { GetExitCodeProcess(self.process.0, &mut exit) } == 0 {
+                let observation = if let Some(code) = self.msys_root {
+                    exit = code;
+                    None
+                } else if adapter {
+                    Some(Error::state(
+                        "MSYS adapter ended before observing child exit",
+                    ))
+                } else if unsafe { GetExitCodeProcess(self.process.0, &mut exit) } == 0 {
                     Some(Error::native("GetExitCodeProcess"))
                 } else {
                     None
@@ -413,11 +454,23 @@ impl Running {
                     serde_json::json!({"exitCode":if observation.is_none(){Some(exit)}else{None},"observationError":observation}),
                 )?;
                 self.root_reported = true;
-                if self.owner._effective.spec.lifetime == "complete-tree" {
+                if self.owner._effective.spec.lifetime == "complete-tree"
+                    && self.owner.workload_job.is_none()
+                {
                     self.stop(false);
                 }
             } else if wait == WAIT_FAILED {
                 return Err(Error::native("WaitForSingleObject(root)"));
+            }
+        }
+        if self.root_reported
+            && !self.cancelled
+            && self.owner._effective.spec.lifetime == "complete-tree"
+        {
+            if let Some(job) = &self.owner.workload_job {
+                if job.active()? > 0 {
+                    job.terminate()?;
+                }
             }
         }
         if !self.tree_reported && self.root_reported && self.owner.job.active()? == 0 {
@@ -457,6 +510,12 @@ impl Running {
             }
         }
         let errors = self.owner._effective.release();
+        if let Some(job) = self.owner.workload_job.as_mut() {
+            if let Err(e) = job.0.close() {
+                self.errors.push(e);
+                released = false;
+            }
+        }
         if !errors.is_empty() {
             released = false;
             self.errors.extend(errors);
@@ -529,6 +588,27 @@ fn drain_events(events: &Receiver<Event>, running: &mut Option<Running>) -> Resu
                 }
             }
             Event::InputClosed | Event::ConsoleClosed => {}
+            Event::Bridge(crate::msys::Observation::Ready) => {}
+            Event::Bridge(crate::msys::Observation::Ack(id, result)) => match result {
+                Ok(()) => status(&id, "ack", serde_json::json!({}))?,
+                Err(e) => failure(&id, e)?,
+            },
+            Event::Bridge(crate::msys::Observation::Root(code)) => {
+                if let Some(r) = running.as_mut() {
+                    r.msys_root = Some(code);
+                }
+            }
+            Event::BridgeDone(result) => {
+                if let Some(r) = running.as_mut() {
+                    r.msys_done = true;
+                    if let Err(e) = result {
+                        if !r.cancelled {
+                            r.remember(e);
+                            r.stop(true);
+                        }
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -756,12 +836,14 @@ pub fn run() -> Result<()> {
                             .io
                             .send(Input::End(id.clone()))?,
                         Action::Resize { cols, rows } => {
-                            running
-                                .as_ref()
+                            let deferred = running
+                                .as_mut()
                                 .ok_or_else(|| Error::state("workload not active"))?
                                 .io
-                                .resize(cols, rows)?;
-                            status(&id, "ack", serde_json::json!({}))?;
+                                .resize(id.clone(), cols, rows)?;
+                            if !deferred {
+                                status(&id, "ack", serde_json::json!({}))?;
+                            }
                         }
                         Action::Signal { signal } => {
                             let r = running

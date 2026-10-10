@@ -1,6 +1,6 @@
-import { readFile, writeFile, readdir } from "node:fs/promises"
+import { readFile, writeFile, readdir, mkdir } from "node:fs/promises"
 import { filesystemApprovalIdentity } from "./approval-identity.ts"
-import { resolve, relative, isAbsolute } from "node:path"
+import { resolve, relative, isAbsolute, dirname } from "node:path"
 import type { Tool, ToolExec } from "@i-harness/core-tools"
 import type { FsToolFailure } from "./error.ts"
 import { createTextDiff, type TextDiff } from "@i-harness/text-diff"
@@ -267,6 +267,8 @@ export function createFsTools(deps: FsToolDeps): Tool[] {
       const captured = deps.rewind !== undefined
         ? await capturePreimage(deps.rewind, deps.workspace, target)
         : {}
+      guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
+      await mkdir(dirname(target), { recursive: true })
       guardWrite(deps, target, ladder.mode, ladder.authoritySnapshot)
       await writeFile(target, text, "utf-8")
       const { beforeBytes, preImageRef, isNewFile } = captured

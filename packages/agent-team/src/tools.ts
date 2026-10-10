@@ -47,14 +47,14 @@ type TaskUpdateArgs = { task_id: string; expected_revision: number; action: stri
 export function createTeamTools(deps: TeamToolDeps): Tool[] {
   const spawn: Tool<SpawnArgs, { member: TeamMemberView }> = {
     name: "spawn_teammate",
-    description: "Create one named, durable teammate. Only the Team Lead may call this.",
+    description: "Create one named, durable teammate. Returns member.agentPath (lead/<name>) for close_agent and other subagent management, member.sessionId, and its live member.jobId. Team tools address the member by name. Only the Team Lead may call this.",
     inputSchema: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, prompt: { type: "string" }, context: { type: "string", enum: ["fresh", "fork"] }, fork_turns: { type: "string" } }, required: ["name", "description", "prompt"] },
     isReadOnly: false,
     execute: async (args, exec) => ({ member: await deps.roster.spawnTeammate(deps.resolveCaller(exec), args.name, { description: args.description, prompt: args.prompt, ...(args.context ? { context: args.context as "fresh" | "fork" } : {}), ...(args.fork_turns ? { forkTurns: args.fork_turns as never } : {}) }) }),
   }
   const list: Tool<ListArgs, { members: TeamMemberView[] }> = {
     name: "list_members",
-    description: "List the Lead and every teammate with current runtime status. Positions are 1-based: the Lead is position #1 and teammates follow in creation order (position #2 and up). Target teammates by name elsewhere.",
+    description: "List the Lead and every teammate with current runtime status and their agentPath, sessionId, and live jobId. Team tools use the member name; close_agent and subagent management use the exact agentPath (lead/<name>). Positions are 1-based: the Lead is position #1 and teammates follow in creation order (position #2 and up).",
     inputSchema: { type: "object", properties: {} },
     isReadOnly: true,
     execute: async (_args, exec) => {

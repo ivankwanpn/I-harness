@@ -53,8 +53,11 @@ the role prompt above) remain higher priority than this contract.`
 
 /** Role system prompt + the subagent contract (the child agent's system
  * prompt). The role prompt always leads; the contract follows. */
-export function composeSubagentPrompt(roleSystemPrompt: string): string {
-  return `${roleSystemPrompt}\n\n${SUBAGENT_PROMPT_CONTRACT}`
+export function composeSubagentPrompt(roleSystemPrompt: string, identity?: { path: string; role: string; tools: readonly string[] }): string {
+  const scope = identity ? `Child identity: ${JSON.stringify(identity.path)}; role: ${JSON.stringify(identity.role)}.
+You are a separate child agent completing your delegated task. Available tools: ${JSON.stringify(identity.tools)}.
+Parent history is context supplied by the parent, not work you performed. Parent tool calls do not grant you those tools. Attribute inherited observations to the parent and report your own work separately.` : ""
+  return [roleSystemPrompt, scope, SUBAGENT_PROMPT_CONTRACT].filter(Boolean).join("\n\n")
 }
 
 /**
@@ -106,7 +109,13 @@ export function resolveRoleTools(
     // mounts these separately through the host factory below.
     if (name === "code_exec" || name === "code_wait") continue
     const tool = parent.get(name)
-    if (tool) child.register(tool)
+    if (tool) {
+      child.register(tool)
+      // The role has already selected these exact bindings. A child has no
+      // parent discovery tool, so expose its allowed deferred schemas locally
+      // without cloning bindings or promoting anything in the parent.
+      child.promote([name])
+    }
     else missing.push(name)
   }
   if (missing.length > 0) {
@@ -278,11 +287,12 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   const childPath = `${opts.parentPath}/${opts.taskName}`
   const childCtx = opts.parentCtx.scope.mount()
+  childCtx.services.register("hooks/agent-type", opts.role.name)
 
-  // fork_turns: last N parent turns (default all). The seed events are the
+  // fork_turns: last N parent turns (default none). The seed events are the
   // child's inherited context; with persistence they are stored in the child's
   // log and seedLength marks the boundary (dsh lineage).
-  const turns = opts.forkTurns ?? "all"
+  const turns = opts.forkTurns ?? "none"
   const seedEvents = turns === "none" ? [] : forkTurns(opts.parentSession.events, turns === "all" ? Infinity : turns)
 
   let childSession: ReturnType<typeof createSession>
@@ -353,6 +363,9 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   } else {
     childSession = createSession()
     for (const ev of seedEvents) childSession.events.push({ ...ev })
+    // Lineage and the inherited-prefix boundary are runtime facts even when
+    // no coordinator persists the child. Hooks and nested delegation use them.
+    childSession.header = { seedLength: seedEvents.length, origin: "subagent", delegationDepth: childDepth }
   }
   // Host services may establish durable ownership of retained seed artifacts.
   // This trusted lifecycle event runs before any child model/tool work.
@@ -425,7 +438,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
   // A declared tool the host does not mount is reported, never dropped silently.
   const childReg = createToolRegistry(childCtx)
   resolveRoleTools(opts.role.name, opts.role.tools, opts.parentRegistry, childReg)
-  const codeModeMount = opts.codeModeFactory?.(childCtx, childReg, {
+  const codeModeMount = opts.role.tools.length === 0 ? undefined : opts.codeModeFactory?.(childCtx, childReg, {
     session: childSession, sessionId, config: opts.codeMode,
     ...(opts.childSessions !== undefined && sessionId !== undefined ? { flush: () => opts.childSessions!.coordinator.flush(sessionId!) } : {}),
   })
@@ -433,7 +446,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   // M73: the prompt is composed ONCE — the agent gets it, and the overhead
   // estimate below prices it.
-  const childPrompt = composeSubagentPrompt(opts.role.systemPrompt)
+  const childPrompt = composeSubagentPrompt(opts.role.systemPrompt, { path: childPath, role: opts.role.name, tools: modelToolSchemas().map(tool => tool.name) })
   const systemPrompt = opts.inheritedSystemContext ? () => {
     const inherited = opts.inheritedSystemContext!(childSession)
     return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt

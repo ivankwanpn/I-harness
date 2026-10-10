@@ -30,6 +30,8 @@ export interface Tool<Args = unknown, Output = unknown> {
   /** Host/tool supplied identity for operations whose complete executable and
    * binding dependencies can be named. Opaque operations remain one-time. */
   approvalIdentity?(args: Args): PreparedToolIdentity | undefined
+  /** Presentation of the captured command binding for foreign hook adapters. */
+  commandDialect?(args: Args): "posix" | "powershell" | "cmd" | undefined
 }
 
 export interface PreparedToolIdentity {
@@ -86,10 +88,12 @@ export interface PolicyRefusal {
   readonly policyRefusal: true
 }
 
-/** Total: never throws, and requires the marker to CARRY `true` — a present
- *  but `undefined` field is not a marker (the same rule as W4's F1 fix). */
+/** An absent/undefined marker is ordinary. An unreadable marker fails closed:
+ *  its getter may be part of a policy refusal, so uncertainty cannot grant
+ *  permission to continue the batch. */
 export function isPolicyRefusal(err: unknown): err is PolicyRefusal {
-  return typeof err === "object" && err !== null && (err as { policyRefusal?: unknown }).policyRefusal === true
+  if (typeof err !== "object" || err === null) return false
+  try { return (err as { policyRefusal?: unknown }).policyRefusal === true } catch { return true }
 }
 
 /** spec §3.7.1: a TYPED disposition. `prepare` throws it; exactly this type is
@@ -101,6 +105,15 @@ export class ToolArgsError extends Error {
   constructor(readonly violations: readonly string[]) {
     super(`invalid arguments: ${violations.join("; ")}`)
     this.name = "ToolArgsError"
+  }
+}
+
+/** A model named a tool absent from this registry. Only the lookup emits this
+ * repairable disposition; policy and changed prepared bindings remain refusals. */
+export class ToolNotFoundError extends Error {
+  constructor(readonly toolName: string) {
+    super(`unknown tool: ${toolName}`)
+    this.name = "ToolNotFoundError"
   }
 }
 
@@ -162,11 +175,13 @@ export interface PreparedCall {
   authorityValidation?(): boolean
   /** Revalidate live authority and prepared identity immediately before launch. */
   approvalValidation?(): boolean
+  commandDialect?: "posix" | "powershell" | "cmd"
 }
 /** Trusted dispatch metadata. The registry and binding validator are never model JSON. */
 export interface ToolDispatchMetadata {
   name: string; args: unknown; exec: ToolExec; tool: Tool
   registry: ToolRegistry; bindingGeneration?: number; validateBinding(): boolean
+  commandDialect?: "posix" | "powershell" | "cmd"
 }
 
 export interface ToolSchema {
@@ -263,6 +278,8 @@ export interface ToolRegistry {
   verifyToolCatalog(expected: Tool[], catalog: ToolSchema[]): void
   installSearch(fn: (query: string, opts?: { limit?: number }) => ToolSchema[]): void
   search(query: string, opts?: { limit?: number }): ToolSchema[]
+  /** Expose already-bound deferred tools in this registry; hidden tools stay hidden. */
+  promote(names: readonly string[]): void
   deferredSearchIndex(): SearchableTool[]
   deferredToolCount(): number
 }
@@ -369,7 +386,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     call = structuredClone(call)
     freezeArguments(call)
     const tool = tools.get(call.name)
-    if (!tool) throw new Error(`unknown tool: ${call.name}`)
+    if (!tool) throw new ToolNotFoundError(call.name)
     const bindingGeneration = bindingGenerations.get(call.name)!
     const executeBinding = tool.execute
     const bindingValidation = () => tools.get(call.name) === tool
@@ -380,13 +397,22 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     // is a TYPED disposition (§3.7.1), read by name at exactly one place.
     const violations = validateJsonSchemaValue(tool.inputSchema as JsonSchemaNode, call.args)
     if (violations.length > 0) throw new ToolArgsError(violations)
+    const commandDialect = tool.commandDialect?.(call.args)
+    // Policy/hook identity comes only from the trusted host, never model JSON.
+    const policyInput = { name: call.name, args: call.args,
+      ...(identity?.session !== undefined ? { session: identity.session } : {}),
+      ...(identity?.sessionId !== undefined ? { sessionId: identity.sessionId } : {}),
+      ...(identity?.callId !== undefined ? { callId: identity.callId } : {}),
+      ...(signal !== undefined ? { signal } : {}),
+      ...(commandDialect !== undefined ? { dialect: commandDialect } : {}),
+    }
 
     // 1. pre-execute waterfall — resolves to a closed-vocabulary decision.
     //    Per-dispatch (M13): the decision is the emit's chain return (or the
     //    call payload when no decision was produced — see the handler's
     //    CRITICAL comment); no shared slot, so concurrent prepares are
     //    independent.
-    const chainValue = await ctx.emit("tools/pre-execute", call)
+    const chainValue = await ctx.emit("tools/pre-execute", policyInput)
     const decision: ToolDecision = isDecision(chainValue) ? chainValue : { kind: "allow" }
 
     // 1b. Cross-scope fail-open fix (Task 10 mechanism B): `emit` propagates
@@ -407,7 +433,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     //     (the same race the emit-return refactor removes for the closure
     //     slot). Only ancestor decisions cannot be derived from the local emit,
     //     so only they are looked up.
-    const ancestorDecision = ctx.resolveAncestorDecision("tools/pre-execute", call)
+    const ancestorDecision = ctx.resolveAncestorDecision("tools/pre-execute", policyInput)
     const resolved = mergeDecision(decision, ancestorDecision)
 
     // 2. monotonic guards run UNCONDITIONALLY before any dispatch (audit F03-1):
@@ -485,18 +511,24 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     if (identity?.callEventSeq !== undefined) exec.callEventSeq = identity.callEventSeq
     if (identity?.resultConsumer === "code") exec.resultConsumer = "code"
 
-    return { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}) }
+    return { call, tool, exec, bindingGeneration, bindingValidation, ...(authorityValidation ? { authorityValidation } : {}), ...(approvalValidation ? { approvalValidation } : {}), ...(commandDialect !== undefined ? { commandDialect } : {}) }
   }
 
   // M13 dispatch stage — the ONLY overlapping stage: runs the around-seam
   // (`tools/execute` cascade handlers wrap the real tool body). `prepare` and
   // `finalize` run in the ordered lane so the policy layer stays model-ordered.
   function validatePrepared(prepared: PreparedCall): void {
-    if (tools.get(prepared.call.name) !== prepared.tool || !prepared.bindingValidation()) throw new Error("prepared tool binding changed: replaced or revoked before dispatch")
-    if (prepared.authorityValidation?.() === false) throw new Error("prepared approval authority or policy changed before dispatch")
-    if (prepared.approvalValidation?.() === false) throw new Error("prepared approval identity, rule or policy changed before dispatch")
-    const guardReason = ctx.checkGuards("tools/execute", { name: prepared.call.name, args: prepared.call.args })
-    if (guardReason !== undefined) throw new Error(`guard denied: ${guardReason}`)
+    try {
+      if (tools.get(prepared.call.name) !== prepared.tool || !prepared.bindingValidation()) throw new Error("prepared tool binding changed: replaced or revoked before dispatch")
+      if (prepared.authorityValidation?.() === false) throw new Error("prepared approval authority or policy changed before dispatch")
+      if (prepared.approvalValidation?.() === false) throw new Error("prepared approval identity, rule or policy changed before dispatch")
+      const guardReason = ctx.checkGuards("tools/execute", { name: prepared.call.name, args: prepared.call.args })
+      if (guardReason !== undefined) throw new Error(`guard denied: ${guardReason}`)
+    } catch (cause) {
+      // These checks also run inside dispatch, after asynchronous hooks. Their
+      // site is an authority gate, never a body failure the model can repair.
+      throw Object.assign(new Error(cause instanceof Error ? cause.message : String(cause), { cause }), { policyRefusal: true as const })
+    }
   }
 
   async function dispatch(prepared: PreparedCall): Promise<unknown> {
@@ -504,7 +536,8 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     const output = await ctx.cascade(
       "tools/execute",
       { name: prepared.call.name, args: prepared.call.args, exec: prepared.exec, tool: prepared.tool,
-        registry, bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation } satisfies ToolDispatchMetadata,
+        registry, bindingGeneration: prepared.bindingGeneration, validateBinding: prepared.bindingValidation,
+        ...(prepared.commandDialect !== undefined ? { commandDialect: prepared.commandDialect } : {}) } satisfies ToolDispatchMetadata,
       async () => {
         // Hooks may await before next(). No await is allowed between this final
         // authority check and invoking the body whose binding was validated.
@@ -541,6 +574,11 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     const matches = searchFn(query, opts)
     for (const m of matches) promoted.add(m.name)
     return matches
+  }
+
+  function promote(names: readonly string[]): void {
+    for (const name of names) if (!tools.has(name)) throw new Error(`unknown tool: ${name}`)
+    for (const name of names) if (tools.get(name)!.exposure === "deferred") promoted.add(name)
   }
 
   // Raw metadata of all deferred tools, used as the search corpus by the
@@ -585,6 +623,7 @@ export function createToolRegistry(ctx: PluginContext): ToolRegistry {
     verifyToolCatalog,
     installSearch,
     search,
+    promote,
     deferredSearchIndex,
     deferredToolCount,
   }

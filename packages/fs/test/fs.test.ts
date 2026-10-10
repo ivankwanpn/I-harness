@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync } from "node:fs"
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { writeFile } from "node:fs/promises"
@@ -24,6 +24,18 @@ describe("fs tools", () => {
     const write = tools.find((t) => t.name === "write")!
     await write.execute({ path: "b.txt", text: "world" }, {})
     expect(readFileSync(join(dir, "b.txt"), "utf-8")).toBe("world")
+  })
+
+  it("write creates missing parent directories and preserves UTF-8 content", async () => {
+    const write = createFsTools({ workspace: dir }).find(tool => tool.name === "write")!
+    expect(await write.execute({ path: "nested/new/hello.txt", text: "你好 🌱\n" }, {})).toMatchObject({ ok: true })
+    expect(readFileSync(join(dir, "nested/new/hello.txt"), "utf8")).toBe("你好 🌱\n")
+  })
+
+  it("denied nested writes do not create parent directories", async () => {
+    const write = createFsTools({ workspace: dir, writeGuard() { throw new Error("write denied") } }).find(tool => tool.name === "write")!
+    await expect(write.execute({ path: "blocked/new/hello.txt", text: "no" }, {})).rejects.toThrow("write denied")
+    expect(existsSync(join(dir, "blocked"))).toBe(false)
   })
 
   it("list_dir lists a directory", async () => {

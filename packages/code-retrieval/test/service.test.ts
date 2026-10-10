@@ -31,6 +31,47 @@ async function index(service: CodeRetrievalService, options?: Parameters<CodeRet
 afterEach(async()=> { await Promise.all(services.splice(0).map(s=>s.close())); await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true}))) })
 
 describe('native code index',()=>{
+  it('does not claim current source health when a search checked no source files',async()=>{
+    const {service}=await fixture();await index(service)
+    expect((await service.search({sessionId:'s'},{query:'absentneedle'})).hits).toEqual([])
+    expect(service.status()).toMatchObject({sourceHealth:{scope:'last-search',state:'unchecked',checkedFiles:0,refusedFiles:0}})
+  })
+
+  it('bounds refused source checks and labels incomplete candidate validation',async()=>{
+    const {service,data,reader}=await fixture()
+    data.splice(0,data.length,...Array.from({length:300},(_,i)=>({sourceId:'workspace',path:`source${i}.ts`,revision:String(i),complete:true,text:'const indexedneedle = true'})))
+    await index(service)
+    let checked=0
+    reader.revalidate=async()=>{checked++;return false}
+    const result=await service.search({sessionId:'s'},{query:'indexedneedle'})
+    expect(checked).toBeLessThanOrEqual(256)
+    expect(result).toMatchObject({hits:[],partial:true,reasons:expect.arrayContaining(['source-validation-limit'])})
+    expect(service.status()).toMatchObject({sourceHealth:{scope:'last-search',state:'degraded',reasons:expect.arrayContaining(['source-validation-limit'])}})
+  })
+
+  it('revalidates an admitted file once per search and checks it again before returning its chunks',async()=>{
+    const {service,data,reader}=await fixture()
+    data.splice(1)
+    data[0].text='const repeatedneedle = true;\n'.repeat(1000)
+    await index(service)
+    let reads=0
+    reader.revalidate=async()=>{reads++;return true}
+    const result=await service.search({sessionId:'s'},{query:'repeatedneedle',limit:3})
+    expect(result.hits).toHaveLength(3)
+    expect(reads).toBe(2)
+    reads=0
+    reader.revalidate=async()=>{reads++;return reads===1}
+    expect((await service.search({sessionId:'s'},{query:'repeatedneedle',limit:3})).hits).toEqual([])
+  })
+
+  it('keeps reader error causes typed and reports the health of the latest search',async()=>{
+    const {service,reader}=await fixture();await index(service)
+    reader.revalidate=async()=>{throw Object.assign(new Error('Controlled pinned read refusal'),{code:'EACCES'})}
+    const result=await service.search({sessionId:'s'},{query:'approveDeployment'})
+    expect(result).toMatchObject({hits:[],partial:true,reasons:expect.arrayContaining(['source-validation-failed']),diagnostics:[{reason:'source-validation-failed',code:'EACCES',count:2}]})
+    expect(service.status()).toMatchObject({state:'ready',sourceHealth:{scope:'last-search',state:'degraded',checkedFiles:2,refusedFiles:2,reasons:['source-validation-failed']}})
+  })
+
   it('lazily indexes real SQLite and returns exact contiguous source ranges with scoped identifier and Chinese recall',async()=>{
     const {root,service,data}=await fixture()
     expect(await readdir(root)).toEqual([])

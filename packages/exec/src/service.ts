@@ -12,6 +12,7 @@ import { ExecutionAdmissionError } from "./execution-admission.ts"
 import { createExecutionSupervisor, type SupervisedExecution } from "./execution-supervisor.ts"
 import { OutputCollector, type CollectResult } from "./spill.ts"
 import { execOutputReader, registerRetainedOutput } from "./retained-output.ts"
+import { resolveWindowsMsysPty } from "./windows-msys-pty.ts"
 import type {
   BackgroundJobStatus, BackgroundJobView, ExecCommand, ExecExecutionHost, ExecResult,
   ExecRunOptions, ExecService, ExecServiceOptions, ExecStreamRunOptions, ExecTransportRequest, PromotedRun,
@@ -131,13 +132,14 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       const target = request.executionTarget ?? "host"
       if (target !== "host" && target !== "wsl") throw new Error("Invalid trusted execution target")
       const env = boundEnvironment(request.env, target)
-      const spec: ProcessSpec = snapshotProcessSpec({
+      const processRequest: ProcessSpec = {
         ...(request.executionTarget === undefined ? {} : { executionTarget: target }),
         argv: target === "wsl" ? request.argv : resolveExecutable(request.argv, cwd, env), cwd,
         env, owner, transport: request.transport,
         lifetime: request.lifetime, argumentEncoding: request.argumentEncoding,
         ...(request.pty === undefined ? {} : { pty: request.pty }),
-      })
+      }
+      const spec = snapshotProcessSpec(policy.mode === "danger-full-access" ? resolveWindowsMsysPty(processRequest) : processRequest)
       let backend: ReturnType<ExecExecutionHost["selectBackend"]>
       try { backend = host.selectBackend(policy, spec.transport, spec) }
       catch (cause) {

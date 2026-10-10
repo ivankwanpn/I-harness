@@ -43,6 +43,10 @@ export interface TeamMemberView {
   id: string; name: string; role: "lead" | "teammate"
   status: "running" | "idle" | "inactive" | "provisioning" | "failed"
   description?: string; context?: "fresh" | "fork"; diagnostics: string[]
+  /** Exact path for subagent management tools; Team tools use the member name. */
+  agentPath?: string
+  sessionId?: string
+  jobId?: string
 }
 export type TeamTaskStatus = "pending" | "in_progress" | "completed" | "deleted"
 export interface TeamTaskSnapshot {

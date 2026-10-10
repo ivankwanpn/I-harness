@@ -8,7 +8,7 @@ import type {
   BackendProbe, CompiledSandboxPolicy, ExecutionOutput, PreparedTransportExecution,
   ProcessSpec, RootExit, StopReason, TransportExecutionBackend, TransportExecutionHandle,
 } from "@i-harness/sandbox"
-import { verifyHelper, type HelperOptions } from "./integrity.ts"
+import { verifyHelper, verifyMsysBridge, type HelperOptions } from "./integrity.ts"
 import { FrameDecoder, StatusDecoder, type NativeError, type Status } from "./protocol.ts"
 import { readWindowsQualification as readQualification, type WindowsQualificationView } from "./qualification.ts"
 export type { WindowsQualificationRecord, WindowsQualificationView, ObservedSupport } from "./qualification.ts"
@@ -97,6 +97,10 @@ async function preparePayload(
   if (Object.entries(spec.env).some(([key, value]) => !key || key.includes("=") || key.includes("\0") || value.includes("\0"))) fail("invalid environment")
   const environmentKeys = Object.keys(spec.env).map(key => key.toLowerCase())
   if (new Set(environmentKeys).size !== environmentKeys.length) fail("duplicate environment key")
+  const msysPty = spec.msysPty === undefined ? undefined : {
+    ...spec.msysPty,
+    bridge: await verifyMsysBridge(options),
+  }
   if (denyPaths.some(root => inside(executable, root) || inside(cwd, root))) fail("executable or cwd denied")
   if (writeRoots.some(root => !authorityRoots.some(authority => inside(root, authority)))) fail("write root outside authority")
   return {
@@ -106,6 +110,7 @@ async function preparePayload(
       argv: [executable, ...spec.argv.slice(1)], cwd, env: { ...spec.env }, owner: copyOwner(spec.owner),
       transport: spec.transport, lifetime: spec.lifetime, argumentEncoding: spec.argumentEncoding,
       ...(spec.pty ? { pty: { ...spec.pty } } : {}),
+      ...(msysPty === undefined ? {} : { msysPty }),
     },
     policy: {
       mode: policy.mode, owner: copyOwner(policy.owner), authorityRevision: policy.authorityRevision,
@@ -138,6 +143,7 @@ class Session {
   private consumerAttached = false
   private outputWaiter?: () => void
   private outputDone = false
+  private outputFailure?: Error
   private discard = false
   private localDiscarded = 0
   private nativeDiscarded = 0
@@ -188,6 +194,7 @@ class Session {
             return { done: false, value: frame }
           }
           if (this.failed) throw this.failed
+          if (this.outputFailure) throw this.outputFailure
           return { done: true, value: undefined }
         },
       }
@@ -274,16 +281,24 @@ class Session {
     else waiter.response.resolve(status)
   }
   private maybeSettleIo() {
-    if (!this.ioStatus) return
+    if (!this.ioStatus || this.outputFailure) return
     const abandoned = this.ioStatus.outputAbandoned === true
-    if (!abandoned && this.binaryEof && !this.frames.outputEnded) { this.io.reject(new Error("missing output-end frame")); return }
+    if (!abandoned && this.binaryEof && !this.frames.outputEnded) { this.failIo(new Error("missing output-end frame")); return }
     if (!abandoned && !this.frames.outputEnded) return
     if (abandoned && !this.binaryEof) return
     try { this.frames.finish(abandoned) }
-    catch (error) { this.io.reject(error as Error); return }
+    catch (error) { this.failIo(error); return }
     const errors = this.ioStatus.errors as NativeError[]
     if (errors.length) this.io.reject(new Error(errors.map(nativeDetail).join("; ")))
     else this.io.resolve()
+    this.outputDone = true
+    this.wake()
+  }
+  private failIo(cause: unknown): void {
+    this.outputFailure = cause instanceof Error ? cause : new Error(String(cause))
+    this.io.reject(this.outputFailure)
+    // End the reader with the same failure after buffered frames are consumed.
+    // This is an I/O observation; tree/resource ownership remains independent.
     this.outputDone = true
     this.wake()
   }

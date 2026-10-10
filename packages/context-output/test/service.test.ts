@@ -24,6 +24,19 @@ afterEach(async () => {
 })
 
 describe('review regressions', () => {
+  it('finds literal identifiers and punctuation in the same complete saved document', async () => {
+    const { service } = await create()
+    const text = JSON.stringify({ content: '前言\nshadow-projection is available.\nUse `read_video`, `read_image`, foo.bar() and C++.' })
+    const ref = await service.capture({ sessionId: 'a', callId: 'identifiers', label: 'read', text, complete: true })
+    for (const query of ['read_video', 'shadow-projection', 'foo.bar()', 'C++', 'read_video shadow-projection']) {
+      const result = await service.search({ sessionId: 'a' }, { query, refIds: [ref!.id] })
+      expect(result.hits.map(hit => hit.ref.id), query).toEqual([ref!.id])
+      const hit = result.hits[0]!
+      expect(Buffer.from(text).subarray(hit.offset, hit.endOffset).toString('utf8')).toBe(hit.text)
+    }
+    expect((await service.search({ sessionId: 'a' }, { query: 'missing_identifier', refIds: [ref!.id] })).hits).toEqual([])
+  })
+
   it('applies live SQLite quota raises and safe lowering on the same open service', async () => {
     const originalQuota = 128 * 1024
     const raisedQuota = 8 * 1024 * 1024

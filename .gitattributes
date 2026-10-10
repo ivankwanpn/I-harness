@@ -1,0 +1,13 @@
+# Native source/protocol digests must survive Windows checkout conversion.
+/packages/sandbox-windows-psec/native/** text=auto eol=lf
+/packages/sandbox-windows-psec/protocol.md text eol=lf
+
+# Keep shipped executable and exact upstream license/source-notice bytes.
+/packages/sandbox-windows-psec/artifacts/** -text
+/packages/sandbox-windows-psec/native/msys/notices/** -text
+/packages/desktop/licenses/msys-pty/** -text
+
+# Preserve upstream license whitespace as part of its verified exact bytes.
+/packages/desktop/licenses/msys-pty/CYGWIN_LICENSE whitespace=-blank-at-eol,-blank-at-eof
+/packages/sandbox-windows-psec/native/msys/notices/CYGWIN_LICENSE whitespace=-blank-at-eol,-blank-at-eof
+/packages/sandbox-windows-psec/artifacts/win32-x64/msys-notices/CYGWIN_LICENSE whitespace=-blank-at-eol,-blank-at-eof

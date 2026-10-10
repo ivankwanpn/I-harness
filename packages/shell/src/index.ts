@@ -111,8 +111,12 @@ function probePowerShellAlias(path: string): boolean {
   return result.status === 0 && /^PowerShell 7(?:\.|\s|$)/.test(result.stdout.trim())
 }
 
-export function powerShellExecutableAvailable(path: string, exists: (path: string) => boolean = existsSync, probe = exists === existsSync ? probePowerShellAlias : () => false): boolean {
-  return exists(path) || /[\\/]Microsoft[\\/]WindowsApps[\\/]pwsh\.exe$/i.test(path) && probe(path)
+export function powerShellExecutableAvailable(path: string, exists: (path: string) => boolean = existsSync, probe = exists === existsSync ? probePowerShellAlias : () => false, canonicalize: (path: string) => string = exists === existsSync ? realpathSync.native : path => path): boolean {
+  try {
+    // Native execution must resolve the executable's identity before launch.
+    // A runnable Store alias is insufficient when its reparse target is unreadable.
+    return (exists(path) || /[\\/]Microsoft[\\/]WindowsApps[\\/]pwsh\.exe$/i.test(path) && probe(path)) && !!canonicalize(path)
+  } catch { return false }
 }
 
 // Windows: prefer installed Git Bash, then another native Bash, else pwsh.
@@ -177,15 +181,16 @@ export function resolvePwshExe(
   platform: NodeJS.Platform = process.platform,
   exists: (path: string) => boolean = existsSync,
   probe: (path: string) => boolean = exists === existsSync ? probePowerShellAlias : () => false,
+  canonicalize: (path: string) => string = exists === existsSync ? realpathSync.native : path => path,
 ): string {
   if (platform !== "win32") return "pwsh"
-  const onPath = onWindowsPath("pwsh.exe", env, (path) => powerShellExecutableAvailable(path, exists, probe))
+  const onPath = onWindowsPath("pwsh.exe", env, (path) => powerShellExecutableAvailable(path, exists, probe, canonicalize))
   if (onPath) return onPath
   const installed = win32.join(environmentValue(env, "ProgramFiles") ?? "C:\\Program Files", "PowerShell", "7", "pwsh.exe")
-  if (exists(installed)) return installed
+  if (powerShellExecutableAvailable(installed, exists, probe, canonicalize)) return installed
   const root = environmentValue(env, "SystemRoot") ?? environmentValue(env, "windir") ?? "C:\\Windows"
   const windowsPowerShell = win32.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
-  return exists(windowsPowerShell) ? windowsPowerShell : "powershell"
+  return powerShellExecutableAvailable(windowsPowerShell, exists, probe, canonicalize) ? windowsPowerShell : "powershell"
 }
 
 /** Keep nested `bash` — a `#!/usr/bin/env bash` script, a `bash -c`, an npm
@@ -721,6 +726,10 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
     },
     inputSchema: bash.inputSchema,
     timeoutMs: deps.timeoutMs,
+    commandDialect: (args) => {
+      const binding = bindingFor(args)
+      return "error" in binding ? undefined : binding.shell.dialect
+    },
     getArgv: (args) => {
       const binding = bindingFor(args)
       return "error" in binding ? [] : getAgentArgv(args.command, binding.shell.dialect)

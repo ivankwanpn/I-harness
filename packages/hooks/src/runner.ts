@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process"
+import { createHash } from "node:crypto"
+import { readFileSync } from "node:fs"
 import { dirname } from "node:path"
 import type { HookContext, HookHandlerSpec, HookOutput } from "./types.ts"
 import {
@@ -7,17 +9,46 @@ import {
   HookBlockedError,
   HookConfigError,
   HookOutputError,
+  HookOwnerAbortError,
   HookTrustError,
 } from "./types.ts"
 import { trustScriptPath, verifyHandlerTrust } from "./trust.ts"
-import { claudeShellEnvironment, normalizeClaudeStartupOutput, resolveClaudeShell } from "./claude.ts"
+import { claudeHookPayload, claudeShellEnvironment, normalizeClaudeHookOutput, resolveClaudeShell, sha256ClaudePluginTreeSync, type ClaudeRuntimeInput } from "./claude.ts"
 import type { ClaudeSessionSource } from "./types.ts"
+import { runWindowsHook } from "./windows-process.ts"
 
-export interface RunHookOptions {
+export interface RunHookOptions extends ClaudeRuntimeInput {
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
   cwd?: string
   source?: ClaudeSessionSource
+  signal?: AbortSignal
+  validateCurrent?(): boolean
+}
+
+/** The subprocess is created here; terminate only its owned process tree. */
+async function terminateHookTree(child: ReturnType<typeof spawn>): Promise<void> {
+  if (child.pid === undefined) return
+  // This detached POSIX group stays owned after its launcher exits.
+  try { process.kill(-child.pid, "SIGKILL") } catch { child.kill("SIGKILL") }
+}
+
+function decodeHookOutput(spec: HookHandlerSpec, stdout: string, stderr: string, code: number | null): HookOutput {
+  if (code === 2 && spec.claude !== undefined) {
+    const reason = stderr.trim() || `hook ${spec.id} blocked ${spec.claude.event}`
+    const event = spec.claude.event
+    return event === "Stop" || event === "SubagentStop" ? { continuation: reason }
+      : event === "PostToolUse" ? { additionalContext: reason } : { block: true, reason }
+  }
+  if (code !== 0) {
+    const tail = stderr.trim().split(/\r?\n/).slice(-3).join("\n")
+    throw new HookOutputError(`hook ${spec.id}: exited with code ${code}${tail ? `: ${tail}` : ""}`)
+  }
+  if (spec.claude !== undefined) return normalizeClaudeHookOutput(stdout, spec.id, spec.claude.event)
+  let parsed: unknown
+  try { parsed = JSON.parse(stdout.trim() === "" ? "{}" : stdout.trim()) }
+  catch { throw new HookOutputError(`hook ${spec.id}: stdout is not valid JSON: ${stdout.trim().slice(0, 120)}`) }
+  return validateHookOutput(parsed, spec.id)
 }
 
 /**
@@ -78,6 +109,7 @@ export async function runHookHandler(
   configDir: string,
   opts: RunHookOptions = {},
 ): Promise<HookOutput> {
+  if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
   const handlerFile = trustScriptPath(spec, configDir)
   try {
     await verifyHandlerTrust(spec, configDir)
@@ -89,13 +121,29 @@ export async function runHookHandler(
   }
 
   const timeoutMs = spec.timeoutMs ?? opts.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS
+  if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
   const cwd = spec.command.cwd ?? opts.cwd ?? (spec.claude ? process.cwd() : dirname(handlerFile))
   let executable = spec.command.cmd
   let env: NodeJS.ProcessEnv = { ...process.env, ...opts.env, IH_HOOK_EVENT: context.event, IH_HOOK_ID: spec.id }
   if (spec.claude !== undefined) {
-    if (context.event !== "session/start") throw new HookConfigError(`Claude hook ${spec.id} requires a SessionStart context`)
     executable = resolveClaudeShell(spec.claude.shell, env)
     env = claudeShellEnvironment(spec, cwd, env, executable)
+  }
+  if (process.platform === "win32") {
+    let serialized: string
+    try { serialized = JSON.stringify(spec.claude !== undefined ? claudeHookPayload(spec, context, cwd, opts) : context) }
+    catch (error) { throw new HookOutputError(`hook ${spec.id}: cannot serialize/send context: ${error instanceof Error ? error.message : String(error)}`) }
+    const captured = await runWindowsHook({ id: spec.id, argv: [executable, ...(spec.command.args ?? [])], cwd, env,
+      input: Buffer.from(serialized), timeoutMs, signal: opts.signal,
+      validate: () => {
+        if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
+        if (opts.validateCurrent?.() === false) throw new HookTrustError(spec.id, spec.trust.sha256, "handler grant changed before dispatch")
+        const actual = spec.claude !== undefined ? sha256ClaudePluginTreeSync(spec.claude.pluginRoot)
+          : createHash("sha256").update(readFileSync(handlerFile)).digest("hex")
+        if (actual !== spec.trust.sha256) throw new HookTrustError(spec.id, spec.trust.sha256, actual)
+      },
+    })
+    return decodeHookOutput(spec, captured.stdout.toString("utf8"), captured.stderr, captured.exitCode)
   }
   return new Promise<HookOutput>((resolvePromise, rejectPromise) => {
     let stdout = ""
@@ -108,12 +156,21 @@ export async function runHookHandler(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      opts.signal?.removeEventListener("abort", cancel)
       fn()
     }
     let child: ReturnType<typeof spawn>
+    let termination: Promise<void> | undefined
+    let terminationError: HookOutputError | undefined
+    const terminate = (error: HookOutputError): void => {
+      if (settled || termination !== undefined) return
+      terminationError = error
+      clearTimeout(timer)
+      termination = terminateHookTree(child)
+    }
+    const cancel = (): void => { terminate(new HookOwnerAbortError(spec.id)) }
     const timer = setTimeout(() => {
-      child.kill()
-      finish(() => rejectPromise(new HookOutputError(`hook ${spec.id}: timed out after ${timeoutMs} ms`)))
+      terminate(new HookOutputError(`hook ${spec.id}: timed out after ${timeoutMs} ms`))
     }, timeoutMs)
     timer.unref?.()
 
@@ -122,7 +179,11 @@ export async function runHookHandler(
       windowsHide: true,
       env,
       stdio: ["pipe", "pipe", "pipe"],
+      ...(process.platform !== "win32" ? { detached: true } : {}),
     })
+    if (opts.signal?.aborted) cancel()
+    else opts.signal?.addEventListener("abort", cancel, { once: true })
+    child.stdin!.on("error", (error) => terminate(new HookOutputError(`hook ${spec.id}: cannot send input: ${error.message}`)))
     // (plan draft used a `{ current: string }` wrapper object per chunk — the
     // captured bytes were discarded, so a junk-stdout handler parsed as `{}`
     // and passed; capture into the live strings under the same byte cap.)
@@ -133,7 +194,7 @@ export async function runHookHandler(
         if (stdoutBytes > HOOK_OUTPUT_CAP_BYTES) {
           startupCaptureError = new HookOutputError(`hook ${spec.id}: startup stdout exceeds ${HOOK_OUTPUT_CAP_BYTES} bytes`)
           startupChunks.length = 0
-          child.kill()
+          terminate(startupCaptureError)
           return
         }
         startupChunks.push(chunk)
@@ -143,40 +204,21 @@ export async function runHookHandler(
     child.on("error", (err) => {
       finish(() => rejectPromise(new HookOutputError(`hook ${spec.id}: cannot start ${spec.command.cmd}: ${err.message}`)))
     })
-    child.on("close", (code) => {
+    child.on("close", async (code) => {
+      if (termination !== undefined) await termination
       finish(() => {
+        if (terminationError !== undefined) { rejectPromise(terminationError); return }
         if (startupCaptureError !== undefined) { rejectPromise(startupCaptureError); return }
-        if (code !== 0) {
-          const tail = stderr.trim().split(/\r?\n/).slice(-3).join("\n")
-          rejectPromise(
-            new HookOutputError(`hook ${spec.id}: exited with code ${code}${tail !== "" ? `: ${tail}` : ""}`),
-          )
-          return
-        }
-        if (spec.claude !== undefined) {
-          try { resolvePromise(normalizeClaudeStartupOutput(Buffer.concat(startupChunks).toString("utf8"), spec.id)) } catch (err) { rejectPromise(err) }
-          return
-        }
-        let parsed: unknown
-        try {
-          parsed = JSON.parse(stdout.trim() === "" ? "{}" : stdout.trim())
-        } catch {
-          rejectPromise(new HookOutputError(`hook ${spec.id}: stdout is not valid JSON: ${stdout.trim().slice(0, 120)}`))
-          return
-        }
-        try {
-          resolvePromise(validateHookOutput(parsed, spec.id))
-        } catch (err) {
-          rejectPromise(err)
-        }
+        try { resolvePromise(decodeHookOutput(spec, spec.claude !== undefined ? Buffer.concat(startupChunks).toString("utf8") : stdout, stderr, code)) }
+        catch (error) { rejectPromise(error) }
       })
     })
     try {
-      child.stdin!.end(JSON.stringify(spec.claude !== undefined && context.event === "session/start"
-        ? { session_id: context.sessionId, cwd, hook_event_name: "SessionStart", source: opts.source ?? "startup" }
+      child.stdin!.end(JSON.stringify(spec.claude !== undefined
+        ? claudeHookPayload(spec, context, cwd, opts)
         : context))
     } catch (err) {
-      finish(() => rejectPromise(err instanceof Error ? err : new HookOutputError(String(err))))
+      terminate(new HookOutputError(`hook ${spec.id}: cannot serialize/send context: ${err instanceof Error ? err.message : String(err)}`))
     }
   })
 }

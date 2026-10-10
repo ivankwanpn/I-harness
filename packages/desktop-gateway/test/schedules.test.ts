@@ -58,7 +58,7 @@ it("rejects invalid rules and an unconfigured model without writing changes", as
   try {
     await expect(configured.schedules.create("s1", { prompt: " ", after_seconds: 600 })).rejects.toThrow(/prompt/i)
     await expect(configured.schedules.create("s1", { prompt: "bad", after_seconds: 1, every_seconds: 300 })).rejects.toThrow(/exactly one/i)
-    await expect(configured.schedules.delete("s1", "schedule-999")).rejects.toThrow(/active schedule/i)
+    await expect(configured.schedules.delete("s1", "schedule-999")).rejects.toThrow(/not found in this session/i)
     expect((await configured.schedules.list("s1")).schedules).toEqual([])
   } finally { await configured.close() }
 })

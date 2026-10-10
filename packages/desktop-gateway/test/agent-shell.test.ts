@@ -90,16 +90,18 @@ it("does not silently normalize an invalid on-disk Agent shell to auto", async (
 const nativeAlias = win32.join(process.env.LOCALAPPDATA ?? "C:\\missing", "Microsoft", "WindowsApps", "pwsh.exe")
 const hasNativeAlias = process.platform === "win32" && !existsSync(nativeAlias)
   && spawnSync(nativeAlias, ["--version"], { encoding: "utf8", timeout: 3000, windowsHide: true }).stdout?.startsWith("PowerShell 7")
-it.skipIf(!hasNativeAlias)("preserves an explicit PowerShell alias and its native admission refusal", async () => {
+it.skipIf(!hasNativeAlias)("refuses a launchable but inaccessible PowerShell alias before selecting a command", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-agent-shell-alias-")); roots.push(root)
   const settings = createAgentShellSettings(join(root, "settings.json"), { env: { Path: win32.dirname(nativeAlias), SystemRoot: process.env.SystemRoot }, platform: "win32" })
-  expect(await settings.configure({ shell: "pwsh" })).toMatchObject({ resolved: { command: nativeAlias, dialect: "powershell" } })
+  await expect(settings.configure({ shell: "pwsh" })).rejects.toThrow(/pwsh.*unavailable/i)
+  expect((await settings.state()).options.some(option => option.id === "pwsh")).toBe(false)
   const selected = settings.resolve()
+  expect(selected).toMatchObject({ id: "auto", dialect: "powershell" })
+  expect(selected.command).toMatch(/WindowsPowerShell[\\/]v1\.0[\\/]powershell\.exe$/i)
   expect(() => selected.validate()).not.toThrow()
   const tools: Tool[] = []
   registerShell(createContext(), { register: (tool) => tools.push(tool) }, { agentShell: () => selected, cwd: root })
   const tool = tools.find((tool) => tool.name === "shell")!
-  // ShellExecute-compatible discovery does not give the native Job driver a
-  // canonical executable file. The explicit selection must not be substituted.
-  await expect(tool.execute({ command: "$PSVersionTable.PSVersion.Major" }, {})).rejects.toThrow(/EACCES|ENOENT/)
+  const output = await tool.execute({ command: "$PSVersionTable.PSVersion.Major" }, {})
+  expect(output).toMatchObject({ exitCode: 0, stdout: expect.stringMatching(/\b5\b/) })
 }, 15000)

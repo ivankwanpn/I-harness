@@ -14,7 +14,8 @@
     "@i-harness/core-plugin": "workspace:*",
     "@i-harness/core-tools": "workspace:*",
     "@i-harness/diagnostics": "workspace:*",
-    "@i-harness/harness-home": "workspace:*"
+    "@i-harness/harness-home": "workspace:*",
+    "@i-harness/sandbox-windows-psec": "workspace:*"
   },
   "devDependencies": {
     "@i-harness/core-agent": "workspace:*",

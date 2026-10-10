@@ -23,6 +23,18 @@ export interface BackendRequirements {
   minimumAssurance: BackendAssurance
 }
 export type BackendDecision = { ok: true } | { ok: false; missing: readonly string[] }
+export interface ExecutionFileIdentity { path: string; sha256: string }
+/** Trusted pre-admission observation for the native Windows MSYS PTY owner. */
+export interface MsysPtyBinding {
+  runtime: Readonly<ExecutionFileIdentity>
+  executable: Readonly<ExecutionFileIdentity>
+  resolution?: Readonly<{
+    kind: "git-bash-shim"
+    original: Readonly<ExecutionFileIdentity>
+    /** null records absence; a later creation must fail the commit fence. */
+    configuration: Readonly<{ path: string; sha256: string | null }>
+  }>
+}
 export interface ProcessSpec {
   /** Trusted composition only. Omission means native host execution. */
   executionTarget?: "host" | "wsl"
@@ -30,6 +42,7 @@ export interface ProcessSpec {
   owner: Readonly<ExecutionOwner>; transport: ExecutionTransport
   lifetime: ExecutionLifetime; argumentEncoding: "crt" | "cmd-verbatim"
   pty?: Readonly<{ cols: number; rows: number }>
+  msysPty?: Readonly<MsysPtyBinding>
 }
 export type AuthorityState =
   | { kind: "unbound"; revision: string; workspaceRoot: string; references?: readonly string[] }

@@ -1,5 +1,6 @@
 import { resolve } from 'node:path'
 import { normalizeSearchQuery, createSearchStats } from '@i-harness/fs-search'
+import type { CodeSourceRefusal, CodeSourceValidation } from '@i-harness/code-retrieval'
 import { createPinnedProjectContentReader, type ProjectContentBudget } from './project-content-reader.ts'
 import { projectRelativePath } from './project-files.ts'
 
@@ -27,11 +28,17 @@ export function createNativeCodeSourceReader(options: NativeCodeSourceReaderOpti
     if (new Set(result.map(source => source.id)).size !== result.length) throw new Error('Duplicate native source identity')
     return result
   }
+  function selectedSources(sourceIds?: string[]) {
+    const all=sources()
+    return sourceIds===undefined?all:sourceIds.map(id=>{
+      const source=all.find(item=>item.id===id);if(!source)throw new Error('Unknown Code Context source');return source
+    })
+  }
   async function admitted(access: Access, source: NativeReferenceSource) {
     access.signal?.throwIfAborted()
-    if (!access.sessionId || !await options.authorize(access.sessionId, source.id)) throw new Error('Code Context source is unavailable to this session')
+    if (!access.sessionId || !await options.authorize(access.sessionId, source.id)) throw Object.assign(new Error('Code Context source is unavailable to this session'),{reason:'source-unavailable'})
     const current = sources().find(item => item.id === source.id)
-    if (!current || sourceKey(current.path) !== sourceKey(source.path)) throw new Error('Code Context source changed')
+    if (!current || sourceKey(current.path) !== sourceKey(source.path)) throw Object.assign(new Error('Code Context source changed'),{reason:'source-changed'})
     access.signal?.throwIfAborted()
   }
   function budget(config: ReaderConfig): ProjectContentBudget {
@@ -46,13 +53,15 @@ export function createNativeCodeSourceReader(options: NativeCodeSourceReaderOpti
     return text
   }
   return {
+    indexSourceIds:()=>sources().map(source=>source.id),
+    async authorizeIndex(access:Access,input:{sourceIds:string[]}) {
+      for(const source of selectedSources(input.sourceIds))await admitted(access,source)
+    },
     status: () => ({ partial: last.partial, reasons: [...last.reasons] }),
     async *snapshots(access: Access, input: { sourceIds?: string[]; config: ReaderConfig }): AsyncIterable<Snapshot> {
       last = { partial:false,reasons:[] }
       previousConfig={...input.config,ignorePatterns:[...input.config.ignorePatterns]}
-      const all = sources(), requested = input.sourceIds === undefined ? all : input.sourceIds.map(id => {
-        const source=all.find(item=>item.id===id); if(!source) throw new Error('Unknown Code Context source'); return source
-      })
+      const requested=selectedSources(input.sourceIds)
       const capturedBudget = budget(input.config)
       const signal = access.signal ?? new AbortController().signal
       const query = normalizeSearchQuery({pattern:'.',includes:[extensions],excludes:input.config.ignorePatterns,hidden:false,respectIgnore:true})
@@ -74,10 +83,10 @@ export function createNativeCodeSourceReader(options: NativeCodeSourceReaderOpti
         }
       } finally { last={partial:capturedBudget.reasons.size>0,reasons:[...capturedBudget.reasons]} }
     },
-    async revalidate(access: Access, hit: Hit): Promise<boolean> {
-      const source = sources().find(item=>item.id===hit.sourceId)
-      if (!source) return false
+    async revalidate(access: Access, hit: Hit): Promise<CodeSourceValidation> {
       try {
+        const source = sources().find(item=>item.id===hit.sourceId)
+        if (!source) return {valid:false,reason:'source-unavailable'}
         projectRelativePath(hit.path); await admitted(access,source)
         // Query admission checks the entire permitted file revision, not just
         // the displayed excerpt. This independent read never changes job stats.
@@ -87,13 +96,20 @@ export function createNativeCodeSourceReader(options: NativeCodeSourceReaderOpti
         try {
           const literalPath=hit.path.replace(/[\\*?\[\]{}()!+@]/g,'\\$&')
           const query=normalizeSearchQuery({pattern:'.',includes:[literalPath],excludes:currentConfig.ignorePatterns,hidden:false,respectIgnore:true})
-          const permitted=await reader.candidates(query)
-          if(!permitted.includes(hit.path)) return false
-          const file=await reader.read(hit.path,checkedBudget.maxFileBytes,false,false)
+          const file=await reader.readAdmitted(hit.path,query,checkedBudget.maxFileBytes)
           await admitted(access,source); await reader.checkRoot()
-          return Boolean(file?.eof && file.revision===hit.revision)
+          if ([...checkedBudget.reasons].some(reason=>reason.startsWith('ignore-policy'))) return {valid:false,reason:'source-policy-incomplete',...(checkedBudget.errorCode?{code:checkedBudget.errorCode}:{})}
+          if (checkedBudget.reasons.has('path-not-admitted')) return {valid:false,reason:'source-ignored'}
+          if (checkedBudget.reasons.has('directory-depth-limit') || checkedBudget.reasons.has('input-byte-limit')) return {valid:false,reason:'source-validation-limit'}
+          if (!file) return {valid:false,reason:'source-path-unavailable',...(checkedBudget.errorCode?{code:checkedBudget.errorCode}:{})}
+          if (!file.eof) return {valid:false,reason:'source-content-incomplete'}
+          return file.revision===hit.revision?{valid:true}:{valid:false,reason:'source-content-changed'}
         } finally { await reader.close() }
-      } catch (error) { if(access.signal?.aborted) throw error; return false }
+      } catch (error) {
+        if(access.signal?.aborted) throw error
+        const failure=error as {reason?:CodeSourceRefusal;code?:string}
+        return {valid:false,reason:failure.reason??'source-validation-failed',...(failure.code?{code:failure.code.slice(0,64)}:{})}
+      }
     },
   }
 }

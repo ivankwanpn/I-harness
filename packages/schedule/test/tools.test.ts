@@ -132,6 +132,15 @@ describe("schedule_list", () => {
 })
 
 describe("schedule_delete", () => {
+  it("distinguishes a fired one-shot from an unknown schedule without appending another event", async () => {
+    const { session, create, remove } = setup()
+    await create.execute({ prompt: "once", after_seconds: 1 }, {})
+    append(session, { type: "schedule/change", version: 1, operation: "dispatch", id: "schedule-1" })
+    const before = session.events.length
+    expect(await remove.execute({ id: "schedule-1" }, {})).toEqual({ id: "schedule-1", deleted: false, state: "already-fired" })
+    expect(session.events).toHaveLength(before)
+    await expect(remove.execute({ id: "schedule-99" }, {})).rejects.toThrow(/not found.*this session/)
+  })
   it("removes an active record; an unknown id throws and appends NOTHING", async () => {
     const { session, create, list, remove } = setup()
     await create.execute({ prompt: "bye", after_seconds: 60 }, {})
@@ -139,18 +148,16 @@ describe("schedule_delete", () => {
     expect(session.events.at(-1)).toMatchObject({ type: "schedule/change", version: 1, operation: "delete", id: "schedule-1" })
     expect(await list.execute({}, {})).toEqual({ schedules: [] })
     const before = session.events.length
-    // already deleted ⇒ inactive; never created ⇒ unknown — both are soft body failures
-    expect((await failureOf(remove.execute({ id: "schedule-1" }, {}))).message)
-      .toMatch(/no active schedule with id "schedule-1"/)
+    expect(await remove.execute({ id: "schedule-1" }, {})).toEqual({ id: "schedule-1", deleted: false, state: "already-deleted" })
     expect((await failureOf(remove.execute({ id: "schedule-99" }, {}))).message)
-      .toMatch(/no active schedule with id "schedule-99"/)
+      .toMatch(/not found.*this session/)
     expect(session.events).toHaveLength(before)
   })
 
   it("in a seeded session, the parent's id is not this session's to delete", async () => {
     const child = setup({ seedLength: 1 })
     append(child.session, createEvent({ id: "schedule-1", kind: "at", prompt: "the parent's", scheduledAt: "2020-01-01T00:00:00.000Z" }))
-    expect((await failureOf(child.remove.execute({ id: "schedule-1" }, {}))).message).toMatch(/no active schedule/)
+    expect((await failureOf(child.remove.execute({ id: "schedule-1" }, {}))).message).toMatch(/not found.*this session/)
     expect(child.session.events).toHaveLength(1) // the seeded prefix only
     // …and the child's own id space starts at schedule-1: it never saw the parent's.
     expect(await child.create.execute({ prompt: "mine", after_seconds: 60 }, {})).toMatchObject({ id: "schedule-1" })

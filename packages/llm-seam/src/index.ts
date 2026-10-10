@@ -408,7 +408,7 @@ function maskToolBase64(content: string): string {
   return content.replace(/\"dataBase64\":\"([A-Za-z0-9+/]{8})[A-Za-z0-9+/=]*\"/g, '\"dataBase64\":\"[image omitted: base64:$1]\"')
 }
 
-export function projectImagesForTextModel(messages: LLMMessage[]): LLMMessage[] {
+function projectImagesForTextModel(messages: LLMMessage[]): LLMMessage[] {
   return messages.map((m) => {
     if (typeof m.content === "string") {
       if (m.role === "tool") return { ...m, content: maskToolBase64(m.content) }

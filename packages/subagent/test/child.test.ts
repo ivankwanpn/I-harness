@@ -278,6 +278,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       table,
       agents,
       childSessions: { coordinator, parentSessionId: "sess-main" },
+      forkTurns: "all",
     })
     expect(sessionId).toMatch(/^child-/)
     expect(path).toBe("root/helper")
@@ -393,6 +394,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       table,
       agents: createAgentRegistry(),
       childSessions: { coordinator, parentSessionId: "sess-child" },
+      forkTurns: "all",
     })
     expect(sessionId).toMatch(/^child-/)
     expect(coordinator.created[0]).toMatchObject({ sessionId, parentSession: "sess-child", origin: "subagent", seedLength: 4, delegationDepth: 2 })
@@ -499,6 +501,7 @@ describe("M76: the seed's bound — the model resolves first, and an over-window
         parentRegistry: f.parentReg, parentSession: f.parentSession, parentCtx: f.parentCtx,
         role: f.roles.get("general")!,
         parentModel: createMockClient([{ role: "assistant", text: "child done" }]), resolveModel: noRoleModel,
+        forkTurns: "all",
         contextWindow: 2_000,
         jobs: f.jobs, table: f.table, agents: f.agents,
       })
@@ -1325,6 +1328,7 @@ describe("the child's request carries the resolved budget", () => {
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
       contextWindow: 2_000, // the seed alone is over 0.8 × this
+      forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
     for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
@@ -1342,7 +1346,8 @@ describe("the child's request carries the resolved budget", () => {
       const last = r.messages.at(-1)
       return typeof last?.content === "string" && last.content.includes("summar")
     })
-    expect(summarizerReq?.systemPrompt).toBe(composeSubagentPrompt(f.roles.get("general")!.systemPrompt))
+    expect(summarizerReq?.systemPrompt).toBe(requests.at(-1)?.systemPrompt)
+    expect(summarizerReq?.systemPrompt).toContain("root/helper")
   }, 15_000)
 
   // M74 (final review, fix wave): the same regime as the case above, behind a
@@ -1400,6 +1405,7 @@ describe("the child's request carries the resolved budget", () => {
       parentModel: client, resolveModel: noRoleModel,
       contextWindow: 2_000,
       maxOutputTokens: 4_242,
+      forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
     for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
@@ -1497,6 +1503,7 @@ describe("the child's request carries the resolved budget", () => {
       parentModel: client, resolveModel: noRoleModel,
       contextWindow: 2_000,
       maxOutputTokens: 4_242,
+      forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
     for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {
@@ -1634,6 +1641,7 @@ describe("the child's request carries the resolved budget", () => {
       role: f.roles.get("general")!,
       parentModel: client, resolveModel: noRoleModel,
       contextWindow: 2_000,
+      forkTurns: "all",
       jobs: f.jobs, table: f.table, agents: f.agents,
     })
     for (let i = 0; i < 300 && f.jobs.read(jobId).status === "running"; i++) {

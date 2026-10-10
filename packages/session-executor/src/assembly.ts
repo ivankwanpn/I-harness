@@ -25,7 +25,7 @@ import { createFsTools } from "@i-harness/fs"
 import { createTodoTool, renderTodoContext } from "@i-harness/todo"
 import { createReadImageTool } from "@i-harness/attachment"
 import { createReadVideoTool, type VideoAudioAnalyzer } from "@i-harness/media"
-import { createApprovalPolicy, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
+import { createApprovalPolicy, ensureReviewerRole, registerGuardian, type ApprovalMode, type GuardianIsolatedConfig } from "@i-harness/guard-approval"
 import { createRetryGuard, type RetryConfig } from "@i-harness/guard-retry"
 import { createOutputSpillGuard, createUnifiedSpillStore, type OutputSpillGuardConfig } from "@i-harness/output-retention"
 import { createContextOutputTools, type ContextOutputService, type ContextCapture } from "@i-harness/context-output"
@@ -346,7 +346,7 @@ export interface SessionAssembly {
   executionBackendStatus(): Promise<(BackendProbe | UnavailableExecutionAuthorityStatus) & { windowsSandboxBackend: "legacy" | "psec" | "wsl" }>
   /** Current owning runtime registries only; reading never mounts or restores work.
    * A child owner may be supplied to inspect its terminals in this shared runtime. */
-  liveResources?(terminalOwnerSessionId?: string): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[] }
+  liveResources?(terminalOwnerSessionId?: string): { codeCells: { id: string; status: "running" }[]; terminals: import("@i-harness/terminal").TerminalView[]; backgroundJobs?: {id:string;status:"running"|"stopping"}[] }
   /** Reports the actual mounted mode/catalogue; never resolves a model. */
   executionState?(): { codeMode: "off" | "mixed" | "only"; modelTools: string[] }
   /** Cancels only an owned live cell without competing with its model observer. */
@@ -383,6 +383,9 @@ export interface SessionAssembly {
   /** Request cancellation of one background job through the subagent job
    * registry (the model-facing job_kill machinery). */
   killJob(jobId: string): "cancellation-requested" | "already-finished"
+  /** Register live host work with this assembly's real job tools/persistence.
+   * Disposal requests cancellation and waits for the producer to finish. */
+  registerBackgroundJob?(input: { id:string; kind:string; label:string; cancel():void }): { finish(status:"completed"|"killed"|"error",output:string):void }
   /** M49 Task 12 (spec §8.2): the REAL task projection — subagent rows (live
    * agent-table entries fused with their durable task records, plus
    * record-only recovered rows), job rows (the subagent jobs registry) and
@@ -1117,6 +1120,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let flushSubagentPersistence: (() => Promise<void>) | undefined
   let disposeSubagents: (() => Promise<void>) | undefined
   let disposing = false
+  const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
   const codeModeNow = () => normalizeCodeMode(typeof opts.codeMode === "function" ? opts.codeMode() : opts.codeMode)
   const codeMode = codeModeNow()
@@ -1314,6 +1318,10 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       warn: (message) => d.warn(message),
     })
     await pluginCapabilities.update(opts, false)
+    // The settings surface advertises the established reviewer capability.
+    // Isolated approval reviews do not spawn it themselves, so register its
+    // tool-free definition here as well; model rows never invent capabilities.
+    if (opts.guardian !== undefined || opts.roleSelectionFor?.("reviewer") !== undefined) ensureReviewerRole(subagent.roles)
     if (opts.guardian) {
       await registerGuardian(ctx, {
         ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
@@ -1594,12 +1602,30 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       drainParentNotifications: async () => { for (const handle of teamHandles) await handle.drainLeadMessages?.() },
       ...(opts.telemetry !== undefined ? { telemetry: opts.telemetry } : {}),
       killJob: (jobId: string) => subagent.jobs.kill(jobId),
+      registerBackgroundJob: (input) => {
+        if (disposing || opts.executionCallerAvailable?.() === false) throw new Error("Background job owner is unavailable")
+        const existing = backgroundJobs.get(input.id)
+        if (existing) {
+          if(existing.kind!==input.kind || existing.label!==input.label || existing.requestCancel!==input.cancel)throw new Error(`duplicate job id: ${input.id}`)
+          return { finish:existing.finish }
+        }
+        const producer=subagent.jobs.registerJob("root",input.kind,input.label,input.id,undefined,input.cancel)
+        let settled!:()=>void
+        const done=new Promise<void>(resolve=>{settled=resolve})
+        const finish=(status:"completed"|"killed"|"error",output:string)=>{
+          try {if (!(producer.finish?producer.finish(status,output):subagent.jobs.updateJob(input.id,{status,output}))) throw new Error(`Background job disappeared: ${input.id}`)}
+          finally {backgroundJobs.delete(input.id);settled()}
+        }
+        backgroundJobs.set(input.id,{kind:input.kind,label:input.label,requestCancel:input.cancel,cancel:()=>{subagent.jobs.kill(input.id)},done,finish})
+        return {finish}
+      },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
       ownedToolCaller,
       liveResources: (terminalOwnerSessionId = opts.sessionId) => {
         if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
         const terminal = ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")
-        return { codeCells: codeModeMount?.liveCells?.() ?? [], terminals: (terminal?.list() ?? []).filter(row => row.ownerSessionId === terminalOwnerSessionId) }
+        return { codeCells: codeModeMount?.liveCells?.() ?? [], terminals: (terminal?.list() ?? []).filter(row => row.ownerSessionId === terminalOwnerSessionId),
+          backgroundJobs:[...backgroundJobs.keys()].map(id=>({id,status:subagent.jobs.read(id).status==='killed'?'stopping' as const:'running' as const})) }
       },
       executionState: () => ({ codeMode: codeMode.mode, modelTools: modelToolSchemas().map(tool => tool.name) }),
       ...(codeModeMount?.terminateCell ? { async stopCodeCell(cellId: string) {
@@ -1661,6 +1687,13 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
   async function dispose(): Promise<void> {
     disposing = true
+    const processCleanupFailures: unknown[] = []
+    const draining:Promise<void>[]=[]
+    for (const job of backgroundJobs.values()) {
+      try { job.cancel();draining.push(job.done) }
+      catch(error) { processCleanupFailures.push(error);d.warn(`Background job cancellation failed: ${String(error)}`) }
+    }
+    await Promise.all(draining)
     try { await codeModeMount?.cancel("Session assembly disposed") } catch (error) { d.warn(`Code Mode cancellation failed: ${String(error)}`) }
     try { await codeModeMount?.dispose() } catch (error) { d.warn(`Code Mode disposal failed: ${String(error)}`) }
     try { await disposeSubagents?.() } catch (error) { d.warn(`Subagent disposal failed: ${String(error)}`) }
@@ -1686,7 +1719,6 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         // cleanup failure on unmount: disposal continues
       }
     }
-    const processCleanupFailures: unknown[] = []
     // M26-B2: terminal handle disposal (all PTYs).
     try {
       await terminalMount.dispose()

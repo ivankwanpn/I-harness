@@ -3,7 +3,9 @@ import { chunks } from './chunker.ts'
 import { configuration, identity, sourceIds } from './config.ts'
 import { cosine, embed, modelIdentity, validVector, vectorKey } from './embedding.ts'
 import { hash, Store, type StoredFile } from './store.ts'
-import type { CodeAccess, CodeHit, CodeRetrievalOptions, CodeRetrievalService, CodeRetrievalStatus, CodeSearchResult } from './types.ts'
+import type { CodeAccess, CodeHit, CodeRetrievalOptions, CodeRetrievalService, CodeRetrievalStatus, CodeSearchResult, CodeSourceValidation } from './types.ts'
+
+const MAX_SOURCE_CHECKS=256,MAX_SEARCH_CANDIDATES=1024
 
 export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRetrievalService {
   identity(options.workspaceId,'workspace ID')
@@ -11,25 +13,28 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   const store=new Store(options.root,options.workspaceId)
   const metrics={embeddingRequests:0,embeddingCacheHits:0,reportedInputTokens:0,unreportedRequests:0}
   const usage={request(){metrics.embeddingRequests++;metrics.unreportedRequests++},reported(tokens:number){metrics.reportedInputTokens+=tokens;metrics.unreportedRequests--}}
-  type Operation={controller:AbortController;done:Promise<unknown>}
+  type Operation={controller:AbortController;done:Promise<unknown>;sessionId:string}
   const active=new Set<Operation>(),jobs=new Map<string,Promise<CodeRetrievalStatus>>()
-  let indexing:{jobId:string;progress:{files:number;bytes:number}}|undefined
+  type JobBinding=ReturnType<NonNullable<CodeRetrievalOptions['registerJob']>>
+  type Indexing={jobId:string;sourceIds?:string[];progress:{files:number;bytes:number};cancel():void;bindings:Map<string,JobBinding>}
+  let indexing:Indexing|undefined
   let lastJob:CodeRetrievalStatus['lastJob']
+  let sourceHealth:CodeRetrievalStatus['sourceHealth']
   let controls:Promise<unknown>=Promise.resolve()
   const status=():CodeRetrievalStatus=>({enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':store.status().generation?'ready':'unindexed',
-    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(error?{error}:{})})
+    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(sourceHealth?{sourceHealth:{...sourceHealth,reasons:[...sourceHealth.reasons]}}:{}),...(error?{error}:{})})
   function admit(access:CodeAccess,controlOwner=false) {
     identity(access.sessionId,'session ID');access.signal?.throwIfAborted()
     if(closed)throw new Error('Code Context is closed')
     if(!config.enabled)throw new Error('Code Context is disabled')
     if(stopping&&!controlOwner)throw new Error('Code Context is stopping')
   }
-  function operation<T>(access:CodeAccess,run:(signal:AbortSignal,check:()=>void)=>Promise<T>):Promise<T> {
-    const controller=new AbortController(),signal=access.signal?AbortSignal.any([access.signal,controller.signal]):controller.signal
+  function operation<T>(access:CodeAccess,run:(signal:AbortSignal,check:()=>void)=>Promise<T>,controller=new AbortController()):Promise<T> {
+    const signal=access.signal?AbortSignal.any([access.signal,controller.signal]):controller.signal
     const deadline=Date.now()+config.deadlineMs
     const check=()=>{if(Date.now()>=deadline&&!signal.aborted)controller.abort(new Error('Code Context deadline exceeded'));signal.throwIfAborted()}
     const timer=setTimeout(()=>controller.abort(new Error('Code Context deadline exceeded')),config.deadlineMs)
-    const item:Operation={controller,done:Promise.resolve()};active.add(item)
+    const item:Operation={controller,done:Promise.resolve(),sessionId:access.sessionId};active.add(item)
     const promise=Promise.resolve().then(()=>{check();return run(signal,check)}).finally(()=>{clearTimeout(timer);active.delete(item)})
     item.done=promise;return promise
   }
@@ -42,31 +47,59 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
     }).finally(()=>{stopping--})
     controls=next.catch(()=>{});return next
   }
-  async function startIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean}={}) {
+  async function startIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean}={}):Promise<{jobId:string}> {
     admit(access);sourceIds(input.sourceIds)
     if(input.force!==undefined&&typeof input.force!=='boolean')throw new Error('Invalid force flag')
     if(input.force) {
       const requested={...input,sourceIds:input.sourceIds?[...input.sourceIds]:undefined}
+      const reserved=indexing,available=options.reader.indexSourceIds?.()
+      if(options.reader.authorizeIndex) {
+        if(!available || reserved&&!reserved.sourceIds)throw new Error('Code Context source authorization is unavailable for a rebuild')
+        // Force owns a global drain, including searches. Check all current
+        // sources and the exact active job, not just the requested replacement
+        // subset, before aborting anyone's work or binding a replacement.
+        const affected=[...new Set([...available,...(requested.sourceIds??[]),...(reserved?.sourceIds??[])])]
+        await operation(access,async(signal,check)=>{await options.reader.authorizeIndex!({...access,signal},{sourceIds:affected});check()})
+        admit(access)
+        if(indexing!==reserved)return startIndex(access,requested)
+      } else if([...active].some(item=>item.sessionId!==access.sessionId) || reserved&&!reserved.bindings.has(access.sessionId))throw new Error('Code Context source authorization is unavailable for a shared rebuild')
       return control(async()=>{
         // Drainage and synchronous reservation share this owner. Admission
         // remains closed until the replacement is tracked in indexing/active.
         // Do not await the job here: later cancel/clear/disable owners must be
         // able to abort and drain it.
         admit(access,true)
-        return reserveIndex(access,requested)
+        return reserveIndex(access,requested,available)
       })
     }
-    if(indexing)return {jobId:indexing.jobId}
+    if(indexing){
+      const reserved=indexing
+      if(!reserved.bindings.has(access.sessionId)) {
+        if(!options.reader.authorizeIndex || !reserved.sourceIds)throw new Error('Code Context source authorization is unavailable for a shared job')
+        await operation(access,async(signal,check)=>{await options.reader.authorizeIndex!({...access,signal},{sourceIds:[...reserved.sourceIds!]});check()})
+        admit(access)
+        // Authority awaited for this exact lifetime cannot authorize a later
+        // replacement whose actual source scope may be different.
+        if(indexing!==reserved)return startIndex(access,input)
+      }
+      bindJob(access,reserved);return {jobId:reserved.jobId}
+    }
     return reserveIndex(access,input)
   }
-  function reserveIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean}) {
-    const jobId=randomUUID(),captured=structuredClone(config),scope=input.sourceIds?[...new Set(input.sourceIds)]:undefined
+  function bindJob(access:CodeAccess,job:Indexing) {
+    if(!job.bindings.has(access.sessionId))job.bindings.set(access.sessionId,options.registerJob?.(access,{jobId:job.jobId,cancel:job.cancel}))
+  }
+  function reserveIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean},admittedSources?:string[]) {
+    const jobId=`code-context-${randomUUID()}`,captured=structuredClone(config),scope=input.sourceIds?[...new Set(input.sourceIds)]:undefined
+    const readScope=scope??admittedSources??options.reader.indexSourceIds?.()
+    const jobController=new AbortController(),reservation:Indexing={jobId,sourceIds:readScope?[...readScope]:undefined,progress:{files:0,bytes:0},cancel:()=>jobController.abort(new Error('Code Context indexing cancelled')),bindings:new Map()}
+    bindJob(access,reservation)
     let result:NonNullable<CodeRetrievalStatus['lastJob']>
     const finish=(outcome:'completed'|'cancelled'|'failed',reason?:string)=>{
       result={jobId,outcome,generation:store.status().generation,...(reason?{reason}:{})}
       lastJob=result
     }
-    indexing={jobId,progress:{files:0,bytes:0}};error=undefined
+    indexing=reservation;error=undefined
     const work=operation(access,async (signal,check)=>{
       try {
         await store.open(captured.maxDiskBytes);check()
@@ -85,12 +118,12 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
           dimensions??=retainedDimensions
         }
         if(preserved.files&&old.partial)for(const reason of old.reasons)reasons.add(reason)
-        const iterator=options.reader.snapshots({...access,signal},{sourceIds:scope,config:captured})
+        const iterator=options.reader.snapshots({...access,signal},{sourceIds:reservation.sourceIds,config:captured})
         for await(const file of iterator) {
           check()
           identity(file.sourceId,'source ID');identity(file.path,'source path');identity(file.revision,'source revision')
           if(typeof file.text!=='string'||typeof file.complete!=='boolean')throw new Error('Invalid admitted snapshot')
-          if(scope&&!scope.includes(file.sourceId))throw new Error('Reader returned an unrequested source')
+          if(reservation.sourceIds&&!reservation.sourceIds.includes(file.sourceId))throw new Error('Reader returned an unrequested source')
           const key=JSON.stringify([file.sourceId,file.path]);if(seen.has(key))throw new Error('Duplicate source path');seen.add(key)
           if(files.length+preserved.files>=captured.maxFiles){reasons.add('max-files');break}
           const bytes=Buffer.byteLength(file.text)
@@ -134,16 +167,24 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
         }
         check()
         store.commit(files,scope,[...reasons],model,vectors,captured.maxDiskBytes,check)
+        sourceHealth=undefined
         finish('completed')
       } catch(failure) {
         if(signal.aborted&&signal.reason?.message!=='Code Context deadline exceeded')finish('cancelled','Code Context indexing cancelled')
         else {error=failure instanceof Error?failure.message:'Code Context indexing failed';finish('failed',error)}
       } finally {if(indexing?.jobId===jobId)indexing=undefined}
-    }).catch(failure=>{
+    },jobController).catch(failure=>{
       if(indexing?.jobId===jobId)indexing=undefined
-      if(failure?.message!=='Code Context deadline exceeded'&&(access.signal?.aborted||failure?.message==='Code Context operation cancelled'))finish('cancelled','Code Context indexing cancelled')
+      if(failure?.message!=='Code Context deadline exceeded'&&(jobController.signal.aborted||access.signal?.aborted||failure?.message==='Code Context operation cancelled'))finish('cancelled','Code Context indexing cancelled')
       else {error=failure instanceof Error?failure.message:'Code Context indexing failed';finish('failed',error)}
-    }).then(()=>({...status(),lastJob:{...result}}))
+    }).then(()=>{
+      const snapshot={...status(),lastJob:{...result}},sharedStatus=result.outcome==='completed'?'completed':result.outcome==='cancelled'?'killed':'error'
+      for(const binding of new Set(reservation.bindings.values())) {
+        try {binding?.finish(sharedStatus,JSON.stringify(result))}
+        catch(failure) {error=`Code Context job management failed: ${failure instanceof Error?failure.message:String(failure)}`;finish('failed',error)}
+      }
+      return error?{...status(),lastJob:{...result}}:snapshot
+    })
     jobs.set(jobId,work)
     // Bound completed handles; callers can always inspect current durable status.
     if(jobs.size>64)jobs.delete(jobs.keys().next().value!)
@@ -184,27 +225,71 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
       }
       if(!state.generation)reasons.add('unindexed')
       const result:CodeSearchResult={hits,mode,partial:reasons.size>0,reasons:[...reasons],generation:state.generation}
-      function boundedReasons(){result.partial=reasons.size>0;result.reasons=[...reasons];if(Buffer.byteLength(JSON.stringify({...result,hits:[]}))>maxBytes)result.reasons=['result-budget']}
+      const validated=new Map<string,CodeSourceValidation>(),refused=new Map<string,Extract<CodeSourceValidation,{valid:false}>>()
+      const fileKey=(hit:CodeHit)=>JSON.stringify([hit.sourceId,hit.path,hit.revision])
+      async function validate(hit:CodeHit):Promise<CodeSourceValidation> {
+        let outcome:CodeSourceValidation
+        try {
+          const value=await options.reader.revalidate({...access,signal},hit)
+          outcome=typeof value==='boolean'?(value?{valid:true}:{valid:false,reason:'stale-or-inaccessible-source'}):value
+        } catch(failure) {
+          check()
+          const code=(failure as NodeJS.ErrnoException)?.code
+          outcome={valid:false,reason:'source-validation-failed',...(typeof code==='string'?{code:code.slice(0,64)}:{})}
+        }
+        check()
+        if(!outcome.valid){reasons.add(outcome.reason);refused.set(fileKey(hit),outcome)}
+        return outcome
+      }
+      function boundedReasons(){
+        result.partial=reasons.size>0;result.reasons=[...reasons]
+        if(Buffer.byteLength(JSON.stringify({...result,hits:[]}))>maxBytes){result.reasons=['result-budget'];delete result.diagnostics}
+      }
+      let visited=0
       for(const candidate of candidates) {
         check()
-        const hit={...candidate,generation:state.generation}
-        if(!await options.reader.revalidate({...access,signal},hit)){reasons.add('stale-or-inaccessible-source');continue}
-        check()
         if(hits.length>=limit){reasons.add('result-limit');break}
+        if(visited++>=MAX_SEARCH_CANDIDATES){reasons.add('candidate-budget');break}
+        const hit={...candidate,generation:state.generation}
+        const key=fileKey(hit)
+        if(!validated.has(key)) {
+          if(validated.size>=MAX_SOURCE_CHECKS){reasons.add('source-validation-limit');break}
+          validated.set(key,await validate(hit))
+        }
+        if(!validated.get(key)!.valid)continue
         hits.push(hit);boundedReasons()
         // Reserve room for a budget reason before admitting a hit.
         if(Buffer.byteLength(JSON.stringify({...result,partial:true,reasons:[...result.reasons,'result-budget']}))>maxBytes){hits.pop();reasons.add('result-budget')}
       }
+      // Cached admission avoids a full file read for each chunk, but is never
+      // publication authority. Recheck each returned file after candidate work
+      // so a revision, ignore policy, or permission change removes every chunk.
+      for(const hit of [...new Map(hits.map(hit=>[fileKey(hit),hit])).values()]) {
+        if(!(await validate(hit)).valid)for(let i=hits.length-1;i>=0;i--)if(fileKey(hits[i])===fileKey(hit))hits.splice(i,1)
+      }
+      if(refused.size) {
+        const diagnostics=new Map<string,NonNullable<CodeSearchResult['diagnostics']>[number]>()
+        for(const refusal of refused.values()) {
+          const key=JSON.stringify([refusal.reason,refusal.code]),previous=diagnostics.get(key)
+          if(previous)previous.count++
+          else if(diagnostics.size<16)diagnostics.set(key,{reason:refusal.reason,...(refusal.code?{code:refusal.code}:{}),count:1})
+        }
+        result.diagnostics=[...diagnostics.values()]
+      }
       boundedReasons()
       while(Buffer.byteLength(JSON.stringify(result))>maxBytes&&hits.length){hits.pop();reasons.add('result-budget');boundedReasons()}
-      check();return result
+      check()
+      const healthReasons:string[]=[...new Set([...refused.values()].map(value=>value.reason))]
+      for(const reason of ['source-validation-limit','candidate-budget'])if(reasons.has(reason))healthReasons.push(reason)
+      sourceHealth={scope:'last-search',state:healthReasons.length?'degraded':validated.size?'current':'unchecked',generation:state.generation,checkedFiles:validated.size,refusedFiles:refused.size,reasons:healthReasons,checkedAt:Date.now()}
+      return result
     })
   }
   const service:CodeRetrievalService={status,startIndex,search,
     async wait(jobId){const job=jobs.get(jobId);if(!job)throw new Error('Unknown Code Context job');return job},
-    async configure(patch){const captured=structuredClone(patch);configuration(captured,config);await control(async()=>{if(closed)throw new Error('Code Context is closed');config=configuration(captured,config);error=undefined});return status()},
+    async configure(patch){const captured=structuredClone(patch);configuration(captured,config);await control(async()=>{if(closed)throw new Error('Code Context is closed');config=configuration(captured,config);error=undefined;sourceHealth=undefined});return status()},
     async cancel(){await control(async()=>{});return status()},
-    async clear(){await control(async()=>{if(closed)throw new Error('Code Context is closed');await store.open(config.maxDiskBytes);store.clear();error=undefined});return status()},
+    async clear(){await control(async()=>{if(closed)throw new Error('Code Context is closed');await store.open(config.maxDiskBytes);store.clear();error=undefined;sourceHealth=undefined});return status()},
     async close(){if(closed)return;await control(async()=>{store.close();closed=true})},
   }
   return service

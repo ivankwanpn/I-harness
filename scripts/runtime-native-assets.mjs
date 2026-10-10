@@ -3,14 +3,29 @@ import { cpSync, readFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 
 const hash = (path) => createHash("sha256").update(readFileSync(path)).digest("hex")
+const msysNotices = ["CYGWIN_LICENSE", "COPYING.LIB", "COPYING", "SOURCES.md"].map(file => `msys-notices/${file}`)
 export function verifyNativeAssets(root, { sources = false } = {}) {
   const manifest = JSON.parse(readFileSync(join(root, "artifacts/win32-x64/manifest.json"), "utf8"))
   if (manifest.manifestVersion !== 1 || manifest.protocolVersion !== 1 || manifest.target !== "x86_64-pc-windows-msvc"
     || manifest.helperFile !== "i-harness-windows-helper.exe") throw new Error("Invalid native asset manifest identity")
   if (hash(join(root, "artifacts/win32-x64", manifest.helperFile)) !== manifest.helperSha256) throw new Error("Native helper digest mismatch")
+  const adapter = manifest.msysPty
+  if (!adapter || adapter.file !== "i-harness-msys-pty.exe" || !/^[0-9a-f]{64}$/.test(adapter.sha256 ?? "")) {
+    throw new Error("Invalid MSYS PTY adapter manifest identity")
+  }
+  if (hash(join(root, "artifacts/win32-x64", adapter.file)) !== adapter.sha256) throw new Error("MSYS PTY adapter digest mismatch")
+  if (!adapter.notices || typeof adapter.notices !== "object" || Array.isArray(adapter.notices)
+    || Object.keys(adapter.notices).length !== msysNotices.length
+    || msysNotices.some(file => !/^[0-9a-f]{64}$/.test(adapter.notices[file] ?? ""))) {
+    throw new Error("Invalid MSYS PTY notice manifest identity")
+  }
+  for (const file of msysNotices) {
+    if (hash(join(root, "artifacts/win32-x64", file)) !== adapter.notices[file]) throw new Error(`MSYS PTY notice digest mismatch: ${file}`)
+  }
   if (hash(join(root, "protocol.md")) !== manifest.protocolSha256) throw new Error("Native protocol digest mismatch")
   const record = JSON.parse(readFileSync(join(root, "qualification.json"), "utf8"))
   if (record.helperSha256 !== manifest.helperSha256 || record.protocolSha256 !== manifest.protocolSha256
+    || record.msysPtyTemplateSha256 !== adapter.sha256
     || record.assurance !== "experimental" || record.observationScope !== "historical-one-host") throw new Error("Native qualification identity mismatch")
   if (sources) for (const [file, expected] of Object.entries(manifest.sources)) {
     if (hash(join(root, file)) !== expected) throw new Error(`Stale native helper source: ${file}`)

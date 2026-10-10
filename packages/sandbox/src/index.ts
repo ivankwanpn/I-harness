@@ -2,6 +2,7 @@ export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
 export type {
   ExecutionTransport, ExecutionLifetime, BackendAssurance, StopReason, ExecutionOwner,
   BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
+  ExecutionFileIdentity, MsysPtyBinding,
   CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
   ExecutionHandle, PreparedExecution, ExecutionBackend, ExecutionOutput, ExecutionIo,
   TransportExecutionHandle, PreparedTransportExecution, TransportExecutionBackend,

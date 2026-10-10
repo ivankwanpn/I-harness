@@ -26,6 +26,34 @@ pub struct Spec {
     pub lifetime: String,
     pub argument_encoding: String,
     pub pty: Option<Size>,
+    pub msys_pty: Option<MsysPty>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Artifact {
+    pub path: String,
+    pub sha256: String,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Configuration {
+    pub path: String,
+    pub sha256: Option<String>,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MsysResolution {
+    pub kind: String,
+    pub original: Artifact,
+    pub configuration: Configuration,
+}
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MsysPty {
+    pub runtime: Artifact,
+    pub executable: Artifact,
+    pub resolution: Option<MsysResolution>,
+    pub bridge: Artifact,
 }
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

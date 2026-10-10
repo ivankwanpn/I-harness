@@ -1,4 +1,4 @@
-import { append, createSession, deriveMessages, type Session } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, derivePlanMode, type Session } from "@i-harness/core-session"
 import { createSessionExecutor, type SessionExecutor } from "@i-harness/core-agent"
 import type { CompactionRequest, CompactionResult } from "@i-harness/compaction"
 import type { MockStep } from "@i-harness/llm-mock"
@@ -752,6 +752,8 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
           claudePluginRoot: dirname(dirname(hookConfig)),
           cwd: opts.workspace,
           sessionId: hookSessionId,
+          session: () => assembly?.session,
+          permissionMode: ({ session }) => session && derivePlanMode(session as Session).active ? "plan" : opts.approveAll ? "bypassPermissions" : "default",
           onUnsupported: (diagnostic) => { d.warn(`[plugins] hooks ${hookConfig}: ${diagnostic.event} (${diagnostic.id}): ${diagnostic.message}`) },
           approvals,
         }))

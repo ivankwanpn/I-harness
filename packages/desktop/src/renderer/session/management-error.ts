@@ -6,6 +6,7 @@ const guidance: Record<string, readonly [string, string]> = {
   "Session has active or pending durable agents/inbox": ["子代理仍有執行中或待處理的工作。請查看子代理狀態，待工作完成或明確取消後重試。", "Subagents have running or pending work. Review their status and wait for completion or explicitly cancel the work, then retry."],
   "Session has pending durable tasks/outbox": ["會話仍有待處理任務或尚未送達的結果。請查看工作與子代理狀態，處理完成後重試。", "The conversation has pending tasks or undelivered results. Review the task and subagent status, resolve the pending work, then retry."],
   "Session has active Code Mode cells or processes": ["會話仍有執行中的程式或終端程序。請先在執行面板停止相關工作，再重試。", "The conversation has running code or terminal processes. Stop the relevant work in the execution panel, then retry."],
+  "Session has active background producers": ["背景工作仍在執行或等待取消完成。請查看工作狀態，待工作完整結束後再重試。", "Background work is still running or finishing cancellation. Review its status and retry after the work has fully stopped."],
   "Session has pending interactions": ["會話仍有待回覆的問題或核准要求。請先回覆或停止相關執行，再重試。", "The conversation has unanswered questions or approval requests. Respond or stop the relevant execution, then retry."],
   "Session has active workflow work": ["會話仍有執行中的工作流程。請先停止相關目標或工作流程，再重試。", "The conversation has an active workflow. Stop its goal or workflow, then retry."],
   "Session has an unfinished durable turn": ["上次執行尚未完整結束，需要先檢查會話的中斷狀態。記錄會保留；請先處理復原問題再重試。", "A previous turn did not finish. Review the interrupted conversation and resolve its recovery state, then retry. Its records have been preserved."],

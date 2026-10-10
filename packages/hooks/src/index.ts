@@ -9,6 +9,7 @@ import type {
   HandlerMatcher,
   ClaudePluginHooksOptions,
   ClaudeSessionSource,
+  ClaudeHookSession,
   HookContext,
   HookEventName,
   HookHandlerSpec,
@@ -20,12 +21,15 @@ import {
   HookConfigError,
   HookUnsupportedFormatError,
   HookTrustError,
+  HookOwnerAbortError,
   HOOK_OUTPUT_CAP_BYTES,
 } from "./types.ts"
 import { verifyHandlerTrust } from "./trust.ts"
-import { assertAllowed, runHookHandler } from "./runner.ts"
+import { assertAllowed, runHookHandler, type RunHookOptions } from "./runner.ts"
 import { resolveHarnessHome } from "@i-harness/harness-home"
-import { adaptClaudePluginHooks } from "./claude.ts"
+import { adaptClaudePluginHooks, claudeToolName } from "./claude.ts"
+import { createClaudeTranscriptProjection } from "./claude-transcript.ts"
+import { claudeRuntimeService } from "./claude-runtime.ts"
 
 export * from "./types.ts"
 import type { HookTrustStore } from "./trust.ts"
@@ -50,6 +54,7 @@ export {
   createHookTrustStore,
 } from "./trust.ts"
 export { runHookHandler, validateHookOutput, assertAllowed } from "./runner.ts"
+export { sha256ClaudePluginTreeSync } from "./claude.ts"
 
 const CONFIG_FILE = "hooks.json"
 
@@ -81,6 +86,9 @@ export interface HookRegistryOptions extends ClaudePluginHooksOptions {
   /** Project directory supplied to Claude startup subprocesses. */
   cwd?: string
   sessionId?: string
+  /** Actual root fallback; a child ToolExec/agent payload always overrides it. */
+  session?: ClaudeHookSession | (() => ClaudeHookSession | undefined)
+  permissionMode?: string | ((input: { session?: ClaudeHookSession; sessionId?: string }) => string)
 }
 
 /** One loaded handler with its load-time trust verdict. */
@@ -117,7 +125,7 @@ export interface HookRegistry {
    * (sessionId) and notification (message). Tool/prompt/stop events are
    * fired by the mounted seams — fire() rejects them as not programmatic.
    */
-  fire(event: HookEventName, input: { sessionId?: string; message?: string }): Promise<void>
+  fire(event: HookEventName, input: { sessionId?: string; message?: string; session?: ClaudeHookSession; reason?: string; notificationType?: string; agentType?: string; agentId?: string; finalText?: string; signal?: AbortSignal }): Promise<void>
   beginSession(sessionId: string, source?: ClaudeSessionSource): Promise<void>
   endSession(sessionId: string): Promise<void>
   /** Loaded handlers (config order) with their trust verdicts. */
@@ -141,6 +149,17 @@ interface InternalRegistry {
    * between calls: saying it once is the signal.
    */
   reportedUnapproved: Set<string>
+  run(handler: LoadedHandler, context: HookContext, input?: HookRuntimeInput): Promise<HookOutput>
+  current(handler: LoadedHandler): boolean
+}
+
+interface HookRuntimeInput extends RunHookOptions {
+  session?: ClaudeHookSession
+  nativeOnly?: boolean
+  claudeOnly?: boolean
+  promptSubmission?: boolean
+  matchValue?: string
+  dialect?: "posix" | "powershell" | "cmd"
 }
 
 const TOOL_EVENTS = new Set<HookEventName>(["pre-tool", "post-tool", "permission"])
@@ -284,8 +303,18 @@ function validateSpec(entry: unknown, configPath: string): HookHandlerSpec {
   return spec
 }
 
-function matches(handler: LoadedHandler, event: HookEventName, toolName?: string): boolean {
+function matches(handler: LoadedHandler, event: HookEventName, toolName?: string, input?: HookRuntimeInput): boolean {
   if (handler.spec.event !== event) return false
+  const claude = handler.spec.claude
+  if (claude !== undefined) {
+    if (input?.nativeOnly || event === "prompt/submit" && input?.promptSubmission === false) return false
+    const pattern = claude.matcher
+    if (pattern === undefined || pattern === "" || pattern === "*") return true
+    if (["UserPromptSubmit", "Stop"].includes(claude.event)) return true // Claude ignores matchers for these events.
+    const subject = TOOL_EVENTS.has(event) && toolName !== undefined ? claudeToolName(toolName, input?.dialect) : input?.matchValue
+    return subject !== undefined && new RegExp(pattern).test(subject)
+  }
+  if (input?.claudeOnly) return false
   if (!TOOL_EVENTS.has(event)) return true
   if (toolName === undefined) return true
   return compileMatcher(handler.spec.matcher)(toolName)
@@ -304,11 +333,13 @@ async function runHandlers(
   context: HookContext,
   toolName?: string,
   gate = false,
-): Promise<void> {
+  input?: HookRuntimeInput,
+): Promise<HookOutput[]> {
+  const outputs: HookOutput[] = []
   for (const handler of registry.loaded) {
     // Claude startup commands have a separate output/context lifecycle below.
-    if (handler.spec.claude !== undefined) continue
-    if (!matches(handler, event, toolName)) continue
+    if (handler.spec.claude?.event === "SessionStart") continue
+    if (!matches(handler, event, toolName, input)) continue
     if (!handler.valid) {
       const message = handler.trustError ?? "handler failed trust verification"
       if (handler.unapproved === true) {
@@ -328,41 +359,52 @@ async function runHandlers(
     }
     let output: HookOutput
     try {
-      output = await runHookHandler(handler.spec, context, registry.opts.configDir, { env: registry.opts.env })
+      output = await registry.run(handler, context, input)
     } catch (err) {
+      if (err instanceof HookOwnerAbortError) throw err
       if (!gate) {
         registry.opts.report(err)
         continue
       }
       throw new HookBlockedError(handler.spec.id, `handler failed closed: ${err instanceof Error ? err.message : String(err)}`)
     }
-    if (gate) assertAllowed(output, handler.spec.id)
+    if (gate && !(handler.spec.claude !== undefined && event === "post-tool")) assertAllowed(output, handler.spec.id)
+    outputs.push(output)
   }
+  return outputs
 }
 
 /** Permission handlers → ToolDecision | undefined (undefined = no decision). */
 async function permissionDecision(
   registry: InternalRegistry,
-  call: ToolCall,
+  call: ToolCall & HookRuntimeInput,
 ): Promise<ToolDecision | undefined> {
   for (const handler of registry.loaded) {
-    if (!matches(handler, "permission", call.name)) continue
+    if (!matches(handler, "permission", call.name, call)) continue
     if (!handler.valid) {
+      if (handler.spec.claude !== undefined && handler.unapproved === true) {
+        if (!registry.reportedUnapproved.has(handler.spec.id)) {
+          registry.reportedUnapproved.add(handler.spec.id)
+          registry.opts.report(new HookTrustError(handler.spec.id, handler.spec.trust.sha256, handler.trustError ?? "handler is not approved"))
+        }
+        continue
+      }
       return { kind: "deny", reason: `hook handler ${handler.spec.id} failed trust verification` }
     }
     let output: HookOutput
     try {
-      output = await runHookHandler(
-        handler.spec,
+      output = await registry.run(
+        handler,
         { event: "permission", tool: { name: call.name, args: call.args } },
-        registry.opts.configDir,
-        { env: registry.opts.env },
+        call,
       )
     } catch (err) {
       return { kind: "deny", reason: `hook handler ${handler.spec.id} failed closed: ${err instanceof Error ? err.message : String(err)}` }
     }
+    if (handler.spec.claude !== undefined && (output.continue === false || output.block === true)) return { kind: "deny", reason: output.reason ?? output.stopReason ?? "Claude permission hook stopped the action" }
     if (output.decision === undefined) continue
-    if (output.decision === "allow") return { kind: "allow" }
+    // A plugin's allow can never grant more than IH's host permission policy.
+    if (output.decision === "allow") { if (handler.spec.claude !== undefined) continue; return { kind: "allow" } }
     // ask is not wired to a question seam on main yet — fail closed as deny.
     return { kind: "deny", reason: output.reason ?? output.stopReason ?? `hook handler ${handler.spec.id} requires approval` }
   }
@@ -399,6 +441,11 @@ export async function createHookRegistry(
   const explicitConfigPath = opts.configPath !== undefined
   const configPath = opts.configPath ?? resolveHooksConfigPath(opts.configDir)
   const configDir = opts.configDir ?? dirname(configPath)
+  const projection = createClaudeTranscriptProjection()
+  const runtimeService = claudeRuntimeService(ctx)
+  const sessionIds = new WeakMap<ClaudeHookSession, string>()
+  let ephemeralIds = 0
+  const fallbackSession = (): ClaudeHookSession | undefined => typeof opts.session === "function" ? opts.session() : opts.session
   const registry: InternalRegistry = {
     loaded: [],
     reportedUnapproved: new Set<string>(),
@@ -406,6 +453,35 @@ export async function createHookRegistry(
       report: opts.report ?? defaultReport,
       env: opts.env ?? {},
       configDir,
+    },
+    current: (handler) => !disposed && registry.loaded.includes(handler) && handler.valid
+      && (handler.spec.claude === undefined || activeApprovals?.isApproved(handler.spec.trust.sha256) === true),
+    async run(handler, context, input = {}) {
+      if (handler.spec.claude === undefined) return runHookHandler(handler.spec, context, configDir, { env: registry.opts.env, signal: input.signal, validateCurrent: () => registry.current(handler) })
+      if (!registry.current(handler)) throw new HookTrustError(handler.spec.id, handler.spec.trust.sha256, "handler grant is not current")
+      const fallback = fallbackSession(), session = input.session ?? fallback
+      let sessionId = "sessionId" in context && context.sessionId ? context.sessionId : input.sessionId
+      if (sessionId === undefined && session && session !== fallback) {
+        sessionId = sessionIds.get(session)
+        if (sessionId === undefined) { sessionId = `ih-ephemeral-${++ephemeralIds}`; sessionIds.set(session, sessionId) }
+      }
+      sessionId ??= opts.sessionId ?? ""
+      const cwd = input.cwd ?? opts.cwd ?? process.cwd()
+      const capture = session ? await projection.capture(session, sessionId, cwd) : undefined
+      try {
+        const output = await runHookHandler(handler.spec, context, configDir, {
+          ...input, sessionId, cwd, env: registry.opts.env,
+          validateCurrent: () => registry.current(handler),
+          ...(capture ? { transcriptPath: capture.path } : {}),
+          permissionMode: typeof opts.permissionMode === "function" ? opts.permissionMode({ session, sessionId }) : opts.permissionMode ?? "default",
+        })
+        if (!registry.current(handler)) throw new HookTrustError(handler.spec.id, handler.spec.trust.sha256, "handler grant changed during execution")
+        await verifyHandlerTrust(handler.spec, configDir)
+        if (session && output.additionalContext && context.event !== "session/start" && context.event !== "stop" && context.event !== "subagent/stop") {
+          runtimeService.queueContext(session, output.additionalContext, () => registry.current(handler))
+        }
+        return output
+      } finally { await capture?.release() }
     },
   }
   // Missing file: an EXPLICIT configPath fails closed (the caller named a
@@ -444,7 +520,7 @@ export async function createHookRegistry(
     const revision = startupRevision, trust = trustRevision
     for (const handler of registry.loaded) {
       const claude = handler.spec.claude
-      if (claude === undefined || claude.matcher !== undefined && !new RegExp(claude.matcher).test(source)) continue
+      if (claude?.event !== "SessionStart" || claude.matcher !== undefined && claude.matcher !== "*" && claude.matcher !== "" && !new RegExp(claude.matcher).test(source)) continue
       if (!handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) {
         removeBundleContext(handler)
         if (!registry.reportedUnapproved.has(handler.spec.id)) {
@@ -467,7 +543,7 @@ export async function createHookRegistry(
       if (pending?.revision === revision) { await pending.promise; continue }
       const promise = (async () => {
         try {
-          const output = await runHookHandler(handler.spec, { event: "session/start", sessionId }, configDir, { env: registry.opts.env, cwd: opts.cwd, source })
+          const output = await registry.run(handler, { event: "session/start", sessionId }, { source })
           assertAllowed(output, handler.spec.id)
           // Execution can overlap revoke, refresh, remount, or another session.
           if (disposed || revision !== startupRevision || trust !== trustRevision || !registry.loaded.includes(handler) || !handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) return
@@ -496,10 +572,24 @@ export async function createHookRegistry(
       try { await promise } finally { if (startupPending.get(key)?.promise === promise) startupPending.delete(key) }
     }
   }
+  const removeStop = runtimeService.registerStop(async (input) => {
+    if (disposed) return undefined
+    const header = (input.session as ClaudeHookSession & { header?: { origin?: string } }).header
+    const event = header?.origin === "subagent" ? "subagent/stop" : "stop"
+    const context: HookContext = event === "stop" ? { event, sessionId: input.sessionId ?? "", finalText: input.finalText, turns: input.turns }
+      : { event, sessionId: input.sessionId ?? "" }
+    const outputs = await runHandlers(registry, event, context, undefined, false, {
+      ...input, claudeOnly: true, agentId: input.sessionId, matchValue: input.agentType === "explore" ? "Explore" : input.agentType,
+      agentType: input.agentType === "explore" ? "Explore" : input.agentType,
+    })
+    if (input.signal?.aborted) throw new Error("agent aborted")
+    return outputs.filter(output => output.continue !== false).map(output => output.continuation).filter(Boolean).join("\n\n") || undefined
+  })
   ctx.mount({ name: mountName, mount() {
   // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
   ctx.onCascade("tools/execute", async (input, next) => {
-    const call = input as { name: string; args: unknown }
+    const call = input as { name: string; args: unknown; commandDialect?: HookRuntimeInput["dialect"]; exec?: { session?: ClaudeHookSession; sessionId?: string; callId?: string; abortSignal?: AbortSignal } }
+    const runtime: HookRuntimeInput = { session: call.exec?.session, sessionId: call.exec?.sessionId, callId: call.exec?.callId, signal: call.exec?.abortSignal, dialect: call.commandDialect }
     // M51 B1: a guard-retry RE-DISPATCH frame already had its pre-tool run
     // (approval/args are unchanged) and the frame that ran the pair owns the
     // single post-tool — skip this frame's pair so one logical call sees
@@ -512,15 +602,20 @@ export async function createHookRegistry(
       { event: "pre-tool", tool: { name: call.name, args: call.args } },
       call.name,
       true,
+      runtime,
     )
     const output = await next()
-    await runHandlers(
-      registry,
-      "post-tool",
-      { event: "post-tool", tool: { name: call.name, args: call.args } },
-      call.name,
-      true,
-    )
+    if (runtime.signal?.aborted) return output
+    try {
+      await runHandlers(
+        registry, "post-tool", { event: "post-tool", tool: { name: call.name, args: call.args } },
+        call.name, true, { ...runtime, toolOutput: output },
+      )
+    } catch (error) {
+      // The actual body already completed. Owner cancellation of its post
+      // observation must not replace that result; genuine vetoes stay loud.
+      if (!(error instanceof HookOwnerAbortError) || !runtime.signal?.aborted) throw error
+    }
     return output
   })
 
@@ -532,13 +627,14 @@ export async function createHookRegistry(
   // 4. prompt/submit: waterfall on agent/pre-step (block ⇔ throw).
   ctx.waterfall("agent/pre-step", async (payload, next) => {
     const resolved = await next(payload)
-    const p = resolved as { task?: string }
+    const p = resolved as { task?: string; session?: ClaudeHookSession; sessionId?: string; promptSubmission?: boolean; signal?: AbortSignal }
     await runHandlers(
       registry,
       "prompt/submit",
       { event: "prompt/submit", prompt: typeof p.task === "string" ? p.task : "" },
       undefined,
       true,
+      { session: p.session, sessionId: p.sessionId, signal: p.signal, promptSubmission: p.promptSubmission },
     )
     return resolved
   })
@@ -557,6 +653,7 @@ export async function createHookRegistry(
       },
       undefined,
       true,
+      { nativeOnly: true },
     )
   })
 
@@ -578,23 +675,27 @@ export async function createHookRegistry(
         if (result.sessionId === activeSession?.sessionId && loaded.some(handler => handler.valid && handler.spec.claude !== undefined && handler.spec.id === result.handlerId && handler.spec.trust.sha256 === result.sha256)) startupResults.set(key, result)
       }
     },
-    async dispose() { if (disposed) return; disposed = true; ++startupRevision; startupResults.clear(); await ctx.unmount(mountName); registry.loaded = [] },
+    async dispose() { if (disposed) return; disposed = true; removeStop(); ++startupRevision; startupResults.clear(); await ctx.unmount(mountName); registry.loaded = []; await projection.dispose() },
     async fire(event, input) {
       if (event === "session/start" || event === "session/end" || event === "subagent/stop") {
         if (typeof input.sessionId !== "string") {
           throw new HookConfigError(`hooks fire(${event}) requires sessionId`)
         }
         if (event === "session/start") await beginSession(input.sessionId)
-        else await runHandlers(registry, event, { event, sessionId: input.sessionId })
+        else await runHandlers(registry, event, { event, sessionId: input.sessionId }, undefined, false, {
+          ...input, matchValue: event === "session/end" ? input.reason ?? "other" : input.agentType === "explore" ? "Explore" : input.agentType,
+        })
       } else if (event === "notification") {
-        await runHandlers(registry, "notification", { event: "notification", message: input.message ?? "" })
+        await runHandlers(registry, "notification", { event: "notification", message: input.message ?? "" }, undefined, false, {
+          ...input, matchValue: input.notificationType ?? "ih_notification",
+        })
       } else {
         throw new HookConfigError(`hooks fire(${event}) is not a programmatic event`)
       }
     },
     beginSession,
     async endSession(sessionId) {
-      await runHandlers(registry, "session/end", { event: "session/end", sessionId })
+      await runHandlers(registry, "session/end", { event: "session/end", sessionId }, undefined, false, { matchValue: "other" })
     },
     handlers: () => registry.loaded.map((h) => ({ ...h, spec: structuredClone(h.spec) })),
     context() {
