@@ -15,6 +15,9 @@ import { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import { createNotificationHistory } from "./notification-history.ts"
 import { AttachmentDraftStore } from "./attachment-draft-store.ts"
 import { closeDesktopProjectContentSearches } from "./project-content-search.ts"
+import { resolveDesktopProfilePath } from "./profile-path.ts"
+
+app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.getPath("userData"), undefined, app.commandLine.hasSwitch("user-data-dir")))
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined

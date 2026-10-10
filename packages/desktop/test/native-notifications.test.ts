@@ -29,7 +29,7 @@ it("notifies only opted-in background requests, deduplicates, and excludes reque
   expect(emitted.values).toHaveLength(0)
   focused = false
   native.onEvent(event); native.onEvent(event)
-  expect(emitted.values).toEqual([{ title: "I-harness Desktop", body: "A conversation needs your attention." }])
+  expect(emitted.values).toEqual([{ title: "I-harness", body: "A conversation needs your attention." }])
 })
 
 it("returns the accepted follow-up delivery in native state and restores it after restart", () => {

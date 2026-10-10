@@ -1,8 +1,8 @@
 # Windows Desktop 安裝版
 
-安裝版將完整的 I-harness Desktop、Electron runtime 和 gateway 打包成單一 Setup EXE。使用者毋須另裝 Node.js，也毋須系統管理員權限。
+安裝版將完整的 I-harness、Electron runtime 和 gateway 打包成單一 Setup EXE。使用者毋須另裝 Node.js；一般使用者可使用預設的個人安裝位置。
 
-預設安裝位置為 `%LOCALAPPDATA%\Programs\I-harness Desktop`。安裝後會建立目前使用者的桌面捷徑、開始功能表捷徑，以及 Windows「已安裝的應用程式」移除項目。介面包含英文和繁體中文。
+新安裝的預設位置為 `%LOCALAPPDATA%\Programs\I-harness`。安裝後會建立目前使用者的桌面捷徑、開始功能表捷徑，以及 Windows「已安裝的應用程式」移除項目。介面包含英文和繁體中文。已有安裝的更新會沿用 Windows 移除登錄中的原安裝位置，包括舊的 `I-harness Desktop` 資料夾。
 
 ## 建置
 
@@ -13,17 +13,17 @@ pnpm --filter @i-harness/desktop dist
 pnpm --filter @i-harness/desktop installer -- --nsis 'C:\tools\nsis\makensis.exe'
 ```
 
-預設輸入為 `packages/desktop/release/I-harness Desktop`，預設輸出位於 `packages/desktop/release/`：
+預設輸入為 `packages/desktop/release/I-harness`，預設輸出位於 `packages/desktop/release/`：
 
-- `I-harness-Desktop-Setup-0.1.0.exe`
-- `I-harness-Desktop-Setup-0.1.0.exe.sha256`
-- `I-harness-Desktop-Setup-0.1.0.installer-build.json`
+- `I-harness-Setup-0.1.1.exe`
+- `I-harness-Setup-0.1.1.exe.sha256`
+- `I-harness-Setup-0.1.1.installer-build.json`
 
 也可以明確指定既有 payload 和輸出目錄，兩者都必須是完整路徑：
 
 ```powershell
 pnpm --filter @i-harness/desktop installer -- `
-  --app-dir 'D:\artifacts\I-harness Desktop' `
+  --app-dir 'D:\artifacts\I-harness' `
   --out-dir 'D:\artifacts' `
   --nsis 'C:\tools\nsis\makensis.exe'
 ```
@@ -36,9 +36,11 @@ pnpm --filter @i-harness/desktop installer -- `
 
 下載新版 Setup 並在關閉 Desktop 後執行，會更新同一個安裝目錄。安裝程式會驗證既有安裝的 ownership marker，執行上一版的移除程式，按上一版實際安裝的檔案清單移除舊 payload，再複製新版。這會清理新版已不使用的 gateway 和 resource 檔案。
 
-執行中的 Desktop 或 gateway 會阻止更新及移除；使用者需先自行關閉程式。安裝程式不會終止使用中的程式。自訂安裝目錄的最後一層必須命名為 `I-harness Desktop`；drive root、帶有 junction 的路徑，以及沒有對應 ownership marker 的非空目錄會被拒絕。
+執行中的 Desktop 或 gateway 會阻止更新及移除；使用者需先自行關閉程式。安裝程式不會終止使用中的程式。自訂安裝目錄的最後一層必須命名為 `I-harness`，或沿用舊的 `I-harness Desktop`；drive root、帶有 junction 的路徑，以及沒有對應 ownership marker 的非空目錄會被拒絕。
 
 移除程式只刪除該安裝版列出的檔案及其捷徑，資料夾只在空白時移除。AppData 內的設定、工作區、對話資料和 credentials 會保留；安裝目錄內其他檔案也會保留。
+
+新安裝的使用者資料預設在 `%APPDATA%\I-harness`。若此位置尚無工作區或會話資料，而 `%APPDATA%\I-harness Desktop` 有既有資料，程式會直接沿用舊目錄。明確指定的資料目錄，以及已有歷史的新版目錄，會維持原選擇；程式不搬移或合併資料。
 
 更新的 payload 複製程序沒有自動 rollback。若磁碟或權限問題導致複製中斷，可先執行該目錄內的 `Uninstall.exe`，然後重新安裝。此版本的 Setup 和 Desktop EXE 沒有 code signing，亦沒有自動更新服務。
 
@@ -49,7 +51,7 @@ pnpm --filter @i-harness/desktop installer -- `
 ```powershell
 pnpm --filter @i-harness/desktop test -- test/installer-builder.test.ts
 pnpm --filter @i-harness/desktop installer:test -- `
-  --app-dir 'D:\artifacts\I-harness Desktop' `
+  --app-dir 'D:\artifacts\I-harness' `
   --nsis 'C:\tools\nsis\makensis.exe'
 ```
 

@@ -50,7 +50,7 @@ export function attachNativeWindow(window: BrowserWindow, preferences: ReturnTyp
       if (window.isFocused() || !preferences.get().notifications || !Notification.isSupported()) return
       seen.add(key)
       if (seen.size > 512) seen.delete(seen.values().next().value!)
-      const notification = new Notification({ title: "I-harness Desktop", body: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" })
+      const notification = new Notification({ title: "I-harness", body: preferences.get().locale === "en" ? "A conversation needs your attention." : "有會話等待你的確認或回答。" })
       notification.on("click", () => { if (!window.isDestroyed()) { if (window.isMinimized()) window.restore(); window.show(); window.focus() } })
       notification.show()
     },

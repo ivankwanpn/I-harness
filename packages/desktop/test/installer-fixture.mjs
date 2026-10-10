@@ -29,6 +29,7 @@ export function createInstallerFixture(source, target, variant = "old") {
     const file = `resources/gateway/node_modules/${name}/package.json`
     const path = join(target, file); mkdirSync(dirname(path), { recursive: true }); copyFileSync(join(source, file), path)
   }
-  copyFileSync(join(process.env.WINDIR, "System32", "whoami.exe"), join(target, "I-harness Desktop.exe"))
+  const manifest = JSON.parse(readFileSync(join(source, "resources/app/package.json"), "utf8"))
+  copyFileSync(join(process.env.WINDIR, "System32", "whoami.exe"), join(target, `${manifest.productName}.exe`))
   return target
 }

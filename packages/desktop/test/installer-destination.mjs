@@ -13,6 +13,7 @@ assert.equal(process.platform,'win32')
 const arg=name=>process.argv[process.argv.indexOf(name)+1]
 const source=arg('--app-dir'),nsis=arg('--nsis')
 assert(source&&nsis,'requires --app-dir and --nsis')
+const appName=JSON.parse(readFileSync(join(source,'resources/app/package.json'),'utf8')).productName
 const repo=resolve(dirname(fileURLToPath(import.meta.url)),'../../..')
 const token=randomUUID(),root=join(repo,'.tmp',`desktop-installer-destination-${token}`)
 mkdirSync(root,{recursive:true})
@@ -45,7 +46,7 @@ try{
   assert.equal(acl.status,0,acl.stderr);denied=true
   const result=run(metadata.output,['/S',`/D=${target}`],{windowsVerbatimArguments:true})
   assert.notEqual(result.status,0,'protected destination must not install')
-  assert(!existsSync(join(target,'I-harness Desktop.exe')))
+  assert(!existsSync(join(target,appName + '.exe')))
   assert(!existsSync(join(target,'.i-harness-desktop-install.ini')))
   const diagnostic=readFileSync(join(root,'last-failure.txt'),'utf8')
   evidence.blocked={exitCode:result.status,diagnostic}
@@ -59,7 +60,7 @@ try{
 const writable=join(root,'writable','I-harness Desktop');owned(writable)
 const installed=run(metadata.output,['/S',`/D=${writable}`],{windowsVerbatimArguments:true})
 assert.equal(installed.status,0,existsSync(join(root,'last-failure.txt'))?readFileSync(join(root,'last-failure.txt'),'utf8'):'install failed')
-assert(existsSync(join(writable,'I-harness Desktop.exe')))
+assert(existsSync(join(writable,appName + '.exe')))
 evidence.checks.push('fresh writable destination installs normally without elevation')
 const replaced=join(root,'replacement-uninstall.exe'),executed=join(root,'replacement-executed.txt')
 const replacementScript=join(root,'replacement.nsi')
@@ -89,7 +90,7 @@ writeFileSync(join(root,'test-controls.ini'),`[Controls]\nSimulateElevatedUpgrad
 const machineWideUpgrade=run(metadata.output,['/S',`/D=${machineWide}`],{windowsVerbatimArguments:true})
 const machineWideDiagnostic=existsSync(join(root,'last-failure.txt'))?readFileSync(join(root,'last-failure.txt'),'utf8'):''
 assert.equal(machineWideUpgrade.status,0,`elevated upgrade of a machine-wide destination must proceed: ${machineWideDiagnostic}`)
-assert(existsSync(join(machineWide,'I-harness Desktop.exe')),'upgraded payload must be present')
+assert(existsSync(join(machineWide,appName + '.exe')),'upgraded payload must be present')
 assert.equal(readFileSync(join(machineWide,'keep.txt'),'utf8'),'unrelated user file','upgrade must preserve unrelated files')
 evidence.machineWide={exitCode:machineWideUpgrade.status}
 evidence.checks.push('elevated upgrade of a machine-wide destination proceeds and preserves unrelated files')

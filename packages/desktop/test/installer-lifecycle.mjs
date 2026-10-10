@@ -18,6 +18,7 @@ const resumeRoot = args.includes("--resume-root") ? args[args.indexOf("--resume-
 assert(appDir && nsis, "usage: node test/installer-lifecycle.mjs --app-dir <absolute payload> --nsis <absolute compiler>")
 assert.equal(process.platform, "win32", "the installer lifecycle test requires Windows")
 const payload = validatePayload(appDir)
+const appName = payload.appName
 const token = resumeRoot ? validateTestRoot(resumeRoot).token : randomUUID()
 const root = join(repoRoot, ".tmp", `desktop-installer-smoke-${token}`)
 if (resumeRoot) assert.equal(resolve(resumeRoot), root, "resume root must match its owned smoke token")
@@ -37,7 +38,8 @@ function run(executable, args, extra = {}) {
 function install(setup, target) { return run(setup, ["/S", `/D=${target}`]) }
 function hash(path) { return createHash("sha256").update(readFileSync(path)).digest("hex") }
 function compileFixture(stage, source) {
-  const output = join(root, stage, `I-harness-Desktop-Setup-${payload.version}-test.exe`)
+  const sourceName = validatePayload(source).appName
+  const output = join(root, stage, `${sourceName === "I-harness" ? "I-harness" : "I-harness-Desktop"}-Setup-${payload.version}-test.exe`)
   if (resumeRoot && existsSync(output)) {
     const metadata = JSON.parse(readFileSync(output.replace(/\.exe$/, ".installer-build.json"), "utf8"))
     assert.equal(metadata.output, output)
@@ -71,6 +73,9 @@ function earlierFixture() {
     const target = join(earlier, file); mkdirSync(dirname(target), { recursive: true }); copyFileSync(join(appDir, file), target)
   }
   const gateway = JSON.parse(readFileSync(join(appDir, "resources/gateway/cli/package.json"), "utf8"))
+  const legacyManifest = JSON.parse(readFileSync(join(earlier, "resources/app/package.json"), "utf8"))
+  legacyManifest.productName = "I-harness Desktop"
+  writeFileSync(join(earlier, "resources/app/package.json"), JSON.stringify(legacyManifest))
   for (const name of Object.keys(gateway.dependencies)) {
     const file = `resources/gateway/node_modules/${name}/package.json`
     const target = join(earlier, file); mkdirSync(dirname(target), { recursive: true }); copyFileSync(join(appDir, file), target)
@@ -124,7 +129,13 @@ try {
   assert.equal(readFileSync(join(installed, "keep-user-file.txt"), "utf8"), "unrelated install folder content")
   record("upgrade removes obsolete owned files and preserves unrelated content")
 
-  const executable = join(installed, "I-harness Desktop.exe")
+  const executable = join(installed, `${appName}.exe`)
+  if (appName === "I-harness") {
+    assert(!existsSync(join(installed, "I-harness Desktop.exe")), "legacy executable must be removed")
+    assert(!existsSync(join(root, "shortcuts", "desktop", "I-harness Desktop.lnk")), "legacy shortcut must be removed")
+    assert(existsSync(join(root, "shortcuts", "desktop", "I-harness.lnk")), "current shortcut must target the current app")
+    record("legacy Desktop identity upgrades to I-harness in the same owned folder")
+  }
   const nodeProbe = join(root, "backend-probe.mjs")
   writeFileSync(nodeProbe, `import { pathToFileURL } from "node:url"; import assert from "node:assert/strict"; import { mkdirSync, writeFileSync } from "node:fs"; import { join } from "node:path";
 const appDir = process.env.IH_INSTALLER_APP_DIR; const root = process.env.IH_INSTALLER_TEST_ROOT;
@@ -134,7 +145,7 @@ const settingsPath = join(root, "backend-settings.json"); writeFileSync(settings
 const host = await createDesktopHost({ workspace, sessionDir: join(root, "backend-sessions"), settingsPath, credentialsPath: join(root, "backend-credentials.json"), onWrite: frame => frames.push(frame) });
 try { await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })); assert(frames.some(frame => frame.id === 1 && frame.result)); console.log(JSON.stringify({ node: process.versions.node, electron: process.versions.electron, backendImported: true, initialized: true })); } finally { await host.close(); }
 `)
-  const childEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1", IH_INSTALLER_APP_DIR: installed, IH_INSTALLER_TEST_ROOT: root }
+  const childEnv = { ...process.env, ELECTRON_RUN_AS_NODE: "1", IH_INSTALLER_APP_DIR: installed, IH_INSTALLER_APP_EXE: executable, IH_INSTALLER_TEST_ROOT: root }
   const nodeResult = run(executable, ["--import", pathToFileURL(join(installed, "resources/gateway/node_modules/tsx/dist/loader.mjs")).href, nodeProbe], { env: childEnv, windowsVerbatimArguments: false })
   assert.equal(nodeResult.status, 0, nodeResult.stderr)
   record("installed Electron runs shipped backend and initializes an isolated host", { output: nodeResult.stdout.trim() })
@@ -161,10 +172,12 @@ try { await host.handleLine(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ini
   assert(!existsSync(join(installed, ".i-harness-desktop-install.ini")))
   assert(!existsSync(join(root, "shortcuts", "desktop", "I-harness Desktop.lnk")))
   assert(!existsSync(join(root, "shortcuts", "start-menu", "I-harness Desktop.lnk")))
+  assert(!existsSync(join(root, "shortcuts", "desktop", `${appName}.lnk`)))
+  assert(!existsSync(join(root, "shortcuts", "start-menu", `${appName}.lnk`)))
   assert.equal(readFileSync(join(installed, "keep-user-file.txt"), "utf8"), "unrelated install folder content")
   assert.equal(readFileSync(join(root, "user-data/session.json"), "utf8"), "persistent user data sentinel")
   record("uninstall removes owned payload and shortcuts while preserving user files and app data")
-  const processCheck = spawnSync("powershell.exe", ["-NoProfile", "-Command", "$items = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:IH_INSTALLER_APP_DIR + '\\I-harness Desktop.exe' }); $items.Count"], { env: childEnv, encoding: "utf8", windowsHide: true })
+  const processCheck = spawnSync("powershell.exe", ["-NoProfile", "-Command", "$items = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -eq $env:IH_INSTALLER_APP_EXE }); $items.Count"], { env: childEnv, encoding: "utf8", windowsHide: true })
   assert.equal(processCheck.status, 0, processCheck.stderr)
   assert.equal(Number(processCheck.stdout.trim()), 0, "owned installed app processes must be idle")
   record("all owned installed application processes are idle", { processes })

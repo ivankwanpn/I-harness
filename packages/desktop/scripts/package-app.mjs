@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Build a runnable, unsigned portable distribution without extra build tooling:
-//   release/I-harness Desktop/               unpacked app (exe + resources/app + resources/gateway)
-//   release/I-harness-Desktop-<version>.zip  the same folder, zipped
+//   release/I-harness/                unpacked app (exe + resources/app + resources/gateway)
+//   release/I-harness-<version>.zip    the same folder, zipped
 //
 // Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
 // sibling release folder when an earlier portable app is still open.
@@ -23,7 +23,7 @@ const releaseLabel = process.env.IH_DESKTOP_RELEASE_LABEL ?? "release"
 if (!/^release(?:-[a-z0-9-]+)?$/.test(releaseLabel)) throw new Error("invalid release folder label")
 const releaseDir = resolve(packageRoot, releaseLabel)
 if (dirname(releaseDir) !== packageRoot) throw new Error("release folder escaped the Desktop package")
-const appName = "I-harness Desktop"
+const appName = "I-harness"
 const appDir = join(releaseDir, appName)
 
 for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", "pdf.worker.mjs", "cmaps", "standard_fonts", "wasm", "node_modules/@napi-rs/canvas"].map((part) => join(outDir, "main", part))]) {
@@ -62,7 +62,7 @@ for (const name of ["koffi", `@koromix/koffi-${process.platform}-${process.arch}
   copyRuntimePackage(runtimePackageRoot(name, join(gatewayDir, "cli")), join(resources, "app/node_modules", ...name.split("/")))
 }
 
-const zipPath = join(releaseDir, `I-harness-Desktop-${manifest.version}.zip`)
+const zipPath = join(releaseDir, `I-harness-${manifest.version}.zip`)
 const zip = spawnSync("powershell.exe", [
   "-NoProfile",
   "-Command",

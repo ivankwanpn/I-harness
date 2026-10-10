@@ -27,11 +27,13 @@ The current distribution is collected in `packages/desktop/release/`:
 
 ```text
 release/
-  I-harness Desktop/
-    I-harness Desktop.exe
+  I-harness/
+    I-harness.exe
     resources/
-  I-harness-Desktop-0.1.0.zip
-  I-harness-Desktop-Setup-0.1.0.exe
+  I-harness-0.1.1.zip
+  I-harness-Setup-0.1.1.exe
+  I-harness-Setup-0.1.1.exe.sha256
+  I-harness-Setup-0.1.1.installer-build.json
   SHA256SUMS.txt
 ```
 
@@ -44,6 +46,8 @@ Installer behavior and compiler requirements are documented in [installer/README
 ## Configuration and user data
 
 Desktop preferences, project navigation and conversations are stored in Electron's local user-data directory. The gateway uses the shared I-harness settings/provider/credential implementation; `IH_CONFIG_DIR` can specify its configuration location. User data is separate from the installed program payload.
+
+Fresh installs use `%APPDATA%\I-harness`. When that default has no workspace or session history, the renamed app reuses existing history in `%APPDATA%\I-harness Desktop`. Explicit profile paths and established history in the current default remain authoritative; the app does not move or merge data directories.
 
 Configure providers and model capabilities explicitly. Live work keeps its model binding until an explicit selection or reconstruction. Saved defaults and plugin configuration changes are reflected through the gateway's existing lifecycle.
 
