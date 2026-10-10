@@ -44,6 +44,8 @@ export interface HookOutput {
   decision?: HookDecision
   block?: boolean
   reason?: string
+  /** Produced only by the opt-in Claude SessionStart output adapter. */
+  additionalContext?: string
 }
 
 /** Per-event context the handler receives on stdin (JSON). */
@@ -78,6 +80,22 @@ export interface HookHandlerSpec {
   command: { cmd: string; args?: string[]; cwd?: string }
   trust: { script: string; sha256: string }
   timeoutMs?: number
+  /** Runtime-only metadata. Never accepted from a native on-disk declaration. */
+  claude?: {
+    pluginRoot: string
+    event: "SessionStart"
+    matcher?: string
+    shell: "bash" | "sh"
+    trustScope: "plugin-tree-v1"
+  }
+}
+
+export type ClaudeSessionSource = "startup" | "resume" | "clear" | "compact"
+export interface ClaudeHookDiagnostic { id: string; event: string; message: string }
+export interface ClaudePluginHooksOptions {
+  /** Explicit plugin mount identity; native/global configs never opt themselves in. */
+  claudePluginRoot?: string
+  onUnsupported?: (diagnostic: ClaudeHookDiagnostic) => void
 }
 
 /** The on-disk hooks configuration. */

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { dirname, resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import { acquireSessionLock } from "@i-harness/fs-lock"
 import { createHookTrustStore, HookUnsupportedFormatError, loadHooksConfig, resolveHookTrustPath, trustScriptPath } from "@i-harness/hooks"
 import { createHookAuthoring, createAuthoredHookApprovals, bindAuthoredHookApproval, isAuthoredHookPath } from "./hook-authoring.ts"
@@ -7,11 +7,12 @@ import { authoredHookPath } from "./effective-local-inputs.ts"
 import { existsSync } from "node:fs"
 import { contentRevision } from "./resource-files.ts"
 import { readFile } from "node:fs/promises"
+import { installedPluginHookRoot } from "./plugin-hook-root.ts"
 
 export interface HookSettingsState {
-  handlers: { id: string; name: string; event: string; configPath: string; configRevision?: string; command?: { cmd: string; args?: string[]; cwd?: string }; script: string; sha256: string; status: "ready" | "needs-approval" | "invalid"; error?: string }[]
+  handlers: { id: string; name: string; event: string; configPath: string; configRevision?: string; command?: { cmd: string; args?: string[]; cwd?: string }; script: string; sha256: string; status: "ready" | "needs-approval" | "invalid"; error?: string; format?: "claude-plugin"; trustScope?: "plugin"; pluginRoot?: string; pluginName?: string; sourceEvent?: string }[]
   grants: { sha256: string; script: string; handlerId: string; approvedAt: string }[]
-  errors: { configPath: string; message: string; kind?: "unsupported-format" | "invalid"; source?: "plugin" | "global" | "workspace"; format?: "claude-plugin" }[]
+  errors: { configPath: string; message: string; kind?: "unsupported-format" | "unsupported-handler" | "invalid"; source?: "plugin" | "global" | "workspace"; format?: "claude-plugin"; handlerId?: string; event?: string }[]
 }
 export type HookSettingsCommand = { action: "approve"; id: string; sha256: string } | { action: "revoke"; sha256: string }
 
@@ -23,12 +24,16 @@ export function createHookSettings(configDir: string, paths: () => Promise<strin
     const authoredPaths = options ? (["global", "workspace"] as const).map(source => authoredHookPath(options.workspace, configDir, source)).filter(path => existsSync(path)) : []
     for (const configPath of [...new Set([...await paths(), ...authoredPaths])]) {
       try {
-        const loaded = await loadHooksConfig(configPath, dirname(configPath), createAuthoredHookApprovals(configDir, configPath))
+        const loaded = await loadHooksConfig(configPath, dirname(configPath), createAuthoredHookApprovals(configDir, configPath), {
+          claudePluginRoot: installedPluginHookRoot(configDir, configPath),
+          onUnsupported: row => result.errors.push({ configPath, message: row.message, kind: "unsupported-handler", source: "plugin", format: "claude-plugin", handlerId: row.id, event: row.event }),
+        })
         const configRevision = contentRevision(await readFile(configPath))
         loaded.forEach(({ spec, valid, unapproved, trustError }, index) => result.handlers.push({
           id: createHash("sha256").update(JSON.stringify([configPath, configRevision, spec.id, index, spec.trust.sha256])).digest("hex"),
           name: spec.id, event: spec.event, configPath, configRevision, command: spec.command, script: trustScriptPath(spec, dirname(configPath)), sha256: spec.trust.sha256,
           status: valid ? "ready" : unapproved ? "needs-approval" : "invalid", ...(trustError ? { error: trustError } : {}),
+          ...(spec.claude ? { format: "claude-plugin" as const, trustScope: "plugin" as const, pluginRoot: spec.claude.pluginRoot, pluginName: basename(spec.claude.pluginRoot).split("__").slice(1).join("__") || basename(spec.claude.pluginRoot), sourceEvent: spec.claude.event } : {}),
         }))
       } catch (error) {
         const authored = isAuthoredHookPath(configDir, configPath)

@@ -478,6 +478,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // enabled plugin's): `createHookRegistry` takes one config and owns its load,
   // so N sources are N mounts. All of them must see session/start and session/end.
   const hookRegistries: HookRegistry[] = []
+  // Ephemeral callers still have a stable identity for the plugin startup input.
+  // It does not create durable session storage or change native hook lifecycle.
+  const hookSessionId = activeId ?? `cli-hook-${randomUUID()}`
   // M26-D2: the run's serial lane is created below (after the assembly) — the
   // default parent-notify adapter closes over it and is rebound before the run
   // starts; a task completing before the lane exists keeps its outbox row
@@ -624,6 +627,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     assembly = await createSessionAssembly({
       ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
       workspace: opts.workspace,
+      hookContext: () => hookRegistries.map(registry => registry.context()).filter(Boolean).join("\n\n"),
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
       modelPolicy,
       ...(opts.model !== undefined
@@ -734,16 +738,20 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
     // Plugin hooks — a DIFFERENT TREE's config, so under D1 every handler starts
     // UNGRANTED: skipped and reported once, neither enforced nor allowed to
-    // block, until a user grants that hash. The store is the user-layer one; the
-    // granting UX is the frontend's, so today nothing is granted and nothing
-    // runs. That is the DESIGN, not a gap — "no grant ⇒ no run" is the rule
-    // working, and the declaration is visible in the report rather than silent.
+    // block, until a user grants that hash. CLI and Desktop share the same
+    // user-layer content grant store. Claude compatibility
+    // is opted in only for paths returned by the installed-plugin registry;
+    // the user's native home policy keeps its own format and lifecycle.
     const approvals = createHookTrustStore(resolveHookTrustPath())
     for (const hookConfig of pluginInputs.hookConfigs) {
       try {
         hookRegistries.push(await createHookRegistry(assembly.ctx, {
           configPath: hookConfig,
           configDir: dirname(hookConfig),
+          claudePluginRoot: dirname(dirname(hookConfig)),
+          cwd: opts.workspace,
+          sessionId: hookSessionId,
+          onUnsupported: (diagnostic) => { d.warn(`[plugins] hooks ${hookConfig}: ${diagnostic.event} (${diagnostic.id}): ${diagnostic.message}`) },
           approvals,
         }))
       } catch (err) {
@@ -752,13 +760,6 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         // config we cannot parse contributes ZERO handlers, which is exactly
         // what an ungranted one contributes, so the run proceeds and the reason
         // is reported rather than swallowed.
-        //
-        // NOT a formality, and not about malformed plugins: Claude Code plugins
-        // ship `hooks/hooks.json` in CC's shape (`{hooks:{<Event>:[...]}}`) and
-        // that is the shape our plugin model reads. Letting the refusal
-        // propagate meant ANY enabled CC plugin carrying hooks failed EVERY run
-        // — measured 2026-09-19 against the real home, with `superpowers`
-        // enabled, on runs that never touch a hook.
         d.warn(
           `[plugins] hooks config ${hookConfig} could not be loaded; its hooks contribute nothing for this run: ` +
             `${err instanceof Error ? err.message : String(err)}`,
@@ -766,7 +767,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       }
     }
     if (activeId !== undefined) {
-      for (const registry of hookRegistries) await registry.beginSession(activeId)
+      for (const registry of hookRegistries) await registry.beginSession(activeId, opts.resumeSessionId ? "resume" : "startup")
+    } else {
+      for (const registry of hookRegistries) {
+        if (registry.handlers().some(handler => handler.spec.claude)) await registry.beginSession(hookSessionId, "startup")
+      }
     }
   } catch (err) {
     emitSessionEnd(1)

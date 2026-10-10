@@ -106,7 +106,7 @@ export interface SessionServiceOptions extends AssemblyOptions {
   afterSuccessfulSubmit?: (sessionId: string, assembly: SessionAssembly, limits: { contextWindow?: number; maxOutputTokens?: number }) => Promise<void>
   /** Trusted host extension snapshot, re-read for each new assembly. */
   extensionsFor?: (sessionId: string) => Promise<{
-    options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral">
+    options: Pick<AssemblyOptions, "skills" | "pluginMcp" | "pluginAgents" | "pluginAgentsEphemeral" | "hookContext">
     mount?: (assembly: SessionAssembly) => Promise<(() => void | Promise<void>) | void>
     update?: (assembly: SessionAssembly) => Promise<void>
   }>

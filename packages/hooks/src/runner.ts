@@ -10,10 +10,14 @@ import {
   HookTrustError,
 } from "./types.ts"
 import { trustScriptPath, verifyHandlerTrust } from "./trust.ts"
+import { claudeShellEnvironment, normalizeClaudeStartupOutput, resolveClaudeShell } from "./claude.ts"
+import type { ClaudeSessionSource } from "./types.ts"
 
 export interface RunHookOptions {
   timeoutMs?: number
   env?: NodeJS.ProcessEnv
+  cwd?: string
+  source?: ClaudeSessionSource
 }
 
 /**
@@ -85,9 +89,20 @@ export async function runHookHandler(
   }
 
   const timeoutMs = spec.timeoutMs ?? opts.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS
+  const cwd = spec.command.cwd ?? opts.cwd ?? (spec.claude ? process.cwd() : dirname(handlerFile))
+  let executable = spec.command.cmd
+  let env: NodeJS.ProcessEnv = { ...process.env, ...opts.env, IH_HOOK_EVENT: context.event, IH_HOOK_ID: spec.id }
+  if (spec.claude !== undefined) {
+    if (context.event !== "session/start") throw new HookConfigError(`Claude hook ${spec.id} requires a SessionStart context`)
+    executable = resolveClaudeShell(spec.claude.shell, env)
+    env = claudeShellEnvironment(spec, cwd, env, executable)
+  }
   return new Promise<HookOutput>((resolvePromise, rejectPromise) => {
     let stdout = ""
     let stderr = ""
+    let stdoutBytes = 0
+    const startupChunks: Buffer[] = []
+    let startupCaptureError: HookOutputError | undefined
     let settled = false
     const finish = (fn: () => void): void => {
       if (settled) return
@@ -102,27 +117,44 @@ export async function runHookHandler(
     }, timeoutMs)
     timer.unref?.()
 
-    child = spawn(spec.command.cmd, spec.command.args ?? [], {
-      cwd: spec.command.cwd ?? dirname(handlerFile),
+    child = spawn(executable, spec.command.args ?? [], {
+      cwd,
       windowsHide: true,
-      env: { ...process.env, ...opts.env, IH_HOOK_EVENT: context.event, IH_HOOK_ID: spec.id },
+      env,
       stdio: ["pipe", "pipe", "pipe"],
     })
     // (plan draft used a `{ current: string }` wrapper object per chunk — the
     // captured bytes were discarded, so a junk-stdout handler parsed as `{}`
     // and passed; capture into the live strings under the same byte cap.)
-    child.stdout!.on("data", (chunk: Buffer) => { if (stdout.length < HOOK_OUTPUT_CAP_BYTES) stdout += chunk.toString("utf8") })
+    child.stdout!.on("data", (chunk: Buffer) => {
+      if (spec.claude !== undefined) {
+        if (settled || startupCaptureError !== undefined) return
+        stdoutBytes += chunk.byteLength
+        if (stdoutBytes > HOOK_OUTPUT_CAP_BYTES) {
+          startupCaptureError = new HookOutputError(`hook ${spec.id}: startup stdout exceeds ${HOOK_OUTPUT_CAP_BYTES} bytes`)
+          startupChunks.length = 0
+          child.kill()
+          return
+        }
+        startupChunks.push(chunk)
+      } else if (stdout.length < HOOK_OUTPUT_CAP_BYTES) stdout += chunk.toString("utf8")
+    })
     child.stderr!.on("data", (chunk: Buffer) => { if (stderr.length < HOOK_OUTPUT_CAP_BYTES) stderr += chunk.toString("utf8") })
     child.on("error", (err) => {
       finish(() => rejectPromise(new HookOutputError(`hook ${spec.id}: cannot start ${spec.command.cmd}: ${err.message}`)))
     })
     child.on("close", (code) => {
       finish(() => {
+        if (startupCaptureError !== undefined) { rejectPromise(startupCaptureError); return }
         if (code !== 0) {
           const tail = stderr.trim().split(/\r?\n/).slice(-3).join("\n")
           rejectPromise(
             new HookOutputError(`hook ${spec.id}: exited with code ${code}${tail !== "" ? `: ${tail}` : ""}`),
           )
+          return
+        }
+        if (spec.claude !== undefined) {
+          try { resolvePromise(normalizeClaudeStartupOutput(Buffer.concat(startupChunks).toString("utf8"), spec.id)) } catch (err) { rejectPromise(err) }
           return
         }
         let parsed: unknown
@@ -140,7 +172,9 @@ export async function runHookHandler(
       })
     })
     try {
-      child.stdin!.end(JSON.stringify(context))
+      child.stdin!.end(JSON.stringify(spec.claude !== undefined && context.event === "session/start"
+        ? { session_id: context.sessionId, cwd, hook_event_name: "SessionStart", source: opts.source ?? "startup" }
+        : context))
     } catch (err) {
       finish(() => rejectPromise(err instanceof Error ? err : new HookOutputError(String(err))))
     }

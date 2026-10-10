@@ -208,6 +208,8 @@ export interface AssemblyOptions {
   concurrentSessionTeams?: boolean
   agentShell?: () => ResolvedAgentShell
   additionalSystemPrompt?: (session: Session) => string
+  /** Granted plugin startup context, read at each main/child model request. */
+  hookContext?: () => string
   sessionQuery?: SessionQuery // M10b: session_search + lineage tools
   /** Host-owned tools participate in the same validation and approval pipeline. */
   additionalTools?: Tool[]
@@ -1124,6 +1126,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   let workflowMount: WorkflowMountHandle | undefined
   const inheritedSystemContext=(childSession?:Session)=>[
     projectContextNow(),
+    opts.hookContext?.() ?? '',
     ...(wslShell ? [agentShellPrompt(wslShell)] : []),
     childSession&&opts.contextOutput?renderNativeContextRecovery(opts.contextOutput,childSession):'',
   ].filter(Boolean).join('\n\n')
@@ -1183,7 +1186,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     }))
     const subagent = registerSubagent(ctx, tools, {
       codeMode, codeModeFactory,
-      ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
+      ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
       includeAgentShell: agentShell !== undefined,
       includeNativeContext: Boolean(opts.contextOutput),
       resolveModel: resolveRoleModel,
@@ -1307,7 +1310,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
     await pluginCapabilities.update(opts, false)
     if (opts.guardian) {
       await registerGuardian(ctx, {
-        ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
+        ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
         subagents: {
           roles: subagent.roles,
           jobs: subagent.jobs,
@@ -1358,7 +1361,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         parentRegistry: tools,
         subagents: {
           codeMode, codeModeFactory,
-          ...(opts.projectContext || opts.contextOutput || wslShell ? { inheritedSystemContext } : {}),
+          ...(opts.projectContext || opts.contextOutput || opts.hookContext || wslShell ? { inheritedSystemContext } : {}),
           table: subagent.table,
           jobs: subagent.jobs,
           roles: subagent.roles,
@@ -1413,6 +1416,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       const projectContext = projectContextNow()
       if (projectContext) text += `\n\n${projectContext}`
       if (opts.additionalSystemPrompt) text += `\n\n${opts.additionalSystemPrompt(session)}`
+      const hookContext = opts.hookContext?.()
+      if (hookContext) text += `\n\n${hookContext}`
       if(opts.contextOutput){
         const recovery=renderNativeContextRecovery(opts.contextOutput,session)
         if(recovery) text+=`\n\n${recovery}`

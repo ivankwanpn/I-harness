@@ -235,7 +235,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     allowSubagentModelSelection: () => roleModelsEnabled,
     autoCompactionEnabled: () => autoCompactionEnabled,
     resolveRoleModel: (selection) => runtime.resolveModel({ sessionSelection: selection }),
-    extensionsFor: async (id) => { const inputs = await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs()); extensionInputs.set(id, inputs); return pluginExtensions(inputs, dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active()) },
+    extensionsFor: async (id) => { const inputs = await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs()); extensionInputs.set(id, inputs); return pluginExtensions(inputs, dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active(), options.workspace) },
     transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
     additionalTools,

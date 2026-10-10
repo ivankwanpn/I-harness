@@ -27,14 +27,13 @@ async function fixture(source: "plugin" | "global" | "workspace" = "plugin", bod
   return { root, home, workspace, path, marker, foreign }
 }
 
-it("reports unsupported plugin format without exposing a runnable handler or creating a grant", async () => {
+it("shows the supported plugin declaration awaiting explicit content approval without executing or creating a grant", async () => {
   const { home, workspace, path, marker, foreign } = await fixture()
   const settings = createHookSettings(home, async () => [path], async () => {}, { workspace })
   const state = await settings.state()
-  expect(state.handlers).toEqual([])
+  expect(state.handlers).toMatchObject([{ format: "claude-plugin", trustScope: "plugin", sourceEvent: "SessionStart", status: "needs-approval" }])
   expect(state.grants).toEqual([])
-  expect(state.errors).toMatchObject([{ configPath: path, kind: "unsupported-format", source: "plugin", format: "claude-plugin" }])
-  expect(state.errors[0]!.message).toContain("HookUnsupportedFormatError")
+  expect(state.errors).toEqual([])
   expect(existsSync(marker)).toBe(false)
   expect(existsSync(resolveHookTrustPath(home))).toBe(false)
   await expect(settings.mutate({ action: "approve", id: "foreign", sha256: "a".repeat(64) })).rejects.toThrow("changed or is invalid")
@@ -42,7 +41,7 @@ it("reports unsupported plugin format without exposing a runnable handler or cre
   expect(await readFile(path, "utf8")).toBe(foreign)
 })
 
-it("refreshes supported capabilities on the same agent while recognized foreign hooks remain inactive", async () => {
+it("refreshes supported capabilities on the same agent while unapproved Claude hooks remain inactive", async () => {
   const { home, workspace, path, marker } = await fixture()
   let enabled = false
   const diagnostics: string[][] = []
@@ -59,7 +58,7 @@ it("refreshes supported capabilities on the same agent while recognized foreign 
     expect(listCommands(assembly.ctx).map(command => command.name)).toContain("supported-command")
     expect(await runCommand(assembly.ctx, "supported-command", "")).toMatchObject({ kind: "prompt", text: "Explain the supplied material" })
     expect(assembly.pluginAgentResults.get("supported-reader")).toBe(true)
-    expect(diagnostics.flat().join(" ")).toContain("HookUnsupportedFormatError")
+    expect(diagnostics.flat().join(" ")).toContain("not granted or invalid")
     expect(existsSync(marker)).toBe(false)
     expect(existsSync(resolveHookTrustPath(home))).toBe(false)
   } finally { await service.close() }
