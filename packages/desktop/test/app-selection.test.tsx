@@ -64,10 +64,12 @@ it.each([undefined, "destination"])("settles async authoritative ownership %s de
   await waitFor(() => expect(pending).toHaveLength(1))
   expect(captured.props!.conversation!.projectReady).toBe(false)
   expect(captured.props!.selectedProjectId).toBeUndefined()
+  expect(captured.props!.projectContext).toEqual({ status: "loading" })
   await act(async () => { pending[0]!.resolve({ sessionId: "a", ...(owner ? { projectId: owner } : {}) }); await pending[0]!.promise })
   expect(pending).toHaveLength(1)
   expect(captured.props!.conversation!.projectReady).toBe(true)
   expect(captured.props!.selectedProjectId).toBe(owner)
+  expect(captured.props!.projectContext).toMatchObject({ status: "ready", projectId: owner })
 })
 
 it("does not replace failed saved ownership with a folder-derived project", async () => {
@@ -77,6 +79,7 @@ it("does not replace failed saved ownership with a folder-derived project", asyn
   await waitFor(() => expect(captured.props?.capabilities["desktop-project-scope"]).toEqual(["1"]))
   act(() => captured.props!.onSelectSessionInWorkspace!("w1", "a", "A"))
   await waitFor(() => expect(captured.props!.conversation!.sendReason).toBe("Owner unavailable"))
+  expect(captured.props!.projectContext).toEqual({ status: "unavailable" })
   expect(captured.props!.selectedProjectId).toBeUndefined()
   expect(captured.props!.selectedWorkspaceId).toBe("w1")
   expect(captured.props!.selectedSessionId).toBe("a")
@@ -91,6 +94,7 @@ it.each([{ sessionId: "other", projectId: "A" }, { sessionId: "a", projectId: nu
   await waitFor(() => expect(captured.props!.conversation!.sendReason).toBe("Invalid conversation project owner"))
   expect(captured.props!.selectedProjectId).toBeUndefined()
   expect(captured.props!.conversation!.projectReady).toBe(false)
+  expect(captured.props!.projectContext).toEqual({ status: "unavailable" })
 })
 
 it("preserves removed-owner history without presenting a missing project as selected", async () => {
@@ -104,6 +108,7 @@ it("preserves removed-owner history without presenting a missing project as sele
   expect(captured.props!.selectedWorkspaceId).toBe("w1")
   expect(captured.props!.selectedSessionId).toBe("a")
   expect(request.mock.calls.some(([value]) => value.kind === "desktop/session/project/bind")).toBe(false)
+  expect(captured.props!.projectContext).toMatchObject({ status: "ready", projectId: "removed", projectName: undefined })
 })
 
 const sharedProjects = [

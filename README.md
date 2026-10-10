@@ -4,16 +4,16 @@
 
 I-harness 是開源的 AI 程式開發工作區。連接你選擇的模型服務，開啟本機專案，讓 Agent 搜尋程式碼、讀取檔案、執行命令與完成修改；你可以隨時查看工作過程、核準操作、檢查差異或停止執行。
 
-[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.3) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
+[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.4) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
 
 ## 下載
 
-目前提供 **Windows x64 · v0.1.3**，包含 Desktop 與它需要的執行環境。詳見 [0.1.3 更新紀錄](docs/releases/v0.1.3.md)。
+目前提供 **Windows x64 · v0.1.4**，包含 Desktop 與它需要的執行環境。詳見 [0.1.4 更新紀錄](docs/releases/v0.1.4.md)。
 
 | 版本 | 適合你，如果… | 下載 |
 | --- | --- | --- |
-| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-Setup-0.1.3.exe) |
-| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-0.1.3.zip) |
+| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.4/I-harness-Setup-0.1.4.exe) |
+| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.4/I-harness-0.1.4.zip) |
 
 Portable 版解壓到獨立資料夾後，執行 `I-harness.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
 
@@ -25,7 +25,7 @@ Desktop 不需要另裝 Node.js。模型服務需要自行配置；使用雲端�
 
 ## 快速開始
 
-1. **開啟 I-harness**，進入「專案 → 新增專案」，設定名稱、加入本機資料夾並儲存，再進入專案建立會話。
+1. **開啟 I-harness**，進入「專案 → 新增專案」，設定名稱、加入本機資料夾並儲存，再進入專案建立會話。新會話可從輸入框上方搜尋及選擇專案；既有會話會在同一處顯示已保存的歸屬。
 2. **設定模型**：進入「設定 → 模型與提供商」，新增你的服務端點、協議與 API 憑證，再選擇模型。
 3. **選擇操作範圍**：在「執行與權限」設定唯讀、可寫入工作區或完整存取，以及適合的核準方式。
 4. **建立會話並描述目標**，例如「找出登入失敗的原因，提出修正並執行相關測試」。

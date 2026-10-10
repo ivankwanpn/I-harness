@@ -1,0 +1,24 @@
+.composer-project-context { display: flex; align-items: center; min-width: 0; min-height: 34px; margin: 0 10px -3px; padding: 5px 8px 7px; border: 1px solid var(--ih-divider); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--ih-panel); color: var(--ih-muted); }
+.composer-project-context + .session-composer .zc-composer { margin-top: 0; }
+.composer-project-trigger, .composer-project-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px 7px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 12px; line-height: 18px; }
+.composer-project-trigger { cursor: pointer; }
+.composer-project-trigger:hover:not(:disabled), .composer-project-trigger[aria-expanded="true"] { background: var(--ih-divider); color: var(--ih-text); }
+.composer-project-trigger:disabled { cursor: default; opacity: .65; }
+.composer-project-trigger > span, .composer-project-label > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-project-context svg { flex: 0 0 auto; }
+.composer-project-trigger:focus-visible, .composer-project-picker button:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: -2px; }
+.composer-project-picker { position: fixed; z-index: 100; display: flex; flex-direction: column; width: min(320px, calc(100vw - 24px)); padding: 6px; overflow: auto; border: 1px solid var(--ih-divider); border-radius: 12px; background: var(--ih-panel); color: var(--ih-text); box-shadow: 0 14px 40px #0008; font-size: 12px; }
+.composer-project-search { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding: 7px; }
+.composer-project-search input { min-width: 0; width: 100%; padding: 3px; border: 0; outline-offset: 2px; background: transparent; color: inherit; font: inherit; }
+.composer-project-options { min-height: 0; overflow-y: auto; }
+.composer-project-option { display: grid; grid-template-columns: 16px minmax(0,1fr) 16px; align-items: center; gap: 8px; width: 100%; padding: 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.composer-project-option:hover:not(:disabled), .composer-project-option[aria-pressed="true"] { background: var(--ih-divider); }
+.composer-project-option:disabled { opacity: .5; cursor: default; }
+.composer-project-option strong, .composer-project-option small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.composer-project-option strong { font-weight: 500; }
+.composer-project-option small { margin-top: 3px; color: var(--ih-muted); font-size: 10px; }
+.composer-project-empty { margin: 12px 8px; color: var(--ih-muted); }
+.composer-project-picker-actions { display: flex; flex: 0 0 auto; flex-direction: column; gap: 2px; border-top: 1px solid var(--ih-divider); margin-top: 5px; padding-top: 5px; }
+.composer-project-picker-actions button { padding: 7px 8px; border: 0; border-radius: 7px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; }
+.composer-project-picker-actions button:hover { background: var(--ih-divider); }
+.project-required-composer { padding: 20px; min-height: 110px; border: 1px solid var(--ih-divider); border-radius: 14px; background: var(--ih-panel); color: var(--ih-muted); font-size: 13px; }

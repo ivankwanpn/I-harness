@@ -613,6 +613,13 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       workspaces={workspaces}
       projects={projects}
       selectedProjectId={activeProjectId}
+      projectContext={selectedSessionId
+        ? !capabilitiesReady ? { status: "loading" }
+          : !projectScopeSupported || projectError || projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && projectBinding.error ? { status: "unavailable" }
+          : !selectedBinding || projects === undefined ? { status: "loading" }
+          : { status: "ready", projectId: selectedBinding.projectId, projectName: projects.find(project => project.id === selectedBinding.projectId)?.name }
+        : projects === undefined ? { status: projectError ? "unavailable" : "loading" }
+          : { status: "ready", projectId: activeProjectId, projectName: projects.find(project => project.id === activeProjectId)?.name }}
       onProjectsChanged={async () => { await Promise.all([refreshProjects(), refreshWorkspaces()]) }}
       onSelectProject={(id) => {
         navigationVersion.current++

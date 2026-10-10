@@ -43,6 +43,12 @@ type SendState = { sending: boolean; error?: string }
 const idleSend: SendState = { sending: false }
 const sends = new Map<string, SendState>()
 const sendListeners = new Set<() => void>()
+export function useComposerSending(workspaceId?: string, sessionId?: string): boolean {
+  return useSyncExternalStore(
+    listener => { sendListeners.add(listener); return () => { sendListeners.delete(listener) } },
+    () => !!(workspaceId && sessionId && sends.get(draftKey(workspaceId, sessionId))?.sending),
+  )
+}
 function publishSend(key: string, state: SendState) {
   if (state === idleSend) sends.delete(key)
   else sends.set(key, state)
