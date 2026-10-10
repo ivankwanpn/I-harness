@@ -71,3 +71,30 @@ I-harness 的桌面按鈕、表單、對話框及記錄輸出介面改編自以�
   source revision https://github.com/FFmpeg/FFmpeg/commit/2296078397.
   FFmpeg/FFprobe run as separate local processes; the package metadata and build
   source references remain in the shipped gateway dependencies.
+
+## Official Claude plugin regression fixtures (Apache-2.0)
+
+- Source: https://github.com/anthropics/claude-plugins-official at
+  b8e53f1c05dff3b6d751297f6527990ffc81c2f4.
+- Unmodified runtime files from explanatory-output-style, feature-dev, hookify
+  and ralph-loop are retained as regression fixtures in
+  `packages/desktop-gateway/test/fixtures/official-plugins` and
+  `packages/hooks/test/fixtures/claude-official`.
+- Each fixture retains its upstream license and source record. Runtime copying
+  excludes package test directories.
+
+## MSYS PTY adapter library startup components
+
+- MSYS2 runtime-devel 3.6.10-6, source package:
+  https://repo.msys2.org/msys/sources/msys2-runtime-3.6.10-6.src.tar.zst.
+- Upstream cygwin-3.6.10 commit b11613e477c006b2ce0332463ed07f1118260e79.
+  `winsup/CYGWIN_LICENSE` identifies the library sources as LGPL-3.0-or-later
+  and provides the linking exception for libcygwin.a, crt0.o and gcrt0.o with
+  independent modules. Individual source notices also apply; the complete
+  MSYS2 package is labelled GPL-3.0-or-later.
+- Exact license texts, package/source digests and provenance are retained in
+  Desktop `licenses/msys-pty`. IH's adapter source and native build manifest
+  identify its compiled artifacts and build inputs. The selected installed
+  runtime DLL is pinned for execution.
+- MSYS2 binutils 2.47-1 is a build-only tool under GPL-3.0-or-later. Its linker
+  and development SDK are excluded from the Desktop runtime.

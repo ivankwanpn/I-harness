@@ -52,7 +52,7 @@ describe("CLI Claude plugin SessionStart hooks", () => {
     }))
     writeFileSync(join(plugin, "hooks", "hooks.json"), JSON.stringify({ hooks: {
       SessionStart: [{ ...(options.matcher ? { matcher: options.matcher } : {}), hooks }],
-      ...(options.unsupported ? { Stop: [{ hooks: [{ type: "command", command: "echo unsupported-stop" }] }] } : {}),
+      ...(options.unsupported ? { Stop: [{ hooks: [{ type: "command", command: "echo unsupported-stop", asyncRewake: true }] }] } : {}),
     } }))
     const registry = new PluginRegistry({ root: join(home, "plugins") })
     await registry.addSource(source)
@@ -124,7 +124,7 @@ describe("CLI Claude plugin SessionStart hooks", () => {
     expect(result.exitCode).toBe(0)
     expect(requests.length).toBeGreaterThan(0)
     expect(requests[0]!.systemPrompt).toContain("CLI_CLAUDE_CONTEXT")
-    expect(inputs()).toEqual([expect.objectContaining({ session_id: "cli-startup", hook_event_name: "SessionStart", source: "startup", cwd: home })])
+    expect(inputs()).toEqual([expect.objectContaining({ session_id: "cli-startup", hook_event_name: "SessionStart", source: "startup", cwd: home, permission_mode: "bypassPermissions" })])
   })
 
   it.skipIf(!bashAvailable())("starts an ephemeral run with one stable hook session identity", async () => {

@@ -745,6 +745,9 @@ importers:
       '@i-harness/harness-home':
         specifier: workspace:*
         version: link:../harness-home
+      '@i-harness/sandbox-windows-psec':
+        specifier: workspace:*
+        version: link:../sandbox-windows-psec
     devDependencies:
       '@i-harness/core-agent':
         specifier: workspace:*

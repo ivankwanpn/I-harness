@@ -84,19 +84,10 @@ describe("executeToolCalls — the durable dispatch boundary (M4)", () => {
   })
 })
 
-// M5's T4, second half: **cancellation propagates to the siblings of a failed
-// call.** Measured before writing: the failure path says
-//
-//   // Failure: drain started (results discarded), rethrow the first error.
-//   await Promise.allSettled([...inFlight.values()])
-//
-// — a DRAIN. The siblings keep running (a `bash` command keeps spawning, a network
-// call keeps going), their results are thrown away, and the caller waits for the
-// SLOWEST of them before the error surfaces. The roadmap's completion definition
-// asks for "可取消", and the mechanism is already there: `prepare` puts the signal
-// on `prepared.exec.abortSignal` (core-tools:291), so a body can observe it.
-describe("executeToolCalls — a failure cancels its siblings (M5)", () => {
-  it("a failed call CANCELS a still-running sibling instead of waiting for it", async () => {
+// Ordinary body errors are isolated. A marked refusal still cancels running
+// work and rejects the turn, preserving the fail-closed boundary.
+describe("executeToolCalls — a policy refusal cancels its siblings", () => {
+  it("a marked refusal CANCELS a still-running sibling instead of waiting for it", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
@@ -127,7 +118,7 @@ describe("executeToolCalls — a failure cancels its siblings (M5)", () => {
       description: "",
       inputSchema: {},
       isConcurrencySafe: true,
-      execute: async () => { throw new Error("boom") },
+      execute: async () => { throw Object.assign(new Error("boom"), { policyRefusal: true as const }) },
     })
 
     await executeToolCalls(ctx, session, tools, [
@@ -253,18 +244,17 @@ describe("executeToolCalls scheduler", () => {
     })
   })
 
-  it("a never-started call is CANCELLED, and says so — not the abort message", async () => {
+  it("an ordinary failure still starts the next call in a serial pool", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
     tools.register({
       name: "boomtool", description: "boom", inputSchema: {}, isConcurrencySafe: true,
-      // Throws IMMEDIATELY: c0 fails before c1's prepare ever runs, so c1 is
-      // never started and lands in the [startedUpTo, batch.length) range.
+      // The first call fails before the second can enter a full serial pool.
       execute: async () => { throw new Error("kaboom") },
     })
     tools.register({
-      name: "nevertool", description: "never started", inputSchema: {}, isConcurrencySafe: true,
+      name: "nevertool", description: "independent call", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => ({ ok: true }),
     })
     await executeToolCalls(ctx, session, tools, [
@@ -276,16 +266,7 @@ describe("executeToolCalls scheduler", () => {
     }[]
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output.code).toBe(TOOL_FAILED)
-    expect(results[1]!.output.code).toBe(TOOL_CANCELLED_BY_SIBLING)
-    expect(results[1]!.output).not.toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
-    // The contract this test's NAME states has TWO halves, and only the `code`
-    // half was pinned. Measured (T4's review): swapping the message for the
-    // abort message while leaving the code alone left the file green — 19
-    // passed. A reader of the name ("not the abort message") would have
-    // believed the message was pinned. It is now.
-    expect(results[1]!.output.error).toBe(
-      "tool call cancelled: a sibling call in the same batch failed",
-    )
+    expect(results[1]!.output).toEqual({ ok: true })
   })
 
   it("synthesizes TOOL_ABORTED_BEFORE_DISPATCH results for never-started calls on abort", async () => {
@@ -531,11 +512,12 @@ describe("executeToolCalls scheduler", () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
-    // An unregistered tool makes `prepare` throw at core-tools:254. That is a
-    // POLICY/PROTOCOL refusal, not a tool failure, and it must stay loud.
+    tools.register({ name: "blocked", description: "Known denied binding", inputSchema: {}, execute: async () => "must not execute" })
+    ctx.on("tools/pre-execute", () => ({ kind: "deny", reason: "standing policy refuses this operation" }))
+    // A known operation denied by current policy remains a prepare refusal.
     await expect(
-      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "no-such-tool", args: {} }], { maxParallel: 10 }),
-    ).rejects.toThrow("unknown tool: no-such-tool")
+      executeToolCalls(ctx, session, tools, [{ callId: "c0", name: "blocked", args: {} }], { maxParallel: 10 }),
+    ).rejects.toThrow("denied: standing policy refuses this operation")
     expect(session.events.filter((e) => e.type === "tool/result")).toHaveLength(0)
   })
 
@@ -550,20 +532,13 @@ describe("executeToolCalls scheduler", () => {
     ).rejects.toThrow("agent aborted")
   })
 
-  it("BOUNDARY: a throwing finalize during the failure drain still fills the never-started calls, and the lane's error is rethrown", async () => {
+  it("BOUNDARY: a throwing finalize stops later groups after an ordinary body failure", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
-    // Mirrors the abort-path test ("abort dominates a throwing finalize") in
-    // the FILLS, and differs in the disposition: the abort path swallows
-    // because it throws "agent aborted" immediately after, while this path is
-    // not aborting — so the commit lane's error is rethrown once the fills have
-    // run (M5 T6). Before that it was swallowed by a bare `catch {}`, and a
-    // lost durable write (an `append` fail-loud path among them) left a turn
-    // that resolved and continued in silence.
-    // The inherited cost is unchanged by the rethrow: the commit cursor stops
-    // where the throwing listener fired, so neither c0's REAL result nor c1's
-    // synthetic fill reaches the log — c2 does.
+    // The commit lane still fails the turn even if a body failure is ordinary.
+    // An exclusive later group cannot start across that broken commit barrier.
+    let laterRan = false
     ctx.on("tools/post-execute", () => { throw new Error("post-execute boom") })
     tools.register({
       name: "okTool", description: "", inputSchema: {}, isConcurrencySafe: true,
@@ -573,17 +548,17 @@ describe("executeToolCalls scheduler", () => {
       name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { throw new Error("kaboom") },
     })
+    tools.register({ name: "pendingTool", description: "", inputSchema: {},
+      execute: async () => { laterRan = true; return {} } })
     await expect(
       executeToolCalls(ctx, session, tools, [
         { callId: "c0", name: "okTool", args: {} },
         { callId: "c1", name: "boomTool", args: {} },
-        { callId: "c2", name: "okTool", args: {} }, // never started (pool full at the failure)
+        { callId: "c2", name: "pendingTool", args: {} },
       ], { maxParallel: 2 }),
     ).rejects.toThrow("post-execute boom")
-    const cancelled = session.events.filter(
-      (e) => e.type === "tool/result" && (e as { output?: { code?: string } }).output?.code === TOOL_CANCELLED_BY_SIBLING,
-    )
-    expect(cancelled.map((e) => (e as { callId: string }).callId)).toEqual(["c2"])
+    expect(laterRan).toBe(false)
+    expect(session.events.filter((event) => event.type === "tool/dispatch").map((event) => event.callId)).toEqual(["c0", "c1"])
   })
 
   it("BOUNDARY: a first failure that rejects with `undefined` still writes results", async () => {
@@ -611,19 +586,13 @@ describe("executeToolCalls scheduler", () => {
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
   })
 
-  it("BOUNDARY: a SECOND failure whose own classification throws still keeps its OWN message", async () => {
+  it("BOUNDARY: an unreadable refusal keeps its OWN reason when an owner abort dominates it", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
-    // The `.catch` handler records the call's own error as its FIRST statement,
-    // ahead of `telemetry.emit` and the marker check — both of which run
-    // out-of-tree code (a host Telemetry, an error whose `policyRefusal` getter
-    // throws). A SECOND failure's handler that throws there is absorbed by the
-    // post-loop drain (`Promise.allSettled`), so nothing re-reads it; if its
-    // entry were recorded after the throw, the fill would fall back to
-    // `firstError` and stamp the FIRST failure's message on it — the
-    // misattribution the `failures` map exists to prevent. Measured before the
-    // move: c1 came out as `{ error: "A error" }` below.
+    const ac = new AbortController()
+    // An unreadable marker is fail-closed; an owner abort still dominates that
+    // refusal and records the interrupted call's own reason in the abort fill.
     tools.register({
       name: "failA", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { throw new Error("A error") },
@@ -632,22 +601,23 @@ describe("executeToolCalls scheduler", () => {
       name: "failB", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => {
         await new Promise((r) => setTimeout(r, 20)) // A settles first ⇒ A wins firstError
+        ac.abort()
         throw Object.defineProperty(new Error("B error"), "policyRefusal", {
           get() { throw new Error("poisoned marker read") },
         })
       },
     })
-    await executeToolCalls(ctx, session, tools, [
+    await expect(executeToolCalls(ctx, session, tools, [
       { callId: "c0", name: "failA", args: {} },
       { callId: "c1", name: "failB", args: {} },
-    ], { maxParallel: 2 })
+    ], { maxParallel: 2, signal: ac.signal })).rejects.toThrow("agent aborted")
     const results = session.events.filter((e) => e.type === "tool/result") as {
       callId: string
       output: { error: string; code?: string }
     }[]
     expect(results.map((r) => [r.callId, r.output.error, r.output.code])).toEqual([
       ["c0", "A error", TOOL_FAILED],
-      ["c1", "B error", TOOL_FAILED],
+      ["c1", "B error", TOOL_ABORTED_MID_FLIGHT],
     ])
   })
 
@@ -658,14 +628,8 @@ describe("executeToolCalls scheduler", () => {
     const ac = new AbortController()
     const postTool: string[] = []
     ctx.on("agent/post-tool", (p) => { postTool.push((p as { name: string }).name) })
-    // `aborted` is written inside `runGroup`, which breaks out of its loop on
-    // the first failure — so an abort fired while the post-loop drain is
-    // running is seen by neither the loop nor (before the re-read) the
-    // dispositions. The slow body settles AFTER the failure and fires the
-    // outer abort before returning, so the abort lands inside that window by
-    // construction, not by a bet on the clock. Pre-fix the turn RESOLVED, the
-    // never-started call was stamped CANCELLED BY A SIBLING, and post-tool was
-    // emitted for the call that settled in the window.
+    // The slow body aborts after an ordinary failure. The final exclusive
+    // group remains pending, and no post-tool event may run after owner abort.
     tools.register({
       name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async () => { throw new Error("boom") },
@@ -678,11 +642,12 @@ describe("executeToolCalls scheduler", () => {
         return { ok: true }
       },
     })
+    tools.register({ name: "pendingTool", description: "", inputSchema: {}, execute: async () => ({ ok: true }) })
     await expect(
       executeToolCalls(ctx, session, tools, [
         { callId: "c0", name: "boomTool", args: {} },
         { callId: "c1", name: "slowTool", args: {} },
-        { callId: "c2", name: "slowTool", args: {} }, // never started (pool full at the failure)
+        { callId: "c2", name: "pendingTool", args: {} },
       ], { maxParallel: 2, signal: ac.signal }),
     ).rejects.toThrow("agent aborted")
     const byCode = (code: string) => session.events
@@ -769,38 +734,15 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     // veto's listener ARMS (below) before boomTool is allowed to throw.
     let vetoArmed!: () => void
     const vetoArmedP = new Promise<void>((r) => { vetoArmed = r })
+    let failureObserved!: () => void
+    const failureObservedP = new Promise<void>((r) => { failureObserved = r })
     ctx.onCascade("tools/execute", async (input, next) => {
-      const { name, exec } = input as { name: string; exec: { abortSignal?: AbortSignal } }
+      const { name } = input as { name: string }
       if (name !== "vetoTool") return next()
-      // A pre-tool hook is a SUBPROCESS — `hooks/src/runner.ts` boots the
-      // handler with `spawn(...)` (:105 as of this commit) — so a veto landing
-      // after a fast sibling's failure is the ordinary case, not the exotic
-      // one. (An earlier draft of this comment carried a startup latency
-      // figure; it was relayed from a report without an artifact in the tree,
-      // and there is no hooks e2e under `e2e/` to back it, so it is gone.)
-      //
-      // Constructed, not raced. This used to `setTimeout(50)` here — the M61
-      // note above in miniature: that is a timing assertion, not a behaviour
-      // assertion, and it fails under load for the same reason.
-      // `batchAbort.abort()` fires this signal in the SAME synchronous block
-      // that sets `firstError`, so the veto's listener is WOKEN at the instant
-      // the sibling's failure is recorded and only then throws: "a sibling
-      // already failed" is a fact of the construction, not a bet on the clock.
-      const signal = exec.abortSignal
-      const woke = new Promise<void>((resolve) => {
-        if (signal?.aborted === true) resolve()
-        else signal?.addEventListener("abort", () => resolve(), { once: true })
-      })
       vetoArmed()
-      await woke
-      // `woke` is resolved inside the synchronous block that set `firstError`;
-      // this boundary makes the THROW one microtask later, so the veto's
-      // rejection is still OUTSTANDING when the group loop breaks. Measured
-      // (this file, mutating away the drain before the disposition test):
-      // without it the veto's `.catch` runs one hop BEFORE that test — the
-      // turn still died, so the drain was unobservable and the test could not
-      // fail. A real veto arrives from a hook's own promise chain (a subprocess
-      // round trip), never as the abort's own reaction.
+      // Ordinary failures do not abort a sibling anymore. Observe the actual
+      // error notification to release this late veto without a timing race.
+      await failureObservedP
       await Promise.resolve()
       throw veto
     })
@@ -810,16 +752,17 @@ describe("executeToolCalls — fix round: disposition is not raced, each failure
     })
     tools.register({
       name: "boomTool", description: "", inputSchema: {}, isConcurrencySafe: true,
-      // The sibling fails FIRST — once the veto is armed, so the batch's group
-      // loop breaks out while the veto is still in flight, which is what the
-      // drain after that loop exists to absorb.
+      // The ordinary sibling fails first, after this veto is in flight.
       execute: async () => { await vetoArmedP; throw new Error("boom") },
     })
     // NO .resolves: a refusal is never soft, whenever it lands.
     await expect(executeToolCalls(ctx, session, tools, [
       { callId: "c0", name: "vetoTool", args: {} },
       { callId: "c1", name: "boomTool", args: {} },
-    ], { maxParallel: 10 })).rejects.toThrow(/read disabled/)
+    ], { maxParallel: 10, telemetry: {
+      emit: (event) => { if (event.type === "tool/error" && event.data.callId === "c1") failureObserved() },
+      close: () => {},
+    } })).rejects.toThrow(/read disabled/)
   })
 
   it("records each failed call's OWN message, not the first failure's", async () => {
@@ -998,46 +941,31 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     })
     await executeToolCalls(ctx, session, tools, [
       { callId: "c0", name: "typed", args: { n: "3" } }, // refused → slot filled, never started
-      { callId: "c1", name: "sibling", args: {} }, // never started → cancelled by the sibling
+      { callId: "c1", name: "sibling", args: {} }, // independent call still starts
     ], { maxParallel: 10 })
     const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
-    // Model order, one result per call. Without the skip this reads
-    // ["c0", "c0", "c1"] — c0 twice, its second result stamped CANCELLED.
+    // Model order, one result per call; the malformed body stays uncalled.
     expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
     expect(results[0]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
-    expect(results[1]!.output).toMatchObject({ code: TOOL_CANCELLED_BY_SIBLING })
-    // And the refusal never reached a tool body.
-    expect(ran).toBe(0)
+    expect(results[1]!.output).toEqual({ ok: true })
+    expect(ran).toBe(1)
   })
 
-  it("REGRESSION: a refused call an abort then sweeps is still answered ONCE (abort path)", async () => {
+  it("REGRESSION: a malformed call an owner abort sweeps is still answered ONCE", async () => {
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
     const ac = new AbortController()
     let cancelled = false
+    ctx.on("tools/pre-execute", (payload) => { if ((payload as { name: string }).name === "stop") ac.abort() })
     tools.register({
       name: "ok", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async (_args: unknown, exec: { abortSignal?: AbortSignal }) => {
         await new Promise<void>((resolve) => {
-          // A refusal CANCELS the siblings still running beside it, so this
-          // body sees the batch's abort channel fire the moment the malformed
-          // call is refused — and the user's step signal stops in that same
-          // window, which is what puts this batch on the ABORT path with the
-          // refusal's slot already filled. Half a tick later the abort branch's
-          // never-started loop walks past that same index: without the skip
-          // there, this callId is appended a SECOND time, stamped
-          // TOOL_ABORTED_BEFORE_DISPATCH.
-          //
-          // The timeout is only a floor for the failure mode: if the cancel
-          // stops firing (mutation), this body still resolves and the test
-          // fails on `cancelled` / on the abort that never happened, instead of
-          // hanging on a signal nobody aborted.
-          const floor = setTimeout(resolve, 60)
+          // A later prepare fires the OWNER signal after the malformed slot
+          // is filled. Invalid arguments themselves do not cancel this body.
           exec.abortSignal?.addEventListener("abort", () => {
-            clearTimeout(floor)
             cancelled = true
-            ac.abort()
             resolve()
           }, { once: true })
         })
@@ -1049,49 +977,38 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
       inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
       execute: async () => ({ ok: true }),
     })
+    tools.register({ name: "stop", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => ({}) })
     await expect(
       executeToolCalls(ctx, session, tools, [
         { callId: "c0", name: "ok", args: {} },
         { callId: "c1", name: "typed", args: { n: "3" } },
+        { callId: "c2", name: "stop", args: {} },
       ], { maxParallel: 10, signal: ac.signal }),
     ).rejects.toThrow("agent aborted")
-    // The refusal cancelled its running sibling — the cancel channel fires on
-    // THIS path too, not only on the body-failure path.
+    // The owner's cancellation still reaches running siblings.
     expect(cancelled).toBe(true)
     const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
     // One per call, in model order: c0's REAL result, then the refusal's own
     // envelope — not that envelope plus an abort verdict for the same callId.
-    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1", "c2"])
     expect(results[0]!.output).toEqual({ ok: true })
     expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+    expect(results[2]!.output).toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
   })
 
   it("REGRESSION: an abort fill keeps each killed call's OWN reason, not the refusal's", async () => {
-    // The abort path's fill (M51 B3) used to stamp ONE message — `firstError`'s
-    // — onto every started-but-empty slot. That substitution was merely
-    // imprecise while `firstError` was always a tool-body failure; a typed
-    // argument refusal can now BE `firstError`, and then a sibling killed by
-    // the cancel is told about a DIFFERENT call's arguments. The reason is
-    // per-call, and the map that carries it already has this slot's entry.
+    // A malformed slot and a body interrupted by the owner keep distinct
+    // reasons. Neither may borrow the other call's message during the drain.
     const ctx = createContext()
     const session = createSession()
     const tools = createToolRegistry(ctx)
     const ac = new AbortController()
+    ctx.on("tools/pre-execute", (payload) => { if ((payload as { name: string }).name === "stop") ac.abort() })
     tools.register({
       name: "kill", description: "", inputSchema: {}, isConcurrencySafe: true,
       execute: async (_args: unknown, exec: { abortSignal?: AbortSignal }) => {
         await new Promise<void>((resolve) => {
-          // Killed in the refusal's cancel window: the malformed sibling's
-          // cancel reaches this signal, this body stops the step signal in the
-          // same breath, and then it REJECTS — so its own reason is a body
-          // failure on record while the batch is on its way to the abort path.
-          // The floor keeps the mutant's failure a failure rather than a hang.
-          const floor = setTimeout(resolve, 60)
-          exec.abortSignal?.addEventListener("abort", () => {
-            clearTimeout(floor)
-            ac.abort()
-            resolve()
-          }, { once: true })
+          exec.abortSignal?.addEventListener("abort", () => resolve(), { once: true })
         })
         throw new Error("body killed by cancel")
       },
@@ -1101,14 +1018,16 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
       inputSchema: { type: "object", properties: { n: { type: "integer" } }, required: ["n"] },
       execute: async () => ({ ok: true }),
     })
+    tools.register({ name: "stop", description: "", inputSchema: {}, isConcurrencySafe: true, execute: async () => ({}) })
     await expect(
       executeToolCalls(ctx, session, tools, [
         { callId: "c0", name: "kill", args: {} },
         { callId: "c1", name: "typed", args: { n: "3" } },
+        { callId: "c2", name: "stop", args: {} },
       ], { maxParallel: 10, signal: ac.signal }),
     ).rejects.toThrow("agent aborted")
     const results = session.events.filter((e) => e.type === "tool/result") as { callId: string; output: unknown }[]
-    expect(results.map((r) => r.callId)).toEqual(["c0", "c1"])
+    expect(results.map((r) => r.callId)).toEqual(["c0", "c1", "c2"])
     // c0 died BY THE CANCEL and says so — not about c1's argument.
     // (The code joined this envelope with block 3's T1: the abort fill now
     // carries its OWN code, so this exact-shape pin carries it too.)
@@ -1116,6 +1035,7 @@ describe("executeToolCalls — a malformed-argument refusal is a typed dispositi
     expect(results[0]!.output).not.toMatchObject({ error: expect.stringContaining("invalid arguments") })
     // …and c1 keeps its own refusal, not c0's body failure.
     expect(results[1]!.output).toEqual({ error: expect.stringContaining('"value.n" must be an integer'), code: TOOL_FAILED })
+    expect(results[2]!.output).toMatchObject({ code: TOOL_ABORTED_BEFORE_DISPATCH })
   })
 })
 

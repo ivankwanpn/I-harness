@@ -4,7 +4,7 @@ use crate::{
     protocol::Spec,
 };
 use std::{
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::windows::io::{AsRawHandle, FromRawHandle, IntoRawHandle},
     ptr::null_mut,
     sync::{
@@ -30,10 +30,13 @@ pub enum Event {
     Output(Result<()>),
     InputClosed,
     ConsoleClosed,
+    Bridge(crate::msys::Observation),
+    BridgeDone(Result<()>),
 }
 pub enum Input {
     Bytes(String, Vec<u8>),
     End(String),
+    Resize(String, i16, i16),
 }
 struct Frame {
     channel: u8,
@@ -152,6 +155,7 @@ pub struct PreparedIo {
     input: Option<Handle>,
     outputs: Vec<(u8, Handle)>,
     pub console: Option<Console>,
+    msys: bool,
 }
 impl PreparedIo {
     pub fn empty() -> Self {
@@ -160,6 +164,7 @@ impl PreparedIo {
             input: None,
             outputs: vec![],
             console: None,
+            msys: false,
         }
     }
     pub fn release(&mut self) -> Vec<Error> {
@@ -182,13 +187,15 @@ impl PreparedIo {
         errors
     }
     pub fn initialize(&mut self, spec: &Spec) -> Result<()> {
-        let pty = spec.transport == "pty";
+        let pty = spec.transport == "pty" && spec.msys_pty.is_none();
+        self.msys = spec.msys_pty.is_some();
         let (input_read, input_write) = pipe(!pty)?;
         self.child.push(input_read);
         self.input = Some(input_write);
         let (output_read, output_write) = pipe(!pty)?;
         self.child.push(output_write);
-        self.outputs.push((if pty { 2 } else { 0 }, output_read));
+        self.outputs
+            .push((if pty || self.msys { 2 } else { 0 }, output_read));
         private(self.input.as_ref().unwrap())?;
         private(&self.outputs[0].1)?;
         if pty {
@@ -222,7 +229,8 @@ impl PreparedIo {
         } else {
             let (error_read, error_write) = pipe(true)?;
             self.child.push(error_write);
-            self.outputs.push((1, error_read));
+            self.outputs
+                .push((if self.msys { 4 } else { 1 }, error_read));
             private(&self.outputs[1].1)?;
             Ok(())
         }
@@ -272,6 +280,59 @@ impl PreparedIo {
             let dropped = dropped.clone();
             readers.push(thread::spawn(move || {
                 let mut file = into_file(handle);
+                if channel == 4 {
+                    let result = (|| -> Result<()> {
+                        let mut reader = BufReader::new(&mut file);
+                        let mut line = Vec::new();
+                        let mut ready = false;
+                        let mut root = false;
+                        loop {
+                            let available = reader
+                                .fill_buf()
+                                .map_err(|e| Error::io("read MSYS controller", e))?;
+                            if available.is_empty() {
+                                if !line.is_empty() {
+                                    return Err(Error::state("truncated MSYS controller"));
+                                }
+                                break;
+                            }
+                            let n = available
+                                .iter()
+                                .position(|b| *b == b'\n')
+                                .map_or(available.len(), |i| i + 1);
+                            if line.len() + n > 256 {
+                                return Err(Error::state("MSYS controller line limit exceeded"));
+                            }
+                            let complete = available[n - 1] == b'\n';
+                            line.extend_from_slice(&available[..n]);
+                            reader.consume(n);
+                            if complete {
+                                let observation = crate::msys::observation(&line)?;
+                                line.clear();
+                                match &observation {
+                                    crate::msys::Observation::Ready if !ready => ready = true,
+                                    crate::msys::Observation::Ack(..) if ready => {}
+                                    crate::msys::Observation::Root(_) if ready && !root => {
+                                        root = true
+                                    }
+                                    _ => {
+                                        return Err(Error::state(
+                                            "MSYS controller lifecycle order violated",
+                                        ));
+                                    }
+                                }
+                                events
+                                    .send(Event::Bridge(observation))
+                                    .map_err(|_| Error::state("MSYS observer disconnected"))?;
+                            }
+                        }
+                        Ok(())
+                    })();
+                    let result = with_cleanup(result, close_worker_file(file, &events));
+                    drop(tx);
+                    let _ = events.send(Event::BridgeDone(result));
+                    return;
+                }
                 let mut buf = [0u8; CHUNK];
                 let result = (|| -> Result<()> {
                     loop {
@@ -314,10 +375,30 @@ impl PreparedIo {
         let input_handle = self.input.take().expect("prepared input ownership");
         let input_events = events.clone();
         let input_stop = stop_input.clone();
+        let msys = self.msys;
         let input = thread::spawn(move || {
             let mut file = into_file(input_handle);
             loop {
                 match input_rx.recv_timeout(Duration::from_millis(10)) {
+                    Ok(command) if msys => {
+                        let id = match &command {
+                            Input::Bytes(id, _) | Input::End(id) | Input::Resize(id, _, _) => {
+                                id.clone()
+                            }
+                        };
+                        let result = if input_stop.load(Ordering::Acquire) {
+                            Err(Error::state("input cancelled"))
+                        } else {
+                            crate::msys::packet(&command).and_then(|bytes| {
+                                file.write_all(&bytes)
+                                    .map_err(|e| Error::io("write MSYS controller", e))
+                            })
+                        };
+                        // Success is acknowledged by the adapter after delivery/ioctl.
+                        if result.is_err() {
+                            let _ = input_events.send(Event::Input(id, result));
+                        }
+                    }
                     Ok(Input::Bytes(id, data)) => {
                         let result = if input_stop.load(Ordering::Acquire) {
                             Err(Error::state("input cancelled"))
@@ -333,6 +414,7 @@ impl PreparedIo {
                         let _ = input_events.send(Event::InputClosed);
                         return;
                     }
+                    Ok(Input::Resize(..)) => unreachable!("ConPTY resize never enters input queue"),
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         if input_stop.load(Ordering::Acquire) {
@@ -359,6 +441,7 @@ impl PreparedIo {
             stop_input,
             dropped,
             input_ended: false,
+            msys,
         }
     }
 }
@@ -375,6 +458,7 @@ pub struct RunningIo {
     stop_input: Arc<AtomicBool>,
     dropped: Arc<AtomicU64>,
     input_ended: bool,
+    msys: bool,
 }
 impl RunningIo {
     pub fn close_pending_handles(&mut self) -> Vec<Error> {
@@ -388,7 +472,7 @@ impl RunningIo {
         errors
     }
     pub fn send(&mut self, input: Input) -> Result<()> {
-        if self.input_ended {
+        if self.input_ended && !matches!(input, Input::Resize(..)) {
             return Err(Error::state("input already ended"));
         }
         let end = matches!(&input, Input::End(_));
@@ -411,7 +495,11 @@ impl RunningIo {
             Err(TrySendError::Disconnected(_)) => Err(Error::state("input writer ended")),
         }
     }
-    pub fn resize(&self, cols: i16, rows: i16) -> Result<()> {
+    pub fn resize(&mut self, id: String, cols: i16, rows: i16) -> Result<bool> {
+        if self.msys {
+            self.send(Input::Resize(id, cols, rows))?;
+            return Ok(true);
+        }
         let console = self
             .console
             .as_ref()
@@ -420,7 +508,7 @@ impl RunningIo {
         if hr < 0 {
             Err(Error::native_code("ResizePseudoConsole", hr as u32))
         } else {
-            Ok(())
+            Ok(false)
         }
     }
     pub fn stop_input(&mut self) {
@@ -494,6 +582,7 @@ mod tests {
             input: Some(write),
             outputs: vec![],
             console: None,
+            msys: false,
         };
         crate::ffi::FAIL_NEXT_CLOSE.with(|flag| flag.set(true));
         let errors = io.release();

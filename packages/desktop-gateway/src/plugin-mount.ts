@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path"
 import { readFile } from "node:fs/promises"
+import { readFileSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { toMcpServerConfigs, toSubagentRoles, type RuntimeInputs } from "@i-harness/plugin-registry"
 import { createPromptCommand, registerPromptCommand, parseCommandLine, listCommands, runCommand } from "@i-harness/interaction"
@@ -8,15 +9,31 @@ import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import { createAuthoredHookApprovals, isAuthoredHookPath } from "./hook-authoring.ts"
 import { installedPluginHookRoot } from "./plugin-hook-root.ts"
+import { fingerprintHookArtifacts } from "./plugin-hook-authority.ts"
+import { derivePlanMode, type Session } from "@i-harness/core-session"
 
 interface Mounted {
   startSource: "startup" | "resume"
   commands: Map<string, { signature: string; dispose(): void }>
-  hooks: Map<string, { signature: string; trustSignature: string; registry: HookRegistry }>
+  hooks: Map<string, { signature: string; trustSignature: string; registry: HookRegistry; pluginRoot?: string }>
 }
 const live = new WeakMap<SessionAssembly, Mounted>()
 
-export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void, directMcp: McpServerConfig[] = [], workspace = configDir): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
+/** Authorization consumes the SAME normalized registry execution mounted. A
+ * changed config requires a successful reload; unreadable/unmounted authority
+ * is unavailable rather than inferred from a second source-format parser. */
+export function mountedHookAuthority(assembly: SessionAssembly, paths: readonly string[]): unknown | undefined {
+  try {
+    const state = live.get(assembly)
+    return paths.map(path => {
+      const mounted = state?.hooks.get(path)
+      if (!mounted || createHash("sha256").update(readFileSync(path)).digest("hex") !== mounted.signature) throw new Error("Hook configuration is not mounted at its current revision")
+      return { path, signature: mounted.signature, ...fingerprintHookArtifacts(path, mounted.registry, mounted.pluginRoot) }
+    })
+  } catch { return undefined }
+}
+
+export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void, directMcp: McpServerConfig[] = [], workspace = configDir, approvalMode?: () => string): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
   const mcp = toMcpServerConfigs(inputs.mcpServerConfigs)
   const agents = toSubagentRoles(inputs.agentDescriptors, { allowedTools: ["read", "glob", "grep", "list_dir"] })
   const messages = [...mcp.skipped.map((row) => `MCP ${row.serverName}: ${row.reason}`), ...agents.unresolved.map((row) => `Agent ${row.role}: ${row.tool} (${row.reason})`)]
@@ -69,13 +86,15 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         try {
           const approvals = createAuthoredHookApprovals(configDir, configPath)
           const trustSignature = trustSignatureFor(configPath)
+          const pluginRoot = installedPluginHookRoot(configDir, configPath)
           const registry = await createHookRegistry(assembly.ctx, {
-            configPath, configDir: dirname(configPath), approvals, cwd: workspace, sessionId,
-            claudePluginRoot: installedPluginHookRoot(configDir, configPath),
+            configPath, configDir: dirname(configPath), approvals, cwd: workspace, sessionId, session: () => assembly.session,
+            permissionMode: ({ session }) => session && derivePlanMode(session as Session).active ? "plan" : approvalMode?.() === "full-access" ? "bypassPermissions" : "default",
+            claudePluginRoot: pluginRoot,
             onUnsupported: row => { messages.push(`Hook ${configPath} ${row.event} ${row.id}: ${row.message}`); publish() },
             report: (error) => { messages.push(String(error)); publish() },
           })
-          state.hooks.set(configPath, { signature, trustSignature, registry })
+          state.hooks.set(configPath, { signature, trustSignature, registry, ...(pluginRoot ? { pluginRoot } : {}) })
           for (const handler of registry.handlers()) if (!handler.valid) messages.push(`Hook ${configPath}: not granted or invalid`)
           await registry.beginSession(sessionId, state.startSource)
         } catch (error) {

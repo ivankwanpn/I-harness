@@ -19,18 +19,20 @@ async function fixture(resume = false) {
   await mkdir(join(plugin, "skills", "context"), { recursive: true })
   vi.stubEnv("IH_CONFIG_DIR", home)
   const config = join(plugin, "hooks", "hooks.json"), marker = join(workspace, "calls.txt"), skill = join(plugin, "skills", "context", "SKILL.md")
+  const capture = join(workspace, "inputs.jsonl")
   await writeFile(skill, "# Reviewed fixture skill")
-  await writeFile(join(plugin, "hooks", "start.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf x >> \"$CLAUDE_PROJECT_DIR/calls.txt\"\nprintf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"OFFICIAL_START_CONTEXT\"}}'\n")
+  await writeFile(join(plugin, "hooks", "start.sh"), "#!/usr/bin/env bash\nset -euo pipefail\ninput=$(cat)\nprintf '%s\\n' \"$input\" >> \"$CLAUDE_PROJECT_DIR/inputs.jsonl\"\nprintf x >> \"$CLAUDE_PROJECT_DIR/calls.txt\"\nprintf '%s\\n' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"OFFICIAL_START_CONTEXT\"}}'\n")
   await writeFile(config, JSON.stringify({ hooks: { SessionStart: [{ matcher: "startup|clear|compact", hooks: [{ type: "command", command: 'bash "${CLAUDE_PLUGIN_ROOT}/hooks/start.sh"', timeout: 5 }] }] } }))
   const requests: LLMRequest[] = []
   const model: ModelClient = { async *stream(request) { requests.push(structuredClone(request)); yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
   let enabled = true
+  let approvalMode: "dangerous" | "full-access" = "dangerous"
   const inputs = () => ({ hookConfigs: enabled ? [config] : [], skillDirs: [], commandDescriptors: [], agentDescriptors: [], mcpServerConfigs: {} })
   const restored = createSession()
   if (resume) append(restored, { type: "user/message", text: "Existing conversation" })
-  const service = createSessionService({ workspace, model, ...(resume ? { sessionFor: async () => restored } : {}), additionalSystemPrompt: () => "HOST_GOAL_CONTEXT", extensionsFor: async id => pluginExtensions(inputs(), home, id, () => {}, [], workspace) })
+  const service = createSessionService({ workspace, model, ...(resume ? { sessionFor: async () => restored } : {}), approvalMode: () => approvalMode, additionalSystemPrompt: () => "HOST_GOAL_CONTEXT", extensionsFor: async id => pluginExtensions(inputs(), home, id, () => {}, [], workspace, () => approvalMode) })
   const settings = createHookSettings(home, async () => inputs().hookConfigs, () => service.refreshExtensions(), { workspace })
-  return { home, workspace, config, marker, skill, requests, service, settings, disable: () => { enabled = false } }
+  return { home, workspace, config, marker, capture, skill, requests, service, settings, disable: () => { enabled = false }, fullAccess: () => { approvalMode = "full-access" } }
 }
 
 it("approves the reviewed plugin bundle, activates startup on the same agent, and withdraws context on revoke/update/disable", async () => {
@@ -73,7 +75,7 @@ it("diagnoses unsupported handlers individually while retaining a runnable Sessi
   const f = await fixture()
   try {
     const raw = JSON.parse(await readFile(f.config, "utf8"))
-    raw.hooks.Stop = [{ hooks: [{ type: "command", command: "exit 2" }] }]
+    raw.hooks.Stop = [{ hooks: [{ type: "command", command: "exit 2", asyncRewake: true }] }]
     await writeFile(f.config, JSON.stringify(raw))
     const state = await f.settings.state()
     expect(state.handlers).toHaveLength(1)
@@ -99,5 +101,18 @@ it("uses resume for restored conversation history and respects the plugin matche
     await f.service.submit("restored", "continue with context", new AbortController().signal)
     expect(await readFile(f.marker, "utf8")).toBe("x")
     expect(f.requests.at(-1)!.systemPrompt).toContain("OFFICIAL_START_CONTEXT")
+  } finally { await f.service.close() }
+})
+
+it.each(["full-access", "plan"])("reports actual %s mode to approved Desktop plugin commands", async mode => {
+  const f = await fixture()
+  try {
+    const assembly = await f.service.assemblyFor("s")
+    f.fullAccess()
+    if (mode === "plan") append(assembly.session, { type: "plan/mode", mode: "on" })
+    const row = (await f.settings.state()).handlers[0]!
+    await f.settings.mutate({ action: "approve", id: row.id, sha256: row.sha256 })
+    const input = JSON.parse((await readFile(f.capture, "utf8")).trim())
+    expect(input.permission_mode).toBe(mode === "plan" ? "plan" : "bypassPermissions")
   } finally { await f.service.close() }
 })

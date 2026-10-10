@@ -85,17 +85,22 @@ function createScheduleListTool(deps: ScheduleToolDeps): Tool<Record<string, nev
   }
 }
 
-function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, { deleted: string }> {
+function createScheduleDeleteTool(deps: ScheduleToolDeps): Tool<{ id: string }, { deleted: string } | { id: string; deleted: false; state: "already-fired" | "already-deleted" }> {
   return {
     name: "schedule_delete",
-    description: "delete one schedule by id (schedule-<n>) from THIS session",
+    description: "delete one schedule by id (schedule-<n>) from THIS session; a spent or previously deleted schedule returns its inactive state without another write",
     inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"], additionalProperties: false },
     isReadOnly: false,
     isConcurrencySafe: false,
     execute: async ({ id }) => {
       const folded = foldScheduleEvents(ownEvents(deps.session))
       if (!folded.active.some((record) => record.id === id)) {
-        throw new Error(`schedule_delete: no active schedule with id ${JSON.stringify(id)}`) // soft body failure (tool pipeline block ①); NOT a durable write
+        if (!folded.seenIds.includes(id)) throw new Error(`schedule_delete: schedule ${JSON.stringify(id)} was not found in this session`)
+        let state: "already-fired" | "already-deleted" = "already-fired"
+        for (const event of ownEvents(deps.session)) {
+          if (event.type === "schedule/change" && event.operation === "delete" && event.id === id) state = "already-deleted"
+        }
+        return { id, deleted: false, state }
       }
       append(deps.session, { type: "schedule/change", version: 1, operation: "delete", id })
       return { deleted: id }

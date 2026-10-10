@@ -1,38 +1,80 @@
 {
-    "manifestVersion":  1,
-    "protocolVersion":  1,
-    "target":  "x86_64-pc-windows-msvc",
-    "helperFile":  "i-harness-windows-helper.exe",
-    "helperSha256":  "421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395",
-    "protocolSha256":  "c6bcb90ad924488e5d58df01e681ee899a910156d71f5b267b5ea9ad4aa62594",
-    "rustc":  "rustc 1.94.0 (4a4ef493e 2026-03-02)",
-    "cargo":  "cargo 1.94.0 (85eff7c80 2026-01-15)",
-    "compilerSetup":  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat",
-    "msvcTools":  "14.41.34120",
-    "buildCommand":  "cargo build --release --locked --manifest-path native/Cargo.toml (VS2022 x64 environment)",
-    "windows":  "Microsoft Windows NT 10.0.26200.0",
-    "schema":  {
-                   "repository":  "https://github.com/microsoft/mxc",
-                   "revision":  "6cd3d58f05d3447e67109cfb75e042803b843ca4",
-                   "package":  "process_security_environment_spec",
-                   "packageVersion":  "0.8.0",
-                   "path":  "external/windows-sdk/ProcessSecurityEnvironment.fbs",
-                   "sha256":  "7d14b01850a735329da00cde4d4d2e32e463f49026a39708be9059fd64e764d3",
-                   "flatbuffers":  "25.12.19",
-                   "windowsSys":  "0.61.2"
-               },
-    "sources":  {
-                    "native/Cargo.lock":  "4a4e28dce15e3b9fd115e99e2bc97f38aa5c53b8ab5df7e57a83744d97df9400",
-                    "native/Cargo.toml":  "d6a943af1098daf1223c106436791fbe573bece36ea3b1378c0e3dac20d34154",
-                    "native/src/command_line.rs":  "622ef7333194e52be7a3737c1f847338dda86fb6edebba0afc18c05d52471dd1",
-                    "native/src/error.rs":  "270e71523edbe0dc256cd91c5b2bca0b1eb85ee935ae1a0245eeae7548c9faa4",
-                    "native/src/ffi.rs":  "164f29b04c5280b1069035a292237ee2a75b6977c4c7a6f3e6502b3c266a5e5e",
-                    "native/src/job.rs":  "043b1d995e788eae56dd5e82cf3bd98f0850f4897611986ba1df91990ec5ed9b",
-                    "native/src/main.rs":  "89e982b29c8c2656d3396595864b5020d7264dfb96794bd65609f3016ca14ab5",
-                    "native/src/policy.rs":  "65c6ce2c666f16b611d372979bebe0a2859f8eb44839e9073b34e6281043aef5",
-                    "native/src/protocol.rs":  "c6fc34fb83c98744b1babf8da6eec22171d05ca10e1f503cb356073673bee9e4",
-                    "native/src/runner.rs":  "12c464a47aad006d47d1023c2f225c4538907afa7dd822af2fdb3bb170d37565",
-                    "native/src/self_child.rs":  "3af9cf29b7b814cefda8e4b1746167a7d9125f986961c720ad7c0eb3fecf5a86",
-                    "native/src/transport.rs":  "e4085bd102d40793b8611aa3f21cf0dfbe99d3cd3d9d360835a1bd15724b5b3d"
-                }
+  "manifestVersion": 1,
+  "protocolVersion": 1,
+  "target": "x86_64-pc-windows-msvc",
+  "helperFile": "i-harness-windows-helper.exe",
+  "helperSha256": "438de391dfc6a9f6acf48fad20fa9d6e017e45b05b2d365049d4eb423b021ab5",
+  "protocolSha256": "b0cb25235f97f269f7dee0447a514ec2b4004cdc5908c4256e68032750617cbe",
+  "rustc": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+  "cargo": "cargo 1.94.0 (85eff7c80 2026-01-15)",
+  "compilerSetup": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat",
+  "msvcTools": "14.41.34120",
+  "buildCommand": "cargo build --release --locked --manifest-path native/Cargo.toml (VS2022 x64 environment)",
+  "windows": "Microsoft Windows NT 10.0.26200.0",
+  "schema": {
+    "repository": "https://github.com/microsoft/mxc",
+    "revision": "6cd3d58f05d3447e67109cfb75e042803b843ca4",
+    "package": "process_security_environment_spec",
+    "packageVersion": "0.8.0",
+    "path": "external/windows-sdk/ProcessSecurityEnvironment.fbs",
+    "sha256": "7d14b01850a735329da00cde4d4d2e32e463f49026a39708be9059fd64e764d3",
+    "flatbuffers": "25.12.19",
+    "windowsSys": "0.61.2"
+  },
+  "sources": {
+    "native/Cargo.lock": "4a4e28dce15e3b9fd115e99e2bc97f38aa5c53b8ab5df7e57a83744d97df9400",
+    "native/Cargo.toml": "d6a943af1098daf1223c106436791fbe573bece36ea3b1378c0e3dac20d34154",
+    "native/msys/api.h": "a3dca43c58221af97b2ae75d7ec84e9c2ba918f9550cdc39d75d86ae5f9c6693",
+    "native/msys/bridge.c": "6d0e91ff948f8ae54dc8ffad2671dfe7739a8c8810cb3d08616e366c376bfcbe",
+    "native/msys/bridge.sha256": "d6a7b6d0081a3db0ef7cdb07857cc767cb31c799bfd18aa9ff2e9dc478fd23f3",
+    "native/msys/import-path.c": "a32a9b33e7fb46031126ed95d0fb81847ab278a8397076a48e48aa8769363a23",
+    "native/src/command_line.rs": "8e82a1833473a7d25b77eb8a7da89275bec06e9f000880a17a9b51c363945b5e",
+    "native/src/error.rs": "270e71523edbe0dc256cd91c5b2bca0b1eb85ee935ae1a0245eeae7548c9faa4",
+    "native/src/ffi.rs": "164f29b04c5280b1069035a292237ee2a75b6977c4c7a6f3e6502b3c266a5e5e",
+    "native/src/job.rs": "043b1d995e788eae56dd5e82cf3bd98f0850f4897611986ba1df91990ec5ed9b",
+    "native/src/main.rs": "07d50fbb91ee93a7350b1294bea95c40ab36b96684d92778c27d09d345b9b3ec",
+    "native/src/msys_image.rs": "8c33c87ecc8090afa19331faf7d44679b4532d1d893ee7d9ef9fc8b01f8d4ccc",
+    "native/src/msys.rs": "318f301973830f5ae2d86ec87be848038bd3ac57d2a0283504bf77220ce733f2",
+    "native/src/policy.rs": "879ca290940bc01f91c4ea388a5f8cf9884bdd738e5d6b74a81aa0b73020dba9",
+    "native/src/protocol.rs": "653abf7676d7bee1e76aa2e6a8afabc13672b1a907d26c8b6cb1c5ef3b444ba7",
+    "native/src/runner.rs": "f65eb964a23fec319b02fba3773bf8cce64257949ad8e1bb569b4c253d23d95a",
+    "native/src/self_child.rs": "3af9cf29b7b814cefda8e4b1746167a7d9125f986961c720ad7c0eb3fecf5a86",
+    "native/src/transport.rs": "da250f7b8a053cbd38c8e9e141e397ec3d8900fcb90dbff17b0e86c9eff89a37"
+  },
+  "msysPty": {
+    "file": "i-harness-msys-pty.exe",
+    "sha256": "64edb20e3a5a28b27034ff6fcca0cdc7acea0eaac02f183bbaf7e1dcb617d2b5",
+    "runtime": "Caller-selected installed x86-64 MSYS runtime, observed/pinned before commit; no DLL is shipped.",
+    "buildCommand": "MSVC C /O2 /GS- /Zl; GNU ld -m i386pep --no-insert-timestamp --subsystem console -e mainCRTStartup; official MSYS crt0/import archive; native prepare binds exactly one MSYS import to the admitted absolute installed DLL",
+    "buildDependencies": [
+      {
+        "package": "msys2-runtime-devel",
+        "version": "3.6.10-6",
+        "url": "https://repo.msys2.org/msys/x86_64/msys2-runtime-devel-3.6.10-6-x86_64.pkg.tar.zst",
+        "sha256": "d50d94d36f45da93fc8ed53c91cd1c1eae38a370da1b3e00d31d0f8760e91ca9",
+        "source": "https://repo.msys2.org/msys/sources/msys2-runtime-3.6.10-6.src.tar.zst",
+        "license": "LGPL-3.0-or-later with runtime linking exception; included source notices also apply"
+      },
+      {
+        "package": "binutils",
+        "version": "2.47-1",
+        "url": "https://repo.msys2.org/msys/x86_64/binutils-2.47-1-x86_64.pkg.tar.zst",
+        "sha256": "b7ddaca6e8b63774cdb1f5ac2720963cd76f8f62ca7e2667b1b0f008ed7ecba2",
+        "source": "https://repo.msys2.org/msys/sources/binutils-2.47-1.src.tar.zst",
+        "license": "GPL-3.0-or-later; build-only, not shipped"
+      }
+    ],
+    "buildFiles": {
+      "usr/bin/ld.exe": "47f9ba070741b0ee4e95ea53d5985ab901d9c3828691c2dec045c3fb33e32e7c",
+      "usr/bin/objdump.exe": "1259abda47dc8f2586b777c4467e80a36b2075ab9f5c25f3472387cf9e36389b",
+      "usr/lib/crt0.o": "bfeb584ea9a516dd3159a22e11fb2a2822c374b41c8b5f291db359155eee8021",
+      "usr/lib/libmsys-2.0.a": "f5b6ef1d41392ea782b7b0d8acac86ca49bb967f5441362b79b3fdb76479ad89"
+    },
+    "notices": {
+      "msys-notices/CYGWIN_LICENSE": "794433752103cf4bbb4a84a1bdb8fbc150abb1762704bb35fecc9f7f820be984",
+      "msys-notices/COPYING.LIB": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "msys-notices/COPYING": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "msys-notices/SOURCES.md": "8dd4bab8e17a633c3f10279afefc464664d3b377a2fb27a88cce7d4042b667bf"
+    }
+  }
 }

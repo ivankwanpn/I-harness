@@ -468,6 +468,10 @@ export async function mountAgentTeams(
       maxMembers: cfg.maxMembers,
       startupTimeoutMs: cfg.startupTimeoutMs,
       memberStatus,
+      memberJobId: id => {
+        const member = [...state.members.values()].find(row => row.id === id)
+        return member ? sub.table.get(AgentPath.parse(`lead/${member.name}`).toString())?.jobId : undefined
+      },
     })
     const mailbox = createMailbox({
       teamId,

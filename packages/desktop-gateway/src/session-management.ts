@@ -52,6 +52,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     if (assembly) {
       if (!assembly.liveResources) throw new Error("Live resource inspection is unavailable")
       const resources = assembly.liveResources()
+      if (resources.backgroundJobs?.length) throw new Error("Session has active background producers")
       if (resources.codeCells.some(cell => cell.status === "running") || resources.terminals.some(terminal => terminal.status === "running")) throw new Error("Session has active Code Mode cells or processes")
     }
     if (!coordinator.snapshot) throw new Error("Durable session inspection is unavailable")
@@ -86,6 +87,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
         if (!ended || cells.size || new Inbox(child).pending().length || service.queueState(row.sessionId).running || service.queueState(row.sessionId).queued) throw new Error("Session has active or pending durable agents/inbox")
         const resources = service.liveAssembly?.(row.sessionId)?.liveResources?.()
         const ownerResources = assembly?.liveResources?.(row.sessionId)
+        if ([resources, ownerResources].some(resources => resources?.backgroundJobs?.length)) throw new Error("Session has active background producers")
         if ([resources, ownerResources].some(resources => resources?.codeCells.some(cell => cell.status === "running") || resources?.terminals.some(terminal => terminal.status === "running"))) throw new Error("Session has active Code Mode cells or processes")
         if (row.path) idleChildren.add(row.path)
       }
@@ -152,6 +154,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
             if (assembly) {
               if (!assembly.liveResources) throw new Error("Live resource inspection is unavailable")
               const resources = assembly.liveResources()
+              if (resources.backgroundJobs?.length) throw new Error("Session has active background producers")
               if (resources.codeCells.some(cell => cell.status === "running") || resources.terminals.some(terminal => terminal.status === "running")) throw new Error("Session has active Code Mode cells or processes")
             }
             for (const id of await coordinator.list()) if ((await coordinator.profile(id)).meta.parentSession === sessionId) throw new Error("Session has descendants; coordinated deletion is unavailable")

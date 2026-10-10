@@ -22,6 +22,7 @@ import {
   resolveHooksConfigPath,
   trustScriptPath,
   type LoadedHandler,
+  type ClaudeHookEvent,
 } from "@i-harness/hooks"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { diagnosticsFor } from "@i-harness/diagnostics"
@@ -56,7 +57,7 @@ export interface DeclaredHookRow {
   sha256: string
   status: HooksStatus
   trustScope?: "plugin"
-  sourceEvent?: "SessionStart"
+  sourceEvent?: ClaudeHookEvent
 }
 
 const HOOKS_USAGE =

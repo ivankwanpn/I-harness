@@ -389,9 +389,15 @@ describe("headless CLI (M2)", () => {
           { role: "assistant", text: "ok" },
         ],
       })
-      expect(result.exitCode).not.toBe(0)
-      expect(result.error).toContain("unknown tool: session_search")
-      // Without sessionQuery, session_search is unknown because the tool is not mounted.
+      expect(result.exitCode).toBe(0)
+      expect(result.error).toBeUndefined()
+      expect(result.finalText).toBe("ok")
+      expect(result.session!.events.filter(event => event.type === "tool/result")).toMatchObject([
+        { name: "session_search", isError: true, output: { error: "unknown tool: session_search", code: "TOOL_FAILED" } },
+      ])
+      expect(result.session!.events.filter(event => event.type === "tool/dispatch")).toEqual([])
+      // The tool remains unmounted. A lookup error is an ordered per-call answer
+      // so the model can recover; it does not abort the entire CLI request.
     })
   })
 

@@ -20,7 +20,6 @@ import { createJobRegistry } from "../src/jobs.ts"
 import { createRoleRegistry, builtinRoles } from "../src/roles.ts"
 import { createAgentTable, type ChildAgentEntry } from "../src/agent-table.ts"
 import { createSubagentTools, driveFollowups, ensureResidentAgent, sweepPendingInbox, type SubagentToolDeps } from "../src/tools.ts"
-import { composeSubagentPrompt } from "../src/child.ts"
 import { registerSubagent } from "../src/index.ts"
 import { classifyRestoredTasks, createTaskRegistry } from "../src/task-protocol.ts"
 import type { SubagentStateSnapshot } from "../src/persist.ts"
@@ -259,7 +258,11 @@ describe("ensureResidentAgent", () => {
 
     const role = deps.roles.get("general")!
     expect(requests).toHaveLength(1)
-    expect(requests[0]!.systemPrompt).toBe(composeSubagentPrompt(role.systemPrompt))
+    expect(requests[0]!.systemPrompt).toContain(role.systemPrompt)
+    expect(requests[0]!.systemPrompt).toContain('Child identity: "root/helper"; role: "general"')
+    expect(requests[0]!.systemPrompt).toContain('Available tools: ["read"]')
+    expect(requests[0]!.systemPrompt).toContain("Parent history is context supplied by the parent")
+    expect(requests[0]!.systemPrompt).toContain("Subagent contract:")
     // …and the contract is what makes the difference: the composed prompt is
     // NOT the bare role prompt, so this can never pass by both being equal.
     expect(requests[0]!.systemPrompt).not.toBe(role.systemPrompt)

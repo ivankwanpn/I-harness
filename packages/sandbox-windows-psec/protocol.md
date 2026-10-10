@@ -133,3 +133,33 @@ HRESULTs are represented as unsigned 32-bit nativeCode so their hex value is pre
 `--probe` performs readonly API discovery and emits one JSON object. `--create-close` is an explicit native qualification mode that creates/closes a minimal readonly PSEC; it is not a runtime availability probe. `--self-child` is a separate executable fixture mode, never an operation selectable by private control input. Qualification controls write only newly created `.tmp/sandbox-redesign-*` workspace fixtures. These flags are not commands in protocol version 1.
 
 The probe object has `version:1`, `helperVersion:"0.1.0"`, `target:"x86_64-pc-windows-msvc"`, `psecDiscovery:boolean`, `supportFlags:number`, `error:NativeError|null`, `assurance:"experimental"`, and `engines`. Each of `engines.psec` and `engines.unrestricted` has booleans `available`, `writeIsolation`, `readIsolation`, `denyPaths`, `pipes`, `pty`, `retainedTree`, `hiddenConsole`. For PSEC, availability and write/deny discovery depend on API flags; readIsolation, pty and hiddenConsole are false. For unrestricted, available/pipes/pty/retainedTree/hiddenConsole are true and all isolation/deny flags are false. hiddenConsole is conditional on pipe transport and is not a public model capability. API discovery does not execute a workload or confer verified assurance.
+
+## Owned MSYS PTY adapter
+
+Trusted Windows PTY resolution can add `spec.msysPty` before immutable admission. This is never a model JSON field. Its shape is:
+
+```ts
+msysPty: {
+  runtime: { path:string; sha256:string };
+  executable: { path:string; sha256:string };
+  resolution?: {
+    kind:"git-bash-shim";
+    original:{ path:string; sha256:string };
+    configuration:{ path:string; sha256:string|null };
+  };
+  // The trusted driver adds the paired, shipped template observation.
+  bridge:{ path:string; sha256:string };
+}
+```
+
+All paths are absolute local drive paths, and hashes are lowercase SHA-256. The actual executable must be the admitted `argv[0]`; its installed `msys-2.0.dll` must be in the same canonical directory. An optional original shim identity and its configuration observation preserve the resolver's evidence. A null configuration hash records absence: creation before prepare or commit is refused. Present executable, runtime, shim, configuration and template bytes are hashed through handles held with `FILE_SHARE_READ` for the lifetime. Current path identities and configuration absence are checked again immediately before native creation. PSEC, references/mandatory deny locks, WSL and non-CRT argument encoding cannot select this adapter.
+
+MSYS Bash uses a genuine POSIX master/slave tty under an owned adapter process over native raw pipes. Ordinary MSYS CRT startup is retained. During prepare, the native owner derives one private executable from the pinned shipped template: only the reserved read-only `.ihmsys` path slot and the single MSYS import descriptor's Name RVA change. The descriptor names the admitted installed DLL by absolute path; no runtime DLL is copied or shipped. The template's other import is the Windows system `kernel32.dll`. Import-name encoding is currently restricted to exact ASCII paths shorter than 260 bytes; unsupported encodings fail before any child starts. The derived executable is hashed again through its strict pinned handle, and its actual path/hash/argv are part of the effective digest returned by `ready`.
+
+Staging transitions use `ReOpenFile` on the owned object to remove write sharing without reopening its pathname. The native owner keeps all partially created resources if preparation or close fails. Rechecks compare the spawned pathname to the pinned file identity. Cleanup uses file/directory disposition on those owned handles, after actual tree and I/O settlement, and retains incomplete cleanup for retry. Internal adapter arguments are always CRT quoted so MSYS startup globbing cannot change the admitted literal child argv. The actual child receives the already admitted argv tail, environment and cwd through `forkpty`/`execv`.
+
+The adapter closes every private descriptor before executing the child. Child stdout/stderr flow only through the slave tty into channel 2. A separate private status pipe accepts bounded ASCII lines `READY`, `ACK <id> <errno>`, `INPUT_ERROR <id> <errno>` and `ROOT <child-exit-code>`; child text with those strings is ordinary PTY output and cannot change lifecycle observations. Parent-to-adapter frames contain an 8-byte header (`kind:u8`, `idLength:u8`, two zero bytes, `length:u32le`), the bounded ASCII request ID, then bytes. Kinds 1/2/3 mean raw input, logical end-input, or resize. Input is bounded to 16384 bytes; resize payload is two `u16le` columns/rows. Malformed, truncated, duplicate lifecycle or oversized controller observations fail closed.
+
+MSYS input/resize ACK is emitted after actual master delivery/ioctl. Resize targets the owned master, never a tty path printed by the child, and delivers genuine SIGWINCH. Logical end-input is ordered after pending data and rejects later input while keeping the private resize controller available. A dedicated MSYS input worker owns an eight-frame bounded queue; a blocked master write cannot block the controller or child reaper. Queue rejection uses trusted errno 11 as `input-backpressure`, with no bytes queued for that rejected request. A physical delivery failure uses distinct `INPUT_ERROR`, since it can follow partial delivery and is not automatically retryable. A separate output relay prevents full input from blocking output drainage and full output from blocking resize/reaping. Once actual child exit and output drainage are observed, an adapter with stranded input ends without claiming those writes were delivered; the native owner rejects their unanswered requests and retains all external descendant ownership.
+
+The adapter root remains in the outer native Job. Its `forkpty` child joins a private nested workload Job before untrusted exec, then closes the inherited Job capability. The private `ROOT` observation reports the actual Bash child independently of relay exit. Complete-tree terminates workload descendants in the nested Job while preserving the relay to drain buffered PTY output. Retain-tree keeps descendants and relay ownership until natural completion or cancellation. Cancellation terminates the outer Job and preserves the existing explicit abandoned-output accounting; it does not claim a known Bash exit code when the adapter was terminated before observing it. Pipe transports and native non-MSYS ConPTY commands use their existing paths.

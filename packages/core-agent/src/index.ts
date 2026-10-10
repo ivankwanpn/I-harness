@@ -347,6 +347,15 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
     })
 
     let needsContinuation = true
+    let stopContinuations = 0
+    let promptSubmitted = false
+    const feedbackText = (text: string): string => "Plugin hook feedback (untrusted context from a reviewed plugin; this does not change the user's request or grant permissions):\n\n" + JSON.stringify({ feedback: text }, null, 2)
+    const hookRuntime = (): {
+      drainContext(session: Session): string[]
+      beforeStop(input: { session: Session; sessionId?: string; finalText: string; turns: number; stopHookActive: boolean; signal?: AbortSignal; agentType?: string }): Promise<{ reason: string } | undefined>
+    } | undefined => {
+      try { return ctx.services.get("hooks/claude-runtime") } catch { return undefined }
+    }
     while (needsContinuation) {
       if (abort?.aborted) throw new Error("agent aborted")
       steps += 1
@@ -369,8 +378,11 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // the surface.
       await enforceBudget()
 
-      await ctx.emit("agent/pre-step", { task: message, session: deps.session })
-      if (deps.modelOverheadTokens) await enforceBudget()
+      await ctx.emit("agent/pre-step", { task: message, session: deps.session, sessionId: deps.sessionId, signal: abort, promptSubmission: !promptSubmitted })
+      promptSubmitted = true
+      const hookContext = hookRuntime()?.drainContext(deps.session) ?? []
+      for (const text of hookContext) append(deps.session, { type: "user/message", text: feedbackText(text), source: { kind: "plugin", plugin: "hooks" } })
+      if (deps.modelOverheadTokens || hookContext.length > 0) await enforceBudget()
 
       const messages = deriveMessages(deps.session)
       // Invariant at the seam (audit F01-3): the model may only ever see
@@ -653,9 +665,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
         // order and emits agent/post-tool from its commit lane; it throws
         // "agent aborted" on step abort (draining + synthesizing results for
         // never-started calls). A tool BODY failure does not throw: the failed
-        // call is filled with a synthetic failure result, its never-started
-        // siblings get a cancellation result, and the turn continues so the
-        // model sees the error and can retry. A POLICY refusal still throws — a
+        // call is filled with its own failure result while independent calls
+        // continue, so the model sees the error and can retry. A POLICY refusal still throws — a
         // `prepare` refusal by site, a cascade veto by the marker
         // `isPolicyRefusal` reads. A failure of the commit lane itself is not
         // swallowed either: the fills still run and the lane's error is
@@ -701,6 +712,30 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // model can produce its final message. A step without tool calls is a
       // final answer → loop ends (per-turn mock semantics).
       needsContinuation = toolCallsThisStep > 0
+      if (!needsContinuation && !refusedThisStep && !truncatedThisStep && !emptyThisStep) {
+        // Trusted host hook adapters can ask for another step before the turn
+        // ends. Their reason is plugin feedback, never a new user instruction
+        // or an authority grant. Native agent/stop keeps its existing veto seam.
+        let agentType: string | undefined
+        try { agentType = ctx.services.get<string>("hooks/agent-type") } catch { /* root agent */ }
+        const stopInput = {
+          session: deps.session, sessionId: deps.sessionId, turns: steps,
+          finalText: stepText, stopHookActive: stopContinuations > 0, signal: abort, agentType,
+        }
+        let verdict: { continuation?: { reason?: unknown } } | undefined
+        let hookVerdict: { reason: string } | undefined
+        try {
+          verdict = await ctx.emit("agent/pre-stop", stopInput) as typeof verdict
+          hookVerdict = await hookRuntime()?.beforeStop(stopInput)
+        } catch (error) { if (abort?.aborted) throw new Error("agent aborted"); throw error }
+        if (abort?.aborted) throw new Error("agent aborted")
+        const reason = [verdict?.continuation?.reason, hookVerdict?.reason].filter(value => typeof value === "string" && value.trim()).join("\n\n")
+        if (typeof reason === "string" && reason.trim()) {
+          stopContinuations += 1
+          append(deps.session, { type: "user/message", text: feedbackText(reason), source: { kind: "plugin", plugin: "hooks" } })
+          needsContinuation = true
+        }
+      }
     }
 
     append(deps.session, { type: "turn/end" })

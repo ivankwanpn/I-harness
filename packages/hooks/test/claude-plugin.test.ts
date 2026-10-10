@@ -52,13 +52,14 @@ describe("explicit Claude plugin SessionStart adaptation", () => {
     expect(loaded!.spec.trust.script).toBe(f.configPath)
   })
 
-  it("reports unsupported handlers individually and retains the supported startup command", async () => {
+  it("reports unsupported handlers individually and retains supported startup and tool commands", async () => {
     const body = { hooks: { ...document().hooks, PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "echo pre" }] }], SessionStart: [{ hooks: [{ type: "command", command: "echo supported" }, { type: "command", command: "echo background", async: true }, { type: "prompt", prompt: "inspect" }, { type: "command", command: "echo conditional", if: "${CLAUDE_PLUGIN_ROOT}/check" }] }] } }
     const f = await fixture(body), diagnostics: Array<{ id: string; event: string; message: string }> = []
     const handlers = await loadHooksConfig(f.configPath, f.plugin, undefined, { claudePluginRoot: f.plugin, onUnsupported: diagnostic => diagnostics.push(diagnostic) })
-    expect(handlers).toHaveLength(1)
-    expect(diagnostics).toHaveLength(4)
-    expect(diagnostics.map(row => row.event)).toEqual(["SessionStart", "SessionStart", "SessionStart", "PreToolUse"])
+    expect(handlers).toHaveLength(2)
+    expect(handlers.map(handler => handler.spec.event)).toEqual(["session/start", "pre-tool"])
+    expect(diagnostics).toHaveLength(3)
+    expect(diagnostics.map(row => row.event)).toEqual(["SessionStart", "SessionStart", "SessionStart"])
     expect(diagnostics.every(row => row.id && row.message)).toBe(true)
   })
 

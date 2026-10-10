@@ -7,10 +7,10 @@ import type { Tool } from "@i-harness/core-tools"
 import { decodeVideo } from "./video-decoder.ts"
 import { VIDEO_LIMITS, type VideoAudioAnalyzer, type VideoAudioAnalysis, type VideoDecoder } from "./types.ts"
 export { VIDEO_LIMITS } from "./types.ts"
-export type { DecodedVideo, VideoAudioAnalyzer, VideoAudioAnalysis, VideoAudioInput, VideoDecoder, VideoDecodeInput } from "./types.ts"
+export type { VideoAudioAnalyzer, VideoAudioAnalysis, VideoAudioInput, VideoDecoder } from "./types.ts"
 
-export interface ReadVideoInput { path: string; startSeconds?: number; durationSeconds?: number; frameCount?: number; question?: string }
-export interface ReadVideoResult {
+interface ReadVideoInput { path: string; startSeconds?: number; durationSeconds?: number; frameCount?: number; question?: string }
+interface ReadVideoResult {
   status: "complete" | "partial" | "error"
   coverage?: { startSeconds: number; endSeconds: number; sourceDurationSeconds: number; truncated: boolean; frameTimestamps: "approximate"; note: string }
   frames?: { imageIndex: number; timestampSeconds: number }[]

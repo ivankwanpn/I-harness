@@ -3,8 +3,11 @@ import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, existsSync 
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRequire } from "node:module"
+import { createHash } from "node:crypto"
 // @ts-expect-error The packaging helper runs directly as native ESM JavaScript.
 import { copyRuntimePackage, runtimePackageRoot } from "../scripts/runtime-copy.mjs"
+// @ts-expect-error The native asset gate is also an ESM packaging helper.
+import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
 
 it("ships native packages exposing only a package subpath and native binary", () => {
   const root = mkdtempSync(join(tmpdir(), "ih-native-package-root-"))
@@ -58,5 +61,77 @@ it("finds the actual package manifest when package.json resolves into a nested m
     writeFileSync(join(pkg, "package.json"), JSON.stringify({ name: "wrapped", version: "1.0.0", exports: { "./package.json": "./dist/cjs/package.json" }, dependencies: { shared: "1" } }))
     writeFileSync(join(pkg, "dist", "cjs", "package.json"), JSON.stringify({ type: "commonjs" }))
     expect(runtimePackageRoot("wrapped", root)).toBe(pkg)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it("refuses a changed or missing PTY adapter even when the helper and protocol still match", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-pty-asset-integrity-"))
+  const artifacts = join(root, "artifacts", "win32-x64")
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex")
+  try {
+    mkdirSync(artifacts, { recursive: true })
+    writeFileSync(join(artifacts, "i-harness-windows-helper.exe"), "helper-fixture")
+    const adapter = join(artifacts, "i-harness-msys-pty.exe")
+    writeFileSync(adapter, "adapter-fixture")
+    writeFileSync(join(root, "protocol.md"), "protocol-fixture")
+    const manifest = { manifestVersion: 1, protocolVersion: 1, target: "x86_64-pc-windows-msvc",
+      helperFile: "i-harness-windows-helper.exe", helperSha256: hash("helper-fixture"), protocolSha256: hash("protocol-fixture"),
+      sources: {}, msysPty: { file: "i-harness-msys-pty.exe", sha256: hash("adapter-fixture"), notices: {} as Record<string, string> } }
+    for (const name of ["CYGWIN_LICENSE", "COPYING.LIB", "COPYING", "SOURCES.md"]) {
+      const relative = `msys-notices/${name}`, content = `notice-fixture-${name}`
+      mkdirSync(join(artifacts, "msys-notices"), { recursive: true })
+      writeFileSync(join(artifacts, relative), content)
+      manifest.msysPty.notices[relative] = hash(content)
+    }
+    writeFileSync(join(artifacts, "manifest.json"), JSON.stringify(manifest))
+    writeFileSync(join(root, "qualification.json"), JSON.stringify({ helperSha256: manifest.helperSha256,
+      protocolSha256: manifest.protocolSha256, msysPtyTemplateSha256: manifest.msysPty.sha256,
+      assurance: "experimental", observationScope: "historical-one-host" }))
+    expect(verifyNativeAssets(root).helperSha256).toBe(manifest.helperSha256)
+    writeFileSync(join(root, "qualification.json"), JSON.stringify({ helperSha256: manifest.helperSha256,
+      protocolSha256: manifest.protocolSha256, msysPtyTemplateSha256: hash("different-candidate"),
+      assurance: "experimental", observationScope: "historical-one-host" }))
+    expect(() => verifyNativeAssets(root)).toThrow(/qualification identity/i)
+    writeFileSync(join(root, "qualification.json"), JSON.stringify({ helperSha256: manifest.helperSha256,
+      protocolSha256: manifest.protocolSha256, msysPtyTemplateSha256: manifest.msysPty.sha256,
+      assurance: "experimental", observationScope: "historical-one-host" }))
+    writeFileSync(adapter, "changed-adapter")
+    expect(() => verifyNativeAssets(root)).toThrow(/MSYS.*digest/i)
+    rmSync(adapter)
+    expect(() => verifyNativeAssets(root)).toThrow(/ENOENT/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+it("refuses a native runtime with missing or altered required source and license notices", () => {
+  const root = mkdtempSync(join(tmpdir(), "ih-pty-notice-integrity-")), artifacts = join(root, "artifacts", "win32-x64")
+  const hash = (text: string) => createHash("sha256").update(text).digest("hex")
+  try {
+    mkdirSync(join(artifacts, "msys-notices"), { recursive: true })
+    writeFileSync(join(artifacts, "i-harness-windows-helper.exe"), "helper-fixture")
+    writeFileSync(join(artifacts, "i-harness-msys-pty.exe"), "adapter-fixture")
+    writeFileSync(join(root, "protocol.md"), "protocol-fixture")
+    const notices: Record<string, string> = {}
+    for (const name of ["CYGWIN_LICENSE", "COPYING.LIB", "COPYING", "SOURCES.md"]) {
+      const relative = `msys-notices/${name}`, content = `notice-fixture-${name}`
+      writeFileSync(join(artifacts, relative), content)
+      notices[relative] = hash(content)
+    }
+    const manifest = { manifestVersion: 1, protocolVersion: 1, target: "x86_64-pc-windows-msvc",
+      helperFile: "i-harness-windows-helper.exe", helperSha256: hash("helper-fixture"), protocolSha256: hash("protocol-fixture"),
+      sources: {}, msysPty: { file: "i-harness-msys-pty.exe", sha256: hash("adapter-fixture"), notices } }
+    writeFileSync(join(artifacts, "manifest.json"), JSON.stringify(manifest))
+    writeFileSync(join(root, "qualification.json"), JSON.stringify({ helperSha256: manifest.helperSha256,
+      protocolSha256: manifest.protocolSha256, msysPtyTemplateSha256: manifest.msysPty.sha256,
+      assurance: "experimental", observationScope: "historical-one-host" }))
+    expect(verifyNativeAssets(root).helperSha256).toBe(manifest.helperSha256)
+    const notice = join(artifacts, "msys-notices", "CYGWIN_LICENSE")
+    rmSync(notice)
+    expect(() => verifyNativeAssets(root)).toThrow(/notices|ENOENT/i)
+    writeFileSync(notice, "changed-license")
+    expect(() => verifyNativeAssets(root)).toThrow(/notice.*digest/i)
+    writeFileSync(notice, "notice-fixture-CYGWIN_LICENSE")
+    delete manifest.msysPty.notices["msys-notices/SOURCES.md"]
+    writeFileSync(join(artifacts, "manifest.json"), JSON.stringify(manifest))
+    expect(() => verifyNativeAssets(root)).toThrow(/notice.*identity/i)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })

@@ -61,6 +61,8 @@ Configure custom endpoints, models, context windows and output limits, and chang
 
 Connect MCP servers, use Skills, manage plugins and run workflows. Subagents and Teams support division of work, messages, status and cancellation. Tools follow the current role, access scope and approval configuration.
 
+Plugin sources and declarations normalize into IH's unified runtime format. Existing sources, Skills, Commands, MCP, Agents and native hooks retain the shared mounting and authorization path; supported Claude synchronous command hooks use that path too. See [plugin compatibility](docs/PLUGIN-COMPATIBILITY.md) for events, limits and executable prerequisites.
+
 ### Keep longer tasks usable
 
 Code Mode lets agents compose tools with JavaScript, filter or aggregate results in the script, and return the relevant content to the model. Tools can be discovered on demand. Long outputs have bounded previews and retained references; successfully saved JSON state can survive session reconstruction.

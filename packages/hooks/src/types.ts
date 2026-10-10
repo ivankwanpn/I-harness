@@ -44,8 +44,10 @@ export interface HookOutput {
   decision?: HookDecision
   block?: boolean
   reason?: string
-  /** Produced only by the opt-in Claude SessionStart output adapter. */
+  /** Runtime output of a trusted Claude adapter; native v1 does not accept it. */
   additionalContext?: string
+  /** Claude Stop/SubagentStop feedback, consumed before the native stop veto. */
+  continuation?: string
 }
 
 /** Per-event context the handler receives on stdin (JSON). */
@@ -83,7 +85,7 @@ export interface HookHandlerSpec {
   /** Runtime-only metadata. Never accepted from a native on-disk declaration. */
   claude?: {
     pluginRoot: string
-    event: "SessionStart"
+    event: ClaudeHookEvent
     matcher?: string
     shell: "bash" | "sh"
     trustScope: "plugin-tree-v1"
@@ -91,6 +93,9 @@ export interface HookHandlerSpec {
 }
 
 export type ClaudeSessionSource = "startup" | "resume" | "clear" | "compact"
+export type ClaudeHookEvent = "SessionStart" | "SessionEnd" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop" | "SubagentStop" | "Notification"
+/** Structural session seam: the adapter projects copies, never changes history. */
+export interface ClaudeHookSession { readonly events: readonly unknown[] }
 export interface ClaudeHookDiagnostic { id: string; event: string; message: string }
 export interface ClaudePluginHooksOptions {
   /** Explicit plugin mount identity; native/global configs never opt themselves in. */
@@ -142,6 +147,11 @@ export class HookOutputError extends Error {
     super(message)
     this.name = "HookOutputError"
   }
+}
+
+/** Owner cancellation is distinguishable from a hook policy/output failure. */
+export class HookOwnerAbortError extends HookOutputError {
+  constructor(handlerId: string) { super(`hook ${handlerId}: aborted by owner`); this.name = "HookOwnerAbortError" }
 }
 
 /** A gate/block veto: tool blocked or phase stopped (reason carried). */

@@ -83,7 +83,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         message: { type: "string", description: "Initial task for the subagent." },
         task_name: { type: "string", description: "Short name used in the agent path." },
         agent_type: { type: "string", description: "Role name (default general)." },
-        fork_turns: { type: ["string", "number"], description: "none, all, or N." },
+        fork_turns: { type: ["string", "number"], description: "Parent history to inherit: none (default), all, or a positive number of turns. Inherited history is parent context; the child's role still restricts its tools." },
         background: { type: "boolean", description: "false = block until the task settles (escape hatch); default true = return immediately and notify the parent on completion." },
       },
       required: ["message", "task_name"],
@@ -91,7 +91,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     isReadOnly: false,
     execute: async (args, exec) => {
       const role = deps.roles.get(args.agent_type ?? "general")
-      if (!role) throw new Error(`unknown role: ${args.agent_type}`)
+      if (!role) throw new Error(`unknown role: ${args.agent_type}; register a capability definition with a system prompt and allowed tools. A model selection alone does not define a role.`)
       // M24a (B2): max_depth guard — reject spawning once the caller is already
       // at (or beyond) the nesting limit. Default 1 keeps today's behavior
       // (top-level callers are depth 0; subagents cannot nest).
@@ -364,8 +364,8 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const closeTool: Tool<{ target: string }, { previous_status: string }> = {
     name: "close_agent",
-    description: "Close a subagent and reclaim its resources (abort execution, unmount child scope, remove from the agent and job tables). Its task record terminalizes as cancelled.",
-    inputSchema: { type: "object", properties: { target: { type: "string" } }, required: ["target"] },
+    description: "Close a subagent or teammate by its exact returned management path: root/<task> from spawn_agent or lead/<name> from spawn_teammate/list_members. Aborts and drains execution, unmounts its scope, and removes the runtime; its job result remains available. Its outstanding task terminalizes as cancelled.",
+    inputSchema: { type: "object", properties: { target: { type: "string", description: "Exact agent path from spawn_agent, list_agents, or member.agentPath from spawn_teammate/list_members. Preserve its root/ or lead/ prefix." } }, required: ["target"] },
     isReadOnly: false,
     execute: async (args) => {
       const entry = deps.table.get(args.target)
@@ -473,13 +473,17 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const jobListTool: Tool<Record<string, never>, { jobs: { id: string; kind: string; status: string; label: string }[] }> = {
+  const jobListTool: Tool<Record<string, never>, { jobs: { id: string; kind: string; status: string; label: string; agent_path?: string; session_id?: string }[] }> = {
     name: "job_list",
     description: "List your background jobs (subagent, shell, and workflow) with ids, kinds, and statuses.",
     inputSchema: { type: "object", properties: {} },
     isReadOnly: true,
     execute: async () => {
-      const sub = deps.jobs.list("root").map((j) => ({ id: j.id, kind: j.kind, status: j.status, label: j.label }))
+      const sub = deps.jobs.list("root").map((j) => {
+        const entry = [...deps.table.entries().values()].find(row => row.jobId === j.id)
+        return { id: j.id, kind: j.kind, status: j.status, label: j.label,
+          ...(entry ? { agent_path: entry.path, ...(entry.sessionId ? { session_id: entry.sessionId } : {}) } : {}) }
+      })
       const shell = deps.exec.listJobs().map((v) => ({ id: v.id, kind: "bash", status: v.status, label: v.id }))
       // M24b (spec §3.3): workflow jobs join the index as kind "workflow".
       const workflow = deps.workflow
@@ -673,7 +677,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // mirrored those appends in the first place.
   const childCoordinator = deps.childSessions?.coordinator
   const childSessionId = entry.sessionId
-  const codeModeMount = deps.codeModeFactory?.(childCtx, childReg, {
+  const codeModeMount = role.tools.length === 0 ? undefined : deps.codeModeFactory?.(childCtx, childReg, {
     session: entry.session, sessionId: childSessionId, config: deps.codeMode,
     ...(childCoordinator !== undefined && childSessionId !== undefined ? { flush: () => childCoordinator.flush(childSessionId) } : {}),
   })
@@ -682,7 +686,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   // COMPOSED prompt — so a rebuilt child silently lost SUBAGENT_PROMPT_CONTRACT
   // (scope / delegation / result-delivery), which child.ts's own comment says
   // rides "every child agent". Same composer, same place, one call site each.
-  const childPrompt = composeSubagentPrompt(role.systemPrompt)
+  const childPrompt = composeSubagentPrompt(role.systemPrompt, { path: entry.path, role: role.name, tools: modelToolSchemas().map(tool => tool.name) })
   const systemPrompt = deps.inheritedSystemContext ? () => {
     const inherited = deps.inheritedSystemContext!(entry.session)
     return inherited ? `${childPrompt}\n\n${inherited}` : childPrompt
@@ -753,10 +757,11 @@ function followupDepsWithRebuild(deps: SubagentToolDeps): FollowupDeps {
 }
 
 function parseForkTurns(value: string | number | undefined): "none" | "all" | number {
-  if (value === undefined || value === "all") return "all"
-  if (value === "none") return "none"
+  if (value === undefined || value === "none") return "none"
+  if (value === "all") return "all"
   const n = typeof value === "number" ? value : Number(value)
-  return Number.isInteger(n) && n > 0 ? n : "all"
+  if (Number.isInteger(n) && n > 0) return n
+  throw new Error("fork_turns must be none, all, or a positive integer")
 }
 
 // Drain all unconsumed durable inbox events as serialized turns on the child.

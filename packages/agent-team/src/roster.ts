@@ -25,6 +25,8 @@ export interface RosterDeps {
   // live child status accessor (subagent table entry status by member id);
   // used to map active members: running->running, waiting->idle, else->inactive.
   memberStatus?: (id: string) => string
+  /** The job belonging to this mounted child, if its runtime remains present. */
+  memberJobId?: (id: string) => string | undefined
   // recovery probe: does the child session durably exist with the initial
   // prompt? Any failure (unknown session, lost log, truncated prompt) returns
   // false. Used by reconcileProvisioning (spec §4.1 step 6 / §8.3).
@@ -53,9 +55,9 @@ export function createRoster(deps: RosterDeps) {
     return "inactive"
   }
 
-  function listMembers(): TeamMemberView[] {
-    const lead: TeamMemberView = { id: deps.teamId, name: "lead", role: "lead", status: "running", diagnostics: [] }
-    const members: TeamMemberView[] = [...deps.state.members.values()].map((m) => ({
+  function memberView(m: TeamMemberSnapshot): TeamMemberView {
+    const jobId = deps.memberJobId?.(m.id)
+    return {
       id: m.id,
       name: m.name,
       role: "teammate" as const,
@@ -63,7 +65,14 @@ export function createRoster(deps: RosterDeps) {
       description: m.description,
       context: m.context,
       diagnostics: [],
-    }))
+      agentPath: AgentPath.parse(`lead/${m.name}`).toString(),
+      ...(m.sessionId ? { sessionId: m.sessionId } : {}),
+      ...(jobId ? { jobId } : {}),
+    }
+  }
+  function listMembers(): TeamMemberView[] {
+    const lead: TeamMemberView = { id: deps.teamId, name: "lead", role: "lead", status: "running", diagnostics: [] }
+    const members = [...deps.state.members.values()].map(memberView)
     return [lead, ...members]
   }
 
@@ -129,7 +138,7 @@ export function createRoster(deps: RosterDeps) {
       if (state.members.get(name)?.phase !== "provisioning") throw new TeamError(TEAM_CODES.PROVISIONING_CONFLICT, `member "${name}" already reconciled`)
       return { events: [{ type: "team/member", version: 1, teamId: deps.teamId, member: active }], result: undefined }
     })
-    return { id: active.id, name: active.name, role: "teammate", status: liveStatus(active.id), description: active.description, context: active.context, diagnostics: [] }
+    return memberView(active)
   }
 
   // Recovery path (spec §4.1 step 6 / §8.3): a crash between the provisioning

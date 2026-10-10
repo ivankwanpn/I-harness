@@ -2,6 +2,8 @@ mod command_line;
 mod error;
 mod ffi;
 mod job;
+mod msys;
+mod msys_image;
 mod policy;
 mod protocol;
 mod runner;

@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto'
 import {realpath} from 'node:fs/promises'
 import {join} from 'node:path'
 import {createContextOutputService,type ContextOutputConfig,type ContextResultRef} from '@i-harness/context-output'
-import {createCodeRetrievalService,type CodeRetrievalConfig} from '@i-harness/code-retrieval'
+import {createCodeRetrievalService,type CodeRetrievalConfig,type CodeRetrievalOptions} from '@i-harness/code-retrieval'
 import type {SessionCoordinator} from '@i-harness/session-persistence'
 import type {SessionProjectContext} from '@i-harness/session-executor'
 import {createNativeCodeSourceReader,type NativeReferenceSource} from './context-source-reader.ts'
@@ -16,6 +16,7 @@ export async function createNativeContextRuntime(options:{
   contextConfig?:Partial<ContextOutputConfig>;codeConfig?:Partial<CodeRetrievalConfig>
   references?:NativeReferenceSource[]|((workspaceKey:string)=>NativeReferenceSource[]);resolveCredential?(ref:string):string|undefined
   visibleRefsFor?(sessionId:string):Promise<readonly ContextResultRef[]>
+  registerJob?:CodeRetrievalOptions['registerJob']
 }) {
   const canonical=await realpath(options.workspace)
   const workspaceKey=createHash('sha256').update(pathKey(canonical)).digest('hex')
@@ -52,7 +53,7 @@ export async function createNativeContextRuntime(options:{
         return sourceId==='workspace'||references.some(ref=>ref.id===sourceId)
       }catch{return false}
     }})
-  codeRetrieval=createCodeRetrievalService({root:join(options.storageRoot,'code-retrieval'),workspaceId:workspaceKey,reader,config:options.codeConfig,resolveCredential:options.resolveCredential})
+  codeRetrieval=createCodeRetrievalService({root:join(options.storageRoot,'code-retrieval'),workspaceId:workspaceKey,reader,config:options.codeConfig,resolveCredential:options.resolveCredential,registerJob:options.registerJob})
   async function autoRefresh(){
     const status=codeRetrieval.status()
     if(closed||refreshing||!status.enabled||!status.config.autoRefresh||status.activeJobs)return

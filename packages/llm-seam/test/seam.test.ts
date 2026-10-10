@@ -36,18 +36,18 @@ it("uses ordered replay only when every native block still matches neutral conte
   expect(replayBlockOrder([...order, { kind: "tool" as const, index: 0 }], "after", ["thought"], ["tool"], (text) => text)).toBeUndefined()
 })
 
-import { projectImagesForTextModel } from "../src/index.ts"
+import { projectImagesForProvider } from "../src/index.ts"
 
-describe("M14 projectImagesForTextModel", () => {
+describe("M14 projectImagesForProvider", async () => {
   const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
-  it("replaces image parts with a text placeholder and keeps text parts", () => {
-    const out = projectImagesForTextModel([
+  it("replaces image parts with a text placeholder and keeps text parts", async () => {
+    const out = await projectImagesForProvider([
       { role: "user", content: [
         { type: "text", text: "look" },
         { type: "image", image: { mediaType: "image/png", dataBase64: PNG } },
       ]},
-    ])
+    ], false)
     expect(out[0]).toEqual({
       role: "user",
       content: [
@@ -57,28 +57,28 @@ describe("M14 projectImagesForTextModel", () => {
     })
   })
 
-  it("leaves string content untouched", () => {
-    const out = projectImagesForTextModel([{ role: "user", content: "plain" }])
+  it("leaves string content untouched", async () => {
+    const out = await projectImagesForProvider([{ role: "user", content: "plain" }], false)
     expect(out).toEqual([{ role: "user", content: "plain" }])
   })
 
-  it("masks dataBase64 inside tool-role string content (M15 I3 close)", () => {
+  it("masks dataBase64 inside tool-role string content (M15 I3 close)", async () => {
     const payload = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    const out = projectImagesForTextModel([
+    const out = await projectImagesForProvider([
       { role: "tool", toolCallId: "c1", content: `{"ok":true,"images":[{"mediaType":"image/png","dataBase64":"${payload}"}]}` },
-    ])
+    ], false)
     const content = out[0]!.content as string
     expect(content).not.toContain(payload) // raw bytes never reach a text-only model
     expect(content).toContain(`"dataBase64":"[image omitted: base64:${payload.slice(0, 8)}]"`)
     expect(content).toContain(`"ok":true`) // the rest of the JSON survives
   })
 
-  it("masks multiple base64 occurrences in one tool string", () => {
+  it("masks multiple base64 occurrences in one tool string", async () => {
     const p1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     const p2 = "aGVsbG8gd29ybGQgdGhpcyBpcyBhIHNlY29uZCBpbWFnZSBwYXlsb2FkISEh"
-    const out = projectImagesForTextModel([
+    const out = await projectImagesForProvider([
       { role: "tool", toolCallId: "c2", content: `[{"dataBase64":"${p1}"},{"dataBase64":"${p2}"}]` },
-    ])
+    ], false)
     const content = out[0]!.content as string
     expect(content).not.toContain(p1)
     expect(content).not.toContain(p2)
@@ -86,9 +86,9 @@ describe("M14 projectImagesForTextModel", () => {
     expect(content).toContain(`base64:${p2.slice(0, 8)}]`)
   })
 
-  it("leaves user/assistant string content untouched even when it resembles base64", () => {
+  it("leaves user/assistant string content untouched even when it resembles base64", async () => {
     const sneaky = `{"dataBase64":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="}`
-    const out = projectImagesForTextModel([{ role: "user", content: sneaky }])
+    const out = await projectImagesForProvider([{ role: "user", content: sneaky }], false)
     expect(out[0]!.content).toBe(sneaky)
   })
 })

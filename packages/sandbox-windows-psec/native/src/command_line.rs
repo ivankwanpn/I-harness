@@ -6,6 +6,9 @@ pub fn quote(arg: &str) -> String {
     {
         return arg.to_string();
     }
+    quote_always(arg)
+}
+pub fn quote_always(arg: &str) -> String {
     let mut out = String::from("\"");
     let mut slashes = 0;
     for c in arg.chars() {

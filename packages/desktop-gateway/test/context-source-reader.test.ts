@@ -29,13 +29,13 @@ describe('native Code Context admitted source reader', () => {
     expect(await readFile(join(external,'参考.ts'),'utf8')).toBe('export const 核準 = true')
     const first = snapshots.find(file=>file.path==='main.ts')!
     const hit = {...first,generation:1,startLine:1,endLine:1,startOffset:0,endOffset:first.text.length,score:1}
-    expect(await reader.revalidate({sessionId:'allowed'},hit)).toBe(true)
+    expect(await reader.revalidate({sessionId:'allowed'},hit)).toEqual({valid:true})
     await writeFile(join(root,'.gitignore'),'ignored.ts\nmain.ts\n')
-    expect(await reader.revalidate({sessionId:'allowed'},hit)).toBe(false)
+    expect(await reader.revalidate({sessionId:'allowed'},hit)).toEqual({valid:false,reason:'source-ignored'})
     await writeFile(join(root,'.gitignore'),'ignored.ts\n')
     await writeFile(join(root,'main.ts'),'changed')
-    expect(await reader.revalidate({sessionId:'allowed'},hit)).toBe(false)
-    expect(await reader.revalidate({sessionId:'denied'},hit)).toBe(false)
+    expect(await reader.revalidate({sessionId:'allowed'},hit)).toEqual({valid:false,reason:'source-content-changed'})
+    expect(await reader.revalidate({sessionId:'denied'},hit)).toEqual({valid:false,reason:'source-unavailable'})
   })
 
   it('refuses unknown sources and revokes removed reference visibility', async () => {
@@ -46,7 +46,7 @@ describe('native Code Context admitted source reader', () => {
     expect(snapshots).toHaveLength(1)
     const first=snapshots[0]!, hit={...first,generation:1,startLine:1,endLine:1,startOffset:0,endOffset:first.text.length,score:1}
     references=[]
-    expect(await reader.revalidate({sessionId:'s'},hit)).toBe(false)
+    expect(await reader.revalidate({sessionId:'s'},hit)).toEqual({valid:false,reason:'source-unavailable'})
     await expect((async()=>{for await(const file of reader.snapshots({sessionId:'s'},{sourceIds:['unknown'],config})) void file})()).rejects.toThrow()
   })
 })

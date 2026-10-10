@@ -23,7 +23,7 @@ export interface JobRegistry {
   // verbatim so persisted job ids survive resume; duplicates fail loud.
   // Task 4.4: `startedAt` (optional, restore path) seeds the creation stamp —
   // the live registry mints Date.now() when absent.
-  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number): { id: string }
+  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void): { id: string; finish?(status:Exclude<JobStatus,"running">,output:string):boolean }
   // M24a (G2/Ruling M24a-P4): returns false for an unknown id (observable
   // instead of a silent no-op). Existing callers may ignore the return.
   // Task 4.4: the patch may also carry startedAt/endedAt — the restore path
@@ -40,6 +40,8 @@ export interface JobRegistry {
 
 export function createJobRegistry(): JobRegistry {
   const records = new Map<string, JobRecord>()
+  // Live cancellation authority is process-local and never part of snapshots.
+  const cancellation = new Map<string, () => void>()
   const counters = new Map<string, number>()
   function nextId(kind: string): string {
     const n = (counters.get(kind) ?? 0) + 1
@@ -47,7 +49,7 @@ export function createJobRegistry(): JobRegistry {
     return `${kind}-${n}`
   }
   return {
-    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number) {
+    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void) {
       const resolved = id ?? nextId(kind)
       // Fail loud on a persisted-id collision: silent re-count would break
       // post-resume jobId links (agent-table entries + followups).
@@ -55,6 +57,7 @@ export function createJobRegistry(): JobRegistry {
       // Task 4.4: start stamp — explicit (restore path) or minted now. A
       // restored terminal job's endedAt is replayed through updateJob below.
       records.set(resolved, { id: resolved, kind, label, status: "running", output: "", owner, terminal: false, startedAt: startedAt ?? Date.now() })
+      if (cancel) cancellation.set(resolved, cancel)
       // Ruling M24a-T1a: seed the per-kind counter from an explicitly
       // registered id ("<kind>-<n>"), so the auto generator continues AFTER
       // the highest known id. Without this, restoring a snapshot that
@@ -66,7 +69,17 @@ export function createJobRegistry(): JobRegistry {
       // check above runs first), and is O(1) instead of scan-per-spawn.
       const m = id !== undefined ? new RegExp(`^${kind}-(\\d+)$`).exec(id) : null
       if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
-      return { id: resolved }
+      let settled=false
+      return { id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running">,output:string) {
+        const rec=records.get(resolved)
+        if(!rec)return false
+        // Only this registered producer can enrich its terminal row. A late
+        // success cannot replace a recorded kill, and publication is one-shot.
+        if(settled || rec.terminal&&rec.status!==status)return true
+        rec.status=status;rec.output=output;rec.terminal=true;rec.endedAt??=Date.now()
+        cancellation.delete(resolved);settled=true
+        return true
+      } } : {}) }
     },
     updateJob(id: string, patch: Partial<Pick<JobSnapshot, "status" | "output" | "startedAt" | "endedAt">>): boolean {
       const rec = records.get(id)
@@ -80,7 +93,7 @@ export function createJobRegistry(): JobRegistry {
       if (patch.status === "running") { rec.terminal = false; rec.endedAt = undefined }
       if (patch.status !== undefined) rec.status = patch.status
       if (patch.output !== undefined) rec.output = patch.output
-      if (rec.status !== "running") { rec.terminal = true; rec.endedAt = rec.endedAt ?? Date.now() }
+      if (rec.status !== "running") { rec.terminal = true; rec.endedAt = rec.endedAt ?? Date.now(); cancellation.delete(id) }
       return true
     },
     read(id: string) {
@@ -120,6 +133,10 @@ export function createJobRegistry(): JobRegistry {
       const rec = records.get(id)
       if (!rec) throw new Error(`unknown job: ${id}`)
       if (rec.terminal) return "already-finished"
+      // A failed request must stay observable/retryable rather than marking
+      // work killed while it is still running.
+      cancellation.get(id)?.()
+      cancellation.delete(id)
       rec.status = "killed"
       rec.terminal = true
       rec.endedAt = rec.endedAt ?? Date.now()

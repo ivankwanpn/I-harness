@@ -20,7 +20,8 @@ test("bundled native verifier resolves shipped assets and refuses corrupt helper
   const run = () => spawnSync(process.execPath, [join(out, "probe.mjs")], { encoding: "utf8" })
   let result = run()
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395/)
+  const manifest = JSON.parse(readFileSync(join(pkg, "artifacts/win32-x64/manifest.json"), "utf8"))
+  assert.equal(JSON.parse(result.stdout).sha256, manifest.helperSha256)
   const helper = join(assets, "artifacts/win32-x64/i-harness-windows-helper.exe")
   const bytes = readFileSync(helper); bytes[0] ^= 1; writeFileSync(helper, bytes)
   result = run()
@@ -35,7 +36,7 @@ test("packaging refuses a missing helper, changed source and mismatched qualific
   const fixture=mkdtempSync(join(root,".tmp/sandbox-redesign-asset-build-"))
   const source=join(fixture,"source"),out=join(fixture,"out"),pkg=join(root,"packages/sandbox-windows-psec")
   const manifest=verifyNativeAssets(pkg,{sources:true})
-  for(const file of ["artifacts/win32-x64/manifest.json","artifacts/win32-x64/i-harness-windows-helper.exe","protocol.md","qualification.json",...Object.keys(manifest.sources)]) {
+  for(const file of ["artifacts/win32-x64/manifest.json","artifacts/win32-x64/i-harness-windows-helper.exe",`artifacts/win32-x64/${manifest.msysPty.file}`,...Object.keys(manifest.msysPty.notices).map(file=>`artifacts/win32-x64/${file}`),"protocol.md","qualification.json",...Object.keys(manifest.sources)]) {
     mkdirSync(dirname(join(source,file)),{recursive:true});cpSync(join(pkg,file),join(source,file))
   }
   copyNativeAssets(source,out);assert.equal(verifyNativeAssets(out).helperSha256,manifest.helperSha256)

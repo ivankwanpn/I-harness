@@ -4,12 +4,12 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import { PNG } from "../../image-validation/test/fixtures.ts"
-import { createReadVideoTool, type DecodedVideo, type VideoDecoder, type VideoAudioAnalyzer } from "../src/index.ts"
+import { createReadVideoTool, type VideoDecoder, type VideoAudioAnalyzer } from "../src/index.ts"
 
 let workspace: string
 beforeEach(async () => { workspace = await mkdtemp(join(tmpdir(), "ih-media-test-")); await writeFile(join(workspace, "clip.mp4"), "fixture") })
 afterEach(async () => { await rm(workspace, { recursive: true, force: true }) })
-const decoded = (audio = true): DecodedVideo => ({
+const decoded = (audio = true): Awaited<ReturnType<VideoDecoder>> => ({
   sourceDurationSeconds: 10, startSeconds: 0, durationSeconds: 10,
   frames: [{ timestampSeconds: 2, image: { mediaType: "image/png", dataBase64: PNG, width: 2, height: 2 } }],
   ...(audio ? { wav: new Uint8Array([82, 73, 70, 70]) } : {}),

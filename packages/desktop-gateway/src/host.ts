@@ -10,7 +10,7 @@ import { createSessionCoordinator } from "@i-harness/session-persistence"
 import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 import { createFileBackedSessionQuery } from "@i-harness/session-query"
 import { openMemoryStore, createMemoryTools } from "@i-harness/memory"
-import type { SessionService, SessionProjectContext } from "@i-harness/session-executor"
+import type { SessionService, SessionProjectContext, SessionAssembly } from "@i-harness/session-executor"
 import { createDurableSessionLoader, createSessionService, type SessionServiceOptions } from "@i-harness/session-executor"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { resolveSettingsPath, SettingsStore, PROVIDER_PROTOCOLS, type SettingsProviderProtocol } from "@i-harness/settings"
@@ -22,7 +22,7 @@ import { createConversationVisibility, createConversationQuery, createSessionRun
 import { createDesktopSubagents } from "./session-subagents.ts"
 import { createDesktopRewind } from "./rewind.ts"
 import { createDesktopPlugins } from "./plugins.ts"
-import { pluginExtensions, expandPluginPrompt } from "./plugin-mount.ts"
+import { pluginExtensions, expandPluginPrompt, mountedHookAuthority } from "./plugin-mount.ts"
 import { createDesktopTerminal } from "./terminal.ts"
 import { createDesktopSchedules } from "./schedules.ts"
 import { createDesktopWorkState } from "./work-state.ts"
@@ -175,6 +175,16 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   // process. Never call global query cleanup when closing an individual host.
   const sessionQuery = createFileBackedSessionQuery({ storeRoot: options.sessionDir })
   const nativeCredentials=createCredentialStore(options.credentialsPath ?? join(dirname(settingsPath),"credentials.json"))
+  const indexJobOwners=new Map<string,WeakRef<SessionAssembly>>()
+  const liveIndexJobOwners=()=>{
+    const owners:SessionAssembly[]=[]
+    for(const [id,reference] of indexJobOwners) {
+      const assembly=reference.deref()
+      if(!assembly || service.liveAssembly(id)!==assembly)indexJobOwners.delete(id)
+      else owners.push(assembly)
+    }
+    return owners
+  }
   const nativeContext=await createNativeContextRuntime({workspace:options.workspace,storageRoot:join(options.sessionDir,"native-context"),coordinator,
     projectFor:projects.nativeScopeFor,
     references:key=>settings.get().contextSubsystems.workspaceOverrides[key]?.references ?? settings.get().contextSubsystems.references,
@@ -184,6 +194,14 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
       return snapshot.events.flatMap(event=>event.type==="context/result-ref"&&!cuts.some(cut=>event.seq!==undefined&&event.seq>=cut.cutFrom&&event.seq<cut.markerSeq)?[event.ref]:[])
     },
     resolveCredential:ref=>nativeCredentials.resolve(ref),
+    registerJob:(access,job)=>{
+      if(access.sessionId===nativeContext.humanSessionId)return undefined
+      // Child tools share the owning parent's runtime/registry. Resolve only
+      // currently live ownership; registration never constructs an assembly.
+      const owner=service.liveAssembly(access.sessionId) ?? liveIndexJobOwners().find(assembly=>assembly.subagentState().agentTable.some(entry=>entry.sessionId===access.sessionId && entry.status==='running'))
+      if(!owner?.registerBackgroundJob)throw new Error('Code Context job owner is unavailable')
+      return owner.registerBackgroundJob({id:job.jobId,kind:'code-context',label:'Index code sources (cancel preserves stored index)',cancel:job.cancel})
+    },
   })
   const contextSubsystems=createContextSubsystemSettings({settingsPath,workspaceKey:nativeContext.workspaceKey,workspaceId:nativeContext.workspaceId,
     contextOutput:nativeContext.contextOutput,codeRetrieval:nativeContext.codeRetrieval,
@@ -206,7 +224,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     const project = assembly.sessionId ? projectContexts.get(assembly.sessionId) : undefined
     const inputs = assembly.sessionId ? extensionInputs.get(assembly.sessionId) : undefined
     return project && inputs ? approvalPolicyIdentity(assembly, { workspace: options.workspace, sandbox: mode, approval: approvalMode, project, executionAuthority: executionAuthorities.get(assembly.sessionId!),
-      hookConfigs: inputs.hookConfigs, grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
+      hookConfigs: inputs.hookConfigs, hookAuthority: () => mountedHookAuthority(assembly, inputs.hookConfigs), grantPaths: [resolveHookTrustPath(dirname(settingsPath)), join(dirname(settingsPath), "hook-authoring-grants.json")], pluginAuthority: inputs }) : undefined
   } })
   const service: SessionService = createSessionService({
     videoAudioAnalyzer: input => runtime.analyzeVideoAudio?.(input) ?? Promise.resolve({ status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." }),
@@ -236,7 +254,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     allowSubagentModelSelection: () => roleModelsEnabled,
     autoCompactionEnabled: () => autoCompactionEnabled,
     resolveRoleModel: (selection) => runtime.resolveModel({ sessionSelection: selection }),
-    extensionsFor: async (id) => { const inputs = await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs()); extensionInputs.set(id, inputs); return pluginExtensions(inputs, dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active(), options.workspace) },
+    extensionsFor: async (id) => { const inputs = await createEffectiveLocalInputs(options.workspace, dirname(settingsPath), await plugins.inputs()); extensionInputs.set(id, inputs); return pluginExtensions(inputs, dirname(settingsPath), id, (messages) => plugins.report(id, messages), await mcp.active(), options.workspace, () => approvalMode) },
     transformPrompt: expandPluginPrompt,
     rewindStoreRoot: options.sessionDir,
     additionalTools,
@@ -322,7 +340,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   })
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
-  const offInteraction = service.onAssembly((assembly) => interaction.attach(assembly))
+  const offInteraction = service.onAssembly((assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
   const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: notifyWorkflow })
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)

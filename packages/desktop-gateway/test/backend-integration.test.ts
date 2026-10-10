@@ -11,6 +11,9 @@ import { createSessionManagement } from "../src/session-management.ts"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { createDesktopExecution } from "../src/execution.ts"
 import { createAgentProcesses } from "../src/agent-processes.ts"
+import { createHash } from "node:crypto"
+import { createHookTrustStore } from "@i-harness/hooks"
+import { mountedHookAuthority, pluginExtensions } from "../src/plugin-mount.ts"
 
 it("cold execution/process inspection refuses a recovering-only backend and leaves incomplete JSONL unchanged", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-cold-read-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
@@ -72,12 +75,21 @@ it("drains nested admitted producers without a stale context admitting later wri
 it("derives policy evidence from actual Plan, registry, roles, membership, Hook content and grants", async () => {
   const root = await mkdtemp(join(tmpdir(), "desktop-policy-identity-")), coordinator = createSessionCoordinator(createJsonlBackend(root))
   await coordinator.create({ sessionId: "owner" })
-  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: "test-mock", sandbox: "read-only" })
+  const hookPath = join(root, "hooks.json"), scriptPath = join(root, "hook.cjs"), grantPath = join(root, "hook-trust.json")
+  const scriptText = "process.stdout.write('{}')"
+  await writeFile(scriptPath, scriptText)
+  const scriptHash = createHash("sha256").update(scriptText).digest("hex")
+  await writeFile(hookPath, JSON.stringify({ version: 1, handlers: [{ id: "policy-check", event: "pre-tool", type: "command",
+    command: { cmd: process.execPath, args: [scriptPath] }, trust: { script: "hook.cjs", sha256: scriptHash } }] }))
+  createHookTrustStore(grantPath).approve({ sha256: scriptHash, script: scriptPath, handlerId: "policy-check" })
+  const inputs = { skillDirs: [], mcpServerConfigs: {}, commandDescriptors: [], agentDescriptors: [], hookConfigs: [hookPath] }
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), modelPolicy: "test-mock", sandbox: "read-only",
+    extensionsFor: async id => pluginExtensions(inputs, root, id, () => {}) })
   try {
-    const assembly = await service.assemblyFor("owner"), hookPath = join(root, "hooks.json"), scriptPath = join(root, "hook.cjs"), grantPath = join(root, "grants.json")
-    await writeFile(hookPath, JSON.stringify({ handlers: [{ trust: { script: "hook.cjs" } }] })); await writeFile(scriptPath, "fixture-one"); await writeFile(grantPath, "fixture-grant")
+    const assembly = await service.assemblyFor("owner")
     let roots = [root]
-    const options = { workspace: root, sandbox: "read-only", approval: "ask-all", project: () => ({ id: "p", name: "Project", primaryRoot: root, roots }), hookConfigs: [hookPath], grantPaths: [grantPath], pluginAuthority: [] }
+    const options = { workspace: root, sandbox: "read-only", approval: "ask-all", project: () => ({ id: "p", name: "Project", primaryRoot: root, roots }), hookConfigs: [hookPath],
+      hookAuthority: () => mountedHookAuthority(assembly, [hookPath]), grantPaths: [grantPath], pluginAuthority: inputs }
     const identity = () => approvalPolicyIdentity(assembly, options)
     const initial = identity()!; expect(initial.workspaceId).toBe(root)
     append(assembly.session, { type: "plan/mode", mode: "on" }); expect(identity()?.revision).not.toBe(initial.revision)
@@ -86,7 +98,7 @@ it("derives policy evidence from actual Plan, registry, roles, membership, Hook 
     const membership = identity()!
     await writeFile(scriptPath, "fixture-two"); expect(identity()?.revision).not.toBe(membership.revision)
     const script = identity()!
-    await writeFile(grantPath, "changed-grant"); expect(identity()?.revision).not.toBe(script.revision)
+    createHookTrustStore(grantPath).revoke(scriptHash); expect(identity()?.revision).not.toBe(script.revision)
     const grants = identity()!
     assembly.tools.unregister("read"); expect(identity()?.revision).not.toBe(grants.revision)
     await rm(scriptPath); expect(identity()).toBeUndefined()

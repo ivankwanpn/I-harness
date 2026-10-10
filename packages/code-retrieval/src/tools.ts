@@ -15,11 +15,11 @@ export function createCodeRetrievalTools(service:CodeRetrievalService):Tool[] {
     inputSchema:{type:'object',properties:{query:{type:'string',description:'Non-empty query, at most 1024 UTF-8 bytes.'},sourceIds:sources,pathPrefix:{type:'string'},limit:{type:'integer',minimum:1,maximum:100},maxBytes:{type:'integer',minimum:128}},required:['query'],additionalProperties:false},
     async execute(args,exec){const caller=access(exec);return service.search(caller,argumentsObject(args,['query','sourceIds','pathPrefix','limit','maxBytes']) as unknown as Parameters<CodeRetrievalService['search']>[1])},
   },{...shared,name:'code_context_index',isReadOnly:false,isConcurrencySafe:false,
-    description:'Start or refresh the local Code Context index from sources already admitted by the host. Changes internal index storage. Returns a job ID; use status to inspect progress. Explicitly configured hybrid mode may call its embedding provider.',
+    description:'Start or refresh the local Code Context index from sources already admitted by the host. Changes internal index storage. Returns a job ID; use code_context_status for progress. Desktop job_list/job_output expose the job and job_kill cancels indexing while preserving the committed index. Explicitly configured hybrid mode may call its embedding provider.',
     searchHint:'Code Context index refresh rebuild source code',
     inputSchema:{type:'object',properties:{sourceIds:sources,force:{type:'boolean'}},additionalProperties:false},
     async execute(args,exec){const caller=access(exec);return service.startIndex(caller,argumentsObject(args,['sourceIds','force']) as Parameters<CodeRetrievalService['startIndex']>[1])},
-  },{...shared,name:'code_context_status',description:'Inspect Code Context configuration, committed generation, indexing progress, limits, partial reasons, and provider usage counters for this service lifetime.',searchHint:'Code Context status indexing progress usage limits',
+  },{...shared,name:'code_context_status',description:'Inspect Code Context configuration, committed generation and completeness, indexing progress, limits, provider usage counters, and current-source health from the latest search. Source health applies to files checked by that search.',searchHint:'Code Context status indexing progress source health usage limits',
     inputSchema:{type:'object',properties:{},additionalProperties:false},
     async execute(args,exec){access(exec);argumentsObject(args,[]);return service.status()},
   }]

@@ -30,7 +30,7 @@ it("uses the selected audio route for speech and sounds and preserves it through
   await settings.load()
   expect(settings.get().llm.videoAudio).toEqual({ provider: "audio", model: "audio-model" })
   let body: any
-  const fetch = vi.fn(async (url, init) => { body = JSON.parse(init.body); return Response.json({ choices: [{ message: { content: "[00:00] Door closes; speaker says hello." } }] }) })
+  const fetch = vi.fn(async (_url, init) => { body = JSON.parse(init.body); return Response.json({ choices: [{ message: { content: "[00:00] Door closes; speaker says hello." } }] }) })
   vi.stubGlobal("fetch", fetch)
   expect(await runtime.analyzeVideoAudio!({ wav: new Uint8Array(44), startSeconds: 2, durationSeconds: 1 })).toMatchObject({ status: "analyzed", model: "audio-model" })
   expect(fetch.mock.calls[0]?.[0]).toBe("https://audio.invalid/v1/chat/completions"); expect(body.model).toBe("audio-model"); expect(body.modalities).toEqual(["text"])

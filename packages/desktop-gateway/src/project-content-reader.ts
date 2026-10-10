@@ -17,6 +17,7 @@ export interface ProjectContentBudget {
   maxInputBytes: number; maxFileBytes: number; maxCandidates: number
   stats: SearchStats; reserved: number; entries: number; pathBytes: number; policyFiles: number
   reasons: Set<string>; diagnostics: string[]
+  errorCode?: string
   maxEntries?: number; maxPolicyFiles?: number; maxCandidateBytes?: number
   labelRoot?: string
 }
@@ -26,8 +27,9 @@ const inside = (root: string, path: string) => {
   return suffix === "" || suffix !== ".." && !suffix.startsWith("../") && !suffix.startsWith("..\\") && !isAbsolute(suffix)
 }
 const same = (first: string, second: string) => relative(first, second) === ""
-export function contentDiagnostic(budget: ProjectContentBudget, reason: string, detail?: string) {
+export function contentDiagnostic(budget: ProjectContentBudget, reason: string, detail?: string, code?: string) {
   budget.reasons.add(reason)
+  if (code) budget.errorCode = code.slice(0, 64)
   if (detail && budget.diagnostics.length < 16) budget.diagnostics.push(detail.slice(0, 512))
 }
 function reserve(budget: ProjectContentBudget, desired: number) {
@@ -97,7 +99,7 @@ export async function createPinnedProjectContentReader(workspace: string, budget
       })
     } catch (error) {
       if (signal.aborted) throw error
-      contentDiagnostic(budget, policy ? "ignore-policy-incomplete" : "file-unavailable", `${path}: ${error instanceof Error ? error.message : String(error)}`)
+      contentDiagnostic(budget, policy ? "ignore-policy-incomplete" : "file-unavailable", `${path}: ${error instanceof Error ? error.message : String(error)}`, (error as NodeJS.ErrnoException).code)
       return undefined
     } finally { budget.reserved -= allowance }
   }
@@ -111,7 +113,7 @@ export async function createPinnedProjectContentReader(workspace: string, budget
       signal.throwIfAborted()
       const info = await lstat(join(parent.scanPath, name)).catch(error => {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
-        contentDiagnostic(budget, "ignore-policy-incomplete", `${folder}/${name}: unreadable ignore policy`); return undefined
+        contentDiagnostic(budget, "ignore-policy-incomplete", `${folder}/${name}: unreadable ignore policy`, (error as NodeJS.ErrnoException).code); return undefined
       })
       if (!info) continue
       if (budget.policyFiles >= (budget.maxPolicyFiles ?? 20)) { contentDiagnostic(budget, "ignore-policy-limit"); continue }
@@ -124,18 +126,55 @@ export async function createPinnedProjectContentReader(workspace: string, budget
     }
     return loaded ? [...inherited, { base: folder, rules }] : inherited
   }
-  async function candidates(query: Required<SearchQuery>): Promise<string[]> {
-    const result: string[] = [], include = query.includes.map(pattern => picomatch(pattern, { dot: true, basename: !pattern.includes("/") })), exclude = query.excludes.map(pattern => picomatch(pattern, { dot: true, basename: !pattern.includes("/") }))
-    function ignored(path: string, directory: boolean, chain: Policy[]) {
-      let excluded = false
-      for (const scope of chain) {
-        const local = scope.base ? path.slice(scope.base.length + 1) : path
-        const status = scope.rules.test(local + (directory ? "/" : ""))
-        if (status.ignored) excluded = true
-        else if (status.unignored) excluded = false
-      }
-      return excluded
+  function ignored(path: string, directory: boolean, chain: Policy[]) {
+    let excluded = false
+    for (const scope of chain) {
+      const local = scope.base ? path.slice(scope.base.length + 1) : path
+      const status = scope.rules.test(local + (directory ? "/" : ""))
+      if (status.ignored) excluded = true
+      else if (status.unignored) excluded = false
     }
+    return excluded
+  }
+  const matchers = (patterns: string[]) => patterns.map(pattern => picomatch(pattern, { dot: true, basename: !pattern.includes("/") }))
+  /** Revalidate one known file by walking only its ancestors. Every ancestor
+   * policy is freshly read through pinned handles, and ignored parents and
+   * aliases have exactly the same admission rules as automatic enumeration. */
+  async function readAdmitted(path: string, query: Required<SearchQuery>, maxBytes: number) {
+    const parts = projectRelativePath(path).split("/")
+    if (parts.length - 1 > 32) { contentDiagnostic(budget, "directory-depth-limit"); return undefined }
+    const include = matchers(query.includes), exclude = matchers(query.excludes)
+    const pins: PinnedProjectDirectory[] = []
+    let parent = rootPin, folder = "", chain: Policy[] = []
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        signal.throwIfAborted(); await checkRoot()
+        chain = await policies(folder, parent, chain, query)
+        if ([...budget.reasons].some(reason => reason.startsWith("ignore-policy") || reason === "input-byte-limit")) return undefined
+        const name = parts[i]!, current = folder ? `${folder}/${name}` : name
+        const directory = i < parts.length - 1
+        if ([".git", "node_modules"].includes(name) || !query.hidden && name.startsWith(".") || exclude.some(match => match(current) || directory && match(`${current}/`)) || query.respectIgnore && ignored(current, directory, chain)) {
+          contentDiagnostic(budget, "path-not-admitted"); return undefined
+        }
+        const target = join(parent.scanPath, name), info = await lstat(target)
+        if (info.isSymbolicLink() || directory && !info.isDirectory() || !directory && !info.isFile()) { contentDiagnostic(budget, "path-unavailable"); return undefined }
+        if (!directory) {
+          if (include.length && !include.some(match => match(current))) { contentDiagnostic(budget, "path-not-admitted"); return undefined }
+          return await read(path, maxBytes, false, false)
+        }
+        const pin = await openDirectory(target); pins.push(pin)
+        if (!inside(root, pin.finalPath) || !same(await realpath(target), pin.finalPath)) throw new Error("Project content directory handle identity changed")
+        parent = pin; folder = current
+      }
+      return undefined
+    } catch (error) {
+      if (signal.aborted) throw error
+      contentDiagnostic(budget, "file-unavailable", `${path}: ${error instanceof Error ? error.message : String(error)}`, (error as NodeJS.ErrnoException).code)
+      return undefined
+    } finally { for (const pin of pins.reverse()) await pin.close() }
+  }
+  async function candidates(query: Required<SearchQuery>): Promise<string[]> {
+    const result: string[] = [], include = matchers(query.includes), exclude = matchers(query.excludes)
     async function walk(folder: string, parent: PinnedProjectDirectory, inherited: Policy[], depth: number): Promise<void> {
       if (depth > 32) { contentDiagnostic(budget, "directory-depth-limit"); return }
       await checkRoot()
@@ -185,5 +224,5 @@ export async function createPinnedProjectContentReader(workspace: string, budget
       if (budget.stats.inputBytes >= budget.maxInputBytes) { contentDiagnostic(budget, "input-byte-limit"); break }
     }
   }
-  return { candidates, snapshots, read, checkRoot, async close() { if (closed) return; closed = true; await rootPin.close() } }
+  return { candidates, snapshots, read, readAdmitted, checkRoot, async close() { if (closed) return; closed = true; await rootPin.close() } }
 }

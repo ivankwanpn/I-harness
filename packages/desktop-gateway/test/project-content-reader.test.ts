@@ -72,3 +72,33 @@ it("marks policy boundary incompleteness instead of claiming the ignore rules we
   try { await reader.candidates({ ...query, includes: [], excludes: [] }); expect(limits.reasons.has("ignore-policy-incomplete")).toBe(true); expect(limits.stats.inputBytes).toBe(65536) }
   finally { await reader.close() }
 })
+
+it("admits a known file through fresh ancestor policies while refusing ignored parents and aliases", async () => {
+  const root = await fixture(), outside = await fixture()
+  for (const directory of ["nested", "ignored", "node_modules"]) await mkdir(join(root, directory))
+  await writeFile(join(root, ".gitignore"), "ignored/\n")
+  await writeFile(join(root, "ignored", ".gitignore"), "!allowed.ts\n")
+  for (const path of ["nested/allowed.ts", "nested/blocked.ts", "ignored/allowed.ts", "node_modules/allowed.ts", ".hidden.ts"]) await writeFile(join(root, path), "needle")
+  await writeFile(join(root, "nested", ".gitignore"), "blocked.ts\n")
+  await writeFile(join(outside, "allowed.ts"), "outside secret")
+  await symlink(outside, join(root, "alias"), process.platform === "win32" ? "junction" : "dir")
+  const limits = budget(), reader = await createPinnedProjectContentReader(root, limits, new AbortController().signal)
+  try {
+    const admitted = { ...query, includes: ["**/*.ts"], excludes: [] }
+    expect((await reader.readAdmitted("nested/allowed.ts", admitted, 1024))?.bytes.toString()).toBe("needle")
+    for (const path of ["nested/blocked.ts", "ignored/allowed.ts", "node_modules/allowed.ts", ".hidden.ts", "alias/allowed.ts"]) expect(await reader.readAdmitted(path, admitted, 1024), path).toBeUndefined()
+    expect(limits.stats.readFiles).toBe(1)
+  } finally { await reader.close() }
+})
+
+it("refuses a known indexed path when its current ignore policy cannot be completely read", async () => {
+  const root = await fixture(); await mkdir(join(root, "src"))
+  await writeFile(join(root, "src", "allowed.ts"), "needle")
+  await writeFile(join(root, "src", ".gitignore"), "#".repeat(65536))
+  const limits = budget(), reader = await createPinnedProjectContentReader(root, limits, new AbortController().signal)
+  try {
+    expect(await reader.readAdmitted("src/allowed.ts", { ...query, includes: [], excludes: [] }, 1024)).toBeUndefined()
+    expect(limits.reasons.has("ignore-policy-incomplete")).toBe(true)
+    expect(limits.stats.readFiles).toBe(0)
+  } finally { await reader.close() }
+})

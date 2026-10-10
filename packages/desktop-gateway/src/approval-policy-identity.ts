@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto"
 import { readFileSync } from "node:fs"
-import { dirname, resolve } from "node:path"
 import { derivePlanMode } from "@i-harness/core-session"
 import type { SessionAssembly, SessionProjectContext } from "@i-harness/session-executor"
 import type { AuthorityState } from "@i-harness/sandbox"
@@ -12,22 +11,16 @@ export function approvalPolicyIdentity(assembly: SessionAssembly, options: {
   executionAuthority?: () => AuthorityState
   hookConfigs: readonly string[]; grantPaths: readonly string[]
   pluginAuthority: unknown
+  /** Snapshot from the mounted HookRegistry's normalized handlers and artifacts. */
+  hookAuthority?: () => unknown | undefined
 }): { workspaceId: string; revision: string } | undefined {
   try {
     const optional = (path: string) => {
       try { return readFileSync(path, "utf8") }
       catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error }
     }
-    const hooks = options.hookConfigs.map(path => {
-      const body = readFileSync(path, "utf8")
-      const config = JSON.parse(body) as { handlers?: { trust?: { script?: string } }[] }
-      if (!Array.isArray(config.handlers)) throw new Error("Opaque Hook authority")
-      return [path, body, config.handlers.map(handler => {
-        if (typeof handler.trust?.script !== "string") throw new Error("Opaque Hook script")
-        const script = resolve(dirname(path), handler.trust.script)
-        return [script, createHash("sha256").update(readFileSync(script)).digest("hex")]
-      })]
-    })
+    const hooks = options.hookConfigs.length === 0 ? [] : options.hookAuthority?.()
+    if (hooks === undefined) throw new Error("Mounted Hook authority unavailable")
     const project = options.project()
     const executionAuthority = options.executionAuthority?.()
     if (executionAuthority?.kind === "revoked" || executionAuthority?.kind === "unavailable") return undefined

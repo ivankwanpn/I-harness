@@ -28,6 +28,13 @@ it("recognizes a runnable PowerShell 7 App Execution Alias despite a negative ex
   expect(resolvePwshExe({ Path: win32.dirname(alias) }, "win32", () => false, (path) => path === alias)).toBe(alias)
 })
 
+it("falls back to Windows PowerShell when a runnable alias cannot be canonicalized", () => {
+  const alias = "C:\\Users\\tester\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"
+  const classic = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+  const canonicalize = (path: string) => { if (path === alias) throw Object.assign(new Error("alias inaccessible"), { code: "EACCES" }); return path }
+  expect(resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: "C:\\Windows" }, "win32", path => path === classic, path => path === alias, canonicalize)).toBe(classic)
+})
+
 it.skipIf(!hasNativeGit)("pins the actual Bash on PATH so nested env bash never enters WSL", async () => {
   const exec = registerExec(createContext())
   const tool = createShellTools({ exec })[0]!
@@ -44,10 +51,13 @@ it.skipIf(!hasNativeGit || !hasNativeNpm)("runs the installed npm shim through t
   expect(result.stdout.trim()).toMatch(/^\d+\.\d+\.\d+$/)
 }, 15000)
 
-it.skipIf(!hasNativeAlias)("refuses an alias the native backend cannot canonicalize", async () => {
+it.skipIf(!hasNativeAlias)("runs the PowerShell fallback when a Store alias cannot be canonicalized", async () => {
   const alias = nativeAlias
   // This host's App Execution Alias is runnable even though Node reports no file.
   expect(existsSync(alias)).toBe(false)
   const exe = resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: process.env.SystemRoot }, "win32")
-  await expect(registerExec(createContext()).run({ argv: [exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"] })).rejects.toThrow(/EACCES|realpath|permission denied/i)
+  expect(exe.toLowerCase()).not.toContain("windowsapps")
+  const result = await registerExec(createContext()).run({ argv: [exe, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PSVersionTable.PSVersion.Major"] })
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout.trim()).toMatch(/^[57]$/)
 }, 15000)

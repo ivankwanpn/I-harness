@@ -1,7 +1,50 @@
 import { describe, expect, it } from "vitest"
 import { createJobRegistry } from "../src/jobs.ts"
+import { persistentJobRegistry, restoreState, snapshotState } from "../src/persist.ts"
+import { createAgentTable } from "../src/agent-table.ts"
+import { createRoleRegistry } from "../src/roles.ts"
 
 describe("job registry", () => {
+  it("publishes a cancelled producer's final output without reopening or replacing its killed disposition", () => {
+    const controller = new AbortController(), jobs = persistentJobRegistry(createJobRegistry(), async () => {})
+    const producer = jobs.registerJob("root", "code-context", "Index sources", undefined, undefined, () => controller.abort())
+    jobs.kill(producer.id)
+    producer.finish!("killed", '{"outcome":"cancelled","generation":1}')
+    expect(jobs.read(producer.id)).toMatchObject({ status: "killed", output: '{"outcome":"cancelled","generation":1}' })
+    producer.finish!("completed", "late claimed success")
+    jobs.updateJob(producer.id, { status: "completed", output: "late generic update" })
+    expect(jobs.read(producer.id)).toMatchObject({ status: "killed", output: '{"outcome":"cancelled","generation":1}' })
+  })
+
+  it("cancels live work through the durable job wrapper without serializing its callback", () => {
+    const controller = new AbortController()
+    const raw = createJobRegistry(), jobs = persistentJobRegistry(raw, async () => {})
+    const { id } = jobs.registerJob("root", "code-context", "Index sources", "code-context-fixture", undefined, () => controller.abort())
+    const snap = snapshotState({ jobs, table: createAgentTable(), roles: createRoleRegistry() })
+    expect(snap.jobs[0]).toMatchObject({ id, kind: "code-context", status: "running" })
+    expect(JSON.stringify(snap)).not.toContain('cancel')
+    expect(jobs.kill(id)).toBe("cancellation-requested")
+    expect(controller.signal.aborted).toBe(true)
+    expect(jobs.kill(id)).toBe("already-finished")
+    const restored = { jobs: createJobRegistry(), table: createAgentTable(), roles: createRoleRegistry() }
+    restoreState(restored, JSON.parse(JSON.stringify(snap)))
+    expect(restored.jobs.read(id)).toMatchObject({ status: "error", output: "interrupted by resume" })
+    expect(restored.jobs.kill(id)).toBe("already-finished")
+  })
+
+  it("keeps a failed cancellation visible and retryable", () => {
+    const controller = new AbortController(), jobs = createJobRegistry()
+    let first = true
+    const { id } = jobs.registerJob("root", "code-context", "Index sources", undefined, undefined, () => {
+      if (first) { first = false; throw new Error("Cancellation transport failed") }
+      controller.abort()
+    })
+    expect(() => jobs.kill(id)).toThrow("Cancellation transport failed")
+    expect(jobs.read(id).status).toBe("running")
+    expect(jobs.kill(id)).toBe("cancellation-requested")
+    expect(controller.signal.aborted).toBe(true)
+  })
+
   it("issues ids with per-kind monotonic counters", () => {
     const jobs = createJobRegistry()
     expect(jobs.registerJob("a", "bash", "build").id).toBe("bash-1")

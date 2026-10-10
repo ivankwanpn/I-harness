@@ -2,7 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from "@i-harness/core-session"
 import { append } from "@i-harness/core-session"
 import type { PreparedCall, ToolRegistry } from "@i-harness/core-tools"
-import { isPolicyRefusal, ToolArgsError } from "@i-harness/core-tools"
+import { isPolicyRefusal, ToolArgsError, ToolNotFoundError } from "@i-harness/core-tools"
 import {
   TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_ABORTED_MID_FLIGHT,
@@ -60,18 +60,14 @@ export interface ExecuteToolCallsOptions {
 // run sequentially (full drain between), so an exclusive call never overlaps
 // anything.
 //
-// Failure (soft since M5 T4 block ①): stop starting, drain started calls,
-// fill the failed slot, commit what settled, and give never-started calls a
-// TOOL_CANCELLED_BY_SIBLING result. That verdict is not fabricated: CANCELLED
-// is what happened to that call — it never started — not a made-up outcome.
-// (The FILL is a different thing and does not claim otherwise: it is written
-// `synthetic: true`.) A policy refusal (a policy `prepare` throw, or a cascade
-// throw carrying the `isPolicyRefusal` marker) still rethrows.
+// Ordinary body failures fill only their own slots. Independent calls in the
+// pool and in later exclusive groups continue. A policy refusal (a policy
+// `prepare` throw, or a marked dispatch refusal) stops/drains and rethrows.
 //
-// M5 T4 block ② adds ONE soft `prepare` throw: a malformed-argument refusal is
-// a typed disposition the model can repair, so it lands in the same soft path
-// as a body failure (that call's slot is filled, `synthetic: true`) while it
-// still never reaches the tool body. It is converted in `startCall`, by TYPE —
+// Missing tool names and malformed arguments are typed dispositions the model
+// can repair, so they land in the same soft path
+// as a body failure (only that call's slot is filled, `synthetic: true`) while
+// it still never reaches the tool body. It is converted in `startCall`, by TYPE —
 // every other `prepare` refusal is untouched and loud.
 //
 // Abort: stop starting, drain started (commit what settled in model order),
@@ -94,43 +90,24 @@ export async function executeToolCalls(
   // (tools/post-execute) or agent/post-tool (M10a ordering ruling).
   interface SyntheticSlot { name: string; callId: string; output: unknown; synthetic: true }
   const slots: ((Slot | SyntheticSlot) | undefined)[] = batch.map(() => undefined)
-  // Each call's OWN failure, so the fill below can record what actually
-  // happened to THAT call rather than stamping the first failure's message on
-  // every sibling. Two facts make the fill's `firstError` branch dead: the
-  // drain below (ahead of both dispositions, the abort test included) lets
-  // every in-flight dispatch settle, and a settled dispatch either wrote
-  // `slots[i]` or ran its `.catch`, whose FIRST statement records this map —
-  // before the emit and the marker check, either of which can throw.
+  // Preserve each rejection before observations/classification so an abort or
+  // checkpoint drain never attributes a sibling's error to this call.
   const failures = new Map<number, unknown>()
   const inFlight = new Map<number, Promise<number>>()
   let startedUpTo = 0 // next batch index that has NOT started (never-started boundary)
   let committed = 0
   let aborted = opts.signal?.aborted ?? false
   let firstError: unknown
-  // "Did anything fail?" is a SEPARATE variable from the failure's value, on
-  // purpose. `firstError` is used as a value (it is thrown on the loud paths and
-  // its message is filled into the batch), and a variable cannot carry both jobs:
-  // a body that rejects with `undefined` — `throw undefined` is legal — used to
-  // fire `batchAbort.abort()` while every `if (firstError)` read falsy, so the
-  // soft fill and the never-started fill both skipped and the projection emitted
-  // a tool_use with no tool_result. The flag is the flag; the value is the value
-  // (`firstError` is read for its content only).
+  // A rejection can legally carry undefined. Keep occurrence separate from
+  // its value; this flag records the fallback reason, not whether to stop.
   let hasFailed = false
-  // M5 T4 block ①: WHICH KIND of failure decides whether the batch is soft.
-  // A throw from a TOOL BODY (the dispatch `.catch` below) is soft: the failed
-  // call gets a result and the turn continues. Every OTHER throw that reaches
-  // this scope stays loud — a `prepare` refusal (unknown tool / guard denied /
-  // a `tools/pre-execute` deny / denied / approval fail-closed / guardian
-  // denied), and a throwing commit-lane listener. (The one `prepare` throw that
-  // is NOT loud — the malformed-argument disposition — is converted up in
-  // `startCall` and never reaches this scope, so the rule above still holds as
-  // written for everything that does.)
-  //
-  // Structural, not a list: the SITE of the throw is the classification, so a
-  // fifth refusal added to `prepare` tomorrow is loud without anyone
-  // remembering to add it here. (A list is what gets forgotten — which is how
-  // the first draft of this task got it wrong.)
+  // Ordinary failures belong to a call. Only execution/policy failures stop
+  // the pool; sharing this flag with hasFailed cancelled unrelated writes.
+  let stopped = false
+  // Prepare/ordered-lane errors and marked dispatch refusals remain loud.
+  // The site/type supplies the boundary; error message wording does not.
   let firstRefusal: unknown
+  let hasRefusal = false
   // M70: the checkpoint's own failure, carried to the END of the function.
   // It cannot be thrown from `startCall`: the fills and the commit lane still
   // have to run (a throw from there leaves the log half-committed — the M5 T4
@@ -150,23 +127,24 @@ export async function executeToolCalls(
   // names. The flag carries "it happened"; the value carries what it was.
   let firstFlushError: unknown
   let hasFlushError = false
-  // M5 T4: the batch's OWN abort channel. Measured before adding it: the failure
-  // path said "drain started (results discarded)" and awaited `allSettled`, so a
-  // failed call left its siblings running — a `bash` still spawning, a fetch
-  // still in flight — threw their results away anyway, and made the caller wait
-  // for the SLOWEST of them before the error surfaced. The roadmap asks for
-  // "可取消", and the mechanism was already there: `prepare` puts the signal on
-  // `prepared.exec.abortSignal` (core-tools:291), so a body can observe it.
-  // Composed with the outer signal rather than replacing it — an abort and a
-  // failure are different events and both must reach the body.
+  // Policy/infrastructure stops cancel dispatched work. Ordinary failures do
+  // not touch this channel; the owner's signal remains composed into it.
   const batchAbort = new AbortController()
   const batchSignal = opts.signal !== undefined
     ? AbortSignal.any([opts.signal, batchAbort.signal])
     : batchAbort.signal
 
+  const stopForRefusal = (error: unknown): void => {
+    if (!hasRefusal) firstRefusal = error
+    hasRefusal = true
+    stopped = true
+    batchAbort.abort()
+  }
+
   const isExclusive = (name: string): boolean => tools.get(name)?.isConcurrencySafe !== true
 
   const commitReady = async (): Promise<void> => {
+    if (opts.signal?.aborted) aborted = true
     while (committed < batch.length) {
       const slot = slots[committed]
       if (slot === undefined) break
@@ -189,6 +167,12 @@ export async function executeToolCalls(
       const isError = outcome !== null && typeof outcome === "object" && !Array.isArray(outcome)
         && typeof outcome.error === "string" && typeof outcome.code === "string"
       append(session, { type: "tool/result", callId: slot.callId, name: slot.name, output: finalized.output, ...(isError ? { isError: true } : {}) })
+      // The durable answer already exists. A throwing observation must not
+      // cause the abort drain to append this same call's answer a second time.
+      committed += 1
+      // finalize can await hooks while the owner presses Stop. Keep the real
+      // completed answer, but do not start post-tool effects after that abort.
+      if (opts.signal?.aborted) aborted = true
       // M25: tool/end beside the tool/result commit (model-order lane).
       opts.telemetry?.emit({ type: "tool/end", ts: Date.now(), data: { tool: slot.name, callId: slot.callId } })
       // M10a ordering ruling: post-tool only for completed dispatches and only
@@ -196,7 +180,6 @@ export async function executeToolCalls(
       if (!aborted) {
         await ctx.emit("agent/post-tool", { name: call.name, args: call.args, output: finalized.output, session })
       }
-      committed += 1
     }
   }
 
@@ -215,16 +198,13 @@ export async function executeToolCalls(
         { sessionId: opts.sessionId, session, callId: call.callId, callEventSeq: call.eventSeq },
       )
     } catch (err) {
-      if (err instanceof ToolArgsError) {
+      if (!isPolicyRefusal(err) && (err instanceof ToolArgsError || err instanceof ToolNotFoundError)) {
         // A TYPED disposition, checked by name — never a message list. The
-        // model CAN fix this one, so it is soft; every other `prepare`
-        // refusal (guard / approval / guardian / unknown tool) stays loud.
+        // model CAN fix these, so they are soft; every other `prepare`
+        // refusal (guard / approval / guardian / host error) stays loud.
         //
-        // THIS call's record goes down FIRST, before the slot it fills and
-        // before `abort()` — both of which run out-of-tree code (a slot
-        // build reads `err.message`, `abort()` notifies tool bodies). The
-        // same rule as the dispatch `.catch`: an unrecorded failure gets
-        // stamped with its SIBLING's message by the fill below.
+        // Record and answer this call without advancing the dispatch boundary
+        // or cancelling a sibling. The malformed body never runs.
         failures.set(index, err)
         slots[index] = {
           name: call.name,
@@ -239,11 +219,15 @@ export async function executeToolCalls(
           firstError = err
           hasFailed = true
         }
-        batchAbort.abort()
+        // Invalid names/arguments do not revoke independent calls' permission.
         return
       }
       throw err
     }
+    // Approval/policy preparation can await. A stop in that window means the
+    // prepared call never reached dispatch, so it gets the before-dispatch
+    // verdict from the abort synthesis below and no marker/body.
+    if (batchSignal.aborted) return
     startedUpTo = index + 1
     // M4: make the boundary DURABLE, at the exact point it becomes true. The
     // in-memory `startedUpTo` above already carries this fact for the abort path;
@@ -303,11 +287,18 @@ export async function executeToolCalls(
           firstFlushError = err
           hasFlushError = true
         }
-        // Cancel the siblings: a batch whose store is broken must not keep
-        // starting bodies (the same channel a body failure uses).
+        stopped = true
+        // A batch whose store is broken must not keep starting bodies.
         batchAbort.abort()
         return
       }
+    }
+    // The checkpoint can also await while the owner cancels or a sibling's
+    // policy gate stops the batch. The marker exists, but the body did not run.
+    if (batchSignal.aborted) {
+      slots[index] = { name: call.name, callId: call.callId, synthetic: true,
+        output: { error: "tool call aborted before dispatch", code: TOOL_ABORTED_BEFORE_DISPATCH } }
+      return
     }
     // M25: tool/start only once the call is REALLY dispatched (after prepare —
     // a prepare failure means the tool never started, mirroring the
@@ -321,36 +312,30 @@ export async function executeToolCalls(
         slots[index] = { name: call.name, callId: call.callId, prepared, output }
       })
       .catch((err: unknown) => {
-        // This call's OWN rejection is recorded FIRST — the order is
-        // load-bearing. `telemetry.emit` and `isPolicyRefusal` below both run
-        // out-of-tree code (a host Telemetry, an error whose `policyRefusal`
-        // getter throws), so either can reject this handler; when that happens
-        // to a SECOND failure the post-loop drain absorbs the rejection and
-        // nobody re-reads it. A slot left with no entry here is stamped with
-        // its SIBLING's message by the fill below — the exact misattribution
-        // this map exists to prevent.
+        // Record this rejection before classification and observations. The
+        // drain needs its own reason even if another error stops the batch.
         failures.set(index, err)
-        // M25: tool/error — the dispatched call's promise rejected. The M5 T4
-        // classification below decides what that rejection means for the turn.
-        opts.telemetry?.emit({
-          type: "tool/error",
-          ts: Date.now(),
-          data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
-        })
-        if (isPolicyRefusal(err)) {
-          // A veto is not a body failure: it must keep failing the turn.
-          firstRefusal ??= err
-        }
-        // M5 T4: on the FIRST failure, cancel the siblings. `abort()` lands here
-        // (before the drains below), so `allSettled` returns their cancellations
-        // instead of waiting out their work. Only the first, so a second failure
-        // cannot re-open a channel that is already closed. "First" is read off
-        // the FLAG, not off `firstError === undefined`: the value may legitimately
-        // be `undefined`, the flag cannot.
         if (!hasFailed) {
           firstError = err
           hasFailed = true
-          batchAbort.abort()
+        }
+        // Fill the ordinary failure immediately: leaving it empty until a
+        // batch-wide drain stalls ordered commits while later calls continue.
+        // An owner abort still uses the mid-flight synthesis below.
+        if (isPolicyRefusal(err)) stopForRefusal(err)
+        else if (!opts.signal?.aborted) {
+          slots[index] = { name: call.name, callId: call.callId, synthetic: true,
+            output: { error: err instanceof Error ? err.message : String(err), code: TOOL_FAILED } }
+        }
+        try {
+          opts.telemetry?.emit({
+            type: "tool/error", ts: Date.now(),
+            data: { tool: call.name, callId: call.callId, error: err instanceof Error ? err.message : String(err) },
+          })
+        } catch (error) {
+          // An observation failure must not disappear inside allSettled,
+          // especially when it arrives after another dispatch failed.
+          stopForRefusal(error)
         }
       })
       .then(() => index)
@@ -377,8 +362,9 @@ export async function executeToolCalls(
   const runGroup = async (indices: number[]): Promise<void> => {
     let gi = 0
     while (gi < indices.length || inFlight.size > 0) {
-      if (aborted || hasFailed) break
-      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !hasFailed) {
+      if (opts.signal?.aborted) aborted = true
+      if (aborted || stopped) break
+      while (gi < indices.length && inFlight.size < opts.maxParallel && !aborted && !stopped) {
         await startCall(indices[gi]!)
         gi += 1
         await commitReady()
@@ -395,7 +381,7 @@ export async function executeToolCalls(
   try {
     for (const group of groups) {
       await runGroup(group)
-      if (hasFailed || aborted) break
+      if (stopped || aborted) break
     }
   } catch (err) {
     if (!hasFailed) firstError = err
@@ -403,30 +389,14 @@ export async function executeToolCalls(
     // Anything thrown outside the dispatch `.catch` is a refusal. It DOMINATES:
     // a policy refusal must never be silently downgraded by a coincident body
     // failure, so a refusal that arrives second still wins.
-    firstRefusal ??= err
+    stopForRefusal(err)
   }
 
-  // Drain BEFORE the disposition tests. Every write to `firstError` and
-  // `firstRefusal` happens in a `.catch` handler, so until the in-flight
-  // promises have settled neither is final — and a refusal that settles one
-  // microtask late is tested as "not a refusal" and silently downgraded to
-  // the soft path. (Measured before this drain existed: the same marked veto
-  // threw when its own .catch ran first, and resolved softly — recorded
-  // against a sibling's error message — when a sibling's failure got there
-  // first. A pre-tool hook is a SUBPROCESS; losing that race is the normal
-  // case, not the exotic one.)
+  // Drain before deciding disposition: a late marked policy refusal must
+  // dominate an ordinary body failure, and no dispatch may outlive this call.
   await Promise.allSettled([...inFlight.values()])
   inFlight.clear()
-  // …and the drain is also where a late ABORT is read. `aborted` is only
-  // written inside `runGroup`, which breaks out of its loop on the first
-  // failure, so an abort that fires while this drain is running — the user
-  // stopping the step just after a tool broke — otherwise reaches the
-  // dispositions as "not aborted": the soft path commits, and the
-  // never-started calls are stamped CANCELLED BY A SIBLING, which is not what
-  // happened to them. Measured before this re-read: that batch RESOLVED, with
-  // `TOOL_CANCELLED_BY_SIBLING` on the never-started call, and `agent/post-tool`
-  // was emitted for the call that settled inside the window although
-  // `commitReady` suppresses post-tool when aborted (M10a).
+  // Cancellation can arrive while draining after any stopping condition.
   if (opts.signal?.aborted) aborted = true
 
   // Abort dominates: commit what settled in model order, synthesize.
@@ -501,29 +471,14 @@ export async function executeToolCalls(
 
   // A refusal is never soft. The drain above has already settled every
   // in-flight dispatch, so `firstRefusal` is final here.
-  if (firstRefusal !== undefined) {
+  if (hasRefusal) {
     throw firstRefusal
   }
 
-  // Failure: cancel the siblings (M5 T4), then COMMIT — on THIS path every
-  // DISPATCHED call ends in exactly one tool/result. The guarantee is the soft
-  // failure path's, not the function's: a refusal (checked just above) still
-  // discards the batch by design, and a throw from the commit lane below stops
-  // the cursor where it fired, leaving the slots from there on out of the log
-  // (the accepted cost recorded at that rethrow). This path used to
-  // `throw firstError` and discard the batch; fs/src/error.ts records the
-  // consequence in its own words ("no tool/result and no turn/end are appended
-  // ... read as hung").
-  //
-  // Cancelling and committing are different questions: cancellation answers
-  // "do the siblings keep working" (no), committing answers "how does what
-  // happened get written down" (honestly). Discarding the siblings' already
-  // settled results made the M5 T4 cancellation pointless — they were
-  // cancelled AND thrown away.
-  //
-  // Reached ONLY when `firstRefusal` is undefined (checked above): a throw
-  // from a tool body. A refusal never gets here.
-  if (hasFailed) {
+  // A checkpoint failure stops the batch, records what settled and fills
+  // pending calls before rethrowing the store error. Ordinary failed calls
+  // already committed in the rolling pool and never reach this branch.
+  if (hasFlushError) {
     // Fill every STARTED slot that produced no output, so the head-of-line
     // cursor advances and an already-settled sibling commits its REAL result
     // (the SAME mechanism M51 B3 added to the abort path, one branch up).
@@ -590,7 +545,7 @@ export async function executeToolCalls(
         name: call.name,
         isError: true,
         output: {
-          error: "tool call cancelled: a sibling call in the same batch failed",
+          error: "tool call cancelled: the batch checkpoint failed",
           code: TOOL_CANCELLED_BY_SIBLING,
         },
       })

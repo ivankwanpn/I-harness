@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events"
-import { mkdtempSync } from "node:fs"
+import { mkdtempSync, readFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
 import { PassThrough, Writable } from "node:stream"
 import { fileURLToPath } from "node:url"
@@ -17,7 +17,7 @@ import { createWindowsUnrestrictedBackend } from "../src/index.ts"
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../../..")
 const helper = resolve(repo, "packages/sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe")
 const manifestPath = resolve(repo, "packages/sandbox-windows-psec/artifacts/win32-x64/manifest.json")
-const hash = "421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395"
+const hash = JSON.parse(readFileSync(manifestPath, "utf8")).helperSha256 as string
 const nativeError = { code: "native-failure", api: "CreateProcessW", nativeCode: 203, detail: "environment unavailable", cleanup: [] }
 
 class FakeChild extends EventEmitter {
@@ -306,6 +306,44 @@ describe("fake protocol ownership", () => {
     expect(await handle.settled).toMatchObject({ kind: "settled", resourcesReleased: true })
     await vi.waitFor(() => expect(supervisor.list()).toHaveLength(0))
     expect(child.sent.filter(type => type === "release")).toHaveLength(2)
+  })
+
+  it("a missing output-end wakes the output reader with the I/O failure while retaining incomplete settlement", async () => {
+    let commitId: string | undefined
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        commitId = command.id
+        client.status(command.id, "started", { pid: 1234 })
+        client.status(command.id, "root-exit", { exitCode: 0, observationError: null })
+        client.status(command.id, "tree-empty", { activeProcesses: 0 })
+        const data = Buffer.from("partial")
+        const frame = Buffer.alloc(5 + data.length); frame[0] = 0; frame.writeUInt32LE(data.length, 1); data.copy(frame, 5)
+        client.stderr.write(frame)
+      } else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const prepared = await f.backend.prepare(f.spec, f.policy)
+    const handle = await prepared.commit(() => {})
+    const chunks: string[] = []
+    const reading = (async () => {
+      for await (const frame of handle.io.output) chunks.push(Buffer.from(frame.data).toString())
+    })().then(() => "unexpected success", error => (error as Error).message)
+    await vi.waitFor(() => expect(chunks).toEqual(["partial"]))
+    child.stderr.end()
+    child.status(commitId!, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+    expect(await handle.rootExited).toEqual({ exitCode: 0 })
+    expect(await handle.settled).toMatchObject({ kind: "incomplete", phase: "io", detail: "missing output-end frame" })
+    const disposition = await Promise.race([reading, new Promise(resolve => setTimeout(() => resolve("reader still waiting"), 100))])
+    expect(chunks).toEqual(["partial"])
+    expect(disposition).toBe("missing output-end frame")
+    expect(child.sent).not.toContain("release")
+    // Releasing the native resources does not relabel failed I/O as settled.
+    expect(await handle.release()).toMatchObject({ kind: "incomplete", phase: "io" })
+    await f.backend.dispose()
+    expect(child.sent.filter(type => type === "release")).toHaveLength(1)
   })
 
   it("drains a released acknowledgement after helper exit before retiring ownership", async () => {

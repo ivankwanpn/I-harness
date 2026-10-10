@@ -1,0 +1,7 @@
+{
+  "name": "Official fixture subset",
+  "plugins": [
+    { "name": "explanatory-output-style", "source": "./plugins/explanatory-output-style" },
+    { "name": "feature-dev", "source": "./plugins/feature-dev" }
+  ]
+}

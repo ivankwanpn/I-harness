@@ -188,11 +188,20 @@ export function persistentJobRegistry(
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label, id, startedAt) {
-      const result = jobs.registerJob(owner, kind, label, id, startedAt)
+    registerJob(owner, kind, label, id, startedAt, cancel) {
+      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel)
       observe?.(jobs.read(result.id))
       void save()
-      return result
+      if(!result.finish)return result
+      const finish=result.finish
+      return {...result,finish(status,output){
+        const previous=jobs.read(result.id),updated=finish(status,output)
+        if(updated) {
+          const next=jobs.read(result.id)
+          if(previous.status!==next.status || previous.output!==next.output){observe?.(next);void save()}
+        }
+        return updated
+      }}
     },
     updateJob(id, patch) {
       // Task 4.4: emit ONLY on an observable change — the wrapper compares the

@@ -70,6 +70,48 @@ pub struct Identity {
     _file: Handle,
 }
 impl Identity {
+    fn pinned(path: &str, expected: &str) -> Result<Self> {
+        if expected.len() != 64
+            || !expected
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        {
+            return Err(Error::invalid("invalid artifact SHA256"));
+        }
+        let canonical = normalized(path)?;
+        let mut file = OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(&canonical)
+            .map_err(|e| Error::io("pin runtime artifact", e))?;
+        let mut hash = Sha256::new();
+        let mut chunk = [0u8; 65536];
+        loop {
+            let n = file
+                .read(&mut chunk)
+                .map_err(|e| Error::io("hash runtime artifact", e))?;
+            if n == 0 {
+                break;
+            }
+            hash.update(&chunk[..n]);
+        }
+        if format!("{:x}", hash.finalize()) != expected {
+            return Err(Error::state(
+                "runtime artifact content changed since admission",
+            ));
+        }
+        let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0 {
+            return Err(Error::native("GetFileInformationByHandle(runtime)"));
+        }
+        Ok(Self {
+            original: path.into(),
+            canonical,
+            serial: info.dwVolumeSerialNumber,
+            index: ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64,
+            _file: Handle(file.into_raw_handle()),
+        })
+    }
     fn read(path: &str) -> Result<Self> {
         let canonical = normalized(path)?;
         let file = OpenOptions::new()
@@ -110,6 +152,10 @@ pub struct Effective {
     pub digest: String,
     pub bytes: Vec<u8>,
     identities: Vec<Identity>,
+    missing_paths: Vec<String>,
+    pub spawn_argv: Option<Vec<String>>,
+    derived: Option<crate::msys_image::Derived>,
+    engine: String,
 }
 impl Effective {
     pub fn release(&mut self) -> Vec<Error> {
@@ -117,6 +163,13 @@ impl Effective {
         for identity in &mut self.identities {
             if let Err(e) = identity._file.close() {
                 errors.push(e);
+            }
+        }
+        if errors.is_empty() {
+            if let Some(image) = self.derived.as_mut() {
+                if let Err(e) = image.release() {
+                    errors.push(e);
+                }
             }
         }
         errors
@@ -178,7 +231,7 @@ impl Effective {
         )?;
         // Always protect the running executable, even if a consumer omits it.
         if engine == "psec" {
-            protection.read_only_paths.push(helper_path);
+            protection.read_only_paths.push(helper_path.clone());
         }
         for w in &policy.write_roots {
             if !policy.authority_roots.iter().any(|r| within(w, r)) {
@@ -206,7 +259,90 @@ impl Effective {
         read_only.extend(policy.reference_roots.iter().cloned());
         read_only.extend(protection.read_only_paths.iter().cloned());
         let bytes = serialize(&policy.write_roots, &read_only, &protection.deny_paths);
-        let digest=hash(&serde_json::to_vec(&serde_json::json!({"engine":engine,"consoleMode":console_mode,"spec":spec,"policy":policy,"protection":protection,"schemaSha256":hash(&bytes)})).map_err(|_|Error::invalid("effective policy serialization"))?);
+        let mut missing_paths = Vec::new();
+        let spawn_argv = if let Some(binding) = spec.msys_pty.as_mut() {
+            if engine != "unrestricted"
+                || spec.transport != "pty"
+                || spec.argument_encoding != "crt"
+            {
+                return Err(Error::invalid(
+                    "MSYS PTY requires unrestricted host PTY with CRT arguments",
+                ));
+            }
+            let mut pin = |artifact: &mut crate::protocol::Artifact| -> Result<()> {
+                let identity = Identity::pinned(&artifact.path, &artifact.sha256)?;
+                artifact.path = identity.canonical.clone();
+                identities.push(identity);
+                Ok(())
+            };
+            pin(&mut binding.executable)?;
+            pin(&mut binding.runtime)?;
+            pin(&mut binding.bridge)?;
+            if !binding.executable.path.eq_ignore_ascii_case(&spec.argv[0])
+                || Path::new(&binding.runtime.path).parent()
+                    != Path::new(&binding.executable.path).parent()
+                || Path::new(&binding.runtime.path)
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    != Some("msys-2.0.dll")
+            {
+                return Err(Error::invalid("MSYS runtime/executable identity mismatch"));
+            }
+            if Path::new(&binding.bridge.path).parent() != Path::new(&helper_path).parent()
+                || Path::new(&binding.bridge.path)
+                    .file_name()
+                    .and_then(|p| p.to_str())
+                    != Some("i-harness-msys-pty.exe")
+                || binding.bridge.sha256 != include_str!("../msys/bridge.sha256").trim()
+            {
+                return Err(Error::state(
+                    "MSYS adapter identity does not match shipped helper",
+                ));
+            }
+            if let Some(resolution) = binding.resolution.as_mut() {
+                if resolution.kind != "git-bash-shim" {
+                    return Err(Error::invalid("unknown executable resolution"));
+                }
+                pin(&mut resolution.original)?;
+                let config = &mut resolution.configuration;
+                if let Some(sha) = &config.sha256 {
+                    let identity = Identity::pinned(&config.path, sha)?;
+                    config.path = identity.canonical.clone();
+                    identities.push(identity);
+                } else {
+                    path_syntax(&config.path)?;
+                    let parent = Path::new(&config.path)
+                        .parent()
+                        .and_then(|p| p.to_str())
+                        .ok_or_else(|| Error::invalid("configuration parent missing"))?;
+                    let identity = Identity::read(parent)?;
+                    identities.push(identity);
+                    assert_missing(&config.path)?;
+                    missing_paths.push(config.path.clone());
+                }
+            }
+            let size = spec
+                .pty
+                .as_ref()
+                .ok_or_else(|| Error::invalid("MSYS PTY size missing"))?;
+            Some(
+                [
+                    vec![
+                        binding.bridge.path.clone(),
+                        binding.runtime.path.clone(),
+                        size.cols.to_string(),
+                        size.rows.to_string(),
+                        "0".into(),
+                        "--".into(),
+                    ],
+                    spec.argv.clone(),
+                ]
+                .concat(),
+            )
+        } else {
+            None
+        };
+        let digest=hash(&serde_json::to_vec(&serde_json::json!({"engine":engine,"consoleMode":console_mode,"spec":spec,"policy":policy,"protection":protection,"schemaSha256":hash(&bytes),"spawnArgv":spawn_argv})).map_err(|_|Error::invalid("effective policy serialization"))?);
         Ok(Self {
             spec,
             policy,
@@ -215,9 +351,19 @@ impl Effective {
             digest,
             bytes,
             identities,
+            missing_paths,
+            spawn_argv,
+            derived: None,
+            engine: engine.into(),
         })
     }
     pub fn recheck(&self) -> Result<()> {
+        if let Some(image) = &self.derived {
+            image.check()?;
+        }
+        for path in &self.missing_paths {
+            assert_missing(path)?;
+        }
         for i in &self.identities {
             i.check()?;
         }
@@ -226,6 +372,39 @@ impl Effective {
             return Err(Error::state("helper content changed"));
         }
         Ok(())
+    }
+    pub fn prepare_msys_image(&mut self, workload_handle: usize) -> Result<()> {
+        let Some(binding) = self.spec.msys_pty.as_ref() else {
+            return Ok(());
+        };
+        let bytes = std::fs::read(&binding.bridge.path)
+            .map_err(|e| Error::io("read pinned adapter template", e))?;
+        let bound = crate::msys_image::bind(&bytes, &binding.runtime.path)?;
+        self.derived = Some(crate::msys_image::Derived::empty());
+        let image = self.derived.as_mut().unwrap();
+        image.initialize(&bound)?;
+        let path = image
+            .path
+            .to_str()
+            .ok_or_else(|| Error::invalid("derived adapter path is not Unicode"))?;
+        let argv = self
+            .spawn_argv
+            .as_mut()
+            .ok_or_else(|| Error::state("MSYS adapter argv missing"))?;
+        argv[0] = path.strip_prefix("\\\\?\\").unwrap_or(path).into();
+        path_syntax(&argv[0])?;
+        argv[4] = workload_handle.to_string();
+        self.digest=hash(&serde_json::to_vec(&serde_json::json!({"engine":self.engine,"consoleMode":self.console_mode,"spec":self.spec,"policy":self.policy,"protection":self.protection,"schemaSha256":hash(&self.bytes),"spawnArgv":argv,"derivedImage":{"path":argv[0],"sha256":image.sha256}})).map_err(|_|Error::invalid("effective adapter serialization"))?);
+        Ok(())
+    }
+}
+fn assert_missing(path: &str) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => Err(Error::state(
+            "configuration created since executable resolution",
+        )),
+        Err(e) => Err(Error::io("check absent configuration", e)),
     }
 }
 pub fn validate_console(engine: &str, transport: &str, mode: &str) -> Result<()> {

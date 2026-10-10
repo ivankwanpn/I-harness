@@ -61,6 +61,8 @@ Rewind 提供會話與已記錄檔案變更的還原預覽。可還原的內容�
 
 接入 MCP 伺服器、使用 Skills、管理插件及執行工作流。子代理與 Team 可承接分工，並提供訊息、狀態與取消控制。工具仍依目前角色、操作範圍與核準設定執行。
 
+插件來源與宣告會先轉為 IH 的統一 runtime 格式。既有來源、Skills、Commands、MCP、Agents 與原生 hooks 沿用同一套掛載與授權流程；已支援的 Claude 同步 command hooks 也透過這個流程執行。實際支援事件、限制與所需執行環境見 [插件相容性文件](docs/PLUGIN-COMPATIBILITY.md)。
+
 ### Windows 上的 Linux 執行環境
 
 v0.1.3 包含 WSL2 Linux 後端，可在「執行與權限」選擇發行版、沙箱範圍、命令網路及工作區依賴。Bash、Code Mode 和子代理使用相同的 Linux 執行環境；IH 可管理固定版本的 Linux Node/npm。網頁存取另提供停用、快取、已索引和即時四種模式。設定方式與目前支援範圍見 [WSL2 使用指南](docs/wsl2.md)。

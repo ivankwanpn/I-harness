@@ -92,12 +92,22 @@ function run(cmd, args) {
 const readings = {}
 let failed = false
 
+// A fresh checkout has no ignored Desktop worker payload. Build it before the
+// document-reader tests so results do not depend on a prior development build.
+rule("prepare · Desktop attachment reader")
+const preparation = await run("node", ["packages/desktop/scripts/build-attachment-reader.mjs"])
+readings.preparation = { code: preparation.code }
+if (preparation.code !== 0) {
+  console.error("Verification preparation failed; no test result can be claimed.")
+  process.exit(1)
+}
+
 // ── 1/5 · the recursive suite, captured so its POPULATION can be counted ──────
-rule("1/5 · pnpm -r --no-bail --stream --workspace-concurrency=1 test")
+rule("1/5 · pnpm -r --no-bail --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
 const expected = expectedPopulation()
 // Native integration fixtures have finite deadlines. Keep workspace suites
 // serial so another package's process workload cannot consume their budget.
-const suite = await run("pnpm", ["-r", "--no-bail", "--stream", "--workspace-concurrency=1", "test"])
+const suite = await run("pnpm", ["-r", "--no-bail", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1"])
 const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map((m) => m[1]))].sort()
 const verdicts = [...suite.text.matchAll(/^(\S+) test: (Done|Failed)$/gm)]
 const failedProjects = verdicts.filter((m) => m[2] === "Failed").map((m) => m[1]).sort()
@@ -139,7 +149,7 @@ if (types.code !== 0) failed = true
 
 // ── 4/5 · the suite the recursive walk does not reach ────────────────────────
 rule("4/5 · pnpm e2e")
-const e2e = await run("pnpm", ["e2e"])
+const e2e = await run("pnpm", ["e2e", "--maxWorkers=2", "--minWorkers=1"])
 const e2eFiles = [...e2e.text.matchAll(/✓ (e2e\/[\w.-]+)\s+\((\d+) tests?\)/g)].map((m) => `${m[1]} ${m[2]}`)
 readings.e2e = { code: e2e.code, files: e2eFiles.length }
 console.log(`\n   reading: exit ${e2e.code} · ${e2eFiles.length} files · ${e2eFiles.join(" · ")}`)

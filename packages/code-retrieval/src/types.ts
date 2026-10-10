@@ -25,11 +25,21 @@ export interface CodeRetrievalStatus {
   /** Measured counters for this service lifetime. Missing provider token usage
    * increments unreportedRequests; it is never presented as zero token use. */
   metrics?: { embeddingRequests:number; embeddingCacheHits:number; reportedInputTokens:number; unreportedRequests:number };
+  /** Current-source checks from the latest completed search, distinct from
+   * durable index completeness. This is not a scan of every indexed file. */
+  sourceHealth?: { scope:'last-search'; state:'unchecked'|'current'|'degraded'; generation:number; checkedFiles:number; refusedFiles:number; reasons:string[]; checkedAt:number };
 }
-export interface CodeSearchResult { hits: CodeHit[]; mode: 'lexical'|'hybrid'; partial: boolean; reasons: string[]; generation: number }
+export type CodeSourceRefusal = 'source-unavailable'|'source-changed'|'source-path-unavailable'|'source-ignored'|'source-policy-incomplete'|'source-content-changed'|'source-content-incomplete'|'source-validation-limit'|'source-validation-failed'|'stale-or-inaccessible-source';
+export type CodeSourceValidation = { valid:true } | { valid:false; reason:CodeSourceRefusal; code?:string };
+export interface CodeSearchResult { hits: CodeHit[]; mode: 'lexical'|'hybrid'; partial: boolean; reasons: string[]; generation: number; diagnostics?: { reason:CodeSourceRefusal; code?:string; count:number }[] }
 export interface CodeSnapshotReader {
+  /** Capture the actual source set before scheduling a full index. */
+  indexSourceIds?(): string[];
+  /** Recheck current source authority before another session can join and
+   * manage an existing index lifetime. The scope belongs to that job. */
+  authorizeIndex?(access:CodeAccess,input:{sourceIds:string[]}): Promise<void>;
   snapshots(access: CodeAccess, options: { sourceIds?: string[]; config: CodeRetrievalConfig }): AsyncIterable<CodeFileSnapshot>;
-  revalidate(access: CodeAccess, hit: CodeHit): Promise<boolean>;
+  revalidate(access: CodeAccess, hit: CodeHit): Promise<boolean|CodeSourceValidation>;
   status?(): { partial: boolean; reasons: string[] };
 }
 export interface CodeRetrievalService {
@@ -45,4 +55,8 @@ export interface CodeRetrievalService {
 export interface CodeRetrievalOptions {
   root: string; workspaceId: string; reader: CodeSnapshotReader; config?: Partial<CodeRetrievalConfig>;
   resolveCredential?: (ref: string) => string|undefined; fetch?: typeof globalThis.fetch;
+  /** Connect this lifetime to an owning session's shared job management.
+   * Human settings jobs may have no session registry. Registration failures
+   * reject admission before any index work starts. */
+  registerJob?: (access:CodeAccess,job:{jobId:string;cancel():void}) => {finish(status:'completed'|'killed'|'error',output:string):void}|undefined;
 }
