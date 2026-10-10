@@ -21,7 +21,8 @@ import { ProjectSidebar } from "./ProjectSidebar.tsx"
 import { ProjectManager } from "../projects/ProjectManager.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft } from "../session/Composer.tsx"
+import { Composer, NewTaskComposer, readDraft, writeDraft, boundedDraft, useComposerSending } from "../session/Composer.tsx"
+import { ComposerProjectContext, type ComposerProjectState } from "../session/ComposerProjectContext.tsx"
 import type { TimelineRow } from "../session/project.ts"
 import { ExecutionPane } from "../session/ExecutionPane.tsx"
 import { AgentProcessesPane } from "../session/AgentProcessesPane.tsx"
@@ -110,6 +111,7 @@ export interface WorkbenchProps {
   workspaces: WorkspaceEntry[]
   projects?: ProjectEntry[]
   selectedProjectId?: string
+  projectContext?: ComposerProjectState
   onProjectsChanged?(): Promise<void>
   onSelectProject?(id: string): void
   onSelectSessionInWorkspace?(workspaceId: string, sessionId: string, projectId?: string): void
@@ -139,6 +141,7 @@ export function Workbench({
   workspaces,
   projects,
   selectedProjectId,
+  projectContext,
   onProjectsChanged,
   onSelectProject,
   onSelectSessionInWorkspace,
@@ -284,6 +287,7 @@ export function Workbench({
   }
   const workspaceTitle = selectedWorkspaceId ? t("未分類會話") : t("尚未選擇會話")
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
+  const composerSending = useComposerSending(selectedWorkspaceId, selectedSessionId ?? `new-task:${selectedProjectId ?? "unassigned"}`)
   const displayProject = selectedProject
   const newSessionWorkspaceId = selectedProject
     ? [selectedProject.primaryWorkspaceId, ...selectedProject.workspaceIds].find(id => id !== undefined && selectedProject.workspaceIds.includes(id) && workspaces.some(folder => folder.id === id))
@@ -331,6 +335,12 @@ export function Workbench({
   const workVisible = reviewOpen && !pageOpen
   const toggleSidebar = drawer.toggle
   const navigate = (next: "settings" | "projects" | "plugins" | "search") => { drawer.closeTemporary(); setSurface(next) }
+  const contextState: ComposerProjectState = projectContext ?? (conversation?.projectReady === false ? { status: "loading" }
+    : projects === undefined ? { status: "unavailable" } : { status: "ready", ...(selectedProject ? { projectId: selectedProject.id, projectName: selectedProject.name } : {}) })
+  const composerProject = <ComposerProjectContext context={contextState} projects={projects} workspaces={workspaces} editable={!selectedSessionId} disabled={composerSending}
+    onSelect={onSelectProject ? id => { drawer.closeTemporary(); onSelectProject(id) } : undefined}
+    onUnassign={selectedWorkspaceId ? () => onSelectWorkspace(selectedWorkspaceId, undefined) : undefined}
+    onManage={onProjectsChanged ? () => navigate("projects") : undefined} />
   const sidebarVisible = !pageOpen && (drawer.narrow ? drawer.open : !sidebarCollapsed || drawer.preview)
   const rightDocked = reviewOpen && !pageOpen && viewportWidth >= 1180
   const sidebarMax = Math.max(200, Math.min(520, viewportWidth - 48 - (drawer.narrow ? 16 : 8 + 400 + (rightDocked ? 280 : 0))))
@@ -440,6 +450,7 @@ export function Workbench({
                 <PendingPanel key={`${selectedWorkspaceId}:${selectedSessionId}`} draftOwner={bridge} workspaceId={selectedWorkspaceId} pending={conversation.pending} onReply={conversation.onReply} />
                 {conversation.pending.length > 0 && conversation.running ? <button type="button" className="link-button dock-cancel" onClick={conversation.onCancel}>{t("停止")}</button> : null}
                 <div hidden={conversation.pending.length > 0}>
+                {composerProject}
                 <Composer
                   onOpenHistory={onSelectHistory}
                   onOpenProjectFile={fileNavigation?.onOpenProjectFile}
@@ -472,16 +483,19 @@ export function Workbench({
                 </div>
               </>
             )
-            : <div className={selectedWorkspaceId === undefined ? "empty-conversation" : "empty-conversation new-task-conversation"}>
+            : <div className="empty-conversation new-task-conversation">
                 {selectedWorkspaceId === undefined ? <>
+                  <div className="empty-introduction">
                   <span className="welcome-mark">I</span>
                   <h1>{t("讓想法成為成果")}</h1>
                   <p>{t("建立專案，集中管理資料夾與會話。")}</p>
                   <button type="button" className="welcome-action" onClick={() => navigate("projects")} disabled={!onProjectsChanged}><FolderOpen size={17} />{t("專案")}</button>
+                  </div>
+                  <div className="empty-composer">{composerProject}<div className="project-required-composer">{t("先選擇專案以開始會話。")}</div></div>
                 </> : <>
                   <div className="empty-introduction"><h1>{t("今天想完成甚麼？")}</h1>
                   <p>{t(displayProject ? "描述你的目標，從這個專案開始。" : "延續左側的會話，或開始一項新任務。")}</p></div>
-                  <div className="empty-composer">{selectedProject && !selectedProject.workspaceIds.includes(selectedWorkspaceId) ? <><p className="notice">{english ? "Choose a project folder to create a conversation. This folder retains moved conversation storage." : "選擇專案資料夾以建立會話；此資料夾保留已移動會話的儲存資料。"}</p><button type="button" className="primary-button" onClick={() => { const member = selectedProject.primaryWorkspaceId ?? selectedProject.workspaceIds[0]; if (member) onSelectWorkspace(member, selectedProject.id) }}>{t("選擇資料夾")}</button></> : <NewTaskComposer onOpenHistory={onSelectHistory} onOpenProjectFile={fileNavigation?.onOpenProjectFile} key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`} bridge={bridge} draftRequest={capabilities["desktop-drafts"]?.includes("1") ? draftRequest : undefined} workspaceId={selectedWorkspaceId} projectId={selectedProjectId} capabilities={capabilities} onPermissionsChanged={onSandboxChange} onSubmitted={(id) => { if (workspaceScope.current.id === selectedWorkspaceId && workspaceScope.current.sessionId === undefined && workspaceScope.current.projectId === selectedProjectId) { onSelectSession(id); onSessionsChanged?.() } }} onWorkflow={openWorkflow} />}</div>
+                  <div className="empty-composer">{composerProject}{selectedProject && !selectedProject.workspaceIds.includes(selectedWorkspaceId) ? <><p className="notice">{english ? "Choose a project folder to create a conversation. This folder retains moved conversation storage." : "選擇專案資料夾以建立會話；此資料夾保留已移動會話的儲存資料。"}</p><button type="button" className="primary-button" onClick={() => { const member = selectedProject.primaryWorkspaceId ?? selectedProject.workspaceIds[0]; if (member) onSelectWorkspace(member, selectedProject.id) }}>{t("選擇資料夾")}</button></> : <NewTaskComposer onOpenHistory={onSelectHistory} onOpenProjectFile={fileNavigation?.onOpenProjectFile} key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`} bridge={bridge} draftRequest={capabilities["desktop-drafts"]?.includes("1") ? draftRequest : undefined} workspaceId={selectedWorkspaceId} projectId={selectedProjectId} capabilities={capabilities} onPermissionsChanged={onSandboxChange} onSubmitted={(id) => { if (workspaceScope.current.id === selectedWorkspaceId && workspaceScope.current.sessionId === undefined && workspaceScope.current.projectId === selectedProjectId) { onSelectSession(id); onSessionsChanged?.() } }} onWorkflow={openWorkflow} />}</div>
                 </>}
               </div>}
         </section>}

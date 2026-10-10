@@ -2,6 +2,9 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "會話專案": "Conversation project", "選擇會話專案": "Choose conversation project", "選擇專案": "Choose project",
+  "正在確認專案…": "Checking project…", "專案歸屬無法確認": "Project ownership unavailable", "專案已移除": "Project removed",
+  "不在專案中": "Not in a project", "不在專案中工作": "Work outside a project", "先選擇專案以開始會話。": "Choose a project to start a conversation.",
   "首頁": "Home", "首頁側欄": "Home sidebar", "關閉首頁側欄": "Close home sidebar", "最近會話": "Recent conversations",
   "搜尋最近會話": "Search recent conversations", "搜尋會話或專案": "Search conversations or projects", "沒有符合的會話": "No matching conversations",
   "會話分組狀態無法確認": "Conversation ownership is unavailable", "會話所屬專案無法確認": "The conversation's project is unavailable",
