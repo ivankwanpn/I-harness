@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
-import { useState } from "react"
+import { useState, type ComponentProps } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import type { SessionDashboardResult } from "@i-harness/sdk"
-import { Workbench } from "../src/renderer/shell/Workbench.tsx"
+import { Workbench as ActualWorkbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 import { useLocale } from "../src/renderer/design/i18n.ts"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
 import type { WorkspaceEntry } from "../src/main/workspaces.ts"
 import { writeDraft, clearDraft } from "../src/renderer/session/Composer.tsx"
 import type { ProjectFilesRequest } from "../../desktop-gateway/src/project-files.ts"
+
+const Workbench = (props: ComponentProps<typeof ActualWorkbench>) => <ActualWorkbench projects={[]} {...props} />
 
 const ENTRY: WorkspaceEntry = { id: "ws-1", path: "D:/workspace", label: "workspace" }
 
@@ -132,7 +134,7 @@ describe("Desktop workbench shell", () => {
     const onSelectWorkspace = vi.fn()
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
       capabilities={{ "session-create": ["1"], "desktop-input": ["1"] }} onSelectWorkspace={onSelectWorkspace} onSelectSession={() => {}} />)
-    fireEvent.click(within(screen.getByRole("navigation", { name: "首頁側欄" })).getByRole("button", { name: "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" }))
     expect(onSelectWorkspace).toHaveBeenCalledWith(ENTRY.id, undefined)
     const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
     fireEvent.change(editor, { target: { value: "Review the playground" } })
@@ -141,7 +143,7 @@ describe("Desktop workbench shell", () => {
   })
   it("inserts a settings command into the existing draft without sending", async () => {
     const bridge = fakeBridge()
-    bridge.request = vi.fn(async (request) => request.kind === "desktop/resources/list" ? { items: [{ name: "hello", source: "plugin" }], total: 1, diagnostics: [] }
+    bridge.request = vi.fn(async (request) => request.kind === "session/dashboard" ? { sessions: [] } : request.kind === "desktop/session/navigation/state" ? {} : request.kind === "desktop/resources/list" ? { items: [{ name: "hello", source: "plugin" }], total: 1, diagnostics: [] }
       : request.kind === "desktop/resources/read" ? { name: "hello", source: "plugin", body: "A prompt", truncated: false } : { notifications: false, notificationsSupported: false })
     const onPrompt = vi.fn(async () => {})
     writeDraft(ENTRY.id, "resource-test", "existing prompt")
@@ -158,7 +160,7 @@ describe("Desktop workbench shell", () => {
   })
   it("retains a resource draft after leaving and reopening Settings", async () => {
     const bridge = fakeBridge()
-    bridge.request = vi.fn(async request => request.kind === "desktop/resources/list" ? { items: [], total: 0, diagnostics: [] } : { notifications: false, notificationsSupported: false })
+    bridge.request = vi.fn(async request => request.kind === "session/dashboard" ? { sessions: [] } : request.kind === "desktop/session/navigation/state" ? {} : request.kind === "desktop/resources/list" ? { items: [], total: 0, diagnostics: [] } : { notifications: false, notificationsSupported: false })
     useUiStore.setState({ surface: "settings" })
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} selectedWorkspaceId={ENTRY.id} capabilities={{ "desktop-resources": ["1"], "desktop-resource-authoring": ["1"] }} onSelectWorkspace={() => {}} onSelectSession={() => {}} />)
     fireEvent.click(screen.getByRole("button", { name: "資源" }))
@@ -173,9 +175,9 @@ describe("Desktop workbench shell", () => {
   it("can hide and restore navigation without losing the header toggle", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
-    expect(screen.queryByRole("navigation", { name: "首頁側欄" })).toBeNull()
+    expect(screen.queryByRole("navigation", { name: "專案" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
-    expect(screen.getByRole("navigation", { name: "首頁側欄" })).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   })
   it("preserves a draft while a pending request takes over the bottom dock", () => {
     const conversation = { rows: [], canSend: true, running: true, pending: [], onPrompt: async () => {}, onCancel: vi.fn(), onCancelTask: vi.fn(), onCancelQueue: vi.fn(), onReply: async () => {} }
@@ -201,7 +203,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
     fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
     expect(await screen.findByRole("region", { name: "工作區記憶" })).toBeTruthy()
-    fireEvent.click(within(screen.getByRole("navigation", { name: "首頁側欄" })).getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
     await waitFor(() => expect(screen.queryByRole("region", { name: "工作區記憶" })).toBeNull())
     if (mode === "existing") expect(onSelectSession).toHaveBeenCalledWith("existing")
     else expect(vi.mocked(bridge.request).mock.calls.some(([request]) => request.kind === "session/create")).toBe(false)
@@ -209,13 +211,13 @@ describe("Desktop workbench shell", () => {
   it("switches shell language while preserving workspace navigation", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "設定" }))
-    expect(screen.queryByRole("navigation", { name: "首頁側欄" })).toBeNull()
+    expect(screen.queryByRole("navigation", { name: "專案" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "一般" }))
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
-    expect(within(screen.getByRole("navigation", { name: "Home sidebar" })).getByRole("button", { name: "New conversation" })).toBeTruthy()
+    expect(within(screen.getByRole("navigation", { name: "Projects" })).getByRole("button", { name: "New conversation" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "What would you like to work on?" })).toBeTruthy()
-    expect(screen.getByRole("navigation", { name: "Home sidebar" })).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "Projects" })).toBeTruthy()
     expect(document.documentElement.lang).toBe("en")
   })
   it("keeps review closed until requested and allows closing it", () => {
@@ -260,14 +262,14 @@ describe("Desktop workbench shell", () => {
   it("renders a disabled create control when the host lacks session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} capabilities={{ "session-list": ["1"] }} />)
 
-    const create = within(screen.getByRole("navigation", { name: "首頁側欄" })).getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(true)
   })
 
   it("enables the create control when the host advertises session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
 
-    const create = within(screen.getByRole("navigation", { name: "首頁側欄" })).getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(false)
   })
 
@@ -282,7 +284,7 @@ describe("Desktop workbench shell", () => {
     )
 
     await screen.findAllByText("未命名會話")
-    await waitFor(() => expect(document.querySelectorAll(".home-sidebar-conversation time")).toHaveLength(1))
+    await waitFor(() => expect(Array.from(document.querySelectorAll(".row-meta")).filter(row => row.textContent?.includes("最後活動"))).toHaveLength(1))
   })
 
   it("offers a retry when a load failed", () => {

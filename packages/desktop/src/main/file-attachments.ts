@@ -1,6 +1,6 @@
 import type { ImageInput } from "@i-harness/sdk"
 import { open, realpath, stat, type FileHandle } from "node:fs/promises"
-import { basename, isAbsolute, relative, win32 } from "node:path"
+import { basename, extname, isAbsolute, relative, win32 } from "node:path"
 import { documentFormat, READER_LIMITS, readDocumentSnapshot } from "./attachment-readers.ts"
 import type { DocumentSnapshot } from "./attachment-reader-core.ts"
 export interface PickedAttachments {
@@ -13,6 +13,44 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 const MAX_IMAGE_TOTAL_BYTES = 20 * 1024 * 1024
 const MAX_FILES = 8
 const MAX_CONTEXT_BYTES = 64 * 1024
+const MAX_VIDEO_BYTES = 256 * 1024 * 1024
+
+/** Identify containers only. read_video's decoder validates the actual streams. */
+function videoType(path: string, header: Buffer): string | undefined {
+  const extension = extname(path).toLowerCase()
+  if (![".mp4", ".m4v", ".mov", ".webm"].includes(extension)) return undefined
+  const fail = (): never => { throw new Error("Unsupported or invalid video container; select an MP4, MOV or WebM video") }
+  if (extension !== ".webm") {
+    if (header.length < 16 || header.toString("ascii", 4, 8) !== "ftyp") return fail()
+    const size = header.readUInt32BE(0)
+    if (size < 16 || size > header.length || size % 4 !== 0) return fail()
+    const brand = header.toString("ascii", 8, 12)
+    if (brand === "qt  ") return "video/quicktime"
+    if (["isom", "iso2", "iso3", "iso4", "iso5", "iso6", "iso7", "iso8", "iso9", "mp41", "mp42", "avc1", "M4V ", "M4VH", "M4VP", "MSNV", "dash"].includes(brand)) return "video/mp4"
+    return fail()
+  }
+  if (header.length < 5 || header.readUInt32BE(0) !== 0x1a45dfa3) return fail()
+  const vint = (at: number, identifier = false): { value: number; width: number } => {
+    const first = header[at]
+    if (!first) return fail()
+    let width = 1, mask = 0x80
+    while (!(first & mask)) { width++; mask >>= 1 }
+    if (width > 4 || at + width > header.length) return fail()
+    let value = identifier ? first : first & (mask - 1)
+    for (let i = 1; i < width; i++) value = value * 256 + header[at + i]!
+    return { value, width }
+  }
+  const size = vint(4), end = 4 + size.width + size.value
+  if (end > header.length) return fail()
+  for (let at = 4 + size.width; at < end;) {
+    const id = vint(at, true); at += id.width
+    const length = vint(at); at += length.width
+    if (at + length.value > end) return fail()
+    if (id.value === 0x4282) return header.toString("ascii", at, at + length.value) === "webm" ? "video/webm" : fail()
+    at += length.value
+  }
+  return fail()
+}
 
 function mediaType(bytes: Buffer): ImageInput["mediaType"] | undefined {
   if (bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png"
@@ -68,7 +106,18 @@ export async function readPickedAttachments(workspacePath: string, selectedPaths
     try {
       const info = await file.stat()
       if (!info.isFile()) throw new Error("The selected attachment must be a regular file, not a directory")
-      const header = await readUpTo(file, 12)
+      const header = await readUpTo(file, 4096)
+      const video = videoType(requested, header)
+      if (video) {
+        if (info.size === 0 || info.size > MAX_VIDEO_BYTES) throw new Error("Each video must be nonempty and at most 256 MiB")
+        if (result.paths.length + result.texts.length >= MAX_FILES) throw new Error("Attach at most 8 non-image files")
+        // The picker authorizes this exact external file; absolute reads are
+        // supported by read_video. Preserve a reference, never the media bytes.
+        const text = JSON.stringify({ kind: "video-reference", path: canonical.replaceAll("\\", "/"), contentType: video, bytes: info.size })
+        if (Buffer.byteLength(JSON.stringify([...result.texts.map(({ name, text }) => ({ name, text })), { name, text }])) > MAX_CONTEXT_BYTES) throw new Error("Attachment text context must total at most 64 KiB")
+        result.texts.push({ name, text, contentType: video, bytes: info.size, truncated: false })
+        continue
+      }
       const imageType = mediaType(header)
       if (imageType !== undefined) {
         if (!allowImages) throw new Error("The selected model does not support image attachments")

@@ -17,7 +17,7 @@ import { ContextUsage } from "./ContextUsage.tsx"
 import "./Composer.css"
 import { useUiStore } from "../shell/ui-store.ts"
 import type { FollowupDelivery } from "../../main/local-preferences.ts"
-import { prepareTextAttachmentDrafts, readTextAttachmentDrafts, subscribeTextAttachmentDrafts, textAttachmentContext, writeTextAttachmentDrafts } from "./text-attachment-drafts.ts"
+import { isVideoAttachment, prepareTextAttachmentDrafts, readTextAttachmentDrafts, subscribeTextAttachmentDrafts, textAttachmentContext, writeTextAttachmentDrafts } from "./text-attachment-drafts.ts"
 import type { DraftRequester, DraftTextAttachment, UnsentDraft } from "../../shared/attachment-drafts.ts"
 import { DurableDraftClient } from "./durable-draft-client.ts"
 import { publishDraftChange, subscribeDraftChanges, isDraftRetired, retireDraftScope } from "./draft-changes.ts"
@@ -36,7 +36,7 @@ const rawListeners = new Set<(key: string) => void>()
 const durableClients = new Map<string, DurableDraftClient>()
 const restoringDrafts = new Set<string>()
 const retiredRawKeys = new Set<string>()
-const documentLabels: Record<string, string> = { "application/pdf": "PDF", "application/zip": "ZIP", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX" }
+const documentLabels: Record<string, string> = { "video/mp4": "MP4", "video/quicktime": "MOV", "video/webm": "WebM", "application/pdf": "PDF", "application/zip": "ZIP", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "DOCX", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "application/vnd.openxmlformats-officedocument.presentationml.presentation": "PPTX" }
 subscribeDraftChanges((workspace, session) => { const key = draftKey(workspace, session); if (!restoringDrafts.has(key)) durableClients.get(key)?.changed() })
 let nextNativeImageId = -1
 type SendState = { sending: boolean; error?: string }
@@ -497,6 +497,7 @@ function SessionComposer({
       {images.length ? <div className="composer-images">{images.map((image) => <span key={image.id} className="composer-image-chip"><img alt="" src={`data:${image.mediaType};base64,${image.dataBase64}`} /><span title={image.name}>{image.name}</span><button type="button" aria-label={t("移除圖片 {name}", { name: image.name ?? "" })} onClick={() => writeImageDrafts(workspaceId, sessionId, images.filter((value) => value.id !== image.id))}><X size={12} /></button></span>)}</div> : null}
       {texts.length ? <div className="composer-file-references">{texts.map((attachment) => <span key={attachment.id} className="composer-file-chip composer-text-chip"><FileText size={14} aria-hidden="true" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={t("移除附件 {name}", { name: attachment.name })} onClick={() => writeTextAttachmentDrafts(workspaceId, sessionId, texts.filter((value) => value.id !== attachment.id))}><X size={12} aria-hidden="true" /></button>{attachment.contentType ? <small title={attachment.contentType}>{documentLabels[attachment.contentType] ?? attachment.contentType}{attachment.bytes !== undefined ? ` · ${attachment.bytes} bytes` : ""}{attachment.truncated ? ` · ${attachmentText("已截斷")}` : ""}</small> : null}{attachment.reason ? <small title={attachment.reason}>{attachment.reason}</small> : null}</span>)}</div> : null}
       {draftRequest && (images.length || texts.length || references.length || contextRefs.length) ? <small className="composer-draft-policy">{attachmentText("未送出附件保留 7 天；本機草稿上限 128 MiB。")}</small> : null}
+      {texts.some(isVideoAttachment) ? <small className="composer-draft-policy">{attachmentText("影片保留原檔案位置；分析完成前請勿移動或刪除。")}</small> : null}
       {draftError ? <p role="alert" className="error-text">{attachmentText("草稿儲存失敗；目前輸入仍保留。")} {draftError}</p> : null}
       {pickError ? <p role="alert" className="error-text">{pickError}</p> : null}
       {imageError ? <p role="alert" className="error-text">{imageError}</p> : null}
@@ -571,6 +572,9 @@ function SessionComposer({
         </span> : null}
         {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
+        {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={t("停止")} onClick={onCancel}>
+          <Square size={14} fill="currentColor" aria-hidden="true" />
+        </button> : null}
         <button type={primaryStops ? "button" : "submit"} className="composer-send" data-state={primaryState} aria-busy={primaryBusy || undefined}
           aria-label={t(primaryStops ? "停止" : "送出")}
           title={primaryBusy ? t("操作進行中") : primaryStops ? t("停止") : running ? deliveryLabel : t("送出")}

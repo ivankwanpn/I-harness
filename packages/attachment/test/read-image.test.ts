@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createReadImageTool } from "../src/read-image.ts"
+import { JPEG, GIF, WEBP } from '../../image-validation/test/fixtures.ts'
 
 // 1x1 transparent PNG (canonical base64, no data: prefix) — the attachment
 // store test's own fixture; round-trip asserts the bytes decode exactly.
@@ -35,6 +36,12 @@ afterEach(() => {
 })
 
 describe("createReadImageTool", () => {
+  it('returns a useful failure for a corrupt image instead of poisoning later model requests', async () => {
+    writeFileSync(join(workspaceDir,'bad.png'),Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==','base64'))
+    const fail = await failureOf(createReadImageTool({workspace:workspaceDir}).execute({path:'bad.png'},{}))
+    expect(fail.code).toBe('FS_IO_ERROR')
+    expect(fail.error).toMatch(/checksum/)
+  })
   it("round-trips a real tiny PNG: mime + canonical base64 + exact bytes", async () => {
     const pngPath = join(workspaceDir, "pixel.png")
     writeFileSync(pngPath, Buffer.from(PNG_1X1_BASE64, "base64"))
@@ -54,7 +61,7 @@ describe("createReadImageTool", () => {
       ["pixel.webp", "image/webp" as const],
       ["pixel.gif", "image/gif" as const],
     ]) {
-      writeFileSync(join(workspaceDir, name), Buffer.from([1, 2, 3]))
+      writeFileSync(join(workspaceDir, name), Buffer.from(mime === 'image/jpeg' ? JPEG : mime === 'image/gif' ? GIF : WEBP, 'base64'))
       const tool = createReadImageTool({ workspace: workspaceDir })
       const images = imagesOf(await tool.execute({ path: name }, {}))
       expect(images[0]!.mediaType).toBe(mime)

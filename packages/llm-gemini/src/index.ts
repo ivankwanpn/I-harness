@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -175,7 +175,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
-      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      const messages = await projectImagesForProvider(request.messages, vision, request.signal)
       // Gemini's functionResponse requires the function NAME, but the neutral
       // tool message carries only the call id — the name is recovered from the
       // assistant toolCalls the session log derived (they always precede the

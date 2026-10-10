@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
 import { createPortal } from "react-dom"
 import { Archive, Copy, FolderOpen, GitBranch, Mail, MailOpen, Pencil, Pin, PinOff } from "lucide-react"
-import { useText } from "../design/i18n.ts"
+import { useLocale, useText } from "../design/i18n.ts"
+import { managementError } from "../session/management-error.ts"
 import { listenForegroundEscape } from "../design/foreground-escape.ts"
 import "./session-actions.css"
 
@@ -21,6 +22,7 @@ export interface SessionActionsProps {
 /** Native sidebar affordances, using this app's existing management services. */
 export function SessionActions({ session, navigation, anchor, onManage, onCopyId, onOpenFolder, onManageSession, onClose }: SessionActionsProps) {
   const t = useText()
+  const english = useLocale(state => state.locale) === "en"
   const [renaming, setRenaming] = useState(false)
   const [title, setTitle] = useState(session.title ?? "")
   const [busy, setBusy] = useState(false)
@@ -58,7 +60,7 @@ export function SessionActions({ session, navigation, anchor, onManage, onCopyId
     if (lock.current) return
     lock.current = true; setBusy(true); setError(undefined)
     try { await action(); if (alive.current) close() }
-    catch (reason) { if (alive.current) setError(reason instanceof Error ? reason.message : String(reason)) }
+    catch (reason) { if (alive.current) setError(managementError(reason, english)) }
     finally { lock.current = false; if (alive.current) setBusy(false) }
   }
   function keyboard(event: KeyboardEvent<HTMLDivElement>) {

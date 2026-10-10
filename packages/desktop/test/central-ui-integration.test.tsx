@@ -15,7 +15,7 @@ function bridgeFor(handle: (request: DesktopRequest) => unknown): DesktopBridge 
   return { request: vi.fn(async request => handle(request)), onEvent: () => () => {} }
 }
 function base(bridge: DesktopBridge): WorkbenchProps {
-  return { bridge, workspaces: [workspace], selectedWorkspaceId: "source", selectedSessionId: "moved", capabilities: {}, onSelectWorkspace() {}, onSelectSession() {}, conversation: { rows: [], running: false, canSend: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } }
+  return { projects: [], bridge, workspaces: [workspace], selectedWorkspaceId: "source", selectedSessionId: "moved", capabilities: {}, onSelectWorkspace() {}, onSelectSession() {}, conversation: { rows: [], running: false, canSend: false, pending: [], onPrompt: async () => {}, onCancel() {}, onCancelTask() {}, onCancelQueue() {}, onReply: async () => {} } }
 }
 
 it("mounts provider configuration without a folder, native auto-title and actual About copy", async () => {

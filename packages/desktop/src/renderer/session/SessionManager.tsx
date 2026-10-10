@@ -5,6 +5,7 @@ import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import { RewindPanel } from "./RewindPanel.tsx"
 import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 import { Button } from "../vendor/opencode/Button.tsx"
+import { managementError } from "./management-error.ts"
 export type ManageSession = (sessionId: string, action: "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread", title?: string) => Promise<void>
 interface Row { id: string; title?: string }
 export interface ManageSessionBatchCommand { action: "archive" | "restore" | "delete" | "move"; sessionIds: string[]; projectId?: string; expectedOwners?: Record<string, string | null> }
@@ -60,7 +61,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
     lock.current = true; setBusy(true); setError(undefined)
     const owner = workspaceId
     try { await onManage(id, action, name); if (scope.current === owner) setRefresh((value) => value + 1) }
-    catch (reason) { if (scope.current === owner) setError(reason instanceof Error ? reason.message : String(reason)) }
+    catch (reason) { if (scope.current === owner) setError(managementError(reason, english)) }
     finally { lock.current = false; setBusy(false) }
   }
   function confirmBatch(action: ManageSessionBatchCommand["action"]) {
@@ -79,7 +80,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
       setBatchResults(result); setBatchConfirmation(undefined)
       setSelected(new Set(result.results.filter(row => !row.ok).map(row => row.sessionId)))
       setRefresh(value => value + 1)
-    } catch (error) { if (scope.current === owner) setError(error instanceof Error ? error.message : String(error)) }
+    } catch (error) { if (scope.current === owner) setError(managementError(error, english)) }
     finally { lock.current = false; setBusy(false) }
   }
   const pageCount = Math.max(1, Math.ceil((rows?.length ?? 0) / 50))
@@ -94,7 +95,7 @@ export function SessionManager({ bridge, workspaceId, onManage, onRewindComplete
       <button disabled={blocked || !selected.size || selected.size > 100} onClick={() => confirmBatch("delete")}>{c("永久刪除所選會話", "Permanently delete selected conversations")}</button>
       {projects && currentOwners && executionWorkspace ? <><label>{c("目的專案", "Destination project")}<select aria-label={c("目的專案", "Destination project")} value={destination} disabled={blocked} onChange={event => setDestination(event.target.value)}><option value="">{c("未分組", "Ungrouped")}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><button disabled={blocked || !selected.size || selected.size > 100} onClick={() => confirmBatch("move")}>{c("移動所選會話", "Move selected conversations")}</button></> : null}
     </div> : null}
-    {batchResults ? <section aria-label={c("批次操作結果", "Batch results")}><p>{c(`${batchResults.results.filter(row => row.ok).length} 筆完成，${batchResults.results.filter(row => !row.ok).length} 筆失敗`, `${batchResults.results.filter(row => row.ok).length} completed, ${batchResults.results.filter(row => !row.ok).length} failed`)}</p>{batchResults.results.map(row => <div key={row.sessionId} role={row.ok ? "status" : "alert"} className="batch-result"><span>{rows?.find(item => item.id === row.sessionId)?.title ?? row.sessionId} · {row.ok ? t("已完成") : row.sessionDeleted ? c("會話已刪除，本機草稿尚未清理。", "Conversation deleted. Local draft cleanup is incomplete.") : row.error}</span>{!row.ok && row.sessionDeleted ? <><details><summary>{c("詳細錯誤", "Error details")}</summary><pre className="tool-output">{row.error}</pre></details><button disabled={blocked} onClick={() => { void runBatch({ action: "delete", sessionIds: [row.sessionId] }) }}>{c("重試草稿清理", "Retry draft cleanup")}</button></> : null}</div>)}</section> : null}
+    {batchResults ? <section aria-label={c("批次操作結果", "Batch results")}><p>{c(`${batchResults.results.filter(row => row.ok).length} 筆完成，${batchResults.results.filter(row => !row.ok).length} 筆失敗`, `${batchResults.results.filter(row => row.ok).length} completed, ${batchResults.results.filter(row => !row.ok).length} failed`)}</p>{batchResults.results.map(row => <div key={row.sessionId} role={row.ok ? "status" : "alert"} className="batch-result"><span>{rows?.find(item => item.id === row.sessionId)?.title ?? row.sessionId} · {row.ok ? t("已完成") : row.sessionDeleted ? c("會話已刪除，本機草稿尚未清理。", "Conversation deleted. Local draft cleanup is incomplete.") : managementError(row.error, english)}</span>{!row.ok && row.sessionDeleted ? <><details><summary>{c("詳細錯誤", "Error details")}</summary><pre className="tool-output">{row.error}</pre></details><button disabled={blocked} onClick={() => { void runBatch({ action: "delete", sessionIds: [row.sessionId] }) }}>{c("重試草稿清理", "Retry draft cleanup")}</button></> : null}</div>)}</section> : null}
     {error ? <p role="alert">{error}<button onClick={() => setRefresh(refresh + 1)}>{t("重試")}</button></p> : null}
     {rows === undefined && !error ? <p role="status">{t("正在讀取…")}</p> : null}
     {rows?.length === 0 ? <p>{t("尚無會話")}</p> : null}

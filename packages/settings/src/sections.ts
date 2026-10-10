@@ -168,6 +168,7 @@ const providerConfigFields: Record<string, FieldSpec> = {
 export const SECTION_SCHEMAS: Record<SectionName, SectionSchema> = {
   llm: {
     fields: {
+      videoAudio: { type: "object", fields: { provider: { type: "string" }, model: { type: "string" } }, required: ["provider", "model"] },
       providers: {
         type: "object",
         items: { type: "object", fields: providerConfigFields },

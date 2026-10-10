@@ -86,6 +86,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [workStateResult, setWorkStateResult] = useState<{ scope: { workspaceId?: string; sessionId?: string }; view: DesktopWorkStateView }>()
   const [workStateFailure, setWorkStateFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [running, setRunning] = useState(false)
+  const runningRevision = useRef(0)
   const [executionError, setExecutionError] = useState<string>()
   const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
@@ -192,13 +193,17 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const scope = selection.current
     if (scope.workspaceId !== workspaceId || scope.sessionId !== sessionId) return
     const request = ++tasksRequest.current
+    const statusRevision = runningRevision.current
     try {
       const [queueRows, taskRows] = await Promise.all([
         bridge.request({ kind: durableInputSupported.current ? "desktop/session/input/state" : "session/queue", workspaceId, sessionId }),
         bridge.request({ kind: "session/tasks", workspaceId, sessionId }),
       ])
       if (selection.current !== scope || request !== tasksRequest.current) return
-      setQueue(Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items)
+      const items = Array.isArray(queueRows) ? queueRows as SessionQueueItem[] : (queueRows as { items: SessionQueueItem[] }).items
+      setQueue(items)
+      // A status notification received during this read is newer than its snapshot.
+      if (statusRevision === runningRevision.current) setRunning(items.some(row => row.state === "running"))
       setQueueResumable(!Array.isArray(queueRows) && (queueRows as { resumable: boolean }).resumable)
       setTasks(taskRows as AgentTaskView[])
       setTaskError(undefined)
@@ -386,6 +391,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         refresh.schedule()
         return
       }
+      runningRevision.current++
       setRunning(info.status === "queued")
       const statusError = (event.params as { error?: unknown })?.error
       if (info.status === "failed" && typeof statusError === "string") setExecutionError(statusError)
@@ -444,6 +450,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setHistoryError(undefined)
     setHistoryCount(undefined)
     setRunning(false)
+    runningRevision.current++
     setExecutionError(undefined)
     setQueueResumable(false)
     chunkBuffer.current.length = 0
@@ -574,7 +581,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         onCancel: () => {
           const scope = selection.current
           void bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
-            .then(() => { if (selection.current === scope) setRunning(false) })
+            .then(() => { if (selection.current === scope) { setTaskActionFailure(undefined); return refreshTasks(selectedWorkspaceId, selectedSessionId) } })
             .catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
         },
         onCancelTask: (taskId: string) => {

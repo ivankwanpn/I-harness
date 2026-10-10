@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync, existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createImageAttachmentStore } from "../src/index.ts"
@@ -18,6 +18,19 @@ afterEach(() => {
 })
 
 describe("createImageAttachmentStore", () => {
+  it('rejects malformed images before publishing attachment files', async () => {
+    const store=createImageAttachmentStore({workspaceDir})
+    await expect(store.save({mediaType:'image/png',data:Buffer.from([1,2,3])})).rejects.toThrow('Invalid image')
+    expect(existsSync(join(workspaceDir,'.i-harness','attachments'))).toBe(false)
+  })
+  it('publishes the same immutable bytes that were validated', async () => {
+    const store=createImageAttachmentStore({workspaceDir})
+    const data=Buffer.from(PNG_1X1_BASE64,'base64')
+    const pending=store.save({mediaType:'image/png',data})
+    data.fill(0)
+    const ref=await pending
+    expect((await store.load(ref)).dataBase64).toBe(PNG_1X1_BASE64)
+  })
   it("saves an image and returns a durable ref", async () => {
     const store = createImageAttachmentStore({ workspaceDir })
     const input = { data: Uint8Array.from(Buffer.from(PNG_1X1_BASE64, "base64")), mediaType: "image/png" as const, name: "pic.png" }

@@ -625,6 +625,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     }
     runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
+      videoAudioAnalyzer: async input => (await runtimeNow()).analyzeVideoAudio?.(input) ?? { status: "unconfigured", reason: "Video audio analysis is unavailable in this provider runtime." },
       ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
       workspace: opts.workspace,
       hookContext: () => hookRegistries.map(registry => registry.context()).filter(Boolean).join("\n\n"),

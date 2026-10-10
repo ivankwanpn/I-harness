@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto"
 import { mkdir, writeFile, readFile, unlink } from "node:fs/promises"
 import { join, dirname } from "node:path"
 import type { ImageInput, ImageMediaType } from "@i-harness/core-session"
+import { validateImage } from '@i-harness/image-validation'
 
 export type { ImageMediaType }
 export { createReadImageTool, type ReadImageToolDeps } from "./read-image.ts"
@@ -62,19 +63,26 @@ export function createImageAttachmentStore(opts: {
   const dir = join(opts.workspaceDir, ".i-harness", "attachments")
 
   async function save(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
-    if (!limits.mediaTypes.includes(input.mediaType))
+    const { mediaType, name } = input
+    if (!limits.mediaTypes.includes(mediaType))
       throw new Error(`attachment: unsupported media type ${input.mediaType}`)
     if (input.data.byteLength > limits.maxImageBytes)
       throw new Error(`attachment: image too large (${input.data.byteLength} bytes > ${limits.maxImageBytes})`)
+    const data = Buffer.from(input.data)
+    const info = await validateImage({ mediaType, dataBase64: data.toString('base64') })
+    if (info.width > limits.maxImageDimension || info.height > limits.maxImageDimension || info.width * info.height > limits.maxImagePixels)
+      throw new Error('attachment: image dimensions exceed configured limits')
     const id = `att-${randomUUID()}`
     const file = join(dir, `${id}.bin`)
     await mkdir(dirname(file), { recursive: true })
-    await writeFile(file, input.data)
-    return { attachmentId: id, mediaType: input.mediaType, bytes: input.data.byteLength, name: input.name }
+    await writeFile(file, data)
+    return { attachmentId: id, mediaType, bytes: data.byteLength, name }
   }
   async function load(ref: ImageAttachmentRef): Promise<ImageInput> {
     const buf = await readFile(resolvePath(ref))
-    return { mediaType: ref.mediaType, dataBase64: buf.toString("base64") }
+    const image = { mediaType: ref.mediaType, dataBase64: buf.toString("base64") }
+    await validateImage(image)
+    return image
   }
   function resolvePath(ref: ImageAttachmentRef): string {
     return join(dir, `${ref.attachmentId}.bin`)

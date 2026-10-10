@@ -18,6 +18,25 @@ afterEach(async () => {
 
 const base = { workspaceId: "ws-1", sessionId: "s1", running: false, onCancel: vi.fn() }
 
+it("keeps Stop available with a follow-up draft and an admitted pending request", async () => {
+  let admitted!: () => void, release!: () => void
+  const pending = new Promise<void>(resolve => { release = resolve })
+  const onCancel = vi.fn()
+  const onPrompt = vi.fn(async (_text: string, _context?: string, _images?: unknown, ack?: () => void) => { admitted = ack!; await pending })
+  render(<Composer workspaceId="stop-regression" sessionId="pending" canSend running onCancel={onCancel} onPrompt={onPrompt} />)
+  fireEvent.change(textarea(), { target: { value: "follow-up draft" } })
+  expect(screen.queryByRole("button", { name: "停止" })).not.toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "停止" }))
+  expect(onCancel).toHaveBeenCalledTimes(1)
+  expect(textarea().value).toBe("follow-up draft")
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => expect(admitted).toBeDefined())
+  act(() => admitted())
+  expect(textarea().value).toBe("")
+  expect((screen.getByRole("button", { name: "停止" }) as HTMLButtonElement).disabled).toBe(false)
+  await act(async () => { release(); await pending })
+})
+
 function textarea(): HTMLTextAreaElement {
   return screen.getByLabelText("提示") as HTMLTextAreaElement
 }
@@ -161,15 +180,15 @@ describe("Composer", () => {
     expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
   })
 
-  it("changes the same primary control to queue a draft while running then restores Stop after admission", async () => {
+  it("keeps Stop beside the primary control while queuing a draft", async () => {
     const onPrompt = vi.fn(async () => {})
     const onSteer = vi.fn(async () => {})
     render(<Composer {...base} running canSend steeringEnabled onPrompt={onPrompt} onSteer={onSteer} />)
     const primary = screen.getByRole("button", { name: "停止" })
     fireEvent.change(textarea(), { target: { value: "next queued step" } })
-    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+    expect(screen.getByRole("button", { name: "停止" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "送出" })).toBe(primary)
-    expect(screen.getAllByRole("button")).toHaveLength(1)
+    expect(screen.getAllByRole("button")).toHaveLength(2)
     expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)
     fireEvent.click(screen.getByRole("button", { name: "送出" }))
     await waitFor(() => expect(onPrompt).toHaveBeenCalledWith("next queued step", undefined, undefined, expect.any(Function)))
@@ -178,13 +197,13 @@ describe("Composer", () => {
     expect(screen.getByRole("button", { name: "停止" })).toBe(primary)
   })
 
-  it("disables the one primary control while admission is pending and keeps the failed draft sendable", async () => {
+  it("disables Send while admission is pending, retaining Stop and the failed draft", async () => {
     let fail!: (error: Error) => void
     const onPrompt = vi.fn(() => new Promise<void>((_resolve, reject) => { fail = reject }))
     render(<Composer {...base} running canSend onPrompt={onPrompt} />)
     fireEvent.change(textarea(), { target: { value: "keep failed queued draft" } })
     fireEvent.click(screen.getByRole("button", { name: "送出" }))
-    expect(screen.getAllByRole("button")).toHaveLength(1)
+    expect(screen.getAllByRole("button")).toHaveLength(2)
     expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(true)
     fireEvent.keyDown(textarea(), { key: "Enter" })
     expect(onPrompt).toHaveBeenCalledOnce()
@@ -192,7 +211,7 @@ describe("Composer", () => {
     await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("admission failed"))
     expect(textarea().value).toBe("keep failed queued draft")
     expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.queryByRole("button", { name: "停止" })).toBeNull()
+    expect(screen.getByRole("button", { name: "停止" })).toBeTruthy()
   })
 
   it("keeps the draft when submission fails before admission and clears a successful send", async () => {

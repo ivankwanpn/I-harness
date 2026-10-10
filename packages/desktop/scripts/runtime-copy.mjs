@@ -5,7 +5,9 @@ import { dirname, join, relative, sep } from "node:path"
 export function runtimePackageRoot(name, fromDir) {
   const require = createRequire(join(fromDir, "package.json"))
   const candidates = []
-  for (const specifier of [`${name}/package.json`, name]) {
+  // Native @img packages expose their manifest as /package, without a bare
+  // entry or /package.json export. They still own required runtime binaries.
+  for (const specifier of [`${name}/package.json`, `${name}/package`, name]) {
     try { candidates.push(dirname(require.resolve(specifier))) } catch { /* exports may expose only subpaths */ }
   }
   for (const start of candidates) {

@@ -28,6 +28,11 @@ interface ProjectSessionsProps {
   onManageSessions?: ProjectSidebarProps["onManageSessions"]
 }
 
+function confirmedDashboard(value: unknown): value is SessionDashboardResult {
+  return !!value && typeof value === "object" && Array.isArray((value as SessionDashboardResult).sessions)
+    && (value as SessionDashboardResult).sessions.every(row => row && typeof row.id === "string" && row.id !== "" && typeof row.live === "boolean")
+}
+
 /** One visible list, with source identity retained for every native operation. */
 export function ProjectSessions(props: ProjectSessionsProps) {
   const t = useText()
@@ -53,11 +58,13 @@ export function ProjectSessions(props: ProjectSessionsProps) {
     if (!active.current || scope !== epoch.current || ticket !== tickets.current[workspaceId]) return
     const confirmedNavigation = navigation.status === "fulfilled" && isSessionNavigationState(navigation.value) ? navigation.value : undefined
     const failed = [sessions, navigation].find(result => result.status === "rejected")
+    const invalidDashboard = loadDashboard && (sessions.status !== "fulfilled" || !confirmedDashboard(sessions.value))
     setSnapshots(current => ({ ...current, [workspaceId]: {
-      dashboard: sessions.status === "fulfilled" ? (sessions.value as SessionDashboardResult | undefined) ?? current[workspaceId]?.dashboard : undefined,
+      dashboard: !loadDashboard ? current[workspaceId]?.dashboard : sessions.status === "fulfilled" && confirmedDashboard(sessions.value) ? sessions.value : undefined,
       navigation: confirmedNavigation,
       error: failed?.status === "rejected" ? failed.reason instanceof Error ? failed.reason.message : String(failed.reason)
-        : confirmedNavigation ? undefined : en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認",
+        : invalidDashboard ? en ? "Conversation list is unavailable" : "無法取得會話列表"
+          : confirmedNavigation ? undefined : en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認",
     } }))
   }, [bridge, en])
 

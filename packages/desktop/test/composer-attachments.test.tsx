@@ -6,6 +6,26 @@ import { Composer } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); localStorage.clear() })
 const base = { workspaceId: "attach-w", sessionId: "attach-s", canSend: true, running: false, onPrompt: async () => {}, onCancel: () => {} }
 
+it("sends picked videos as read_video references and retains the draft after failure", async () => {
+  const reference = { kind: "video-reference", path: "C:/outside/recording.mp4", contentType: "video/mp4", bytes: 2048 }
+  const request = vi.fn(async () => ({ paths: [], images: [], texts: [{ name: "recording.mp4", text: JSON.stringify(reference), contentType: "video/mp4", bytes: 2048 }] }))
+  const onPrompt = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined)
+  render(<Composer {...base} sessionId="video-reference" bridge={{ request, onEvent: () => () => {} }} fileReferencesEnabled onPrompt={onPrompt} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增附件" }))
+  await screen.findByText("recording.mp4")
+  expect(screen.getByText(/影片保留原檔案位置/)).toBeTruthy()
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await screen.findByText("offline")
+  expect(screen.getByText("recording.mp4")).toBeTruthy()
+  const context = onPrompt.mock.calls[0]![1] as string
+  expect(context).toContain("read_video")
+  expect(context).toContain("C:/outside/recording.mp4")
+  expect(context).not.toContain("base64")
+  expect(onPrompt.mock.calls[0]![2]).toBeUndefined()
+  fireEvent.click(screen.getByRole("button", { name: "送出" }))
+  await waitFor(() => expect(screen.queryByText("recording.mp4")).toBeNull())
+})
+
 it("uses one plus to choose supported attachments without a menu or separate image action", async () => {
   const request = vi.fn(async () => ({ paths: [], images: [], texts: [] }))
   const view = render(<Composer {...base} bridge={{ request, onEvent: () => () => {} }} fileReferencesEnabled />)

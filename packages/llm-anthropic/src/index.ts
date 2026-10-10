@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
   return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
@@ -202,7 +202,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
-      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      const messages = await projectImagesForProvider(request.messages, vision, request.signal)
       const maxTokens = request.maxOutputTokens ??
         (typeof config.options?.max_tokens === "number" ? config.options.max_tokens : ANTHROPIC_MAX_TOKENS_FALLBACK)
       const reasoning = translateReasoning(config.model, request.reasoningEffort)

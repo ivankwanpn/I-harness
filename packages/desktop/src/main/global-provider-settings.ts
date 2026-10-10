@@ -34,7 +34,7 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
         case "desktop/global-provider/directory": method = "desktop/provider/directory"; params = {}; break
         case "desktop/global-provider/mutate":
           if (!record(input.command) || !id(input.command.id) || typeof input.command.action !== "string"
-            || !["provider/create", "provider/edit", "provider/remove", "key/set", "key/clear", "model/add", "model/edit", "model/remove", "default/set"].includes(input.command.action)) throw new Error("Invalid provider command")
+            || !["provider/create", "provider/edit", "provider/remove", "key/set", "key/clear", "model/add", "model/edit", "model/remove", "default/set", "video-audio/set"].includes(input.command.action)) throw new Error("Invalid provider command")
           method = "desktop/provider/mutate"; params = input.command; break
         case "desktop/global-provider/probe":
           if (!id(input.id) || !token(input.token)) throw new Error("Invalid provider probe")

@@ -67,18 +67,18 @@ it.each(["cross-workspace", "current-workspace"])("marks Home selections read at
   const pending = Promise.withResolvers<void>()
   const manage = vi.fn(() => pending.promise), select = vi.fn()
   const source = mode === "cross-workspace" ? "other" : "current"
-  render(<Workbench bridge={{ request: async input => input.kind === "desktop/session/navigation/state"
+  render(<Workbench projects={[]} bridge={{ request: async input => input.kind === "desktop/session/navigation/state"
     ? { same: { pinned: false, unread: true } }
     : { sessions: [{ id: "same", title: input.kind === "session/dashboard" ? input.workspaceId : "", live: false }] }, onEvent: () => () => {} }}
     workspaces={[{ id: "current", path: "D:/current", label: "Current" }, { id: "other", path: "D:/other", label: "Other" }]}
     selectedWorkspaceId="current" selectedSessionId="same" capabilities={{}} onSelectWorkspace={() => {}}
     onSelectSession={select} onSelectSessionInWorkspace={mode === "cross-workspace" ? select : undefined}
     onManageSessionInWorkspace={mode === "cross-workspace" ? manage : undefined} onManageSession={mode === "current-workspace" ? manage : undefined} />)
-  const home = within(screen.getByRole("navigation", { name: "首頁側欄" }))
+  const home = within(screen.getByRole("navigation", { name: "專案" }))
   fireEvent.click(await home.findByText(source))
   expect(manage).toHaveBeenCalledWith(...(mode === "cross-workspace" ? [source, "same", "read"] : ["same", "read"]))
   expect(select).toHaveBeenCalledWith(...(mode === "cross-workspace" ? [source, "same", undefined] : ["same"]))
-  expect(screen.getByRole("navigation", { name: "首頁側欄" })).toBeTruthy()
+  expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   await act(async () => { pending.reject(new Error("Read-state update failed")); await pending.promise.catch(() => {}) })
   expect(select).toHaveBeenCalledOnce()
 })
@@ -88,7 +88,7 @@ it("returns to the conversation when clicking Home from Settings", () => {
   const rail = screen.getByRole("navigation", { name: "主導覽" })
   fireEvent.click(within(rail).getByRole("button", { name: "設定" }))
   fireEvent.click(within(rail).getByRole("button", { name: "首頁" }))
-  expect(screen.getByRole("navigation", { name: "首頁側欄" })).toBeTruthy()
+  expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   expect(useUiStore.getState().surface).toBe("conversation")
 })
 
@@ -113,7 +113,7 @@ it("does not infer a current project or Git action from an unassigned conversati
 
 it("does not relabel folder sessions as projects while the catalog loads", () => {
   render(<Workbench bridge={bridge} workspaces={[{ id: "w", path: "D:/folder", label: "Folder must not become project" }]} selectedWorkspaceId="w" dashboard={{ sessions: [{ id: "s", title: "Unclassified data", live: false }] }} onProjectsChanged={async () => {}} capabilities={{}} onSelectSession={() => {}} onSelectWorkspace={() => {}} />)
-  expect(screen.getByRole("navigation", { name: "首頁側欄" })).toBeTruthy()
+  expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Folder must not become project" })).toBeNull()
   expect(screen.queryByText("Unclassified data")).toBeNull()
 })

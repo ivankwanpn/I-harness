@@ -55,3 +55,19 @@ I-harness 的桌面按鈕、表單、對話框及記錄輸出介面改編自以�
   CRLF 歸一（dsh packages/tool-terminal 同源機制；M26-B2 唯一新外部依賴，pnpm-workspace.yaml
   allowBuilds 對照 koffi 先例）
 - License: MIT
+
+## Media and image decoding
+- Sharp 0.35.5: https://github.com/lovell/sharp (Apache-2.0); libvips and codec
+  dependencies retain their own notices in the shipped `@img` packages.
+- ffmpeg-static 5.3.0: https://github.com/eugeneware/ffmpeg-static (GPL-3.0-or-later).
+  Windows binary: FFmpeg 6.1.1 essentials build from https://www.gyan.dev/ffmpeg/builds/,
+  GPL v3; source revision https://github.com/FFmpeg/FFmpeg/commit/e38092ef93.
+  The binary's license and full build information are distributed alongside it
+  as `ffmpeg.exe.LICENSE` and `ffmpeg.exe.README`, and in Desktop `licenses/media`.
+- @ffprobe-installer/ffprobe 2.1.2: https://github.com/SavageCore/node-ffprobe-installer
+  (MIT wrapper); Windows x64 binary package 5.1.0 identifies FFprobe build
+  20230213-2296078 from https://www.gyan.dev/ffmpeg/builds/ under GPL-3.0.
+  Binary version: 2023-02-13-git-2296078397-essentials_build-www.gyan.dev;
+  source revision https://github.com/FFmpeg/FFmpeg/commit/2296078397.
+  FFmpeg/FFprobe run as separate local processes; the package metadata and build
+  source references remain in the shipped gateway dependencies.

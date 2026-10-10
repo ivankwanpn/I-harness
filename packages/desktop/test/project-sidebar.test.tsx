@@ -318,7 +318,7 @@ it("retains a failed rename draft through unrelated folder refresh without retar
   fireEvent.click(screen.getByRole("menuitem", { name: "重新命名" }))
   fireEvent.change(screen.getByLabelText("會話名稱"), { target: { value: "Backend draft" } })
   fireEvent.click(screen.getByRole("button", { name: "儲存" }))
-  await screen.findByText("Session is busy")
+  await screen.findByText(/會話仍有執行中或排隊的工作/)
   emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "s1", status: "idle" } })
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)) })
   expect((screen.getByLabelText("會話名稱") as HTMLInputElement).value).toBe("Backend draft")

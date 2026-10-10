@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, replayBlockOrder, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 
@@ -161,7 +161,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
-      const messages = vision ? request.messages : projectImagesForTextModel(request.messages)
+      const messages = await projectImagesForProvider(request.messages, vision, request.signal)
       // M32: request-level effort wins over config.options (explicit per-request intent).
       const reasoning = translateReasoning(config.model, request.reasoningEffort)
       const legacyThinking = reasoning?.thinking?.type === "enabled" ? reasoning.thinking : undefined

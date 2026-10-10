@@ -41,7 +41,6 @@ import { ProjectFilesPane } from "../review/ProjectFilesPane.tsx"
 import { SessionChangesPane } from "../review/SessionChangesPane.tsx"
 import { ProjectGitPane } from "../review/ProjectGitPane.tsx"
 import { NavigationRail } from "./NavigationRail.tsx"
-import { HomeSidebar } from "./HomeSidebar.tsx"
 import { TitleBar } from "./TitleBar.tsx"
 import { useSidebarNavigation } from "./use-sidebar-navigation.ts"
 import { ReviewResizeHandle } from "../review/ReviewResizeHandle.tsx"
@@ -202,7 +201,6 @@ export function Workbench({
     else throw new Error("Conversation management unavailable")
     setSidebarRevision(value => value + 1)
   }, [onManageSessionInWorkspace, onManageSession, selectedWorkspaceId])
-  const homeManagementAvailable = selectedWorkspaceId !== undefined && (onManageSessionInWorkspace || onManageSession) && capabilities["desktop-sessions"]?.includes("1") === true
   const [managerOwners, setManagerOwners] = useState<Record<string, string | undefined>>()
   const workspaceScope = useRef({ id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId })
   if (workspaceScope.current.id !== selectedWorkspaceId || workspaceScope.current.sessionId !== selectedSessionId || workspaceScope.current.projectId !== selectedProjectId) workspaceScope.current = { id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId }
@@ -352,7 +350,7 @@ export function Workbench({
 
   return (
     <div className={reviewOpen && !pageOpen ? "workbench review-open" : "workbench"} data-sidebar-collapsed={pageOpen || drawer.narrow || sidebarCollapsed} style={{ "--sidebar-width": `${sidebarWidth}px`, "--review-width": `${actualReviewWidth}px` } as CSSProperties}>
-      <NavigationRail surface={surface} homeOpen={sidebarVisible && drawer.mode === "home"} homeButtonRef={drawer.homeButton} onHome={drawer.homeClick} onHomePointerEnter={drawer.enterHome} onHomePointerLeave={drawer.leaveRegion}
+      <NavigationRail surface={surface} homeOpen={sidebarVisible} homeButtonRef={drawer.homeButton} onHome={drawer.homeClick} onHomePointerEnter={drawer.enterHome} onHomePointerLeave={drawer.leaveRegion}
         onCreate={() => { void createSession() }} canCreate={canCreate}
         onProjects={onProjectsChanged ? () => navigate("projects") : undefined}
         onPlugins={selectedWorkspaceId && capabilities["desktop-plugins"]?.includes("1") ? () => navigate("plugins") : undefined}
@@ -360,22 +358,10 @@ export function Workbench({
         onSettings={() => navigate("settings")} />
       {drawer.narrow && drawer.open && !pageOpen ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={drawer.closeTemporary} /> : null}
       <div id="navigation-sidebar" ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : drawer.preview ? "sidebar-container sidebar-preview" : "sidebar-container"}
-        hidden={!sidebarVisible} role={drawer.temporary && sidebarVisible ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open && sidebarVisible ? true : undefined} aria-label={drawer.temporary ? t(drawer.mode === "home" ? "首頁" : "專案") : undefined}
+        hidden={!sidebarVisible} role={drawer.temporary && sidebarVisible ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open && sidebarVisible ? true : undefined} aria-label={drawer.temporary ? t("專案") : undefined}
         onPointerEnter={drawer.enterPanel} onPointerLeave={drawer.leaveRegion} onFocusCapture={drawer.enterPanel} onBlurCapture={drawer.preview ? drawer.leaveRegion : undefined}>
         {drawer.narrow ? <button type="button" className="drawer-close primary-button" onClick={drawer.closeTemporary}>{t("關閉側欄")}</button> : null}
-        <div className="sidebar-view" hidden={drawer.mode !== "home"}>
-          <HomeSidebar bridge={bridge} revision={sidebarRevision} workspaces={onSelectSessionInWorkspace ? workspaces : workspaces.filter(row => row.id === selectedWorkspaceId)} projects={projects} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId} dashboard={dashboard}
-            canCreate={canCreate} onCreate={() => { drawer.closeTemporary(); void createSession() }}
-            onProjects={onProjectsChanged ? () => navigate("projects") : undefined} onClose={drawer.collapse}
-            onManageSessions={homeManagementAvailable ? () => openManager(selectedWorkspaceId!) : undefined} onManageArchived={homeManagementAvailable ? () => openManager(selectedWorkspaceId!, undefined, true) : undefined}
-            onSelectSession={(workspaceId, sessionId, projectId) => {
-              drawer.closeTemporary(); setMemoryOpen(false); setSurface("conversation")
-              if (onSelectSessionInWorkspace) onSelectSessionInWorkspace(workspaceId, sessionId, projectId)
-              else if (workspaceId === selectedWorkspaceId) onSelectSession(sessionId)
-              if (onManageSessionInWorkspace || workspaceId === selectedWorkspaceId && onManageSession) void manageSourceSession(workspaceId, sessionId, "read").catch(() => {})
-            }} />
-        </div>
-        <div className="sidebar-view" hidden={drawer.mode !== "project"}>
+        <div className="sidebar-view">
           {projects === undefined ? <nav className="sidebar" aria-label={t("專案")}><div className="brand">I-harness</div><p role="status" className="notice">{english ? "Loading projects…" : "正在讀取專案…"}</p><button type="button" className="link-button" onClick={() => { void onProjectsChanged?.().catch(() => undefined) }}>{t("重試")}</button></nav> : <ProjectSidebar
             bridge={bridge} revision={sidebarRevision} onManageSessions={capabilities["desktop-sessions"]?.includes("1") && (onManageSessionInWorkspace || onManageSession) ? (workspaceId, sessionId) => openManager(workspaceId, sessionId) : undefined} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
             dashboard={dashboard} attentionBySession={attentionBySession}

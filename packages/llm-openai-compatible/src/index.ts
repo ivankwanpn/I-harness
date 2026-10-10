@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForTextModel, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeTransportError, projectImagesForProvider, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M72 Ⅲ: the wire's usage, under the seam's names.
@@ -149,7 +149,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
-      const messages = config.inputModalities?.includes("image") ?? false ? request.messages : projectImagesForTextModel(request.messages)
+      const messages = await projectImagesForProvider(request.messages, config.inputModalities?.includes("image") ?? false, request.signal)
       const body: Record<string, unknown> = {
         model: config.model,
         // M72 Ⅰ: the system prompt is the first MESSAGE. The old code sent no

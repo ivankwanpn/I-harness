@@ -10,6 +10,7 @@ export type ProviderCommand =
   | { action: "key/set"; id: string; value: string }
   | { action: "model/add" | "model/edit"; id: string; model: string; fields: ModelFields }
   | { action: "model/remove" | "default/set"; id: string; model: string }
+  | { action: "video-audio/set"; id: string; model: string | null }
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected an object")
@@ -61,6 +62,9 @@ export async function providerCommand(runtime: ProviderRuntime, value: unknown):
     case "model/edit": await runtime.setModel(id, text(command.model, "model id"), fields(command.fields, true, true)); break
     case "model/remove": await runtime.removeModel(id, text(command.model, "model id")); break
     case "default/set": await runtime.setDefaultModel({ provider: id, model: text(command.model, "model id") }); break
+    case "video-audio/set":
+      if (!runtime.setVideoAudioModel) throw new Error("Video audio configuration is unavailable")
+      await runtime.setVideoAudioModel(command.model === null ? null : { provider: id, model: text(command.model, "audio model id") }); break
     default: throw new Error("Unknown provider command")
   }
   return { ok: true }

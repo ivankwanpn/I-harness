@@ -3,6 +3,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession, deriveMessages } from "@i-harness/core-session"
 import { registerCodeMode } from "../src/register.ts"
+import { PNG } from '../../image-validation/test/fixtures.ts'
 
 it("uses the real registry policy even when guest code catches a refused write", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession(); let writes = 0
@@ -23,8 +24,8 @@ it("keeps Code Mode-only model exposure separate from actual tool execution and 
   const mount = registerCodeMode(ctx, tools, { session, config: { mode: "only" } })
   try {
     expect(mount.schemas().map(s => s.name)).toEqual(["code_exec", "code_status", "code_wait"])
-    const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZasAAAAASUVORK5CYII="
-    const result = await tools.execute({ name: "code_exec", args: { code: `text(await tools.read({})); image({type:"image",mimeType:"image/png",data:"${png}"});` } })
+    const png = PNG
+    const result = await tools.execute({ name: "code_exec", args: { code: `text(await tools.read({})); image({type:"image",mimeType:"image/png",data:"${png}"});`, yield_time_ms: 5000 } })
     expect(result.output).toMatchObject({ status: "completed", text: "actual file", images: [{ mediaType: "image/png", dataBase64: png }] })
     expect((result.output as { items: unknown[] }).items).not.toEqual(expect.arrayContaining([expect.objectContaining({ image: expect.objectContaining({ dataBase64: png }) })]))
   } finally { await mount.dispose() }

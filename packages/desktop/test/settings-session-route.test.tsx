@@ -9,7 +9,7 @@ afterEach(() => { cleanup(); localStorage.clear(); useUiStore.setState({ surface
 const workspace = { id: "owned", label: "Owned fixture", path: "D:/I-harness-main/.tmp/settings-management" }
 const rows = [{ id: "session", title: "Owned session", live: false }]
 function base(bridge: DesktopBridge): WorkbenchProps {
-  return { bridge, workspaces: [workspace], selectedWorkspaceId: workspace.id, selectedSessionId: "session", dashboard: { sessions: rows }, capabilities: { "desktop-sessions": ["1"], "desktop-rewind": ["1"] }, onSelectWorkspace() {}, onSelectSession() {} }
+  return { projects: [], bridge, workspaces: [workspace], selectedWorkspaceId: workspace.id, selectedSessionId: "session", dashboard: { sessions: rows }, capabilities: { "desktop-sessions": ["1"], "desktop-rewind": ["1"] }, onSelectWorkspace() {}, onSelectSession() {} }
 }
 function bridgeFor(): DesktopBridge {
   return { request: vi.fn(async request => {

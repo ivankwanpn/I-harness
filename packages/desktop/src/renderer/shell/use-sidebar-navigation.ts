@@ -8,7 +8,6 @@ export function useSidebarNavigation(managementModalOpen = false) {
   const drawer = useNarrowSidebar()
   const surface = useUiStore(state => state.surface)
   const collapsed = useUiStore(state => state.sidebarCollapsed)
-  const [mode, setMode] = useState<"home" | "project">("home")
   const [preview, setPreview] = useState(false)
   const homeButton = useRef<HTMLButtonElement>(null)
   const opening = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -63,9 +62,9 @@ export function useSidebarNavigation(managementModalOpen = false) {
   }
   function enterPanel() { clearTimeout(dismissal.current); dismissal.current = undefined }
   function homeClick() {
-    const alreadyDocked = mode === "home" && !collapsed && surface === "conversation"
-    closeTemporary(); setMode("home"); useUiStore.getState().setSurface("conversation")
-    if (drawer.narrow) drawer.setOpen(!(drawer.open && mode === "home"))
+    const alreadyDocked = !collapsed && surface === "conversation"
+    closeTemporary(); useUiStore.getState().setSurface("conversation")
+    if (drawer.narrow) drawer.setOpen(!drawer.open)
     else useUiStore.getState().update({ sidebarCollapsed: alreadyDocked })
   }
   function toggle() {
@@ -78,9 +77,9 @@ export function useSidebarNavigation(managementModalOpen = false) {
     if (!drawer.narrow && !preview) useUiStore.getState().update({ sidebarCollapsed: true })
   }
   function openProject() {
-    closeTemporary(); setMode("project"); useUiStore.getState().setSurface("conversation")
+    closeTemporary(); useUiStore.getState().setSurface("conversation")
     if (drawer.narrow) drawer.setOpen(true)
     else useUiStore.getState().update({ sidebarCollapsed: false })
   }
-  return { ...drawer, mode: preview ? "home" as const : mode, preview, temporary, homeButton, homeClick, enterHome, leaveRegion, enterPanel, closeTemporary, toggle, collapse, openProject }
+  return { ...drawer, preview, temporary, homeButton, homeClick, enterHome, leaveRegion, enterPanel, closeTemporary, toggle, collapse, openProject }
 }

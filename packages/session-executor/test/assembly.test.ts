@@ -236,6 +236,7 @@ describe("createSessionAssembly", () => {
       await assembly.agent.run("hi")
       expect(toolNames).toContain("todo_write")
       expect(toolNames).toContain("read_image")
+      expect(toolNames).toContain("read_video")
     } finally {
       await assembly.dispose()
     }
