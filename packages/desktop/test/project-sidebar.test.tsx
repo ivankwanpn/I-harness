@@ -21,18 +21,27 @@ const dashboard = (title: string): SessionDashboardResult => ({ sessions: [{ id:
 function fixture(handle?: (request: DesktopRequest) => unknown) {
   const listeners = new Set<(event: DesktopEvent) => void>()
   const bridge: DesktopBridge = {
-    request: vi.fn(async (request) => handle?.(request) ?? (request.kind === "session/dashboard" ? dashboard(`Chat ${request.workspaceId}`) : request.kind === "desktop/session/navigation/state" ? { s1: { pinned: false, unread: false } } : {})),
+    request: vi.fn(async (request) => handle?.(request) ?? (request.kind === "session/dashboard" ? dashboard(`Chat ${request.workspaceId}`) : request.kind === "desktop/session/navigation/state" ? { s1: { pinned: false, unread: false, ...(request.workspaceId === "wu" ? {} : { projectId: "p1" }) } } : {})),
     onEvent: vi.fn((listener) => { listeners.add(listener); return () => { listeners.delete(listener) } }),
   }
   const props: ProjectSidebarProps = {
     bridge, projects, workspaces, selectedProjectId: "p1", selectedWorkspaceId: "w1", selectedSessionId: "s1", dashboard: dashboard("Current chat"),
-    canCreate: true, onCreate: vi.fn(), onOpenWorkspace: vi.fn(), onProjects: vi.fn(), onSettings: vi.fn(),
+    canCreate: true, onCreate: vi.fn(),  onProjects: vi.fn(), onSettings: vi.fn(),
     onSelectProject: vi.fn(), onSelectWorkspace: vi.fn(), onSelectSession: vi.fn(), onManageSession: vi.fn(async () => {}), onManageArchived: vi.fn(),
   }
   return { props, bridge, listeners, emit(event: DesktopEvent) { for (const listener of listeners) listener(event) } }
 }
 
 describe("project conversation sidebar", () => {
+  it("honors a valid project creation target even when the current conversation has no selected storage folder", () => {
+    const { props } = fixture()
+    render(<ProjectSidebar {...props} selectedWorkspaceId={undefined} selectedSessionId={undefined} canCreate />)
+    const create = screen.getByRole("button", { name: "新增會話" }) as HTMLButtonElement
+    expect(create.disabled).toBe(false)
+    fireEvent.click(create)
+    expect(props.onCreate).toHaveBeenCalledTimes(1)
+  })
+
   it("orders pinned projects first and collects all member conversations directly under an expanded project", async () => {
     const { props, bridge } = fixture()
     const view = render(<ProjectSidebar {...props} />)
@@ -135,7 +144,7 @@ describe("project conversation sidebar", () => {
 
   it("routes session mutations to their folder and refreshes its navigation", async () => {
     let pinned = false
-    const { props } = fixture((request) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "w2" ? { s1: { pinned, unread: false } } : undefined)
+    const { props } = fixture((request) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "w2" ? { s1: { projectId: "p1", pinned, unread: false } } : undefined)
     props.onManageSession = vi.fn(async () => { pinned = true })
     render(<ProjectSidebar {...props} />)
     const session = await screen.findByText("Chat w2")
@@ -152,7 +161,7 @@ describe("project conversation sidebar", () => {
   it("selects a chat immediately and clears unread from the saved navigation result", async () => {
     let unread = true
     let finish!: () => void
-    const { props } = fixture((request) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "w2" ? { s1: { pinned: false, unread } } : undefined)
+    const { props } = fixture((request) => request.kind === "desktop/session/navigation/state" && request.workspaceId === "w2" ? { s1: { projectId: "p1", pinned: false, unread } } : undefined)
     props.onManageSession = vi.fn(async () => { await new Promise<void>((resolve) => { finish = resolve }); unread = false })
     render(<ProjectSidebar {...props} />)
     const session = await screen.findByText("Chat w2")
@@ -224,7 +233,7 @@ it("keeps a confirmed removed-project conversation discoverable without changing
   fireEvent.click(ungrouped)
   const folder = within(ungrouped.closest("li")! as HTMLElement)
   const conversation = await folder.findByText("Chat w1")
-  expect(folder.queryByText("Ordinary unbound chat")).toBeNull()
+  expect(folder.getByText("Ordinary unbound chat")).toBeTruthy()
   fireEvent.click(conversation)
   expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", undefined)
   expect(stored.s1.projectId).toBe("removed-project")
@@ -253,16 +262,36 @@ it("distinguishes duplicate native conversation IDs across member folders for se
   expect(view.container.textContent).not.toContain('["w2","s1"]')
 })
 
-it("keeps confirmed foreign owners out of a project while displaying legacy unowned member history", async () => {
+it("keeps confirmed foreign owners out of a project and lists shared-folder legacy history once as unclassified", async () => {
   const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? { s1: { pinned: false, unread: false, ...(request.workspaceId === "w1" ? { projectId: "p2" } : {}) } } : undefined)
   render(<ProjectSidebar {...props} />)
-  await screen.findByText("Chat w2")
+  await screen.findByRole("button", { name: "未分類會話" })
+  const product = within(screen.getByRole("button", { name: "Product" }).closest("li")! as HTMLElement)
+  expect(product.queryByText("Chat w2")).toBeNull()
   expect(screen.queryByText("Current chat")).toBeNull()
   fireEvent.click(screen.getByRole("button", { name: "Pinned" }))
   const group = within(screen.getByRole("button", { name: "Pinned" }).closest("li")! as HTMLElement)
   const moved = await group.findByText("Chat w1")
   fireEvent.click(moved)
   expect(props.onSelectSession).toHaveBeenCalledWith("w1", "s1", "p2")
+  expect(group.queryByText("Chat w2")).toBeNull()
+  fireEvent.click(screen.getByRole("button", { name: "未分類會話" }))
+  const legacy = await screen.findByText("Chat w2")
+  expect(screen.getAllByText("Chat w2")).toHaveLength(1)
+  fireEvent.click(legacy)
+  expect(props.onSelectSession).toHaveBeenCalledWith("w2", "s1", undefined)
+})
+
+it("does not infer selected project membership for an existing unclassified or removed-owner conversation", async () => {
+  const stored = { s1: { projectId: "removed-project", pinned: false, unread: false } }
+  const { props } = fixture(request => request.kind === "desktop/session/navigation/state" ? stored : undefined)
+  const view = render(<ProjectSidebar {...props} selectedProjectId={undefined} workspaces={[workspaces[0]!]} />)
+  const unclassified = await screen.findByText("Current chat")
+  expect(unclassified.closest("button")?.getAttribute("aria-current")).toBe("true")
+  expect(screen.getByRole("button", { name: "Product" }).getAttribute("aria-current")).toBeNull()
+  view.rerender(<ProjectSidebar {...props} selectedProjectId="removed-project" workspaces={[workspaces[0]!]} />)
+  expect(screen.getByText("Current chat").closest("button")?.getAttribute("aria-current")).toBe("true")
+  expect(screen.getByRole("button", { name: "Product" }).getAttribute("aria-current")).toBeNull()
 })
 
 it("routes row management and consolidated batch/archive controls to the selected native source folder", async () => {
@@ -302,8 +331,7 @@ it("uses accessible project header actions and omits the duplicate marketplace e
   const projectView = render(<ProjectSidebar {...props} />)
   fireEvent.click(screen.getByRole("button", { name: "管理專案" }))
   expect(props.onProjects).toHaveBeenCalledTimes(1)
-  fireEvent.click(screen.getByRole("button", { name: "開啟專案" }))
-  expect(props.onOpenWorkspace).toHaveBeenCalledTimes(1)
+  expect(screen.queryByRole("button", { name: "開啟專案" })).toBeNull()
   expect(screen.queryByRole("button", { name: "插件市場" })).toBeNull()
   projectView.unmount()
   const openFallback = vi.fn()

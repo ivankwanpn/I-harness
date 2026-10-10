@@ -42,3 +42,17 @@ it("keeps the saved identity when refresh fails so retry cannot create a second 
   await waitFor(() => expect(request).toHaveBeenCalledTimes(2))
   expect(request.mock.calls[1]?.[0]).toMatchObject({ kind: "projects/save", input: { id: "saved-id", expectedUpdatedAt: saved.updatedAt } })
 })
+
+it("picks a folder only in the editor and creates a project only after explicit Save", async () => {
+  const folder = { id: "owned-folder", label: "Owned folder", path: "D:/owned-fixture" }
+  const request = vi.fn(async (input: { kind: string }) => input.kind === "workspace/pick" ? folder : { id: "saved-project" })
+  render(<ProjectManager bridge={{ request, onEvent: () => () => {} }} projects={[]} workspaces={[]} onChanged={async () => {}} onOpen={() => {}} onClose={() => {}} />)
+  expect(request).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole("button", { name: "新增專案" }))
+  fireEvent.change(screen.getByRole("textbox", { name: "專案名稱" }), { target: { value: "Explicit project" } })
+  fireEvent.click(screen.getByRole("button", { name: "新增資料夾" }))
+  await screen.findByText("Owned folder")
+  expect(request.mock.calls.map(([input]) => input.kind)).toEqual(["workspace/pick"])
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "projects/save", input: { name: "Explicit project", workspaceIds: ["owned-folder"], primaryWorkspaceId: "owned-folder", pinned: false } }))
+})

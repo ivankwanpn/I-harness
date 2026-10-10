@@ -2,6 +2,9 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "首頁": "Home", "首頁側欄": "Home sidebar", "關閉首頁側欄": "Close home sidebar", "最近會話": "Recent conversations",
+  "搜尋最近會話": "Search recent conversations", "搜尋會話或專案": "Search conversations or projects", "沒有符合的會話": "No matching conversations",
+  "會話分組狀態無法確認": "Conversation ownership is unavailable", "會話所屬專案無法確認": "The conversation's project is unavailable",
   "填寫後按確認送出": "Enter an answer, then confirm to send",
   "批次管理會話": "Manage conversations", "管理此會話": "Manage conversation",
   "沒有符合的專案": "No matching projects", "沒有符合的插件": "No matching plugins", "尚未加入插件；可先加入市場來源。": "No plugins yet. Add a marketplace source to get started.",

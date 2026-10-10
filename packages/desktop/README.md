@@ -23,23 +23,23 @@ pnpm --filter @i-harness/desktop dist
 pnpm --filter @i-harness/desktop installer
 ```
 
-Standard builds write to `packages/desktop/release/`. The current local 0.1.2 preview is in `packages/desktop/release-0-1-2/`; its full app and installer are collected together:
+Standard builds write to `packages/desktop/release/`. The current release is **0.1.3**; its full app and installer are collected together:
 
 ```text
 release/
   I-harness/
     I-harness.exe
     resources/
-  I-harness-0.1.2.zip
-  I-harness-Setup-0.1.2.exe
-  I-harness-Setup-0.1.2.exe.sha256
-  I-harness-Setup-0.1.2.installer-build.json
+  I-harness-0.1.3.zip
+  I-harness-Setup-0.1.3.exe
+  I-harness-Setup-0.1.3.exe.sha256
+  I-harness-Setup-0.1.3.installer-build.json
   SHA256SUMS.txt
 ```
 
 The portable and installed app carry Electron, gateway dependencies and their loader; end users do not install a separate Node runtime. Keep the portable executable and resources together. Build outputs are ignored by Git; downloadable packages belong in [GitHub Releases](https://github.com/ivankwanpn/I-harness/releases).
 
-Local Desktop release policy: keep the latest distribution in the canonical release directory. Dated release folders used for development are temporary outputs. Do not keep obsolete Desktop distributions beside the current product.
+Release versions are recorded in [release notes](../../docs/releases/v0.1.3.md) and immutable Git tags. `IH_DESKTOP_RELEASE_LABEL` can select an isolated candidate directory; local build directories are not version-control artifacts. Published Setup and ZIP files are accompanied by SHA-256 checksums.
 
 Installer behavior and compiler requirements are documented in [installer/README.md](installer/README.md).
 

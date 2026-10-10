@@ -96,7 +96,7 @@
   min-width: 0;
   max-width: 100%;
   min-height: 2.429rem;
-  padding: .429rem .714rem;
+  padding: .429rem var(--ih-field-padding-inline, .714rem);
   border: 1px solid var(--ih-control-border);
   border-radius: .5rem;
   background: var(--ih-control-background);
@@ -140,7 +140,11 @@
 .settings-content .zc-settings-row input[type="number"] { width: 100%; max-width: 12rem; }
 .settings-dialog .provider-editor input[type="number"] { width: 100%; }
 :is(.settings-content, .settings-dialog, .ih-control-scope) textarea, textarea.ih-control { width: 100%; min-height: 6rem; resize: vertical; }
-:is(.settings-content, .settings-dialog) .zc-search-input { padding-inline: 2.429rem; }
+/* Keep icon space when the more-specific native-control rule supplies padding. */
+:is(.settings-content, .settings-dialog) .zc-search-input {
+  --ih-field-padding-inline: 2.429rem;
+  padding-inline: 2.429rem;
+}
 .settings-content .settings-search { width: 100%; }
 :is(.settings-content, .settings-dialog) .resource-editor textarea { font-family: ui-monospace, Consolas, monospace; font-size: .857rem; line-height: 1.65; }
 

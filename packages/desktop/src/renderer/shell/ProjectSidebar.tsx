@@ -25,7 +25,6 @@ export interface ProjectSidebarProps {
   attentionBySession?: Record<string, number>
   canCreate: boolean
   onCreate(): void
-  onOpenWorkspace(): void
   onProjects(): void
   onSettings?(): void
   onPlugins?(): void
@@ -43,7 +42,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   const t = useText()
   const en = useLocale(state => state.locale) === "en"
   const { projects, workspaces, selectedProjectId, selectedWorkspaceId, selectedSessionId, bridge } = props
-  const [ownerFolders, setOwnerFolders] = useState<Record<string, string[]>>({})
+  const [workspaceOwners, setWorkspaceOwners] = useState<Record<string, (string | undefined)[]>>({})
   const [ownerError, setOwnerError] = useState<string>()
   const workspaceKey = JSON.stringify(workspaces.map(row => row.id))
   useEffect(() => {
@@ -54,12 +53,12 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       const results = await Promise.allSettled(workspaces.map(async workspace => {
         const rows = await bridge.request({ kind: "desktop/session/navigation/state", workspaceId: workspace.id })
         if (!isSessionNavigationState(rows)) throw new Error(en ? "Conversation ownership is unavailable" : "會話分組狀態無法確認")
-        return { workspaceId: workspace.id, projects: [...new Set(Object.values(rows).flatMap(row => confirmedSessionNavigation(row) && row.projectId ? [row.projectId] : []))] }
+        return { workspaceId: workspace.id, owners: [...new Set(Object.values(rows).flatMap(row => confirmedSessionNavigation(row) ? [row.projectId] : []))] }
       }))
       if (!active || own !== version) return
-      setOwnerFolders(previous => {
+      setWorkspaceOwners(previous => {
         const next = { ...previous }
-        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.projects; else if (workspaces[index]) next[workspaces[index]!.id] = [] })
+        results.forEach((result, index) => { if (result.status === "fulfilled") next[result.value.workspaceId] = result.value.owners; else if (workspaces[index]) next[workspaces[index]!.id] = [] })
         return next
       })
       const failed = results.find(result => result.status === "rejected")
@@ -72,8 +71,8 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   }, [bridge, workspaceKey, props.revision, en])
   const assigned = new Set(projects.flatMap((project) => project.workspaceIds))
   const knownProjectIds = new Set(projects.map(project => project.id))
-  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || ownerFolders[workspace.id]?.some(id => !knownProjectIds.has(id)))
-  const effectiveProjectId = selectedProjectId ?? projects.find((project) => project.workspaceIds.includes(selectedWorkspaceId ?? ""))?.id
+  const unassigned = workspaces.filter((workspace) => !assigned.has(workspace.id) || workspaceOwners[workspace.id]?.some(id => id === undefined || !knownProjectIds.has(id)))
+  const effectiveProjectId = selectedProjectId && knownProjectIds.has(selectedProjectId) ? selectedProjectId : undefined
   const [expandedProjects, setExpandedProjects] = useState<Set<string>>(() => new Set(selectedWorkspaceId || selectedProjectId ? [projectKey(effectiveProjectId)] : []))
 
   useEffect(() => {
@@ -97,9 +96,8 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
   return <nav className="sidebar project-sidebar" aria-label={t("專案")}>
     <div className="sidebar-header">
     <div className="brand">I-harness</div>
-    <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!props.canCreate || !selectedWorkspaceId} onClick={props.onCreate}>{t("新增會話")}</Button>
+    <Button variant="ghost" className="sidebar-new" icon={<Plus size={17} />} disabled={!props.canCreate} onClick={props.onCreate}>{t("新增會話")}</Button>
     <div className="project-sidebar-heading"><h2 className="sidebar-title">{t("專案")}</h2><Button variant="ghost" size="small" className="project-sidebar-manage" icon={<SlidersHorizontal size={14} />} onClick={props.onProjects}>{t("管理專案")}</Button></div>
-    <Button variant="ghost" className="sidebar-open" icon={<FolderOpen size={16} />} onClick={props.onOpenWorkspace}>{t("開啟專案")}</Button>
     </div>
     <div className="sidebar-scroll">
     {ownerError ? <p role="alert" className="notice error-text">{ownerError}</p> : null}
@@ -107,7 +105,7 @@ export function ProjectSidebar(props: ProjectSidebarProps) {
       {[...projects].sort((a, b) => Number(b.pinned === true) - Number(a.pinned === true)).map((project) => {
         const key = projectKey(project.id)
         const expanded = expandedProjects.has(key)
-        const members = workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || ownerFolders[workspace.id]?.includes(project.id))
+        const members = workspaces.filter(workspace => project.workspaceIds.includes(workspace.id) || workspaceOwners[workspace.id]?.includes(project.id))
         return <li key={project.id}>
           <div className={`project-sidebar-project-row${project.id === effectiveProjectId ? " is-selected" : ""}`}>
             <button type="button" className="project-sidebar-expander" aria-expanded={expanded} aria-label={t(expanded ? "收合專案 {name}" : "展開專案 {name}", { name: project.name })}

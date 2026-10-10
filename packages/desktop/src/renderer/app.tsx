@@ -158,10 +158,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge])
 
   const selectedBinding = projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && !projectBinding?.error ? projectBinding : undefined
-  const activeProjectId = selectedSessionId && selectedBinding ? selectedBinding.projectId : selectedWorkspaceId
-    ? projects?.find((project) => project.id === selectedProjectId && (selectedSessionId || project.workspaceIds.includes(selectedWorkspaceId)))?.id
-      ?? projects?.find((project) => project.workspaceIds.includes(selectedWorkspaceId))?.id
-    : projects?.find((project) => project.id === selectedProjectId)?.id
+  const activeProjectId = selectedSessionId
+    ? projects?.find(project => project.id === selectedBinding?.projectId)?.id
+    : projects?.find(project => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
   const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && !projectBinding.error)
   useEffect(() => {
@@ -170,7 +169,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId
     setProjectBinding(undefined)
     void bridge.request({ kind: "desktop/session/project/state", workspaceId, sessionId }).then((value) => {
-      if (active) setProjectBinding({ workspaceId, sessionId, projectId: (value as { projectId?: string })?.projectId })
+      if (!active) return
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid conversation project owner")
+      const owner = value as { sessionId?: unknown; projectId?: unknown }
+      if (owner.sessionId !== sessionId || owner.projectId !== undefined && (typeof owner.projectId !== "string" || owner.projectId === "")) throw new Error("Invalid conversation project owner")
+      setProjectBinding({ workspaceId, sessionId, ...(typeof owner.projectId === "string" ? { projectId: owner.projectId } : {}) })
     }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, error: error instanceof Error ? error.message : String(error) }) })
     return () => { active = false }
   }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, retryNonce])
@@ -757,31 +760,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (selection.current !== scope) return
         if (action === "archive" && selectedSessionId === sessionId) setSelectedSessionId(undefined)
         if (action === "fork") { setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
-      }}
-      onOpenWorkspace={() => {
-        const scope = selection.current
-        const version = ++navigationVersion.current
-        void (async () => {
-          try {
-            const opened = await bridge.request({ kind: "workspace/pick" })
-            if (opened === undefined) return
-            const entry = opened as WorkspaceEntry
-            await refreshWorkspaces()
-            const projectRows = await refreshProjects()
-            let project = projectRows.find((row) => row.workspaceIds.includes(entry.id))
-            if (!project) {
-              project = await bridge.request({ kind: "projects/save", input: { name: entry.label, workspaceIds: [entry.id], primaryWorkspaceId: entry.id } }) as ProjectEntry
-              await refreshProjects()
-            }
-            if (selection.current !== scope || navigationVersion.current !== version) return
-            setSelectedProjectId(project.id)
-            setSelectedWorkspaceId(entry.id)
-            if (entry.id !== selectedWorkspaceId) setConnection("connecting")
-            setSelectedSessionId(undefined)
-          } catch (reason) {
-            if (selection.current === scope && navigationVersion.current === version) setError(reason instanceof Error ? reason.message : String(reason))
-          }
-        })()
       }}
       onRetry={() => {
         setConnection("reconnecting")

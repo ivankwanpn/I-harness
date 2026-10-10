@@ -14,7 +14,7 @@ export function useNarrowSidebar() {
   useEffect(() => {
     if (!narrow || !open) return
     const previous = document.activeElement as HTMLElement | null
-    const focusables = () => Array.from(container.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') ?? [])
+    const focusables = () => Array.from(container.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') ?? []).filter(element => !element.closest("[hidden]"))
     focusables()[0]?.focus()
     const removeKeys = listenForegroundEscape(container.current, () => setOpen(false), undefined, event => {
       const controls = focusables(); const first = controls[0]; const last = controls.at(-1)
