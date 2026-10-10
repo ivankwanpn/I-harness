@@ -6,6 +6,7 @@ import { SettingsGroup, SettingsRow } from "../vendor/zcode/SettingsRow.tsx"
 import type { HookAuthoringRequestHandler } from "@i-harness/desktop-gateway/src/hook-authoring.ts"
 import { HookAuthoringEditor } from "./HookAuthoringEditor.tsx"
 import { SettingsDraftScope } from "./settings-drafts.tsx"
+import "./hook-diagnostics.css"
 
 interface HookSettingsProps { bridge: DesktopBridge; workspaceId: string; onAuthoringRequest?: HookAuthoringRequestHandler; active?: boolean }
 export function HookSettings(props: HookSettingsProps) {
@@ -54,7 +55,19 @@ function HookSettingsContent({ bridge, workspaceId, onAuthoringRequest, active =
     {state ? <>
       <h2>{t("目前有效的 Hooks")}</h2>
       {!state.handlers.length && !state.errors.length ? <p className="muted">{t("目前沒有已啟用插件宣告的 Hooks。")}</p> : null}
-      {state.errors.map((row) => <div role="alert" className="notice" key={row.configPath}><strong>{row.configPath}</strong><p>{row.message}</p></div>)}
+      {state.errors.map((row) => {
+        const unsupported = row.kind === "unsupported-format"
+        const source = row.source === "plugin" ? t("插件") : row.source === "global" ? t("全域") : row.source === "workspace" ? t("專案") : undefined
+        return <div role={unsupported ? "note" : "alert"} className="hook-format-diagnostic" key={row.configPath}>
+          <strong>{t(unsupported ? "不支援的 Hook 格式" : "Hook 設定無效")}</strong>
+          <div className="hook-format-metadata">
+            {source ? <span>{t("來源：{source}", { source })}</span> : null}
+            {row.format === "claude-plugin" ? <span>{t("格式：{format}", { format: t("Claude 插件格式") })}</span> : null}
+          </div>
+          <p>{t(unsupported ? "此插件使用 Claude Hooks 格式。I-harness 目前支援原生 v1 設定；其他插件功能仍可使用。" : row.format === "claude-plugin" ? "此本機設定使用不支援的 Claude Hooks 格式，請改用原生 v1 設定。" : "請修正設定後重新套用 Hooks。")}</p>
+          <details><summary>{t("來源與診斷")}</summary><code>{row.configPath}</code><pre>{row.message}</pre></details>
+        </div>
+      })}
       {state.handlers.map((row) => <SettingsGroup key={row.id}>
         <SettingsRow label={row.name} description={row.event} control={<span>{t(row.status === "ready" ? "信任檢查通過" : row.status === "needs-approval" ? "等待腳本授權" : "腳本或設定無效")}</span>} />
         <div className="hook-details"><p>{row.script}</p><code>{row.sha256}</code><details><summary>{t("來源與診斷")}</summary><p>{row.configPath}</p>{row.error ? <p>{row.error}</p> : null}</details>

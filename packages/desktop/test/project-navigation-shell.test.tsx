@@ -17,5 +17,5 @@ it("opens moved conversation storage as a read-only reference when it is outside
   expect(screen.getByRole("button", { name: "工具詳情 read" })).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "唯讀開啟 D:/storage/previous.txt" }))
   expect(targets).toEqual([{ reference: { path: "D:/storage/previous.txt", readonly: true } }])
-  expect(screen.getByRole("tab", { name: "變更" }).getAttribute("aria-selected")).toBe("true")
+  expect(screen.getByRole("tab", { name: "檔案" }).getAttribute("aria-selected")).toBe("true")
 })

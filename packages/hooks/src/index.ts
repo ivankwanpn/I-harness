@@ -16,6 +16,7 @@ import {
   HOOK_EVENTS,
   HookBlockedError,
   HookConfigError,
+  HookUnsupportedFormatError,
   HookTrustError,
 } from "./types.ts"
 import { verifyHandlerTrust } from "./trust.ts"
@@ -187,6 +188,13 @@ export async function loadHooksConfig(
     throw new HookConfigError("hooks config must be a JSON object")
   }
   const cfg = raw as Record<string, unknown>
+  // Native fields take precedence: an invalid or mixed native policy must not
+  // acquire the optional-plugin containment reserved for this foreign format.
+  if (!Object.hasOwn(cfg, "version") && !Object.hasOwn(cfg, "handlers")
+    && typeof cfg.hooks === "object" && cfg.hooks !== null && !Array.isArray(cfg.hooks)
+    && Object.values(cfg.hooks).every(Array.isArray)) {
+    throw new HookUnsupportedFormatError()
+  }
   if (cfg.version !== 1) throw new HookConfigError("hooks config version must be 1")
   if (!Array.isArray(cfg.handlers)) throw new HookConfigError("hooks config must carry a handlers array")
   const userLayer = resolve(configPath) === resolve(resolveHooksConfigPath())

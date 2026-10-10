@@ -129,6 +129,21 @@ describe("sidebar session actions", () => {
     await waitFor(() => expect((screen.getByRole("button", { name: "更多會話操作 First" }) as HTMLButtonElement).disabled).toBe(false))
   })
 
+  it("dismisses a project row's open action draft when its confirmed owner changes without changing native IDs", async () => {
+    const manage = vi.fn(async () => {})
+    const props = { dashboard: { sessions: [{ id: "opaque-row", title: "Moved history", live: false }] }, onSelect: () => {}, onManage: manage }
+    const view = render(<TaskList {...props} rowScopes={{ "opaque-row": { workspaceId: "storage", sessionId: "native-id", projectId: "removed-a" } }} />)
+    fireEvent.click(screen.getByRole("button", { name: "更多會話操作 Moved history" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "重新命名" }))
+    fireEvent.change(screen.getByLabelText("會話名稱"), { target: { value: "Old owner draft" } })
+    view.rerender(<TaskList {...props} rowScopes={{ "opaque-row": { workspaceId: "storage", sessionId: "native-id", projectId: "removed-b" } }} />)
+    expect(screen.queryByRole("dialog", { name: "重新命名" })).toBeNull()
+    expect(manage).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "更多會話操作 Moved history" }))
+    fireEvent.click(screen.getByRole("menuitem", { name: "釘選會話" }))
+    await waitFor(() => expect(manage).toHaveBeenCalledWith("native-id", "pin", undefined, { workspaceId: "storage", sessionId: "native-id", projectId: "removed-b" }))
+  })
+
   it("routes archive, fork, copy ID and folder actions to their own targets", async () => {
     const manage = vi.fn(async () => {})
     const copy = vi.fn(async () => {})

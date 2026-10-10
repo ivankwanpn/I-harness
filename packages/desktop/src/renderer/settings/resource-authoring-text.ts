@@ -1,6 +1,12 @@
 import { useCallback } from "react"
 import { useLocale, useText, type Message } from "../design/i18n.ts"
 const english = {
+  "專案": "Project", "開啟專案": "Open project", "未分類會話": "Ungrouped conversations", "尚未開啟專案": "No project open", "選擇來源資料夾": "Choose source folder",
+  "不支援的 Hook 格式": "Unsupported hook format", "Hook 設定無效": "Invalid hook configuration", "Claude 插件格式": "Claude plugin format",
+  "來源：{source}": "Source: {source}", "格式：{format}": "Format: {format}",
+  "此插件使用 Claude Hooks 格式。I-harness 目前支援原生 v1 設定；其他插件功能仍可使用。": "This plugin uses the Claude hook format. I-harness currently supports native v1 configuration; other plugin capabilities remain available.",
+  "此本機設定使用不支援的 Claude Hooks 格式，請改用原生 v1 設定。": "This local configuration uses the unsupported Claude hook format. Use native v1 configuration.",
+  "請修正設定後重新套用 Hooks。": "Correct the configuration and reapply hooks.",
   "尚未建立筆記": "No notes yet", "重新讀取筆記": "Reload note",
   "筆記已變更；已保留。請重新讀取後再決定是否刪除。": "The note changed and was retained. Reload it before deciding whether to delete it.",
   "批次刪除（{count}）": "Forget selected ({count})", "清除選取": "Clear selection", "確認刪除選取筆記": "Confirm forgetting selected notes",

@@ -15,9 +15,9 @@ pnpm --filter @i-harness/desktop installer -- --nsis 'C:\tools\nsis\makensis.exe
 
 預設輸入為 `packages/desktop/release/I-harness`，預設輸出位於 `packages/desktop/release/`：
 
-- `I-harness-Setup-0.1.1.exe`
-- `I-harness-Setup-0.1.1.exe.sha256`
-- `I-harness-Setup-0.1.1.installer-build.json`
+- `I-harness-Setup-0.1.2.exe`
+- `I-harness-Setup-0.1.2.exe.sha256`
+- `I-harness-Setup-0.1.2.installer-build.json`
 
 也可以明確指定既有 payload 和輸出目錄，兩者都必須是完整路徑：
 

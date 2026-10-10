@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { toMcpServerConfigs, toSubagentRoles, type RuntimeInputs } from "@i-harness/plugin-registry"
 import { createPromptCommand, registerPromptCommand, parseCommandLine, listCommands, runCommand } from "@i-harness/interaction"
-import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
+import { createHookRegistry, createHookTrustStore, HookUnsupportedFormatError, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-executor"
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import { createAuthoredHookApprovals, isAuthoredHookPath } from "./hook-authoring.ts"
@@ -67,7 +67,10 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         } catch (error) {
           const failed = state.hooks.get(configPath)
           if (failed) { await failed.registry.dispose(); state.hooks.delete(configPath) }
-          failures.push(error); messages.push(`Hooks ${configPath}: ${String(error)}`)
+          // An unsupported plugin document contributes no handlers. Authored
+          // policies and invalid native configurations still reject live apply.
+          if (!(error instanceof HookUnsupportedFormatError) || isAuthoredHookPath(configDir, configPath)) failures.push(error)
+          messages.push(`Hooks ${configPath}: ${String(error)}`)
         }
       }
       for (const [name, mounted] of assembly.pluginMcpResults) if (!mounted) messages.push(`MCP ${name}: failed to mount`)

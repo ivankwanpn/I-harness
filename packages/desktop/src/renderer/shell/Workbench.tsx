@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, useCallback, lazy, Suspense, type CSSProperties } from "react"
-import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, Network, ListTodo, ShieldCheck } from "lucide-react"
+import { Brain, Search, PanelLeft, PanelRight, FolderOpen, TerminalSquare, Globe, UsersRound, Code2, Activity, Wrench, Target, Network, ListTodo, ShieldCheck, GitBranch, FileDiff } from "lucide-react"
 import { BrowserPane } from "../browser/BrowserPane.tsx"
 import { WorkbenchTools, type WorkbenchTool } from "./WorkbenchTools.tsx"
 import { useUiStore } from "./ui-store.ts"
@@ -36,6 +36,9 @@ import { Timeline } from "../session/Timeline.tsx"
 import { PendingPanel, type InteractionReply } from "../interaction/PendingPanel.tsx"
 import type { PendingInteraction } from "../interaction/pending.ts"
 import { ReviewPane, type ReviewChanges, type ReviewText } from "../review/ReviewPane.tsx"
+import { ProjectFilesPane } from "../review/ProjectFilesPane.tsx"
+import { SessionChangesPane } from "../review/SessionChangesPane.tsx"
+import { ProjectGitPane } from "../review/ProjectGitPane.tsx"
 import { TaskList } from "./TaskList.tsx"
 import { WorkspaceSidebar } from "./WorkspaceSidebar.tsx"
 import { NavigationRail } from "./NavigationRail.tsx"
@@ -198,7 +201,10 @@ export function Workbench({
   const [managerOwners, setManagerOwners] = useState<Record<string, string | undefined>>()
   const workspaceScope = useRef({ id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId })
   if (workspaceScope.current.id !== selectedWorkspaceId || workspaceScope.current.sessionId !== selectedSessionId || workspaceScope.current.projectId !== selectedProjectId) workspaceScope.current = { id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId }
-  const [workPaneTab, setWorkPaneTab] = useState("changes")
+  const [workPaneTab, setWorkPaneTab] = useState("files")
+  const [gitOpen, setGitOpen] = useState(false)
+  const [gitBusy, setGitBusy] = useState(false)
+  useEffect(() => { setGitOpen(false) }, [selectedProjectId])
   const [workflowSection, setWorkflowSection] = useState<"goal" | "team" | "jobs" | "reviews">("goal")
   useEffect(() => {
     if ((workPaneTab === "execution" && (!selectedSessionId || !capabilities["desktop-execution"]?.includes("1"))) || (workPaneTab === "processes" && (!selectedSessionId || !capabilities["desktop-agent-processes"]?.includes("1"))) || (workPaneTab === "diagnostics" && !capabilities["desktop-environment-diagnostics"]?.includes("1"))) setWorkPaneTab("changes")
@@ -276,6 +282,7 @@ export function Workbench({
   }
   const workspaceTitle = workspaces.find((row) => row.id === selectedWorkspaceId)?.label ?? t("尚未選擇會話")
   const selectedProject = projects?.find((project) => project.id === selectedProjectId)
+  const displayProject = selectedProject ?? (selectedProjectId === undefined ? projects?.find(project => project.workspaceIds.includes(selectedWorkspaceId ?? "")) : undefined)
   const canCreate = capabilities["session-create"]?.includes("1") === true && (!selectedProject || selectedProject.workspaceIds.includes(selectedWorkspaceId ?? ""))
   const fileProjectMembers = projects?.find(project => project.id === review?.projectFiles?.selection.projectId)?.workspaceIds
   const fileProjectRoots = review?.projectFiles ? workspaces.filter(row => review.projectFiles?.selection.projectId ? fileProjectMembers?.includes(row.id) : row.id === selectedWorkspaceId).map(row => ({ workspaceId: row.id, path: row.path })) : undefined
@@ -283,9 +290,9 @@ export function Workbench({
   const fileNavigation: FileNavigation | undefined = review && selectedWorkspaceId && (capabilities["desktop-review"]?.includes("1") || review.projectFiles) ? {
     workspaceId: selectedWorkspaceId, workspacePath: workspaces.find(row => row.id === selectedWorkspaceId)?.path ?? "",
     projectRoots: fileProjectRoots,
-    onOpenProjectFile: review.projectFiles && onOpenProjectFile ? ref => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); onOpenProjectFile({ ...ref }) } : undefined,
-    onOpenExternalFile: review.projectFiles && onOpenExternalFile && capabilities["desktop-project-content-search"]?.includes("1") ? target => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); onOpenExternalFile({ ...target, reference: { ...target.reference } }) } : undefined,
-    onOpenFile: path => { if (!reviewOpen) toggleReview(); setWorkPaneTab("changes"); review.onSelect(path, "preview") },
+    onOpenProjectFile: review.projectFiles && onOpenProjectFile ? ref => { if (!reviewOpen) toggleReview(); setWorkPaneTab("files"); onOpenProjectFile({ ...ref }) } : undefined,
+    onOpenExternalFile: review.projectFiles && onOpenExternalFile && capabilities["desktop-project-content-search"]?.includes("1") ? target => { if (!reviewOpen) toggleReview(); setWorkPaneTab("files"); onOpenExternalFile({ ...target, reference: { ...target.reference } }) } : undefined,
+    onOpenFile: path => { if (!reviewOpen) toggleReview(); setWorkPaneTab("files"); review.onSelect(path, "preview") },
   } : undefined
 
   async function createSession(): Promise<void> {
@@ -313,8 +320,8 @@ export function Workbench({
   const visitedWorkspacePanes = useRef({ scope: selectedWorkspaceId, tabs: new Set<string>() })
   if (visitedWorkspacePanes.current.scope !== selectedWorkspaceId) visitedWorkspacePanes.current = { scope: selectedWorkspaceId, tabs: new Set() }
   if (visitedWork.current.scope !== workScope) visitedWork.current = { scope: workScope, tabs: new Set() }
-  if (reviewOpen && !pageOpen && selectedWorkspaceId && selectedSessionId && (workPaneTab === "workflow" || workPaneTab === "reminders")) visitedWork.current.tabs.add(workPaneTab)
-  if (reviewOpen && !pageOpen && selectedWorkspaceId && (workPaneTab === "browser" || workPaneTab === "terminal")) visitedWorkspacePanes.current.tabs.add(workPaneTab)
+  if (reviewOpen && !pageOpen && selectedWorkspaceId && selectedSessionId && (workPaneTab === "workflow" || workPaneTab === "reminders" || workPaneTab === "changes")) visitedWork.current.tabs.add(workPaneTab)
+  if (reviewOpen && !pageOpen && selectedWorkspaceId && (workPaneTab === "browser" || workPaneTab === "terminal" || workPaneTab === "files")) visitedWorkspacePanes.current.tabs.add(workPaneTab)
   const workVisible = reviewOpen && !pageOpen
   const toggleSidebar = () => {
     if (pageOpen) { setSurface("conversation"); if (drawer.narrow) drawer.setOpen(true); else updatePreferences({ sidebarCollapsed: false }); return }
@@ -339,7 +346,7 @@ export function Workbench({
         onSearch={selectedWorkspaceId && capabilities["desktop-session-search"]?.includes("1") ? () => navigate("search") : undefined}
         onSettings={() => navigate("settings")} />
       {drawer.narrow && drawer.open ? <button type="button" className="sidebar-scrim" tabIndex={-1} aria-label={t("關閉側欄")} onClick={() => drawer.setOpen(false)} /> : null}
-      <div ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : "sidebar-container"} hidden={pageOpen || (drawer.narrow ? !drawer.open : sidebarCollapsed)} role={drawer.narrow && drawer.open ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open ? true : undefined} aria-label={drawer.narrow ? t("工作區") : undefined}>
+      <div ref={drawer.container} className={drawer.narrow ? "sidebar-container sidebar-drawer" : "sidebar-container"} hidden={pageOpen || (drawer.narrow ? !drawer.open : sidebarCollapsed)} role={drawer.narrow && drawer.open ? "dialog" : undefined} aria-modal={drawer.narrow && drawer.open ? true : undefined} aria-label={drawer.narrow ? t("專案") : undefined}>
       {drawer.narrow ? <button type="button" className="drawer-close primary-button" onClick={() => drawer.setOpen(false)}>{t("關閉側欄")}</button> : null}
       {projects && onManageSessionInWorkspace ? <ProjectSidebar
         bridge={bridge} revision={sidebarRevision} onManageSessions={capabilities["desktop-sessions"]?.includes("1") ? (workspaceId, sessionId) => openManager(workspaceId, sessionId) : undefined} projects={projects} workspaces={workspaces} selectedProjectId={selectedProjectId} selectedWorkspaceId={selectedWorkspaceId} selectedSessionId={selectedSessionId}
@@ -367,21 +374,23 @@ export function Workbench({
       {settingsPane ? <div className="settings-retained-host" hidden={surface !== "settings"}>{settingsPane}</div> : null}
       {surface === "settings" ? null : projectsPane ?? <>
       <main className="center-pane">
-        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? selectedProject ? `${selectedProject.name} · ${workspaceTitle}` : workspaceTitle : sessionTitle}
+        <TitleBar bridge={bridge} title={surface === "plugins" ? t("插件市場") : surface === "memory" ? t("工作區記憶") : surface === "search" ? t("搜尋會話") : selectedSessionId === undefined ? displayProject?.name ?? workspaceTitle : sessionTitle}
           leading={<button type="button" className="icon-button" aria-label={t("顯示側欄")} aria-expanded={drawer.narrow ? drawer.open : !sidebarCollapsed} onClick={toggleSidebar}><PanelLeft size={18} /></button>}>
           <button type="button" className="icon-button review-toggle" aria-label={t("成果檢查")} aria-expanded={reviewOpen} onClick={toggleReview}>
             <PanelRight size={18} />
           </button>
+          {displayProject && capabilities["desktop-review"]?.includes("1") ? <button type="button" className="header-action project-git-trigger" aria-label={t("專案 Git")} title={displayProject.name + " · Git"} onClick={() => setGitOpen(true)}><GitBranch size={16} aria-hidden="true" /><span>Git</span></button> : null}
           {connection ? <span className={`connection-state connection-${connection}`} role="status">{t(connection === "online" ? "已連線" : connection === "offline" ? "連線已中斷" : connection === "reconnecting" ? "重新連線中…" : "連線中…")}</span> : null}
           {selectedWorkspaceId ? <WorkbenchTools key={`${selectedWorkspaceId}:${selectedSessionId ?? ""}`} groups={[
-            { label: english ? "Workspace" : "工作區", items: [
+            { label: english ? "Project" : "專案", items: [
               { id: "browser", label: t("瀏覽器"), icon: <Globe size={16} />, selected: reviewOpen && workPaneTab === "browser", open: () => openPane("browser") },
               ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端"), icon: <TerminalSquare size={16} />, selected: reviewOpen && workPaneTab === "terminal", open: () => openPane("terminal") }] : []),
               ...(capabilities["desktop-memory"]?.includes("1") ? [{ id: "memory", label: t(memoryOpen ? "返回會話" : "工作區記憶"), icon: <Brain size={16} />, selected: memoryOpen, open: () => setMemoryOpen(open => !open) }] : []),
               ...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel, icon: <Wrench size={16} />, selected: reviewOpen && workPaneTab === "diagnostics", open: () => openPane("diagnostics") }] : []),
             ] },
             { label: english ? "Conversation" : "會話", items: selectedSessionId ? [
-              { id: "changes", label: t("變更"), icon: <FolderOpen size={16} />, selected: reviewOpen && workPaneTab === "changes", open: () => openPane("changes") },
+              { id: "files", label: t("檔案"), icon: <FolderOpen size={16} />, selected: reviewOpen && workPaneTab === "files", open: () => openPane("files") },
+              { id: "changes", label: t("變更"), icon: <FileDiff size={16} />, selected: reviewOpen && workPaneTab === "changes", open: () => openPane("changes") },
               { id: "tasks", label: t("任務"), icon: <ListTodo size={16} />, selected: reviewOpen && workPaneTab === "tasks", open: () => openPane("tasks") },
               ...(capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode", icon: <Code2 size={16} />, selected: reviewOpen && workPaneTab === "execution", open: () => openPane("execution") }] : []),
               ...(capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel, icon: <Activity size={16} />, selected: reviewOpen && workPaneTab === "processes", open: () => openPane("processes") }] : []),
@@ -417,7 +426,7 @@ export function Workbench({
                 </div> : null}
                 {capabilities["desktop-work-state"]?.includes("1") ? <TodoProgress key={`todos:${selectedWorkspaceId}:${selectedSessionId}`} todos={conversation.workState?.todos} error={conversation.workStateError} onOpenTasks={openTodoEditor} /> : null}
                 {conversation.rows.length === 0
-                  ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個工作區開始。")}</p></div>
+                  ? <div className="empty-conversation"><h1>{t("今天想完成甚麼？")}</h1><p>{t("描述你的目標，從這個專案開始。")}</p></div>
                   : <Timeline key={`${selectedWorkspaceId}:${selectedSessionId}`} rows={conversation.rows} running={conversation.running} navigation={fileNavigation} />}
                 <div className="conversation-dock">
                 {conversation.taskError && !(reviewOpen && workPaneTab === "tasks") ? <p role="alert" className="notice error-text">{conversation.taskError}</p> : null}
@@ -464,7 +473,7 @@ export function Workbench({
                   <button type="button" className="welcome-action" onClick={() => onOpenWorkspace?.()}><FolderOpen size={17} />{t("選擇資料夾")}</button>
                 </> : <>
                   <h1>{t("今天想完成甚麼？")}</h1>
-                  <p>{t("描述你的目標，從這個工作區開始。")}</p>
+                  <p>{t("描述你的目標，從這個專案開始。")}</p>
                   <div className="empty-composer">{selectedProject && !selectedProject.workspaceIds.includes(selectedWorkspaceId) ? <><p className="notice">{english ? "Choose a project folder to create a conversation. This folder retains moved conversation storage." : "選擇專案資料夾以建立會話；此資料夾保留已移動會話的儲存資料。"}</p><button type="button" className="primary-button" onClick={() => { const member = selectedProject.primaryWorkspaceId ?? selectedProject.workspaceIds[0]; if (member) onSelectWorkspace(member, selectedProject.id) }}>{t("選擇資料夾")}</button></> : <NewTaskComposer onOpenHistory={onSelectHistory} onOpenProjectFile={fileNavigation?.onOpenProjectFile} key={`${selectedWorkspaceId}:${selectedProjectId ?? ""}`} bridge={bridge} draftRequest={capabilities["desktop-drafts"]?.includes("1") ? draftRequest : undefined} workspaceId={selectedWorkspaceId} projectId={selectedProjectId} capabilities={capabilities} onPermissionsChanged={onSandboxChange} onSubmitted={(id) => { if (workspaceScope.current.id === selectedWorkspaceId && workspaceScope.current.sessionId === undefined && workspaceScope.current.projectId === selectedProjectId) { onSelectSession(id); onSessionsChanged?.() } }} onWorkflow={openWorkflow} />}</div>
                 </>}
               </div>}
@@ -473,7 +482,7 @@ export function Workbench({
       </>}
       {reviewOpen || visitedWork.current.tabs.size > 0 || visitedWorkspacePanes.current.tabs.size > 0 ? <aside className="review-pane" aria-label={t("成果檢查")} hidden={!workVisible}>
         <ReviewResizeHandle width={actualReviewWidth} min={reviewMin} max={reviewMax} onResize={setReviewWidth} />
-        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel }] : []), ...(selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode" }] : []), ...(selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel }] : []), { id: "browser", label: t("瀏覽器") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理") }] : []), ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
+        <div className="work-pane-header"><PaneTabs id={workPaneId} label={t("成果檢查")} items={[...(capabilities["desktop-environment-diagnostics"]?.includes("1") ? [{ id: "diagnostics", label: diagnosticsLabel }] : []), ...(selectedSessionId && capabilities["desktop-execution"]?.includes("1") ? [{ id: "execution", label: "Code Mode" }] : []), ...(selectedSessionId && capabilities["desktop-agent-processes"]?.includes("1") ? [{ id: "processes", label: processesLabel }] : []), { id: "browser", label: t("瀏覽器") }, { id: "files", label: t("檔案") }, { id: "changes", label: t("變更") }, { id: "tasks", label: t("任務") }, ...(selectedSessionId && capabilities["desktop-subagent-catalog"]?.includes("1") ? [{ id: "subagents", label: t("子代理") }] : []), ...(selectedSessionId && capabilities["desktop-workflow"]?.includes("1") ? [{ id: "workflow", label: t("工作流程") }] : []), ...(selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? [{ id: "reminders", label: t("提醒") }] : []), ...(capabilities["desktop-terminal"]?.includes("1") ? [{ id: "terminal", label: t("終端") }] : [])]} selected={workPaneTab} onSelect={setWorkPaneTab} />
           <button type="button" className="icon-button" aria-label={t("關閉成果面板")} onClick={toggleReview}>×</button></div>
         <div role="tabpanel" id={`${workPaneId}-panel`} aria-labelledby={`${workPaneId}-${workPaneTab}`}>
         {workVisible && workPaneTab === "diagnostics" && selectedWorkspaceId && capabilities["desktop-environment-diagnostics"]?.includes("1") ? <DiagnosticsPane key={`diagnostics:${selectedWorkspaceId}:${selectedSessionId ?? ""}`} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} /> : null}
@@ -486,25 +495,13 @@ export function Workbench({
         {visitedWorkspacePanes.current.tabs.has("browser") && selectedWorkspaceId ? <div className="retained-work-pane" hidden={workPaneTab !== "browser"}><BrowserPane key={selectedWorkspaceId} bridge={bridge} workspaceId={selectedWorkspaceId} visible={workVisible && workPaneTab === "browser" && !drawer.open} /></div> : null}
         {visitedWorkspacePanes.current.tabs.has("terminal") && selectedWorkspaceId && capabilities["desktop-terminal"]?.includes("1") ? <div className="retained-work-pane" hidden={workPaneTab !== "terminal"}><Suspense fallback={<p>{t("正在載入終端…")}</p>}><TerminalPane key={selectedWorkspaceId} active={workVisible && workPaneTab === "terminal"} bridge={bridge} workspaceId={selectedWorkspaceId} /></Suspense></div> : null}
         {visitedWork.current.tabs.has("reminders") && selectedWorkspaceId && selectedSessionId && capabilities["desktop-schedule"]?.includes("1") ? <div className="retained-work-pane" hidden={workPaneTab !== "reminders"}><SchedulePane key={`${selectedWorkspaceId}:${selectedSessionId}`} active={workVisible && workPaneTab === "reminders"} bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} canCreate={conversation?.modelState?.status === "ready" && !conversation.running && !conversation.queue?.length && conversation.operation?.busy !== true} /></div> : null}
-        {!workVisible || workPaneTab !== "changes" || review === undefined || selectedWorkspaceId === undefined ? null : (
-          <ReviewPane
-            draftOwner={bridge}
-            workspaceId={selectedWorkspaceId}
-            projectFiles={review.projectFiles ? { ...review.projectFiles, contentSearchAvailable: capabilities["desktop-project-content-search"]?.includes("1") === true, membershipRevision: fileMembershipRevision } : undefined}
-            key={selectedWorkspaceId}
-            changes={review.changes}
-            error={review.error}
-            selected={review.selected}
-            diff={review.diff}
-            preview={review.preview}
-            onSelect={review.onSelect}
-            onRefresh={review.onRefresh}
-            onSaveFile={review.onSaveFile}
-            onStage={review.onStage}
-            onUnstage={review.onUnstage}
-            onCommit={review.onCommit}
-          />
-        )}
+        {visitedWorkspacePanes.current.tabs.has("files") && review && selectedWorkspaceId ? <div className="retained-work-pane" hidden={workPaneTab !== "files"}>
+          {review.projectFiles ? <ProjectFilesPane {...review.projectFiles} contentSearchAvailable={capabilities["desktop-project-content-search"]?.includes("1") === true} membershipRevision={fileMembershipRevision} />
+            : <ReviewPane {...review} draftOwner={bridge} workspaceId={selectedWorkspaceId} title={t("檔案")} view="files" onStage={undefined} onUnstage={undefined} onCommit={undefined} />}
+        </div> : null}
+        {visitedWork.current.tabs.has("changes") && conversation && selectedSessionId ? <div className="retained-work-pane" hidden={workPaneTab !== "changes"}>
+          <SessionChangesPane key={JSON.stringify([selectedProjectId, selectedWorkspaceId, selectedSessionId])} rows={conversation.rows} navigation={fileNavigation} historyNotice={conversation.historyNotice} />
+        </div> : null}
         {!workVisible || workPaneTab !== "tasks" || conversation === undefined ? null : (
           <TaskPane
             draftOwner={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId}
@@ -523,12 +520,16 @@ export function Workbench({
             onResumeQueue={conversation.projectReady === false ? undefined : conversation.onResumeQueue}
           />
         )}
-        {workVisible && workPaneTab === "changes" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇工作區以檢查檔案變動。")}</p> : null}
+        {workVisible && workPaneTab === "files" && (review === undefined || selectedWorkspaceId === undefined) ? <p className="notice">{t("選擇專案以瀏覽檔案。")}</p> : null}
+        {workVisible && workPaneTab === "changes" && (!conversation || !selectedSessionId) ? <p className="notice">{t("選擇會話以檢查變更。")}</p> : null}
         {workVisible && workPaneTab === "tasks" && conversation === undefined ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         {workVisible && workPaneTab === "reminders" && !selectedSessionId ? <p className="notice">{t("尚未選擇會話")}</p> : null}
         </div>
       </aside> : null}
       {manager && managerManage ? <SettingsDialog title={t("管理會話")} closeLabel={t("關閉")} busy={managerBusy} initialFocusSelector="button" onClose={() => setManager(undefined)}><SessionManager key={JSON.stringify(manager)} onBusyChange={busy => { if (managerOwner.current === manager) setManagerBusy(busy) }} bridge={bridge} workspaceId={manager.workspaceId} initialArchived={manager.archived} initialSelected={manager.sessionId ? [manager.sessionId] : []} onManage={async (id, action, title) => { await managerManage(id, action, title); setSidebarRevision(value => value + 1) }} onRewindComplete={capabilities["desktop-rewind"]?.includes("1") && onRewindComplete ? id => onRewindComplete(manager.workspaceId, id) : undefined} onBatch={onBatchSessions && capabilities["desktop-sessions"]?.includes("1") ? command => batchRequest(manager.workspaceId, command) : undefined} projects={projects} currentOwners={managerOwners} executionWorkspace={workspaces.find(row => row.id === manager.workspaceId)?.path} /></SettingsDialog> : null}
+      {gitOpen && displayProject ? <SettingsDialog title={displayProject.name + " · Git"} className="project-git-dialog" closeLabel={t("關閉")} busy={gitBusy} onClose={() => { if (!gitBusy) setGitOpen(false) }} initialFocusSelector=".project-git-pane select:not(:disabled), .project-git-pane button:not(:disabled)">
+        <ProjectGitPane key={displayProject.id} bridge={bridge} project={displayProject} workspaces={workspaces} onBusyChange={setGitBusy} />
+      </SettingsDialog> : null}
     </div>
   )
 }

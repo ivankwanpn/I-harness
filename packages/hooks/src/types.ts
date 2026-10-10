@@ -95,6 +95,15 @@ export class HookConfigError extends Error {
   }
 }
 
+/** A recognizable foreign document, rejected before native trust evaluation. */
+export class HookUnsupportedFormatError extends HookConfigError {
+  readonly format = "claude-plugin" as const
+  constructor() {
+    super("Claude plugin hook format is unsupported; I-harness requires version: 1 with a handlers array")
+    this.name = "HookUnsupportedFormatError"
+  }
+}
+
 /** sha256 of the handler script does not match the trusted value. */
 export class HookTrustError extends Error {
   readonly code = "hook-trust-failed" as const

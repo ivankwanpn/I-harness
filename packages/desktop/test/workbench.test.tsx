@@ -131,7 +131,7 @@ describe("Desktop workbench shell", () => {
     const onSelectWorkspace = vi.fn()
     render(<Workbench bridge={bridge} workspaces={[ENTRY]} dashboard={{ sessions: [] }} selectedWorkspaceId={ENTRY.id}
       capabilities={{ "session-create": ["1"], "desktop-input": ["1"] }} onSelectWorkspace={onSelectWorkspace} onSelectSession={() => {}} />)
-    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" }))
     expect(onSelectWorkspace).toHaveBeenCalledWith(ENTRY.id, undefined)
     const editor = screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement
     fireEvent.change(editor, { target: { value: "Review the playground" } })
@@ -172,9 +172,9 @@ describe("Desktop workbench shell", () => {
   it("can hide and restore navigation without losing the header toggle", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
-    expect(screen.queryByRole("navigation", { name: "工作區" })).toBeNull()
+    expect(screen.queryByRole("navigation", { name: "專案" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "顯示側欄" }))
-    expect(screen.getByRole("navigation", { name: "工作區" })).toBeTruthy()
+    expect(screen.getByRole("navigation", { name: "專案" })).toBeTruthy()
   })
   it("preserves a draft while a pending request takes over the bottom dock", () => {
     const conversation = { rows: [], canSend: true, running: true, pending: [], onPrompt: async () => {}, onCancel: vi.fn(), onCancelTask: vi.fn(), onCancelQueue: vi.fn(), onReply: async () => {} }
@@ -200,7 +200,7 @@ describe("Desktop workbench shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
     fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
     expect(await screen.findByRole("region", { name: "工作區記憶" })).toBeTruthy()
-    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: mode === "existing" ? "既有會話" : "新增會話" }))
     await waitFor(() => expect(screen.queryByRole("region", { name: "工作區記憶" })).toBeNull())
     if (mode === "existing") expect(onSelectSession).toHaveBeenCalledWith("existing")
     else expect(vi.mocked(bridge.request).mock.calls.some(([request]) => request.kind === "session/create")).toBe(false)
@@ -208,11 +208,11 @@ describe("Desktop workbench shell", () => {
   it("switches shell language while preserving workspace navigation", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
     fireEvent.click(screen.getByRole("button", { name: "設定" }))
-    expect(screen.queryByRole("navigation", { name: "工作區" })).toBeNull()
+    expect(screen.queryByRole("navigation", { name: "專案" })).toBeNull()
     fireEvent.click(screen.getByRole("button", { name: "一般" }))
     fireEvent.change(screen.getByRole("combobox", { name: "語言" }), { target: { value: "en" } })
     fireEvent.click(screen.getByRole("button", { name: "Back to conversation" }))
-    expect(within(screen.getByRole("navigation", { name: "Workspaces" })).getByRole("button", { name: "New conversation" })).toBeTruthy()
+    expect(within(screen.getByRole("navigation", { name: "Projects" })).getByRole("button", { name: "New conversation" })).toBeTruthy()
     expect(screen.getByRole("heading", { name: "What would you like to work on?" })).toBeTruthy()
     expect(screen.getByRole("button", { name: "workspace" })).toBeTruthy()
     expect(document.documentElement.lang).toBe("en")
@@ -259,14 +259,14 @@ describe("Desktop workbench shell", () => {
   it("renders a disabled create control when the host lacks session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} capabilities={{ "session-list": ["1"] }} />)
 
-    const create = within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(true)
   })
 
   it("enables the create control when the host advertises session-create", () => {
     render(<Harness dashboard={{ sessions: [] }} />)
 
-    const create = within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "新增會話" })
+    const create = within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "新增會話" })
     expect(create.hasAttribute("disabled")).toBe(false)
   })
 
@@ -288,7 +288,7 @@ describe("Desktop workbench shell", () => {
       />,
     )
 
-    fireEvent.click(within(screen.getByRole("navigation", { name: "工作區" })).getByRole("button", { name: "開啟工作區" }))
+    fireEvent.click(within(screen.getByRole("navigation", { name: "專案" })).getByRole("button", { name: "開啟專案" }))
     expect(request).toHaveBeenCalledWith({ kind: "workspace/pick" })
   })
 

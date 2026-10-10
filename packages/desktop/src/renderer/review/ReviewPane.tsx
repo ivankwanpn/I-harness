@@ -27,6 +27,9 @@ export type ReviewText =
   | { kind: "unavailable"; reason: string }
 
 export interface ReviewPaneProps {
+  title?: string
+  view?: "git" | "files"
+  draftKey?: string
   draftOwner?: object
   workspaceId?: string
   projectFiles?: ProjectFilesPaneProps
@@ -92,10 +95,10 @@ export function ReviewPane(props: ReviewPaneProps) {
   const fallback = useRef({})
   return <SettingsDraftScope owner={props.draftOwner ?? fallback.current}><ReviewPaneContent key={props.workspaceId ?? "legacy"} {...props} /></SettingsDraftScope>
 }
-function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit }: ReviewPaneProps) {
+function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected, diff, preview, onSelect, onRefresh, onSaveFile, onStage, onUnstage, onCommit, title, view = "git", draftKey }: ReviewPaneProps) {
   const t = useText()
-  const [sourcePath, setSourcePath] = useSettingsDraft(["review", workspaceId ?? "legacy", "path"], "")
-  const [message, setMessage] = useSettingsDraft(["review", workspaceId ?? "legacy", "commit"], "")
+  const [sourcePath, setSourcePath] = useSettingsDraft(["review", draftKey ?? workspaceId ?? "legacy", "path"], "")
+  const [message, setMessage] = useSettingsDraft(["review", draftKey ?? workspaceId ?? "legacy", "commit"], "")
   const [busy, setBusy] = useState(false)
   const [mutationError, setMutationError] = useState<string>()
   const [committed, setCommitted] = useState<string>()
@@ -121,10 +124,10 @@ function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected
     finally { setBusy(false) }
   }
   return (
-    <section className="review-view" aria-label={t("變更")}>
+    <section className="review-view" aria-label={title ?? t("變更")}>
       {projectFiles ? <ProjectFilesPane {...projectFiles} /> : null}
       <div className="review-head">
-        <h3 className="review-title">{t("變更")}</h3>
+        <h3 className="review-title">{title ?? t("變更")}</h3>
         <button type="button" className="link-button" onClick={onRefresh}>{t("重新整理")}</button>
       </div>
       {error === undefined ? null : <p className="notice error-text">{error}</p>}
@@ -134,7 +137,7 @@ function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected
         <input aria-label={t("來源檔案路徑")} placeholder="src/file.ts" value={sourcePath} onChange={(event) => setSourcePath(event.target.value)} />
         <button type="submit" className="link-button" disabled={!sourcePath.trim()}>{t("開啟檔案")}</button>
       </form> : null}
-      {changes === undefined ? (
+      {view === "files" ? null : changes === undefined ? (
         !error ? <p className="muted">{t("正在讀取變更…")}</p> : null
       ) : changes.kind === "unavailable" ? (
         <p className="notice">{CHANGE_REASONS[changes.reason] ? t(CHANGE_REASONS[changes.reason]!) : `${t("無法讀取")} (${changes.reason})`}</p>
@@ -174,7 +177,7 @@ function ReviewPaneContent({ workspaceId, projectFiles, changes, error, selected
           {onSaveFile ? <div hidden={selected.mode !== "preview"}><SourceFileEditor workspaceId={workspaceId} path={selected.path} value={preview} onSave={onSaveFile} onReload={(path) => onSelect(path, "preview")} /></div> : null}
         </div>
       )}
-      {onCommit ? <form className="review-commit" onSubmit={(event) => { event.preventDefault(); if (message.trim() && stagedCount > 0) void mutate(() => onCommit(message), message) }}>
+      {onCommit && view === "git" && changes?.kind === "ok" ? <form className="review-commit" onSubmit={(event) => { event.preventDefault(); if (message.trim() && stagedCount > 0) void mutate(() => onCommit(message), message) }}>
         <span className="row-meta">{t("已暫存 {count} 個檔案", { count: stagedCount })}</span>
         <label>{t("提交訊息")}<textarea value={message} disabled={busy} onChange={(event) => setMessage(event.target.value)} /></label>
         <button type="submit" disabled={busy || stagedCount === 0 || !message.trim()}>{t("提交已暫存變更")}</button>

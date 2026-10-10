@@ -1,6 +1,6 @@
 # I-harness Desktop
 
-The Windows desktop app for the I-harness workspace. For downloads and first-run setup, see the [product README](../../README.en.md) or [繁體中文介紹](../../README.md).
+The Windows desktop app for I-harness projects. For downloads and first-run setup, see the [product README](../../README.en.md) or [繁體中文介紹](../../README.md).
 
 ## Development
 
@@ -23,17 +23,17 @@ pnpm --filter @i-harness/desktop dist
 pnpm --filter @i-harness/desktop installer
 ```
 
-The current distribution is collected in `packages/desktop/release/`:
+Standard builds write to `packages/desktop/release/`. The current local 0.1.2 preview is in `packages/desktop/release-0-1-2/`; its full app and installer are collected together:
 
 ```text
 release/
   I-harness/
     I-harness.exe
     resources/
-  I-harness-0.1.1.zip
-  I-harness-Setup-0.1.1.exe
-  I-harness-Setup-0.1.1.exe.sha256
-  I-harness-Setup-0.1.1.installer-build.json
+  I-harness-0.1.2.zip
+  I-harness-Setup-0.1.2.exe
+  I-harness-Setup-0.1.2.exe.sha256
+  I-harness-Setup-0.1.2.installer-build.json
   SHA256SUMS.txt
 ```
 

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto"
-import { dirname } from "node:path"
+import { dirname, resolve } from "node:path"
 import { acquireSessionLock } from "@i-harness/fs-lock"
-import { createHookTrustStore, loadHooksConfig, resolveHookTrustPath, trustScriptPath } from "@i-harness/hooks"
-import { createHookAuthoring, createAuthoredHookApprovals, bindAuthoredHookApproval } from "./hook-authoring.ts"
+import { createHookTrustStore, HookUnsupportedFormatError, loadHooksConfig, resolveHookTrustPath, trustScriptPath } from "@i-harness/hooks"
+import { createHookAuthoring, createAuthoredHookApprovals, bindAuthoredHookApproval, isAuthoredHookPath } from "./hook-authoring.ts"
 import { authoredHookPath } from "./effective-local-inputs.ts"
 import { existsSync } from "node:fs"
 import { contentRevision } from "./resource-files.ts"
@@ -11,7 +11,7 @@ import { readFile } from "node:fs/promises"
 export interface HookSettingsState {
   handlers: { id: string; name: string; event: string; configPath: string; configRevision?: string; command?: { cmd: string; args?: string[]; cwd?: string }; script: string; sha256: string; status: "ready" | "needs-approval" | "invalid"; error?: string }[]
   grants: { sha256: string; script: string; handlerId: string; approvedAt: string }[]
-  errors: { configPath: string; message: string }[]
+  errors: { configPath: string; message: string; kind?: "unsupported-format" | "invalid"; source?: "plugin" | "global" | "workspace"; format?: "claude-plugin" }[]
 }
 export type HookSettingsCommand = { action: "approve"; id: string; sha256: string } | { action: "revoke"; sha256: string }
 
@@ -30,7 +30,15 @@ export function createHookSettings(configDir: string, paths: () => Promise<strin
           name: spec.id, event: spec.event, configPath, configRevision, command: spec.command, script: trustScriptPath(spec, dirname(configPath)), sha256: spec.trust.sha256,
           status: valid ? "ready" : unapproved ? "needs-approval" : "invalid", ...(trustError ? { error: trustError } : {}),
         }))
-      } catch (error) { result.errors.push({ configPath, message: String(error) }) }
+      } catch (error) {
+        const authored = isAuthoredHookPath(configDir, configPath)
+        const source = !authored ? "plugin" : resolve(configPath) === resolve(authoredHookPath(options?.workspace ?? configDir, configDir, "global")) ? "global" : "workspace"
+        result.errors.push({
+          configPath, message: String(error), source,
+          kind: error instanceof HookUnsupportedFormatError && !authored ? "unsupported-format" : "invalid",
+          ...(error instanceof HookUnsupportedFormatError ? { format: error.format } : {}),
+        })
+      }
     }
     return result
   }

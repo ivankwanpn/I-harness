@@ -1,0 +1,17 @@
+.hook-format-diagnostic {
+  min-width: 0;
+  margin: 12px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--ih-divider);
+  border-radius: 10px;
+  background: var(--ih-panel);
+  color: var(--ih-text);
+  overflow-wrap: anywhere;
+}
+.hook-format-diagnostic > strong { display: block; font-size: 13px; }
+.hook-format-diagnostic > p { margin: 10px 0; font-size: 12px; line-height: 1.65; color: var(--ih-muted); }
+.hook-format-metadata { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; font-size: 11px; color: var(--ih-muted); }
+.hook-format-diagnostic details { min-width: 0; margin-top: 10px; font-size: 12px; }
+.hook-format-diagnostic summary { cursor: pointer; color: var(--ih-muted); }
+.hook-format-diagnostic details > code { display: block; margin-top: 10px; font-size: 11px; }
+.hook-format-diagnostic pre { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; line-height: 1.55; }
