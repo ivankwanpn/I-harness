@@ -16,7 +16,7 @@ Date: 2026-10-10, Asia/Hong_Kong. Baseline `9bcc9aec`; Desktop/gateway 0.1.2.
 
 DSH 0.1.6-alpha.2 supplies the distinction between turn-record changes and an independent Files page. OpenCode 1.18.30 supplies file-list/selected-diff comparison presentation. ZCode current local main separates review from Git action entry; its currently empty last-turn dataset was not adopted. These references do not uniformly have separate top-level Changes and Git pages; the explicit separation is an IH choice matching the user's requirement.
 
-Reference paths: DSH `packages/client/ui-deliverables/src/client/{index,ReviewTab}.tsx` and `ui-sidebar-files`; OpenCode `packages/app/src/pages/session.tsx` and `session/v2/review-panel-v2.tsx`; ZCode `packages/ui/src/v4/ConversationStatusPanel.tsx`, `GitActionMenu.tsx` and `GitPane.tsx`.
+Reference paths: DSH `packages/client/ui-deliverables/src/client/index.ts and src/client/ReviewTab.tsx` and `ui-sidebar-files`; OpenCode `packages/app/src/pages/session.tsx` and `session/v2/review-panel-v2.tsx`; ZCode `packages/ui/src/v4/ConversationStatusPanel.tsx`, `GitActionMenu.tsx` and `GitPane.tsx`.
 
 ## Verification
 
@@ -33,3 +33,6 @@ Recorded Changes is the loaded, valid native file-operation dataset. Missing/opa
 ## Local delivery
 
 The fresh release directory is `packages/desktop/release-0-1-2/`. Automatic approval review rejected recursive cleanup of the prior canonical `release/`; those old files are preserved. The new directory contains the full app, ZIP, production Setup, checksums and qualification receipts. Installer lifecycle and final output hashes are recorded in its qualification manifest after completion. No GitHub publication is requested or performed.
+
+
+Final Setup: packages/desktop/release-0-1-2/I-harness-Setup-0.1.2.exe, 139,022,612 bytes, SHA256 ecb3e13648734840c1e24ccd82b3d502bbe513a81fa2111c21e697a7675e022b. Fresh installer lifecycle: 12/12 passed, source/production payload identity 0aa1e291e8ac8e8f5a9d8400251dc9db84ea76cd4e15473d5dbda64b6ebd7b9b. Source implementation commit: 832a7ca9. Qualification manifest, previews and checksums are beside Setup. Final receipt reports unsigned local delivery and no publication.

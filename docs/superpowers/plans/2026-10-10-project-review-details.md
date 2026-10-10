@@ -66,5 +66,5 @@
 - [x] Independent review all changes relative to `9bcc9aec`; fix material findings with covering regressions and scoped re-review.
 - [x] Complete Desktop/hooks/gateway/CLI-hook affected gates and typechecks; broaden only if failures or material backend changes require it.
 - [x] Build a fresh packaged candidate, then run hidden owned Desktop actions/screenshot checks for project sidebar, Files, Changes, Git, Hooks and Resources without paid models.
-- [ ] Set Desktop/gateway version 0.1.2, build canonical portable/Setup assets, verify SHA256 and actual installed backend/lifecycle. Keep the user's installed copy untouched.
-- [ ] Commit local source and report tested behavior, precise unsupported Hooks limit and clickable installer/preview files.
+- [x] Set Desktop/gateway version 0.1.2, build canonical portable/Setup assets, verify SHA256 and actual installed backend/lifecycle. Keep the user's installed copy untouched.
+- [x] Commit local source and report tested behavior, precise unsupported Hooks limit and clickable installer/preview files.
