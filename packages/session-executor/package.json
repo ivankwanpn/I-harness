@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },
+  "devDependencies": { "@i-harness/session-persistence-jsonl": "workspace:*" },
   "dependencies": {
     "@i-harness/code-mode": "workspace:*",
     "@i-harness/agent-team": "workspace:*",

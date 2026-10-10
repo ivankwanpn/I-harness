@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest"
+import { afterEach, expect, it, vi } from "vitest"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -123,7 +123,7 @@ it("uses the live session snapshot before its events are flushed to disk", async
   } finally { await coordinator.close() }
 })
 
-it("reads an authoritative session supplied by the host before its write-behind is flushed", async () => {
+it("keeps a cold inspection on the durable prefix instead of invoking the host's writable fallback", async () => {
   const root = mkdtempSync(join(tmpdir(), "desktop-work-state-source-")); roots.push(root)
   const coordinator = createSessionCoordinator(createJsonlBackend(join(root, "sessions")), { maxDelayMs: 60_000 })
   await coordinator.create({ sessionId: "s1" })
@@ -132,9 +132,13 @@ it("reads an authoritative session supplied by the host before its write-behind 
   await createTodoTool({ session: authoritative }).execute({ todos: [{ content: "Pending durability", status: "pending" }] }, {})
   const service = { liveSession: () => undefined } as unknown as SessionService
   try {
-    const state = createDesktopWorkState(coordinator, service, { sessionFor: async () => authoritative })
-    expect(await state.read("s1")).toMatchObject({ todos: [{ content: "Pending durability", status: "pending" }], todosRevision: 1 })
+    const writable = vi.fn(async () => authoritative)
+    const state = createDesktopWorkState(coordinator, service, { sessionFor: writable })
+    expect(await state.read("s1")).toMatchObject({ todos: null, todosRevision: 0 })
+    expect(writable).not.toHaveBeenCalled()
     expect((await coordinator.snapshot!("s1")).session.events).toEqual([])
+    await coordinator.flush("s1")
+    expect(await state.read("s1")).toMatchObject({ todos: [{ content: "Pending durability", status: "pending" }], todosRevision: 1 })
   } finally { await coordinator.close() }
 })
 

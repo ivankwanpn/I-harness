@@ -1127,6 +1127,39 @@ describe("createSessionService — real task projection (Task 12)", () => {
   }, 60_000)
 })
 
+describe("process cleanup acknowledgement", () => {
+  it.each(["terminal/service", "exec/service"] as const)("retains the actual assembly after %s disposal fails", async key => {
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
+    const assembly = await service.assemblyFor("native-owner")
+    const resource = assembly.ctx.services.get<{ dispose(): Promise<void> }>(key)
+    const dispose = resource.dispose.bind(resource)
+    let attempts = 0
+    resource.dispose = async () => { if (++attempts === 1) throw new Error("owned cleanup incomplete"); await dispose() }
+    await expect(service.closeSession("native-owner")).rejects.toThrow(/process cleanup/)
+    expect(service.hasAssembly("native-owner")).toBe(true)
+    expect(service.liveAssembly("native-owner")).toBeUndefined()
+    await expect(service.assemblyFor("native-owner")).rejects.toThrow(/cleanup incomplete/)
+    await service.closeSession("native-owner")
+    expect(attempts).toBe(2)
+    await service.close()
+  })
+  it.each(["session", "service"] as const)("retains failed %s cleanup for explicit retry", async scope => {
+    const service = createSessionService({ workspace: process.cwd(), approveAll: true, modelPolicy: "test-mock" })
+    const assembly = await service.assemblyFor("cleanup-owner")
+    const original = assembly.dispose
+    let attempts = 0
+    assembly.dispose = async () => { if (++attempts === 1) throw new Error("tree still owned"); await original() }
+    const close = () => scope === "session" ? service.closeSession("cleanup-owner") : service.close()
+    await expect(close()).rejects.toThrow(/tree still owned|cleanup/)
+    expect(service.hasAssembly("cleanup-owner")).toBe(true)
+    await expect(assembly.tools.execute({ name: "list_dir", args: { path: "." } })).rejects.toThrow(/caller.*unavailable/)
+    await expect(close()).resolves.toBeUndefined()
+    expect(attempts).toBe(2)
+    expect(service.hasAssembly("cleanup-owner")).toBe(false)
+    await service.close()
+  })
+})
+
 describe("createSessionService — close lifecycle with a queue in flight (Task 11 regression)", () => {
   it("closeSession() with a submit in flight settles the binding promise, clears queue rows, and never crashes", async () => {
     const gate = deferred<void>()

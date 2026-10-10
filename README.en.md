@@ -4,30 +4,30 @@
 
 I-harness is an open source workspace for coding with AI. Connect your preferred model service, open a local project, and let the agent search code, read files, run commands and make changes. Follow its progress, approve operations, inspect diffs and stop execution from the same desktop app.
 
-[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
+[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.3) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
 
 ## Download
 
-**Windows x64 · v0.1.1** includes Desktop and its required runtime.
+**Windows x64 · v0.1.3** includes Desktop and its required runtime. See the [0.1.3 release notes](docs/releases/v0.1.3.md).
 
 | Edition | Choose it when… | Download |
 | --- | --- | --- |
-| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-Setup-0.1.1.exe) |
-| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-0.1.1.zip) |
+| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-Setup-0.1.3.exe) |
+| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-0.1.3.zip) |
 
-Extract the portable ZIP into its own folder and run `I-harness Desktop.exe`. Keep the executable beside the `resources` folder.
+Extract the portable ZIP into its own folder and run `I-harness.exe`. Keep the executable beside the `resources` folder.
 
 Desktop does not require a separate Node.js installation. Configure your own model service; cloud models require network access, credentials and usage allowance from that service.
 
 The current Windows distribution is unsigned.
 
-The installer defaults to a per-user LocalAppData folder. Windows asks administrator accounts for consent, allowing a Program Files destination. If a copy is already installed and setup is elevated, uninstall that copy through Windows Apps before reinstalling; conversation and settings data are retained. The v0.1.1 installer includes the destination-permission correction documented in the [fix report](docs/audit/2026-10-05-desktop-installer-location-fix.md).
+The installer defaults to a per-user LocalAppData folder and can reuse an existing installation and legacy profile. Close the app before upgrading. See the [Windows installer guide](packages/desktop/installer/README.md) for destination restrictions and elevated upgrades.
 
 ## Get started
 
-1. **Open I-harness Desktop** and choose a local project folder as your workspace.
+1. **Open I-harness**, go to Projects → New project, set a name, add local folders and save. Open the project to start a conversation.
 2. **Configure a model** in Settings → Models and providers: add the endpoint, protocol and API credentials, then select a model.
-3. **Choose an access scope** in Execution and context: read-only, workspace write or full access, with an approval mode suited to the task.
+3. **Choose an access scope** in Execution and permissions: read-only, workspace write or full access, with an approval mode suited to the task.
 4. **Start a conversation with a concrete goal**, such as “Find why login fails, make a fix, and run the relevant tests.”
 5. **Inspect the result** through the work process, Todo progress, command output and file diffs.
 
@@ -69,7 +69,7 @@ Automatic and manual compaction help organize long conversations. Valid model us
 
 ### Context Mode and Code Context
 
-Version 0.1.1 includes two native subsystems, controlled independently in Settings → Context and retrieval. Both default to off. Use global defaults or overrides for the current workspace.
+Since version 0.1.1, I-harness includes two native subsystems, controlled independently in Settings → Context and retrieval. Both default to off. Use global defaults or overrides for the current workspace.
 
 - **Context Mode** retains large tool and Code Mode text locally and gives the model bounded previews and references. Search retained content or read it in exact windows; references can survive conversation restoration and forks.
 - **Code Context** indexes workspace code and explicitly selected read-only reference sources. Lexical search uses a local index. Hybrid search uses a separately configured embedding service while vectors and indexes remain local.

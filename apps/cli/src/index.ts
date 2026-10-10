@@ -1,10 +1,8 @@
 import { pathToFileURL } from "node:url"
 import { createInterface } from "node:readline"
 import { Readable, Writable } from "node:stream"
-import { mkdtempSync, rmSync } from "node:fs"
-import { tmpdir } from "node:os"
-import { join } from "node:path"
-import { spawnSync } from "node:child_process"
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs"
+import { dirname, join } from "node:path"
 // BUG-1 (m49 audit): node:sqlite's ExperimentalWarning is suppressed by the
 // session-query package itself (module side effect, evaluated before its
 // node:sqlite import) — no explicit wiring needed here.
@@ -21,13 +19,14 @@ import { createFileBackedSessionQuery, type SessionQuery } from "@i-harness/sess
 import { createDurableSessionLoader, createSessionService } from "@i-harness/session-executor"
 import type { SessionAssembly, SessionServiceOptions } from "@i-harness/session-executor"
 import type { SandboxMode } from "@i-harness/sandbox"
+export { HeadlessCleanupError } from "./run.ts"
 import type { ProviderRuntime } from "@i-harness/provider-runtime"
 import { createGitProbeForStore, RewindService } from "@i-harness/rewind"
 import { createSdkServer } from "@i-harness/sdk/server"
 import { createBoundedWriter, DEFAULT_WRITE_BOUND_BYTES, type SessionListEntry, type SessionModelSelection } from "@i-harness/sdk"
 import { createAcpServer } from "@i-harness/acp"
 import { CLI_VERSION } from "./version.ts"
-import { loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
+import { executionServiceOptionsFor, loadProviderRuntime, roleModelOptionsFor, roleModelResolverFor } from "./provider-runtime.ts"
 import { listStoredSessions, runSessionsCommand } from "./sessions.ts"
 import { runHooksCommand } from "./hooks.ts"
 import { runPluginsCommand } from "./plugins.ts"
@@ -74,7 +73,7 @@ for (const event of ["uncaughtException", "unhandledRejection"] as const) {
 // test-pinned (bin.test.ts's M62 block) and stays verbatim.
 const USAGE =
   "usage: i-harness [<run|sdk|acp|sessions|hooks|provider|models|roles|plugins> ...]\n" +
-  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--code-mode off|mixed|only] |\n" +
+  "  run <task> [--model provider:model --api-key KEY] [--protocol P (not with --model)] [--yes] [--session-dir DIR] [--resume ID] [--telemetry] [--sandbox read-only|workspace-write|danger-full-access] [--windows-sandbox legacy|psec|wsl] [--wsl-distribution NAME] [--wsl-network allow|deny] [--wsl-workspace-dependencies true|false] [--code-mode off|mixed|only] |\n" +
   "  sdk [--session-dir DIR] | acp [--session-dir DIR] [--no-auto-approve] |\n" +
   "  sessions [list] [--session-dir DIR] [--json] | sessions show <id> [--last N] |\n" +
   "  hooks <list|approve|revoke> [sha256] |\n" +
@@ -229,8 +228,8 @@ export async function main(argv: string[]): Promise<number> {
   // out again, and a flag missing from EITHER chain there leaks into the prompt
   // (the `--no-compact` defect: `run "do x" --no-compact` sent the model
   // `do x --no-compact`).
-  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--no-compact", "--protocol", "--code-mode"])
-  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--protocol", "--code-mode"])
+  const RUN_FLAGS = new Set(["--model", "--api-key", "--yes", "--session-dir", "--resume", "--telemetry", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--no-compact", "--protocol", "--code-mode"])
+  const RUN_VALUE_FLAGS = new Set(["--model", "--api-key", "--session-dir", "--resume", "--sandbox", "--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies", "--protocol", "--code-mode"])
   const runArgs = args.slice(1)
   for (let i = 0; i < runArgs.length; i += 1) {
     const a = runArgs[i]!
@@ -292,15 +291,45 @@ export async function main(argv: string[]): Promise<number> {
   // stays an embedder contract where unset means "no sandbox requested", so the
   // hidden __dist-selfcheck and the exported API keep their meaning.
   const sandboxIdx = args.indexOf("--sandbox")
+  const windowsBackendIdx = args.indexOf("--windows-sandbox")
   const noCompact = args.includes("--no-compact")
   let sandboxMode: SandboxMode | undefined
   // Load BEFORE reading either knob: an UNLOADED SettingsStore answers get() with
   // DEFAULTS, so skipping this would silently ignore the operator's file (the same
   // trap the web fix hit — see docs/audit/2026-09-10-m62-web-sandbox-not-wired.md).
   // Loaded once for both, rather than per-knob.
-  const { SettingsStore } = await import("@i-harness/settings")
+  const { SettingsStore, resolveSettingsPath } = await import("@i-harness/settings")
   const settings = new SettingsStore()
   await settings.load()
+  // Explicit flag, then environment, then persisted choice. Invalid explicit values refuse.
+  const windowsSandboxBackend = windowsBackendIdx >= 0 ? args[windowsBackendIdx + 1]
+    : process.env.IH_WINDOWS_SANDBOX ?? settings.get().windowsSandboxBackend
+  if (windowsSandboxBackend !== "legacy" && windowsSandboxBackend !== "psec" && windowsSandboxBackend !== "wsl") {
+    d.error("--windows-sandbox / IH_WINDOWS_SANDBOX requires legacy, psec or wsl (experimental)")
+    return 1
+  }
+  for (const flag of ["--windows-sandbox", "--wsl-distribution", "--wsl-network", "--wsl-workspace-dependencies"]) {
+    if (args.filter(arg => arg === flag).length > 1) { d.error(`${flag} may only be specified once`); return 1 }
+  }
+  const wslValue = (flag: string, env: string): string | undefined => {
+    const index = args.indexOf(flag)
+    return index < 0 ? process.env[env] : args[index + 1] ?? ""
+  }
+  const savedWsl = settings.get().wslExecution
+  const distribution = wslValue("--wsl-distribution", "IH_WSL_DISTRIBUTION") ?? savedWsl.distribution
+  const network = wslValue("--wsl-network", "IH_WSL_NETWORK")
+  const dependencies = wslValue("--wsl-workspace-dependencies", "IH_WSL_WORKSPACE_DEPENDENCIES")
+  if (!/^[A-Za-z0-9][A-Za-z0-9._ -]{0,127}$/.test(distribution) || distribution.trim() !== distribution) {
+    d.error("--wsl-distribution / IH_WSL_DISTRIBUTION requires a valid exact installed distribution name"); return 1
+  }
+  if (network !== undefined && network !== "allow" && network !== "deny") {
+    d.error("--wsl-network / IH_WSL_NETWORK requires allow or deny"); return 1
+  }
+  if (dependencies !== undefined && dependencies !== "true" && dependencies !== "false") {
+    d.error("--wsl-workspace-dependencies / IH_WSL_WORKSPACE_DEPENDENCIES requires true or false"); return 1
+  }
+  const wslExecution = Object.freeze({ distribution, networkAccess: network === undefined ? savedWsl.networkAccess : network === "allow",
+    workspaceDependencies: dependencies === undefined ? savedWsl.workspaceDependencies : dependencies === "true" })
   if (sandboxIdx !== -1) {
     const value = args[sandboxIdx + 1]
     const allowed: readonly SandboxMode[] = ["read-only", "workspace-write", "danger-full-access"]
@@ -438,6 +467,11 @@ export async function main(argv: string[]): Promise<number> {
     // The rule the (M65-deleted) web path established: explicit flag wins,
     // otherwise the operator's setting.
     sandbox: sandboxMode,
+    windowsSandboxBackend,
+    wslExecution,
+    webSearchMode: settings.get().webSearchMode,
+    webCacheRoot: join(dirname(resolveSettingsPath()), "web-cache"),
+    workspaceRuntimeCacheRoot: join(dirname(resolveSettingsPath()), "workspace-runtime"),
     // The window is NOT supplied here — `runHeadless` resolves the model binding
     // and the assembly fills it in. See the resolution above.
     compact: { auto: compactAuto },
@@ -557,27 +591,46 @@ async function runDistSelfcheck(): Promise<number> {
  * → confine) and mirror its exit code — proves the BUNDLED seam spawns the
  * sibling `runner.mjs`, not the source tsx entry. Returns the child exit. */
 async function probeAclSeam(): Promise<number> {
-  const { createWindowsAclSandbox } = await import("@i-harness/sandbox-windows-acl")
-  const workspace = mkdtempSync(join(tmpdir(), "ih-dist-acl-"))
+  const { createExecService } = await import("@i-harness/exec")
+  const { createLocalExecutionBackends } = await import("@i-harness/sandbox-local")
+  const { compileExecutionPolicy, assertExecutionAuthority } = await import("@i-harness/sandbox-policy")
+  const fixtureRoot = join(process.cwd(), ".tmp")
+  mkdirSync(fixtureRoot, { recursive: true })
+  const fixture = mkdtempSync(join(fixtureRoot, "sandbox-redesign-dist-selfcheck-"))
+  const workspace = join(fixture, "workspace")
+  const privateTempRoot = join(fixture, "private-temp")
+  mkdirSync(workspace); mkdirSync(privateTempRoot)
+  const backends = createLocalExecutionBackends({ windowsSelection: "legacy", legacyPrivateTempRoot: privateTempRoot })
+  const authority = { kind: "unbound" as const, revision: "dist-probe", workspaceRoot: workspace }
+  const execution = createExecService({ execution: {
+    defaultOwner: { sessionId: "dist-selfcheck" },
+    resolvePolicy: (owner, requested) => compileExecutionPolicy({ owner, mode: requested?.mode ?? "danger-full-access", authority }),
+    validateAuthority: policy => assertExecutionAuthority(policy, compileExecutionPolicy({ owner: policy.owner, mode: policy.mode, authority })),
+    selectBackend: (policy, transport) => backends.select(policy, transport),
+    dispose: () => backends.dispose(),
+  } })
   try {
-    const provider = createWindowsAclSandbox({ writableDirs: [workspace], mode: "read-only" })
+    const { createSessionAssembly } = await import("@i-harness/session-executor")
+    let code: Awaited<ReturnType<typeof createSessionAssembly>>
+    code = await createSessionAssembly({ sessionId: "dist-selfcheck", workspace, modelPolicy: "test-mock", sandbox: "danger-full-access", codeMode: { mode: "mixed" },
+      additionalTools: [{ name: "probe", description: "Owned distribution probe", isReadOnly: true, inputSchema: { type: "object" },
+        execute: async () => code.ctx.services.get<import("@i-harness/exec").ExecService>("exec/service").run({ argv: [process.execPath, "-e", "console.log('CODE_WORKER_OK')"], cwd: workspace }) }] })
     try {
-      const confined = provider.confine(
-        [process.execPath, "-e", "process.exit(7)"],
-        { mode: "read-only", workspaceRoot: workspace },
-      )
-      if (process.env.I_HARNESS_DIST === "1" && confined.argv.some((arg) => arg.includes("tsx"))) {
-        throw new Error(`dist confinement still uses tsx: ${JSON.stringify(confined.argv.slice(0, 5))}`)
-      }
-      const result = spawnSync(confined.argv[0]!, confined.argv.slice(1), { stdio: "inherit", timeout: 120_000 })
-      if (result.status !== 7) throw new Error(`confined child exit ${String(result.status)} (expected 7)`)
-      return 7
-    } finally {
-      provider.dispose()
+      const result = await code.tools.execute({ name: "code_exec", args: { code: "text((await tools.probe({})).stdout)" } })
+      if (!JSON.stringify(result).includes("CODE_WORKER_OK")) throw new Error("bundled Code Mode worker failed: " + JSON.stringify(result))
+    } finally { await code.dispose() }
+    for (const mode of ["read-only", "danger-full-access"] as const) {
+      const result = await execution.run({ argv: [process.execPath, "-e", "console.log('SUPERVISED_OK');process.exit(7)"], cwd: workspace, sandbox: { mode, workspaceRoot: workspace } })
+      if (result.exitCode !== 7 || !result.stdout.includes("SUPERVISED_OK")) throw new Error(mode + " native probe failed: " + result.exitCode + " " + result.stderr)
     }
-  } finally {
-    rmSync(workspace, { recursive: true, force: true })
-  }
+    const denied = join(workspace, "readonly-denied")
+    const denial = await execution.run({ argv: [process.execPath, "-e", "try{require('fs').writeFileSync(" + JSON.stringify(denied) + ", 'bad');process.exit(9)}catch{console.log('DENIED_OK')}"], cwd: workspace, sandbox: { mode: "read-only", workspaceRoot: workspace } })
+    if (denial.exitCode !== 0 || !denial.stdout.includes("DENIED_OK") || existsSync(denied)) throw new Error("readonly write denial failed")
+    const allowed = join(workspace, "workspace-write")
+    const write = await execution.run({ argv: [process.execPath, "-e", "require('fs').writeFileSync(" + JSON.stringify(allowed) + ", 'allowed')"], cwd: workspace, sandbox: { mode: "workspace-write", workspaceRoot: workspace } })
+    if (write.exitCode !== 0 || !existsSync(allowed)) throw new Error("workspace write failed: " + write.stderr)
+    return 7
+  } finally { await execution.dispose() }
 }
 
 /** `i-harness sdk` — the SDK stdio server (R-C4). One NDJSON JSON-RPC line
@@ -607,6 +660,7 @@ async function runSdkCommand(args: string[]): Promise<number> {
   // validation), so no record is being missed.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    ...executionServiceOptionsFor(settings),
     codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",
@@ -858,6 +912,7 @@ async function runAcpCommand(args: string[]): Promise<number> {
   // W6 T4: same seam as the sdk path above, same reason — see there.
   const boot = createCliDiagnostics({ settings, credentials })
   const service = createSessionService({
+    ...executionServiceOptionsFor(settings),
     codeMode: settings.get().codeMode,
     workspace: process.cwd(),
     modelPolicy: "required",

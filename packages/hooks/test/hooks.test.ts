@@ -40,7 +40,8 @@ async function tmpDir(): Promise<string> {
 
 /** Write a handler script that: reads stdin JSON, resolves a per-kind reply, prints it. */
 async function writeHandler(dir: string, name: string, body: string): Promise<string> {
-  const file = join(dir, name)
+  // These handlers use CommonJS even when the owned test temp lives under an ESM workspace.
+  const file = join(dir, name.replace(/\.js$/, ".cjs"))
   await writeFile(file, body, "utf8")
   return file
 }

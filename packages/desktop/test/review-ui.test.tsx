@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { ReviewPane } from "../src/renderer/review/ReviewPane.tsx"
 import type { ReviewChanges } from "../src/renderer/review/ReviewPane.tsx"
 
@@ -16,6 +16,34 @@ const changes: ReviewChanges = {
 }
 
 describe("ReviewPane", () => {
+  it("retains path and commit drafts by connection and workspace across pane unmounts", () => {
+    const owner = {}, props = { draftOwner: owner, workspaceId: "review-a", changes, onSelect: () => {}, onRefresh: () => {}, onSaveFile: vi.fn(), onCommit: vi.fn() }
+    const view = render(<ReviewPane {...props} />)
+    fireEvent.change(screen.getByRole("textbox", { name: "來源檔案路徑" }), { target: { value: "src/unsent.ts" } })
+    fireEvent.change(screen.getByRole("textbox", { name: "提交訊息" }), { target: { value: "Unsent commit" } })
+    view.unmount()
+    const other = render(<ReviewPane {...props} workspaceId="review-b" />)
+    expect((screen.getByRole("textbox", { name: "提交訊息" }) as HTMLTextAreaElement).value).toBe("")
+    other.unmount()
+    render(<ReviewPane {...props} />)
+    expect((screen.getByRole("textbox", { name: "來源檔案路徑" }) as HTMLInputElement).value).toBe("src/unsent.ts")
+    expect((screen.getByRole("textbox", { name: "提交訊息" }) as HTMLTextAreaElement).value).toBe("Unsent commit")
+  })
+
+  it("does not clear a newer commit draft after an older hidden operation completes", async () => {
+    let release!: (value: { kind: "committed"; commit: string }) => void
+    const commit = vi.fn(() => new Promise<{ kind: "committed"; commit: string }>(resolve => { release = resolve }))
+    const props = { draftOwner: {}, workspaceId: "review-late", changes: { kind: "ok" as const, truncated: false, files: [{ path: "a.txt", status: "modified" as const, canDiff: true, canPreview: true, staged: true }] }, onSelect: () => {}, onRefresh: () => {}, onCommit: commit }
+    const view = render(<ReviewPane {...props} />)
+    fireEvent.change(screen.getByRole("textbox", { name: "提交訊息" }), { target: { value: "Submitted A" } })
+    fireEvent.click(screen.getByRole("button", { name: "提交已暫存變更" }))
+    view.unmount()
+    render(<ReviewPane {...props} />)
+    fireEvent.change(screen.getByRole("textbox", { name: "提交訊息" }), { target: { value: "Newer B" } })
+    await act(async () => release({ kind: "committed", commit: "a".repeat(40) }))
+    expect((screen.getByRole("textbox", { name: "提交訊息" }) as HTMLTextAreaElement).value).toBe("Newer B")
+  })
+
   it("retains source edits while checking the diff", () => {
     const source = { kind: "text" as const, text: "before\n", revision: "a".repeat(64), truncated: false, bytes: 7 }
     const save = vi.fn()

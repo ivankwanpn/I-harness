@@ -1,10 +1,16 @@
 import { expect, it } from "vitest"
-import { createShellTools, registerShell, type ResolvedAgentShell } from "../src/index.ts"
+import { createShellTools, registerShell, resolveWslAgentShell, agentShellPrompt, type ResolvedAgentShell } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { registerExec } from "@i-harness/exec"
 import type { ExecCommand, ExecService } from "@i-harness/exec"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
+
+const unusedTransport = {
+  launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
+  cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
+  dispose: async (): Promise<void> => {},
+}
 
 const bash = { id: "git-bash", label: "Git Bash", command: "D:/Git/bin/bash.exe", dialect: "posix" } as const
 const cmd = { id: "cmd", label: "CMD", command: "C:/Windows/System32/cmd.exe", dialect: "cmd" } as const
@@ -16,13 +22,31 @@ function getAgentArgv(command: string, dialect: ResolvedAgentShell["dialect"]): 
 function recorder() {
   const commands: ExecCommand[] = []
   const exec: ExecService = {
+    ...unusedTransport,
     run: async (command) => { commands.push(command); return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false } },
-    runBackground: (command) => { commands.push(command); return { jobId: "job" } },
+    runBackground: async (command) => { commands.push(command); return { jobId: "job" } },
     getOutput: () => ({ id: "job", status: "running", stdout: "", stderr: "" }),
-    killJob: () => "already-finished", listJobs: () => [],
+    killJob: async () => "already-finished", listJobs: () => [],
   }
   return { commands, exec }
 }
+it("binds Bash and Agent Shell to captured Linux argv/environment while keeping PowerShell on the host", async () => {
+  const { commands, exec } = recorder()
+  const options = { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }
+  const selected = resolveWslAgentShell(options, "/mnt/d/project")
+  const tools = createShellTools({ exec, agentShell: () => selected, wslShell: selected, cwd: "D:/project" })
+  await tools.find(tool => tool.name === "bash")!.execute({ command: "uname -s" }, {})
+  await tools.find(tool => tool.name === "shell")!.execute({ command: "pwd", background: true }, {})
+  await tools.find(tool => tool.name === "pwsh")!.execute({ command: "Get-Date" }, {})
+  expect(commands.slice(0, 2)).toMatchObject([
+    { executionTarget: "wsl", argv: ["/bin/bash", "--noprofile", "--norc", "-c", "uname -s"], env: { PATH: "/usr/bin:/bin", LANG: "C" }, cwd: "D:/project" },
+    { executionTarget: "wsl", argv: ["/bin/bash", "--noprofile", "--norc", "-c", "pwd"], env: { PATH: "/usr/bin:/bin", LANG: "C" } },
+  ])
+  expect(commands[2]!.executionTarget ?? "host").toBe("host")
+  expect(agentShellPrompt(selected)).toContain("/mnt/d/project")
+  expect(tools[0]!.description).toContain("root")
+  expect(tools.find(tool => tool.name === "shell")!.approvalIdentity!({ command: `"${process.execPath}" --version` })).toBeUndefined()
+})
 it("launches subsequent Agent commands using the changed shell and noninteractive dialect flags", async () => {
   const { commands, exec } = recorder()
   let selected: ResolvedAgentShell = bash

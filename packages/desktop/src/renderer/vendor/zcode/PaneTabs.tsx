@@ -2,12 +2,28 @@
  * Adapted from ZCode 3.14.0 app-shell/SidePaneTabTrigger.tsx tab presentation.
  * Modified: native buttons with keyboard navigation; no drag/drop or store imports.
  */
-import { useRef } from "react"
+import { useLayoutEffect, useRef } from "react"
 export function PaneTabs({ id, items, selected, onSelect, label }: {
   id: string; items: { id: string; label: string }[]; selected: string; onSelect(id: string): void; label: string
 }) {
   const buttons = useRef<(HTMLButtonElement | null)[]>([])
-  return <div role="tablist" aria-label={label} className="zc-pane-tabs">
+  const strip = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const keepSelectedVisible = () => {
+      const target = buttons.current[items.findIndex(item => item.id === selected)]
+      const container = strip.current
+      if (!target || !container || container.closest('[hidden], [inert]')) return
+      const outer = container.getBoundingClientRect(), inner = target.getBoundingClientRect()
+      if (outer.width > 0 && (inner.left < outer.left || inner.right > outer.right)) target.scrollIntoView?.({ block: "nearest", inline: "nearest" })
+    }
+    keepSelectedVisible()
+    if (typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver(keepSelectedVisible)
+    if (strip.current) observer.observe(strip.current)
+    for (const button of buttons.current) if (button) observer.observe(button)
+    return () => observer.disconnect()
+  }, [selected, items])
+  return <div ref={strip} role="tablist" aria-label={label} className="zc-pane-tabs">
     {items.map((item, index) => <button ref={(element) => { buttons.current[index] = element }} key={item.id} type="button" role="tab" id={`${id}-${item.id}`} aria-controls={`${id}-panel`} aria-selected={selected === item.id} tabIndex={selected === item.id ? 0 : -1}
       onClick={() => onSelect(item.id)} onKeyDown={(event) => {
         let next: number

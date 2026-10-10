@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url"
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const repoRoot = resolve(packageRoot, "..", "..")
 const sourceManifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
-const appName = "I-harness Desktop"
+const defaultAppName = "I-harness"
 export const testOwner = "I-harness.Desktop.Installer.Test.v1"
 export const testMarker = ".ih-desktop-installer-test-owner.ini"
 
@@ -32,6 +32,9 @@ function manifestAt(root, path) {
 export function validatePayload(input) {
   const appDir = absolutePath(input, "app directory")
   if (!existsSync(appDir) || !lstatSync(appDir).isDirectory() || lstatSync(appDir).isSymbolicLink()) throw new Error("app directory must be an existing plain directory, not a link")
+  const app = manifestAt(appDir, "resources/app/package.json")
+  if (app.name !== "@i-harness/desktop" || !["I-harness", "I-harness Desktop"].includes(app.productName) || app.main !== "./out/main/index.js" || app.type !== "module") throw new Error("payload app manifest does not identify the Desktop entry point")
+  const appName = app.productName
   const files = [], directories = []
   function walk(directory) {
     for (const name of readdirSync(directory).sort()) {
@@ -69,8 +72,6 @@ export function validatePayload(input) {
     readSync(executable, header, 0, 2, 0)
     if (header.toString("ascii") !== "MZ") throw new Error("Desktop executable is not a Windows executable")
   } finally { closeSync(executable) }
-  const app = manifestAt(appDir, "resources/app/package.json")
-  if (app.name !== "@i-harness/desktop" || app.productName !== appName || app.main !== "./out/main/index.js" || app.type !== "module") throw new Error("payload app manifest does not identify the Desktop entry point")
   if (app.version !== sourceManifest.version || !/^\d+\.\d+\.\d+$/.test(app.version)) throw new Error(`payload version ${app.version} differs from Desktop source version ${sourceManifest.version}, or is unsupported`)
   const electronVersion = readFileSync(join(appDir, "version"), "utf8").trim()
   if (electronVersion !== sourceManifest.devDependencies.electron) throw new Error(`Electron version ${electronVersion} differs from ${sourceManifest.devDependencies.electron}`)
@@ -81,7 +82,7 @@ export function validatePayload(input) {
     const dependency = manifestAt(appDir, `resources/gateway/node_modules/${name}/package.json`)
     if (dependency.name !== name) throw new Error(`gateway dependency manifest mismatch: ${name}`)
   }
-  return { appDir, version: app.version, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0) }
+  return { appDir, appName, version: app.version, electronVersion, files, directories, fileCount: files.length, payloadBytes: files.reduce((sum, file) => sum + file.bytes, 0) }
 }
 
 export function validateTestRoot(input) {
@@ -113,7 +114,8 @@ function compilerPath(explicit) {
 }
 
 export function buildInstaller(options) {
-  const payload = validatePayload(options.appDir ?? join(packageRoot, "release", appName))
+  const payload = validatePayload(options.appDir ?? join(packageRoot, "release", defaultAppName))
+  const appName = payload.appName
   const isolated = options.testRoot ? validateTestRoot(options.testRoot) : null
   const outDir = absolutePath(options.outDir ?? join(packageRoot, "release"), "output directory")
   const outputRelative = relative(payload.appDir, outDir)
@@ -131,7 +133,7 @@ export function buildInstaller(options) {
   mkdirSync(staging, { recursive: true })
   writeFileSync(join(staging, ".build-owner"), "I-harness Desktop installer build v1\n")
   mkdirSync(outDir, { recursive: true })
-  const filename = `I-harness-Desktop-Setup-${payload.version}${isolated ? "-test" : ""}.exe`
+  const filename = `${appName === "I-harness" ? "I-harness" : "I-harness-Desktop"}-Setup-${payload.version}${isolated ? "-test" : ""}.exe`
   const output = join(outDir, filename)
   const installInclude = join(staging, "payload-install.nsh")
   const removeInclude = join(staging, "payload-remove.nsh")
@@ -143,7 +145,7 @@ export function buildInstaller(options) {
   writeFileSync(directoryInclude, payload.directories.map(path => `!insertmacro CheckPayloadDirectory "${nsisString(path)}"`).join("\n") + "\n")
   writeFileSync(conflictInclude, payload.files.map(file => `!insertmacro RefuseExistingFile "${nsisString(file.path)}"`).join("\n") + "\n")
   const definitions = {
-    APP_VERSION: payload.version, PAYLOAD_ID: payloadId, OUTPUT_FILE: output, PAYLOAD_INSTALL: installInclude,
+    APP_NAME: appName, APP_VERSION: payload.version, PAYLOAD_ID: payloadId, OUTPUT_FILE: output, PAYLOAD_INSTALL: installInclude,
     PAYLOAD_REMOVE: removeInclude, PAYLOAD_DIRECTORIES: directoryInclude, PAYLOAD_CONFLICTS: conflictInclude,
     ESTIMATED_SIZE: Math.ceil(payload.payloadBytes / 1024),
     ...(isolated ? { TEST_ROOT: isolated.testRoot, TEST_TOKEN: isolated.token, TEST_HOOKS: join(packageRoot, "test", "installer-fixture-hooks.nsh") } : {}),

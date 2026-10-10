@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
+import { dirname } from "node:path"
 import { MessageDecoder, spawnLspConnection, type ConnectionSpec } from "../src/index.ts"
 import { createFakeChild } from "./fake-server.ts"
 
@@ -27,6 +28,40 @@ function decodeLast(fake: ReturnType<typeof createFakeChild>): Record<string, un
 }
 
 describe("LspConnection request", () => {
+  it("exchanges framed messages with the default subprocess launcher and preserves cwd, env and args", async () => {
+    const script = `
+      let input = Buffer.alloc(0);
+      process.stdin.on('data', chunk => {
+        input = Buffer.concat([input, chunk]);
+        const split = input.indexOf('\\r\\n\\r\\n');
+        if (split < 0) return;
+        const length = Number(/Content-Length: (\\d+)/i.exec(input.subarray(0, split).toString())[1]);
+        if (input.length < split + 4 + length) return;
+        const request = JSON.parse(input.subarray(split + 4, split + 4 + length).toString());
+        const body = JSON.stringify({ jsonrpc: '2.0', id: request.id,
+          result: { cwd: process.cwd(), env: process.env.IH_LSP_PIPE_FIXTURE, arg: process.argv[1] } });
+        process.stderr.write('fixture stderr');
+        process.stdout.write('Content-Length: ' + Buffer.byteLength(body) + '\\r\\n\\r\\n' + body,
+          () => process.exit(0));
+      });
+    `
+    const cwd = dirname(process.execPath)
+    const conn = spawnLspConnection(spec({
+      command: process.execPath,
+      args: ["-e", script, "fixture-arg"],
+      cwd,
+      env: { IH_LSP_PIPE_FIXTURE: "fixture-env" },
+    }))
+    try {
+      expect(await conn.request("fixture", {})).toEqual({ cwd, env: "fixture-env", arg: "fixture-arg" })
+      await conn.closed
+      expect(conn.stderrTail).toBe("fixture stderr")
+    } finally {
+      conn.kill()
+      await conn.closed
+    }
+  })
+
   it("sends a request framed with Content-Length and correct JSON-RPC body", async () => {
     const fake = createFakeChild()
     const conn = spawnLspConnection(spec(), fake.spawner)

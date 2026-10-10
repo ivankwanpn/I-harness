@@ -29,7 +29,7 @@ export function createDesktopTray(options: {
   const tray = new Tray(trayIcon())
   const rebuild = () => {
     const english = options.locale() === "en"
-    tray.setToolTip("I-harness Desktop")
+    tray.setToolTip("I-harness")
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: english ? "Show workbench" : "顯示工作台", click: options.show },
       { type: "separator" },

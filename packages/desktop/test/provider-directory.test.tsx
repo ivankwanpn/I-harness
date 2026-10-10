@@ -94,7 +94,7 @@ it("shows one provider at a time and scopes connection drafts to that provider",
   fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://draft.example" } })
   fireEvent.click(screen.getByRole("dialog").querySelector("button[aria-label='關閉對話框']") as HTMLButtonElement)
   fireEvent.click(screen.getByRole("button", { name: /Beta/ }))
-  expect(screen.queryByText("alpha-model")).toBeNull()
+  expect(screen.getByText("alpha-model").closest("[hidden]")).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "編輯提供商" }))
   expect((screen.getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://b.example")
   expect(request).toHaveBeenCalledTimes(1)

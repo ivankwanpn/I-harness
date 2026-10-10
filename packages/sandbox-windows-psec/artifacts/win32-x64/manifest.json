@@ -1,0 +1,38 @@
+{
+    "manifestVersion":  1,
+    "protocolVersion":  1,
+    "target":  "x86_64-pc-windows-msvc",
+    "helperFile":  "i-harness-windows-helper.exe",
+    "helperSha256":  "421d4a0ed72600d593f5cd1afe8012f49aa0e7ff1ab590486666cf5839e3d395",
+    "protocolSha256":  "c6bcb90ad924488e5d58df01e681ee899a910156d71f5b267b5ea9ad4aa62594",
+    "rustc":  "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+    "cargo":  "cargo 1.94.0 (85eff7c80 2026-01-15)",
+    "compilerSetup":  "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat",
+    "msvcTools":  "14.41.34120",
+    "buildCommand":  "cargo build --release --locked --manifest-path native/Cargo.toml (VS2022 x64 environment)",
+    "windows":  "Microsoft Windows NT 10.0.26200.0",
+    "schema":  {
+                   "repository":  "https://github.com/microsoft/mxc",
+                   "revision":  "6cd3d58f05d3447e67109cfb75e042803b843ca4",
+                   "package":  "process_security_environment_spec",
+                   "packageVersion":  "0.8.0",
+                   "path":  "external/windows-sdk/ProcessSecurityEnvironment.fbs",
+                   "sha256":  "7d14b01850a735329da00cde4d4d2e32e463f49026a39708be9059fd64e764d3",
+                   "flatbuffers":  "25.12.19",
+                   "windowsSys":  "0.61.2"
+               },
+    "sources":  {
+                    "native/Cargo.lock":  "4a4e28dce15e3b9fd115e99e2bc97f38aa5c53b8ab5df7e57a83744d97df9400",
+                    "native/Cargo.toml":  "d6a943af1098daf1223c106436791fbe573bece36ea3b1378c0e3dac20d34154",
+                    "native/src/command_line.rs":  "622ef7333194e52be7a3737c1f847338dda86fb6edebba0afc18c05d52471dd1",
+                    "native/src/error.rs":  "270e71523edbe0dc256cd91c5b2bca0b1eb85ee935ae1a0245eeae7548c9faa4",
+                    "native/src/ffi.rs":  "164f29b04c5280b1069035a292237ee2a75b6977c4c7a6f3e6502b3c266a5e5e",
+                    "native/src/job.rs":  "043b1d995e788eae56dd5e82cf3bd98f0850f4897611986ba1df91990ec5ed9b",
+                    "native/src/main.rs":  "89e982b29c8c2656d3396595864b5020d7264dfb96794bd65609f3016ca14ab5",
+                    "native/src/policy.rs":  "65c6ce2c666f16b611d372979bebe0a2859f8eb44839e9073b34e6281043aef5",
+                    "native/src/protocol.rs":  "c6fc34fb83c98744b1babf8da6eec22171d05ca10e1f503cb356073673bee9e4",
+                    "native/src/runner.rs":  "12c464a47aad006d47d1023c2f225c4538907afa7dd822af2fdb3bb170d37565",
+                    "native/src/self_child.rs":  "3af9cf29b7b814cefda8e4b1746167a7d9125f986961c720ad7c0eb3fecf5a86",
+                    "native/src/transport.rs":  "e4085bd102d40793b8611aa3f21cf0dfbe99d3cd3d9d360835a1bd15724b5b3d"
+                }
+}

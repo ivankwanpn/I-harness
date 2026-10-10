@@ -31,6 +31,7 @@ import type { ProviderRuntime, SessionModelBinding } from "@i-harness/provider-r
 import { loadProviderRuntime, roleModelResolverFor } from "./provider-runtime.ts"
 import { registerCliSecrets } from "./diagnostics-bootstrap.ts"
 import { diagnosticsFor, fromError, type DiagnosticPhase, type Redactor } from "@i-harness/diagnostics"
+import { createWorkspaceRuntime } from "@i-harness/workspace-runtime"
 
 // W6 T5: one module-scope handle, and the phase is the SEAM rather than the
 // file: all five migrated sites here are the plugin/hook/mcp mount's own
@@ -116,6 +117,14 @@ export async function handleSessionCompactCommand(
   })
 }
 
+/** Keeps the exact failed assembly/coordinator reachable for an explicit host retry. */
+export class HeadlessCleanupError extends Error {
+  constructor(cause: unknown, readonly retryCleanup: () => Promise<void>) {
+    super("Headless process cleanup incomplete; retryCleanup retains its owner", { cause })
+    this.name = "HeadlessCleanupError"
+  }
+}
+
 export interface HeadlessOptions {
   codeMode?: import("@i-harness/settings").SettingsCodeMode
   workspace: string
@@ -198,6 +207,11 @@ export interface HeadlessOptions {
   // dead on every shipped path.
   compact?: CompactionRequest
   sandbox?: SandboxMode // M16: "read-only" | "workspace-write" | "danger-full-access"; default (unset) = no sandbox
+  windowsSandboxBackend?: "legacy" | "psec" | "wsl"
+  wslExecution?: { distribution: string; networkAccess: boolean; workspaceDependencies: boolean; runtimePath?: readonly string[] }
+  workspaceRuntimeCacheRoot?: string
+  webSearchMode?: AssemblyOptions["webSearchMode"]
+  webCacheRoot?: string
   mcp?: McpServerConfig[] // M17: MCP servers to mount for the run (stdio or streamable-http)
   lsp?: LspServerConfig[] // M18: LSP servers to mount for the run (stdio)
   team?: Partial<TeamConfig> // M19: mount the agent-team domain (10 team tools replace the colliding subagent surface)
@@ -337,6 +351,8 @@ let crashSession: string | undefined
 export function diagnosticSessionId(): string | undefined { return crashSession }
 
 export async function runHeadless(task: string, opts: HeadlessOptions): Promise<HeadlessResult> {
+  opts = { ...opts, windowsSandboxBackend: opts.windowsSandboxBackend ?? process.env.IH_WINDOWS_SANDBOX as HeadlessOptions["windowsSandboxBackend"],
+    ...(opts.wslExecution ? { wslExecution: Object.freeze({ ...opts.wslExecution, ...(opts.wslExecution.runtimePath ? { runtimePath: Object.freeze([...opts.wslExecution.runtimePath]) } : {}) }) } : {}) }
   const activeId = opts.resumeSessionId ?? opts.sessionId
   // M25 (spec §2.2): the independent host event stream, assembled ONLY when the
   // host asks for it (`--telemetry` → opts.telemetry === "jsonl"). JSONL sink
@@ -462,6 +478,9 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
   // enabled plugin's): `createHookRegistry` takes one config and owns its load,
   // so N sources are N mounts. All of them must see session/start and session/end.
   const hookRegistries: HookRegistry[] = []
+  // Ephemeral callers still have a stable identity for the plugin startup input.
+  // It does not create durable session storage or change native hook lifecycle.
+  const hookSessionId = activeId ?? `cli-hook-${randomUUID()}`
   // M26-D2: the run's serial lane is created below (after the assembly) — the
   // default parent-notify adapter closes over it and is rebound before the run
   // starts; a task completing before the lane exists keeps its outbox row
@@ -594,9 +613,21 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       d.warn(`[plugins] agent ${missed.role} declares an unusable tool (${missed.reason}): ${missed.tool}`)
     }
 
+    runSignal.throwIfAborted()
+    if (opts.windowsSandboxBackend === "wsl") {
+      const configuration = opts.wslExecution ?? { distribution: "Ubuntu", networkAccess: false, workspaceDependencies: true }
+      if (configuration.workspaceDependencies && configuration.runtimePath === undefined) {
+        const managed = await createWorkspaceRuntime({ cacheRoot: opts.workspaceRuntimeCacheRoot ?? join(resolveHarnessHome(), "workspace-runtime") })
+          .resolve(configuration, { installIfMissing: true, signal: runSignal })
+        if (managed.status === "missing" || managed.status === "unavailable") throw new Error(managed.detail)
+        opts = { ...opts, wslExecution: Object.freeze({ ...configuration, ...(managed.runtimePath ? { runtimePath: managed.runtimePath } : {}) }) }
+      }
+    }
+    runSignal.throwIfAborted()
     assembly = await createSessionAssembly({
       ...(opts.codeMode !== undefined ? { codeMode: opts.codeMode } : {}),
       workspace: opts.workspace,
+      hookContext: () => hookRegistries.map(registry => registry.context()).filter(Boolean).join("\n\n"),
       ...(activeId !== undefined ? { sessionId: activeId } : {}),
       modelPolicy,
       ...(opts.model !== undefined
@@ -612,6 +643,10 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(opts.retry !== undefined ? { retry: opts.retry } : {}),
       ...(opts.maxParallelToolCalls !== undefined ? { maxParallelToolCalls: opts.maxParallelToolCalls } : {}),
       ...(opts.sandbox !== undefined ? { sandbox: opts.sandbox } : {}),
+      windowsSandboxBackend: opts.windowsSandboxBackend,
+      wslExecution: opts.wslExecution,
+      webSearchMode: opts.webSearchMode,
+      webCacheRoot: opts.webCacheRoot,
       session,
       // M16 final-review (C1) parity. WHAT PROTECTS THE MODE HERE IS THE
       // ASSEMBLY'S FLOOR SLICE, not `policySession` — rewritten 2026-09-15
@@ -703,16 +738,20 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
 
     // Plugin hooks — a DIFFERENT TREE's config, so under D1 every handler starts
     // UNGRANTED: skipped and reported once, neither enforced nor allowed to
-    // block, until a user grants that hash. The store is the user-layer one; the
-    // granting UX is the frontend's, so today nothing is granted and nothing
-    // runs. That is the DESIGN, not a gap — "no grant ⇒ no run" is the rule
-    // working, and the declaration is visible in the report rather than silent.
+    // block, until a user grants that hash. CLI and Desktop share the same
+    // user-layer content grant store. Claude compatibility
+    // is opted in only for paths returned by the installed-plugin registry;
+    // the user's native home policy keeps its own format and lifecycle.
     const approvals = createHookTrustStore(resolveHookTrustPath())
     for (const hookConfig of pluginInputs.hookConfigs) {
       try {
         hookRegistries.push(await createHookRegistry(assembly.ctx, {
           configPath: hookConfig,
           configDir: dirname(hookConfig),
+          claudePluginRoot: dirname(dirname(hookConfig)),
+          cwd: opts.workspace,
+          sessionId: hookSessionId,
+          onUnsupported: (diagnostic) => { d.warn(`[plugins] hooks ${hookConfig}: ${diagnostic.event} (${diagnostic.id}): ${diagnostic.message}`) },
           approvals,
         }))
       } catch (err) {
@@ -721,13 +760,6 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         // config we cannot parse contributes ZERO handlers, which is exactly
         // what an ungranted one contributes, so the run proceeds and the reason
         // is reported rather than swallowed.
-        //
-        // NOT a formality, and not about malformed plugins: Claude Code plugins
-        // ship `hooks/hooks.json` in CC's shape (`{hooks:{<Event>:[...]}}`) and
-        // that is the shape our plugin model reads. Letting the refusal
-        // propagate meant ANY enabled CC plugin carrying hooks failed EVERY run
-        // — measured 2026-09-19 against the real home, with `superpowers`
-        // enabled, on runs that never touch a hook.
         d.warn(
           `[plugins] hooks config ${hookConfig} could not be loaded; its hooks contribute nothing for this run: ` +
             `${err instanceof Error ? err.message : String(err)}`,
@@ -735,7 +767,11 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       }
     }
     if (activeId !== undefined) {
-      for (const registry of hookRegistries) await registry.beginSession(activeId)
+      for (const registry of hookRegistries) await registry.beginSession(activeId, opts.resumeSessionId ? "resume" : "startup")
+    } else {
+      for (const registry of hookRegistries) {
+        if (registry.handlers().some(handler => handler.spec.claude)) await registry.beginSession(hookSessionId, "startup")
+      }
     }
   } catch (err) {
     emitSessionEnd(1)
@@ -874,7 +910,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
       ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
       ...(opts.coordinator && activeId ? { coordinator: opts.coordinator, sessionId: activeId } : {}),
     })
-    if (opts.coordinator) await opts.coordinator.close()
+    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId)
     // The metrics summary, when the operator asked for observability. On STDERR
     // because stdout carries ONLY the telemetry's NDJSON frames (the same
     // discipline `sdk` and `acp` follow) — a summary printed to stdout would
@@ -943,7 +979,7 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
     // close below for the same reason as site ①.
     appendRunEnd(1, "run", err)
     telemetry?.close()
-    if (opts.coordinator) await opts.coordinator.close().catch(() => {})
+    if (opts.coordinator && activeId) await opts.coordinator.flush(activeId).catch(() => {})
     return { finalText: "", exitCode: 1, error: err instanceof Error ? err.message : String(err), ...(activeId !== undefined ? { sessionId: activeId } : {}) }
   } finally {
     // The handlers come off on EVERY exit path. A run that left them behind
@@ -965,9 +1001,12 @@ export async function runHeadless(task: string, opts: HeadlessOptions): Promise<
         })
       }
     }
-    // The assembly owns every mount's reverse-order unmount + the win32 ACL
-    // sandbox teardown (dispose never throws) — never the coordinator.
-    await assembly?.dispose().catch(() => {})
+    // A process cleanup failure rejects shutdown and retains the coordinator;
+    // success is acknowledged only after the assembly's native owners drain.
+    try { await assembly?.dispose() }
+    catch (cause) {
+      throw new HeadlessCleanupError(cause, async () => { await assembly?.dispose(); await opts.coordinator?.close() })
+    }
     // Disposal joins task/notification save queues and may schedule registry
     // metadata writes. The final store barrier must follow those producers.
     if (opts.coordinator) await opts.coordinator.close().catch((error: unknown) => {

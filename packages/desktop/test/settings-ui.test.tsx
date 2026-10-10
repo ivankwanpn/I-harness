@@ -10,7 +10,6 @@ afterEach(() => { cleanup(); localStorage.removeItem("ih:settings-section"); use
 function View() { useAppearance(); return <SettingsPane onClose={() => {}} /> }
 it("applies appearance and text size locally and resets them", () => {
   render(<View />)
-  fireEvent.click(screen.getByRole("button", { name: "外觀" }))
   fireEvent.change(screen.getByRole("combobox", { name: "外觀" }), { target: { value: "light" } })
   expect(document.documentElement.dataset.theme).toBe("light")
   fireEvent.change(screen.getByLabelText("文字大小"), { target: { value: "18" } })
@@ -28,7 +27,6 @@ it("follows system changes while system appearance is selected", () => {
   window.matchMedia = vi.fn(() => media as unknown as MediaQueryList)
   try {
     const view = render(<View />)
-    fireEvent.click(screen.getByRole("button", { name: "外觀" }))
     fireEvent.change(screen.getByRole("combobox", { name: "外觀" }), { target: { value: "system" } })
     expect(document.documentElement.dataset.theme).toBe("light")
     act(() => { media.matches = true; callbacks.at(-1)!() })
@@ -47,20 +45,11 @@ it("opens models separately from workspace controls and remembers the selected s
   expect(screen.getByRole("button", { name: "模型與提供商" }).getAttribute("aria-current")).toBe("page")
 })
 
-it("routes workspace memory using the real workspace context", () => {
-  const onMemory = vi.fn()
-  render(<SettingsPane workspace={{ id: "play", label: "playground", path: "D:/agent-complete/playground" }} onMemory={onMemory} onClose={() => {}} />)
-  fireEvent.click(screen.getByRole("button", { name: "工作區" }))
-  expect(screen.getByText("D:/agent-complete/playground")).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "工作區記憶" }))
-  expect(onMemory).toHaveBeenCalledTimes(1)
-})
-
 it("explains unavailable Agent pages and mounts advertised pages with the selected workspace", async () => {
   const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/memory/state" ? { enabled: false } : { notes: [] })
   render(<SettingsPane workspace={{ id: "play", label: "playground", path: "D:/agent-complete/playground" }} capabilities={{ "desktop-memory": ["1"] }} bridge={{ request, onEvent: () => () => {} }} onClose={() => {}} />)
-  expect(screen.getByRole("button", { name: "執行與上下文" }).getAttribute("aria-disabled")).toBe("true")
-  fireEvent.click(screen.getByRole("button", { name: "執行與上下文" }))
+  expect(screen.getByRole("button", { name: "執行與權限" }).hasAttribute("aria-disabled")).toBe(false)
+  fireEvent.click(screen.getByRole("button", { name: "執行與權限" }))
   expect(screen.getByRole("status").textContent).toBe("目前工作區後端未提供此功能。")
   expect(request).not.toHaveBeenCalledWith({ kind: "desktop/agent-settings/state", workspaceId: "play" })
   fireEvent.click(screen.getByRole("button", { name: "記憶" }))

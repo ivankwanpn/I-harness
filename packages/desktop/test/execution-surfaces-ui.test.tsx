@@ -29,7 +29,7 @@ it("shows code/output/nested trace and confirms a cell stop using the exact sess
   fireEvent.click(screen.getByRole("tab", { name: "巢狀呼叫" })); expect(screen.getByText("nested result")).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "停止 cell" }))
   expect(request.mock.calls.some(([input]) => input.kind.endsWith("stop"))).toBe(false)
-  fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "確認停止" }))
+  fireEvent.click(within(screen.getByRole("dialog", { name: "確認停止 cell" })).getByRole("button", { name: "確認停止" }))
   await vi.waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/session/execution/stop", workspaceId: "w", sessionId: "s", cellId: "cell" }))
 })
 

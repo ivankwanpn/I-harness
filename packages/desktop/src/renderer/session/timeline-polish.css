@@ -1,0 +1,19 @@
+.timeline-assistant > :first-child { margin-top: 0; }
+.timeline-assistant > :last-child { margin-bottom: 0; }
+.timeline-code { margin: 14px 0; }
+.timeline-code .output-block-label { font-weight: 500; }
+.timeline-code .output-block-content { font-size: .92em; }
+.timeline-assistant .output-block-content { margin: 0; padding: 12px; border: 0; border-radius: 0; background: transparent; font-size: .86rem; }
+.message-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px; margin-top: 6px; min-height: 28px; color: var(--ih-muted); }
+.message-actions > button { opacity: 0; transition: opacity 120ms ease; }
+.timeline-assistant:hover .message-actions > button, .timeline-assistant:focus-within .message-actions > button { opacity: 1; }
+.message-copy-error { font-size: .85em; color: #edaaa3; overflow-wrap: anywhere; }
+.work-stage-meta { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-inline-start: 8px; font-size: .86em; color: var(--ih-muted); }
+.work-stage-incomplete { color: #d3a765; }
+:root[data-theme="light"] .message-copy-error { color: #a63730; }
+:root[data-theme="light"] .work-stage-incomplete { color: #91620f; }
+.timeline-image-dialog { width: min(1200px, 100%); }
+.timeline-image-dialog .settings-dialog-content { display: flex; align-items: center; justify-content: center; }
+.timeline-image-dialog img { display: block; max-width: 100%; max-height: 72vh; object-fit: contain; }
+@media (hover: none) { .message-actions > button { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .message-actions > button { transition: none; } }

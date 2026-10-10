@@ -13,6 +13,32 @@ const fixtures: Awaited<ReturnType<typeof projectFilesFixture>>[] = []
 afterEach(async () => { cleanup(); localStorage.clear(); for (const f of fixtures.splice(0)) { await f.dispose(); await rm(f.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }) } })
 const contents = () => screen.getByRole("textbox", { name: "來源檔案內容" }) as HTMLTextAreaElement
 
+it("revalidates a saved file on keep-and-reopen without ingesting its obsolete cached preview", async () => {
+  const f = await projectFilesFixture(); fixtures.push(f)
+  const store = new EditorDraftStore()
+  render(<ProjectFilesPane selection={f.selection} request={f.request} store={store} />)
+  fireEvent.click(await screen.findByTitle("first/same.txt"))
+  await waitFor(() => expect(contents().value).toBe("first"))
+  fireEvent.change(contents(), { target: { value: "saved first" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存檔案" }))
+  await screen.findByText("檔案已儲存")
+  expect(await readFile(join(f.first.path, "same.txt"), "utf8")).toBe("saved first")
+  fireEvent.change(contents(), { target: { value: "newer unsaved draft" } })
+  fireEvent.click(screen.getByRole("button", { name: "關閉 first/same.txt" }))
+  fireEvent.click(screen.getByRole("button", { name: "保留草稿並關閉" }))
+  fireEvent.click(screen.getByTitle("first/same.txt"))
+  await waitFor(() => expect((screen.getByRole("button", { name: "儲存檔案" }) as HTMLButtonElement).disabled).toBe(false))
+  expect(contents().value).toBe("newer unsaved draft")
+  expect(screen.queryByText("檢視外部版本")).toBeNull()
+  expect(await readFile(join(f.first.path, "same.txt"), "utf8")).toBe("saved first")
+  await writeFile(join(f.first.path, "same.txt"), "actual external change")
+  fireEvent.click(screen.getByRole("button", { name: "重新整理專案檔案" }))
+  await screen.findByText("檢視外部版本")
+  expect((screen.getByRole("button", { name: "儲存檔案" }) as HTMLButtonElement).disabled).toBe(true)
+  expect(contents().value).toBe("newer unsaved draft")
+  expect(store.get({ workspaceId: f.first.id, path: "same.txt" })?.external?.text).toBe("actual external change")
+})
+
 it("restores the second root draft after editor unmount without replacing the first root", async () => {
   const source = (text: string) => ({ kind: "text" as const, text, revision: "a".repeat(64), bytes: text.length, truncated: false })
   const saved: string[] = []

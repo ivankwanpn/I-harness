@@ -15,7 +15,12 @@ export function createDesktopSchedules(coordinator: SessionCoordinator, service:
   return {
     async list(sessionId: string) {
       await coordinator.profile(sessionId)
-      const session = service.liveSession(sessionId) ?? (await coordinator.load(sessionId)).session
+      let session = service.liveSession(sessionId)
+      if (!session) {
+        if (!coordinator.snapshot) throw new Error("Read-only schedule snapshots unavailable")
+        const saved = (await coordinator.snapshot(sessionId)).session
+        session = service.liveSession(sessionId) ?? saved
+      }
       const folded = foldScheduleEvents(session.events, session.header?.seedLength ?? 0)
       const now = Date.now()
       return { schedules: folded.active.map((record) => scheduleView(record, now)) }

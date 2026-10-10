@@ -1,0 +1,13 @@
+{
+  "name": "@i-harness/workspace-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": ["src", "README.md"],
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/sandbox-wsl": "workspace:*",
+    "@i-harness/fs-lock": "workspace:*"
+  }
+}

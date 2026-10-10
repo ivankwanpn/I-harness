@@ -3,8 +3,9 @@ import { realpath, stat } from "node:fs/promises"
 import { isAbsolute, resolve } from "node:path"
 import type { SessionCoordinator, SessionMeta } from "@i-harness/session-persistence"
 import type { SessionProjectContext } from "@i-harness/session-executor"
+import type { AuthorityState } from "@i-harness/sandbox"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
-export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; fence?: SessionManagementFence }
+export interface ProjectMoveOptions { assertIdle?(id: string): Promise<void>; drainSession?(id: string): Promise<void>; authorityChanged?(ids: readonly string[]): Promise<void>; fence?: SessionManagementFence }
 
 interface Binding { bound: boolean; projectId?: string }
 interface ConfirmedProjectScope { id: string; name: string; roots: string[]; primaryRoot?: string; unavailableReason?: string }
@@ -33,6 +34,15 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   const parents = new Map<string, string>()
   const loading = new Map<string, Promise<Binding>>()
   const operations = new Map<string, Promise<unknown>>()
+  const revisions = new Map<string, number>()
+  let referenceRevision = 0
+  let references: readonly string[] = []
+  let referenceFailure: string | undefined
+  const observed = new Set<string>()
+  const pendingChanges = new Set<string>()
+  const withdrawn = new Set<string>()
+  const requests = new Map<string, number>()
+  const nextRequest = (id: string) => { const next = (requests.get(id) ?? 0) + 1; requests.set(id, next); return next }
   let closed = false
   let closing: Promise<void> | undefined
   const assertOpen = () => { if (closed) throw new Error("Project scope broker is closed") }
@@ -144,42 +154,130 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
   }
   function assertAvailable(projectId?: string): void {
     const context = projectId ? projects.get(projectId) : undefined
+    if (projectId && (!context || withdrawn.has(projectId))) throw new Error("Project authority revoked: catalog entry missing")
     if (context?.unavailableReason) throw new Error(context.unavailableReason)
     if (context && (context.roots.length === 0 || context.primaryRoot === undefined)) throw new Error("Project has no workspace folders")
   }
+  function authority(id: string): AuthorityState {
+    const projectId = liveOwner(id)
+    const revision = `${projectId ?? "unbound"}:${revisions.get(projectId ?? "") ?? 0}:refs:${referenceRevision}`
+    if (closed) return { kind: "unavailable", revision, reason: "Project scope service closed" }
+    if (referenceFailure) return { kind: "unavailable", revision, reason: referenceFailure }
+    if (!bindings.has(id)) return { kind: "unavailable", revision, reason: "Session authority not loaded" }
+    if (!projectId) return { kind: "unbound", revision, workspaceRoot: _workspace, references: [...references] }
+    const scope = projects.get(projectId)
+    if (!scope || withdrawn.has(projectId)) return { kind: "revoked", revision, reason: "Project authority revoked: catalog entry missing" }
+    if (scope.unavailableReason || !scope.primaryRoot || !scope.roots.length) return { kind: "unavailable", revision, reason: scope.unavailableReason ?? "Project has no workspace folders" }
+    return { kind: "bound", revision, primaryRoot: scope.primaryRoot, roots: [...scope.roots], references: [...references] }
+  }
+  async function changed(projectIds: readonly string[], publish = true): Promise<void> {
+    for (const id of projectIds) {
+      if (publish) revisions.set(id, (revisions.get(id) ?? 0) + 1)
+      pendingChanges.add(id)
+    }
+    const ids = [...observed].filter(id => projectIds.includes(liveOwner(id) ?? ""))
+    if (ids.length) await moveOptions.authorityChanged?.(ids)
+    for (const id of projectIds) pendingChanges.delete(id)
+  }
   return {
+    async authorityFor(id: string): Promise<() => AuthorityState> {
+      await resolveOwner(id)
+      observed.add(id)
+      return () => authority(id)
+    },
+    /** Host-confirmed source registrations impose restrictions only. */
+    configureReferences(paths: readonly string[]): Promise<void> {
+      const requested = [...paths]
+      referenceRevision++
+      const initialFence = observed.size ? moveOptions.authorityChanged?.([...observed]) ?? Promise.resolve() : Promise.resolve()
+      void initialFence.catch(() => {})
+      return catalog(async () => {
+        await initialFence
+        let confirmed: string[]
+        try {
+          confirmed = await Promise.all(requested.map(async path => {
+            if (!isAbsolute(path)) throw new Error("Reference root must be absolute")
+            return realpath(path)
+          }))
+        } catch (error) {
+          referenceFailure = "Readonly reference registration unavailable"
+          referenceRevision++
+          if (observed.size) await moveOptions.authorityChanged?.([...observed])
+          throw error
+        }
+        referenceFailure = undefined
+        references = Object.freeze([...new Set(confirmed)])
+        referenceRevision++
+        if (observed.size) await moveOptions.authorityChanged?.([...observed])
+      })
+    },
     configure(value: unknown): Promise<{ projectId: string }> {
       const snapshot = structuredClone(value)
+      let declared: ConfirmedProjectScope
+      try { declared = scopeSchema(snapshot) } catch (error) { return Promise.reject(error) }
+      const request = nextRequest(declared.id)
+      // Publish the admission generation before canonicalization or queued work.
+      const initialFence = changed([declared.id])
+      void initialFence.catch(() => {})
       return catalog(async () => {
-        const declared = scopeSchema(snapshot)
+        await initialFence
         try {
           const project = await resolveScope(declared)
           assertOpen()
+          const publish = JSON.stringify(projects.get(project.id)) !== JSON.stringify(project)
           projects.set(project.id, project)
+          if (requests.get(project.id) === request) withdrawn.delete(project.id)
+          await changed([project.id], publish)
           return { projectId: project.id }
         } catch (error) {
-          if (error instanceof ProjectFoldersUnavailable) { assertOpen(); projects.set(declared.id, blocked(declared)) }
+          if (error instanceof ProjectFoldersUnavailable) { assertOpen(); projects.set(declared.id, blocked(declared)); await changed([declared.id]) }
           throw error
         }
       })
     },
     sync(value: unknown): Promise<{ synchronized: true }> {
       const snapshot = structuredClone(value)
-      return catalog(async () => {
+      let declarations: ConfirmedProjectScope[]
+      try {
         if (!Array.isArray(snapshot) || snapshot.length > 2048) throw new Error("Invalid project scope catalog")
-        const declarations = snapshot.map(scopeSchema)
-        if (new Set(declarations.map((project) => project.id)).size !== declarations.length) throw new Error("Project scope catalog contains duplicate IDs")
+        declarations = snapshot.map(scopeSchema)
+        if (new Set(declarations.map(project => project.id)).size !== declarations.length) throw new Error("Project scope catalog contains duplicate IDs")
+      } catch (error) { return Promise.reject(error) }
+      const declaredIds = new Set(declarations.map(project => project.id))
+      const removed = [...projects.keys()].filter(id => !declaredIds.has(id))
+      for (const id of removed) { withdrawn.add(id); nextRequest(id) }
+      const requestIds = new Map(declarations.map(project => [project.id, nextRequest(project.id)]))
+      const initialIds = [...removed, ...declarations.filter(project => withdrawn.has(project.id) || JSON.stringify(projects.get(project.id)) !== JSON.stringify(project)).map(project => project.id)]
+      const initialFence = changed(initialIds)
+      void initialFence.catch(() => {})
+      return catalog(async () => {
+        await initialFence
         const confirmed = await Promise.all(declarations.map(async (project) => {
           try { return await resolveScope(project) }
           catch (error) { if (error instanceof ProjectFoldersUnavailable) return blocked(project); throw error }
         }))
         assertOpen()
+        const next = new Map(confirmed.map(project => [project.id, project]))
+        const affected = [...new Set([...projects.keys(), ...next.keys()])].filter(id => JSON.stringify(projects.get(id)) !== JSON.stringify(next.get(id)))
+        const retries = [...pendingChanges].filter(id => !affected.includes(id))
         projects.clear()
-        for (const project of confirmed) projects.set(project.id, project)
+        for (const project of confirmed) {
+          projects.set(project.id, project)
+          if (requests.get(project.id) === requestIds.get(project.id)) withdrawn.delete(project.id)
+        }
+        await changed(affected)
+        await changed(retries, false)
         return { synchronized: true as const }
       })
     },
-    revoke(projectId: string): Promise<{ revoked: boolean }> { return catalog(async () => ({ revoked: projects.delete(identifier(projectId)) })) },
+    revoke(projectId: string): Promise<{ revoked: boolean }> {
+      try { identifier(projectId) } catch (error) { return Promise.reject(error) }
+      const revoked = projects.has(projectId) && !withdrawn.has(projectId)
+      nextRequest(projectId); withdrawn.add(projectId)
+      const drain = changed([projectId])
+      void drain.catch(() => {})
+      return catalog(async () => { await drain; projects.delete(projectId); return { revoked } })
+    },
     bind(id: string, projectId?: string): Promise<{ sessionId: string; projectId?: string }> {
       return serial(id, async () => {
         await ensureVisible(id)
@@ -263,8 +361,10 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
     },
     async forSession(id: string): Promise<() => SessionProjectContext | undefined> {
       await resolveOwner(id)
+      observed.add(id)
       return () => {
-        if (closed) throw new Error("Project scope service closed")
+        const state = authority(id)
+        if (state.kind === "revoked" || state.kind === "unavailable") throw new Error(state.reason)
         const projectId = liveOwner(id)
         const context = projectId ? projects.get(projectId) : undefined
         if (!context) return undefined
@@ -288,7 +388,9 @@ export function createProjectScopeBroker(coordinator: SessionCoordinator, _works
       if (closing) return closing
       closed = true
       projects.clear()
-      closing = Promise.allSettled([catalogTail, ...operations.values(), ...loading.values()]).then(() => {})
+      closing = Promise.allSettled([catalogTail, ...operations.values(), ...loading.values()]).then(async () => {
+        if (observed.size) await moveOptions.authorityChanged?.([...observed])
+      }).catch(error => { closing = undefined; throw error })
       return closing
     },
   }

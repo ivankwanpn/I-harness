@@ -1,25 +1,7 @@
-import { spawn, type IPty } from "node-pty"
-import { existsSync } from "node:fs"
-import { basename, delimiter, extname, isAbsolute, join } from "node:path"
-
-// M27-H-2 (win32 ConPTY quirk): node-pty's fork()'d conpty_console_list_agent
-// agent writes "Error: AttachConsole failed" to its INHERITED stderr on every
-// PTY kill (exit status 0) — the subprocess stderr cannot be intercepted
-// library-side, so the known-noise filter runs on the terminal surface's ERROR
-// REPORT path: matching lines are stripped before an error escapes a tool, and
-// an all-noise report yields the benign terminal-state outcome instead.
-// Upstream: https://github.com/microsoft/node-pty (winptyagent).
-const CONPTY_NOISE_RE = /AttachConsole failed|conpty_console_list_agent/i
-
-/** True when a single error-report line is known ConPTY agent noise. */
-export function isKnownConptyNoise(line: string): boolean {
-  return CONPTY_NOISE_RE.test(line)
-}
-
-/** Strip known ConPTY noise lines from a PTY error report (per-line match). */
-export function filterConptyNoise(text: string): string {
-  return text.replace(/\r\n/g, "\n").split("\n").filter((l) => !isKnownConptyNoise(l)).join("\n")
-}
+import { StringDecoder } from "node:string_decoder"
+import { resolve } from "node:path"
+import { currentExecCaller, withExecCallerScope, type ExecService, type SupervisedExecution } from "@i-harness/exec"
+import type { ExecutionOwner, ExecutionSettlement, RootExit, SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 export interface TerminalOpenSpec {
   /** Preserve CR/LF and control sequences for terminal emulators. */
@@ -27,9 +9,12 @@ export interface TerminalOpenSpec {
   command: string
   args?: string[]
   cwd?: string
+  /** Omission inherits the host snapshot; an explicit empty object stays empty. */
   env?: Record<string, string>
   cols?: number
   rows?: number
+  /** Resolved by trusted tool/host policy, never by model JSON. */
+  sandbox?: SandboxExecutionPolicy
 }
 export type TerminalSignalName = "INT" | "TERM" | "KILL"
 export interface TerminalView {
@@ -42,10 +27,14 @@ export interface TerminalView {
   rows: number
   beganAt: string
   ownerSessionId?: string
+  /** Root exit and full native settlement are separate observations. */
+  root?: RootExit
+  settlement?: ExecutionSettlement
+  cleanupDetail?: string
+  outputDiagnostics?: { outputAbandoned: boolean; discardedOutputBytes: number }
 }
 export interface TerminalRunSpec { id: string; pid: number; cols: number; rows: number }
 export interface TerminalReadResult {
-  /** Requested cursor preceded the retained output window. */
   dropped?: boolean
   id: string
   data: string
@@ -55,211 +44,285 @@ export interface TerminalReadResult {
   exitCode?: number
 }
 export interface TerminalService {
-  open(spec: TerminalOpenSpec, opts?: { sessionId?: string }): TerminalRunSpec
-  send(id: string, data: string, opts?: { sessionId?: string }): void
+  open(spec: TerminalOpenSpec, opts?: { sessionId?: string; abortSignal?: AbortSignal }): Promise<TerminalRunSpec>
+  send(id: string, data: string, opts?: { sessionId?: string; sandbox?: SandboxExecutionPolicy }): Promise<void>
   read(id: string, opts?: { offset?: number; maxBytes?: number; sessionId?: string }): TerminalReadResult
-  signal(id: string, signal: TerminalSignalName, opts?: { sessionId?: string }): TerminalView
-  close(id: string, opts?: { sessionId?: string }): TerminalView
-  resize(id: string, cols: number, rows: number, opts?: { sessionId?: string }): TerminalView
-  list(): TerminalView[]
+  signal(id: string, signal: TerminalSignalName, opts?: { sessionId?: string }): Promise<TerminalView>
+  close(id: string, opts?: { sessionId?: string }): Promise<TerminalView>
+  resize(id: string, cols: number, rows: number, opts?: { sessionId?: string }): Promise<TerminalView>
+  list(opts?: { sessionId?: string }): TerminalView[]
   waitExited(id: string): Promise<{ exitCode?: number }>
-  dispose(): void
+  dispose(): Promise<void>
 }
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
 const DEFAULT_MAX_READ_BYTES = 64_000
+const RING_MAX = 1_000_000
 
-/** ConPTY does not reliably search PATH for extensionless command names (a
- * bare `pwsh` can fail with `File not found: ` even when pwsh.exe is installed).
- * Resolve one executable before calling node-pty, honoring the PTY's env.
- * Keep paths and explicit relative commands untouched. */
-function resolvePtyExecutable(command: string, env: NodeJS.ProcessEnv): string {
-  if (process.platform !== "win32" || isAbsolute(command) || /[\\/]/.test(command)) return command
-  const pathKey = Object.keys(env).reverse().find((key) => key.toLowerCase() === "path")
-  const pathValue = pathKey === undefined ? undefined : env[pathKey]
-  const names = extname(command) ? [command] : [`${command}.exe`, command]
-  for (const entry of pathValue?.split(delimiter) ?? []) {
-    const directory = entry.trim().replace(/^"|"$/g, "")
-    if (!directory) continue
-    // The Windows launchers are WSL aliases, not native shells; ConPTY's cwd
-    // and native-path contract needs the later Git/MSYS/Rtools bash instead.
-    if (/^bash(?:\.exe)?$/i.test(command) && ["system32", "windowsapps"].includes(basename(directory).toLowerCase())) continue
-    for (const name of names) {
-      const candidate = join(directory, name)
-      try { if (existsSync(candidate)) return candidate } catch { /* malformed PATH entry */ }
-    }
-  }
-  return command
-}
-
-// 場沖模型：每 terminal 一個 chunks 序列（string[]），offset 以 UTF-16 code unit 計
-// （與 LSP position 慣例一致，文件化）。read(offset) 回傳 [offset, offset+max)：
-// 可重複、可以任意游標重讀——日誌視圖語意，非消耗型。
-class PtySession {
-  static counter = 0 // 先於 id 初始化（useDefineForClassFields 聲明序）
-  readonly id = `term-${++PtySession.counter}`
-  private chunks: string[] = []
-  private retainedLength = 0
+class TerminalRecord {
+  static counter = 0
+  readonly id = `term-${++TerminalRecord.counter}`
+  readonly beganAt = new Date().toISOString()
+  readonly owner: Readonly<ExecutionOwner>
+  readonly decoder = new StringDecoder("utf8")
+  private pendingCR = false
+  readonly chunks: string[] = []
+  retainedLength = 0
   startOffset = 0
-  // 超過 RING_MAX 就丟最舊——早於 ring 起點的 offset 從 ring 起點開始（文件化缺點）。
-  private static readonly RING_MAX = 1_000_000
-  status: "running" | "exited" = "running"
-  exitCode?: number
-  readonly pty: IPty
-  /** ConPTY ready 信號（首個 onData）——resize 下發門檻（見 onData 註釋）。service 閉包需要讀。 */
-  ptyReady = false
-  // M26-B2 (win32 校準)：ConPTY 的 pty.cols/rows getter 在 resize 後是異步/過期值，而且
-  // resize 已 exit 的 pty 直接 throw——view 的尺寸以 service 追蹤值為準（resize 對 exited
-  // 節點是 no-op 但追蹤值仍更新；running 時才真的下發 pty.resize）。
   cols: number
   rows: number
-  readonly beganAt = new Date().toISOString()
-  private dataWaiters: Array<() => void> = []
-  // public：waitExited（service 閉包）需要 push——用方法收回不如直接可讀（內部一致性）。
-  exitWaiters: Array<{ resolve: (v: { exitCode?: number }) => void; reject: (e: Error) => void }> = []
+  status: "running" | "exited" = "running"
+  exitCode?: number
+  root?: RootExit
+  settlement?: ExecutionSettlement
+  cleanupDetail?: string
+  outputFailure?: string
+  outputDone: Promise<void>
 
-  constructor(readonly spec: TerminalOpenSpec, readonly ownerSessionId?: string) {
+  constructor(readonly spec: TerminalOpenSpec, readonly execution: SupervisedExecution) {
+    this.owner = execution.policy.owner
     this.cols = spec.cols ?? DEFAULT_COLS
     this.rows = spec.rows ?? DEFAULT_ROWS
-    const env = { ...process.env, ...(spec.env ?? {}) }
-    this.pty = spawn(resolvePtyExecutable(spec.command, env), spec.args ?? [], {
-      name: "xterm-256color",
-      cols: spec.cols ?? DEFAULT_COLS,
-      rows: spec.rows ?? DEFAULT_ROWS,
-      cwd: spec.cwd,
-      env,
-    })
-    this.pty.onData((d: string) => {
-      // ConPTY ready 信號：首個 onData（未必是應用輸出——初始化 ESC 序也夠）。在 ready 前
-      // resize 會被 node-pty 的 deferred queue 收走；pty 早退時隊列執行即 throw
-      // "Cannot resize a pty that has already exited"（async uncaught——vitest 視為失敗），
-      // 所以 resize 只在 ready 後直接走（sync throw 可被捕）。
-      this.ptyReady = true
-      const cleaned = spec.rawOutput ? d : d.replace(/\r\n/g, "\n")
-      const last = this.chunks.length - 1
-      if (last >= 0 && this.chunks[last]!.length < 4096 && cleaned.length < 4096) this.chunks[last] += cleaned
-      else this.chunks.push(cleaned)
-      this.retainedLength += cleaned.length
-      while (this.retainedLength > PtySession.RING_MAX) {
-        const first = this.chunks[0]!
-        const remove = Math.min(first.length, this.retainedLength - PtySession.RING_MAX)
-        if (remove === first.length) this.chunks.shift()
-        else this.chunks[0] = first.slice(remove)
-        this.retainedLength -= remove
-        this.startOffset += remove
-      }
-      for (const w of this.dataWaiters) w()
-      this.dataWaiters = []
-    })
-    this.pty.onExit(({ exitCode }) => {
+    this.outputDone = this.consume()
+    void this.outputDone.catch(cause => { this.outputFailure = String(cause) })
+    void execution.handle.rootExited.then(root => {
+      this.root = root
       this.status = "exited"
-      this.exitCode = exitCode
-      for (const w of this.exitWaiters) w.resolve({ ...(exitCode !== undefined ? { exitCode } : {}) })
-      this.exitWaiters = []
-    })
+      if (root.exitCode !== null) this.exitCode = root.exitCode
+    }, cause => { this.outputFailure = String(cause) })
+    void execution.handle.settled.then(settlement => {
+      this.settlement = settlement
+      if (settlement.kind === "incomplete") this.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+      else this.cleanupDetail = undefined
+    }, cause => { this.cleanupDetail = String(cause) })
+  }
+
+  private append(data: string): void {
+    if (this.spec.rawOutput) { this.appendRetained(data); return }
+    const combined = (this.pendingCR ? "\r" : "") + data
+    this.pendingCR = combined.endsWith("\r")
+    const complete = this.pendingCR ? combined.slice(0, -1) : combined
+    this.appendRetained(complete.replace(/\r\n/g, "\n"))
+  }
+
+  private appendRetained(cleaned: string): void {
+    if (!cleaned) return
+    const last = this.chunks.length - 1
+    if (last >= 0 && this.chunks[last]!.length < 4096 && cleaned.length < 4096) this.chunks[last] += cleaned
+    else this.chunks.push(cleaned)
+    this.retainedLength += cleaned.length
+    while (this.retainedLength > RING_MAX) {
+      const first = this.chunks[0]!
+      const remove = Math.min(first.length, this.retainedLength - RING_MAX)
+      if (remove === first.length) this.chunks.shift()
+      else this.chunks[0] = first.slice(remove)
+      this.retainedLength -= remove
+      this.startOffset += remove
+    }
+  }
+
+  private async consume(): Promise<void> {
+    for await (const frame of this.execution.handle.io.output) {
+      if (frame.channel !== "pty") throw new Error("PTY backend returned non-PTY output")
+      this.append(this.decoder.write(Buffer.from(frame.data)))
+    }
+    const tail = this.decoder.end()
+    if (tail) this.append(tail)
+    if (this.pendingCR) { this.pendingCR = false; this.appendRetained("\r") }
   }
 
   textSince(offset: number): string {
     const combined = this.chunks.join("")
     const relative = Math.max(0, offset - this.startOffset)
-    if (relative >= combined.length) return ""
-    return combined.slice(relative)
-  }
-
-  closePty(): void { try { this.pty.kill() } catch { /* 已死 */ } }
-  rejectAllExitWaiters(err: Error): void {
-    for (const w of this.exitWaiters) w.reject(err)
-    this.exitWaiters = []
+    return relative >= combined.length ? "" : combined.slice(relative)
   }
 }
 
-export function createTerminalService(): TerminalService {
-  const sessions = new Map<string, PtySession>()
+/** The only process owner is ExecService. This service keeps presentation views. */
+export function createTerminalService(exec: ExecService): TerminalService {
+  const records = new Map<string, TerminalRecord>()
+  const pending = new Set<{ controller: AbortController; attempt: Promise<TerminalRunSpec> }>()
+  let disposed = false
 
-  function getOwned(sessions: Map<string, PtySession>, id: string, sessionId?: string): PtySession {
-    const s = sessions.get(id)
-    if (!s) throw new Error(`TERMINAL_NOT_FOUND: no terminal ${id}`)
-    if (s.ownerSessionId !== undefined && sessionId !== s.ownerSessionId) {
-      throw new Error(`TERMINAL_OWNER_MISMATCH: terminal ${id} is owned by session ${s.ownerSessionId}`)
+  function getOwned(id: string, sessionId?: string): TerminalRecord {
+    const record = records.get(id)
+    if (!record) throw new Error(`TERMINAL_NOT_FOUND: no terminal ${id}`)
+    // Standalone callers can use their local default owner without an ALS
+    // scope. Named owners require a trusted dispatch scope or owner assertion.
+    const caller = currentExecCaller()?.sessionId ?? sessionId ?? (record.owner.sessionId === "standalone-exec" ? "standalone-exec" : undefined)
+    if (caller !== record.owner.sessionId || (sessionId !== undefined && sessionId !== record.owner.sessionId)) {
+      throw new Error(`TERMINAL_OWNER_MISMATCH: terminal ${id} is owned by session ${record.owner.sessionId}`)
     }
-    return s
+    return record
   }
-  const view = (s: PtySession): TerminalView => ({
-    id: s.id,
-    command: s.spec.command,
-    pid: s.pty.pid,
-    status: s.status,
-    ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {}),
-    cols: s.cols,
-    rows: s.rows,
-    beganAt: s.beganAt,
-    ...(s.ownerSessionId !== undefined ? { ownerSessionId: s.ownerSessionId } : {}),
-  })
+
+  function view(record: TerminalRecord): TerminalView {
+    return {
+      id: record.id, command: record.spec.command, pid: record.execution.handle.pid,
+      status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }),
+      cols: record.cols, rows: record.rows, beganAt: record.beganAt,
+      ownerSessionId: record.owner.sessionId,
+      ...(record.root === undefined ? {} : { root: record.root }),
+      ...(record.settlement === undefined ? {} : { settlement: record.settlement }),
+      ...(record.cleanupDetail === undefined ? {} : { cleanupDetail: record.cleanupDetail }),
+      ...(record.execution.handle.io.diagnostics?.() === undefined ? {} : { outputDiagnostics: record.execution.handle.io.diagnostics?.() }),
+    }
+  }
+
+  async function stop(record: TerminalRecord): Promise<ExecutionSettlement> {
+    let settlement: ExecutionSettlement
+    try {
+      settlement = await withExecCallerScope(record.owner, () => exec.cancelExecution(record.execution.id, "cancelled"))
+    } catch (cause) {
+      // A naturally settled handle can retire before the output/view observer.
+      settlement = await record.execution.handle.settled
+      if (settlement.kind !== "settled") {
+        record.cleanupDetail = cause instanceof Error ? cause.message : String(cause)
+        throw cause
+      }
+    }
+    record.settlement = settlement
+    if (settlement.kind !== "settled") {
+      record.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+      throw new Error(`Terminal cleanup incomplete: ${record.cleanupDetail}`)
+    }
+    await record.outputDone
+    record.cleanupDetail = undefined
+    return settlement
+  }
 
   return {
     open(spec, opts) {
-      const s = new PtySession(spec, opts?.sessionId)
-      const pid = s.pty.pid
-      sessions.set(s.id, s)
-      return { id: s.id, pid, cols: s.cols, rows: s.rows }
+      if (disposed) throw new Error("terminal service disposed")
+      const controller = new AbortController()
+      const externalAbort = () => controller.abort(opts?.abortSignal?.reason ?? "cancelled")
+      opts?.abortSignal?.addEventListener("abort", externalAbort, { once: true })
+      if (opts?.abortSignal?.aborted) externalAbort()
+      const attempt = (async (): Promise<TerminalRunSpec> => {
+      if (!spec.command) throw new Error("Terminal command required")
+      const cols = spec.cols ?? DEFAULT_COLS
+      const rows = spec.rows ?? DEFAULT_ROWS
+      if (![cols, rows].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error("Invalid terminal dimensions")
+      const env = spec.env === undefined ? undefined : { ...spec.env }
+      const cwd = resolve(spec.cwd ?? process.cwd())
+      // node-pty on POSIX requires these exact values. Bind them as host intent
+      // before ExecService captures its immutable environment; explicit env is
+      // retained exactly and must provide them itself.
+      if (process.platform !== "win32" && env === undefined) {
+        const inherited = { ...process.env, PWD: cwd, TERM: process.env.TERM || "xterm-256color" } as Record<string, string>
+        Object.keys(inherited).forEach(key => inherited[key] === undefined && delete inherited[key])
+        spec = { ...spec, env: inherited }
+      }
+      const presentationSpec: TerminalOpenSpec = { ...spec,
+        ...(spec.args === undefined ? {} : { args: [...spec.args] }),
+        ...(spec.env === undefined ? {} : { env: { ...spec.env } }),
+      }
+      const execution = await exec.launchTransport({
+        argv: [spec.command, ...(spec.args ?? [])], cwd,
+        ...(spec.env === undefined ? {} : { env: spec.env }),
+        transport: "pty", lifetime: "retain-tree", argumentEncoding: "crt",
+        pty: { cols, rows }, ...(spec.sandbox === undefined ? {} : { sandbox: spec.sandbox }),
+        abortSignal: controller.signal,
+      })
+      // The receipt is the authority; an optional trusted dispatch assertion
+      // cannot select an owner or change the already admitted execution.
+      if (disposed || (opts?.sessionId !== undefined && opts.sessionId !== execution.policy.owner.sessionId)) {
+        const abandoned = new TerminalRecord(presentationSpec, execution)
+        records.set(abandoned.id, abandoned)
+        await stop(abandoned)
+        records.delete(abandoned.id)
+        throw new Error(disposed ? "terminal service disposed during admission" : "TERMINAL_OWNER_MISMATCH: caller differs from admitted owner")
+      }
+      const record = new TerminalRecord(presentationSpec, execution)
+      records.set(record.id, record)
+      return { id: record.id, pid: execution.handle.pid, cols, rows }
+      })()
+      const entry = { controller, attempt }
+      pending.add(entry)
+      void attempt.finally(() => { pending.delete(entry); opts?.abortSignal?.removeEventListener("abort", externalAbort) }).catch(() => {})
+      return attempt
     },
-    send(id, data, opts) { getOwned(sessions, id, opts?.sessionId).pty.write(data) },
+    async send(id, data, opts) {
+      const record = getOwned(id, opts?.sessionId)
+      const rank = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 }
+      if (rank[opts?.sandbox?.mode ?? "danger-full-access"] < rank[record.execution.policy.mode]) {
+        throw new Error(`TERMINAL_POLICY_MISMATCH: terminal ${id} was admitted under ${record.execution.policy.mode}`)
+      }
+      if (record.status === "exited") throw new Error(`Terminal ${id} has exited`)
+      const bytes = Buffer.from(data)
+      for (let offset = 0; offset < bytes.length; offset += 16_384) {
+        await record.execution.handle.io.write(bytes.subarray(offset, Math.min(offset + 16_384, bytes.length)))
+      }
+    },
     read(id, opts) {
-      const s = getOwned(sessions, id, opts?.sessionId)
+      const record = getOwned(id, opts?.sessionId)
       const offset = opts?.offset ?? 0
       const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_READ_BYTES
-      const text = s.textSince(offset)
+      if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid terminal cursor")
+      const text = record.textSince(offset)
       const data = text.slice(0, maxBytes)
-      return {
-        id,
-        data,
-        nextOffset: Math.max(offset, s.startOffset) + data.length,
-        ...(offset < s.startOffset ? { dropped: true } : {}),
-        truncated: text.length > data.length,
-        status: s.status,
-        ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {}),
+      return { id, data, nextOffset: Math.max(offset, record.startOffset) + data.length,
+        ...(offset < record.startOffset ? { dropped: true } : {}), truncated: text.length > data.length,
+        status: record.status, ...(record.exitCode === undefined ? {} : { exitCode: record.exitCode }) }
+    },
+    async signal(id, signal, opts) {
+      const record = getOwned(id, opts?.sessionId)
+      if (signal === "INT") {
+        if (record.status === "running") {
+          if (record.execution.handle.io.signal) await record.execution.handle.io.signal("INT")
+          else await record.execution.handle.io.write(Buffer.from("\x03"))
+        }
+      } else await stop(record)
+      return view(record)
+    },
+    async close(id, opts) {
+      const record = getOwned(id, opts?.sessionId)
+      await stop(record)
+      const final = view(record)
+      records.delete(id)
+      return final
+    },
+    async resize(id, cols, rows, opts) {
+      const record = getOwned(id, opts?.sessionId)
+      if (![cols, rows].every(value => Number.isSafeInteger(value) && value > 0)) throw new Error("Invalid terminal dimensions")
+      if (record.status === "running") {
+        if (!record.execution.handle.io.resize) throw new Error("PTY resize unsupported by selected backend")
+        await record.execution.handle.io.resize(cols, rows)
       }
+      record.cols = cols
+      record.rows = rows
+      return view(record)
     },
-    signal(id, signal, opts) {
-      const s = getOwned(sessions, id, opts?.sessionId)
-      switch (signal) {
-        case "INT": s.pty.write("\x03"); break          // 終端 Ctrl+C（ConPTY cooked mode）
-        case "TERM": s.pty.kill(); break                 // pty.kill（win: 終止 conpty 主體）
-        case "KILL": s.pty.kill(); break
+    list(opts) {
+      if (currentExecCaller() && opts?.sessionId !== undefined && currentExecCaller()!.sessionId !== opts.sessionId) {
+        throw new Error("TERMINAL_OWNER_MISMATCH: caller scope differs from terminal list owner")
       }
-      return view(s)
+      const owner = currentExecCaller()?.sessionId ?? opts?.sessionId
+      return [...records.values()].filter(record => owner === undefined || record.owner.sessionId === owner).map(view)
     },
-    close(id, opts) {
-      const s = getOwned(sessions, id, opts?.sessionId)
-      s.closePty()
-      sessions.delete(id)
-      return view(s)
+    async waitExited(id) {
+      const record = records.get(id)
+      if (!record) throw new Error(`TERMINAL_NOT_FOUND: no terminal ${id}`)
+      const root = await record.execution.handle.rootExited
+      return root.exitCode === null ? {} : { exitCode: root.exitCode }
     },
-    resize(id, cols, rows, opts) {
-      const s = getOwned(sessions, id, opts?.sessionId)
-      s.cols = cols
-      s.rows = rows
-      // 追蹤值一律更新；pty.resize 只在 running + ready 時下發（否則被 node-pty 的 deferred
-      // queue 收走→pty 早退時 async throw——見 PtySession.ptyReady 註釋）。sync throw 也吞掉。
-      if (s.status === "running" && s.ptyReady) {
-        try { s.pty.resize(cols, rows) } catch { /* 已死——追蹤值仍更新 */ }
-      }
-      return view(s)
-    },
-    list() { return [...sessions.values()].map(view) },
-    waitExited(id) {
-      return new Promise((resolve, reject) => {
-        const s = sessions.get(id)
-        if (!s) { reject(new Error(`TERMINAL_NOT_FOUND: no terminal ${id}`)); return }
-        if (s.status === "exited") { resolve({ ...(s.exitCode !== undefined ? { exitCode: s.exitCode } : {}) }); return }
-        s.exitWaiters.push({ resolve, reject }) // onExit / dispose 雙向解決
-      })
-    },
-    dispose() {
-      const err = new Error("terminal service disposed")
-      for (const s of sessions.values()) { s.closePty(); s.rejectAllExitWaiters(err) }
-      sessions.clear()
+    async dispose() {
+      disposed = true
+      const admissions = [...pending]
+      const existing = [...records.values()]
+      admissions.forEach(entry => entry.controller.abort("shutdown"))
+      const admissionOutcomes = await Promise.allSettled(admissions.map(entry => entry.attempt))
+      const outcomes = await Promise.allSettled(existing.map(async record => {
+        await stop(record)
+        records.delete(record.id)
+      }))
+      const failures = [
+        ...admissionOutcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"
+          && (outcome.reason instanceof AggregateError || /cleanup incomplete|cleanup failed/i.test(String(outcome.reason)))),
+        ...outcomes.filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected"),
+      ]
+      if (failures.length) throw new AggregateError(failures.map(item => item.reason), "Terminal view disposal incomplete")
     },
   }
 }

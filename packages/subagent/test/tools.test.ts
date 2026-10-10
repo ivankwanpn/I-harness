@@ -509,7 +509,7 @@ describe("job tools bridge", () => {
     const { exec, jobs, table, roles, parentReg, session, resolveModel, model } = setup()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks: createTaskRegistry() })
     const output = all.find((t) => t.name === "job_output")!
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('bg done'), 100)"] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('bg done'), 100)"] })
     expect(jobId).toMatch(/^bash-\d+$/)
     // wait:true exercises the exec-fallback poll-wait path and avoids a fixed sleep.
     const read = await output.execute({ job_id: jobId, wait: true, timeout_ms: 5000 }, {})
@@ -525,7 +525,7 @@ describe("job tools bridge", () => {
     const list = all.find((t) => t.name === "job_list")!
     const spawnOut = await spawn.execute({ message: "do it", task_name: "helper" }, {})
     const subId = (spawnOut as { job_id: string }).job_id
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 50)"] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 50)"] })
     const listed = await list.execute({}, {})
     const ids = (listed as { jobs: { id: string; kind: string }[] }).jobs.map((j) => j.id)
     expect(ids).toContain(subId)
@@ -539,7 +539,7 @@ describe("job tools bridge", () => {
     const { exec, jobs, table, roles, parentReg, session, resolveModel, model } = setup()
     const all = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: createContext(), parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks: createTaskRegistry() })
     const kill = all.find((t) => t.name === "job_kill")!
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
     const out = await kill.execute({ job_id: jobId }, {})
     expect((out as { outcome: string }).outcome).toBe("cancellation-requested")
   }, 10_000)

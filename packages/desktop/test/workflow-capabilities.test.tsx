@@ -27,6 +27,7 @@ it("keeps settings available in slash commands without offering unsupported work
 it("unmounts an open workflow when capability disappears and retains an unavailable explanation", async () => {
   const { request, props } = fixture()
   const view = render(<Workbench {...props} capabilities={{ "desktop-workflow": ["1"] }} />)
+  fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
   fireEvent.click(screen.getByRole("button", { name: "Goal / Plan" }))
   await screen.findByRole("textbox", { name: "目標內容" })
   const calls = request.mock.calls.filter(([input]) => input.kind.startsWith("desktop/session/workflow/")).length

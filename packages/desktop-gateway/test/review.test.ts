@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest"
 import { execFileSync } from "node:child_process"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { createWorkspaceReview } from "../src/review.ts"
 import { openPinnedFileForReview } from "../src/review-handle.ts"
 
@@ -54,7 +54,11 @@ describe("workspace review remains read-only and honest", () => {
     if (changes.kind !== "ok") throw new Error("changes unavailable")
     expect(changes.files).toContainEqual(expect.objectContaining({ path: "new.txt", status: "untracked", canDiff: false }))
     expect(await review.diff("new.txt")).toEqual({ kind: "unavailable", reason: "untracked" })
-    expect(await createWorkspaceReview(workspace(false)).changes()).toEqual({ kind: "unavailable", reason: "not-git-repo" })
+    const noRepository = workspace(false)
+    const priorCeiling = process.env.GIT_CEILING_DIRECTORIES
+    process.env.GIT_CEILING_DIRECTORIES = dirname(noRepository)
+    try { expect(await createWorkspaceReview(noRepository).changes()).toEqual({ kind: "unavailable", reason: "not-git-repo" }) }
+    finally { if (priorCeiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES; else process.env.GIT_CEILING_DIRECTORIES = priorCeiling }
   })
 
   it("reports paths relative to a workspace nested inside a Git repository", async () => {

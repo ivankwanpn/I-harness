@@ -13,5 +13,10 @@ export function createScopedExec(base: ExecService, cwd: string, policy: () => S
     if (options === undefined) return base.run(scoped)
     return "stream" in options ? base.run(scoped, options) : base.run(scoped, options)
   }
-  return { ...base, run, runBackground: (command) => base.runBackground(commandFor(command)) }
+  return {
+    ...base,
+    run,
+    runBackground: (command) => base.runBackground(commandFor(command)),
+    launchTransport: request => base.launchTransport({ ...request, cwd: request.cwd ?? cwd, sandbox: request.sandbox ?? policy() }),
+  }
 }

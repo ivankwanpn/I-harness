@@ -39,6 +39,7 @@ export class OutputCollector {
 
   push(chunk: Buffer): void {
     this.total += chunk.byteLength
+    if (!this.spillDisabled && this.total > this.maxSpillBytes) this.discardSpill()
     // 溢出判定（spill 已停用時不重啟）
     if (!this.spillDisabled && (this.spillFd === undefined ? this.total > this.maxBytes : true)) {
       if (this.spillFd === undefined) {
@@ -48,12 +49,20 @@ export class OutputCollector {
       }
       this.writeSpill(chunk)
     }
-    // tail-keep 內存（單一 chunk > maxBytes 時整 chunk 保留——chunks.length > 1 才 drop）
-    this.chunks.push(chunk)
-    this.tailBytes += chunk.byteLength
-    while (this.tailBytes > this.maxBytes && this.chunks.length > 1) {
-      const dropped = this.chunks.shift()!
-      this.tailBytes -= dropped.byteLength
+    // Copy retained slices so a small tail cannot retain a large backing buffer.
+    const retained = Buffer.from(chunk.subarray(Math.max(0, chunk.length - this.maxBytes)))
+    if (retained.length) this.chunks.push(retained)
+    this.tailBytes += retained.byteLength
+    while (this.tailBytes > this.maxBytes) {
+      const first = this.chunks[0]!
+      const excess = this.tailBytes - this.maxBytes
+      if (first.length <= excess) {
+        this.chunks.shift()
+        this.tailBytes -= first.length
+      } else {
+        this.chunks[0] = Buffer.from(first.subarray(excess))
+        this.tailBytes -= excess
+      }
     }
     // 超 spill cap → discard（close + unlink + 永久停用）→ 只剩 tail
     if (!this.spillDisabled && this.spillFd !== undefined && this.total > this.maxSpillBytes) {
@@ -62,26 +71,33 @@ export class OutputCollector {
   }
 
   finalize(): CollectResult {
-    const text = Buffer.concat(this.chunks).toString("utf-8")
-    const truncated = this.total > this.maxBytes
-    const spillPath = this.spillPath
-    // 有完整 spill 檔 → 資料無損（lossy=false）；無 spill 檔（discard/開檔失敗）且 truncated → 中間丟（lossy=true）
-    const lossy = truncated && spillPath === undefined
     if (this.spillFd !== undefined) {
       closeSync(this.spillFd)
       this.spillFd = undefined
     }
+    return this.snapshot()
+  }
+
+  snapshot(): CollectResult {
+    const text = this.peek()
+    const truncated = this.total > this.maxBytes
+    const spillPath = this.spillPath
+    // 有完整 spill 檔 → 資料無損（lossy=false）；無 spill 檔（discard/開檔失敗）且 truncated → 中間丟（lossy=true）
+    const lossy = truncated && spillPath === undefined
     return { text, spillPath, lossy, truncated }
   }
 
-  /** W10: the retained text RIGHT NOW, without finalizing. A foreground
-   * promotion seeds the job record with what the command has already produced
-   * (exec's `registerJob` → `SpawnHandle.text()`); calling `finalize()` for
-   * that would close the spill fd and end the collection the running command
-   * still needs. `finalize` remains the only thing that decides truncation and
-   * lossiness. */
+  /** Current bounded presentation, without closing the ongoing spill. */
   peek(): string {
-    return Buffer.concat(this.chunks).toString("utf-8")
+    const bytes = Buffer.concat(this.chunks)
+    let start = 0
+    if (this.total > this.maxBytes) while (start < bytes.length && (bytes[start]! & 0xc0) === 0x80) start++
+    const text = new TextDecoder().decode(bytes.subarray(start), { stream: true })
+    // Invalid binary bytes can expand to UTF-8 replacement characters.
+    const encoded = Buffer.from(text)
+    start = Math.max(0, encoded.length - this.maxBytes)
+    while (start < encoded.length && (encoded[start]! & 0xc0) === 0x80) start++
+    return encoded.subarray(start).toString("utf8")
   }
 
   private openSpill(): void {

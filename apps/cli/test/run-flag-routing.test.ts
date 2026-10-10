@@ -64,6 +64,19 @@ afterEach(() => {
 })
 
 describe("run argv routing", () => {
+  it("uses explicit backend choice ahead of environment and refuses invalid choices", async () => {
+    const before = process.env.IH_WINDOWS_SANDBOX
+    try {
+      process.env.IH_WINDOWS_SANDBOX = "psec"
+      expect(await main(["node", "i-harness", "run", "hello", "--windows-sandbox", "legacy"])).toBe(0)
+      expect(calls[0]).toMatchObject({ task: "hello", opts: { windowsSandboxBackend: "legacy" } })
+      calls.length = 0
+      expect(await main(["node", "i-harness", "run", "hello"])).toBe(0)
+      expect(calls[0]!.opts.windowsSandboxBackend).toBe("psec")
+      process.env.IH_WINDOWS_SANDBOX = "automatic"
+      expect(await main(["node", "i-harness", "run", "hello"])).toBe(1)
+    } finally { if (before === undefined) delete process.env.IH_WINDOWS_SANDBOX; else process.env.IH_WINDOWS_SANDBOX = before }
+  })
   it.each(["off", "mixed", "only"])("routes --code-mode %s without leaking it into the task", async (mode) => {
     expect(await main(["node", "i-harness", "run", "hello", "--code-mode", mode])).toBe(0)
     expect(calls[0]).toMatchObject({ task: "hello", opts: { codeMode: { mode } } })

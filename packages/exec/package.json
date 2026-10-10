@@ -7,6 +7,9 @@
   "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
   "dependencies": {
     "@i-harness/core-plugin": "workspace:*",
-    "@i-harness/sandbox": "workspace:*"
-  }
+    "@i-harness/sandbox": "workspace:*",
+    "@i-harness/sandbox-local": "workspace:*",
+    "@i-harness/sandbox-policy": "workspace:*"
+  },
+  "devDependencies": {}
 }

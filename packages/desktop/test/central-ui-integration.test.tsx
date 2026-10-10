@@ -71,9 +71,11 @@ it("mounts execution and process entry points against the selected owning sessio
   const bridge = bridgeFor(request => request.kind === "desktop/session/execution/read" ? { cells: [], total: 0, hasMore: false }
     : request.kind === "desktop/session/processes/read" ? { terminals: [], jobs: [] } : [])
   render(<Workbench {...base(bridge)} capabilities={{ "desktop-execution": ["1"], "desktop-agent-processes": ["1"] }} />)
+  fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
   fireEvent.click(screen.getByRole("button", { name: "Code Mode" }))
   await screen.findByText("尚無 Code Mode cell")
   expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/execution/read", workspaceId: "source", sessionId: "moved", offset: 0, limit: 10 })
+  fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
   fireEvent.click(screen.getByRole("button", { name: "Agent 程序" }))
   await screen.findByText("目前沒有此會話擁有的 PTY 程序")
   expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/session/processes/read", workspaceId: "source", sessionId: "moved" })
@@ -114,7 +116,7 @@ it("mounts the batch manager, confirms the action and retains only failed select
   expect((screen.getByRole("checkbox", { name: "選取 Busy" }) as HTMLInputElement).checked).toBe(true)
 })
 
-it("mounts saved/effective Code Mode, explicit diagnostics probes and remembered rules in execution settings", async () => {
+it("keeps defaults and remembered rules in settings and opens operational diagnostics from Tools", async () => {
   localStorage.setItem("ih:settings-section", "execution")
   const defaults = { sandboxMode: "read-only", approvalMode: "dangerous", autoCompaction: true }
   const bridge = bridgeFor(request => request.kind === "desktop/agent-settings/state" ? { saved: defaults, effective: defaults, restartRequired: false }
@@ -122,14 +124,19 @@ it("mounts saved/effective Code Mode, explicit diagnostics probes and remembered
     : request.kind === "desktop/code-mode/state" ? { saved: { mode: "only" }, effective: "mixed" }
     : request.kind === "desktop/code-mode/configure" ? { saved: { mode: request.patch.mode }, effective: "mixed" }
     : request.kind === "desktop/environment/diagnostics" ? { live: false, executables: [], tools: [], roles: [] } : [])
-  render(<SettingsPane workspace={workspace} sessionId="moved" bridge={bridge} onClose={() => {}} capabilities={{ "desktop-agent-settings": ["1"], "desktop-code-mode-settings": ["1"], "desktop-environment-diagnostics": ["1"] }} />)
+  const view = render(<SettingsPane workspace={workspace} sessionId="moved" bridge={bridge} onClose={() => {}} capabilities={{ "desktop-agent-settings": ["1"], "desktop-code-mode-settings": ["1"], "desktop-environment-diagnostics": ["1"] }} />)
   const mode = await screen.findByRole("combobox", { name: "Code Mode" })
   await waitFor(() => expect((mode as HTMLSelectElement).value).toBe("only"))
   expect(screen.getByText("mixed")).toBeTruthy()
   fireEvent.change(mode, { target: { value: "off" } })
   await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/code-mode/configure", workspaceId: "source", sessionId: "moved", patch: { mode: "off" } }))
   expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/approval-rules/state", workspaceId: "source" })
-  expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: false })
+  expect(bridge.request).not.toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: false })
+  view.unmount()
+  render(<Workbench {...base(bridge)} capabilities={{ "desktop-environment-diagnostics": ["1"] }} />)
+  fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
+  fireEvent.click(screen.getByRole("button", { name: "工具與環境診斷" }))
+  await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: false }))
   fireEvent.click(screen.getByRole("button", { name: "檢測執行檔版本" }))
   await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: true }))
 })

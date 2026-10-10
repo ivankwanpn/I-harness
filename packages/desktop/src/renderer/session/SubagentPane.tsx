@@ -22,6 +22,13 @@ const STATUS_LABELS: Record<DesktopSubagentStatus, Message> = {
 }
 const errorText = (reason: unknown) => reason instanceof Error ? reason.message : String(reason)
 type Feedback = { error?: string; notice?: string }
+// Exact gateway guidance only. Saved diagnostics and transcript content keep
+// their original text, including unknown policy reasons from other peers.
+const CONTROL_GUIDANCE = new Map<string, Message>([
+  ["This subagent is not active in the current process. Its saved history remains available.", "此子代理目前未在這裡執行，仍可查閱已保存的記錄。"],
+  ["Leave Plan Mode before following up with or messaging a subagent.", "請先退出計畫模式，再派發後續任務或傳送訊息給子代理。"],
+  ["The parent conversation is archived.", "主會話已封存。"],
+])
 
 /** Own presentation informed by DSH ui-subagent's lineage and read-only
  * composer. Runtime ownership/capabilities come exclusively from the gateway. */
@@ -113,6 +120,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       await Promise.allSettled([readCatalog(), ...(selectedRef.current ? [readHistory(selectedRef.current)] : [])])
     })
     const unsubscribe = bridge.onEvent((event) => {
+      if (event.kind === "window/state") return
       if (event.workspaceId !== workspaceId) return
       if (event.kind === "sdk/disconnected") { setCatalogError(event.message); return }
       const params = event.params as { sessionId?: unknown } | undefined
@@ -131,6 +139,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
   }, [selected, readHistory])
 
   const selectedAgent = catalog?.agents.find((row) => row.sessionId === selected)
+  const controlGuidance = selectedAgent?.controlReason ? CONTROL_GUIDANCE.get(selectedAgent.controlReason) : undefined
   const displayedHistory = history && history.childSessionId === selected ? history.value : undefined
   const displayedError = historyError && historyError.childSessionId === selected ? historyError.message : undefined
   const rows = useMemo(() => projectTimeline(displayedHistory?.events ?? []), [displayedHistory])
@@ -195,7 +204,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       <div className="subagent-detail-heading"><button type="button" className="subagent-back" aria-label={t("返回子代理列表")} title={t("返回子代理列表")} onClick={() => setSelected(undefined)}><ArrowLeft size={16} aria-hidden="true" /></button><h3>{selectedAgent?.label ?? selected}</h3>{selectedAgent ? <span className="subagent-status" data-status={selectedAgent.status}>{t(STATUS_LABELS[selectedAgent.status])}</span> : null}</div>
       <p className="subagent-detail-model">{selectedAgent ? selectedAgent.modelLabel ?? t("繼承主會話模型") : t("模型資訊未提供")}</p>
       {selectedAgent?.live === false ? <p className="subagent-recorded">{t("已保存的子代理記錄")}</p> : null}
-      {selectedAgent?.controlReason ? <p className="subagent-control-reason">{selectedAgent.controlReason}</p> : null}
+      {selectedAgent?.controlReason ? <p className="subagent-control-reason">{controlGuidance ? t(controlGuidance) : selectedAgent.controlReason}</p> : null}
       {selectedAgent?.error ? <p role="alert" className="notice error-text">{selectedAgent.error}</p> : null}
       {!selectedAgent ? <p role="status" className="notice">{t("子代理暫時不可用")}</p> : null}
       {displayedError !== undefined ? <p role="alert" className="notice error-text">{t("讀取子代理記錄失敗")}：{displayedError}<button type="button" className="link-button" onClick={() => { void readHistory(selected) }}>{t("重試")}</button></p> : null}

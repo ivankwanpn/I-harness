@@ -22,7 +22,9 @@ SetCompressorDictSize 32
   !include "${TEST_HOOKS}"
 !endif
 
-!define APP_NAME "I-harness Desktop"
+!ifndef APP_NAME
+  !define APP_NAME "I-harness Desktop"
+!endif
 !define INSTALL_MARKER ".i-harness-desktop-install.ini"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\I-harness Desktop"
 !ifdef TEST_ROOT
@@ -111,7 +113,8 @@ Function ${PREFIX}ValidateLocation
   StrCpy $INSTDIR $0
   ${GetFileName} "$INSTDIR" $0
   ${If} $0 != "${APP_NAME}"
-    !insertmacro Fail "Choose an installation folder named ${APP_NAME}. Drive roots and shared parent folders cannot be used. Received: $INSTDIR (folder: $0)" 2
+  ${AndIf} $0 != "I-harness Desktop"
+    !insertmacro Fail "Choose an installation folder named ${APP_NAME}, or the existing I-harness Desktop folder for an upgrade. Drive roots and shared parent folders cannot be used. Received: $INSTDIR (folder: $0)" 2
   ${EndIf}
   StrCpy $1 "$INSTDIR"
   location_ancestor:

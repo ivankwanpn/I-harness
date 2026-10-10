@@ -1,0 +1,7 @@
+.browser-pane .browser-tabs { gap: .286rem; padding: .286rem; }
+.browser-pane .browser-tabs [role="tab"] { min-width: 0; max-width: 12rem; padding: .429rem .714rem; }
+.browser-pane .browser-toolbar { flex-wrap: wrap; gap: .286rem; padding: .429rem; }
+.browser-pane .browser-toolbar input { flex: 1 1 9rem; min-width: 0; }
+.browser-pane .browser-toolbar .oc-button { flex: 0 0 auto; min-height: 2.143rem; }
+.browser-pane .browser-state { margin: 0; padding: 1.143rem; color: var(--ih-muted); font-size: .929rem; line-height: 1.6; }
+.browser-pane .browser-error { display: flex; align-items: center; gap: .571rem; color: var(--ih-control-danger); }

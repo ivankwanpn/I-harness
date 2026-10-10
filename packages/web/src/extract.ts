@@ -35,7 +35,8 @@ export async function readBodyLimited(res: Response, maxBytes: number): Promise<
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
-    chunks.push(value)
+    const remaining = maxBytes - total
+    chunks.push(value.subarray(0, remaining))
     total += value.length
     if (total > maxBytes) {
       await reader.cancel()

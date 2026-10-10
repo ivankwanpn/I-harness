@@ -4,6 +4,7 @@ import { CircleGauge } from "lucide-react"
 import type { SessionContextState } from "@i-harness/sdk"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
+import { listenForegroundEscape } from "../design/foreground-escape.ts"
 
 /** A read-only estimate from the backend's token meter, loaded only on demand. */
 export function ContextUsage({ bridge, workspaceId, sessionId }: { bridge: DesktopBridge; workspaceId: string; sessionId: string }) {
@@ -14,6 +15,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId }: { bridge: Deskt
   const [open, setOpen] = useState(false)
   const [state, setState] = useState<SessionContextState>()
   const [error, setError] = useState<string>()
+  const [retry, setRetry] = useState(0)
   const [placement, setPlacement] = useState({ right: 24, bottom: 72 })
   useLayoutEffect(() => {
     if (!open) return
@@ -25,10 +27,9 @@ export function ContextUsage({ bridge, workspaceId, sessionId }: { bridge: Deskt
     panel.current?.focus()
     window.addEventListener("resize", position)
     const dismiss = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false) }
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setOpen(false); trigger.current?.focus() } }
+    const removeEscape = listenForegroundEscape(panel.current, () => { setOpen(false); trigger.current?.focus() })
     document.addEventListener("pointerdown", dismiss)
-    document.addEventListener("keydown", escape)
-    return () => { window.removeEventListener("resize", position); document.removeEventListener("pointerdown", dismiss); document.removeEventListener("keydown", escape) }
+    return () => { window.removeEventListener("resize", position); document.removeEventListener("pointerdown", dismiss); removeEscape() }
   }, [open])
   useEffect(() => {
     if (!open) return
@@ -36,7 +37,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId }: { bridge: Deskt
     setState(undefined); setError(undefined)
     void bridge.request({ kind: "session/context", workspaceId, sessionId }).then((value) => { if (active) setState(value as SessionContextState) }).catch((reason: unknown) => { if (active) setError(reason instanceof Error ? reason.message : String(reason)) })
     return () => { active = false }
-  }, [bridge, workspaceId, sessionId, open])
+  }, [bridge, workspaceId, sessionId, open, retry])
   const ready = state?.kind === "ready" ? state : undefined
   const roleTokens = ready?.roleTokens
   const percent = ready ? (ready.estimatedTokens / ready.contextWindow * 100).toFixed(1) : undefined
@@ -45,7 +46,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId }: { bridge: Deskt
     <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-expanded={open} aria-controls={open ? panelId : undefined} title={t("上下文容量")} onClick={() => setOpen((value) => !value)}><CircleGauge size={17} /></button>
     {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover" style={placement} role="dialog" aria-label={t("上下文容量")}>
       <strong>{t("估算上下文容量")}</strong>
-      {error ? <p role="alert">{error}</p> : ready ? <>
+      {error ? <div><p role="alert">{error}</p><button type="button" onClick={() => setRetry(value => value + 1)}>{t("重試")}</button></div> : ready ? <>
         <p>{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({percent}%)</p>
         <progress max={ready.contextWindow} value={Math.min(ready.estimatedTokens, ready.contextWindow)} aria-label={t("估算已用 Token")} />
         {roleTokens ? <div className="context-usage-breakdown" aria-label={t("訊息來源")}>

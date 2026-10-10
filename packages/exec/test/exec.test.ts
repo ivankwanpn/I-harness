@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext } from "@i-harness/core-plugin"
-import { registerExec, type ExecService } from "../src/index.ts"
-import { SandboxUnavailableError, type SandboxProvider, type SandboxPolicy } from "@i-harness/sandbox"
+import { registerExec, withExecCallerScope, type ExecService } from "../src/index.ts"
+import { SandboxUnavailableError, type SandboxProvider } from "@i-harness/sandbox"
 
 // Poll-wait helper: avoids raw fixed sleeps (flake-prone under parallel load).
 async function waitForStatus(exec: ExecService, jobId: string, pred: (status: string) => boolean, timeoutMs = 5000): Promise<void> {
@@ -43,19 +43,24 @@ describe("exec service", () => {
     const exec = registerExec(createContext())
     const controller = new AbortController()
     const started = Date.now()
-    // run() spawns + registers the abort listener synchronously, so schedule
-    // the abort right after and await the promise.
+    let readiness = ""
+    // Admission is asynchronous. Abort only after the real child is running,
+    // so this assertion covers cancellation rather than preparation rollback.
     const pending = exec.run({
-      argv: [process.execPath, "-e", "setTimeout(()=>{}, 60000)"],
+      argv: [process.execPath, "-e", "console.log('ABORT_READY');setTimeout(()=>{}, 60000)"],
       abortSignal: controller.signal,
-    })
-    setTimeout(() => controller.abort(), 200)
-    const result = await pending
-    const elapsed = Date.now() - started
-    expect(elapsed).toBeLessThan(10_000)
-    expect(result.exitCode).not.toBe(0)
-    // An abort is NOT a timeout — callers must see the real exitCode.
-    expect(result.timedOut).toBe(false)
+    }, { stream: { maxBytes: 1024, onStdout: chunk => {
+      readiness += chunk.toString()
+      if (readiness.includes("ABORT_READY")) controller.abort()
+    } } })
+    try {
+      const result = await pending
+      const elapsed = Date.now() - started
+      expect(elapsed).toBeLessThan(10_000)
+      expect(result.exitCode).not.toBe(0)
+      // An abort is NOT a timeout — callers must see the real exitCode.
+      expect(result.timedOut).toBe(false)
+    } finally { await exec.dispose() }
   }, 10_000)
 
   it("aborts immediately when the signal is already aborted before spawn", async () => {
@@ -86,7 +91,9 @@ describe("exec service", () => {
 describe("exec background jobs", () => {
   it("runBackground returns immediately and accumulates output", async () => {
     const exec = registerExec(createContext())
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('done'), 100)"] })
+    const launch = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>console.log('done'), 100)"] })
+    expect(launch).toBeInstanceOf(Promise)
+    const { jobId } = await launch
     expect(jobId).toMatch(/^bash-\d+$/)
     expect(exec.getOutput(jobId).status).toBe("running")
     await waitForStatus(exec, jobId, (s) => s === "completed")
@@ -94,15 +101,20 @@ describe("exec background jobs", () => {
     expect(view.status).toBe("completed")
     expect(view.stdout.trim()).toBe("done")
     expect(view.exitCode).toBe(0)
+    expect(view.root?.exitCode).toBe(0)
+    expect(view.settlement?.kind).toBe("settled")
+    expect(view.receipt?.owner.sessionId).toBe(view.owner)
   }, 10_000)
 
   it("killJob cancels a running job and marks it killed", async () => {
     const exec = registerExec(createContext())
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
-    expect(exec.killJob(jobId)).toBe("cancellation-requested")
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] })
+    const cancellation = exec.killJob(jobId)
+    expect(cancellation).toBeInstanceOf(Promise)
+    expect(await cancellation).toBe("cancellation-requested")
     await waitForStatus(exec, jobId, (s) => s === "killed")
     expect(exec.getOutput(jobId).status).toBe("killed")
-    expect(exec.killJob(jobId)).toBe("already-finished")
+    expect(await exec.killJob(jobId)).toBe("already-finished")
   }, 10_000)
 
   it("getOutput for unknown job throws", () => {
@@ -112,7 +124,7 @@ describe("exec background jobs", () => {
 
   it("listJobs enumerates running and finished jobs", async () => {
     const exec = registerExec(createContext())
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 200)"] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 200)"] })
     const ids = exec.listJobs().map((j) => j.id)
     expect(ids).toContain(jobId)
     expect(exec.listJobs().find((j) => j.id === jobId)!.status).toBe("running")
@@ -124,7 +136,7 @@ describe("exec background jobs", () => {
     const exec = registerExec(createContext())
     // 'late' is far enough out that the job is guaranteed still running when
     // the 'early' chunk becomes observable, even under parallel load.
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", "console.log('early'); setTimeout(()=>console.log('late'), 1000)"] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", "console.log('early'); setTimeout(()=>console.log('late'), 1000)"] })
     await waitForStatus(exec, jobId, () => exec.getOutput(jobId).stdout.includes("early"))
     const view = exec.getOutput(jobId)
     expect(view.status).toBe("running")
@@ -146,7 +158,7 @@ describe("exec background jobs", () => {
     const script = "process.stdout.write('A\\r');setTimeout(()=>process.stdout.write('\\nB'),150)"
     const foreground = await exec.run({ argv: [process.execPath, "-e", script] })
     expect(foreground.stdout).toBe("A\nB") // the pre-existing foreground contract
-    const { jobId } = exec.runBackground({ argv: [process.execPath, "-e", script] })
+    const { jobId } = await exec.runBackground({ argv: [process.execPath, "-e", script] })
     await waitForStatus(exec, jobId, (s) => s === "completed")
     // RED before the fix: "A\r\nB" — measured. The job view is what job_output
     // renders to the model, so this is model-visible, not internal.
@@ -206,112 +218,86 @@ describe("exec foreground promotion (W10)", () => {
   }, 10_000)
 })
 
-describe("exec sandbox", () => {
-  const policy: SandboxPolicy = { mode: "read-only", workspaceRoot: "/" }
+describe("exec backend admission", () => {
+  const policy = { mode: "read-only" as const, workspaceRoot: process.cwd() }
 
-  it("confines argv when a provider AND a per-command policy exist", async () => {
-    // Portable "confiner": re-exec the original argv under process.execPath. It
-    // stands in for bwrap/ACL so the test runs on any host (incl. win32).
-    const wrapper = "const{spawn}=require('node:child_process');const c=spawn(process.argv[1],process.argv.slice(2),{stdio:'inherit'});c.on('error',()=>process.exit(1));c.on('exit',(code)=>process.exit(code??1));"
-    const provider: SandboxProvider = {
-      confine(argv, _policy) {
-        return {
-          argv: [process.execPath, "-e", wrapper, ...argv],
-          enforcement: "full",
-          denialSignatures: ["read-only file system"],
-          runnerFailureRules: [],
-        }
-      },
-    }
+  it("does not let an argv-only provider bypass the selected transport backend", async () => {
+    const provider: SandboxProvider = { confine() { throw new Error("argv provider must never launch") } }
     const exec = registerExec(createContext(), { sandbox: provider })
-    const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('ok')"], sandbox: policy })
-    expect(result.stdout).toBe("ok")
+    if (process.platform === "win32") {
+      await expect(exec.run({ argv: [process.execPath, "-e", ""], sandbox: policy })).rejects.toThrow(SandboxUnavailableError)
+    }
   })
 
-  it("throws when cmd.sandbox is set but the service has no provider (fail-closed)", async () => {
-    const exec = registerExec(createContext()) // no provider
-    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(/no sandbox provider/)
-  })
-
-  it("runs unconfined when no policy (existing behavior)", async () => {
+  it("uses the native unrestricted backend when sandbox is unset", async () => {
     const exec = registerExec(createContext())
     const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('plain')"] })
     expect(result.stdout).toBe("plain")
   })
 
-  it("danger-full-access policy runs unconfined (passthrough)", async () => {
-    const exec = registerExec(createContext()) // no provider
-    const result = await exec.run({ argv: [process.execPath, "-e", "process.stdout.write('full')"], sandbox: { mode: "danger-full-access", workspaceRoot: "/" } })
-    expect(result.stdout).toBe("full")
+  it("preserves an explicitly empty environment at the backend seam", async () => {
+    const exec = registerExec(createContext())
+    const name = "IH_EXEC_TEST_INHERITED_ONLY"
+    process.env[name] = "present"
+    try {
+      const argv = process.platform === "win32"
+        ? [process.env.ComSpec ?? "C:/Windows/System32/cmd.exe", "/d", "/c", `if defined ${name} (echo present) else (echo absent)`]
+        : ["/bin/sh", "-c", `if [ -z \"$${name}\" ]; then echo absent; else echo present; fi`]
+      const result = await exec.run({ argv, env: {} })
+      expect(result.stdout.trim(), JSON.stringify(result)).toBe("absent")
+    } finally { delete process.env[name] }
   })
 
-  it("runner failure (nonzero exit + fatal signature) → SandboxUnavailableError (I3)", async () => {
-    // Simulates bwrap's exec-refusal shape: the runner exits 125 with
-    // "bwrap: failed to ..." (user namespaces blocked). The provider confines
-    // to `sh -c` with the exact stderr; exec must translate it to
-    // SandboxUnavailableError instead of returning an ordinary failure.
-    const provider: SandboxProvider = {
-      confine(argv, _policy) {
-        return {
-          argv: [process.execPath, "-e", `console.error("bwrap: failed to create namespace: Permission denied"); process.exit(125)`, ...argv],
-          enforcement: "full",
-          denialSignatures: ["read-only file system"],
-          runnerFailureRules: [{ allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] }],
-        }
-      },
+  it("binds a trusted caller and its parent into a committed transport receipt", async () => {
+    const exec = registerExec(createContext())
+    const owner = { sessionId: "child-transport", parentSessionId: "parent-transport" }
+    const execution = await withExecCallerScope(owner, () => exec.launchTransport({
+      argv: [process.execPath, "-e", "process.stdout.write('owned')"],
+      cwd: process.cwd(), transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt",
+    }))
+    const chunks: Buffer[] = []
+    await execution.handle.io.endInput()
+    for await (const frame of execution.handle.io.output) chunks.push(Buffer.from(frame.data))
+    expect(Buffer.concat(chunks).toString()).toBe("owned")
+    expect(execution.handle.receipt.owner).toEqual(owner)
+    expect((await execution.handle.settled).kind).toBe("settled")
+    await exec.dispose()
+  })
+
+  it("does not expose another scoped caller's background job", async () => {
+    const exec = registerExec(createContext())
+    const ownerA = { sessionId: "owner-a" }, ownerB = { sessionId: "owner-b" }
+    const { jobId } = await withExecCallerScope(ownerA, () => exec.runBackground({ argv: [process.execPath, "-e", "setTimeout(()=>{}, 5000)"] }))
+    try {
+      await withExecCallerScope(ownerB, async () => {
+        expect(exec.listJobs()).toEqual([])
+        expect(() => exec.getOutput(jobId)).toThrow(/unknown job/i)
+        await expect(exec.killJob(jobId)).rejects.toThrow(/unknown job/i)
+      })
+      expect(exec.listJobs()).toEqual([])
+      expect(() => exec.getOutput(jobId)).toThrow(/unknown job/i)
+      await expect(exec.killJob(jobId)).rejects.toThrow(/unknown job/i)
+    } finally {
+      await withExecCallerScope(ownerA, () => exec.killJob(jobId))
+      await exec.dispose()
     }
-    const exec = registerExec(createContext(), { sandbox: provider })
-    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(SandboxUnavailableError)
-    await expect(exec.run({ argv: ["echo", "hi"], sandbox: policy })).rejects.toThrow(/bwrap: failed to/)
   })
 
-  it("nonzero exit WITHOUT a matching runner-failure rule stays an ordinary failure", async () => {
-    const provider: SandboxProvider = {
-      confine(argv, _policy) {
-        // Exit 125 but no fatal signature → NOT a runner failure.
-        return {
-          argv: [process.execPath, "-e", "console.error('command body failed'); process.exit(125)", ...argv],
-          enforcement: "full",
-          denialSignatures: ["read-only file system"],
-          runnerFailureRules: [{ allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] }],
-        }
-      },
-    }
-    const exec = registerExec(createContext(), { sandbox: provider })
-    const result = await exec.run({ argv: ["echo", "hi"], sandbox: policy })
-    expect(result.exitCode).toBe(125)
-    expect(result.stderr).toContain("command body failed")
-  })
-
-  // The refusal has to say WHY, because the two reasons need OPPOSITE advice:
-  // with no backend at all a wider mode is pointless, while a backend that
-  // merely cannot run THIS program is exactly what a wider mode fixes. `kind`
-  // is that discriminator; the shell reads it to pick the right sentence.
-  it("a classified confined failure names the reason: the COMMAND never ran", async () => {
-    const provider: SandboxProvider = {
-      confine(argv, _policy) {
-        return {
-          argv: [process.execPath, "-e", `console.error("*** fatal error - couldn't create signal pipe, Win32 error 5"); process.exit(3221225794)`, ...argv],
-          enforcement: "partial",
-          denialSignatures: [],
-          runnerFailureRules: [{ allowedExitCodes: [3221225794], fatalSignatures: ["couldn't create signal pipe"] }],
-        }
-      },
-    }
-    const exec = registerExec(createContext(), { sandbox: provider })
-    const err = await exec.run({ argv: ["echo", "hi"], sandbox: { mode: "read-only", workspaceRoot: process.cwd() } })
-      .then(() => undefined, (e: unknown) => e)
-    expect(err).toBeInstanceOf(SandboxUnavailableError)
-    expect((err as SandboxUnavailableError).kind).toBe("command-not-run")
-    // The detail is the only thing that explains the death; it must survive.
-    expect((err as SandboxUnavailableError).message).toContain("couldn't create signal pipe")
-  })
-
-  it("no composed backend names the other reason: there is no backend for ANY mode", async () => {
-    const exec = registerExec(createContext()) // no provider
-    const err = await exec.run({ argv: ["echo", "hi"], sandbox: { mode: "read-only", workspaceRoot: process.cwd() } })
-      .then(() => undefined, (e: unknown) => e)
-    expect(err).toBeInstanceOf(SandboxUnavailableError)
-    expect((err as SandboxUnavailableError).kind).toBe("no-backend")
+  it("settles a public transport cancellation only for its bound owner", async () => {
+    const exec = registerExec(createContext())
+    const ownerA = { sessionId: "transport-a" }, ownerB = { sessionId: "transport-b" }
+    const execution = await withExecCallerScope(ownerA, () => exec.launchTransport({
+      argv: [process.execPath, "-e", "setInterval(()=>{}, 1000)"], cwd: process.cwd(),
+      transport: "pipe", lifetime: "complete-tree", argumentEncoding: "crt",
+    }))
+    const drain = (async () => { for await (const _frame of execution.handle.io.output) { /* drain */ } })()
+    await execution.handle.io.endInput()
+    await withExecCallerScope(ownerB, async () => {
+      await expect(exec.cancelExecution(execution.id, "cancelled")).rejects.toThrow(/unknown execution/i)
+    })
+    const settlement = await withExecCallerScope(ownerA, () => exec.cancelExecution(execution.id, "cancelled"))
+    expect(settlement.kind).toBe("settled")
+    await drain
+    await exec.dispose()
   })
 })

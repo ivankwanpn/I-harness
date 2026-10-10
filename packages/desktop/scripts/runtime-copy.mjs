@@ -21,11 +21,14 @@ export function runtimePackageRoot(name, fromDir) {
 
 /** Package payload only; dependency graph ownership belongs to the bundle. */
 export function copyRuntimePackage(source, target) {
+  const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"))
+  const declared = manifest.name?.startsWith("@i-harness/") && Array.isArray(manifest.files) ? manifest.files : undefined
   cpSync(source, target, {
     recursive: true, dereference: true,
     filter(path) {
       const parts = relative(source, path).split(sep)
-      return !parts.some((part) => ["node_modules", ".git", ".vite", "test", "tests"].includes(part))
+      if (parts.some((part) => ["node_modules", ".git", ".vite", ".tmp", "target", "test", "tests", "__pycache__"].includes(part))) return false
+      return !declared || parts[0] === "" || parts[0] === "package.json" || declared.includes(parts[0])
     },
   })
 }

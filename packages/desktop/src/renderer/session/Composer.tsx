@@ -2,13 +2,14 @@ import { useEffect, useLayoutEffect, useId, useState, useSyncExternalStore, useR
 import { createPortal } from "react-dom"
 import { ArrowUp, Square, Plus, FileText, X, ChevronDown, LoaderCircle, Shield, ShieldCheck, ShieldAlert, Check } from "lucide-react"
 import { useText } from "../design/i18n.ts"
+import { listenForegroundEscape } from "../design/foreground-escape.ts"
 import { ComposerSurface } from "../vendor/zcode/ComposerSurface.tsx"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { SlashCommands } from "./SlashCommands.tsx"
 import { readFileReferences, writeFileReferences, subscribeFileReferences } from "./file-reference-drafts.ts"
 import { addImageFiles, readImageDrafts, subscribeImageDrafts, writeImageDrafts } from "./image-drafts.ts"
 import type { ImageInput, SessionModelSelection, SessionModelState } from "@i-harness/sdk"
-import { SessionModelPicker } from "./SessionModelPicker.tsx"
+import { SessionModelPicker, type ModelDirectoryRoute } from "./SessionModelPicker.tsx"
 import { ContextPicker, type PickerKeyboard } from "./ContextPicker.tsx"
 import type { ContextItem, ContextReference } from "@i-harness/desktop-gateway/src/context-picker.ts"
 import type { AgentSettingsState, AgentDefaults } from "@i-harness/desktop-gateway/src/agent-settings.ts"
@@ -185,17 +186,28 @@ export function NewTaskComposer({ bridge, draftRequest, onOpenHistory, onOpenPro
     try { return JSON.parse(rawRead(metadataKey) ?? "{}") } catch { return {} }
   })
   const latest = useRef(metadata)
+  const providerRevision = useUiStore(state => state.providerRevision)
+  const [models, setModels] = useState<ModelDirectoryRoute[]>([])
+  useEffect(() => {
+    let active = true
+    setModels([])
+    void bridge.request({ kind: "desktop/provider/directory", workspaceId }).then(value => {
+      if (active && Array.isArray(value)) setModels(value as ModelDirectoryRoute[])
+    }).catch(() => { /* Unknown capabilities stay disabled until the directory can be read. */ })
+    return () => { active = false }
+  }, [bridge, workspaceId, providerRevision])
   const save = (next: typeof metadata) => { latest.current = next; rawWrite(metadataKey, JSON.stringify(next)); setMetadata(next); publishDraftChange(workspaceId, sessionId) }
   useEffect(() => {
     const changed = (key: string) => { if (key !== metadataKey) return; try { const restored = JSON.parse(rawRead(metadataKey) ?? "{}"); latest.current = restored; setMetadata(restored) } catch {} }
     rawListeners.add(changed); return () => { rawListeners.delete(changed) }
   }, [metadataKey])
   const selected = metadata.selection
-  const model: SessionModelState | undefined = selected ? { status: "ready", providerId: selected.provider, modelId: selected.model, label: selected.model, ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}) } : undefined
+  const declared = models.find(route => route.id === selected?.provider)?.models.find(model => model.id === selected?.model)
+  const model: SessionModelState | undefined = selected ? { status: "ready", providerId: selected.provider, modelId: selected.model, label: selected.model, ...(selected.protocol ? { protocol: selected.protocol } : {}), ...(selected.reasoningEffort ? { reasoningEffort: selected.reasoningEffort } : {}), ...(declared?.inputModalities?.includes("image") ? { imageInput: true } : {}) } : undefined
   return <Composer onOpenHistory={onOpenHistory} onOpenProjectFile={onOpenProjectFile} bridge={bridge} draftRequest={draftRequest} workspaceId={workspaceId} sessionId={sessionId} projectId={projectId} draftSession
     canSend={capabilities["session-create"]?.includes("1") === true && !!selected && capabilities["desktop-input"]?.includes("1") === true && capabilities["desktop-draft-create"]?.includes("1") === true}
     sendReason={!selected ? t("選擇模型") : t("耐久輸入不可用")} running={false} onCancel={() => {}}
-    fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") === true} imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") === true}
+    fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") === true} imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") === true && model?.status === "ready" && model.imageInput === true}
     permissionsEnabled={capabilities["desktop-agent-settings"]?.includes("1")} onWorkflow={onWorkflow} workflowEnabled={capabilities["desktop-workflow"]?.includes("1")} onPermissionsChanged={onPermissionsChanged}
     modelControl={<SessionModelPicker bridge={bridge} workspaceId={workspaceId} current={model} disabled={false} onSelect={async (selection) => save({ ...latest.current, selection })} />}
     onPrompt={async (text, context, images, onAdmitted) => {
@@ -307,10 +319,10 @@ function SessionComposer({
     const options = Array.from(permissionsPanel.current?.querySelectorAll<HTMLButtonElement>("[role=menuitemradio]:not(:disabled)") ?? [])
     if (!permissionsBusy) (permissionsFocus.current === "first" ? options[0] : permissionsFocus.current === "last" ? options.at(-1) : options.find(option => option.getAttribute("aria-checked") === "true") ?? options[0])?.focus()
     const outside = (event: PointerEvent) => { if (!permissionsPanel.current?.contains(event.target as Node) && !trigger?.contains(event.target as Node)) closePermissions(false) }
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { event.preventDefault(); closePermissions() } }
+    const removeEscape = listenForegroundEscape(permissionsPanel.current, () => closePermissions(), () => permissionsLock.current)
     window.addEventListener("resize", position); window.addEventListener("scroll", position, true)
-    document.addEventListener("pointerdown", outside); document.addEventListener("keydown", escape)
-    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); document.removeEventListener("pointerdown", outside); document.removeEventListener("keydown", escape) }
+    document.addEventListener("pointerdown", outside)
+    return () => { window.removeEventListener("resize", position); window.removeEventListener("scroll", position, true); document.removeEventListener("pointerdown", outside); removeEscape() }
   }, [permissionsOpen, workspaceId, effectiveApproval, permissionsBusy])
   async function configurePermissions(patch: Partial<AgentDefaults>) {
     if (!bridge || permissionsLock.current) return
@@ -470,11 +482,12 @@ function SessionComposer({
   }
 
   return (
-    <ComposerSurface onSubmit={() => { void send() }} error={error ?? executionError ?? (!canSend ? sendReason : undefined)}
+    <ComposerSurface onSubmit={() => { void send() }} error={error ?? executionError}
       editor={
       <>
       {contextRefs.length ? <div className="composer-file-references">{contextRefs.map((item, i) => <span className="composer-file-chip" key={JSON.stringify(item)}>{(item.kind === "session" && onOpenHistory) || (item.kind === "file" && onOpenProjectFile) ? <button type="button" className="link-button" onClick={() => item.kind === "session" ? onOpenHistory?.({ workspaceId: item.workspaceId, sessionId: item.sessionId, seq: item.seq }) : onOpenProjectFile?.({ workspaceId: item.workspaceId, path: item.path })}>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</button> : <span>{item.kind === "file" ? `${item.workspaceLabel ?? item.workspaceId}/${item.path}` : `${item.label} · ${item.workspaceId}/${item.sessionId}#${item.seq}`}</span>}<button type="button" aria-label={`移除引用 ${item.label}`} onClick={() => saveContextRefs(contextRefs.filter((_, index) => i !== index))}><X size={12} /></button></span>)}</div> : null}
       {references.length ? <div className="composer-file-references">{references.map((path) => <span key={path} className="composer-file-chip" title={path}><span>{path}</span><button type="button" aria-label={t("移除檔案引用 {path}", { path })} onClick={() => writeFileReferences(workspaceId, sessionId, references.filter((value) => value !== path))}><X size={12} /></button></span>)}</div> : null}
+      {!canSend && sendReason && (hasPayload || sendReason !== t("選擇模型")) ? <small className="muted" role="status">{sendReason}</small> : null}
       {images.length ? <div className="composer-images">{images.map((image) => <span key={image.id} className="composer-image-chip"><img alt="" src={`data:${image.mediaType};base64,${image.dataBase64}`} /><span title={image.name}>{image.name}</span><button type="button" aria-label={t("移除圖片 {name}", { name: image.name ?? "" })} onClick={() => writeImageDrafts(workspaceId, sessionId, images.filter((value) => value.id !== image.id))}><X size={12} /></button></span>)}</div> : null}
       {texts.length ? <div className="composer-file-references">{texts.map((attachment) => <span key={attachment.id} className="composer-file-chip composer-text-chip"><FileText size={14} aria-hidden="true" /><span title={attachment.name}>{attachment.name}</span><button type="button" aria-label={t("移除附件 {name}", { name: attachment.name })} onClick={() => writeTextAttachmentDrafts(workspaceId, sessionId, texts.filter((value) => value.id !== attachment.id))}><X size={12} aria-hidden="true" /></button>{attachment.contentType ? <small title={attachment.contentType}>{documentLabels[attachment.contentType] ?? attachment.contentType}{attachment.bytes !== undefined ? ` · ${attachment.bytes} bytes` : ""}{attachment.truncated ? ` · ${attachmentText("已截斷")}` : ""}</small> : null}{attachment.reason ? <small title={attachment.reason}>{attachment.reason}</small> : null}</span>)}</div> : null}
       {draftRequest && (images.length || texts.length || references.length || contextRefs.length) ? <small className="composer-draft-policy">{attachmentText("未送出附件保留 7 天；本機草稿上限 128 MiB。")}</small> : null}

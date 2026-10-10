@@ -69,6 +69,9 @@ interface ParsedArgs {
   mode: 'read-only' | 'workspace-write'
   writeSids: string[]
   tempWriteSid: string | undefined
+  noTempWrite: boolean
+  windowsHide: boolean
+  argumentEncoding: 'crt' | 'cmd-verbatim'
   command: string
   args: string[]
 }
@@ -79,6 +82,9 @@ function parseArgs(raw: string[]): ParsedArgs {
   let mode: string | undefined
   const writeSids: string[] = []
   let parsedTempWriteSid: string | undefined
+  let noTempWrite = false
+  let windowsHide = false
+  let argumentEncoding: 'crt' | 'cmd-verbatim' = 'crt'
   let index = 0
   for (; index < raw.length; index++) {
     const token = raw[index]
@@ -95,6 +101,18 @@ function parseArgs(raw: string[]): ParsedArgs {
       case '--mode': mode = value; break
       case '--write-sid': writeSids.push(value); break
       case '--temp-write-sid': parsedTempWriteSid = value; break
+      case '--no-temp-write':
+        if (value !== 'true' || noTempWrite) fail('invalid --no-temp-write')
+        noTempWrite = true
+        break
+      case '--windows-hide':
+        if (value !== 'true' || windowsHide) fail('invalid --windows-hide')
+        windowsHide = true
+        break
+      case '--argument-encoding':
+        if (value !== 'crt' && value !== 'cmd-verbatim') fail('invalid --argument-encoding')
+        argumentEncoding = value
+        break
       default: fail(`unknown argument: ${token}`)
     }
   }
@@ -104,7 +122,8 @@ function parseArgs(raw: string[]): ParsedArgs {
   const argv = raw.slice(index)
   const command = argv[0]
   if (command === undefined) fail('missing command after --')
-  return { workspaces, temp, mode, writeSids, tempWriteSid: parsedTempWriteSid, command, args: argv.slice(1) }
+  return { workspaces, temp, mode, writeSids, tempWriteSid: parsedTempWriteSid, noTempWrite, windowsHide,
+    argumentEncoding, command, args: argv.slice(1) }
 }
 
 function requireDirectory(label: string, path: string): void {
@@ -126,7 +145,10 @@ async function main(): Promise<number> {
   if (parsed.mode === 'read-only' && seamManaged) {
     fail('read-only does not accept --write-sid or --temp-write-sid')
   }
-  if (parsed.mode === 'workspace-write' && (parsed.writeSids.length === 0) !== (parsed.tempWriteSid === undefined)) {
+  if (parsed.noTempWrite && (parsed.mode !== 'workspace-write' || parsed.tempWriteSid !== undefined || parsed.writeSids.length === 0)) {
+    fail('--no-temp-write requires workspace-write with workspace SIDs and no temp SID')
+  }
+  if (parsed.mode === 'workspace-write' && !parsed.noTempWrite && (parsed.writeSids.length === 0) !== (parsed.tempWriteSid === undefined)) {
     fail('workspace-write requires --write-sid and --temp-write-sid together')
   }
   if (parsed.mode === 'workspace-write') {
@@ -150,7 +172,9 @@ async function main(): Promise<number> {
     let privateTempSid: string | undefined
     if (parsed.mode === 'workspace-write') {
       writeSids = roots.map(workspaceWriteSid)
-      if (seamManaged) {
+      if (parsed.noTempWrite) {
+        if (parsed.writeSids.length !== writeSids.length || parsed.writeSids.some((sid, index) => sid !== writeSids[index])) fail('--write-sid values do not match --workspace roots')
+      } else if (seamManaged) {
         if (parsed.writeSids.length !== writeSids.length || parsed.writeSids.some((sid, index) => sid !== writeSids[index])) fail('--write-sid values do not match --workspace roots')
         privateTempDir = parsed.temp
         privateTempSid = tempWriteSid(privateTempDir)
@@ -184,6 +208,8 @@ async function main(): Promise<number> {
     const child = sandbox.spawn({
       command: parsed.command,
       args: parsed.args,
+      argumentEncoding: parsed.argumentEncoding,
+      windowsHide: parsed.windowsHide,
       stdio: 'inherit',
     })
     const result = await child.wait()

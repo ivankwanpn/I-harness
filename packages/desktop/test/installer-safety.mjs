@@ -13,7 +13,7 @@ const args = process.argv.slice(2)
 const option = name => args.includes(name) ? args[args.indexOf(name) + 1] : undefined
 const source = option("--app-dir"), nsis = option("--nsis")
 assert(source && nsis, "safety test requires --app-dir and --nsis")
-validatePayload(source)
+const { appName } = validatePayload(source)
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..")
 const token = randomUUID()
 const root = join(repo, ".tmp", `desktop-installer-safety-${token}`)
@@ -91,7 +91,7 @@ for (const [name, control] of [["marker", "FailMarkerBootstrap"], ["uninstaller"
     const location = target(`bootstrap-${name}`)
     controls({ [control]: 1 })
     assert.notEqual(install(old.output, location).status, 0)
-    assert(!existsSync(join(location, "I-harness Desktop.exe")))
+    assert(!existsSync(join(location, appName + '.exe')))
     assert(!existsSync(join(location, "resources/app/out/main/index.js")))
   })
 }
@@ -104,11 +104,11 @@ await check("a second Setup refuses an operation held by the first Setup before 
   const exited = new Promise(done => first.once("exit", done))
   try {
     await ready(join(root, "setup-ready.txt"))
-    assert(!existsSync(join(location, "I-harness Desktop.exe")))
+    assert(!existsSync(join(location, appName + '.exe')))
     assert.notEqual(install(old.output, location).status, 0)
-    assert(!existsSync(join(location, "I-harness Desktop.exe")))
+    assert(!existsSync(join(location, appName + '.exe')))
   } finally { controls({}); await exited }
-  assert(existsSync(join(location, "I-harness Desktop.exe")))
+  assert(existsSync(join(location, appName + '.exe')))
 })
 
 writeFileSync(join(evidence, `safety-${token}.json`), `${JSON.stringify({ root, old, current, results, ownedPids, finishedAt: new Date().toISOString() }, null, 2)}\n`)

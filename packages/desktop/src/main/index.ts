@@ -15,6 +15,9 @@ import { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import { createNotificationHistory } from "./notification-history.ts"
 import { AttachmentDraftStore } from "./attachment-draft-store.ts"
 import { closeDesktopProjectContentSearches } from "./project-content-search.ts"
+import { resolveDesktopProfilePath } from "./profile-path.ts"
+
+app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.getPath("userData"), undefined, app.commandLine.hasSwitch("user-data-dir")))
 
 let catalog: WorkspaceCatalog | undefined
 let runtimes: WorkspaceRuntimeManager | undefined
@@ -72,7 +75,7 @@ app.whenReady().then(() => {
       globalProviders,
       notifications,
       drafts,
-      about: { info: applicationInfo, copy: () => { clipboard.writeText(JSON.stringify(applicationInfo(), null, 2)); return { copied: true } } },
+      about: { info: applicationInfo, copy: async () => { await clipboard.writeText(JSON.stringify(applicationInfo(), null, 2)); return { copied: true } } },
       pickSkill: async () => {
         const result = await dialog.showOpenDialog(window, { properties: ["openFile"], filters: [{ name: "SKILL.md", extensions: ["md"] }] })
         return result.canceled ? undefined : result.filePaths[0]

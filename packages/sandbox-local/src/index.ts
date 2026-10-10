@@ -1,12 +1,18 @@
-import { spawnSync } from "node:child_process"
 import {
   SandboxUnavailableError,
+  assertSandboxCapable,
   type ConfinedArgv,
   type SandboxEnforcement,
   type SandboxPolicy,
   type SandboxProvider,
 } from "@i-harness/sandbox"
-import { bwrapProfileArgs } from "./profiles.ts"
+import { BWRAP_DENIAL_SIGNATURES, BWRAP_RUNNER_FAILURE_RULES, bwrapProfileArgs, probeBwrap } from "./profiles.ts"
+export { probeBwrap } from "./profiles.ts"
+export { createLocalExecutionBackends, type LocalExecutionBackends, type LocalExecutionOptions } from "./execution-backends.ts"
+export { createLegacyWindowsBackend, type LegacyWindowsBackend } from "./windows-legacy.ts"
+export { createPosixExecutionBackend, type PosixExecutionBackend } from "./posix-execution.ts"
+export { readWindowsQualification } from "@i-harness/sandbox-windows-psec"
+export { inspectWslRuntime, listWslDistributions } from "@i-harness/sandbox-wsl"
 
 export interface LocalSandboxConfig {
   runnerCommand?: string[]
@@ -25,7 +31,7 @@ const STATIC_ENFORCEMENT: Record<Runner, SandboxEnforcement> = {
 }
 
 const DENIAL_SIGNATURES: Record<Runner, readonly string[]> = {
-  bwrap: ["read-only file system"],
+  bwrap: BWRAP_DENIAL_SIGNATURES,
   "windows-acl": ["access is denied", "access to the path", "permission denied"],
 }
 
@@ -41,18 +47,17 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
       }
     }
     const backend = config.windowsAclBackend
-    return {
+    const provider: SandboxProvider = {
       // M22: honest capability declaration — the Windows ACL backend has no
       // read isolation (WRITE_RESTRICTED is read-visible on Windows).
       capabilities: { readIsolation: false },
       confine(argv, policy) {
-        if (policy.requireReadIsolation === true) {
-          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
-        }
+        assertSandboxCapable(policy, provider)
         // On win32, delegate to the injected backend.
         return { ...backend.confine(argv, policy), enforcement: STATIC_ENFORCEMENT["windows-acl"] }
       },
     }
+    return provider
   }
 
   if (process.platform === "linux") {
@@ -64,7 +69,7 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
         },
       }
     }
-    return {
+    const provider: SandboxProvider = {
       // M22: honest capability declaration — bwrap isolates the filesystem
       // for writes but does not hide/read-block filesystem content, so it has
       // no read isolation either.
@@ -74,19 +79,16 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
         if (runner[0] !== "bwrap") {
           throw new SandboxUnavailableError(policy.mode, `runner override must be bwrap (got ${runner[0]})`)
         }
-        if (policy.requireReadIsolation === true) {
-          throw new SandboxUnavailableError(policy.mode, "local sandbox backends provide no read isolation (capability: none)")
-        }
+        assertSandboxCapable(policy, provider)
         return {
           argv: [...runner, ...bwrapProfileArgs(policy), "--", ...argv],
           enforcement: STATIC_ENFORCEMENT.bwrap,
           denialSignatures: DENIAL_SIGNATURES.bwrap,
-          runnerFailureRules: [
-            { allowedExitCodes: [125], fatalSignatures: ["bwrap: failed to"] },
-          ],
+          runnerFailureRules: BWRAP_RUNNER_FAILURE_RULES,
         }
       },
     }
+    return provider
   }
 
   // Other platforms: fail closed.
@@ -100,11 +102,3 @@ export function createLocalSandbox(config: LocalSandboxConfig = {}): SandboxProv
 // M16 final-review (I2): exported so tests/e2e guards probe the SAME gate
 // that createLocalSandbox actually uses (bwrap --version alone passes on hosts
 // where user namespaces are blocked, so the e2e would run RED instead of SKIP).
-export function probeBwrap(timeoutMs?: number): boolean {
-  // spawnSync is correct here: a one-shot bounded probe, not a long-lived process.
-  const probe = spawnSync("bwrap", [...bwrapProfileArgs({ mode: "read-only", workspaceRoot: "/" }), "--", "true"], {
-    timeout: timeoutMs ?? 5000,
-    stdio: "ignore",
-  })
-  return probe.status === 0
-}

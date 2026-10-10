@@ -46,6 +46,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.input) capabilities["desktop-input"] = ["1"]
     if (handlers.workflow) capabilities["desktop-workflow"] = ["1"]
     if (handlers.agentShell) capabilities["desktop-agent-shell"] = ["1"]
+    if (handlers.wslSettings) capabilities["desktop-wsl-settings"] = ["1"]
     if (handlers.resources) capabilities["desktop-resources"] = ["1"]
     if (handlers.resources?.write) capabilities["desktop-resource-authoring"] = ["1"]
     if (handlers.mcp) capabilities["desktop-mcp"] = ["1"]
@@ -353,6 +354,16 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
+      if (["desktop/wsl/state", "desktop/wsl/diagnose", "desktop/wsl/repair"].includes(message.method)) {
+        try {
+          if (!handlers.wslSettings) throw new Error("WSL settings unavailable")
+          const params = asRecord(message.params)
+          if (params && Object.keys(params).length) throw new Error("Unknown WSL settings action parameter")
+          const result = message.method.endsWith("/state") ? await handlers.wslSettings.state() : message.method.endsWith("/diagnose") ? await handlers.wslSettings.diagnose() : await handlers.wslSettings.repair()
+          send(makeSuccess(message.id, result))
+        } catch (error) { send(makeFailure(message.id, INVALID_REQUEST, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if ((message.method === "desktop/agent-settings/state" || message.method === "desktop/agent-settings/configure") && handlers.agentSettings) {
         try { send(makeSuccess(message.id, message.method.endsWith("/state") ? await handlers.agentSettings.state() : await handlers.agentSettings.configure(message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
@@ -380,7 +391,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         return
       }
       if (message.method.startsWith("desktop/terminal/") && handlers.terminal) {
-        try { send(makeSuccess(message.id, handlers.terminal.request(message.method, message.params))) }
+        try { send(makeSuccess(message.id, await handlers.terminal.request(message.method, message.params))) }
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }

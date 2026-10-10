@@ -19,12 +19,13 @@ it("opens an absolute external file through a separate read-only target callback
   expect(targets).toEqual([{ reference: { path: "C:/reference/outside.md", readonly: true } }])
 })
 
-it("reveals the actual invocation as well as its result", () => {
+it("shows a command summary and reveals its recorded arguments separately from the result", () => {
   render(<ToolActivity name="bash" args={{ command: "pwd" }} output="D:/playground" />)
-  expect(screen.queryByText(/pwd/)).toBeNull()
+  expect(screen.getByText("pwd")).toBeTruthy()
   fireEvent.click(screen.getByRole("button", { name: "工具詳情 bash" }))
-  expect(screen.getByText(/pwd/)).toBeTruthy()
   expect(screen.getByText("D:/playground")).toBeTruthy()
+  fireEvent.click(screen.getByText("原始記錄"))
+  expect(screen.getByText(/"command": "pwd"/)).toBeTruthy()
 })
 
 it("does not serialize tool output until details are expanded", () => {

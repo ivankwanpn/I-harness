@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Build a runnable, unsigned portable distribution without extra build tooling:
-//   release/I-harness Desktop/               unpacked app (exe + resources/app + resources/gateway)
-//   release/I-harness-Desktop-<version>.zip  the same folder, zipped
+//   release/I-harness/                unpacked app (exe + resources/app + resources/gateway)
+//   release/I-harness-<version>.zip    the same folder, zipped
 //
 // Usage: node scripts/package-app.mjs; IH_DESKTOP_RELEASE_LABEL selects a
 // sibling release folder when an earlier portable app is still open.
@@ -11,6 +11,9 @@ import { createRequire } from "node:module"
 import { dirname, join, resolve } from "node:path"
 import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
+import { verifyNativeAssets } from "../../../scripts/runtime-native-assets.mjs"
+import { verifyWslAssets } from "../../../scripts/runtime-wsl-assets.mjs"
+import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const packageRoot = resolve(here, "..")
@@ -20,7 +23,7 @@ const releaseLabel = process.env.IH_DESKTOP_RELEASE_LABEL ?? "release"
 if (!/^release(?:-[a-z0-9-]+)?$/.test(releaseLabel)) throw new Error("invalid release folder label")
 const releaseDir = resolve(packageRoot, releaseLabel)
 if (dirname(releaseDir) !== packageRoot) throw new Error("release folder escaped the Desktop package")
-const appName = "I-harness Desktop"
+const appName = "I-harness"
 const appDir = join(releaseDir, appName)
 
 for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", "pdf.worker.mjs", "cmaps", "standard_fonts", "wasm", "node_modules/@napi-rs/canvas"].map((part) => join(outDir, "main", part))]) {
@@ -28,6 +31,8 @@ for (const required of [outDir, gatewayDir, ...["attachment-reader-worker.mjs", 
 }
 
 const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"))
+verifyNativeAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-windows-psec"))
+verifyWslAssets(join(gatewayDir, "node_modules/@i-harness/sandbox-wsl/worker"))
 const electronDist = dirname(createRequire(join(packageRoot, "package.json"))("electron"))
 const electronExe = join(electronDist, "electron.exe")
 if (!existsSync(electronExe)) throw new Error(`electron.exe not found at ${electronExe}`)
@@ -52,8 +57,12 @@ writeFileSync(join(resources, "app", "package.json"), `${JSON.stringify({
 }, null, 2)}\n`)
 
 cpSync(gatewayDir, join(resources, "gateway"), { recursive: true, dereference: true })
+// Main-process imports also load Koffi; its loader must retain its package layout.
+for (const name of ["koffi", `@koromix/koffi-${process.platform}-${process.arch}`]) {
+  copyRuntimePackage(runtimePackageRoot(name, join(gatewayDir, "cli")), join(resources, "app/node_modules", ...name.split("/")))
+}
 
-const zipPath = join(releaseDir, `I-harness-Desktop-${manifest.version}.zip`)
+const zipPath = join(releaseDir, `I-harness-${manifest.version}.zip`)
 const zip = spawnSync("powershell.exe", [
   "-NoProfile",
   "-Command",

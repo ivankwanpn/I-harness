@@ -1,6 +1,5 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react"
-import { createPortal } from "react-dom"
-import { ArrowDown, Brain, X } from "lucide-react"
+import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ArrowDown, Brain } from "lucide-react"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
@@ -12,22 +11,41 @@ import { workStages, type WorkItem } from "./work-stages.ts"
 import { ChevronRight } from "lucide-react"
 import { useText } from "../design/i18n.ts"
 import type { FileNavigation } from "./file-navigation.ts"
+import { OutputBlock } from "./OutputBlock.tsx"
+import { RecordedCodeActivity } from "./RecordedCodeActivity.tsx"
+import { SettingsDialog } from "../settings/SettingsDialog.tsx"
+import { MessageActions } from "./MessageActions.tsx"
+import { useToolText } from "./tool-text.ts"
+import "./timeline-polish.css"
 
 const MarkdownMessage = memo(function MarkdownMessage({ text }: { text: string }) {
   const t = useText()
+  const toolText = useToolText()
   return <Markdown remarkPlugins={[remarkGfm]} components={{
     a: ({ children, href }) => <a href={href} target="_blank" rel="noreferrer">{children}</a>,
     img: ({ alt }) => <span className="muted">[{t("圖片")}: {alt}]</span>,
+    pre: ({children}) => {
+      const code = Children.toArray(children).find(child => isValidElement<{children?:ReactNode;className?:string}>(child))
+      if (!isValidElement<{children?:ReactNode;className?:string}>(code) || typeof code.props.children !== "string") return <pre>{children}</pre>
+      const language = code.props.className?.match(/language-([^\s]+)/)?.[1]
+      return <OutputBlock label={toolText("程式碼","Code")} text={code.props.children} language={language} className="timeline-code" />
+    },
   }}>{text}</Markdown>
 })
 
 function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { row: WorkItem; open: Map<string, boolean>; toggle(id: string): void; page: number; setPage(page: number): void; navigation?: FileNavigation; onPreview(preview: { src: string; name: string }): void }) {
   const t = useText()
-  if (row.kind === "work-stage") { const expanded = open.get(row.id) ?? row.active; return <button type="button" className="work-stage-heading" aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button> }
-  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} />
+  const toolText = useToolText()
+  if (row.kind === "work-stage") {
+    const expanded = open.get(row.id) ?? row.active
+    const count = `${row.count} ${toolText("項活動",row.count===1?"activity":"activities")}`
+    const note = row.hasErrors ? toolText("部分活動未完成","Some activities were not completed") : undefined
+    return <button type="button" className="work-stage-heading" aria-label={t("工作過程")} aria-description={`${count}${note?` · ${note}`:""}`} aria-expanded={expanded} onClick={() => toggle(row.id)}>{t("工作過程")}<span className="work-stage-meta" aria-hidden="true">{count}{note?<span className="work-stage-incomplete">{note}</span>:null}</span><ChevronRight size={14} className={expanded ? "rotate-90" : ""} /></button>
+  }
+  if (row.kind === "activity-group") return <ActivityGroup row={row} page={page} setPage={setPage} expanded={open.get(row.id) ?? row.rows.some((tool) => open.get(tool.id) === true)} isOpen={(id) => open.get(id) === true} toggle={toggle} navigation={navigation} onPreview={onPreview} />
   if (row.kind === "message") {
     return <div className={`timeline-message timeline-${row.role}`}>
-      {row.role === "assistant" ? <MarkdownMessage text={row.text} /> : row.text}
+      {row.role === "assistant" ? <><MarkdownMessage text={row.text} /><MessageActions text={row.text}/></> : row.text}
       {row.role === "user" && row.images?.length ? <div className="timeline-user-images">{row.images.map((item, index) => {
         const name = item.name || `${t("圖片")} ${index + 1}`
         const src = `data:${item.mediaType};base64,${item.dataBase64}`
@@ -42,9 +60,10 @@ function RowView({ row, open, toggle, page, setPage, navigation, onPreview }: { 
   }
   if (row.kind === "other") {
     const expanded = open.get(row.id) ?? false
+    if (row.codeActivity) return <RecordedCodeActivity event={row.codeActivity} expanded={expanded} onToggle={() => toggle(row.id)} onPreview={onPreview} />
     return row.detail ? <details className={`timeline-other muted${row.label === "reasoning" ? " timeline-reasoning" : ""}`} open={expanded} onToggle={(event) => { if (event.currentTarget.open !== expanded) toggle(row.id) }}><summary>{row.label === "reasoning" ? <Brain size={14} aria-hidden="true" /> : null}{row.title ?? activityLabel(row.label, t)}</summary>{row.label === "reasoning" ? <div className="timeline-reasoning-body"><MarkdownMessage text={row.detail} /></div> : <pre className="tool-output">{row.detail}</pre>}</details> : <p className="timeline-other muted">{row.title ?? activityLabel(row.label, t)}</p>
   }
-  return <ToolActivity name={row.name} args={row.args} output={row.output} resultReceived={row.resultReceived} isError={row.isError} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} />
+  return <ToolActivity name={row.name} args={row.args} output={row.output} resultReceived={row.resultReceived} isError={row.isError} dispatched={row.dispatched} cellId={row.cellId} parentCallId={row.parentCallId} resultRefs={row.resultRefs} expanded={open.get(row.id) === true} onToggle={() => toggle(row.id)} navigation={navigation} onPreview={onPreview} />
 }
 
 /** Only the visible rows are mounted, so a long session stays bounded. */
@@ -52,12 +71,6 @@ export interface TimelineProps { rows: TimelineRow[]; navigation?: FileNavigatio
 export function Timeline({ rows, navigation, running = false, targetSeq, historical = false, onTargetVisible }: TimelineProps) {
   const t = useText()
   const [preview, setPreview] = useState<{ src: string; name: string }>()
-  useEffect(() => {
-    if (!preview) return
-    const dismiss = (event: KeyboardEvent) => { if (event.key === "Escape") setPreview(undefined) }
-    document.addEventListener("keydown", dismiss)
-    return () => document.removeEventListener("keydown", dismiss)
-  }, [preview])
   const grouped = useMemo(() => groupActivities(rows), [rows])
   const [open, setOpen] = useState(new Map<string, boolean>())
   const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
@@ -158,10 +171,9 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     {!historical && showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
       following.current = true; setShowLatest(false); virtualizer.scrollToIndex(items.length - 1, { align: "end" })
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
-    {preview ? createPortal(<div className="timeline-image-overlay" role="dialog" aria-modal="true" aria-label={preview.name}>
-      <button type="button" className="timeline-image-close icon-button" aria-label={t("關閉")} onClick={() => setPreview(undefined)}><X size={18} /></button>
+    {preview ? <SettingsDialog title={preview.name} closeLabel={t("關閉")} initialFocusSelector=".settings-dialog-close" className="timeline-image-dialog" onClose={() => setPreview(undefined)}>
       <img src={preview.src} alt={preview.name} />
-    </div>, document.body) : null}
+    </SettingsDialog> : null}
     </div>
   )
 }

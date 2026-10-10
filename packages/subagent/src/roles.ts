@@ -14,6 +14,8 @@ export interface SubagentRole {
 }
 
 export interface RoleRegistry {
+  revision(name?: string): number
+  onChanged(listener: () => void): () => void
   register(role: SubagentRole): void
   get(name: string): SubagentRole | undefined
   list(): SubagentRole[]
@@ -22,14 +24,21 @@ export interface RoleRegistry {
 
 export function createRoleRegistry(): RoleRegistry {
   const roles = new Map<string, SubagentRole>()
+  let revision = 0
+  const roleRevisions = new Map<string, number>()
+  const listeners = new Set<() => void>()
+  const changed = (name: string) => { revision++; roleRevisions.set(name, (roleRevisions.get(name) ?? 0) + 1); for (const listener of listeners) listener() }
   return {
+    revision: name => name === undefined ? revision : roleRevisions.get(name) ?? 0,
+    onChanged(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
     register(role) {
       if (roles.has(role.name)) throw new Error(`duplicate role: ${role.name}`)
       roles.set(role.name, role)
+      changed(role.name)
     },
     get(name) { return roles.get(name) },
     list() { return [...roles.values()] },
-    remove(name) { roles.delete(name) },
+    remove(name) { if (roles.delete(name)) changed(name) },
   }
 }
 

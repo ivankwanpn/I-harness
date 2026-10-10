@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from "react"
 import type { ProjectFileRef, ProjectFileRoot } from "../../../../desktop-gateway/src/project-files.ts"
 import { EditorDraftStore, editorDraftKey, isDraftDirty } from "./editor-drafts.ts"
 import { useProjectFilesText } from "./project-files-text.ts"
+import { SettingsDialog } from "../settings/SettingsDialog.tsx"
 
 export function EditorTabs({ roots, store, onSave, onOpen }: { roots: ProjectFileRoot[]; store: EditorDraftStore; onSave(ref: ProjectFileRef): Promise<boolean>; onOpen?(ref: ProjectFileRef): void }) {
   const pf = useProjectFilesText()
@@ -23,13 +24,13 @@ export function EditorTabs({ roots, store, onSave, onOpen }: { roots: ProjectFil
       <button type="button" role="tab" aria-selected={state.active && editorDraftKey(state.active) === editorDraftKey(ref)} onClick={() => onOpen ? onOpen(ref) : store.open(ref)}>{label(ref)}{isDraftDirty(store.get(ref)) ? " ●" : ""}</button>
       <button type="button" className="link-button" aria-label={pf("關閉 {path}", { path: label(ref) })} onClick={() => close(ref)}>×</button>
     </div>)}</div>
-    {closing ? <div role="dialog" aria-label={pf("關閉未儲存檔案 {path}", { path: label(closing) })} className="editor-close-choice">
+    {closing ? <SettingsDialog title={pf("關閉未儲存檔案 {path}", { path: label(closing) })} closeLabel={pf("關閉對話框")} busy={busy} initialFocusSelector="button" onClose={() => setClosing(undefined)}>
       <p>{pf("{path} 有未儲存內容。", { path: label(closing) })}</p>
       {error ? <p role="alert">{pf(error)}</p> : null}
       <button type="button" disabled={busy || !roots.some((root) => root.workspaceId === closing.workspaceId)} onClick={() => void saveClose(closing)}>{pf("儲存並關閉")}</button>
       <button type="button" disabled={busy} onClick={() => { store.close(closing, "keep"); setClosing(undefined) }}>{pf("保留草稿並關閉")}</button>
       <button type="button" disabled={busy} onClick={() => { store.close(closing, "discard"); setClosing(undefined) }}>{pf("捨棄草稿並關閉")}</button>
       <button type="button" disabled={busy} onClick={() => setClosing(undefined)}>{pf("取消")}</button>
-    </div> : null}
+    </SettingsDialog> : null}
   </>
 }

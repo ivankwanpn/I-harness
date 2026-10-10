@@ -1,10 +1,16 @@
 import { build } from "esbuild"
 import { cpSync, mkdirSync, readFileSync } from "node:fs"
-import { dirname, join, resolve } from "node:path"
+import { dirname, join, resolve, relative, isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
 import { copyRuntimePackage, runtimePackageRoot } from "./runtime-copy.mjs"
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
-const out = join(packageRoot, "out/main"), pdf = runtimePackageRoot("pdfjs-dist", packageRoot)
+const args = process.argv.slice(2)
+if (args.length && !(args.length === 2 && args[0] === "--out" && args[1])) throw new Error("Usage: node scripts/build-attachment-reader.mjs [--out DIR]")
+const output = resolve(packageRoot, args[1] ?? "out")
+const repoRoot = resolve(packageRoot, "../..")
+const outputRelative = relative(repoRoot, output)
+if (!outputRelative || outputRelative.startsWith("..") || isAbsolute(outputRelative)) throw new Error("attachment output must be a child directory of the workspace")
+const out = join(output, "main"), pdf = runtimePackageRoot("pdfjs-dist", packageRoot)
 mkdirSync(out, { recursive: true })
 await build({ entryPoints: [join(packageRoot, "src/main/attachment-reader-worker.ts")], outfile: join(out, "attachment-reader-worker.mjs"), bundle: true, platform: "node", format: "esm", target: "node22", external: ["@napi-rs/canvas"], banner: { js: 'import { createRequire as __readerCreateRequire } from "node:module"; const require = __readerCreateRequire(import.meta.url);' } })
 cpSync(join(pdf, "legacy/build/pdf.worker.mjs"), join(out, "pdf.worker.mjs"))

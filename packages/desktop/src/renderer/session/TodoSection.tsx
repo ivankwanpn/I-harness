@@ -1,23 +1,20 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useId, useRef, useSyncExternalStore } from "react"
 import { Check, Circle, CircleDot, Pencil, Plus, Trash2 } from "lucide-react"
 import type { DesktopTodoWriteInput, DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import { useText } from "../design/i18n.ts"
+import { useSettingsDraftMap } from "../settings/settings-drafts.tsx"
+import { TodoEditorStore, type TodoDraft } from "./todo-drafts.ts"
 import "./TodoSection.css"
 
 type TodoItem = NonNullable<DesktopWorkStateView["todos"]>[number]
 
 interface TodoSectionProps {
+  workspaceId?: string
+  sessionId?: string
   workState?: DesktopWorkStateView
   error?: string
   onRetry?(): void
   onWrite?(input: DesktopTodoWriteInput): Promise<void>
-}
-
-interface TodoDraft {
-  items: TodoItem[]
-  expectedRevision: number
-  index: number | null
-  content: string
 }
 
 const TODO_PAGE_SIZE = 8
@@ -26,18 +23,22 @@ const copyItems = (items: TodoItem[]) => items.map((item) => ({ ...item }))
 /** Compact status markers and completed/total progress follow the inspected
  * DSH TodoPanel and ZCode Todo renderer. This editor uses the local snapshot
  * contract; no reference implementation source is copied. */
-export function TodoSection({ workState, error, onRetry, onWrite }: TodoSectionProps) {
+export function TodoSection({ workspaceId, sessionId, workState, error, onRetry, onWrite }: TodoSectionProps) {
   const t = useText()
-  const [pageOverride, setPageOverride] = useState<number | null>(null)
-  const [draft, setDraft] = useState<TodoDraft | null>(null)
-  const [saving, setSaving] = useState(false)
-  const savingRef = useRef(false)
-  const [writeError, setWriteError] = useState<string>()
+  const states = useSettingsDraftMap<TodoEditorStore>(["todos", workspaceId ?? "local", sessionId ?? "local"])
+  if (!states.has("editor")) states.set("editor", new TodoEditorStore())
+  const store = states.get("editor")!
+  const { pageOverride, draft, saving, error: writeError } = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+  const setPageOverride = (pageOverride: number | null) => store.update({ pageOverride })
+  const setDraft = (draft: TodoDraft | null) => store.update({ draft })
+  const setWriteError = (error: string | undefined) => store.update({ error })
+  const composing = useRef(false), endedComposition = useRef(false), editId = useId()
   const todos = workState?.todos
   const revision = workState?.todosRevision
   const editable = todos !== undefined && revision !== undefined && onWrite !== undefined && !error
   const staleDraft = draft !== null && draft.expectedRevision !== revision && !saving
-  useEffect(() => setPageOverride(null), [todos])
+  const snapshotIdentity = JSON.stringify([revision, todos])
+  useEffect(() => { if (todos !== undefined && store.getSnapshot().snapshotIdentity !== snapshotIdentity) store.update({ snapshotIdentity, pageOverride: null }) }, [store, snapshotIdentity, todos === undefined])
   const focusIndex = todos?.findIndex((item) => item.status === "in_progress") ?? -1
   const firstUnfinished = todos?.findIndex((item) => item.status !== "completed") ?? -1
   const defaultPage = todos && todos.length > 0 ? Math.floor((focusIndex >= 0 ? focusIndex : firstUnfinished >= 0 ? firstUnfinished : todos.length - 1) / TODO_PAGE_SIZE) : 0
@@ -47,24 +48,23 @@ export function TodoSection({ workState, error, onRetry, onWrite }: TodoSectionP
   const statusLabel = (status: TodoItem["status"]) => t(status === "completed" ? "已完成" : status === "in_progress" ? "進行中" : "待開始")
 
   function beginEdit(index: number | null) {
-    if (!editable || savingRef.current) return
+    if (!editable || store.getSnapshot().saving) return
     setWriteError(undefined)
     setDraft({ items: copyItems(todos ?? []), expectedRevision: revision!, index, content: index === null ? "" : todos![index]!.content })
   }
 
   async function write(input: DesktopTodoWriteInput, closeDraft = false) {
-    if (!onWrite || savingRef.current) return
-    savingRef.current = true
-    setSaving(true)
+    if (!onWrite || store.getSnapshot().saving) return
+    const submitted = store.getSnapshot().draft
+    store.update({ saving: true })
     setWriteError(undefined)
     try {
       await onWrite(input)
-      if (closeDraft) setDraft(null)
+      if (closeDraft && store.getSnapshot().draft === submitted) setDraft(null)
     } catch (reason) {
       setWriteError(reason instanceof Error ? reason.message : t("無法儲存待辦。"))
     } finally {
-      savingRef.current = false
-      setSaving(false)
+      store.update({ saving: false })
     }
   }
 
@@ -83,7 +83,7 @@ export function TodoSection({ workState, error, onRetry, onWrite }: TodoSectionP
   }
 
   function changeStatus(index: number, status: TodoItem["status"]) {
-    if (!editable || draft || savingRef.current) return
+    if (!editable || draft || store.getSnapshot().saving) return
     const items = copyItems(todos ?? []).map((item, itemIndex) => ({ ...item, status: itemIndex === index ? status : status === "in_progress" && item.status === "in_progress" ? "pending" as const : item.status }))
     void write({ items, expectedRevision: revision! })
   }
@@ -114,8 +114,10 @@ export function TodoSection({ workState, error, onRetry, onWrite }: TodoSectionP
           })}</ul>
             {pageCount > 1 ? <div className="todo-pager"><button type="button" className="link-button" disabled={page === 0} onClick={() => setPageOverride(page - 1)}>{t("上一頁")}</button><span>{t("第 {page} / {total} 頁", { page: page + 1, total: pageCount })}</span><button type="button" className="link-button" disabled={page + 1 >= pageCount} onClick={() => setPageOverride(page + 1)}>{t("下一頁")}</button></div> : null}</>}
     {draft ? <form className="todo-edit-form" onSubmit={(event) => { event.preventDefault(); saveDraft() }}>
-      <label htmlFor="todo-edit-text">{t("待辦內容")}</label>
-      <input id="todo-edit-text" className="todo-edit-input" autoFocus value={draft.content} placeholder={t("有哪些待辦事項？")} disabled={saving} onChange={(event) => setDraft({ ...draft, content: event.target.value })} onKeyDown={(event) => { if (event.key === "Escape" && !saving) { setDraft(null); setWriteError(undefined) } }} />
+      <label htmlFor={editId}>{t("待辦內容")}</label>
+      <input id={editId} className="todo-edit-input" autoFocus value={draft.content} placeholder={t("有哪些待辦事項？")} disabled={saving} onChange={(event) => setDraft({ ...draft, content: event.target.value })}
+        onCompositionStart={() => { composing.current = true }} onCompositionEnd={() => { composing.current = false; endedComposition.current = true }} onKeyUp={() => { endedComposition.current = false }}
+        onKeyDown={(event) => { const guarded = composing.current || endedComposition.current || event.nativeEvent.isComposing || event.keyCode === 229; endedComposition.current = false; if (guarded) { if (event.key === "Enter") event.preventDefault(); return } if (event.key === "Escape" && !saving) { event.preventDefault(); setDraft(null); setWriteError(undefined) } }} />
       <div className="todo-edit-actions"><button type="submit" className="todo-save-button" disabled={saving || staleDraft || !editable || !draft.content.trim()}>{saving ? t("儲存中…") : t("儲存待辦")}</button><button type="button" className="link-button" disabled={saving} onClick={() => { setDraft(null); setWriteError(undefined) }}>{t("取消編輯")}</button></div>
     </form> : null}
     {staleDraft || writeError ? <p role="alert" className="notice error-text">{staleDraft ? t("待辦清單已變更。請取消編輯後重試。") : writeError}</p> : null}

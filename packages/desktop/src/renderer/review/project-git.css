@@ -1,0 +1,22 @@
+.project-git-pane { min-width: 0; }
+.project-git-context { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.project-git-context > div { flex: 1; min-width: 180px; }
+.project-git-context strong { display: block; overflow-wrap: anywhere; font-size: 14px; }
+.project-git-context p { margin: 6px 0 0; color: var(--ih-muted); font-size: 12px; line-height: 1.6; }
+.project-git-context label { display: grid; gap: 5px; max-width: 100%; color: var(--ih-muted); font-size: 12px; }
+.project-git-context select { min-width: 160px; max-width: 280px; color: var(--ih-text); background: var(--ih-panel); border: 1px solid var(--ih-divider); border-radius: 6px; padding: 7px 8px; font: inherit; }
+.project-git-context select:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
+.project-git-path { margin: 10px 0 16px; color: var(--ih-muted); font-size: 11px; overflow-wrap: anywhere; }
+.project-git-review { min-width: 0; margin: 0; padding: 0; border: 0; }
+.project-git-review > .review-view { height: auto; min-width: 0; padding: 0; }
+.project-git-review .review-head { border-bottom: 1px solid var(--ih-divider); padding-bottom: 8px; }
+.project-git-review .review-files { max-height: 260px; overflow-y: auto; }
+.project-git-review .review-file-actions { flex-shrink: 0; }
+.project-git-review .review-detail { min-width: 0; }
+.project-git-review .review-commit { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--ih-divider); }
+.project-git-review .review-commit textarea { min-height: 84px; resize: vertical; }
+.project-git-review:disabled button { cursor: wait; opacity: .6; }
+@media (max-width: 560px) {
+  .project-git-context label, .project-git-context select { width: 100%; max-width: none; }
+  .project-git-review .review-file-actions { flex-wrap: wrap; }
+}

@@ -8,6 +8,12 @@ import type { Tool } from "@i-harness/core-tools"
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
 
+const unusedTransport = {
+  launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
+  cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
+  dispose: async (): Promise<void> => {},
+}
+
 describe("resolveShell", () => {
   it("resolves to a shell (bash or pwsh) with a -c/-Command prefix", () => {
     const shell = resolveShell()
@@ -76,11 +82,13 @@ describe("bashAvailable (M59)", () => {
 
   it.skipIf(process.platform !== "win32")("the bash tool answers legibly when bash is absent (no silent -1)", async () => {
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async () => ({ stdout: "ran", stderr: "", exitCode: 0, timedOut: false }),
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const prev = process.env.PATH
     const prevPrograms = process.env.ProgramFiles
@@ -121,11 +129,13 @@ describe("getArgv (shell-quote parser)", () => {
 
 describe("createShellTools", () => {
   const fakeExec: ExecService = {
+    ...unusedTransport,
     run: async () => ({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false }),
-    runBackground: () => ({ jobId: "none" }),
+    runBackground: async () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
 
   it("returns bash and pwsh tools carrying getArgv (for guard-approval)", () => {
@@ -139,14 +149,16 @@ describe("createShellTools", () => {
   it("bash tool executes the selected Unix shell, never a Windows launcher or pwsh", async () => {
     let captured: string[] = []
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured = cmd.argv
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash] = createShellTools({ exec: spyExec })
     const result = (await bash.execute({ command: "echo hi" }, {})) as {
@@ -161,14 +173,16 @@ describe("createShellTools", () => {
   it("pwsh tool execute constructs pwsh -Command argv", async () => {
     let captured: string[] = []
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured = cmd.argv
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
     }
     const [, pwsh] = createShellTools({ exec: spyExec })
     await pwsh.execute({ command: "Get-Date" }, {})
@@ -196,13 +210,14 @@ describe("createShellTools", () => {
         into.push(cmd.env)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: (cmd) => {
+      runBackground: async (cmd) => {
         into.push(cmd.env)
         return { jobId: "none" }
       },
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
   }
 
@@ -240,11 +255,13 @@ describe("createShellTools", () => {
   it("bash tool with background:true returns a job id immediately", async () => {
     let ranBackground = false
     const fakeExec: ExecService = {
+    ...unusedTransport,
       run: async () => ({ stdout: "ok", stderr: "", exitCode: 0, timedOut: false }),
-      runBackground: () => { ranBackground = true; return { jobId: "bash-1" } },
+      runBackground: async () => { ranBackground = true; return { jobId: "bash-1" } },
       getOutput: () => ({ id: "bash-1", status: "running", stdout: "", stderr: "" }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash] = createShellTools({ exec: fakeExec })
     const result = await bash.execute({ command: "sleep 5", background: true }, {})
@@ -265,14 +282,16 @@ describe("createShellTools", () => {
     let captured: ExecCommand | undefined
     const signal = new AbortController().signal
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured = cmd
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash] = createShellTools({ exec: spyExec })
     await bash.execute({ command: "echo hi" }, { abortSignal: signal })
@@ -283,14 +302,16 @@ describe("createShellTools", () => {
     let captured: ExecCommand | undefined
     const signal = new AbortController().signal
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured = cmd
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [, pwsh] = createShellTools({ exec: spyExec })
     await pwsh.execute({ command: "Get-Date" }, { abortSignal: signal })
@@ -300,17 +321,19 @@ describe("createShellTools", () => {
   it("background executes do NOT pass an abortSignal (fire-and-forget)", async () => {
     let captured: ExecCommand | undefined
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured = cmd
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: (cmd) => {
+      runBackground: async (cmd) => {
         captured = cmd
         return { jobId: "bash-1" }
       },
       getOutput: () => ({ id: "bash-1", status: "running", stdout: "", stderr: "" }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash] = createShellTools({ exec: spyExec })
     await bash.execute({ command: "sleep 5", background: true }, { abortSignal: new AbortController().signal })
@@ -326,17 +349,19 @@ describe("createShellTools", () => {
     const foreground: ExecCommand[] = []
     const background: ExecCommand[] = []
     const recordingExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         foreground.push(cmd)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: (cmd) => {
+      runBackground: async (cmd) => {
         background.push(cmd)
         return { jobId: "bash-1" }
       },
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash, pwsh] = createShellTools({ exec: recordingExec, cwd: "/ws" })
     await bash.execute({ command: "pwd" }, {})
@@ -350,14 +375,16 @@ describe("createShellTools", () => {
   it("D1: no cwd configured → no cwd field (exec inherits the parent process cwd)", async () => {
     const foreground: ExecCommand[] = []
     const recordingExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         foreground.push(cmd)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "bash-1" }),
+      runBackground: async () => ({ jobId: "bash-1" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash] = createShellTools({ exec: recordingExec })
     await bash.execute({ command: "pwd" }, {})
@@ -379,17 +406,19 @@ describe("createShellTools", () => {
     const foreground: ExecCommand[] = []
     const background: ExecCommand[] = []
     const recordingExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         foreground.push(cmd)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: (cmd) => {
+      runBackground: async (cmd) => {
         background.push(cmd)
         return { jobId: "bash-1" }
       },
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [bash, pwsh] = createShellTools({ exec: recordingExec, sandboxPolicy: () => policy })
     await bash.execute({ command: "echo hi" }, {})
@@ -402,14 +431,16 @@ describe("createShellTools", () => {
     // Absent policy → exactly the pre-M16 shape (no sandbox field).
     const plainForeground: ExecCommand[] = []
     const noPolicyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         plainForeground.push(cmd)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "bash-1" }),
+      runBackground: async () => ({ jobId: "bash-1" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     const [plainBash] = createShellTools({ exec: noPolicyExec })
     await plainBash.execute({ command: "echo hi" }, {})
@@ -441,14 +472,16 @@ describe("registerShell", () => {
   it("D1: passes cwd through to the registered tools", async () => {
     const captured: ExecCommand[] = []
     const spyExec: ExecService = {
+    ...unusedTransport,
       run: async (cmd) => {
         captured.push(cmd)
         return { stdout: "ok", stderr: "", exitCode: 0, timedOut: false }
       },
-      runBackground: () => ({ jobId: "none" }),
+      runBackground: async () => ({ jobId: "none" }),
       getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-      killJob: () => "already-finished",
+      killJob: async () => "already-finished",
       listJobs: () => [],
+    ...unusedTransport,
     }
     // registerShell builds its own exec service; the fake ctx hands the tool
     // closure the spy instead so the forwarded command is observable.
@@ -465,10 +498,11 @@ describe("registerShell", () => {
 function fakeExec(runResult: { stdout: string; stderr: string; exitCode: number }): ExecService {
   return {
     run: async () => ({ ...runResult, timedOut: false }),
-    runBackground: () => ({ jobId: "none" }),
+    runBackground: async () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
-    killJob: () => "already-finished",
+    killJob: async () => "already-finished",
     listJobs: () => [],
+    ...unusedTransport,
   }
 }
 

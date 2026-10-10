@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
 import { useText } from "../design/i18n.ts"
+import { errorMessage } from "../design/error-message.ts"
 type Mode = "all" | "files" | "conversation"
 interface Point { turnIndex: number; preview: string; files: number }
 interface Preview {
@@ -12,7 +13,7 @@ interface Preview {
   orphanedTurns?: unknown[]
 }
 interface Result { revertedFiles: number; errors: { path: string; message: string }[]; eventAppended: boolean }
-export function RewindPanel({ bridge, workspaceId, sessionId, onComplete, onClose }: { bridge: DesktopBridge; workspaceId: string; sessionId: string; onComplete(): void; onClose(): void }) {
+export function RewindPanel({ bridge, workspaceId, sessionId, onComplete, onClose, onBusyChange }: { bridge: DesktopBridge; workspaceId: string; sessionId: string; onComplete(): void; onClose(): void; onBusyChange?(busy: boolean): void }) {
   const t = useText()
   const [points, setPoints] = useState<Point[]>()
   const [target, setTarget] = useState<number>()
@@ -24,9 +25,13 @@ export function RewindPanel({ bridge, workspaceId, sessionId, onComplete, onClos
   const [error, setError] = useState<string>()
   const [result, setResult] = useState<Result>()
   const [reload, setReload] = useState(0)
+  const busyListener = useRef(onBusyChange)
+  busyListener.current = onBusyChange
+  useEffect(() => { busyListener.current?.(busy) }, [busy])
+  useEffect(() => () => { busyListener.current?.(false) }, [])
   useEffect(() => {
     let active = true
-    void bridge.request({ kind: "desktop/rewind/points", workspaceId, sessionId }).then((rows) => { if (active) setPoints(rows as Point[]) }).catch((reason: unknown) => { if (active) setError(String(reason)) })
+    void bridge.request({ kind: "desktop/rewind/points", workspaceId, sessionId }).then((rows) => { if (active) setPoints(rows as Point[]) }).catch((reason: unknown) => { if (active) setError(errorMessage(reason)) })
     return () => { active = false }
   }, [bridge, workspaceId, sessionId, reload])
   const run = async (execute: boolean) => {
@@ -40,7 +45,7 @@ export function RewindPanel({ bridge, workspaceId, sessionId, onComplete, onClos
         setPlan(undefined); setConfirmed(false); setResult(undefined)
         setPlan(await bridge.request({ kind: "desktop/rewind/plan", workspaceId, sessionId, target, mode }) as Preview)
       }
-    } catch (reason) { setPlan(undefined); setConfirmed(false); setError(String(reason)) }
+    } catch (reason) { setPlan(undefined); setConfirmed(false); setError(errorMessage(reason)) }
     finally { lock.current = false; setBusy(false) }
   }
   return <section className="provider-editor" aria-label={t("回復會話")}>

@@ -2,6 +2,72 @@
   "note": "Deliberate exceptions to the reachability gate. Every entry needs a date and a reason; the gate refuses to run when either is missing. TWO MECHANICS A LATER EDIT MUST KNOW, both recorded here because this file is the artifact a re-seed touches. (1) AN ENTRY EXEMPTS EXACTLY ONE ROW. The gate reduces a row key to `kind<TAB>subject` (`check-reachability.mjs:1612` `allowlistKey`) and compares it for equality against each entry's `key` (`:1599-1600`); there is no wildcard, prefix or class key. An entry keyed on a representative row is therefore a dated ADJUDICATION of a class, not an exemption covering it — the class's other members are accepted through `scripts/audit/reachability-baseline.json`, and repairing one of them warns only about the single row the entry names. The entries dated 2026-09-17 that say \"one class of N rows\" are all of this kind. (2) LINE ENDINGS. This file and `reachability-baseline.json` are CRLF on disk with no BOM, while `--seed-baseline` WRITES LF. A re-seed therefore leaves the baseline LF and produces a whole-file EOL diff against the CRLF convention; re-normalise both files to CRLF after any re-seed and re-run `--gate` and `--digest` to confirm the tool's behaviour is unchanged. Committed blobs are LF under `core.autocrlf=true`, so this is a working-tree rule, not a content rule. Recorded for the milestone record: it belongs in `docs/handoff/2026-09-15-m2-reachability-gate-handoff.md` §6 (\"Three traps a later edit will hit\") as a third trap, where Task 3 landed it on 2026-09-17 — flagged to Task 3, which owns that document.",
   "entries": [
     {
+      "key": "unused-export\t@i-harness/sandbox-wsl#WslExecutionBackend",
+      "reason": "Intentional public type naming the opt-in factory's TransportExecutionBackend, disposal and diagnostic contract. The qualification consumer names this exact type; no Desktop/default consumer is asserted.",
+      "dated": "2026-10-08",
+      "source": "packages/sandbox-wsl/README.md#public-api-scope"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox-wsl#WslDiagnostics",
+      "reason": "Intentional public type naming bounded launcher diagnostics separate from command output. The qualification report consumes this exact type; it is not a claim of additional production wiring.",
+      "dated": "2026-10-08",
+      "source": "packages/sandbox-wsl/README.md#public-api-scope"
+    },
+    {
+      "key": "unused-export\t@i-harness/exec#ExecutionLaunch",
+      "reason": "Intentional public type: ExecutionSupervisor.launch input names the trusted process specification, policy, backend and validation contract.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox#BackendAssurance",
+      "reason": "Intentional public type: names the assurance vocabulary already exposed by BackendProbe, ExecutionReceipt and BackendRequirements.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox#ConfinedSandboxMode",
+      "reason": "Intentional public type: names the restricted mode of SandboxPolicy and SandboxUnavailableError; full access is excluded.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox#ExecutionIo",
+      "reason": "Intentional public type: names the owned I/O interface exposed as TransportExecutionHandle.io, including single output consumer and awaitable input operations.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox-local#LegacyWindowsBackend",
+      "reason": "Intentional public type: names the disposable transport backend returned by createLegacyWindowsBackend; it does not imply PTY or retained-tree support.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox-windows-psec#WindowsExecutionOptions",
+      "reason": "Intentional public type: names trusted construction options accepted by both native backend factories and qualification inspection. It grants no command-JSON authority.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox-windows-psec#WindowsQualificationRecord",
+      "reason": "Intentional public type: names WindowsQualificationView.record, the sanitized historical one-host schema, not a current security certificate.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/sandbox-windows-psec#ObservedSupport",
+      "reason": "Intentional public type: names observed-pass/unsupported values in WindowsQualificationRecord.sourceFamilies, without changing any actual support result.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
+      "key": "unused-export\t@i-harness/settings#SettingsWindowsSandboxBackend",
+      "reason": "Intentional public type: names the persisted Settings.windowsSandboxBackend vocabulary; backend selection remains per new assembly.",
+      "dated": "2026-10-08",
+      "source": "docs/sandbox-distribution-acceptance.md#public-type-contracts"
+    },
+    {
       "key": "producerless-event\tretry/start",
       "reason": "The telemetry manifest is the event **vocabulary**, not an emitter — `TELEMETRY_MANIFEST` is consumed at `packages/telemetry/src/manifest.ts:39` to build `TELEMETRY_EVENT_TYPES` — and the deferral is recorded in source at `packages/core-agent/src/index.ts:234,238` (\"NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20 … emits no `retry/start`\"), so deleting the row would delete a vocabulary entry the M12/M20 retry work is specified against.",
       "dated": "2026-09-15",

@@ -12,8 +12,9 @@ vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: n
   measureElement: () => {}, scrollToIndex: () => {},
 }) }))
 import { SubagentPane } from "../src/renderer/session/SubagentPane.tsx"
+import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); useUiStore.getState().setLocale("zh-TW") })
 const child: DesktopSubagentRow = {
   sessionId: "child-a", parentSessionId: "parent", path: "/root/reader", roleName: "reader", label: "Reader", status: "completed", live: true,
   canFollowup: true, canMessage: false, canInterrupt: false, canClose: false,
@@ -42,6 +43,32 @@ function fixture(handle?: (request: DesktopRequest) => unknown, initial: Desktop
   return { bridge, setCatalog(value: DesktopSubagentCatalog) { catalog = value }, emit(event: DesktopEvent) { for (const listener of listeners) listener(event) } }
 }
 async function open(name = "Reader") { fireEvent.click(await screen.findByRole("button", { name: `查看子代理 ${name}` })) }
+
+it.each(["zh-TW", "en"] as const)("localizes known inactive control guidance in %s without changing saved diagnostics/history or permissions", async locale => {
+  const reason = "This subagent is not active in the current process. Its saved history remains available."
+  const raw = "This operation was aborted"
+  const closed = { ...child, status: "cancelled" as const, live: false, canFollowup: false, canMessage: false, canInterrupt: false, canClose: false, controlReason: reason, error: raw }
+  const { bridge } = fixture(request => request.kind === "desktop/session/subagents/history" ? { events: history(`${reason}\n${raw}`), nextSeq: 2 } : undefined, { parentSessionId: "parent", agents: [closed] })
+  const view = render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" />)
+  await open()
+  await act(async () => { useUiStore.getState().setLocale(locale) })
+  const expected = locale === "en" ? "This subagent is not active here. Its saved history is still available." : "此子代理目前未在這裡執行，仍可查閱已保存的記錄。"
+  expect(view.container.querySelector(".subagent-control-reason")?.textContent).toBe(expected)
+  expect(view.container.querySelector(".subagent-detail [role=alert]")?.textContent).toBe(raw)
+  await waitFor(() => expect(view.container.querySelector(".subagent-transcript")?.textContent).toContain(reason))
+  expect(view.container.querySelector(".subagent-transcript")?.textContent).toContain(raw)
+  expect(view.container.querySelectorAll(".subagent-control-actions button")).toHaveLength(0)
+})
+
+it("preserves unknown control guidance verbatim across locales", async () => {
+  const reason = "Unknown owner policy: RAW <& 漢字>"
+  const { bridge } = fixture(undefined, { parentSessionId: "parent", agents: [{ ...child, controlReason: reason }] })
+  const view = render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" />)
+  await open()
+  expect(view.container.querySelector(".subagent-control-reason")?.textContent).toBe(reason)
+  await act(async () => { useUiStore.getState().setLocale("en") })
+  expect(view.container.querySelector(".subagent-control-reason")?.textContent).toBe(reason)
+})
 
 describe("dedicated subagent pane", () => {
   it("shows the catalog and source errors without starting child work or loading every transcript", async () => {

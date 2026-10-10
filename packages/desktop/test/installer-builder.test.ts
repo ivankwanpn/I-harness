@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { spawnSync } from "node:child_process"
@@ -70,6 +70,23 @@ it("accepts a complete absolute Desktop payload and reports its app and Electron
   const result = validate(app)
   expect(result.status, result.stderr).toBe(0)
   expect(JSON.parse(result.stdout)).toMatchObject({ appDir: app, version: sourceManifest.version, electronVersion: sourceManifest.devDependencies.electron })
+})
+
+it("accepts the current I-harness product payload with its matching executable", () => {
+  const { app, put } = fixture()
+  renameSync(join(app, "I-harness Desktop.exe"), join(app, "I-harness.exe"))
+  put("resources/app/package.json", JSON.stringify({ name: "@i-harness/desktop", productName: "I-harness", version: sourceManifest.version, type: "module", main: "./out/main/index.js" }))
+  const result = validate(app)
+  expect(result.status, result.stderr).toBe(0)
+  expect(JSON.parse(result.stdout).appName).toBe("I-harness")
+})
+
+it("refuses a current product manifest backed only by the legacy executable", () => {
+  const { app, put } = fixture()
+  put("resources/app/package.json", JSON.stringify({ name: "@i-harness/desktop", productName: "I-harness", version: sourceManifest.version, type: "module", main: "./out/main/index.js" }))
+  const result = validate(app)
+  expect(result.status).not.toBe(0)
+  expect(result.stderr).toContain("I-harness.exe")
 })
 
 it("rejects relative payload paths before resolving them against the build working directory", () => {

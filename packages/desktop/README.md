@@ -1,6 +1,6 @@
 # I-harness Desktop
 
-The Windows desktop app for the I-harness workspace. For downloads and first-run setup, see the [product README](../../README.en.md) or [繁體中文介紹](../../README.md).
+The Windows desktop app for I-harness projects. For downloads and first-run setup, see the [product README](../../README.en.md) or [繁體中文介紹](../../README.md).
 
 ## Development
 
@@ -23,27 +23,31 @@ pnpm --filter @i-harness/desktop dist
 pnpm --filter @i-harness/desktop installer
 ```
 
-The current distribution is collected in `packages/desktop/release/`:
+Standard builds write to `packages/desktop/release/`. The current release is **0.1.3**; its full app and installer are collected together:
 
 ```text
 release/
-  I-harness Desktop/
-    I-harness Desktop.exe
+  I-harness/
+    I-harness.exe
     resources/
-  I-harness-Desktop-0.1.0.zip
-  I-harness-Desktop-Setup-0.1.0.exe
+  I-harness-0.1.3.zip
+  I-harness-Setup-0.1.3.exe
+  I-harness-Setup-0.1.3.exe.sha256
+  I-harness-Setup-0.1.3.installer-build.json
   SHA256SUMS.txt
 ```
 
 The portable and installed app carry Electron, gateway dependencies and their loader; end users do not install a separate Node runtime. Keep the portable executable and resources together. Build outputs are ignored by Git; downloadable packages belong in [GitHub Releases](https://github.com/ivankwanpn/I-harness/releases).
 
-Local Desktop release policy: keep the latest distribution in the canonical release directory. Dated release folders used for development are temporary outputs. Do not keep obsolete Desktop distributions beside the current product.
+Release versions are recorded in [release notes](../../docs/releases/v0.1.3.md) and immutable Git tags. `IH_DESKTOP_RELEASE_LABEL` can select an isolated candidate directory; local build directories are not version-control artifacts. Published Setup and ZIP files are accompanied by SHA-256 checksums.
 
 Installer behavior and compiler requirements are documented in [installer/README.md](installer/README.md).
 
 ## Configuration and user data
 
 Desktop preferences, project navigation and conversations are stored in Electron's local user-data directory. The gateway uses the shared I-harness settings/provider/credential implementation; `IH_CONFIG_DIR` can specify its configuration location. User data is separate from the installed program payload.
+
+Fresh installs use `%APPDATA%\I-harness`. When that default has no workspace or session history, the renamed app reuses existing history in `%APPDATA%\I-harness Desktop`. Explicit profile paths and established history in the current default remain authoritative; the app does not move or merge data directories.
 
 Configure providers and model capabilities explicitly. Live work keeps its model binding until an explicit selection or reconstruction. Saved defaults and plugin configuration changes are reflected through the gateway's existing lifecycle.
 

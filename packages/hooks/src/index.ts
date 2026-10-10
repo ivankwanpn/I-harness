@@ -7,6 +7,8 @@ import type { ToolCall, ToolDecision } from "@i-harness/core-tools"
 import { currentDiagnostics } from "@i-harness/diagnostics"
 import type {
   HandlerMatcher,
+  ClaudePluginHooksOptions,
+  ClaudeSessionSource,
   HookContext,
   HookEventName,
   HookHandlerSpec,
@@ -16,11 +18,14 @@ import {
   HOOK_EVENTS,
   HookBlockedError,
   HookConfigError,
+  HookUnsupportedFormatError,
   HookTrustError,
+  HOOK_OUTPUT_CAP_BYTES,
 } from "./types.ts"
 import { verifyHandlerTrust } from "./trust.ts"
 import { assertAllowed, runHookHandler } from "./runner.ts"
 import { resolveHarnessHome } from "@i-harness/harness-home"
+import { adaptClaudePluginHooks } from "./claude.ts"
 
 export * from "./types.ts"
 import type { HookTrustStore } from "./trust.ts"
@@ -56,7 +61,7 @@ export function resolveHooksConfigPath(configDir?: string): string {
   return join(resolveHarnessHome(), CONFIG_FILE)
 }
 
-export interface HookRegistryOptions {
+export interface HookRegistryOptions extends ClaudePluginHooksOptions {
   /** Explicit config file path; default <configDir|$IH_CONFIG_DIR|~/.i-harness>/hooks.json. */
   configPath?: string
   /** Base dir for relative trust.script paths; defaults to the config's dirname. */
@@ -73,6 +78,9 @@ export interface HookRegistryOptions {
    * The home's own config is self-granting and needs none.
    */
   approvals?: HookTrustStore
+  /** Project directory supplied to Claude startup subprocesses. */
+  cwd?: string
+  sessionId?: string
 }
 
 /** One loaded handler with its load-time trust verdict. */
@@ -110,10 +118,12 @@ export interface HookRegistry {
    * fired by the mounted seams — fire() rejects them as not programmatic.
    */
   fire(event: HookEventName, input: { sessionId?: string; message?: string }): Promise<void>
-  beginSession(sessionId: string): Promise<void>
+  beginSession(sessionId: string, source?: ClaudeSessionSource): Promise<void>
   endSession(sessionId: string): Promise<void>
   /** Loaded handlers (config order) with their trust verdicts. */
   handlers(): LoadedHandler[]
+  /** Cached output from successfully trusted startup handlers for this session. */
+  context(): string
 }
 
 interface InternalRegistry {
@@ -170,6 +180,7 @@ export async function loadHooksConfig(
   configPath: string,
   configDir: string,
   approvals?: { isApproved(sha256: string): boolean },
+  options: ClaudePluginHooksOptions = {},
 ): Promise<LoadedHandler[]> {
   let text: string
   try {
@@ -187,6 +198,14 @@ export async function loadHooksConfig(
     throw new HookConfigError("hooks config must be a JSON object")
   }
   const cfg = raw as Record<string, unknown>
+  // Native fields take precedence: an invalid or mixed native policy must not
+  // acquire the optional-plugin containment reserved for this foreign format.
+  if (!Object.hasOwn(cfg, "version") && !Object.hasOwn(cfg, "handlers")
+    && typeof cfg.hooks === "object" && cfg.hooks !== null && !Array.isArray(cfg.hooks)
+    && Object.values(cfg.hooks).every(Array.isArray)) {
+    if (options.claudePluginRoot !== undefined) return adaptClaudePluginHooks(cfg, configPath, text, approvals, { ...options, claudePluginRoot: options.claudePluginRoot })
+    throw new HookUnsupportedFormatError()
+  }
   if (cfg.version !== 1) throw new HookConfigError("hooks config version must be 1")
   if (!Array.isArray(cfg.handlers)) throw new HookConfigError("hooks config must carry a handlers array")
   const userLayer = resolve(configPath) === resolve(resolveHooksConfigPath())
@@ -215,6 +234,7 @@ function validateSpec(entry: unknown, configPath: string): HookHandlerSpec {
     throw new HookConfigError(`hook handler entry must be an object (${configPath})`)
   }
   const e = entry as Record<string, unknown>
+  if (Object.hasOwn(e, "claude")) throw new HookConfigError("native hook declarations cannot supply runtime Claude metadata")
   if (typeof e.id !== "string" || e.id.trim() === "") throw new HookConfigError("hook handler id must be a non-blank string")
   if (!(HOOK_EVENTS as readonly string[]).includes(e.event as string)) {
     throw new HookConfigError(`hook handler ${e.id}: unknown event ${JSON.stringify(e.event)}`)
@@ -286,6 +306,8 @@ async function runHandlers(
   gate = false,
 ): Promise<void> {
   for (const handler of registry.loaded) {
+    // Claude startup commands have a separate output/context lifecycle below.
+    if (handler.spec.claude !== undefined) continue
     if (!matches(handler, event, toolName)) continue
     if (!handler.valid) {
       const message = handler.trustError ?? "handler failed trust verification"
@@ -390,7 +412,7 @@ export async function createHookRegistry(
   // config — its absence is a hard error); a DEFAULT-derived path simply
   // yields zero handlers (a host that never configured hooks).
   if (existsSync(configPath)) {
-    registry.loaded = await loadHooksConfig(configPath, configDir, opts.approvals)
+    registry.loaded = await loadHooksConfig(configPath, configDir, opts.approvals, opts)
   } else if (explicitConfigPath) {
     throw new HookConfigError(`hooks config ${configPath} does not exist (explicit configPath)`)
   }
@@ -398,6 +420,82 @@ export async function createHookRegistry(
   const mountName = `hooks:${randomUUID()}`
   let disposed = false
   let trustRevision = 0
+  let startupRevision = 0
+  let activeSession: { sessionId: string; source: ClaudeSessionSource } | undefined
+  let activeApprovals: Pick<HookTrustStore, "isApproved"> | undefined = opts.approvals
+  type StartupResult = { handlerId: string; sha256: string; sessionId: string; source: ClaudeSessionSource; text: string }
+  const startupResults = new Map<string, StartupResult>()
+  const startupPending = new Map<string, { revision: number; promise: Promise<void> }>()
+  const startupKey = (handler: LoadedHandler, sessionId: string, source: ClaudeSessionSource): string => JSON.stringify([handler.spec.id, handler.spec.trust.sha256, sessionId, source])
+  const removeBundleContext = (handler: LoadedHandler): void => {
+    for (const [key, row] of startupResults) if (row.sha256 === handler.spec.trust.sha256) startupResults.delete(key)
+  }
+  const removeHandlerContext = (handler: LoadedHandler): void => {
+    for (const [key, row] of startupResults) if (row.handlerId === handler.spec.id && row.sha256 === handler.spec.trust.sha256) startupResults.delete(key)
+  }
+  async function beginSession(sessionId: string, source: ClaudeSessionSource = "startup"): Promise<void> {
+    if (disposed) return
+    if (activeSession?.sessionId !== sessionId || activeSession.source !== source) {
+      if (activeSession?.sessionId !== sessionId) startupResults.clear()
+      activeSession = { sessionId, source }; ++startupRevision
+    }
+    // Preserve native lifecycle observers, including their existing replay semantics.
+    await runHandlers(registry, "session/start", { event: "session/start", sessionId })
+    const revision = startupRevision, trust = trustRevision
+    for (const handler of registry.loaded) {
+      const claude = handler.spec.claude
+      if (claude === undefined || claude.matcher !== undefined && !new RegExp(claude.matcher).test(source)) continue
+      if (!handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) {
+        removeBundleContext(handler)
+        if (!registry.reportedUnapproved.has(handler.spec.id)) {
+          registry.reportedUnapproved.add(handler.spec.id)
+          registry.opts.report(new HookTrustError(handler.spec.id, handler.spec.trust.sha256, handler.trustError ?? "handler is not approved"))
+        }
+        continue
+      }
+      // A cached result is reusable only after checking the bundle again.
+      try { await verifyHandlerTrust(handler.spec, configDir) } catch (error) {
+        if (disposed || revision !== startupRevision || trust !== trustRevision || !registry.loaded.includes(handler)) return
+        removeBundleContext(handler); handler.valid = false; handler.unapproved = false
+        handler.trustError = error instanceof Error ? error.message : String(error)
+        registry.opts.report(error); continue
+      }
+      if (disposed || revision !== startupRevision || trust !== trustRevision || activeSession?.sessionId !== sessionId || activeSession.source !== source) return
+      const key = startupKey(handler, sessionId, source)
+      if (startupResults.has(key)) continue
+      const pending = startupPending.get(key)
+      if (pending?.revision === revision) { await pending.promise; continue }
+      const promise = (async () => {
+        try {
+          const output = await runHookHandler(handler.spec, { event: "session/start", sessionId }, configDir, { env: registry.opts.env, cwd: opts.cwd, source })
+          assertAllowed(output, handler.spec.id)
+          // Execution can overlap revoke, refresh, remount, or another session.
+          if (disposed || revision !== startupRevision || trust !== trustRevision || !registry.loaded.includes(handler) || !handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) return
+          await verifyHandlerTrust(handler.spec, configDir)
+          if (disposed || revision !== startupRevision || trust !== trustRevision || !handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) return
+          startupResults.set(key, { handlerId: handler.spec.id, sha256: handler.spec.trust.sha256, sessionId, source, text: output.additionalContext ?? "" })
+        } catch (error) {
+          if (disposed || revision !== startupRevision || trust !== trustRevision || !registry.loaded.includes(handler)) return
+          // Exit/output failures belong to one handler. A changed or unreadable
+          // bundle withdraws every sibling result sharing that content grant.
+          let trustError: unknown = error instanceof HookTrustError ? error : undefined
+          if (trustError === undefined) {
+            try { await verifyHandlerTrust(handler.spec, configDir) } catch (failure) { trustError = failure }
+          }
+          if (disposed || revision !== startupRevision || trust !== trustRevision || !registry.loaded.includes(handler)) return
+          if (trustError !== undefined || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) removeBundleContext(handler)
+          else removeHandlerContext(handler)
+          if (trustError !== undefined) {
+            handler.valid = false; handler.unapproved = false
+            handler.trustError = trustError instanceof Error ? trustError.message : String(trustError)
+          }
+          registry.opts.report(trustError ?? error)
+        }
+      })()
+      startupPending.set(key, { revision, promise })
+      try { await promise } finally { if (startupPending.get(key)?.promise === promise) startupPending.delete(key) }
+    }
+  }
   ctx.mount({ name: mountName, mount() {
   // 1+2. pre-tool / post-tool around the real tool body (tools/execute cascade).
   ctx.onCascade("tools/execute", async (input, next) => {
@@ -467,31 +565,48 @@ export async function createHookRegistry(
     async refreshTrust(approvals) {
       if (disposed) throw new HookConfigError("hooks registry is disposed")
       const revision = ++trustRevision
+      ++startupRevision
+      activeApprovals = approvals
+      const previous = [...startupResults.entries()]
+      startupResults.clear()
       registry.loaded = registry.loaded.map((row) => ({ ...row, valid: false, unapproved: false, trustError: "Hook trust refresh is in progress" }))
-      const loaded = await loadHooksConfig(configPath, configDir, approvals)
+      const loaded = await loadHooksConfig(configPath, configDir, approvals, opts)
       if (disposed || revision !== trustRevision) return
       registry.loaded = loaded
       registry.reportedUnapproved.clear()
+      for (const [key, result] of previous) {
+        if (result.sessionId === activeSession?.sessionId && loaded.some(handler => handler.valid && handler.spec.claude !== undefined && handler.spec.id === result.handlerId && handler.spec.trust.sha256 === result.sha256)) startupResults.set(key, result)
+      }
     },
-    async dispose() { if (disposed) return; disposed = true; await ctx.unmount(mountName); registry.loaded = [] },
+    async dispose() { if (disposed) return; disposed = true; ++startupRevision; startupResults.clear(); await ctx.unmount(mountName); registry.loaded = [] },
     async fire(event, input) {
       if (event === "session/start" || event === "session/end" || event === "subagent/stop") {
         if (typeof input.sessionId !== "string") {
           throw new HookConfigError(`hooks fire(${event}) requires sessionId`)
         }
-        await runHandlers(registry, event, { event, sessionId: input.sessionId })
+        if (event === "session/start") await beginSession(input.sessionId)
+        else await runHandlers(registry, event, { event, sessionId: input.sessionId })
       } else if (event === "notification") {
         await runHandlers(registry, "notification", { event: "notification", message: input.message ?? "" })
       } else {
         throw new HookConfigError(`hooks fire(${event}) is not a programmatic event`)
       }
     },
-    async beginSession(sessionId) {
-      await runHandlers(registry, "session/start", { event: "session/start", sessionId })
-    },
+    beginSession,
     async endSession(sessionId) {
       await runHandlers(registry, "session/end", { event: "session/end", sessionId })
     },
     handlers: () => registry.loaded.map((h) => ({ ...h, spec: structuredClone(h.spec) })),
+    context() {
+      if (disposed || activeSession === undefined) return ""
+      const parts: string[] = []
+      for (const handler of registry.loaded) {
+        if (handler.spec.claude === undefined) continue
+        if (!handler.valid || activeApprovals?.isApproved(handler.spec.trust.sha256) !== true) { removeBundleContext(handler); continue }
+        const output = startupResults.get(startupKey(handler, activeSession.sessionId, activeSession.source))
+        if (output?.text) parts.push(output.text)
+      }
+      return Buffer.from(parts.join("\n\n")).subarray(0, HOOK_OUTPUT_CAP_BYTES).toString("utf8")
+    },
   }
 }

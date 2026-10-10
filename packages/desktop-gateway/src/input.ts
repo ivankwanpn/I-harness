@@ -23,7 +23,10 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
   const controllers = new Set<AbortController>()
   let closed = false
   const keyFor = (id: string, input: string) => JSON.stringify([id, input])
-  const ownSession = async (id: string) => service.liveSession(id) ?? await load(id)
+  const ownSession = async (id: string) => {
+    const session = await service.writableSessionFor?.(id, load) ?? service.liveSession(id) ?? await load(id)
+    return await service.writableSessionFor?.(id, load) ?? service.liveSession(id) ?? session
+  }
   function serial<T>(id: string, action: () => Promise<T>): Promise<T> {
     const job = (gates.get(id) ?? Promise.resolve()).catch(() => undefined).then(action)
     gates.set(id, job)
@@ -95,8 +98,7 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
         }
         // Live admissions use the exact assembly session and its write hook.
         // Recovery-only admissions can be saved without a configured model.
-        const binding = raw.start === false ? await service.modelState(id) : undefined
-        const session = raw.start === false && binding?.status !== "ready" ? await ownSession(id) : (await service.assemblyFor(id)).session
+        const session = raw.start === false ? await ownSession(id) : (await service.assemblyFor(id)).session
         const inbox = new Inbox(session)
         let inputId = receipt?.inputId ?? raw.inputId ?? randomUUID()
         // A canceled admission grants no delivery. A shutdown-compensated
@@ -124,7 +126,13 @@ export function createDesktopInput(coordinator: SessionCoordinator, service: Ses
     },
     async state(id: string) {
       await coordinator.profile(id)
-      const pending = new Inbox(await ownSession(id)).pending()
+      let session = service.liveSession(id)
+      if (!session) {
+        if (!coordinator.snapshot) throw new Error("Read-only input snapshots unavailable")
+        const saved = (await coordinator.snapshot(id)).session
+        session = service.liveSession(id) ?? saved
+      }
+      const pending = new Inbox(session).pending()
       const rows = new Map(service.queue(id).map((row) => [row.id, row]))
       for (const input of pending) if (!rows.has(input.inputId)) rows.set(input.inputId, { id: input.inputId, text: input.text, delivery: input.delivery, intent: input.intent, state: "queued", order: input.admittedSeq })
       return { items: [...rows.values()], resumable: pending.some((input) => !scheduled.has(keyFor(id, input.inputId))) && !service.queueState(id).running }

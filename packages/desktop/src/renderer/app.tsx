@@ -66,7 +66,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [projectError, setProjectError] = useState<string>()
   const [selectedProjectId, setSelectedProjectId] = useState<string>()
   const [projectBinding, setProjectBinding] = useState<{ workspaceId: string; sessionId: string; projectId?: string; error?: string }>()
-  const [capabilities, setCapabilities] = useState<Record<string, string[]>>({})
+  const [capabilitySnapshot, setCapabilitySnapshot] = useState<{ workspaceId: string; value: Record<string, string[]> }>()
+  const capabilitiesReady = selectedWorkspaceId !== undefined && capabilitySnapshot?.workspaceId === selectedWorkspaceId
+  const capabilities = capabilitiesReady ? capabilitySnapshot.value : {}
   const durableInputSupported = useRef(false)
   durableInputSupported.current = capabilities["desktop-input"]?.includes("1") === true
   const [queueResumable, setQueueResumable] = useState(false)
@@ -78,6 +80,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [queue, setQueue] = useState<SessionQueueItem[]>()
   const [tasks, setTasks] = useState<AgentTaskView[]>()
   const [taskError, setTaskError] = useState<string>()
+  const [taskActionFailure, setTaskActionFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [historyError, setHistoryError] = useState<string>()
   const [historyCount, setHistoryCount] = useState<number>()
   const [workStateResult, setWorkStateResult] = useState<{ scope: { workspaceId?: string; sessionId?: string }; view: DesktopWorkStateView }>()
@@ -155,10 +158,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   }, [bridge])
 
   const selectedBinding = projectBinding?.workspaceId === selectedWorkspaceId && projectBinding?.sessionId === selectedSessionId && !projectBinding?.error ? projectBinding : undefined
-  const activeProjectId = selectedSessionId && selectedBinding ? selectedBinding.projectId : selectedWorkspaceId
-    ? projects?.find((project) => project.id === selectedProjectId && (selectedSessionId || project.workspaceIds.includes(selectedWorkspaceId)))?.id
-      ?? projects?.find((project) => project.workspaceIds.includes(selectedWorkspaceId))?.id
-    : projects?.find((project) => project.id === selectedProjectId)?.id
+  const activeProjectId = selectedSessionId
+    ? projects?.find(project => project.id === selectedBinding?.projectId)?.id
+    : projects?.find(project => project.id === selectedProjectId)?.id
   const projectScopeSupported = capabilities["desktop-project-scope"]?.includes("1") === true
   const projectReady = !projectScopeSupported || !!(projectBinding && projectBinding.workspaceId === selectedWorkspaceId && projectBinding.sessionId === selectedSessionId && !projectBinding.error)
   useEffect(() => {
@@ -167,7 +169,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     const workspaceId = selectedWorkspaceId, sessionId = selectedSessionId
     setProjectBinding(undefined)
     void bridge.request({ kind: "desktop/session/project/state", workspaceId, sessionId }).then((value) => {
-      if (active) setProjectBinding({ workspaceId, sessionId, projectId: (value as { projectId?: string })?.projectId })
+      if (!active) return
+      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid conversation project owner")
+      const owner = value as { sessionId?: unknown; projectId?: unknown }
+      if (owner.sessionId !== sessionId || owner.projectId !== undefined && (typeof owner.projectId !== "string" || owner.projectId === "")) throw new Error("Invalid conversation project owner")
+      setProjectBinding({ workspaceId, sessionId, ...(typeof owner.projectId === "string" ? { projectId: owner.projectId } : {}) })
     }).catch((error) => { if (active) setProjectBinding({ workspaceId, sessionId, error: error instanceof Error ? error.message : String(error) }) })
     return () => { active = false }
   }, [bridge, projectScopeSupported, selectedWorkspaceId, selectedSessionId, retryNonce])
@@ -275,7 +281,8 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   useEffect(() => {
     if (selectedWorkspaceId === undefined) return
     let active = true
-    setCapabilities({})
+    const capabilityScope = workspaceSelection.current
+    setCapabilitySnapshot(undefined)
     setSandbox(undefined)
     setConnection((current) => current === "reconnecting" ? "reconnecting" : "connecting")
     // Keep the first selection across failed bootstrap attempts and StrictMode
@@ -291,7 +298,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           bridge.request({ kind: "desktop/capabilities", workspaceId: selectedWorkspaceId }),
           bridge.request({ kind: "workspace/sandbox/state", workspaceId: selectedWorkspaceId }),
         ])
-        if (!active) return
+        if (!active || workspaceSelection.current !== capabilityScope) return
         if (dashboardVersion >= dashboardApplied.current) {
           dashboardApplied.current = dashboardVersion
           const initialDashboard = dashboardResult as SessionDashboardResult
@@ -304,7 +311,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           }
           if (!initialDashboard.listingUnavailable) reconciledWorkspaces.current.add(selectedWorkspaceId)
         }
-        setCapabilities((capabilitiesResult ?? {}) as Record<string, string[]>)
+        setCapabilitySnapshot({ workspaceId: selectedWorkspaceId, value: (capabilitiesResult ?? {}) as Record<string, string[]> })
         setSandbox(sandboxResult as SandboxState | undefined)
         setConnection("online")
         setError(undefined)
@@ -327,6 +334,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
     ]))
     const unsubscribe = bridge.onEvent((event) => {
+      if (event.kind === "window/state") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
         setConnection("offline")
@@ -521,8 +529,15 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         queue,
         queueResumable,
         onResumeQueue: async () => {
-          await bridge.request({ kind: "desktop/session/input/resume", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
-          await refreshTasks(selectedWorkspaceId, selectedSessionId)
+          const scope = selection.current
+          try {
+            await bridge.request({ kind: "desktop/session/input/resume", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+            if (selection.current === scope) setTaskActionFailure(undefined)
+            await refreshTasks(selectedWorkspaceId, selectedSessionId)
+          } catch (reason) {
+            if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) })
+            throw reason
+          }
         },
         onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
           if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
@@ -540,7 +555,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             if (selection.current === scope) setWorkStateResult({ scope, view })
           } catch (error) { await refreshWorkState(selectedWorkspaceId, selectedSessionId); throw error }
         },
-        taskError,
+        taskError: taskActionFailure?.scope === selection.current ? taskActionFailure.message : taskError,
         historyError,
         historyNotice: historyCount === undefined ? undefined : t("歷史視窗已載入 {count} 筆；可使用會話搜尋查找其他內容。", { count: historyCount }),
         pending: pendingForSession(pending, selectedSessionId),
@@ -560,19 +575,21 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           const scope = selection.current
           void bridge.request({ kind: "session/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
             .then(() => { if (selection.current === scope) setRunning(false) })
-            .catch((reason: unknown) => { if (selection.current === scope) setTaskError(String(reason)) })
+            .catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
         },
         onCancelTask: (taskId: string) => {
+          const scope = selection.current
           void bridge.request({ kind: "session/tasks/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: taskId })
-            .then(() => refreshTasks(selectedWorkspaceId, selectedSessionId))
-            .catch(() => undefined)
+            .then(() => { if (selection.current === scope) setTaskActionFailure(undefined); return refreshTasks(selectedWorkspaceId, selectedSessionId) })
+            .catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
         },
         onCancelQueue: (queueId: string) => {
+          const scope = selection.current
           void bridge.request(durableInputSupported.current
             ? { kind: "desktop/session/input/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, inputId: queueId }
             : { kind: "session/queue/cancel", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId, id: queueId })
-            .then(() => refreshTasks(selectedWorkspaceId, selectedSessionId))
-            .catch(() => undefined)
+            .then(() => { if (selection.current === scope) setTaskActionFailure(undefined); return refreshTasks(selectedWorkspaceId, selectedSessionId) })
+            .catch((reason: unknown) => { if (selection.current === scope) setTaskActionFailure({ scope, message: reason instanceof Error ? reason.message : String(reason) }) })
         },
         onReply: async ({ requestId, decision }: InteractionReply) => {
           const row = pending.find((candidate) => candidate.requestId === requestId)
@@ -625,6 +642,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       dashboard={dashboard}
       attentionBySession={pending.reduce<Record<string, number>>((counts, row) => { counts[row.sessionId] = (counts[row.sessionId] ?? 0) + 1; return counts }, {})}
       capabilities={capabilities}
+      capabilitiesReady={capabilitiesReady}
       sandbox={sandbox}
       error={error ?? projectError}
       selectedWorkspaceId={selectedWorkspaceId}
@@ -742,31 +760,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (selection.current !== scope) return
         if (action === "archive" && selectedSessionId === sessionId) setSelectedSessionId(undefined)
         if (action === "fork") { setSelectedSessionId(result.sessionId); useUiStore.getState().setSurface("conversation") }
-      }}
-      onOpenWorkspace={() => {
-        const scope = selection.current
-        const version = ++navigationVersion.current
-        void (async () => {
-          try {
-            const opened = await bridge.request({ kind: "workspace/pick" })
-            if (opened === undefined) return
-            const entry = opened as WorkspaceEntry
-            await refreshWorkspaces()
-            const projectRows = await refreshProjects()
-            let project = projectRows.find((row) => row.workspaceIds.includes(entry.id))
-            if (!project) {
-              project = await bridge.request({ kind: "projects/save", input: { name: entry.label, workspaceIds: [entry.id], primaryWorkspaceId: entry.id } }) as ProjectEntry
-              await refreshProjects()
-            }
-            if (selection.current !== scope || navigationVersion.current !== version) return
-            setSelectedProjectId(project.id)
-            setSelectedWorkspaceId(entry.id)
-            if (entry.id !== selectedWorkspaceId) setConnection("connecting")
-            setSelectedSessionId(undefined)
-          } catch (reason) {
-            if (selection.current === scope && navigationVersion.current === version) setError(reason instanceof Error ? reason.message : String(reason))
-          }
-        })()
       }}
       onRetry={() => {
         setConnection("reconnecting")

@@ -1,0 +1,200 @@
+/* Resource-page presentation. Native resource identities and requests remain
+ * in ResourceSettings; this scope does not style other retained settings pages. */
+.settings-content:has(> div:not([hidden]) > .settings-resource-tabs) {
+  width: 100%;
+  max-width: 1120px;
+}
+
+.settings-resource-tabs {
+  min-width: 0;
+}
+
+.settings-resource-tabs > .zc-pane-tabs {
+  margin-bottom: 18px;
+}
+
+.resource-settings {
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.resource-settings .resource-toolbar {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+}
+
+.resource-settings .resource-search {
+  display: flex;
+  flex: 1 1 320px;
+  align-items: center;
+  flex-wrap: nowrap;
+  min-width: 0;
+  gap: 8px;
+  margin: 0;
+}
+
+.resource-settings .resource-search .zc-search {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.resource-settings .resource-search .zc-search-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.resource-settings :is(.resource-authoring-actions, .resource-secondary-actions) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 8px;
+}
+
+.resource-settings .resource-authoring-actions {
+  flex: 0 1 auto;
+}
+
+.resource-settings .resource-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 22px 0 12px;
+}
+
+.resource-settings .resource-list-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.resource-settings .resource-list-heading h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.resource-settings .resource-list-title > span {
+  font-size: 12px;
+}
+
+.resource-settings .resource-secondary-actions {
+  gap: 4px;
+}
+
+.resource-settings .resource-secondary-actions .oc-button {
+  color: var(--ih-muted);
+}
+
+.resource-settings .resource-secondary-actions .oc-button:hover {
+  color: var(--ih-text);
+}
+
+.resource-settings .resource-cards {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 12px;
+}
+
+.resource-settings .resource-card {
+  min-height: 0;
+  padding: 14px;
+  border-radius: 10px;
+}
+
+.resource-settings .resource-card-top {
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+}
+
+.resource-settings .resource-card-icon {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.resource-settings .resource-card-top strong {
+  flex: 1 1 0;
+  min-width: 0;
+  padding-top: 1px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.resource-settings .resource-card-top > svg {
+  flex: 0 0 auto;
+  margin-top: 4px;
+  color: var(--ih-muted);
+}
+
+.resource-settings .resource-card > p {
+  margin: 10px 0 12px;
+  line-height: 1.6;
+}
+
+.resource-settings .resource-card-footer {
+  display: grid;
+  gap: 6px;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.resource-settings .resource-card-source {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.resource-settings .resource-source-badge {
+  padding: 2px 6px;
+  line-height: 1.45;
+}
+
+.resource-settings .resource-source-id {
+  display: block;
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-settings .resource-card-shadowed {
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.resource-detail .resource-detail-source-id {
+  min-width: 0;
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+@container (max-width: 620px) {
+  .resource-settings .resource-search {
+    flex-basis: 100%;
+  }
+
+  .resource-settings .resource-authoring-actions {
+    flex-basis: 100%;
+  }
+}
+
+@container (max-width: 420px) {
+  .resource-settings .resource-list-heading {
+    align-items: flex-start;
+  }
+
+  .resource-settings .resource-secondary-actions {
+    flex-basis: 100%;
+  }
+}

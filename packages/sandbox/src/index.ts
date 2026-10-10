@@ -1,8 +1,20 @@
 export type SandboxMode = "read-only" | "workspace-write" | "danger-full-access"
+export type {
+  ExecutionTransport, ExecutionLifetime, BackendAssurance, StopReason, ExecutionOwner,
+  BackendProbe, BackendRequirements, BackendDecision, ProcessSpec, AuthorityState,
+  CompiledSandboxPolicy, ExecutionReceipt, RootExit, ExecutionSettlement,
+  ExecutionHandle, PreparedExecution, ExecutionBackend, ExecutionOutput, ExecutionIo,
+  TransportExecutionHandle, PreparedTransportExecution, TransportExecutionBackend,
+} from "./execution.ts"
+export { checkBackendRequirements } from "./backend-requirements.ts"
+export { createExecutionLease } from "./execution-lease.ts"
+export { snapshotProcessSpec } from "./process-spec.ts"
 export type ConfinedSandboxMode = Exclude<SandboxMode, "danger-full-access">
 export type SandboxEnforcement = "full" | "partial"
 
 export interface SandboxExecutionPolicy {
+  /** Opaque host-created base authority token; retained by per-call grant copies. */
+  authoritySnapshot?: object
   mode: SandboxMode
   workspaceRoot: string
   /** Full approved project folder set. The default workspaceRoot is always included. */

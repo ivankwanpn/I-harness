@@ -1,10 +1,12 @@
-import { useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
 import { useText, type Message } from "../design/i18n.ts"
+import { useSettingsDraft } from "./settings-drafts.tsx"
 
 type ModelProtocol = NonNullable<Extract<ProviderCommand, { model: string; fields: unknown }>["fields"]["protocol"]>
 export interface EditableModel { id: string; name?: string; contextWindow?: number; maxTokens?: number; protocol?: ModelProtocol; inputModalities?: ("text" | "image")[] }
 export interface EditableProvider { id: string; displayName: string; baseURL?: string; modelsURL?: string; catalog?: string; apiKeyEnv?: string; protocol?: string; configured?: boolean }
+interface ProviderDraft { baseline: Record<string, unknown>; identity: string; values: Record<string, string> }
 const protocols = ["openai-completions", "openai-responses", "anthropic-messages", "gemini", "bedrock"]
 const modelFields = { name: "顯示名稱", contextWindow: "上下文大小", maxTokens: "最大輸出 Token", protocol: "通訊協定", inputModalities: "輸入類型" } as const
 const providerFields = { displayName: "顯示名稱", baseURL: "API 網址", modelsURL: "模型列表網址", catalog: "模型規格來源", apiKeyEnv: "API key 環境變數" } as const
@@ -18,18 +20,25 @@ function fieldValue(key: string, value: unknown): string {
 
 /** Local unsaved form state only. Blank edits clear overrides; unchanged fields
  * are omitted so independent changes to another field remain intact. */
-export function ProviderEditor({ id, provider, model, newModel = false, onSave, onClose, onBusyChange }: {
+export function ProviderEditor({ id, provider, model, newModel = false, onSave, onClose, onBusyChange, draftIdentity = ["provider-editor"] }: {
   id?: string; provider?: EditableProvider; model?: EditableModel; newModel?: boolean
   onSave(command: ProviderCommand): Promise<void>; onClose(): void; onBusyChange?(busy: boolean): void
+  draftIdentity?: readonly string[]
 }) {
   const t = useText()
   const isModel = model !== undefined || newModel
-  const initial = useRef<Record<string, unknown>>({ ...(isModel ? model : provider) })
   const labels: Record<string, Message> = isModel ? modelFields : providerFields
-  const [identity, setIdentity] = useState(isModel ? model?.id ?? "" : provider?.id ?? "")
-  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(Object.keys(labels).map((key) => [key, fieldValue(key, initial.current[key])])))
+  const [draft, setDraft, clearDraft] = useSettingsDraft<ProviderDraft>(draftIdentity, () => {
+    const baseline = { ...(isModel ? model : provider) }
+    return { baseline, identity: isModel ? model?.id ?? "" : provider?.id ?? "", values: Object.fromEntries(Object.keys(labels).map(key => [key, fieldValue(key, baseline[key as keyof typeof baseline])])) }
+  })
+  const { baseline, identity, values } = draft
+  const setIdentity = (identity: string) => setDraft(previous => ({ ...previous, identity }))
+  const setValues = (values: Record<string, string>) => setDraft(previous => ({ ...previous, values }))
   const [busy, setBusy] = useState(false)
   const inFlight = useRef(false)
+  const generation = useRef(0)
+  useEffect(() => { ++generation.current; return () => { ++generation.current } }, [])
   const [error, setError] = useState<string>()
   const existing = isModel ? model !== undefined : provider?.configured === true
   const creatingProvider = !isModel && provider === undefined
@@ -46,7 +55,7 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
     if (inFlight.current) return
     const fields: Record<string, string | number | string[] | null> = {}
     for (const [key, value] of Object.entries(values)) {
-      if (existing && value === fieldValue(key, initial.current[key])) continue
+      if (existing && value === fieldValue(key, baseline[key])) continue
       if (value === "") { if (existing) fields[key] = null; continue }
       if (key === "inputModalities") { fields[key] = value.split(","); continue }
       if (key === "contextWindow" || key === "maxTokens") {
@@ -59,7 +68,11 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
       ? { action: existing ? "model/edit" : "model/add", id: id!, model: identity, fields }
       : { action: existing ? "provider/edit" : "provider/create", id: provider?.id ?? identity, fields }
     inFlight.current = true; setBusy(true); onBusyChange?.(true); setError(undefined)
-    void onSave(command as ProviderCommand).then(onClose).catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason))).finally(() => { inFlight.current = false; setBusy(false); onBusyChange?.(false) })
+    const token = generation.current
+    void onSave(command as ProviderCommand).then(() => {
+      const cleared = clearDraft(draft)
+      if (token === generation.current && cleared) onClose()
+    }).catch((reason: unknown) => { if (token === generation.current) setError(reason instanceof Error ? reason.message : String(reason)) }).finally(() => { inFlight.current = false; if (token === generation.current) { setBusy(false); onBusyChange?.(false) } })
   }}>
     <fieldset disabled={busy}>
       <legend>{t(isModel ? existing ? "編輯模型" : "新增模型" : creatingProvider ? "新增提供商" : "編輯提供商")}</legend>

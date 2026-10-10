@@ -1,8 +1,9 @@
 {
   "name": "@i-harness/desktop-gateway",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
+  "exports": { ".": "./src/index.ts", "./src/*": "./src/*" },
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
     "@i-harness/credentials": "workspace:*",
     "@i-harness/fs-lock": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
+    "@i-harness/exec": "workspace:*",
     "@i-harness/goal": "workspace:*",
     "@i-harness/hooks": "workspace:*",
     "@i-harness/interaction": "workspace:*",
@@ -28,6 +30,8 @@
     "@i-harness/provider-runtime": "workspace:*",
     "@i-harness/rewind": "workspace:*",
     "@i-harness/sandbox": "workspace:*",
+    "@i-harness/sandbox-wsl": "workspace:*",
+    "@i-harness/workspace-runtime": "workspace:*",
     "@i-harness/schedule": "workspace:*",
     "@i-harness/sdk": "workspace:*",
     "@i-harness/session-executor": "workspace:*",

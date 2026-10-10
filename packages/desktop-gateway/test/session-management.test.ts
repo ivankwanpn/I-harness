@@ -59,11 +59,11 @@ describe("session navigation metadata", () => {
       heldCell.resolve()
       await assembly.tools.execute({ name: "code_wait", args: { cell_id: cell.cell_id, yield_time_ms: 2000 } })
       const terminal = assembly.ctx.services.get<import("@i-harness/terminal").TerminalService>("terminal/service")!
-      const child = terminal.open({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: root }, { sessionId: "s1" })
+      const child = await (await import("@i-harness/exec")).withExecCallerScope({ sessionId: "s1" }, () => terminal.open({ command: process.execPath, args: ["-e", "setInterval(() => {}, 1000)"], cwd: root }, { sessionId: "s1" }))
       expect(assembly.liveResources!().terminals).toEqual([expect.objectContaining({ id: child.id, ownerSessionId: "s1", status: "running" })])
       await expect(manager.mutate("s1", "delete")).rejects.toThrow(/active.*cell|process/i)
       const exited = terminal.waitExited(child.id)
-      terminal.close(child.id, { sessionId: "s1" }); await exited
+      await terminal.close(child.id, { sessionId: "s1" }); await exited
       expect(await coordinator.profile("s1")).toBeDefined()
     } finally { heldCell.resolve(); await assembly.dispose(); await coordinator.close() }
   })

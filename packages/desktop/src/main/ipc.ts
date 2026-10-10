@@ -1,6 +1,6 @@
 import type { BrowserWindow } from "electron"
 import { relative, isAbsolute, sep } from "node:path"
-import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
+import { DESKTOP_EVENT_CHANNEL, DESKTOP_REQUEST_CHANNEL, type DesktopEvent, type DesktopRequest, type TerminalShellChoice } from "../shared/bridge.ts"
 import type { WorkspaceRuntime, WorkspaceRuntimeManager } from "./sdk-runtime.ts"
 import { validateSandboxState } from "./sdk-runtime.ts"
 import type { WorkspaceCatalog } from "./workspaces.ts"
@@ -175,7 +175,7 @@ export async function dispatchDesktopRequest(
       const navigation = await runtime.client.request("desktop/session/navigation/state", {})
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
     }
-    const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh"].includes(value.kind)
+    const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh", "desktop/wsl/repair", "desktop/wsl/diagnose"].includes(value.kind)
     return runtime.client.request(value.kind, contextParams, longOperation ? 600000 : 30000)
   }
 
@@ -290,6 +290,9 @@ export async function dispatchDesktopRequest(
       }
       return { paths }
     }
+    case "window/state":
+      if (!dependencies.native) throw new Error("native window unavailable")
+      return dependencies.native.windowState()
     case "window/control":
       if (value.action !== "minimize" && value.action !== "toggle-maximize" && value.action !== "close") throw new Error("invalid window action")
       if (!dependencies.native) throw new Error("native window unavailable")
@@ -638,6 +641,7 @@ export function registerDesktopIpc(
 ): () => void {
   const projectContentSearch = createDesktopProjectContentSearch(dependencies)
   const ownedDependencies = { ...dependencies, projectContentSearch }
+  let removed = false
   ipc.handle(DESKTOP_REQUEST_CHANNEL, async (event, request) => {
     if (event.sender !== window.webContents) throw new Error("untrusted IPC sender")
     return await dispatchDesktopRequest(request, ownedDependencies)
@@ -647,12 +651,16 @@ export function registerDesktopIpc(
     try { dependencies.native?.onEvent(desktopEvent) } catch { /* Notifications cannot interrupt SDK event delivery. */ }
     window.webContents.send(DESKTOP_EVENT_CHANNEL, desktopEvent)
   })
-  let removed = false
+  const offWindowState = dependencies.native?.onWindowStateChanged((state) => {
+    if (removed || window.isDestroyed()) return
+    window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "window/state", maximized: state.maximized } satisfies DesktopEvent)
+  })
   return () => {
     if (removed) return
     removed = true
     ipc.removeHandler(DESKTOP_REQUEST_CHANNEL)
     offEvent()
+    offWindowState?.()
     void projectContentSearch.close()
   }
 }

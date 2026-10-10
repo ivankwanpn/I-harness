@@ -2,8 +2,13 @@ import type { AgentTaskView, SessionQueueItem } from "@i-harness/sdk"
 import type { DesktopTodoWriteInput, DesktopWorkStateView } from "@i-harness/desktop-gateway/src/work-state.ts"
 import { useText, type Message } from "../design/i18n.ts"
 import { TodoSection } from "./TodoSection.tsx"
+import { useRef } from "react"
+import { SettingsDraftScope } from "../settings/settings-drafts.tsx"
 
 export interface TaskPaneProps {
+  draftOwner?: object
+  workspaceId?: string
+  sessionId?: string
   queue?: SessionQueueItem[]
   tasks?: AgentTaskView[]
   error?: string
@@ -20,15 +25,19 @@ export interface TaskPaneProps {
 
 /** Queue/task state straight from the host: absent stays unknown, an empty
  * task list is "nothing to confirm" — never "everything finished". */
-export function TaskPane({ queue, tasks, error, workStateEnabled = false, workState, workStateError, onRetryWorkState, onWriteTodos, onCancelTask, onCancelQueue, queueResumable, onResumeQueue }: TaskPaneProps) {
+export function TaskPane(props: TaskPaneProps) {
+  const fallback = useRef({})
+  return <SettingsDraftScope owner={props.draftOwner ?? fallback.current}><TaskPaneContent {...props} /></SettingsDraftScope>
+}
+function TaskPaneContent({ workspaceId, sessionId, queue, tasks, error, workStateEnabled = false, workState, workStateError, onRetryWorkState, onWriteTodos, onCancelTask, onCancelQueue, queueResumable, onResumeQueue }: TaskPaneProps) {
   const t = useText()
   const statuses: Record<string, Message> = { running: "執行中", queued: "等候中", completed: "已完成", failed: "已失敗", cancelled: "已取消" }
   return (
     <section className="task-pane" aria-label={t("任務")}>
       <h3 className="review-title">{t("任務")}</h3>
-      {error === undefined ? null : <p className="notice error-text">{error}</p>}
+      {error === undefined ? null : <p role="alert" className="notice error-text">{error}</p>}
       {queueResumable && onResumeQueue ? <button type="button" className="link-button" onClick={() => { void onResumeQueue().catch(() => undefined) }}>{t("繼續佇列")}</button> : null}
-      {workStateEnabled ? <TodoSection workState={workState} error={workStateError} onRetry={onRetryWorkState} onWrite={onWriteTodos} /> : null}
+      {workStateEnabled ? <TodoSection workspaceId={workspaceId} sessionId={sessionId} workState={workState} error={workStateError} onRetry={onRetryWorkState} onWrite={onWriteTodos} /> : null}
       {queue === undefined
         ? <p className="muted">{t("佇列狀態未知")}</p>
         : queue.length === 0

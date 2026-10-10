@@ -48,13 +48,13 @@ export function ApprovalRuleManager({ bridge, workspaceId }: { bridge: DesktopBr
     <button type="button" disabled={busy} onClick={() => setReload((value) => value + 1)}>{t("重新讀取規則")}</button>
     {!state ? !error ? <p role="status">{t("正在讀取…")}</p> : null : <>
       <label>{t("搜尋核准規則")}<input aria-label={t("搜尋核准規則")} value={search} onChange={(event) => { setSearch(event.target.value); setPage(0) }} /></label>
-      {filteredRules.length === 0 ? <p>{t("尚未保存核准規則")}</p> : <><ul className="task-list">{filteredRules.slice(visiblePage * 20, visiblePage * 20 + 20).map((rule) => <li className="task-row" key={rule.id}>
+      {filteredRules.length === 0 ? <p>{t(query ? "沒有符合的核准規則" : "尚未保存核准規則")}</p> : <><ul className="task-list">{filteredRules.slice(visiblePage * 20, visiblePage * 20 + 20).map((rule) => <li className="task-row" key={rule.id}>
         <strong>{rule.evidence.name}</strong><pre className="approval-details">{rule.evidence.arguments}</pre>
         <p>{t(rule.scope.kind === "workspace" ? "此專案" : "此會話")}{rule.scope.kind === "session" ? ` · ${rule.scope.sessionId}` : ""} · {t("有效期限")}：{new Date(rule.expiresAt).toLocaleString()}{rule.expiresAt <= Date.now() ? ` · ${t("已到期")}` : ""}</p>
         <button type="button" aria-label={t("撤銷規則")} disabled={busy} onClick={() => { void mutate({ kind: "desktop/approval-rules/revoke", workspaceId, ruleId: rule.id }) }}>{t("撤銷規則")}</button>
       </li>)}</ul>{pageCount > 1 ? <div><button type="button" disabled={busy || visiblePage === 0} onClick={() => setPage(visiblePage - 1)}>{t("上一頁")}</button><span>{t("第 {page} / {total} 頁", { page: visiblePage + 1, total: pageCount })}</span><button type="button" disabled={busy || visiblePage + 1 === pageCount} onClick={() => setPage(visiblePage + 1)}>{t("下一頁")}</button></div> : null}</>}
       <h3>{t("新增規則")}</h3>
-      {visibleCandidates.length === 0 ? <p>{t("目前沒有可記住的即時待核准操作。可在新的核准卡片勾選記住；中斷或無完整身分證據的操作只支援單次核准。")}</p> : <form onSubmit={(event) => {
+      {visibleCandidates.length === 0 ? <p>{t(query ? "沒有符合的待核准操作" : "目前沒有可記住的即時待核准操作。可在新的核准卡片勾選記住；中斷或無完整身分證據的操作只支援單次核准。")}</p> : <form onSubmit={(event) => {
         event.preventDefault(); if (!candidate) return
         void mutate({ kind: "desktop/approval-rules/add", workspaceId, requestId: candidate.requestId, sessionId: candidate.sessionId, remember: { scope, expiresAt: Date.now() + duration } })
       }}>

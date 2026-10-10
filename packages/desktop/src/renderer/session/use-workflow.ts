@@ -8,13 +8,15 @@ const message = (error: unknown) => error instanceof Error ? error.message : Str
 
 /** Own responses and subscriptions for one selected conversation. The caller
  * keys this hook's component by workspace/session, so drafts also stay scoped. */
-export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionId: string, onChanged?: () => void) {
+export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionId: string, onChanged?: () => void, visible = true) {
   const t = useWorkflowText()
   const [view, setView] = useState<DesktopWorkflowView>()
   const [error, setError] = useState<string>()
   const [busy, setBusy] = useState(false)
   const [readbackRequired, setReadbackRequired] = useState(false)
   const active = useRef(false)
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
   const epoch = useRef(0)
   const readTicket = useRef(0)
   const lock = useRef(false)
@@ -24,6 +26,7 @@ export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionI
   changed.current = onChanged
 
   const read = useCallback(async (force = false) => {
+    if (!active.current || !force && !visibleRef.current) return false
     if (lock.current && !force) { dirty.current = true; return false }
     const scope = epoch.current
     const ticket = ++readTicket.current
@@ -41,6 +44,11 @@ export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionI
   useEffect(() => {
     active.current = true
     epoch.current++
+    return () => { active.current = false; epoch.current++; readTicket.current++ }
+  }, [bridge, workspaceId, sessionId])
+
+  useEffect(() => {
+    if (!visible) return
     const refresh = createRefreshScheduler(async () => { try { await read() } catch (reason) { if (active.current) setError(message(reason)) } })
     scheduler.current = refresh
     const unsubscribe = bridge.onEvent((event) => {
@@ -52,17 +60,17 @@ export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionI
         || event.method === "session/event" && (type === "goal/change" || type === "plan/mode" || type === "job/status" || type === "tool/result" || typeof type === "string" && type.startsWith("team/"))) refresh.schedule()
     })
     void read().catch((reason) => { if (active.current) setError(message(reason)) })
-    return () => { active.current = false; epoch.current++; readTicket.current++; refresh.dispose(); unsubscribe() }
-  }, [bridge, workspaceId, sessionId, read])
+    return () => { refresh.dispose(); unsubscribe(); if (scheduler.current === refresh) scheduler.current = undefined }
+  }, [bridge, workspaceId, sessionId, read, visible])
 
   async function retry() {
-    if (lock.current) return
+    if (lock.current || !visibleRef.current || !active.current) return
     setError(undefined)
     try { await read() } catch (reason) { if (active.current) setError(message(reason)) }
   }
 
   async function mutate(command: WorkflowCommand): Promise<boolean> {
-    if (lock.current || readbackRequired || !active.current) return false
+    if (lock.current || readbackRequired || !active.current || !visibleRef.current || !view) return false
     const scope = epoch.current
     lock.current = true; readTicket.current++; setBusy(true); setError(undefined)
     try {
@@ -86,5 +94,5 @@ export function useWorkflow(bridge: DesktopBridge, workspaceId: string, sessionI
     }
   }
 
-  return { view, error, busy, disabled: busy || readbackRequired, retry, mutate }
+  return { view, error, busy, disabled: busy || readbackRequired || !view || !visible, retry, mutate }
 }

@@ -219,6 +219,7 @@ describe("provider directory", () => {
         { id: "session-model", contextWindow: 96_000 },
       ],
       defaultModel: "default-model",
+      selectedDefaultModel: "default-model",
       discovery: "available",
       // No `catalog` declared anywhere in this fixture, so the route name IS
       // the family. Reported as a resolved value so a listing never has to

@@ -30,12 +30,15 @@ export function ProjectFilesPane({ selection, request, openFile, externalOpenFil
   const [loaded, setLoaded] = useState<{ identity: string; value: EditableSource }>()
   const [preview, setPreview] = useState<{ identity: string; value: SearchPreview }>(), [target, setTarget] = useState<{ selectionKey: string; ref: ProjectFileRef; navigation: ProjectFileTarget["navigation"] }>()
   const [external, setExternal] = useState<{ selectionKey: string; target: ExternalFileTarget }>()
+  // Every explicit open validates a fresh read. A saved draft must never ingest
+  // the previous visit's cached preview while that read is still pending.
+  const openVersion = useRef(0)
   const selectionKey = JSON.stringify(selection), rootScopeKey = JSON.stringify([selectionKey, membershipRevision]), current = useRef(rootScopeKey)
   current.current = rootScopeKey
   const roots = rootState?.scopeKey === rootScopeKey ? rootState.roots : []
   const active = state.active, activeKey = active ? editorDraftKey(active) : ""
   const navigation = target?.selectionKey === selectionKey && target && editorDraftKey(target.ref) === activeKey ? target.navigation : undefined
-  const loadIdentity = `${rootScopeKey}:${activeKey}:${refresh}:${navigation?.nonce ?? ""}`
+  const loadIdentity = `${rootScopeKey}:${activeKey}:${refresh}:${openVersion.current}:${navigation?.nonce ?? ""}`
   const member = !!active && roots.some((root) => root.workspaceId === active.workspaceId)
   useEffect(() => {
     let valid = true
@@ -54,6 +57,7 @@ export function ProjectFilesPane({ selection, request, openFile, externalOpenFil
         return
       }
       const ref = checkedFileRef(target)
+      openVersion.current++
       store.open(ref)
       setExternal(undefined)
       setTarget({ selectionKey, ref, navigation: target.navigation })

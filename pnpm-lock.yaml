@@ -188,6 +188,9 @@ importers:
       '@i-harness/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
+      '@i-harness/workspace-runtime':
+        specifier: workspace:*
+        version: link:../../packages/workspace-runtime
       '@vscode/ripgrep':
         specifier: ^1.18.0
         version: 1.18.0
@@ -381,6 +384,9 @@ importers:
       '@i-harness/desktop-gateway':
         specifier: workspace:*
         version: link:../desktop-gateway
+      '@i-harness/fs-search':
+        specifier: workspace:*
+        version: link:../fs-search
       '@i-harness/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -393,6 +399,9 @@ importers:
       '@xterm/xterm':
         specifier: 5.5.0
         version: 5.5.0
+      koffi:
+        specifier: 3.1.6
+        version: 3.1.6
       lucide-react:
         specifier: 0.469.0
         version: 0.469.0(react@19.1.1)
@@ -481,6 +490,9 @@ importers:
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
       '@i-harness/fs-lock':
         specifier: workspace:*
         version: link:../fs-lock
@@ -523,6 +535,9 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
       '@i-harness/schedule':
         specifier: workspace:*
         version: link:../schedule
@@ -562,6 +577,9 @@ importers:
       '@i-harness/todo':
         specifier: workspace:*
         version: link:../todo
+      '@i-harness/workspace-runtime':
+        specifier: workspace:*
+        version: link:../workspace-runtime
       ignore:
         specifier: 7.0.12
         version: 7.0.12
@@ -582,6 +600,12 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/sandbox-local':
+        specifier: workspace:*
+        version: link:../sandbox-local
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
 
   packages/fs:
     dependencies:
@@ -962,6 +986,21 @@ importers:
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
+      '@i-harness/sandbox-windows-acl':
+        specifier: workspace:*
+        version: link:../sandbox-windows-acl
+      '@i-harness/sandbox-windows-psec':
+        specifier: workspace:*
+        version: link:../sandbox-windows-psec
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
+      node-pty:
+        specifier: ^1.1.0
+        version: 1.1.0
 
   packages/sandbox-policy:
     dependencies:
@@ -980,6 +1019,25 @@ importers:
       koffi:
         specifier: ^3.1.0
         version: 3.1.6
+
+  packages/sandbox-windows-psec:
+    dependencies:
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
+    devDependencies:
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
+      '@i-harness/sandbox-policy':
+        specifier: workspace:*
+        version: link:../sandbox-policy
+
+  packages/sandbox-wsl:
+    dependencies:
+      '@i-harness/sandbox':
+        specifier: workspace:*
+        version: link:../sandbox
 
   packages/schedule:
     dependencies:
@@ -1148,6 +1206,10 @@ importers:
       '@i-harness/workflow':
         specifier: workspace:*
         version: link:../workflow
+    devDependencies:
+      '@i-harness/session-persistence-jsonl':
+        specifier: workspace:*
+        version: link:../session-persistence-jsonl
 
   packages/session-persistence:
     dependencies:
@@ -1321,12 +1383,12 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+      '@i-harness/exec':
+        specifier: workspace:*
+        version: link:../exec
       '@i-harness/sandbox':
         specifier: workspace:*
         version: link:../sandbox
-      node-pty:
-        specifier: ^1.1.0
-        version: 1.1.0
 
   packages/text-diff:
     dependencies:
@@ -1403,6 +1465,15 @@ importers:
       '@i-harness/session-persistence-jsonl':
         specifier: workspace:*
         version: link:../session-persistence-jsonl
+
+  packages/workspace-runtime:
+    dependencies:
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
+      '@i-harness/sandbox-wsl':
+        specifier: workspace:*
+        version: link:../sandbox-wsl
 
 packages:
 

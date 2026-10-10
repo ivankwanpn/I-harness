@@ -43,17 +43,17 @@
 import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { SandboxUnavailableError, workspaceRoots, type ConfinedArgv, type SandboxPolicy, type SandboxProvider } from '@i-harness/sandbox'
+import { SandboxUnavailableError, workspaceRoots, type ConfinedArgv, type ProcessSpec, type SandboxPolicy, type SandboxProvider } from '@i-harness/sandbox'
 import { grantWrite, revokeWrite } from './acl.ts'
 import { Win32Error } from './errors.ts'
 import { allocPtrSlot, decodePtr, isNullPtr, throwLastError, win32 } from './ffi.ts'
 import type { NativePtr, Win32Bindings } from './ffi.ts'
 import { AclWriteGrant } from './grant.ts'
 import { assertPrivateTempDisjoint, assertTempRootOutsideWorkspace } from './path-boundary.ts'
-import { drainPipe, spawnSandboxed, spawnSandboxedInherited, waitForExit } from './spawn.ts'
+import { buildCommandLine, drainPipe, spawnSandboxed, spawnSandboxedInherited, waitForExit } from './spawn.ts'
 import { createRestrictedToken, findLogonSid, makeWellKnownSid, openCurrentProcessToken, setTokenDefaultDaclGrant } from './token.ts'
 import { tempWriteSid, workspaceWriteSid } from './workspace-sid.ts'
 import * as abi from './win32-abi.ts'
@@ -115,6 +115,10 @@ export interface AclSandboxSpawnOptions {
   command: string
   /** Arguments, quoted per CommandLineToArgvW rules. */
   args?: readonly string[]
+  /** CRT by default; cmd-verbatim preserves one raw cmd.exe /d /s /c tail. */
+  argumentEncoding?: ProcessSpec['argumentEncoding']
+  /** Trusted hidden-console runner: preserve hidden presentation with inherited stdio. */
+  windowsHide?: boolean
   /** Working directory; defaults to the caller's cwd. */
   cwd?: string
   /**
@@ -375,7 +379,7 @@ export class AclSandbox {
     const cwd = options.cwd ?? process.cwd()
 
     if (options.stdio === 'inherit') {
-      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd })
+      const native = spawnSandboxedInherited(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding, windowsHide: options.windowsHide })
       let exitCodePromise: Promise<number> | undefined
       return {
         pid: native.pid,
@@ -388,7 +392,7 @@ export class AclSandbox {
       }
     }
 
-    const native = spawnSandboxed(api, token, { command: options.command, args, cwd })
+    const native = spawnSandboxed(api, token, { command: options.command, args, cwd, argumentEncoding: options.argumentEncoding })
     const stdout = drainPipe(api, native.stdoutRead)
     const stderr = drainPipe(api, native.stderrRead)
     // waitForExit is deliberately NOT started here: WaitForSingleObject blocks
@@ -561,7 +565,19 @@ interface AclTempCapability {
  * @returns the enclosing {@link SandboxProvider} (with a `dispose()` that
  *   revokes the provider's temp grants and removes its private temp dirs).
  */
-export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProvider & { dispose(): void } {
+export interface AclSandboxProvider extends SandboxProvider {
+  confineExecution(argv: readonly string[], policy: SandboxPolicy, argumentEncoding: ProcessSpec['argumentEncoding']): ConfinedArgv
+  dispose(): void
+}
+export function createWindowsAclSandbox(options: AclSandboxOptions & {
+  /** Trusted existing root for runner metadata; this does not grant write authority. */
+  privateTempRoot?: string
+  /** Compose only the policy-declared workspace grants. No private temp grant or environment rewrite. */
+  disablePrivateTempWrites?: boolean
+  /** Trusted hidden-console composition only; does not change token, grants or console attachment. */
+  hideChildWindows?: boolean
+}): AclSandboxProvider {
+  const hideChildWindows = options.hideChildWindows === true
   // Fail closed at composition: declared writable directories must exist.
   // (The per-policy write-SID derivation and grant materialization happen at
   // confine() — the AclSandbox class requires the SID at construction, so a
@@ -572,12 +588,22 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
       throw new Error(`AclSandbox writable dir does not exist or is not a directory: ${absolute}`)
     }
   }
+  if (options.privateTempRoot !== undefined && !isAbsolute(options.privateTempRoot)) {
+    throw new Error('AclSandbox private temp root must be absolute')
+  }
+  const privateTempRoot = options.privateTempRoot === undefined ? tmpdir() : resolve(options.privateTempRoot)
+  if (!existsSync(privateTempRoot) || !statSync(privateTempRoot).isDirectory()) {
+    throw new Error(`AclSandbox private temp root does not exist or is not a directory: ${privateTempRoot}`)
+  }
   const workspaceGrants = new Map<string, AclWriteGrant>()
+  // A failed post-apply add is never a ready workspace capability. Keep its
+  // native SID owner separately until explicit dispose can finish cleanup.
+  const partialWorkspaceGrants = new Set<AclWriteGrant>()
   const tempCapabilities = new Map<string, AclTempCapability>()
 
-  function materializeAclGrant(sessionId: string, roots: string[]): AclTempCapability {
+  function materializeWorkspaceGrants(roots: string[]): void {
     for (const workspaceRoot of roots) {
-      assertTempRootOutsideWorkspace(workspaceRoot, tmpdir())
+      assertTempRootOutsideWorkspace(workspaceRoot, privateTempRoot)
       const writeSid = workspaceWriteSid(workspaceRoot)
       if (!workspaceGrants.has(workspaceRoot)) {
         const grant = AclWriteGrant.create(writeSid)
@@ -590,6 +616,8 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
           try {
             grant.dispose()
           } catch (cleanupError) {
+            partialWorkspaceGrants.add(grant)
+            closing = true
             throw new AggregateError([error, cleanupError], 'windows-acl workspace grant failed and its cleanup also failed')
           }
           throw error
@@ -597,12 +625,15 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
         workspaceGrants.set(workspaceRoot, grant)
       }
     }
+  }
+  function materializeAclGrant(sessionId: string, roots: string[]): AclTempCapability {
+    materializeWorkspaceGrants(roots)
     // A new root set gets a new private capability as well. A token must never
     // retain a private-object SID from a prior, broader project scope.
     const key = JSON.stringify([sessionId, [...roots].sort()])
     const existing = tempCapabilities.get(key)
     if (existing !== undefined) return existing
-    const tempDir = mkdtempSync(join(tmpdir(), 'dsh-'))
+    const tempDir = mkdtempSync(join(privateTempRoot, 'dsh-'))
     const tempSid = tempWriteSid(tempDir)
     let grant: AclWriteGrant | undefined
     try {
@@ -633,26 +664,35 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
   }
 
   function revokeAclGrants(): void {
-    if (workspaceGrants.size === 0 && tempCapabilities.size === 0) return
+    if (workspaceGrants.size === 0 && partialWorkspaceGrants.size === 0 && tempCapabilities.size === 0) return
     const failures: unknown[] = []
-    for (const grant of [...workspaceGrants.values(), ...[...tempCapabilities.values()].map(capability => capability.grant)]) {
+    for (const grant of partialWorkspaceGrants) {
       try {
         grant.dispose()
+        partialWorkspaceGrants.delete(grant)
       } catch (error) {
         failures.push(error)
       }
     }
-    for (const { dir } of tempCapabilities.values()) {
+    for (const [root, grant] of workspaceGrants) {
       try {
-        rmSync(dir, { recursive: true, force: true })
+        grant.dispose()
+        workspaceGrants.delete(root)
       } catch (error) {
         failures.push(error)
       }
     }
-    workspaceGrants.clear()
-    tempCapabilities.clear()
+    for (const [key, capability] of tempCapabilities) {
+      try {
+        capability.grant.dispose()
+        rmSync(capability.dir, { recursive: true, force: true })
+        tempCapabilities.delete(key)
+      } catch (error) {
+        failures.push(error)
+      }
+    }
     if (failures.length > 0) {
-      throw new AggregateError(failures, `windows-acl grant cleanup completed with ${failures.length} failure(s)`)
+      throw new AggregateError(failures, `windows-acl grant cleanup incomplete with ${failures.length} failure(s)`)
     }
   }
 
@@ -664,11 +704,20 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
       if (!existsSync(root) || !statSync(root).isDirectory()) throw new Error(`AclSandbox workspace is not an existing directory: ${root}`)
     }
     const rootArgs = roots.flatMap((root) => ['--workspace', root])
+    if (options.disablePrivateTempWrites && policy.mode === 'workspace-write') {
+      if (sessionId === undefined) throw new Error('workspace-write without private temp requires a trusted session ID')
+      materializeWorkspaceGrants(roots)
+      return [
+        ...runnerInvocation(), ...rootArgs,
+        '--temp', privateTempRoot, '--mode', policy.mode, '--no-temp-write', 'true',
+        ...roots.flatMap((root) => ['--write-sid', workspaceWriteSid(root)]),
+      ]
+    }
     if (sessionId === undefined || policy.mode === 'read-only') {
       return [
         ...runnerInvocation(),
         ...rootArgs,
-        '--temp', tmpdir(),
+        '--temp', privateTempRoot,
         '--mode', policy.mode,
       ]
     }
@@ -684,20 +733,26 @@ export function createWindowsAclSandbox(options: AclSandboxOptions): SandboxProv
   }
 
   let disposed = false
+  let closing = false
+  function confineExecution(argv: readonly string[], policy: SandboxPolicy, argumentEncoding: ProcessSpec['argumentEncoding']): ConfinedArgv {
+    if (closing) throw new SandboxUnavailableError(policy.mode, 'windows ACL backend is disposed or closing')
+    if (argumentEncoding !== 'crt' && argumentEncoding !== 'cmd-verbatim') throw new Error('invalid argument encoding')
+    if (argumentEncoding === 'cmd-verbatim') buildCommandLine(argv[0] ?? '', argv.slice(1), argumentEncoding)
+    return {
+      argv: [...aclRunnerArgv(policy), ...(hideChildWindows ? ['--windows-hide', 'true'] : []), ...(argumentEncoding === 'cmd-verbatim' ? ['--argument-encoding', argumentEncoding] : []), '--', ...argv],
+      enforcement: 'partial',
+      denialSignatures: DENIAL_SIGNATURES,
+      runnerFailureRules: RUNNER_FAILURE_RULES,
+    }
+  }
   return {
-    confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv {
-      if (disposed) throw new SandboxUnavailableError(policy.mode, 'windows ACL backend is disposed')
-      return {
-        argv: [...aclRunnerArgv(policy), '--', ...argv],
-        enforcement: 'partial',
-        denialSignatures: DENIAL_SIGNATURES,
-        runnerFailureRules: RUNNER_FAILURE_RULES,
-      }
-    },
+    confine(argv: readonly string[], policy: SandboxPolicy): ConfinedArgv { return confineExecution(argv, policy, 'crt') },
+    confineExecution,
     dispose(): void {
       if (disposed) return
-      disposed = true
+      closing = true
       revokeAclGrants()
+      disposed = true
     },
   }
 }

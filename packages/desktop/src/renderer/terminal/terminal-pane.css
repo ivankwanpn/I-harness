@@ -1,0 +1,5 @@
+.terminal-pane .terminal-controls { display: flex; align-items: center; flex-wrap: wrap; gap: .429rem; margin: .286rem 0 .571rem; }
+.terminal-pane .terminal-controls select { flex: 1 1 12rem; min-width: 0; }
+.terminal-pane .terminal-emulator { background: var(--ih-bg); border: 1px solid var(--ih-divider); border-radius: .429rem; }
+.terminal-pane > p { font-size: .857rem; line-height: 1.6; }
+.terminal-pane > [role="alert"] { color: var(--ih-control-danger); }

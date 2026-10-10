@@ -3,11 +3,9 @@
  * (docs/handoff/2026-09-18-prior-art-survey.md §4).
  *
  * The RULE lives in `@i-harness/hooks`: a declaration counts only when the
- * config is the harness home's own, and anything else needs its script hash
- * approved by the user. That rule was complete and unusable — a plugin's hook
- * could never be granted, because nothing existed that could grant one. This is
- * the surface that can, and it exists for the CLI's own reason: the CLI is the
- * development/test harness, so the grant has to be exercisable here.
+ * config is the harness home's own, and anything else needs its content hash
+ * approved by the user. Native handlers bind a script; compatible Claude plugin
+ * handlers bind the reviewed plugin contents, including their configuration.
  *
  * Shape follows `sessions.ts` — parse → gather → render → run, each piece pure
  * and separately testable — and it shares the store with the run path
@@ -57,12 +55,14 @@ export interface DeclaredHookRow {
   script: string
   sha256: string
   status: HooksStatus
+  trustScope?: "plugin"
+  sourceEvent?: "SessionStart"
 }
 
 const HOOKS_USAGE =
   "usage: i-harness hooks <list|approve|revoke> [sha256]\n" +
   "  list              every declared handler, from the harness home and each enabled plugin\n" +
-  "  approve <sha256>  grant one (a unique prefix is enough); the grant is of the SCRIPT's hash\n" +
+  "  approve <sha256>  grant reviewed contents (a unique prefix is enough): a native script, or all supported handlers from the same reviewed plugin configuration\n" +
   "  revoke <sha256>   take a grant back"
 
 export function parseHooksArgs(args: string[]): ParsedHooksArgs {
@@ -86,9 +86,10 @@ function toRow(handler: LoadedHandler, source: string, configDir: string): Decla
     source,
     id: handler.spec.id,
     event: handler.spec.event,
-    script: trustScriptPath(handler.spec, configDir),
+    script: handler.spec.claude?.pluginRoot ?? trustScriptPath(handler.spec, configDir),
     sha256: handler.spec.trust.sha256,
     status: handler.valid ? "granted" : handler.unapproved === true ? "ungranted" : "tampered",
+    ...(handler.spec.claude ? { trustScope: "plugin" as const, sourceEvent: handler.spec.claude.event } : {}),
   }
 }
 
@@ -122,7 +123,10 @@ export async function listDeclaredHooks(opts: HooksCommandOptions = {}): Promise
       // these as `<root>/<id>/hooks/hooks.json`. The label is cosmetic; the hash
       // is what a grant names.
       const id = relative(root, configPath).split(/[\\/]/)[0] ?? configPath
-      for (const handler of await loadHooksConfig(configPath, dirname(configPath), store)) {
+      for (const handler of await loadHooksConfig(configPath, dirname(configPath), store, {
+        claudePluginRoot: dirname(dirname(configPath)),
+        onUnsupported: (diagnostic) => { d.warn(`[plugins] hooks ${configPath}: ${diagnostic.event} (${diagnostic.id}): ${diagnostic.message}`) },
+      })) {
         rows.push(toRow(handler, id, dirname(configPath)))
       }
     }
@@ -136,9 +140,10 @@ export function renderHookTable(rows: DeclaredHookRow[]): string {
   }
   const lines = [`${rows.length} hook handler(s) declared:`, ""]
   for (const row of rows) {
-    lines.push(`  ${row.status.padEnd(9)} ${row.id}  [${row.event}]`)
+    lines.push(`  ${row.status.padEnd(9)} ${row.id}  [${row.event}${row.sourceEvent ? ` / ${row.sourceEvent}` : ""}]`)
     lines.push(`            source: ${row.source}`)
-    lines.push(`            script: ${row.script}`)
+    lines.push(`            ${row.trustScope === "plugin" ? "plugin contents" : "script"}: ${row.script}`)
+    if (row.trustScope === "plugin") lines.push("            trust: all supported handlers from the same reviewed plugin configuration")
     // Printed in full: this is the string `approve` takes.
     lines.push(`            sha256: ${row.sha256}`)
     lines.push("")

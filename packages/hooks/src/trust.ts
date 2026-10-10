@@ -6,6 +6,7 @@ import { resolveHarnessHome } from "@i-harness/harness-home"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { HookHandlerSpec } from "./types.ts"
 import { HookTrustError } from "./types.ts"
+import { sha256ClaudePluginTree } from "./claude.ts"
 
 // W6 T6: ONE module-scope handle for this file's one report. The phase is
 // `config`: the trust store IS configuration (which handlers the user has
@@ -36,7 +37,7 @@ export async function verifyHandlerTrust(
   configDir: string,
 ): Promise<void> {
   const file = trustScriptPath(spec, configDir)
-  const actual = await sha256File(file)
+  const actual = spec.claude === undefined ? await sha256File(file) : await sha256ClaudePluginTree(spec.claude.pluginRoot)
   if (actual !== spec.trust.sha256) {
     throw new HookTrustError(spec.id, spec.trust.sha256, actual)
   }

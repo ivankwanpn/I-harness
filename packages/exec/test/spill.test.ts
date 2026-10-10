@@ -5,6 +5,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 describe("OutputCollector", () => {
+  it.each([Buffer.from("😀".repeat(20)), Buffer.alloc(80, 255)])("bounds oversized UTF-8/binary frames and retains exact spill bytes", bytes => {
+    const c = new OutputCollector({ maxBytes: 10, spillRoot: mkdtempSync(join(tmpdir(), "i-harness-spill-")) })
+    c.push(bytes)
+    expect(Buffer.byteLength(c.peek())).toBeLessThanOrEqual(10)
+    const r = c.finalize()
+    expect(readFileSync(r.spillPath!)).toEqual(bytes)
+    expect(Buffer.byteLength(r.text)).toBeLessThanOrEqual(10)
+  })
   it("keeps everything under maxBytes (no spill)", () => {
     const c = new OutputCollector({ maxBytes: 100, spillRoot: mkdtempSync(join(tmpdir(), "i-harness-spill-")) })
     c.push(Buffer.from("hello"))
@@ -34,6 +42,6 @@ describe("OutputCollector", () => {
     const r = c.finalize()
     expect(r.spillPath).toBeUndefined()
     expect(r.lossy).toBe(true) // 中間被丟（只保尾）
-    expect(r.text.endsWith("uvwxyz")).toBe(true) // 尾保留
+    expect(r.text).toBe("vwxyz") // Exact bounded tail, including oversized chunks.
   })
 })

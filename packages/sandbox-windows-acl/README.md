@@ -154,3 +154,27 @@ Medium 測試根目錄的個別 ACE 下成功區分兩個可寫身分與唯讀�
 仍可能取得上述 `SANDBOX_DENIED`，不會偷偷轉成完整存取。這並未宣稱所有 piped Node
 工具鏈已恢复可用。**產品後端仍保留原有 WRITE_RESTRICTED 與 capability ACL 邊界。** 詳見
 [後續審查與原生結果](../../docs/audit/2026-10-05-windows-sandbox-toolchain.md)。
+
+# Trusted no-temp composition
+
+`createWindowsAclSandbox` accepts an optional absolute, existing
+`privateTempRoot` to locate runner temp metadata. This path alone grants no
+write authority. The production legacy adapter sets
+`disablePrivateTempWrites: true`: read-only grants no writable temp, and
+workspace-write supplies only the declared workspace write SIDs. The runner's
+`--no-temp-write true` path does not create a private temp directory, add a
+temp SID, or rewrite `TEMP`/`TMP`. A workspace-write call on this path requires
+a trusted `sessionId` so the provider can own the standing workspace grants.
+Programs needing temp writes outside declared roots can fail.
+
+The public `AclSandboxSpawnOptions.argumentEncoding` defaults to CRT. The
+provider's `confineExecution` passes an explicit `cmd-verbatim` request through
+the runner; it admits only absolute `cmd.exe /d /s /c` and one raw fifth
+argument. The CreateProcess command line preserves that raw tail, including
+empty text, Unicode, quoting and redirection, while existing CRT callers keep
+their previous encoding.
+
+Provider disposal closes admission immediately. Failed grant or directory
+cleanup remains owned and a later `dispose()` retries it; successful grant
+release is idempotent. This lets the enclosing native Job owner settle before
+the ACL provider's grant lifecycle is acknowledged.

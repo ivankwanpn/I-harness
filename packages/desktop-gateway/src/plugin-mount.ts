@@ -3,26 +3,30 @@ import { readFile } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { toMcpServerConfigs, toSubagentRoles, type RuntimeInputs } from "@i-harness/plugin-registry"
 import { createPromptCommand, registerPromptCommand, parseCommandLine, listCommands, runCommand } from "@i-harness/interaction"
-import { createHookRegistry, createHookTrustStore, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
+import { createHookRegistry, createHookTrustStore, HookUnsupportedFormatError, resolveHookTrustPath, type HookRegistry } from "@i-harness/hooks"
 import type { SessionServiceOptions, SessionAssembly } from "@i-harness/session-executor"
 import type { McpServerConfig } from "@i-harness/mcp-client"
 import { createAuthoredHookApprovals, isAuthoredHookPath } from "./hook-authoring.ts"
+import { installedPluginHookRoot } from "./plugin-hook-root.ts"
 
 interface Mounted {
+  startSource: "startup" | "resume"
   commands: Map<string, { signature: string; dispose(): void }>
   hooks: Map<string, { signature: string; trustSignature: string; registry: HookRegistry }>
 }
 const live = new WeakMap<SessionAssembly, Mounted>()
 
-export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void, directMcp: McpServerConfig[] = []): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
+export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessionId: string, report: (messages: string[]) => void, directMcp: McpServerConfig[] = [], workspace = configDir): Awaited<ReturnType<NonNullable<SessionServiceOptions["extensionsFor"]>>> {
   const mcp = toMcpServerConfigs(inputs.mcpServerConfigs)
   const agents = toSubagentRoles(inputs.agentDescriptors, { allowedTools: ["read", "glob", "grep", "list_dir"] })
   const messages = [...mcp.skipped.map((row) => `MCP ${row.serverName}: ${row.reason}`), ...agents.unresolved.map((row) => `Agent ${row.role}: ${row.tool} (${row.reason})`)]
   const publish = () => { if (messages.length > 100) messages.splice(0, messages.length - 100); report([...messages]) }
+  let contextAssembly: SessionAssembly | undefined
   const update = async (assembly: SessionAssembly, strict = true) => {
+      contextAssembly = assembly
       const failures: unknown[] = []
       let state = live.get(assembly)
-      if (!state) { state = { commands: new Map(), hooks: new Map() }; live.set(assembly, state) }
+      if (!state) { state = { commands: new Map(), hooks: new Map(), startSource: assembly.session.events.some(event => event.type === "user/message" || event.type === "assistant/message") ? "resume" : "startup" }; live.set(assembly, state) }
       const commands = new Map(inputs.commandDescriptors.map((descriptor) => [descriptor.name, descriptor]))
       for (const [name, old] of state.commands) {
         if (!commands.has(name) || JSON.stringify(commands.get(name)) !== old.signature) { old.dispose(); state.commands.delete(name) }
@@ -47,7 +51,12 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         if (signatures.get(path) === old.signature) {
           // The artifact may have been restored without changing either the
           // config or grant set. Explicit refresh must repair that cached verdict.
-          try { await old.registry.refreshTrust(approvals); old.trustSignature = trustSignature }
+          try {
+            await old.registry.refreshTrust(approvals); old.trustSignature = trustSignature
+            // A newly approved startup handler activates without rebuilding the
+            // agent. The Claude registry dedupes already executed content.
+            if (old.registry.handlers().some(handler => handler.spec.claude)) await old.registry.beginSession(sessionId, state.startSource)
+          }
           catch (error) { failures.push(error); messages.push(`Hook trust ${path}: ${String(error)}`) }
           continue
         }
@@ -60,14 +69,22 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
         try {
           const approvals = createAuthoredHookApprovals(configDir, configPath)
           const trustSignature = trustSignatureFor(configPath)
-          const registry = await createHookRegistry(assembly.ctx, { configPath, configDir: dirname(configPath), approvals, report: (error) => { messages.push(String(error)); publish() } })
+          const registry = await createHookRegistry(assembly.ctx, {
+            configPath, configDir: dirname(configPath), approvals, cwd: workspace, sessionId,
+            claudePluginRoot: installedPluginHookRoot(configDir, configPath),
+            onUnsupported: row => { messages.push(`Hook ${configPath} ${row.event} ${row.id}: ${row.message}`); publish() },
+            report: (error) => { messages.push(String(error)); publish() },
+          })
           state.hooks.set(configPath, { signature, trustSignature, registry })
           for (const handler of registry.handlers()) if (!handler.valid) messages.push(`Hook ${configPath}: not granted or invalid`)
-          await registry.beginSession(sessionId)
+          await registry.beginSession(sessionId, state.startSource)
         } catch (error) {
           const failed = state.hooks.get(configPath)
           if (failed) { await failed.registry.dispose(); state.hooks.delete(configPath) }
-          failures.push(error); messages.push(`Hooks ${configPath}: ${String(error)}`)
+          // An unsupported plugin document contributes no handlers. Authored
+          // policies and invalid native configurations still reject live apply.
+          if (!(error instanceof HookUnsupportedFormatError) || isAuthoredHookPath(configDir, configPath)) failures.push(error)
+          messages.push(`Hooks ${configPath}: ${String(error)}`)
         }
       }
       for (const [name, mounted] of assembly.pluginMcpResults) if (!mounted) messages.push(`MCP ${name}: failed to mount`)
@@ -76,7 +93,9 @@ export function pluginExtensions(inputs: RuntimeInputs, configDir: string, sessi
       if (strict && failures.length) throw new AggregateError(failures, "Plugin hooks failed to update")
   }
   return {
-    options: { skills: { extraDirs: inputs.skillDirs, globalDir: join(configDir, "skills") }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true },
+    options: { skills: { extraDirs: inputs.skillDirs, globalDir: join(configDir, "skills") }, pluginMcp: [...mcp.configs, ...directMcp], pluginAgents: agents.roles, pluginAgentsEphemeral: true,
+      hookContext: () => contextAssembly ? [...(live.get(contextAssembly)?.hooks.values() ?? [])].map(entry => entry.registry.context()).filter(Boolean).join("\n\n") : "",
+    },
     update,
     async mount(assembly) {
       await update(assembly, false)

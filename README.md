@@ -4,30 +4,30 @@
 
 I-harness 是開源的 AI 程式開發工作區。連接你選擇的模型服務，開啟本機專案，讓 Agent 搜尋程式碼、讀取檔案、執行命令與完成修改；你可以隨時查看工作過程、核準操作、檢查差異或停止執行。
 
-[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.1) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
+[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.3) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
 
 ## 下載
 
-目前提供 **Windows x64 · v0.1.1**，包含 Desktop 與它需要的執行環境。
+目前提供 **Windows x64 · v0.1.3**，包含 Desktop 與它需要的執行環境。詳見 [0.1.3 更新紀錄](docs/releases/v0.1.3.md)。
 
 | 版本 | 適合你，如果… | 下載 |
 | --- | --- | --- |
-| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-Setup-0.1.1.exe) |
-| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.1/I-harness-Desktop-0.1.1.zip) |
+| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-Setup-0.1.3.exe) |
+| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.3/I-harness-0.1.3.zip) |
 
-Portable 版解壓到獨立資料夾後，執行 `I-harness Desktop.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
+Portable 版解壓到獨立資料夾後，執行 `I-harness.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
 
 Desktop 不需要另裝 Node.js。模型服務需要自行配置；使用雲端模型時，網路連線、API 權限與用量由所選服務提供。
 
 目前的 Windows 發行檔未進行程式碼簽署。
 
-安裝器預設使用每使用者的 LocalAppData 位置；管理員帳戶啟動時會由 Windows 詢問授權，可選擇 `Program Files`。若已有舊版且安裝器以管理員權限執行，請先從 Windows「已安裝的應用程式」解除安裝舊版，再重新安裝；會話與設定資料會保留。v0.1.1 的安裝器已更新目錄權限檢查，詳見[修正紀錄](docs/audit/2026-10-05-desktop-installer-location-fix.md)。
+安裝器預設使用每使用者的 LocalAppData 位置，並可沿用既有安裝位置與舊版資料目錄。更新前請先關閉程式；提權更新的目的地限制與更新方式見 [Windows 安裝說明](packages/desktop/installer/README.md)。
 
 ## 快速開始
 
-1. **開啟 I-harness Desktop**，選擇本機專案資料夾作為工作區。
+1. **開啟 I-harness**，進入「專案 → 新增專案」，設定名稱、加入本機資料夾並儲存，再進入專案建立會話。
 2. **設定模型**：進入「設定 → 模型與提供商」，新增你的服務端點、協議與 API 憑證，再選擇模型。
-3. **選擇操作範圍**：在「執行與上下文」設定唯讀、可寫入工作區或完整存取，以及適合的核準方式。
+3. **選擇操作範圍**：在「執行與權限」設定唯讀、可寫入工作區或完整存取，以及適合的核準方式。
 4. **建立會話並描述目標**，例如「找出登入失敗的原因，提出修正並執行相關測試」。
 5. **檢查結果**：查看工作過程、待辦進度、命令輸出及檔案差異，再決定下一步。
 
@@ -60,6 +60,10 @@ Rewind 提供會話與已記錄檔案變更的還原預覽。可還原的內容�
 ### 擴充工具與分派工作
 
 接入 MCP 伺服器、使用 Skills、管理插件及執行工作流。子代理與 Team 可承接分工，並提供訊息、狀態與取消控制。工具仍依目前角色、操作範圍與核準設定執行。
+
+### Windows 上的 Linux 執行環境
+
+v0.1.3 包含 WSL2 Linux 後端，可在「執行與權限」選擇發行版、沙箱範圍、命令網路及工作區依賴。Bash、Code Mode 和子代理使用相同的 Linux 執行環境；IH 可管理固定版本的 Linux Node/npm。網頁存取另提供停用、快取、已索引和即時四種模式。設定方式與目前支援範圍見 [WSL2 使用指南](docs/wsl2.md)。
 
 ### 讓長任務維持可用
 
