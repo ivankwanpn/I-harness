@@ -15,6 +15,15 @@ errors should leave the composer and appear in independent floating popups.
   delay cap, 10% jitter. Existing explicit policies, including zero retries, win.
   Low-level provider builders retain their opt-in contract so Desktop attempt
   capture can keep exactly one outer retry layer.
+- User follow-up requests an editable retry count. Persist global
+  `Settings.modelRetryLimit` as an integer from 0 through 100, default 5; 0 disables
+  automatic retries. Settings > General exposes this count and says it applies
+  to the next model request. Existing explicit provider-template policies win.
+  Gateway routes `desktop/model-retry/state` and `desktop/model-retry/configure`
+  return `{ maxRetries: number }`; configure accepts the same field. Desktop
+  proxies them as `desktop/global-retry/state` and `desktop/global-retry/configure`
+  without needing a selected workspace. Already-open conversations must observe
+  the saved value on their next model request.
 - Normalize transient HTTP/transport failures; retry server/429/timeout/network
   failures, not auth, billing/quota, bad arguments, malformed tool arguments,
   context limits, TLS configuration failures or cancellation. Honor valid server
