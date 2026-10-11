@@ -1,0 +1,38 @@
+.icon-button.context-usage-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.context-usage-trigger:focus-visible {
+  outline: 2px solid var(--ih-accent);
+  outline-offset: 2px;
+}
+
+.context-usage-gauge {
+  flex: none;
+  fill: none;
+  stroke-width: 2;
+}
+
+.context-usage-gauge-track { stroke: var(--ih-divider); }
+.context-usage-gauge-fill { stroke: currentColor; stroke-linecap: round; }
+.context-usage-reading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  pointer-events: none;
+}

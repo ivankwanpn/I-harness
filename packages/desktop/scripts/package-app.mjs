@@ -44,6 +44,8 @@ renameSync(join(appDir, "electron.exe"), join(appDir, `${appName}.exe`))
 const resources = join(appDir, "resources")
 cpSync(outDir, join(resources, "app", "out"), { recursive: true, dereference: true })
 cpSync(join(packageRoot, "licenses"), join(resources, "app", "licenses"), { recursive: true })
+copyFileSync(join(packageRoot, "src", "renderer", "session", "SLASH_SOURCES.md"), join(resources, "app", "licenses", "ui-controls", "SLASH_SOURCES.md"))
+copyFileSync(join(packageRoot, "src", "renderer", "session", "COMPOSER_SOURCES.md"), join(resources, "app", "licenses", "ui-controls", "COMPOSER_SOURCES.md"))
 for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES"]) {
   copyFileSync(join(packageRoot, "..", "..", notice), join(resources, "app", notice))
 }

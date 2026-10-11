@@ -204,6 +204,10 @@ export function Workbench({
   const [managerOwners, setManagerOwners] = useState<Record<string, string | undefined>>()
   const workspaceScope = useRef({ id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId })
   if (workspaceScope.current.id !== selectedWorkspaceId || workspaceScope.current.sessionId !== selectedSessionId || workspaceScope.current.projectId !== selectedProjectId) workspaceScope.current = { id: selectedWorkspaceId, sessionId: selectedSessionId, projectId: selectedProjectId }
+  const contextModelOwner = useRef({ bridge, scope: workspaceScope.current })
+  if (contextModelOwner.current.bridge !== bridge || contextModelOwner.current.scope !== workspaceScope.current) contextModelOwner.current = { bridge, scope: workspaceScope.current }
+  const currentContextModelOwner = contextModelOwner.current
+  const [contextModelRevision, setContextModelRevision] = useState(0)
   const [workPaneTab, setWorkPaneTab] = useState("files")
   const [gitOpen, setGitOpen] = useState(false)
   const [gitBusy, setGitBusy] = useState(false)
@@ -449,6 +453,7 @@ export function Workbench({
                   fileReferencesEnabled={capabilities["prompt-context"]?.includes("1") && capabilities["desktop-review"]?.includes("1")}
                   imageAttachmentsEnabled={capabilities["prompt-images"]?.includes("1") && conversation.modelState?.status === "ready" && conversation.modelState.imageInput === true}
                   contextUsageEnabled={capabilities["session-context"]?.includes("1")}
+                  contextRefreshKey={JSON.stringify([conversation.modelState, conversation.running, conversation.operation?.busy === true, contextModelRevision])}
                   canCompact={conversation.canCompact}
                   onCompact={capabilities["desktop-compaction"]?.includes("1") ? conversation.onCompact : undefined}
                   bridge={bridge}
@@ -459,7 +464,7 @@ export function Workbench({
                   executionError={conversation.executionError}
                   running={conversation.running}
                   modelLabel={conversation.modelLabel}
-                  modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={conversation.onSetModel} /> : undefined}
+                  modelControl={bridge && conversation.onSetModel ? <SessionModelPicker key={`${selectedWorkspaceId}:${selectedSessionId}`} bridge={bridge} workspaceId={selectedWorkspaceId} current={conversation.modelState} disabled={conversation.running || conversation.operation?.busy === true} onSelect={async selection => { await conversation.onSetModel!(selection); if (contextModelOwner.current === currentContextModelOwner) setContextModelRevision(value => value + 1) }} /> : undefined}
                   onPrompt={conversation.onPrompt}
                   steeringEnabled={capabilities["desktop-input"]?.includes("1")}
                   onSteer={conversation.onSteer}

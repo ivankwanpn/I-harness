@@ -2,6 +2,10 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "技能與命令": "Skills and commands", "操作": "Actions", "內建": "Built-in",
+  "目標與計畫": "Goals and plans", "代理團隊": "Agent team", "帶入": "Insert", "選擇": "Select",
+  "沒有符合的已啟用命令或技能": "No matching enabled commands or skills",
+  "輸入名稱或描述以縮小搜尋範圍。": "Type a name or description to narrow the results.",
   "會話專案": "Conversation project", "選擇會話專案": "Choose conversation project", "選擇專案": "Choose project",
   "正在確認專案…": "Checking project…", "專案歸屬無法確認": "Project ownership unavailable", "專案已移除": "Project removed",
   "不在專案中": "Not in a project", "不在專案中工作": "Work outside a project", "先選擇專案以開始會話。": "Choose a project to start a conversation.",
@@ -324,7 +328,7 @@ const english = {
   "僅圖片（舊設定）": "Image only (legacy setting)",
   "輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。": "Input types updated. Reapply the model in an existing conversation's model picker to use the updated capability.",
   "壓縮目前會話上下文": "Compact this conversation's context", "目前無法壓縮上下文": "Cannot compact context right now",
-  "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…",
+  "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…", "無法取得上下文容量。": "Context capacity is unavailable.",
   "訊息來源": "Message sources", "使用者訊息": "User messages", "助手訊息": "Assistant messages", "工具訊息": "Tool messages",
 } as const
 export type Message = keyof typeof english
