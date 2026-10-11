@@ -102,6 +102,28 @@ it("does not label a newer interrupted followup completed because the original d
   } finally { await f.close() }
 })
 
+it.each([
+  { liveStatus: "running", currentError: undefined, expectedStatus: "running" },
+  { liveStatus: "waiting", currentError: undefined, expectedStatus: "waiting" },
+  { liveStatus: undefined, currentError: undefined, expectedStatus: "completed" },
+  { liveStatus: "waiting", currentError: "retry failed", expectedStatus: "waiting" },
+  { liveStatus: undefined, currentError: "retry failed", expectedStatus: "completed" },
+])("uses the current registry error after a retry ($liveStatus, $currentError)", async ({ liveStatus, currentError, expectedStatus }) => {
+  const f = await fixture()
+  try {
+    const entry = { path: "root/helper", sessionId: "normal", roleName: "explore", mailbox: [], finalText: "recovered" }
+    await f.coordinator.putDocument("task-parent", { formatVersion: 1, tasks: [{ childSessionId: "normal", agentPath: entry.path, status: "error", error: "original task failed" }], notifications: [] })
+    await f.coordinator.putDocument("parent", { formatVersion: 1, roles: [], jobs: [], agentTable: [{ ...entry, status: "waiting", ...(liveStatus ? { error: "stale saved error" } : currentError ? { error: currentError } : {}) }] })
+    if (liveStatus) {
+      const assembly = { tools: createToolRegistry(createContext()), session: createSession(), subagentState: () => ({ formatVersion: 1, roles: [], jobs: [], agentTable: [{ ...entry, status: liveStatus, ...(currentError ? { error: currentError } : {}) }] }) } as unknown as SessionAssembly
+      f.service.liveAssembly = () => assembly
+    }
+    const row = (await createDesktopSubagents(f.coordinator, f.service).list("parent")).agents.find((agent) => agent.sessionId === "normal")
+    expect(row).toMatchObject({ status: expectedStatus, finalText: "recovered", live: Boolean(liveStatus) })
+    expect(row?.error).toBe(currentError)
+  } finally { await f.close() }
+})
+
 it("honors the parent Plan Mode for followup/message while retaining interrupt/close controls", async () => {
   const f = await fixture()
   const tools = createToolRegistry(createContext()), session = createSession()

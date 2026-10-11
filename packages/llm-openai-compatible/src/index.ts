@@ -233,6 +233,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       let reasoningContent = ""
       // tool call accumulation: index -> { id, name, argsBuffer }
       const pendingToolCalls = new Map<number, { id: string; name: string; argsBuffer: string }>()
+      const emittedToolCalls = new Set<number>()
 
       const emit = function* (events: LLMStreamEvent[]): Generator<LLMStreamEvent, boolean, unknown> {
         for (const ev of events) {
@@ -247,14 +248,15 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
 
       // Emit any tool call whose accumulated function.arguments now form a
       // complete JSON document. Chat Completions streams the tool-call
-      // arguments as one JSON string split across deltas, so a successful
-      // parse means the arguments have fully arrived; emitting here keeps
-      // tool_call events in stream order (before later text chunks).
+      // arguments as one JSON string split across deltas. Emitting here keeps
+      // tool_call events before later text chunks, but retain the buffer until
+      // the stream ends: later deltas may still contain trailing whitespace.
       const flushParsedToolCalls = function* (): Generator<LLMStreamEvent, boolean, unknown> {
         for (const [index, pending] of pendingToolCalls) {
+          if (emittedToolCalls.has(index)) continue
           try {
             const args = JSON.parse(pending.argsBuffer) as unknown
-            pendingToolCalls.delete(index)
+            emittedToolCalls.add(index)
             if (yield* emit([{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }])) return true
           } catch {
             // arguments still incomplete; keep accumulating
@@ -369,12 +371,14 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
             if (yield* flushParsedToolCalls()) return
           }
         }
-        // flush completed tool calls (fallback for streams that never produced
-        // a parseable fragment until the very end)
-        for (const [, pending] of pendingToolCalls) {
+        // Validate the full arguments, including deltas after early emission,
+        // and emit any call that has not already reached the consumer.
+        for (const [index, pending] of pendingToolCalls) {
           try {
             const args = JSON.parse(pending.argsBuffer) as unknown
-            if (yield* emit([{ type: "tool_call", call: { name: pending.name, args } }])) return
+            if (!emittedToolCalls.has(index)) {
+              if (yield* emit([{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }])) return
+            }
           } catch {
             if (yield* emit([{ type: "error", error: new Error(`openai-compatible malformed tool args: ${pending.argsBuffer}`) }])) return
           }

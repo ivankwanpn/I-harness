@@ -802,6 +802,8 @@ export function driveFollowups(deps: FollowupDeps, entry: ChildAgentEntry, sessi
     for (const ev of pending) {
       if (entry.closing || !deps.table.get(entry.path)) return // closed mid-drain → stop
       entry.lastInboxSeq = ev.seq ?? 0
+      // Errors belong to the previous turn; a new attempt has no failure yet.
+      entry.error = undefined
       entry.status = "running"
       // W11: a re-drive starts a NEW run, so the start stamp moves with the
       // status (see ChildAgentEntry.startedAt). Keeping the spawn-time stamp

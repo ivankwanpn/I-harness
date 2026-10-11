@@ -83,6 +83,34 @@ describe("llm-openai-compatible protocol", () => {
     ])
   })
 
+  it.each(["", " ", "\r\n\t"])("keeps a completed Chat tool call when a trailing argument delta is %j", async (tail) => {
+    const sse = [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "chat-a", function: { name: "read", arguments: '{"path":"a"}' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: tail } }] } }] },
+      { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n") + "\n\ndata: [DONE]\n\n"
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const events: LLMStreamEvent[] = []
+    for await (const event of createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events).toEqual([
+      { type: "tool_call", call: { id: "chat-a", name: "read", args: { path: "a" } } },
+      { type: "end" },
+    ])
+  })
+
+  it("rejects an invalid suffix on completed Chat arguments without emitting a second call", async () => {
+    const sse = [
+      { choices: [{ delta: { tool_calls: [{ index: 0, id: "chat-a", function: { name: "read", arguments: '{"path":"a"}' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: "{}" } }] } }] },
+    ].map((event) => `data: ${JSON.stringify(event)}`).join("\n\n") + "\n\ndata: [DONE]\n\n"
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(sse, { status: 200 })))
+    const events: LLMStreamEvent[] = []
+    for await (const event of createOpenAICompatibleClient({ apiKey: "k", baseUrl: "https://api.test", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "" })) events.push(event)
+    expect(events.map((event) => event.type)).toEqual(["tool_call", "error"])
+    expect(events[0]).toEqual({ type: "tool_call", call: { id: "chat-a", name: "read", args: { path: "a" } } })
+    expect((events[1] as Extract<LLMStreamEvent, { type: "error" }>).error.message).toContain("malformed tool args")
+  })
+
   it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
     const fetchMock = vi.fn(async (_url: string, _init: RequestInit) => new Response("", { status: 200 }))
     vi.stubGlobal("fetch", fetchMock)

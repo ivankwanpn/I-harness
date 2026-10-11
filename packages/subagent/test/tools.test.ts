@@ -353,8 +353,18 @@ describe("subagent control tools", () => {
     expect(entry.status).toBe("waiting")
     expect(jobs.read(jobId).status).toBe("killed")
 
-    // Turn 2: a fresh followup succeeds → stale error cleared, job completed.
+    // Hold the retry in flight: list_agents must stop reporting the old turn's
+    // error as soon as a new turn begins, not only after it succeeds.
+    let finishRetry!: (result: { finalText: string; turns: number; reasoning: string[] }) => void
+    followup.mockImplementationOnce(() => new Promise((resolve) => { finishRetry = resolve }))
     await follow.execute({ target: "root/helper", message: "retry" }, {})
+    try {
+      const listed = await all.find((tool) => tool.name === "list_agents")!.execute({}, {}) as { agents: { status: string; error?: string }[] }
+      expect(listed.agents[0]?.status).toBe("running")
+      expect(listed.agents[0]?.error).toBeUndefined()
+    } finally {
+      finishRetry({ finalText: "recovered", turns: 2, reasoning: [] })
+    }
     await entry.followupChain
     expect(followup).toHaveBeenCalledTimes(2)
     expect(entry.error).toBeUndefined()
