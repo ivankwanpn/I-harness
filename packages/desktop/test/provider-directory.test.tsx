@@ -55,7 +55,7 @@ it("opens provider creation in a focused dialog and returns to the add button on
   fireEvent.click(trigger)
   const dialog = screen.getByRole("dialog", { name: "新增提供商" })
   await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText("提供商 ID")))
-  expect(screen.getByRole("button", { name: /DeepSeek/ })).toBeTruthy()
+  expect(await screen.findByRole("button", { name: /DeepSeek/ })).toBeTruthy()
   fireEvent.keyDown(dialog, { key: "Escape" })
   expect(screen.queryByRole("dialog")).toBeNull()
   await waitFor(() => expect(document.activeElement).toBe(trigger))

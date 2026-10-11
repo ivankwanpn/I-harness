@@ -2,6 +2,11 @@ import { useLocale } from "../design/i18n.ts"
 
 // Kept with this slice so parallel central dictionary edits do not conflict.
 const english: Record<string, string> = {
+  "資料夾": "Folder",
+  "無法確認此檔案的存取範圍。": "Could not confirm access to this file.",
+  "關閉檔案": "Close file", "關閉其他": "Close others", "關閉全部": "Close all", "檔案分頁操作": "File tab actions", "關閉 {count} 個檔案": "Close {count} files", "其中 {count} 個檔案有未儲存內容。": "{count} files have unsaved changes.", "關閉分頁不會刪除磁碟上的檔案。": "Closing tabs does not delete files on disk.", "儲存期間內容已變更；分頁和草稿已保留。": "Contents changed while saving. Tabs and drafts have been kept.", "請先處理外部變更或已移出的資料夾。": "Resolve external changes or removed folders before saving.", "分頁內容已變更，請重新確認關閉方式。": "Tab contents changed. Review the close choice again.",
+  "行": "lines", "正在確認檔案存取範圍；草稿已保留。": "Checking file access scope. Your draft is kept.", "無法確認檔案存取範圍；草稿已保留。": "Could not confirm file access scope. Your draft is kept.",
+  "展開檔案瀏覽器": "Show file explorer", "收合檔案瀏覽器": "Hide file explorer", "已移出的資料夾": "Removed folder", "開啟檔案開始編輯": "Open a file to start editing", "資料夾是空的": "This folder is empty",
   "關閉對話框": "Close dialog", "正在搜尋檔案…": "Searching files…", "沒有符合的檔案": "No matching files",
   "專案檔案": "Project files", "專案檔案與編輯": "Project files and editor", "重新整理專案檔案": "Refresh project files",
   "專案檔案樹": "Project file tree", "搜尋專案檔名": "Search project filenames", "搜尋檔名或相對路徑": "Search filename or relative path",

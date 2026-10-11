@@ -72,7 +72,7 @@ describe("Desktop workbench shell", () => {
     const project = { id: "current", name: "Current", workspaceIds: [ENTRY.id, secondary.id], primaryWorkspaceId: ENTRY.id, createdAt: "2026-10-03T00:00:00Z", updatedAt: "2026-10-03T00:00:00Z" }
     const base = { bridge: fakeBridge(), workspaces: [ENTRY, secondary], selectedWorkspaceId: ENTRY.id, selectedSessionId: "owner", selectedProjectId: "current", projects: [project], capabilities: { "desktop-project-files": ["1"], "desktop-project-content-search": ["1"] }, onSelectWorkspace() {}, onSelectSession() {}, review: { projectFiles: { selection, request }, changes: { kind: "ok" as const, files: [], truncated: false }, onSelect() {}, onRefresh() {} } }
     const view = render(<Workbench {...base} />)
-    await screen.findByRole("button", { name: "▾ Second" })
+    await screen.findByRole("button", { name: "Second", expanded: true })
     fireEvent.click(screen.getByRole("button", { name: "檔案內容" }))
     fireEvent.change(screen.getByRole("textbox", { name: "搜尋專案檔案內容" }), { target: { value: "needle" } })
     fireEvent.submit(screen.getByRole("form", { name: "搜尋檔案內容" }))
@@ -94,7 +94,7 @@ describe("Desktop workbench shell", () => {
     const request = async (input: { kind: string }) => input.kind === "desktop/project-files/roots" ? { roots } : { entries: [], nextOffset: null, truncated: false }
     const base = { bridge: fakeBridge(), workspaces: [ENTRY], selectedWorkspaceId: ENTRY.id, onSelectWorkspace: () => {}, onSelectSession: () => {}, review: { projectFiles: { selection: { workspaceId: ENTRY.id }, request }, changes: { kind: "ok" as const, files: [], truncated: false }, onSelect: () => {}, onRefresh: () => {} } }
     const view = render(<Workbench {...base} capabilities={{ "desktop-project-files": ["1"], "desktop-project-content-search": ["1"] }} />)
-    await screen.findByRole("button", { name: "▾ workspace" })
+    await screen.findByRole("button", { name: "workspace", expanded: true })
     fireEvent.click(screen.getByRole("button", { name: "檔案內容" }))
     fireEvent.change(screen.getByRole("textbox", { name: "搜尋專案檔案內容" }), { target: { value: "needle" } })
     expect((screen.getByRole("button", { name: "搜尋內容" }) as HTMLButtonElement).disabled).toBe(false)

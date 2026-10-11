@@ -174,7 +174,7 @@ describe("search hit file ownership and preview", () => {
     await writeFile(absolute, "before\n中😀 needle\nafter")
     const store = new EditorDraftStore()
     render(<ProjectFilesPane selection={fixture.selection} store={store} contentSearchAvailable request={input => { calls.push(input as Input); return fixture.request(input) }} />)
-    await screen.findByRole("button", { name: "▾ second" })
+    await screen.findByRole("button", { name: "second" })
     openContent(); fireEvent.click(screen.getByText("進階搜尋選項"))
     fireEvent.change(screen.getByRole("textbox", { name: "參考位置（唯讀）" }), { target: { value: absolute } })
     submit("needle")
@@ -197,7 +197,7 @@ describe("search hit file ownership and preview", () => {
       if (input.kind === "desktop/project-files/read" || input.kind === "desktop/project-files/save") throw new Error("Reference file entered project write flow")
       return emptyPage
     }} store={store} contentSearchAvailable />)
-    await screen.findByRole("button", { name: "▾ Second" })
+    await screen.findByRole("button", { name: "Second" })
     openContent(); fireEvent.click(screen.getByText("進階搜尋選項"))
     fireEvent.change(screen.getByRole("textbox", { name: "參考位置（唯讀）" }), { target: { value: absolute } })
     submit("needle")
@@ -243,7 +243,7 @@ describe("search hit file ownership and preview", () => {
       if (input.kind === "desktop/project-files/read" || input.kind === "desktop/project-files/save") throw new Error("External search hit entered editable file flow")
       return emptyPage
     }} store={store} contentSearchAvailable />)
-    await screen.findByRole("button", { name: "▾ Second" })
+    await screen.findByRole("button", { name: "Second" })
     openContent(); submit("needle"); fireEvent.click(await screen.findByRole("button", { name: "Second/same.txt:2" }))
     const preview = await screen.findByRole("region", { name: "唯讀搜尋預覽" })
     expect(preview.textContent).toContain("專案外檔案僅供唯讀。")
@@ -257,7 +257,7 @@ describe("search hit file ownership and preview", () => {
     await writeFile(join(fixture.second.path, "same.txt"), "\uFEFFtop\r\n中😀 needle \t\r\nlast")
     const store = new EditorDraftStore()
     render(<ProjectFilesPane selection={fixture.selection} request={fixture.request} store={store} contentSearchAvailable />)
-    await screen.findByRole("button", { name: "▾ second" })
+    await screen.findByRole("button", { name: "second" })
     openContent(); submit("needle")
     fireEvent.click(await screen.findByRole("button", { name: "second/same.txt:2" }))
     await waitFor(() => expect((screen.getByRole("textbox", { name: "來源檔案內容" }) as HTMLTextAreaElement).selectionStart).toBe(8))
@@ -278,7 +278,7 @@ describe("search hit file ownership and preview", () => {
     const store = new EditorDraftStore(), calls: Input[] = []
     const preview = { readonly: true, text: "before\n中😀 needle\nafter", startLine: 40, encoding: "utf16le", revision: "b".repeat(64), changedSinceSearch: true, truncated: true, reason: "windowed-preview" }
     render(<ProjectFilesPane selection={selection} request={async input => { calls.push(input as Input); if (input.kind === "desktop/project-files/roots") return { roots }; if (input.kind === "desktop/project-files/content-search") return result([{ ...match("second", "中😀 needle", 41), column: 4, endColumn: 10, encoding: "utf16le" }]); if (input.kind === "desktop/project-files/search-preview") return preview; if (input.kind === "desktop/project-files/read") throw new Error("UTF16 hit entered UTF8 draft reader"); return emptyPage }} store={store} contentSearchAvailable />)
-    await screen.findByRole("button", { name: "▾ Second" })
+    await screen.findByRole("button", { name: "Second" })
     openContent(); submit("needle"); fireEvent.click(await screen.findByRole("button", { name: "Second/same.txt:41" }))
     const pane = await screen.findByRole("region", { name: "唯讀搜尋預覽" })
     expect(within(pane).getByText("41")).toBeTruthy()

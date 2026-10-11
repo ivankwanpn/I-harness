@@ -103,7 +103,7 @@ it("dirty close offers save/keep/discard; failed CAS save retains the tab and ex
   expect(contents().value).toBe("my changes")
   expect(await readFile(join(f.second.path, "same.txt"), "utf8")).toBe("external")
   fireEvent.click(screen.getByRole("button", { name: "取消" }))
-  fireEvent.click(screen.getByRole("button", { name: "捨棄編輯並重新讀取" }))
+  fireEvent.click(screen.getByRole("button", { name: "重新讀取檔案" }))
   fireEvent.click(screen.getByRole("button", { name: "保留草稿並讀取外部版本" }))
   await waitFor(() => expect(screen.getByText("檢視外部版本")).toBeTruthy())
   expect(contents().value).toBe("my changes")
@@ -182,7 +182,7 @@ it("ignores an old filename page when the search query changes", async () => {
   try {
     render(<ProjectFilesPane selection={f.selection} request={input => { const response = request(input); if (input.kind === "desktop/project-files/search" && input.query === "page-" && input.offset === 100) heldResponse = response; return response }} store={new EditorDraftStore()} />)
     await act(async () => { await rootsReady.promise })
-    await waitFor(() => expect(screen.getByRole("button", { name: "▾ second" })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole("button", { name: "second" })).toBeTruthy())
     fireEvent.change(screen.getByRole("textbox", { name: "搜尋專案檔名" }), { target: { value: "page-" } })
     await act(async () => { await initialPages.promise })
     await waitFor(() => expect(screen.getByRole("button", { name: "載入更多搜尋結果" })).toBeTruthy())
