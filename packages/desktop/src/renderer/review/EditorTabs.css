@@ -1,0 +1,22 @@
+.editor-tabs-shell { display: flex; align-items: center; gap: 5px; min-width: 0; border-bottom: 1px solid var(--ih-divider); padding: 7px 4px; }
+.editor-tabs-shell .editor-tabs { flex: 1 1 240px; min-width: 0; display: flex; gap: 5px; overflow-x: auto; padding: 2px 1px; scrollbar-width: thin; }
+.editor-tabs-shell .editor-tab { display: flex; flex: 0 0 auto; max-width: 250px; border: 1px solid var(--ih-divider); border-radius: 7px; background: var(--ih-panel); overflow: hidden; }
+.editor-tabs-shell .editor-tab-active { border-color: color-mix(in srgb,var(--ih-accent) 48%,var(--ih-divider)); background: var(--ih-selected); }
+.editor-tabs-shell .editor-tab > button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; background: transparent; color: var(--ih-muted); border: 0; padding: 7px 9px; cursor: pointer; font: inherit; font-size: 12px; }
+.editor-tabs-shell .editor-tab > [role="tab"] { min-width: 0; justify-content: flex-start; }
+.editor-tabs-shell .editor-tab > [aria-selected="true"] { color: var(--ih-text); background: transparent; }
+.editor-tabs-shell .editor-tab svg { flex-shrink: 0; }
+.editor-tabs-shell .editor-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.editor-tabs-shell .editor-tab-dirty { width: 6px; height: 6px; border-radius: 50%; background: var(--ih-accent); flex: 0 0 auto; }
+.editor-tabs-shell .editor-tab > .editor-tab-close { flex: 0 0 28px; padding: 5px; opacity: 1; color: var(--ih-muted); border-left: 1px solid color-mix(in srgb,var(--ih-divider) 65%,transparent); }
+.editor-tabs-shell .editor-tab > .editor-tab-close:hover { color: var(--ih-text); background: color-mix(in srgb,var(--ih-text) 8%,transparent); }
+.editor-tabs-shell button:focus-visible, .editor-tabs-close-actions button:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: -2px; }
+.editor-tabs-shell button:disabled, .editor-tabs-close-actions button:disabled { opacity: .45; cursor: default; }
+.editor-tabs-close-list { max-height: 180px; overflow-y: auto; padding-left: 22px; font-size: 12px; color: var(--ih-muted); overflow-wrap: anywhere; }
+.editor-tabs-close-list li { margin: 5px 0; }
+.editor-tabs-close-note { font-size: 12px; color: var(--ih-muted); line-height: 1.6; }
+.editor-tabs-close-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.editor-tabs-close-actions button { padding: 7px 10px; border: 1px solid var(--ih-divider); border-radius: 6px; background: var(--ih-panel); color: var(--ih-text); font: inherit; font-size: 12px; cursor: pointer; }
+.editor-tabs-close-actions .editor-tabs-dialog-cancel { margin-left: auto; }
+.editor-tabs-close-actions .editor-tabs-discard { background: transparent; color: var(--ih-muted); }
+@container (max-width: 420px) { .editor-tabs-shell .editor-tab { max-width: 210px; } }

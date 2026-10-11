@@ -18,7 +18,7 @@ it("keeps Files separate from recorded Changes and exposes Git independently", a
   const fileRequest = vi.fn(async (input: {kind:string}) => input.kind === "desktop/project-files/roots" ? {roots:[{workspaceId:folder.id,label:folder.label}]} : {entries:[],nextOffset:null,truncated:false})
   render(<Workbench {...base} selectedSessionId="s" review={{ projectFiles:{selection:{workspaceId:folder.id,projectId:project.id,sessionId:"s"},request:fileRequest}, changes:{kind:"unavailable",reason:"not-git-repo"}, onSelect(){},onRefresh(){},onCommit:vi.fn() }}
     conversation={{ rows:[{id:"edit",kind:"tool",name:"edit",resultReceived:true,turn:{id:"t",complete:true},output:{change:createTextDiff("a.txt","old\n","new\n")}}],canSend:false,running:false,pending:[],onPrompt:async()=>{},onCancel(){},onCancelTask(){},onCancelQueue(){},onReply:async()=>{} }} />)
-  await screen.findByRole("button",{name:"▾ folder"})
+  await screen.findByRole("button",{name:"folder"})
   fireEvent.click(screen.getByRole("tab",{name:"變更"}))
   expect(screen.getByRole("region",{name:"會話變更"})).toBeTruthy()
   expect(screen.getByText("+new")).toBeTruthy()
