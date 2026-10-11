@@ -4,16 +4,16 @@
 
 I-harness is an open source workspace for coding with AI. Connect your preferred model service, open a local project, and let the agent search code, read files, run commands and make changes. Follow its progress, approve operations, inspect diffs and stop execution from the same desktop app.
 
-[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.4) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
+[Download for Windows](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.7) · [Get started](#get-started) · [Features](#work-through-development-in-one-workspace) · [繁體中文](README.md)
 
 ## Download
 
-**Windows x64 · v0.1.4** includes Desktop and its required runtime. See the [0.1.4 release notes](docs/releases/v0.1.4.md).
+**Windows x64 · v0.1.7** includes Desktop and its required runtime. See the [0.1.7 release notes](docs/releases/v0.1.7.md).
 
 | Edition | Choose it when… | Download |
 | --- | --- | --- |
-| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.4/I-harness-Setup-0.1.4.exe) |
-| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.4/I-harness-0.1.4.zip) |
+| **Installer** | You want a standard Windows installation, Start menu shortcuts and an uninstall entry | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.7/I-harness-Setup-0.1.7.exe) |
+| **Portable** | You prefer extracting the app into a folder of your choice | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.7/I-harness-0.1.7.zip) |
 
 Extract the portable ZIP into its own folder and run `I-harness.exe`. Keep the executable beside the `resources` folder.
 
