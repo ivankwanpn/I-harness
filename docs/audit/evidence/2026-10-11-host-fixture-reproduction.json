@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "baselineHead": "fc8a428",
+  "reproduction": "Three isolated Desktop host fixtures; process-local PATH prepends the real WindowsApps PowerShell alias; native spawn timing preload; maxWorkers=1 and unchanged 15s/20s deadlines",
+  "red": {
+    "testFiles": 3,
+    "failedTests": 3,
+    "passedTests": 8,
+    "durationMs": 67140,
+    "aliasProbeCount": 348,
+    "aliasProbeSumMs": 57033.0,
+    "aliasProbeMinMs": 131.0,
+    "aliasProbeMaxMs": 368.0,
+    "failures": [
+      "child authority host: 20s timeout",
+      "only Code Mode: 15s timeout",
+      "mixed Code Mode: yielded running result, fixture prematurely ended"
+    ]
+  },
+  "green": {
+    "testFiles": 3,
+    "passedTests": 11,
+    "failedTests": 0,
+    "durationMs": 8450,
+    "aliasProbeCount": 0,
+    "stages": [
+      {
+        "label": "code-mode-host:off",
+        "stage": "session/prompt",
+        "elapsedMs": 93
+      },
+      {
+        "label": "code-mode-host:off",
+        "stage": "host/close",
+        "elapsedMs": 6
+      },
+      {
+        "label": "code-mode-host:mixed",
+        "stage": "session/prompt",
+        "elapsedMs": 270
+      },
+      {
+        "label": "code-mode-host:mixed",
+        "stage": "host/close",
+        "elapsedMs": 2
+      },
+      {
+        "label": "code-mode-host:only",
+        "stage": "session/prompt",
+        "elapsedMs": 471
+      },
+      {
+        "label": "code-mode-host:only",
+        "stage": "host/close",
+        "elapsedMs": 2
+      },
+      {
+        "label": "desktop-child-authority-host",
+        "stage": "session/prompt",
+        "elapsedMs": 1254
+      },
+      {
+        "label": "desktop-child-authority-host",
+        "stage": "host/close",
+        "elapsedMs": 8
+      },
+      {
+        "label": "env-report-context-jobs-host",
+        "stage": "session/prompt",
+        "elapsedMs": 338
+      },
+      {
+        "label": "env-report-context-jobs-host",
+        "stage": "host/close",
+        "elapsedMs": 4
+      }
+    ]
+  },
+  "focusedVerification": {
+    "desktopGatewayTests": 16,
+    "desktopBackendTests": 8,
+    "compatibleAdapterTests": 50,
+    "fileProviderRuntimeTests": 4,
+    "shellWindowsDiscoveryTests": 8,
+    "typecheckedPackages": [
+      "desktop-gateway",
+      "provider-runtime",
+      "llm-openai-compatible",
+      "shell"
+    ],
+    "desktopTypecheck": "Passed after the management UI test parameter correction; complete verification is recorded in the parent audit."
+  },
+  "limitations": [
+    "External clone and report were read only; no external clone commands were executed",
+    "Full verify and packaging are owned by the parent agent; this evidence covers focused tests only",
+    "No paid or live model requests; every fixture route is isolated loopback"
+  ],
+  "cleanupAndTransportRegressions": {
+    "pendingRealHostCreation": "RED settled before creation; GREEN owns pending promise before cleanup",
+    "earlyHostCloseFailure": "RED fast rejection; GREEN waits all closes then aggregates failures",
+    "redirect": "RED second owned loopback server received 1 request; GREEN received 0",
+    "globalTransport": "RED unowned global fetch; GREEN independent exact-origin host clients through failed prompt/retry"
+  }
+}

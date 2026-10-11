@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { expect, it } from "vitest"
 import { createServer } from "node:http"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
+import { createHostFixtureModel } from "./host-fixture-model.ts"
 import { createSessionService } from "@i-harness/session-executor"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
@@ -70,13 +71,18 @@ it.each(["mixed", "only"] as const)("takes a coherent approval authority snapsho
 
 it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and normalized limits through the Desktop host", async (mode) => {
   const trace = createHostFixtureTrace(`code-mode-host:${mode}`)
-  const bodies: Array<{ tools?: Array<{ function: { name: string } }> }> = []
+  const bodies: Array<{ tools?: Array<{ function: { name: string } }>; messages: Array<{ role: string; content: string }> }> = []
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
-    bodies.push(JSON.parse(Buffer.concat(chunks).toString()))
+    const body = JSON.parse(Buffer.concat(chunks).toString()) as typeof bodies[number]
+    bodies.push(body)
+    const previous = body.messages.findLast(message => message.role === "tool")
+    const output = previous ? JSON.parse(previous.content) as { status?: string; cell_id?: string } : undefined
     const delta = mode !== "off" && bodies.length === 1
-      ? { tool_calls: [{ index: 0, id: "code-fixture", function: { name: "code_exec", arguments: JSON.stringify({ code: 'text("long result for clamp"); await tools.list_dir({path:"."});' }) } }] }
+      ? { tool_calls: [{ index: 0, id: "code-fixture", function: { name: "code_exec", arguments: JSON.stringify({ code: 'text("long result for clamp"); await tools.list_dir({path:"."});', yield_time_ms: 0 }) } }] }
+      : output?.status === "running"
+      ? { tool_calls: [{ index: 0, id: `wait-${bodies.length}`, function: { name: "code_wait", arguments: JSON.stringify({ cell_id: output.cell_id }) } }] }
       : { content: "done" }
     response.writeHead(200, { "content-type": "text/event-stream" })
     response.end(`data: ${JSON.stringify({ choices: [{ delta }] })}\n\ndata: [DONE]\n\n`)
@@ -84,12 +90,6 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
   const address = server.address() as { port: number }
   const origin = `http://127.0.0.1:${address.port}`
-  const originalFetch = globalThis.fetch
-  const fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    if (url.origin !== origin) throw new Error("Code Mode fixture refused non-loopback provider request")
-    return originalFetch(input, init)
-  })
   const root = await mkdtemp(join(tmpdir(), "ih-code-desktop-"))
   const workspace = join(root, "workspace"); await mkdir(workspace)
   const settingsPath = join(root, "settings.json")
@@ -107,7 +107,7 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
     return reply.result
   }
   try {
-    host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, credentialsPath, sessionDir: join(root, "sessions"), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
+    host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, credentialsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(origin, trace), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
     await call("initialize")
     const { sessionId } = await call("session/create") as { sessionId: string }
     await call("session/prompt", { sessionId, prompt: "run fixture" })
@@ -119,12 +119,14 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
       expect(events.filter(event => event.type === "code/cell" && event.state === "failed")).toEqual([])
       expect(events.some(event => event.type === "code/dispatch")).toBe(true)
       expect(events.find(event => event.type === "code/result" && event.name === "list_dir")).toMatchObject({ output: { entries: [] } })
-      expect(events.find(event => event.type === "tool/result")).toMatchObject({ output: { status: "completed", text: "long", truncated: true } })
+      expect(events.some(event => event.type === "code/cell" && event.state === "completed")).toBe(true)
+      expect(events.find(event => event.type === "tool/result" && (event.output as { text?: string } | undefined)?.text === "long")).toMatchObject({ output: { text: "long", truncated: true } })
     } else expect(events.some(event => event.type.startsWith("code/"))).toBe(false)
   } finally {
-    await trace.run('host/close', async () => { await host?.close() })
-    fetchGuard.mockRestore()
-    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    try { await trace.run('host/close', async () => { await host?.close() }) }
+    finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    }
     await rm(root, { recursive: true, force: true })
   }
 }, 15_000)

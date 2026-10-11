@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest"
+import { expect, it } from "vitest"
 import { createServer } from "node:http"
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
+import { createHostFixtureModel } from "./host-fixture-model.ts"
 
 it("uses the changed role model for a new child in the same Desktop session", async () => {
   const trace = createHostFixtureTrace('subagent-host')
@@ -31,31 +32,26 @@ it("uses the changed role model for a new child in the same Desktop session", as
   const workspace = join(root, "workspace"); await mkdir(workspace)
   const settingsPath = join(root, "settings.json")
   await writeFile(settingsPath, JSON.stringify({ plugins: { subagentModel: true }, sandboxMode: "read-only", llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "parent", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
-  const originalFetch = globalThis.fetch
-  const fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    if (url.origin !== `http://127.0.0.1:${address.port}`) throw new Error("Fixture refused a non-loopback provider request")
-    return originalFetch(input, init)
-  })
   const frames: RpcMessage[] = []
   let approvalId = 1000
-  const host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: (frame) => {
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
+  try {
+  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(`http://127.0.0.1:${address.port}`, trace), onWrite: (frame) => {
     trace.observe(frame)
     frames.push(frame)
     if ("method" in frame && frame.method === "desktop/interaction/request") {
       const pending = frame.params as { requestId: string; sessionId: string; payload: { name?: string } }
-      queueMicrotask(() => { void host.handleLine(encodeFrame(makeRequest(++approvalId, "desktop/interaction/reply", { requestId: pending.requestId, sessionId: pending.sessionId, decision: { kind: "approval", approved: pending.payload.name === "spawn_agent" } }))) })
+      queueMicrotask(() => { void host!.handleLine(encodeFrame(makeRequest(++approvalId, "desktop/interaction/reply", { requestId: pending.requestId, sessionId: pending.sessionId, decision: { kind: "approval", approved: pending.payload.name === "spawn_agent" } }))) })
     }
   } }))
   let id = 0
   async function call(method: string, params = {}) {
     const requestId = ++id
-    await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(requestId, method, params))))
+    await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find((frame) => "id" in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
   }
-  try {
     await call("initialize")
     await call("desktop/provider/mutate", { action: "key/set", id: "fixture", value: "test-only-key" })
     const { sessionId } = await call("session/create") as { sessionId: string }
@@ -67,9 +63,10 @@ it("uses the changed role model for a new child in the same Desktop session", as
     await call("session/prompt", { sessionId, prompt: "spawn another explorer" })
     expect(models).toContain("small-two")
   } finally {
-    await trace.run('host/close', () => host.close())
-    fetchGuard.mockRestore()
-    server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()))
+    try { await trace.run('host/close', async () => { await host?.close() }) }
+    finally {
+      server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()))
+    }
     await rm(root, { recursive: true, force: true })
   }
 }, 15000)

@@ -1,10 +1,11 @@
-import { expect, it, vi } from 'vitest'
+import { expect, it } from 'vitest'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from '@i-harness/sdk'
 import { createDesktopHost } from '../src/host.ts'
 import { createHostFixtureTrace } from './host-fixture-trace.ts'
+import { createHostFixtureModel } from './host-fixture-model.ts'
 
 it('registers Desktop code index job IDs in the actual session job tools', async () => {
   const trace = createHostFixtureTrace('env-report-context-jobs-host')
@@ -36,22 +37,17 @@ it('registers Desktop code index job IDs in the actual session job tools', async
   const root = await mkdtemp(join(base, 'fixture-')), workspace = join(root, 'repo'), settingsPath = join(root, 'settings.json')
   await mkdir(workspace); await writeFile(join(workspace, 'main.ts'), 'export const indexedneedle = true\n')
   await writeFile(settingsPath, JSON.stringify({ sandboxMode: 'danger-full-access', approvalMode: 'full-access', llm: { providers: { fixture: { protocol: 'openai-completions', baseURL: `${origin}/v1`, models: [{ id: 'fixture', contextWindow: 272000 }] } }, defaultModel: { provider: 'fixture', model: 'fixture' } } }))
-  const originalFetch = globalThis.fetch
-  const fetchGuard = vi.spyOn(globalThis, 'fetch').mockImplementation((input, init) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
-    if (url.origin !== origin) throw new Error('Fixture refused a non-loopback provider request')
-    return originalFetch(input, init)
-  })
   const frames: RpcMessage[] = []
-  const host = await trace.run('host/create', () => createDesktopHost({ workspace, sessionDir: join(root, 'sessions'), settingsPath, onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
+  let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
   let id = 0
   const call = async (method: string, params = {}) => {
-    const requestId = ++id; await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(requestId, method, params))))
+    const requestId = ++id; await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find(frame => 'id' in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result as any
   }
   try {
+    host = await trace.run('host/create', () => createDesktopHost({ workspace, sessionDir: join(root, 'sessions'), settingsPath, buildProviderClient: createHostFixtureModel(origin, trace), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
     await call('initialize')
     await call('desktop/provider/mutate', { action: 'key/set', id: 'fixture', value: 'test-only-key' })
     await call('desktop/context-subsystems/configure', { patch: { scope: 'workspace', codeRetrieval: { enabled: true } } })
@@ -64,8 +60,10 @@ it('registers Desktop code index job IDs in the actual session job tools', async
     const state = await call('desktop/context-subsystems/state')
     expect(state.code.lastJob).toMatchObject({ jobId, outcome: expect.stringMatching(/^(completed|cancelled)$/) })
   } finally {
-    await trace.run('host/close', () => host.close()); fetchGuard.mockRestore()
-    server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    try { await trace.run('host/close', async () => { await host?.close() }) }
+    finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    }
     await rm(root, { recursive: true, force: true })
   }
 }, 15000)

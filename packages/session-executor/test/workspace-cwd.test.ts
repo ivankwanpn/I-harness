@@ -4,13 +4,14 @@
 // `glob` with no path searched the vitest cwd — while the fs tools resolved
 // against the workspace.
 import { createContext } from "@i-harness/core-plugin"
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, win32 } from "node:path"
 import { registerExec, type ExecService } from "@i-harness/exec"
 import type { TerminalService } from "@i-harness/terminal"
 import { resolveRgPath } from "@i-harness/fs-search"
+import { resolvePwshExe } from "@i-harness/shell"
 import { createSessionAssembly } from "../src/assembly.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
 
@@ -36,10 +37,15 @@ function stripAnsi(s: string): string {
 }
 
 async function pwshAvailable(): Promise<boolean> {
-  const r = await registerExec(createContext()).run({
-    argv: ["pwsh", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PWD.Path"],
-  })
-  return r.exitCode === 0
+  const exec = registerExec(createContext())
+  try {
+    const r = await exec.run({
+      argv: [resolvePwshExe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$PWD.Path"],
+    })
+    return r.exitCode === 0
+  } finally {
+    await exec.dispose()
+  }
 }
 
 async function rgAvailable(): Promise<boolean> {
@@ -53,6 +59,15 @@ function toolResults(assembly: Awaited<ReturnType<typeof createSessionAssembly>>
 }
 
 describe("D1: assembly tools run in the assembly workspace", () => {
+  it.skipIf(process.platform !== "win32")("PowerShell availability uses the Windows runtime when PowerShell 7 is not on PATH", async () => {
+    vi.stubEnv("PATH", win32.join(process.env.SystemRoot ?? "C:\\Windows", "System32"))
+    try {
+      expect(await pwshAvailable()).toBe(true)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  }, 30_000)
+
   it("bash `pwd` prints the assembly workspace, not the process cwd", async () => {
     const workspace = mkdtempSync(join(tmpdir(), "ih-ws-cwd-"))
     const assembly = await createSessionAssembly({

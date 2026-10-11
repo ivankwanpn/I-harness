@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest"
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { PendingPanel } from "../src/renderer/interaction/PendingPanel.tsx"
 import { ApprovalRuleManager } from "../src/renderer/settings/ApprovalRuleManager.tsx"
 import type { DesktopBridge } from "../src/shared/bridge.ts"
@@ -38,4 +38,28 @@ it("offers pending validated operations to add and durable rules to revoke", asy
   await waitFor(() => expect(request).toHaveBeenCalledWith({ kind: "desktop/approval-rules/revoke", workspaceId: "w", ruleId: "rule" }))
   fireEvent.click(screen.getByRole("button", { name: "新增規則" }))
   await waitFor(() => expect(request.mock.calls.some(([action]: any) => action.kind === "desktop/approval-rules/add" && action.requestId === "r" && action.sessionId === "s")).toBe(true))
+})
+
+it("keeps a new rule action owned by the current visit after returning to the same workspace", async () => {
+  let rejectOld!: (reason: Error) => void
+  let finishCurrent!: (value: unknown) => void
+  let mutations = 0
+  const state = { rules: [{ id: "rule", evidence: { name: "native", arguments: '{}' }, scope: { kind: "workspace" }, createdAt: 1, expiresAt: Date.now() + 86400000 }], candidates: [] }
+  const request = vi.fn((action: any): Promise<unknown> => {
+    if (action.kind === "desktop/approval-rules/state") return Promise.resolve(state)
+    mutations++
+    return mutations === 1 ? new Promise((_resolve, reject) => { rejectOld = reject }) : new Promise(resolve => { finishCurrent = resolve })
+  })
+  const bridge = { request } as unknown as DesktopBridge
+  const view = render(<ApprovalRuleManager bridge={bridge} workspaceId="a" />)
+  fireEvent.click(await screen.findByRole("button", { name: "撤銷規則" }))
+  view.rerender(<ApprovalRuleManager bridge={bridge} workspaceId="b" />)
+  await screen.findByRole("button", { name: "撤銷規則" })
+  view.rerender(<ApprovalRuleManager bridge={bridge} workspaceId="a" />)
+  fireEvent.click(await screen.findByRole("button", { name: "撤銷規則" }))
+  await act(async () => { rejectOld(new Error("previous visit failed")) })
+  expect(screen.queryByRole("alert")).toBeNull()
+  expect((screen.getByRole("button", { name: "撤銷規則" }) as HTMLButtonElement).disabled).toBe(true)
+  await act(async () => { finishCurrent({ accepted: true }) })
+  await waitFor(() => expect((screen.getByRole("button", { name: "撤銷規則" }) as HTMLButtonElement).disabled).toBe(false))
 })

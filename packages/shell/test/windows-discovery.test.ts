@@ -28,11 +28,28 @@ it("recognizes a runnable PowerShell 7 App Execution Alias despite a negative ex
   expect(resolvePwshExe({ Path: win32.dirname(alias) }, "win32", () => false, (path) => path === alias)).toBe(alias)
 })
 
-it("falls back to Windows PowerShell when a runnable alias cannot be canonicalized", () => {
+it("rejects an unreadable PowerShell alias before launching an availability probe", () => {
   const alias = "C:\\Users\\tester\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"
   const classic = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
   const canonicalize = (path: string) => { if (path === alias) throw Object.assign(new Error("alias inaccessible"), { code: "EACCES" }); return path }
-  expect(resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: "C:\\Windows" }, "win32", path => path === classic, path => path === alias, canonicalize)).toBe(classic)
+  const launched: string[] = []
+  const probe = (path: string) => { launched.push(path); return path === alias }
+  expect(resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: "C:\\Windows" }, "win32", path => path === classic, probe, canonicalize)).toBe(classic)
+  expect(launched).toEqual([])
+})
+
+it("revalidates a previously available alias without launching it after its identity becomes unreadable", () => {
+  const alias = "C:\\Users\\tester\\AppData\\Local\\Microsoft\\WindowsApps\\pwsh.exe"
+  const classic = "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+  const launched: string[] = []
+  let readable = true
+  const canonicalize = (path: string) => { if (path === alias && !readable) throw new Error("alias revoked"); return path }
+  const probe = (path: string) => { launched.push(path); return path === alias }
+  const resolve = () => resolvePwshExe({ Path: win32.dirname(alias), SystemRoot: "C:\\Windows" }, "win32", path => path === classic, probe, canonicalize)
+  expect(resolve()).toBe(alias)
+  readable = false
+  expect(resolve()).toBe(classic)
+  expect(launched).toEqual([alias])
 })
 
 it.skipIf(!hasNativeGit)("pins the actual Bash on PATH so nested env bash never enters WSL", async () => {

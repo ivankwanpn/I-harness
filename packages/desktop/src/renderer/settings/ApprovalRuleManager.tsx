@@ -14,11 +14,12 @@ export function ApprovalRuleManager({ bridge, workspaceId }: { bridge: DesktopBr
   const [duration, setDuration] = useState(3600000)
   const [search, setSearch] = useState("")
   const [page, setPage] = useState(0)
-  const currentWorkspace = useRef(workspaceId); currentWorkspace.current = workspaceId
+  const generation = useRef(0)
   const lock = useRef(false)
   // These actions are added to the central Desktop contract by the host owner.
   const request = (action: unknown) => bridge.request(action as Parameters<DesktopBridge["request"]>[0])
   useEffect(() => {
+    const current = ++generation.current
     let active = true
     setState(undefined); setError(undefined); lock.current = false; setBusy(false)
     void request({ kind: "desktop/approval-rules/state", workspaceId }).then((value) => {
@@ -26,14 +27,15 @@ export function ApprovalRuleManager({ bridge, workspaceId }: { bridge: DesktopBr
       if (!next || !Array.isArray(next.rules) || !Array.isArray(next.candidates)) throw new Error(t("目前工作區後端未提供此功能。"))
       if (active) { setState(next); setRequestId((selected) => next.candidates.some((row) => row.requestId === selected) ? selected : next.candidates[0]?.requestId ?? "") }
     }).catch((reason: unknown) => { if (active) setError(String(reason)) })
-    return () => { active = false }
+    return () => { active = false; if (current === generation.current) generation.current++ }
   }, [bridge, workspaceId, reload])
   async function mutate(action: unknown): Promise<void> {
     if (lock.current) return
+    const current = generation.current
     lock.current = true; setBusy(true); setError(undefined)
-    try { await request(action); if (currentWorkspace.current === workspaceId) setReload((value) => value + 1) }
-    catch (reason) { if (currentWorkspace.current === workspaceId) setError(reason instanceof Error ? reason.message : String(reason)) }
-    finally { if (currentWorkspace.current === workspaceId) { lock.current = false; setBusy(false) } }
+    try { await request(action); if (current === generation.current) setReload((value) => value + 1) }
+    catch (reason) { if (current === generation.current) setError(reason instanceof Error ? reason.message : String(reason)) }
+    finally { if (current === generation.current) { lock.current = false; setBusy(false) } }
   }
   const query = search.trim().toLowerCase()
   const filteredRules = state?.rules.filter((row) => `${row.evidence.name} ${row.evidence.arguments} ${row.scope.kind === "session" ? row.scope.sessionId : "workspace"}`.toLowerCase().includes(query)) ?? []

@@ -3,11 +3,13 @@ import { resolve } from "node:path"
 import { createCredentialStore } from "@i-harness/credentials"
 import { acquireSessionLock, type SessionLock } from "@i-harness/fs-lock"
 import { SettingsStore } from "@i-harness/settings"
-import { createProviderRuntime, type ProviderRuntime } from "./index.ts"
+import { createProviderRuntime, type CreateProviderRuntimeOptions, type ProviderRuntime } from "./index.ts"
 
 export interface FileProviderRuntimeOptions {
   settingsPath: string
   credentialsPath: string
+  /** Trusted dependency; configuration documents cannot supply executable code. */
+  buildClient?: CreateProviderRuntimeOptions["buildClient"]
 }
 
 async function validateDocument(path: string): Promise<void> {
@@ -34,7 +36,8 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
     return process.platform === "win32" ? absolute.toLowerCase() : absolute
   }))].sort()
   const settings = new SettingsStore({ path: options.settingsPath })
-  const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath) })
+  const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
+    ...(options.buildClient ? { buildClient: options.buildClient } : {}) })
   let tail: Promise<unknown> = Promise.resolve()
   const result = {} as ProviderRuntime
   for (const key of Object.keys(runtime) as (keyof ProviderRuntime)[]) {
@@ -51,7 +54,8 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
             // shared file locks before waiting for an endpoint response.
             const snapshot = new SettingsStore({ path: options.settingsPath })
             await snapshot.load()
-            const probeRuntime = createProviderRuntime({ settings: snapshot, credentials: createCredentialStore(options.credentialsPath) })
+            const probeRuntime = createProviderRuntime({ settings: snapshot, credentials: createCredentialStore(options.credentialsPath),
+              ...(options.buildClient ? { buildClient: options.buildClient } : {}) })
             return { invoke: () => (probeRuntime.probeModels as (...values: unknown[]) => Promise<unknown>)(...args) }
           }
           return { value: await method(...args) }

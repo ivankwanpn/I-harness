@@ -19,7 +19,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use windows_sys::Win32::{Foundation::*, System::Threading::*};
+use windows_sys::Win32::{
+    Foundation::*,
+    System::{Console::SetConsoleCtrlHandler, Threading::*},
+};
 static STATUS: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
 #[cfg(test)]
 thread_local! {static FAIL_RESUME:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
@@ -231,6 +234,13 @@ impl Prepared {
             } else {
                 CREATE_NO_WINDOW
             };
+        // CTRL+C's ignore attribute is inherited independently of handles, even
+        // when attaching the child to our new pseudoconsole. A launcher in a
+        // new process group can leave it set. Reset only this dedicated helper
+        // before its ConPTY child is created; existing callers are unaffected.
+        if pty && unsafe { SetConsoleCtrlHandler(None, 0) } == 0 {
+            return Err(Error::native("SetConsoleCtrlHandler(ConPTY)"));
+        }
         let created = unsafe {
             CreateProcessW(
                 executable.as_ptr(),

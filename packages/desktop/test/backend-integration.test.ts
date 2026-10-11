@@ -4,6 +4,9 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../../desktop-gateway/src/host.ts"
+import { createHostFixtureModel } from "../../desktop-gateway/test/host-fixture-model.ts"
+import { createHostFixtureOwner } from "../../desktop-gateway/test/host-fixture-owner.ts"
+import { createHostFixtureTrace } from "../../desktop-gateway/test/host-fixture-trace.ts"
 import { createWorkspaceCatalog } from "../src/main/workspaces.ts"
 import { createProjectCatalog } from "../src/main/projects.ts"
 import { createGlobalProviderSettings } from "../src/main/global-provider-settings.ts"
@@ -13,18 +16,40 @@ import { createNotificationHistory } from "../src/main/notification-history.ts"
 import { createServer } from "node:http"
 import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
 
-const roots: string[] = []
-afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "desktop-native-gateway-")); roots.push(root)
+const roots: Array<{ root: string; close(): Promise<void> }> = []
+afterEach(async () => {
+  for (const owned of roots.splice(0)) {
+    // Vitest may finish a timed out test while its body is still awaiting a
+    // prompt. Drain its host owners before removing their SQLite files.
+    await owned.close()
+    await rm(owned.root, { recursive: true, force: true })
+  }
+})
+async function fixture(options: { modelOrigin?: string } = {}) {
+  const root = await mkdtemp(join(tmpdir(), "desktop-native-gateway-"))
+  const owner = createHostFixtureOwner()
+  let globals: ReturnType<typeof createGlobalProviderSettings> | undefined
+  const trace = createHostFixtureTrace(options.modelOrigin ? "desktop/auto-title" : "desktop/backend-integration")
+  const close = () => owner.close()
+  roots.push({ root, close: async () => {
+    const results = await Promise.allSettled([globals?.close()])
+    results.push(...await Promise.allSettled([trace.run("hosts/close", close)]))
+    const failures = results.filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), "Desktop fixture cleanup incomplete")
+  } })
+  const openHost = async (workspace: string, sessionDir: string, settingsPath: string, frames: RpcMessage[], label: string) => {
+    return owner.own(() => trace.run(label, () => createDesktopHost({ workspace, sessionDir, settingsPath,
+      ...(options.modelOrigin ? { buildProviderClient: createHostFixtureModel(options.modelOrigin, trace) } : {}),
+      onWrite: frame => { trace.observe(frame); frames.push(frame) } })))
+  }
   const workspace = join(root, "workspace"), destination = join(root, "destination"), sessionDir = join(root, "sessions"), settingsPath = join(root, "settings.json")
   await mkdir(workspace); await mkdir(destination); await writeFile(settingsPath, JSON.stringify({ sandboxMode: "read-only", autoTitle: true }))
   const frames: RpcMessage[] = []
-  let host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame) })
+  let host = await openHost(workspace, sessionDir, settingsPath, frames, "host/create")
   let sequence = 0
   const request = async (method: string, params: unknown = {}) => {
     const id = ++sequence
-    await host.handleLine(encodeFrame(makeRequest(id, method, params)))
+    await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(id, method, params))))
     const reply = frames.find(frame => "id" in frame && frame.id === id)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
@@ -34,20 +59,20 @@ async function fixture() {
   const projects = createProjectCatalog(join(root, "projects.json"), catalog)
   const runtime = { client: { request, createSession: () => request("session/create") }, info }
   const otherFrames: RpcMessage[] = []
-  const otherHost = await createDesktopHost({ workspace: destination, sessionDir: join(root, "other-sessions"), settingsPath, onWrite: frame => otherFrames.push(frame) })
+  const otherHost = await openHost(destination, join(root, "other-sessions"), settingsPath, otherFrames, "destination-host/create")
   const otherRequest = async (method: string, params: unknown = {}) => {
-    const id = ++sequence; await otherHost.handleLine(encodeFrame(makeRequest(id, method, params)))
+    const id = ++sequence; await trace.run(`destination/${method}`, () => otherHost.handleLine(encodeFrame(makeRequest(id, method, params))))
     const reply = otherFrames.find(frame => "id" in frame && frame.id === id)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
   }
   const otherInfo = await otherRequest("initialize") as { capabilities: Record<string, string[]> }
   const otherRuntime = { client: { request: otherRequest }, info: otherInfo }
-  const globals = createGlobalProviderSettings(async () => ({ request }))
+  globals = createGlobalProviderSettings(async () => ({ request }))
   const drafts = new AttachmentDraftStore(join(root, "drafts"))
   const dependencies = { catalog, projects, globalProviders: globals, drafts, notifications: createNotificationHistory(join(root, "notifications.json")), runtimes: { get: async (member: { id: string }) => member.id === other.id ? otherRuntime : runtime } } as unknown as DesktopIpcDependencies
-  const restart = async (seed?: () => Promise<void>) => { await host.close(); await seed?.(); frames.length = 0; host = await createDesktopHost({ workspace, sessionDir, settingsPath, onWrite: frame => frames.push(frame) }); runtime.info = await request("initialize") as typeof info; dependencies.drafts = new AttachmentDraftStore(join(root, "drafts")) }
-  return { root, workspace, destination, sessionDir, settingsPath, entry, other, restart, host: { ...host, close: async () => { await host.close(); await otherHost.close() } }, request, globals, dependencies, projects }
+  const restart = async (seed?: () => Promise<void>) => { await trace.run("host/close", () => host.close()); await seed?.(); frames.length = 0; host = await openHost(workspace, sessionDir, settingsPath, frames, "host/restart"); runtime.info = await request("initialize") as typeof info; dependencies.drafts = new AttachmentDraftStore(join(root, "drafts")) }
+  return { root, workspace, destination, sessionDir, settingsPath, entry, other, restart, host: { ...host, close: () => trace.run("hosts/close", close) }, request, globals, dependencies, projects }
 }
 
 it.each(["marker failure", "crash window"])("recovers native deletion from authoritative JSONL proof after fresh restart: %s", async failure => {
@@ -210,7 +235,7 @@ it("fences a native save authorized from a navigation reply captured before perm
 })
 
 it("consults the latest saved auto-title preference on real host turns using a local fixture model", async () => {
-  const f = await fixture(), native = (value: unknown) => dispatchDesktopRequest(value, f.dependencies)
+  let f: Awaited<ReturnType<typeof fixture>> | undefined
   let calls = 0
   const server = createServer(async (request, response) => {
     for await (const _chunk of request) { /* drain the local fixture request */ }
@@ -221,6 +246,8 @@ it("consults the latest saved auto-title preference on real host turns using a l
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
   const address = server.address() as { port: number }
   try {
+    f = await fixture({ modelOrigin: `http://127.0.0.1:${address.port}` })
+    const native = (value: unknown) => dispatchDesktopRequest(value, f!.dependencies)
     await f.request("desktop/provider/mutate", { action: "provider/create", id: "local-fixture", fields: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}` } })
     await f.request("desktop/provider/mutate", { action: "key/set", id: "local-fixture", value: "fixture-no-provider-fee" })
     await f.request("desktop/provider/mutate", { action: "model/add", id: "local-fixture", model: "fixture-model", fields: { contextWindow: 32000, maxTokens: 4096 } })
@@ -236,5 +263,8 @@ it("consults the latest saved auto-title preference on real host turns using a l
     const list = await f.request("session/list") as { sessions: { id: string; title?: string }[] }
     expect(list.sessions.find(row => row.id === second.sessionId)?.title).toBe("Fixture title")
     expect(list.sessions.find(row => row.id === first.sessionId)?.title).toBeUndefined()
-  } finally { await f.globals.close(); await f.host.close(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+  } finally {
+    try { await f?.globals.close(); await f?.host.close() }
+    finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())) }
+  }
 })
