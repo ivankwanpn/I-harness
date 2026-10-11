@@ -1,7 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises"
-import type { LLMMessage, LLMContentPart, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
+import type { LLMMessage, LLMContentPart, ModelRetryInfo, ProviderContinuation, ProviderThinkingBlock, Session } from "@i-harness/core-session"
 import { deriveMessages } from "@i-harness/core-session"
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { InvalidImageError, validateImage } from '@i-harness/image-validation'
 
 /**
@@ -69,6 +69,7 @@ export interface LLMUsage {
  *    the other's `else`.
  */
 export type LLMStreamEvent =
+  | { type: "retry"; retry: ModelRetryInfo }
   | { type: "text/chunk"; text: string }
   | { type: "reasoning"; text: string; blockId?: string }
   | { type: "tool_call"; call: { id?: string; name: string; args: unknown } }
@@ -78,7 +79,7 @@ export type LLMStreamEvent =
 
 // LLMMessage is owned by core-session (it is the audit seam for the session
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
-export type { LLMMessage, LLMContentPart, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
+export type { LLMMessage, LLMContentPart, ModelRetryInfo, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
 
 /** Native replay metadata belongs to the route that produced it. Older logs
  * without provenance remain readable; new records reject a different model or
@@ -210,26 +211,81 @@ export function resolveRetryPolicy(config: RetryPolicyConfig | undefined, path =
 const CONTEXT_OVERFLOW_RE = /(?:^|[^a-z0-9])context[\s_-]?(?:length|window)[\s_-]?(?:exceed|overflow)/i
 const QUOTA_RE = /(?:quota|balance|credit|budget|usage[\s_-]limit)[\s_-]?(?:exceeded|exhausted|reached|depleted)/i
 const RATE_RE = /429|rate[\s_-]limit|too many requests/i
-const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT|ECONNRESET/i
-const SERVER_RE = /5\d\d|internal server|bad gateway|service unavailable/i
+const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT/i
+const SERVER_RE = /\b5\d\d\b|internal server|bad gateway|service unavailable/i
+const TERMINAL_CODES = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
+
+function normalizedCode(code: string): string {
+  if (CONTEXT_OVERFLOW_RE.test(code)) return "CONTEXT_WINDOW_EXCEEDED"
+  if (/^(rate_limit_exceeded|rate_limit_error)$/i.test(code)) return "RATE_LIMIT"
+  if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
+  if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
+  if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
+  if (/^(AbortError|ABORT_ERR|ERR_CANCELED)$/.test(code)) return "ABORTED"
+  if (/^(insufficient_quota|billing_hard_limit_reached|quota_exceeded|ServiceQuotaExceededException)$/i.test(code)) return "QUOTA"
+  if (/^(invalid_api_key|authentication_error|permission_denied|AccessDeniedException|UnrecognizedClientException)$/i.test(code)) return "AUTH"
+  if (/^(invalid_request_error|invalid_argument|ValidationException)$/i.test(code)) return "INVALID_ARGUMENT"
+  if (/^(ThrottlingException|TooManyRequestsException)$/.test(code)) return "RATE_LIMIT"
+  if (/^(ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/.test(code)) return "SERVER"
+  return code
+}
 
 export function retryErrorCode(err: unknown): string | undefined {
   // Walk the cause chain for a structured code.
   let cur: unknown = err
   for (let i = 0; i < 5 && cur != null; i++) {
-    if (cur instanceof Error) {
-      const code = (cur as { code?: unknown }).code
-      if (typeof code === "string") return code
+    if (typeof cur === "object") {
+      const record = cur as { code?: unknown; name?: string; httpStatus?: number; $metadata?: { httpStatusCode?: number } }
+      if (record.name === "AbortError") return "ABORTED"
+      if (record.name === "SSEParseError" || record.name === "SyntaxError") return "MALFORMED_RESPONSE"
+      if (typeof record.code === "string") return normalizedCode(record.code)
+      if (record.name && normalizedCode(record.name) !== record.name) return normalizedCode(record.name)
+      const status = record.httpStatus ?? record.$metadata?.httpStatusCode
+      if (status === 401 || status === 403) return "AUTH"
+      if (status === 429) return "RATE_LIMIT"
+      if (status !== undefined && status >= 500 && status <= 599) return "SERVER"
     }
     cur = (cur as { cause?: unknown }).cause
   }
   const msg = err instanceof Error ? `${err.message} ${err.cause instanceof Error ? err.cause.message : ""}` : String(err)
   if (CONTEXT_OVERFLOW_RE.test(msg)) return "CONTEXT_WINDOW_EXCEEDED"
   if (QUOTA_RE.test(msg)) return "QUOTA"
+  if (/insufficient_quota|billing|payment required|not enough (?:credit|balance)/i.test(msg)) return "QUOTA"
+  if (/malformed|invalid (?:tool|function).*argument|invalid json/i.test(msg)) return "MALFORMED_RESPONSE"
+  if (/\b(?:401|403)\b|invalid.api.key|authentication|unauthorized|permission denied/i.test(msg)) return "AUTH"
+  if (/certificate|self.signed|unable to verify|\bTLS\b|\bSSL\b/i.test(msg)) return "TLS"
   if (RATE_RE.test(msg)) return "RATE_LIMIT"
   if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
+  if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|fetch failed|network error|socket hang up/i.test(msg)) return "TRANSPORT"
   if (SERVER_RE.test(msg)) return "SERVER"
   return undefined
+}
+
+/** HTTP status and server delay are structured; response bodies never enter retry diagnostics. */
+export async function describeHttpError(label: string, response: Response): Promise<Error> {
+  const body = await response.text()
+  let bodyCode: string | undefined
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; message?: unknown } }
+    const value = parsed.error?.code ?? parsed.error?.type
+    if (typeof value === "string") bodyCode = normalizedCode(value)
+  } catch { /* Non-JSON error responses still carry a reliable HTTP status. */ }
+  const classified = retryErrorCode(new Error(body.slice(0, 8192)))
+  const code = bodyCode && TERMINAL_CODES.has(bodyCode) ? bodyCode
+    : classified && TERMINAL_CODES.has(classified) ? classified
+    : response.status === 401 || response.status === 403 ? "AUTH"
+    : response.status === 402 ? "QUOTA"
+    : response.status === 429 ? "RATE_LIMIT"
+    : response.status === 408 ? "TIMEOUT"
+    : response.status >= 500 ? "SERVER" : "INVALID_ARGUMENT"
+  const advice = response.headers.get("retry-after")?.trim()
+  const now = Date.now()
+  const parsedDeadline = advice === undefined || advice === "" ? NaN
+    : /^\d+(?:\.\d+)?$/.test(advice) ? now + Number(advice) * 1000 : Date.parse(advice)
+  return Object.assign(new Error(`${label} request failed: ${response.status}`), {
+    code, httpStatus: response.status,
+    ...(Number.isFinite(parsedDeadline) ? { retryAfterAt: Math.max(now, parsedDeadline) } : {}),
+  })
 }
 
 // Exponential backoff with symmetric jitter. attemptNo starts at 1 for the
@@ -239,80 +295,70 @@ export function backoffDelay(policy: ResolvedRetryBackoff, attemptNo: number): n
   const base = policy.initialDelayMs * 2 ** (attemptNo - 1)
   const capped = Math.min(base, policy.maxDelayMs)
   const jitter = (Math.random() * 2 - 1) * policy.jitterRatio * capped
-  return Math.max(0, Math.round(capped + jitter))
+  return Math.min(policy.maxDelayMs, Math.max(0, Math.round(capped + jitter)))
 }
 
-// Retry wrapper (M20). Two provider failure styles must be handled (controller
-// Ruling 3): a THROWN error, or an `{ type: "error", error }` event yielded by
-// the stream. Retry happens only when all of: the error is retryable
-// (code-classified in normal mode, or always-mode), nothing has been produced
-// yet (text/chunk, reasoning or tool_call yielded → a restarted stream would
-// duplicate output, so the error surfaces instead), and a retry budget
-// remains. Retries are silent: the failed attempt's error event is never
-// leaked to the consumer. Budget exhaustion is ALWAYS a hard failure (throw),
-// whichever style the provider used. A give-up that is NOT exhaustion
-// (non-retryable code, or output already produced) preserves the provider's
-// surface style: an error event yields as a terminal event (anything after it
-// is not consumed) and ends the stream; a thrown error is rethrown.
-export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy): ModelClient {
+// Retry only the model request. Consumers must explicitly opt into discarding
+// output; tools and earlier committed steps never belong to this boundary.
+export function createRetryingClient(client: ModelClient, policy: ResolvedRetryPolicy, metadata?: { providerId?: string; modelId?: string }): ModelClient {
   async function* wrapped(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+    const requestId = randomUUID()
     let attemptNo = 0
+    let recovery: ModelRetryInfo | undefined
     while (true) {
-      attemptNo++
+      request.signal?.throwIfAborted()
+      if (recovery) yield { type: "retry", retry: { ...recovery, phase: "attempting" } }
+      request.signal?.throwIfAborted()
       let produced = false
-      let failure: unknown // set by an error event or a throw
-      let failureEvent: { type: "error"; error: Error } | undefined // set only by an error event
-      // M5 T2: a usage report describes a COMPLETED round-trip, so it is held
-      // until the attempt proves it finished. This wrapper's retry is silent —
-      // core-agent cannot tell two attempts from one round-trip — so releasing
-      // a dead attempt's report would merge it with the successful attempt's
-      // and inflate every number with no trace. Holding costs one array; the
-      // alternative is a wrong number that reads as a measurement. Fresh per
-      // attempt, so a retry never inherits the previous one's.
+      let failure: unknown
+      let failed = false
+      let failureEvent: Extract<LLMStreamEvent, { type: "error" }> | undefined
       const pendingUsage: LLMStreamEvent[] = []
       try {
         for await (const ev of client.stream(request)) {
-          if (ev.type === "text/chunk" || ev.type === "reasoning" || ev.type === "tool_call") produced = true
-          if (ev.type === "usage") {
-            pendingUsage.push(ev)
-            continue
+          request.signal?.throwIfAborted()
+          const output = ev.type === "tool_call" || ((ev.type === "text/chunk" || ev.type === "reasoning") && ev.text.length > 0)
+          if (output) produced = true
+          if (ev.type === "usage") { pendingUsage.push(ev); continue }
+          if (ev.type === "error") { failure = ev.error; failureEvent = ev; failed = true; break }
+          if (recovery && (output || ev.type === "end")) {
+            yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
+            recovery = undefined
           }
-          if (ev.type === "error") {
-            // Provider signaled failure via an error EVENT. It is a terminal
-            // event for the attempt: stop consuming (don't leak events after
-            // the error), decide below whether to retry silently or surface.
-            failure = ev.error
-            failureEvent = ev
-            break
-          }
-          if (ev.type === "end") {
-            yield* pendingUsage // the attempt completed → its report is real
-            yield ev
-            return
-          }
+          if (ev.type === "end") { yield* pendingUsage; yield ev; return }
           yield ev
         }
-        // Fall through: normal completion (no failure) or an error event broke
-        // the attempt out of the for-await — both handled below.
-      } catch (err) {
-        failure = err // provider signaled failure via a THROW
-      }
-      if (failure === undefined && failureEvent === undefined) {
-        yield* pendingUsage // completed normally without an explicit `end`
+      } catch (error) { failure = error; failed = true }
+      request.signal?.throwIfAborted()
+      if (!failed) {
+        if (recovery) yield { type: "retry", retry: { ...recovery, phase: "recovered" } }
+        yield* pendingUsage
         return
       }
-      const code = retryErrorCode(failure ?? failureEvent!.error)
-      const retryable = policy.mode === "always" || (policy.mode === "normal" && policy.retryableCodes.includes(code ?? ""))
-      const budgetExhausted = policy.mode === "normal" && attemptNo > policy.maxRetries
-      if (retryable && !produced && !budgetExhausted) {
-        await delay(backoffDelay(policy, attemptNo))
+      const code = retryErrorCode(failure)
+      const retryable = !TERMINAL_CODES.has(code ?? "") && (policy.mode === "always" || policy.retryableCodes.includes(code ?? ""))
+      const budgetExhausted = policy.mode === "normal" && attemptNo >= policy.maxRetries
+      const detail = failure as { retryAfterAt?: number; httpStatus?: number } | undefined
+      const serverWait = typeof detail?.retryAfterAt === "number" && Number.isFinite(detail.retryAfterAt) ? Math.max(0, detail.retryAfterAt - Date.now()) : 0
+      if (retryable && (!produced || request.retryOutput === "discard") && !budgetExhausted && serverWait <= 60_000) {
+        attemptNo++
+        const delayMs = Math.max(serverWait, backoffDelay(policy, attemptNo))
+        recovery = {
+          requestId, phase: "waiting", attempt: attemptNo,
+          ...(policy.mode === "normal" ? { maxRetries: policy.maxRetries } : {}),
+          delayMs, nextAttemptAt: Date.now() + delayMs, code: code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNKNOWN",
+          ...(detail?.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
+          ...(metadata?.providerId === undefined ? {} : { providerId: metadata.providerId.slice(0, 256) }),
+          ...(metadata?.modelId === undefined ? {} : { modelId: metadata.modelId.slice(0, 256) }),
+          ...(request.retryOutput === "discard" ? { discardOutput: true as const } : {}),
+        }
+        yield { type: "retry", retry: recovery }
+        request.signal?.throwIfAborted()
+        await delay(Math.max(0, recovery.nextAttemptAt! - Date.now()), undefined, { signal: request.signal })
         continue
       }
-      if (failureEvent !== undefined && !budgetExhausted) {
-        yield failureEvent // preserve the provider's event surface: terminal
-        return
-      }
-      throw failure ?? failureEvent!.error
+      if (failureEvent && !budgetExhausted) { yield failureEvent; return }
+      throw failure
     }
   }
   return { stream: wrapped }
@@ -353,6 +399,8 @@ export function validatePromptCacheConfig(value: unknown, path = "promptCache"):
 }
 
 export interface LLMRequest {
+  /** Host-only: the consumer can discard an uncommitted failed attempt. */
+  retryOutput?: "discard"
   /** Host-only usage attribution. Protocol adapters never serialize this field. */
   sessionId?: string
   messages: LLMMessage[]
@@ -500,7 +548,7 @@ export async function describeTransportError(
   // A caller-initiated abort is NOT a transport fault; naming it as one sends
   // the operator hunting a network problem that does not exist.
   const aborted = error instanceof Error && error.name === "AbortError"
-  if (aborted) return new Error(`${label} request aborted by the caller`)
+  if (aborted) return Object.assign(new Error(`${label} request aborted by the caller`, { cause: error }), { name: "AbortError", code: "ABORTED" })
 
   const chain: string[] = []
   let current: unknown = error
@@ -528,6 +576,8 @@ export async function describeTransportError(
         " NODE_EXTRA_CA_CERTS to the approved CA bundle. Both are read at process start.",
   )
   err.cause = error
+  const code = retryErrorCode(error)
+  if (code !== undefined) Object.assign(err, { code })
   return err
 }
 
@@ -536,12 +586,11 @@ export async function describeTransportError(
  * `parseSSE` so the READING LOOP can decide — a corrupt chunk is a provider
  * failure like any other and belongs on the seam's `error` channel, not out of
  * the generator as an exception while the same adapter reports HTTP failures as
- * events. The message carries a truncated copy of the offending text: without
- * it a 4000-chunk stream gives no way to tell WHAT was malformed.
+ * events. Payload text is deliberately excluded from diagnostics.
  */
 export class SSEParseError extends Error {
-  constructor(text: string) {
-    super(`malformed SSE chunk: ${text.slice(0, 80)}`)
+  constructor(_text: string) {
+    super("malformed SSE chunk")
     this.name = "SSEParseError"
   }
 }

@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { systemFetch } from "@i-harness/http-transport"
 
 export interface OpenAIConfig {
@@ -236,7 +236,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: new Error(`openai request failed: ${response.status} ${await response.text()}`) }
+        yield { type: "error", error: await describeHttpError("openai", response) }
         return
       }
       const reader = response.body.getReader()

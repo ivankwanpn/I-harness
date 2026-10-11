@@ -47,7 +47,7 @@ it('keeps real host loopback transports independent through a failed prompt with
       return { request, sessionId, settingsPath }
     }
     const first = await fixture('first'), second = await fixture('second')
-    await expect(first.request('session/prompt', { sessionId: first.sessionId, prompt: 'Controlled failure' })).rejects.toThrow(/Controlled fixture failure/)
+    await expect(first.request('session/prompt', { sessionId: first.sessionId, prompt: 'Controlled failure' })).rejects.toThrow(/request failed: 400/)
     await second.request('session/prompt', { sessionId: second.sessionId, prompt: 'Complete on the other fixture origin' })
     await first.request('session/prompt', { sessionId: first.sessionId, prompt: 'Retry on the original fixture origin' })
     expect(routes).toEqual([{ model: 'first', authorization: 'Bearer fixture-key' }, { model: 'second', authorization: 'Bearer fixture-key' }, { model: 'first', authorization: 'Bearer fixture-key' }])

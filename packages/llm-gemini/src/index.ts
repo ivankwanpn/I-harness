@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -286,7 +286,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: new Error(`gemini request failed: ${response.status} ${await response.text()}`) }
+        yield { type: "error", error: await describeHttpError("gemini", response) }
         return
       }
       const reader = response.body.getReader()

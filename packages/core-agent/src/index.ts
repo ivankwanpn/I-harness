@@ -365,7 +365,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // R-A1: steer-tier inputs arrive at the provider boundary — claimed
       // before step/start so deriveMessages below already includes them.
       deps.stepInputs?.claimAtStepBoundary()
-      const stepStartSeq = deps.session.events.length
+      let stepStartSeq = deps.session.events.length
       append(deps.session, { type: "step/start" })
       lifecycle.stepOpen = true
       lifecycle.providerCompleted = false
@@ -394,6 +394,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       assertMessagesFromLog(messages, deps.session)
 
       const request: LLMRequest = {
+        retryOutput: "discard",
         ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
         messages,
         tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
@@ -425,12 +426,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       const requestRevision = projectionRevision()
 
       // M25: provider/call before the model stream opens.
-      // NOTE (retry/start deferral): M12 tool retry (guard-retry) and M20
-      // provider retry (llm-seam createRetryingClient) are both SILENT by
-      // design and expose no callback/event seam — neither is wired into the
-      // core-agent loop, so a retry is not observable from this layer. v0
-      // emits no retry/start (a failed call still surfaces as provider/error
-      // or tool/error); adding a retry hook to those packages is follow-up.
+      // Model retry lifecycle arrives through the stream as durable model/retry
+      // events. Tool retry remains a separate guard-owned boundary.
       // M5/D3: whether THIS request's prefix was rewritten by a marker that
       // arrived since the last one. Derived from the log rather than reported by
       // whoever rewrote it, so a rewrite path that forgets to announce itself
@@ -490,7 +487,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       // M5 T2: the provider's own usage report for THIS round-trip. Merged
       // rather than overwritten, because one request can report twice and each
       // report carries only its own fields.
-      const stepUsage: LLMUsage = {}
+      let stepUsage: LLMUsage = {}
+      const reasoningStart = reasoning.length
       const batch: BatchCall[] = []
       // M72 Ⅱ: this step's ending, decided by the provider's own terminal
       // literal (Task 6) and carried to the durable log below. Per-STEP, so
@@ -550,6 +548,33 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
           if (abort?.aborted) throw new Error("agent aborted")
           if (ev.type !== "reasoning" && ev.type !== "usage") flushReasoning()
           switch (ev.type) {
+            case "retry":
+              if (ev.retry.phase === "waiting" && ev.retry.discardOutput) {
+                // Keep failed output in the append-only audit, but exclude it
+                // and its unexecuted calls from the next model projection.
+                if (stepText) append(deps.session, { type: "assistant/message", text: stepText })
+                append(deps.session, { type: "step/failed" })
+                lifecycle.stepFailed = true
+                append(deps.session, { type: "step/end" })
+                lifecycle.stepOpen = false
+                stepText = ""
+                toolCallsThisStep = 0
+                batch.length = 0
+                stepUsage = {}
+                reasoning.length = reasoningStart
+                reasoningBlockIndex = 0
+                truncatedThisStep = false
+                refusedThisStep = false
+                thinkingBlocks = undefined
+                providerContinuation = undefined
+                contextMeter.invalidate()
+                stepStartSeq = deps.session.events.length
+                append(deps.session, { type: "step/start" })
+                lifecycle.stepOpen = true
+                lifecycle.stepFailed = false
+              }
+              append(deps.session, { type: "model/retry", version: 1, ts: Date.now(), retry: ev.retry })
+              break
             case "text/chunk":
               stepText += ev.text
               break
@@ -608,7 +633,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
               break
             case "error":
               deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
-              throw new Error(`model stream error: ${ev.error.message}`)
+              throw Object.assign(new Error(`model stream error: ${ev.error.message}`, { cause: ev.error }), {
+                code: (ev.error as Error & { code?: string }).code,
+                httpStatus: (ev.error as Error & { httpStatus?: number }).httpStatus,
+              })
             case "end":
               thinkingBlocks = ev.thinkingBlocks
               providerContinuation = ev.providerContinuation
@@ -638,12 +666,8 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       }
       lifecycle.providerCompleted = true
 
-      // M5 T2: emitted ONLY on a completed round-trip, and only if something was
-      // actually reported. The event count is the denominator for every number
-      // in it, so a round-trip that died mid-stream must not report: llm-seam's
-      // retry wrapper is silent, and an attempt that failed and was retried
-      // would otherwise be counted as its own reported request. No report at all
-      // is the honest outcome — absent is not zero.
+      // Only the completed attempt calibrates context usage. The host captures
+      // failed-attempt billing separately below the retry wrapper.
       if (Object.keys(stepUsage).length > 0) {
         deps.telemetry?.emit({ type: "provider/usage", ts: Date.now(), data: { ...stepUsage } })
       }

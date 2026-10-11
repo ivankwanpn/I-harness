@@ -3,6 +3,33 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { afterEach, expect, it, vi } from "vitest"
 import { createFileProviderRuntime } from "../src/file-runtime.ts"
+import { SettingsStore } from "@i-harness/settings"
+
+it("applies a changed retry limit to the next request of an already resolved binding", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-live-retry-")); roots.push(root)
+  const settingsPath = join(root, "settings.json")
+  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: join(root, "credentials.json") })
+  await runtime.createProvider("fixture", { protocol: "openai-completions", baseURL: "https://fixture.invalid" })
+  await runtime.setApiKey("fixture", "fixture-key")
+  const store = new SettingsStore({ path: settingsPath }); await store.load(); await store.set({ modelRetryLimit: 0 })
+  const resolved = await runtime.resolveModel({ sessionSelection: { provider: "fixture", model: "m" } })
+  if (resolved.status !== "ready") throw new Error("binding unavailable")
+  let calls = 0
+  vi.stubGlobal("fetch", async () => { calls++; return new Response("private body", { status: 503 }) })
+  const run = async () => { for await (const _ of resolved.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {} }
+  await expect(run()).rejects.toThrow("503"); expect(calls).toBe(1)
+  await store.set({ modelRetryLimit: 1 })
+  const inFlight = async () => {
+    for await (const event of resolved.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {
+      if (event.type === "retry" && event.retry.phase === "waiting") await store.set({ modelRetryLimit: 0 })
+    }
+  }
+  await expect(inFlight()).rejects.toThrow("503"); expect(calls).toBe(3)
+  await expect(run()).rejects.toThrow("503"); expect(calls).toBe(4)
+  await writeFile(settingsPath, "{corrupt")
+  await expect(run()).rejects.toThrow("Invalid provider configuration document")
+  expect(calls).toBe(4)
+})
 
 const roots: string[] = []
 it("reports the saved default selection separately from route fallback metadata", async () => {

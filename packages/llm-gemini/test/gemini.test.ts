@@ -542,7 +542,7 @@ describe("llm-gemini protocol", () => {
     // may hand the whole body over as ONE chunk, so pinning that would be a test of
     // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
     expect(events.map((e) => e.type)).toEqual(["error"])
-    expect((events[0] as { error: Error }).error.message).toContain("not json")
+    expect((events[0] as { error: Error }).error.message).toBe("malformed SSE chunk")
   })
 
   it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {

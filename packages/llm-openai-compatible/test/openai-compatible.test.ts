@@ -109,6 +109,7 @@ describe("llm-openai-compatible protocol", () => {
     expect(events.map((event) => event.type)).toEqual(["tool_call", "error"])
     expect(events[0]).toEqual({ type: "tool_call", call: { id: "chat-a", name: "read", args: { path: "a" } } })
     expect((events[1] as Extract<LLMStreamEvent, { type: "error" }>).error.message).toContain("malformed tool args")
+    expect((events[1] as Extract<LLMStreamEvent, { type: "error" }>).error.message).not.toContain('"path"')
   })
 
   it("M72 Ⅰ: a blank system prompt sends NO system message (nothing to say)", async () => {
@@ -221,7 +222,7 @@ describe("llm-openai-compatible protocol", () => {
     // may hand the whole body over as ONE chunk, so pinning that would be a test of
     // Node's mood, not of the adapter. Mid-stream corruption goes through this same catch.
     expect(events.map((e) => e.type)).toEqual(["error"])
-    expect((events[0] as { error: Error }).error.message).toContain("not json")
+    expect((events[0] as { error: Error }).error.message).toBe("malformed SSE chunk")
   })
 
   it("M72 Ⅰ: an aborted stream rejects instead of yielding an error event", async () => {

@@ -46,6 +46,7 @@ import { createDesktopDiagnostics } from "./environment-diagnostics.ts"
 import { createApprovalRulesAdapter } from "./approval-rules.ts"
 import { approvalPolicyIdentity } from "./approval-policy-identity.ts"
 import { createAutoTitleSettings } from "./auto-title.ts"
+import { createModelRetrySettings } from "./model-retry-settings.ts"
 import type { RuntimeInputs } from "@i-harness/plugin-registry"
 import { createDesktopWorkflow, createDesktopGoalTools } from "./workflow.ts"
 import { createDesktopApprovalHistory } from "./approval-history.ts"
@@ -385,7 +386,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const agentProcesses = createAgentProcesses(coordinator, service)
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
-    workspace: options.workspace, autoTitle, codeSettings, approvalRules, usageStats,
+    workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },

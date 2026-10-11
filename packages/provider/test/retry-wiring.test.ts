@@ -43,7 +43,10 @@ describe("buildModelClient retry wiring", () => {
 
     // First attempt surfaced only an error event to the wrapper → retried →
     // output was produced and no error leaked.
-    expect(events).toEqual([{ type: "text/chunk", text: "hello" }, { type: "end" }])
+    expect(events).toEqual([
+      ...["waiting", "attempting", "recovered"].map(phase => ({ type: "retry", retry: expect.objectContaining({ phase, providerId: "test", modelId: "gpt-4o", httpStatus: 500, code: "SERVER" }) })),
+      { type: "text/chunk", text: "hello" }, { type: "end" },
+    ])
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 

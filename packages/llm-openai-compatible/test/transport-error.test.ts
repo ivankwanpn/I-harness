@@ -107,7 +107,7 @@ describe("M62 the adapter actually routes a transport rejection through it", () 
     try {
       const text = await drain(createOpenAICompatibleClient(base))
       expect(text).toContain("404")
-      expect(text).toContain("nope")
+      expect(text).not.toContain("nope") // HTTP response bodies are not diagnostic details.
     } finally {
       globalThis.fetch = realFetch
     }
