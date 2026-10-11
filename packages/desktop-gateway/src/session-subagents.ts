@@ -173,6 +173,10 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
       const saved = chain.flatMap((ownerId) => stored.get(ownerId) ?? []).find((row) => row.sessionId === sessionId)
       const hint = hints.get(sessionId)
       const entry = liveEntry || saved || hint ? { ...hint, ...saved, ...liveEntry } : undefined
+      // Snapshots omit cleared optional fields. Unlike identity metadata, an
+      // absent error on the current registry must not fall back to an older
+      // saved entry or the initial task's outcome after a successful retry.
+      const currentError = (liveEntry ?? saved ?? hint)?.error
       let events: SessionEvent[] = [], unavailable: string | undefined
       try { events = (await snapshot(sessionId)).events.slice(meta.seedLength ?? 0) }
       catch (error) { unavailable = errorText(error); errors.push({ sessionId, message: unavailable }) }
@@ -201,7 +205,7 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
         status: state, live: isLive,
         ...(entry?.path ? { path: entry.path } : {}), ...(entry?.roleName ? { roleName: entry.roleName } : {}), ...(entry?.modelLabel ? { modelLabel: entry.modelLabel } : {}), ...(entry?.jobId ? { jobId: entry.jobId } : {}),
         ...(finalText ? { finalText: finalText.slice(0, 16_384) } : {}),
-        ...((unavailable ?? entry?.error) ? { error: unavailable ?? entry?.error } : {}),
+        ...((unavailable ?? currentError) ? { error: unavailable ?? currentError } : {}),
         ...(!canControl || plan ? { controlReason: parentMeta.archived ? "The parent conversation is archived." : plan ? PLAN_REASON : CONTROL_REASON } : {}),
         canFollowup: Boolean(canControl && !plan && tools?.get(team ? "team_followup_task" : "followup_task")),
         canMessage: Boolean(canControl && !plan && tools?.get(team ? "team_send_message" : "send_message")),

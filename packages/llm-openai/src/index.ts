@@ -344,13 +344,18 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           return []
         }
         if (t === "response.function_call_arguments.done") {
-          const ev = event as { item_id: string }
+          const ev = event as { item_id: string; arguments?: unknown }
           const pending = pendingCalls.get(ev.item_id)
           if (pending) {
             pendingCalls.delete(ev.item_id)
             if (!yieldedInline.has(ev.item_id)) {
               try {
-                const args = JSON.parse(pending.argsBuffer) as unknown
+                // The done event contains the final argument snapshot. Deltas
+                // are only a fallback for compatible endpoints that omit it.
+                // Never execute a stale delta when a supplied final value is invalid.
+                const serialized = ev.arguments === undefined ? pending.argsBuffer : ev.arguments
+                if (typeof serialized !== "string") throw new Error("Invalid final arguments")
+                const args = JSON.parse(serialized) as unknown
                 recordOutput(pending.outputIndex, { kind: "tool", index: toolCount++ })
                 return [{ type: "tool_call", call: { ...(pending.callId ? { id: pending.callId } : {}), name: pending.name, args } }]
               } catch {
