@@ -2,6 +2,10 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "技能與命令": "Skills and commands", "操作": "Actions", "內建": "Built-in",
+  "目標與計畫": "Goals and plans", "代理團隊": "Agent team", "帶入": "Insert", "選擇": "Select",
+  "沒有符合的已啟用命令或技能": "No matching enabled commands or skills",
+  "輸入名稱或描述以縮小搜尋範圍。": "Type a name or description to narrow the results.",
   "會話專案": "Conversation project", "選擇會話專案": "Choose conversation project", "選擇專案": "Choose project",
   "正在確認專案…": "Checking project…", "專案歸屬無法確認": "Project ownership unavailable", "專案已移除": "Project removed",
   "不在專案中": "Not in a project", "不在專案中工作": "Work outside a project", "先選擇專案以開始會話。": "Choose a project to start a conversation.",

@@ -16,6 +16,8 @@ export type ResourceAuthoringRequest =
   | { kind: "desktop/resources/import"; workspaceId: string; source: LocalResourceSource }
 export type ResourceAuthoringRequestHandler = (request: ResourceAuthoringRequest) => Promise<unknown>
 export interface ResourceList { items: ResourceSummary[]; total: number; diagnostics: string[] }
+export interface ResourceSuggestion { name: string; kind: "command" | "skill"; description?: string; argumentHints?: string; source: "workspace" | "global" | "plugin"; pluginId?: string }
+export interface ResourceSuggestionPage { items: ResourceSuggestion[]; total: number; diagnostics: string[] }
 const validCommand = (name: string) => parseCommandLine(`/${name}`)?.name === name
 const bodyPreview = (body: string) => ({ body: body.slice(0, 131072), truncated: body.length > 131072 })
 
@@ -61,6 +63,25 @@ export function createDesktopResources(workspace: string, inputs: () => Promise<
   }
   return {
     effectiveInputs,
+    async suggestions(query: string): Promise<ResourceSuggestionPage> {
+      if (typeof query !== "string" || query.length > 512) throw new Error("Invalid resource search")
+      const data = await catalogue()
+      const summarize = (row: ResourceSummary, kind: ResourceSuggestion["kind"]): ResourceSuggestion => ({
+        name: row.name, kind, source: row.source,
+        ...(row.description === undefined ? {} : { description: row.description }),
+        ...(row.argumentHints === undefined ? {} : { argumentHints: row.argumentHints }),
+        ...(row.pluginId === undefined ? {} : { pluginId: row.pluginId }),
+      })
+      const all = [
+        ...data.commands.map(row => summarize({ ...row, source: row.source ?? "plugin" }, "command")),
+        ...data.skillRows().map(row => summarize(row, "skill")),
+      ]
+      const term = query.trim().toLocaleLowerCase()
+      const matches = all.filter(row => `${row.name} ${row.description ?? ""} ${row.pluginId ?? ""}`.toLocaleLowerCase().includes(term))
+      matches.sort((a, b) => Number(b.name.toLocaleLowerCase().startsWith(term)) - Number(a.name.toLocaleLowerCase().startsWith(term))
+        || a.name.localeCompare(b.name) || a.kind.localeCompare(b.kind) || a.source.localeCompare(b.source) || (a.pluginId ?? "").localeCompare(b.pluginId ?? ""))
+      return { items: matches.slice(0, 100), total: matches.length, diagnostics: data.diagnostics }
+    },
     async list(kind: ResourceKind, query: string, offset: number, includeShadowed = false): Promise<ResourceList> {
       const data = await catalogue()
       if (kind !== "skills" && kind !== "commands") throw new Error("Invalid resource kind")

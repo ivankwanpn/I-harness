@@ -50,6 +50,7 @@ export type DesktopRequest =
   | { kind: "desktop/session/job/output"; workspaceId: string; sessionId: string; id: string }
   | { kind: "workspace/files/pick"; workspaceId: string }
   | { kind: "workspace/attachments/pick"; workspaceId: string; allowImages: boolean }
+  | { kind: "desktop/resources/suggestions"; workspaceId: string; query: string }
   | { kind: "desktop/resources/list"; workspaceId: string; resourceKind: ResourceKind; query: string; offset: number; includeShadowed?: boolean }
   | { kind: "desktop/resources/read"; workspaceId: string; resourceKind: ResourceKind; name: string; source?: "workspace" | "global" | "plugin"; pluginId?: string }
   | { kind: "desktop/mcp/state" | "desktop/mcp/refresh"; workspaceId: string }

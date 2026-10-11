@@ -5,7 +5,7 @@ import { Composer } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); localStorage.clear() })
 const base = { workspaceId: "picker", sessionId: "s", canSend: true, running: false, onPrompt: vi.fn(async () => {}), onCancel() {} }
 it("selects slash commands by keyboard, ignores composition, escapes without submitting", async () => {
-  const request = vi.fn(async () => [{ name: "hello" }, { name: "help" }])
+  const request = vi.fn(async () => ({ items: [{ name: "hello", kind: "command", source: "plugin" }, { name: "help", kind: "command", source: "plugin" }], total: 2, diagnostics: [] }))
   render(<Composer {...base} bridge={{ request, onEvent: () => () => {} }} />)
   const editor = screen.getByRole("textbox", { name: "提示" })
   fireEvent.change(editor, { target: { value: "/he" } })
@@ -18,6 +18,22 @@ it("selects slash commands by keyboard, ignores composition, escapes without sub
   fireEvent.change(editor, { target: { value: "/" } })
   fireEvent.keyDown(editor, { key: "Escape" })
   expect(screen.queryByText("/hello")).toBeNull()
+})
+it("inserts a selected skill without opening a same-named workflow or submitting", async () => {
+  const onPrompt = vi.fn(async () => {}), onWorkflow = vi.fn()
+  const request = vi.fn(async () => ({ items: [{ name: "goal", kind: "skill", source: "plugin", pluginId: "fixture" }], total: 1, diagnostics: [] }))
+  render(<Composer {...base} onPrompt={onPrompt} onWorkflow={onWorkflow} workflowEnabled bridge={{ request, onEvent: () => () => {} }} />)
+  const editor = screen.getByRole("textbox", { name: "提示" })
+  editor.focus()
+  fireEvent.change(editor, { target: { value: "/" } })
+  const row = await screen.findByRole("option", { name: /\$goal/ })
+  fireEvent.mouseDown(row)
+  fireEvent.click(row)
+  expect((editor as HTMLTextAreaElement).value).toBe("$goal ")
+  expect(document.activeElement).toBe(editor)
+  expect(onWorkflow).not.toHaveBeenCalled()
+  expect(onPrompt).not.toHaveBeenCalled()
+  expect(screen.queryByRole("listbox", { name: "可用命令" })).toBeNull()
 })
 it("ignores old workspace picker replies and attaches returned identity with bounded readable data", async () => {
   let finish!: (value: any) => void

@@ -1,13 +1,51 @@
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { expect, it, vi } from "vitest"
 import { createSessionService } from "@i-harness/session-executor"
-import { listCommands } from "@i-harness/interaction"
+import { listCommands, runCommand } from "@i-harness/interaction"
 import { createDesktopPlugins } from "../src/plugins.ts"
 import { pluginExtensions, expandPluginPrompt } from "../src/plugin-mount.ts"
 import { writeStdioStubServer } from "../../mcp-client/test/stdio-stub.ts"
+import { writeSuggestionMarketplace } from "./resource-suggestions-fixture.ts"
+
+it("withdraws skills-only and command plugin resources from the same existing assembly on disable and uninstall", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-live-plugin-resources-"))
+  await mkdir(join(root, "plugins"))
+  await writeFile(join(root, "plugins", "state.json"), JSON.stringify({ version: 1, sources: [], plugins: [] }))
+  const plugins = createDesktopPlugins(join(root, "plugins"))
+  const service = createSessionService({ workspace: root, modelPolicy: "test-mock",
+    extensionsFor: async id => pluginExtensions(await plugins.inputs(), root, id, () => {}) })
+  const stop = plugins.bindRefresh(() => service.refreshExtensions())
+  try {
+    const original = await service.assemblyFor("existing")
+    const marketplace = await writeSuggestionMarketplace(root)
+    await plugins.mutate({ action: "source/add", source: marketplace.source })
+    for (const id of [marketplace.skillsId, marketplace.commandsId]) {
+      await plugins.mutate({ action: "install", id })
+      await plugins.mutate({ action: "enable", id })
+    }
+    const skill = await original.tools.execute({ name: "skill_get", args: { name: "brainstorming" } })
+    expect(JSON.stringify(skill.output)).toContain("private skill body brainstorming")
+    expect(await runCommand(original.ctx, "review-changes", "example.ts")).toMatchObject({ kind: "prompt", text: "private command body example.ts" })
+    const history = [...original.session.events]
+    for (const id of [marketplace.skillsId, marketplace.commandsId]) await plugins.mutate({ action: "disable", id })
+    expect(await service.assemblyFor("existing")).toBe(original)
+    expect(original.session.events).toEqual(history)
+    await expect(original.tools.execute({ name: "skill_get", args: { name: "brainstorming" } })).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" })
+    await expect(runCommand(original.ctx, "review-changes", "example.ts")).rejects.toThrow("unknown command")
+    for (const id of [marketplace.skillsId, marketplace.commandsId]) await plugins.mutate({ action: "enable", id })
+    expect(JSON.stringify((await original.tools.execute({ name: "skill_get", args: { name: "brainstorming" } })).output)).toContain("private skill body brainstorming")
+    expect(await runCommand(original.ctx, "review-changes", "restored.ts")).toMatchObject({ text: "private command body restored.ts" })
+    for (const id of [marketplace.skillsId, marketplace.commandsId]) await plugins.mutate({ action: "uninstall", id })
+    expect(await service.assemblyFor("existing")).toBe(original)
+    expect(original.session.events).toEqual(history)
+    await expect(original.tools.execute({ name: "skill_get", args: { name: "brainstorming" } })).rejects.toMatchObject({ code: "SKILL_NOT_FOUND" })
+    await expect(runCommand(original.ctx, "review-changes", "example.ts")).rejects.toThrow("unknown command")
+    expect(listCommands(original.ctx)).toEqual([])
+  } finally { await stop(); await service.close(); await plugins.close(); await rm(root, { recursive: true, force: true, maxRetries: 5 }) }
+})
 
 it("live-mounts the same MCP plugin into two independent existing agents", async () => {
   let enabled = false

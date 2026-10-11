@@ -298,6 +298,15 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         catch (error) { send(makeFailure(message.id, INVALID_PARAMS, error instanceof Error ? error.message : String(error))) }
         return
       }
+      if (message.method === "desktop/resources/suggestions" && handlers.resources) {
+        const params = asRecord(message.params)
+        if (typeof params?.query !== "string" || params.query.length > 512) {
+          send(makeFailure(message.id, INVALID_PARAMS, "Invalid resource query")); return
+        }
+        try { send(makeSuccess(message.id, await handlers.resources.suggestions(params.query))) }
+        catch (error) { send(makeFailure(message.id, INTERNAL_ERROR, error instanceof Error ? error.message : String(error))) }
+        return
+      }
       if (["desktop/resources/list", "desktop/resources/read"].includes(message.method) && handlers.resources) {
         const params = asRecord(message.params)
         if ((params?.resourceKind !== "skills" && params?.resourceKind !== "commands") || (message.method.endsWith("/list")

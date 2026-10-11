@@ -49,6 +49,9 @@ export function contextRequestParams(value: Record<string, unknown>): Record<str
       if (!remember || !["session", "workspace"].includes(String(remember.scope)) || typeof remember.expiresAt !== "number" || !Number.isSafeInteger(remember.expiresAt) || remember.expiresAt <= Date.now() || remember.expiresAt > Date.now() + 366 * 86400000) throw new Error("invalid remembered approval expiry/scope")
       return { sessionId: text("sessionId", 256), requestId: text("requestId", 256), remember: { scope: remember.scope, expiresAt: remember.expiresAt } }
     }
+    case "desktop/resources/suggestions":
+      if (typeof value.query !== "string" || value.query.length > 512) throw new Error("invalid resource query")
+      return { query: value.query }
     case "desktop/resources/list":
     case "desktop/resources/read": {
       if (value.resourceKind !== "skills" && value.resourceKind !== "commands") throw new Error("invalid resource kind")
