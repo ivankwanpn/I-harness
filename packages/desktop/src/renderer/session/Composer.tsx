@@ -174,6 +174,7 @@ export interface ComposerProps {
   fileReferencesEnabled?: boolean
   imageAttachmentsEnabled?: boolean
   contextUsageEnabled?: boolean
+  contextRefreshKey?: string
   canCompact?: boolean
   onCompact?(instructions?: string): Promise<void>
   onPrompt(text: string, context?: string, images?: ImageInput[], onAdmitted?: () => void): Promise<void>
@@ -269,6 +270,7 @@ function SessionComposer({
   fileReferencesEnabled = false,
   imageAttachmentsEnabled = false,
   contextUsageEnabled = false,
+  contextRefreshKey,
   onOpenHistory,
   onOpenProjectFile,
   canCompact = false,
@@ -570,7 +572,7 @@ function SessionComposer({
           <select className="composer-delivery" aria-label={t("輸入處理方式")} title={t("輸入處理方式")} value={delivery} disabled={primaryBusy} onChange={(event) => setDeliveryOverride(event.target.value as FollowupDelivery)}><option value="queue">{t("加入佇列")}</option><option value="steer">{t("引導目前執行")}</option></select>
           <ChevronDown size={12} aria-hidden="true" />
         </span> : null}
-        {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} /> : null}
+        {bridge && contextUsageEnabled ? <ContextUsage bridge={bridge} workspaceId={workspaceId} sessionId={sessionId} refreshKey={contextRefreshKey} /> : null}
         {modelControl ?? (modelLabel ? <span className="composer-model" title={modelLabel}>{modelLabel}</span> : null)}
         {running && !primaryStops ? <button type="button" className="composer-send" data-state="running" aria-label={t("停止")} title={t("停止")} onClick={onCancel}>
           <Square size={14} fill="currentColor" aria-hidden="true" />

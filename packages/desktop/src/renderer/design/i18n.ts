@@ -328,7 +328,7 @@ const english = {
   "僅圖片（舊設定）": "Image only (legacy setting)",
   "輸入類型已更新；現有會話請在模型選擇器重新套用模型，之後才會使用更新後的能力。": "Input types updated. Reapply the model in an existing conversation's model picker to use the updated capability.",
   "壓縮目前會話上下文": "Compact this conversation's context", "目前無法壓縮上下文": "Cannot compact context right now",
-  "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…",
+  "上下文容量": "Context capacity", "估算上下文容量": "Estimated context capacity", "估算已用 Token": "Estimated tokens used", "根據目前可見的模型訊息估算；不是供應商帳單或快取命中率。": "Estimated from active model messages; this is not provider billing or a cache hit rate.", "讀取上下文容量中…": "Reading context capacity…", "無法取得上下文容量。": "Context capacity is unavailable.",
   "訊息來源": "Message sources", "使用者訊息": "User messages", "助手訊息": "Assistant messages", "工具訊息": "Tool messages",
 } as const
 export type Message = keyof typeof english

@@ -4,7 +4,62 @@
   container: session-composer / inline-size;
 }
 
+/* Shared input-card layout: see COMPOSER_SOURCES.md. Text entry keeps the
+ * same neutral surface on focus; the caret shows the insertion point. */
+.session-composer .zc-composer { margin: 0; }
+.session-composer .composer-surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  overflow: hidden;
+  border: 1px solid var(--ih-divider);
+  border-radius: 16px;
+  background: var(--ih-panel);
+  color: var(--ih-text);
+  box-shadow: 0 2px 8px #0001;
+}
+.session-composer .zc-composer .composer-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 3.75rem;
+  max-height: min(16rem, 35vh);
+  margin: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  outline-offset: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.6;
+  field-sizing: content;
+  resize: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ih-divider) transparent;
+}
+.session-composer .zc-composer .composer-input:focus,
+.session-composer .zc-composer .composer-input:focus-visible { outline: none; box-shadow: none; }
+.session-composer .composer-input::placeholder { color: var(--ih-muted); opacity: .8; }
+.session-composer .composer-surface > .zc-composer-error { margin: 0; max-height: 6rem; overflow-y: auto; }
+.composer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.session-composer [data-composer-leading-actions] { display: flex; min-width: 0; max-width: 100%; }
+.session-composer [data-composer-leading-content] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+
 .session-composer [data-composer-trailing-actions] {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-left: auto;
   min-width: 0;
   max-width: 100%;
   flex-shrink: 1;
@@ -12,7 +67,7 @@
   row-gap: 6px;
 }
 
-.session-composer [data-composer-leading-actions] { flex: 0 0 auto; }
+.session-composer [data-composer-leading-actions] { flex: 0 1 auto; }
 .session-composer .composer-add { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border-radius: 50%; }
 .session-composer .composer-add:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
 .composer-file-chip small { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ih-muted); }
@@ -47,7 +102,8 @@
 .composer-delivery option { background: var(--ih-panel); color: var(--ih-text); }
 .composer-delivery-control > svg { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); color: var(--ih-muted); pointer-events: none; }
 
-.session-composer .composer-send { flex: none; border-radius: 50%; }
+.session-composer .composer-send { flex: none; width: 34px; height: 34px; border-radius: 50%; background: var(--ih-accent); color: var(--ih-panel); }
+.session-composer .composer-send:disabled { opacity: 1; background: color-mix(in srgb, var(--ih-text) 12%, var(--ih-panel)); color: var(--ih-muted); }
 .session-composer .composer-send:focus-visible, .composer-delivery:focus-visible { outline: 2px solid var(--ih-accent); outline-offset: 2px; }
 .composer-spinner { animation: composer-spin 1s linear infinite; }
 @keyframes composer-spin { to { transform: rotate(360deg); } }

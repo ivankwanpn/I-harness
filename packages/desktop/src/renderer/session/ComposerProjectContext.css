@@ -1,5 +1,6 @@
-.composer-project-context { display: flex; align-items: center; min-width: 0; min-height: 34px; margin: 0 10px -3px; padding: 5px 8px 7px; border: 1px solid var(--ih-divider); border-bottom: 0; border-radius: 12px 12px 0 0; background: var(--ih-panel); color: var(--ih-muted); }
+.composer-project-context { display: flex; align-items: center; min-width: 0; min-height: 32px; margin: 0; padding: 6px 12px 2px; border: 1px solid var(--ih-divider); border-bottom: 0; border-radius: 16px 16px 0 0; background: var(--ih-panel); color: var(--ih-muted); }
 .composer-project-context + .session-composer .zc-composer { margin-top: 0; }
+.composer-project-context + .session-composer .composer-surface { border-top: 0; border-top-left-radius: 0; border-top-right-radius: 0; padding-top: 8px; }
 .composer-project-trigger, .composer-project-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; padding: 3px 7px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 12px; line-height: 18px; }
 .composer-project-trigger { cursor: pointer; }
 .composer-project-trigger:hover:not(:disabled), .composer-project-trigger[aria-expanded="true"] { background: var(--ih-divider); color: var(--ih-text); }
