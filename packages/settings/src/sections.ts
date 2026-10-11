@@ -134,6 +134,8 @@ const MODEL_FIELDS: Record<string, FieldSpec> = {
 
 const providerConfigFields: Record<string, FieldSpec> = {
   apiKeyEnv: { type: "string", role: "credential-ref" },
+  oauthAccountId: { type: "string", role: "credential-ref" },
+  oauthProvider: { type: "enum", enum: ["openai-codex"] },
   baseURL: { type: "string" },
   modelsURL: { type: "string" },
   displayName: { type: "string" },

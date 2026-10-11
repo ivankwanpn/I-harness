@@ -48,15 +48,16 @@ function ProviderDirectoryContent({ bridge, workspaceId, showHeading, active }: 
     setTimeout(() => addTrigger.current?.focus(), 0)
   }
   useEffect(() => {
-    let active = true
+    if (!active) return
+    let current = true
     setError(undefined)
     void bridge.request({ kind: "desktop/provider/directory", workspaceId }).then((result) => {
-      if (active) setRows(result as DirectoryRow[])
+      if (current) setRows(result as DirectoryRow[])
     }).catch((reason: unknown) => {
-      if (active) setError(reason instanceof Error ? reason.message : String(reason))
+      if (current) setError(reason instanceof Error ? reason.message : String(reason))
     })
-    return () => { active = false }
-  }, [bridge, workspaceId, reload])
+    return () => { current = false }
+  }, [bridge, workspaceId, reload, active])
   return <section hidden={!active} className="provider-directory" aria-label={t("模型與提供商")}>
     <header className="provider-directory-heading">{showHeading ? <h2>{t("模型與提供商")}</h2> : <span />}
     <Button variant="secondary" size="small" icon={<Plus size={16} />} onClick={(event) => { addTrigger.current = event.currentTarget; setAddingBusy(false); setAdding(true) }}>{t("新增提供商")}</Button></header>

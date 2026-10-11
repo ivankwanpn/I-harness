@@ -18,7 +18,7 @@ const token = (value: unknown): value is string => typeof value === "string" && 
  * provider runtime uses the same settings/credentials as later workspace hosts.
  * Keeping these operations in that shipped gateway avoids raw TS dependencies
  * entering Electron main. Provider endpoint probes remain explicit UI actions. */
-export function createGlobalProviderSettings(client: () => Promise<ConfigurationClient>) {
+export function createGlobalProviderSettings(client: () => Promise<ConfigurationClient>, options: { openExternal?(url: string): Promise<void>; usageWarnings?(): Promise<string[]> } = {}) {
   let closed = false
   const jobs = new Set<Promise<unknown>>()
   return {
@@ -27,6 +27,27 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
       let method: string
       let params: Record<string, unknown>
       switch (input.kind) {
+        case "desktop/usage/query":
+          if (!record(input.query)) throw new Error("Invalid usage query")
+          method = input.kind; params = { query: input.query }; break
+        case "desktop/usage/pricing":
+          if (!record(input.price)) throw new Error("Invalid usage pricing")
+          method = input.kind; params = { price: input.price }; break
+        case "desktop/coding-plans/state":
+        case "desktop/coding-plans/cancel":
+        case "desktop/coding-plans/welcome-dismiss":
+        case "desktop/coding-plans/management-refresh":
+          method = input.kind; params = {}; break
+        case "desktop/coding-plans/reset-credit":
+          if (!token(input.accountId) || !token(input.creditId) || input.confirmed !== true) throw new Error("Reset credit requires an account, card and explicit confirmation")
+          method = input.kind; params = { accountId: input.accountId, creditId: input.creditId, confirmed: true }; break
+        case "desktop/coding-plans/start":
+          if (input.accountId !== undefined && !id(input.accountId)) throw new Error("Invalid Coding Plans account")
+          method = input.kind; params = input.accountId ? { accountId: input.accountId } : {}; break
+        case "desktop/coding-plans/refresh":
+        case "desktop/coding-plans/signout":
+          if (!id(input.accountId)) throw new Error("Invalid Coding Plans account")
+          method = input.kind; params = { accountId: input.accountId }; break
         case "desktop/global-preferences/state": method = "desktop/auto-title/state"; params = {}; break
         case "desktop/global-preferences/configure":
           if (typeof input.autoTitle !== "boolean") throw new Error("Invalid auto-title preference")
@@ -48,7 +69,26 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
         if (closed) throw new Error("Global provider settings closed")
         const target = await client()
         if (closed) throw new Error("Global provider settings closed")
-        return target.request(method, params)
+        if (method === "desktop/coding-plans/start") {
+          if (!options.openExternal) throw new Error("Browser opening unavailable")
+          const result = await target.request(method, params)
+          try {
+            if (!record(result) || typeof result.authorizationUrl !== "string") throw new Error()
+            const url = new URL(result.authorizationUrl)
+            if (closed || url.href !== "https://auth.openai.com/codex/device") throw new Error()
+            await options.openExternal(url.href)
+          } catch {
+            await target.request("desktop/coding-plans/cancel", {}).catch(() => {})
+            throw new Error("Unable to open ChatGPT authorization. Please try again.")
+          }
+          return target.request("desktop/coding-plans/state", {})
+        }
+        const result = await target.request(method, params)
+        if (method === "desktop/usage/query" && record(result) && options.usageWarnings) {
+          const warnings = await options.usageWarnings()
+          return { ...result, warnings: [...new Set([...(Array.isArray(result.warnings) ? result.warnings : []), ...warnings])] }
+        }
+        return result
       })
       jobs.add(job)
       try { return await job } finally { jobs.delete(job) }

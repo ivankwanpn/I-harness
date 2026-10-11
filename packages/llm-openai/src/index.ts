@@ -1,7 +1,12 @@
 import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { systemFetch } from "@i-harness/http-transport"
 
 export interface OpenAIConfig {
   apiKey: string
+  /** Account-bound Codex subscription requests use the Codex backend. */
+  codexSubscription?: boolean
+  /** Resolve immediately before each request, including retries and continuations. */
+  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string }>
   baseUrl?: string
   model: string
   providerId?: string
@@ -108,13 +113,21 @@ export function parseSSE(text: string): Record<string, unknown>[] {
 }
 
 export function createOpenAIClient(config: OpenAIConfig): ModelClient {
-  const baseUrl = config.baseUrl ?? "https://api.openai.com"
+  const codexSubscription = config.codexSubscription === true
+  if (codexSubscription && config.baseUrl !== undefined && !/^https:\/\/chatgpt\.com\/backend-api\/codex\/?$/.test(config.baseUrl)) {
+    throw new Error("Codex subscription credentials require the official Codex Responses endpoint")
+  }
+  if (codexSubscription && Object.keys(config.headers ?? {}).length > 0) {
+    throw new Error("Codex subscription requests do not support configurable headers")
+  }
+  const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses" : `${config.baseUrl ?? "https://api.openai.com"}/v1/responses`
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
       const messages = await projectImagesForProvider(request.messages, vision, request.signal)
       const body: Record<string, unknown> = {
+        ...(codexSubscription ? config.options ?? {} : {}),
         model: config.model,
         instructions: request.systemPrompt,
         input: messages
@@ -133,6 +146,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
               type: "function_call",
               call_id: c.id,
               name: c.name,
+              ...(codexSubscription ? { namespace: "ih" } : {}),
               arguments: JSON.stringify(c.args),
             })) ?? []
             const ordered = replayBlockOrder<unknown>(continuation?.outputOrder, m.content, originalReasoningItems, calls,
@@ -153,7 +167,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           .flat(),
         tools: request.tools.map((t) => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
         stream: true,
-        ...(config.options ?? {}),
+        ...(!codexSubscription ? config.options ?? {} : {}),
         // M32: request-level effort wins over config.options (explicit per-request intent).
         ...(translateReasoning(config.model, request.reasoningEffort) ?? {}),
         // M72 Ⅱ: a request-level cap, so it lands after config.options (the
@@ -169,21 +183,56 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       } else if (cacheMode === "automatic" && body.prompt_cache_key === undefined && request.promptCache?.key !== undefined) {
         body.prompt_cache_key = request.promptCache.key
       }
+      if (codexSubscription) {
+        // Match Codex 0.160.0 codex-api/src/common.rs ResponsesApiRequest;
+        // HTTP carries the full input rather than a previous_response_id.
+        const fields = new Set(["model", "instructions", "input", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "store", "stream", "stream_options", "include", "service_tier", "prompt_cache_key", "text", "client_metadata", "access_programs"])
+        for (const field of Object.keys(body)) if (!fields.has(field)) delete body[field]
+        body.store = false
+        body.stream = true
+        body.tool_choice ??= "auto"
+        body.parallel_tool_calls ??= true
+        body.include = [...new Set([...(Array.isArray(body.include) ? body.include.filter(value => typeof value === "string") : []), "reasoning.encrypted_content"])]
+        // One adapter-owned namespace keeps neutral tool names stable during
+        // execution and restores their wire namespace on every history replay.
+        body.tools = request.tools.length ? [{
+          type: "namespace", name: "ih", description: "I-harness local tools",
+          tools: request.tools.map(t => ({ type: "function", name: t.name, description: t.description, parameters: t.inputSchema })),
+        }] : []
+      }
+      let accessToken: string
+      let accountId: string | undefined
+      try {
+        request.signal?.throwIfAborted()
+        if (codexSubscription && !config.resolveCodexAuth) throw new Error("Codex subscription account credentials are unavailable")
+        if (codexSubscription) {
+          const auth = await config.resolveCodexAuth!(request.signal)
+          if (!auth || typeof auth.accessToken !== "string" || !auth.accessToken.trim() || typeof auth.accountId !== "string" || !auth.accountId.trim()) throw new Error("Codex account credentials are unavailable")
+          accessToken = auth.accessToken
+          accountId = auth.accountId
+        } else accessToken = config.apiKey
+        request.signal?.throwIfAborted()
+      } catch (error) {
+        if (request.signal?.aborted) throw error
+        yield { type: "error", error: error instanceof Error ? error : new Error("Unable to resolve account credentials") }
+        return
+      }
       // M62: a TRANSPORT failure (fetch rejects before any HTTP response) used
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
       // TCP / TLS / proxy. Surface the cause chain instead.
       let response: Response
       try {
-        response = await fetch(`${baseUrl}/v1/responses`, {
+        response = await (codexSubscription ? systemFetch : fetch)(endpoint, {
           method: "POST",
-          headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` }),
+          headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream" } : {}) }),
+          ...(codexSubscription ? { redirect: "error" as const } : {}),
           body: JSON.stringify(body),
           // M61: the caller's abort signal reaches the transport — cancel must
           // kill a parked request, not wait for the first event.
           ...(request.signal !== undefined ? { signal: request.signal } : {}),
         })
       } catch (error) {
-        yield { type: "error", error: await describeTransportError("openai", `${baseUrl}/v1/responses`, error) }
+        yield { type: "error", error: await describeTransportError("openai", endpoint, error) }
         return
       }
       if (!response.ok || !response.body) {
@@ -194,6 +243,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       const decoder = new TextDecoder()
       let buffer = ""
       let receivedDone = false
+      let receivedCompleted = false
       // M72 Ⅱ: the Responses wire's own truncation literal lives in
       // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
       // below, read once at the ending. Absent stays absent: only `true` writes
@@ -267,8 +317,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
           return []
         }
         if (t === "response.output_item.added") {
-          const item = event.item as { type: string; id?: string; call_id?: string; name?: string; arguments?: string }
+          const item = event.item as { type: string; id?: string; call_id?: string; name?: string; namespace?: string; arguments?: string }
           if (item?.type === "function_call") {
+            if (codexSubscription && item.namespace !== undefined && item.namespace !== "ih") {
+              return [{ type: "error", error: new Error("Codex subscription returned an undeclared tool namespace") }]
+            }
             // Some Responses streams send the full arguments inline on the item.
             if (item.arguments && item.arguments.trim() !== "") {
               try {
@@ -319,11 +372,14 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // reason now sets its own bit, the sibling of the truncation above.
         if (t === "response.incomplete") {
           const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
+          if (codexSubscription) return [{ type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
           if (reason === "max_output_tokens") truncated = true
           if (reason === "content_filter") refused = true
           return []
         }
         if (t === "response.completed") {
+          receivedCompleted = true
+          if (codexSubscription) receivedDone = true
           // M72 Ⅲ: the Responses API reports this round-trip's usage HERE and
           // nowhere else — the arm used to drop the payload on the floor. The
           // rules are llm-anthropic's `mapUsage`: finite numbers only, and no
@@ -406,7 +462,12 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) }
         return
       } finally {
+        if (codexSubscription) await reader.cancel().catch(() => {})
         reader.releaseLock()
+      }
+      if (codexSubscription && !receivedCompleted) {
+        yield { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
+        return
       }
       // M77: the two bits are independent — each is written on its own, so a
       // response that was both truncated and refused carries both. Both absent

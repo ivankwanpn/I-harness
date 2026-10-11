@@ -29,6 +29,17 @@ function resourceBridge() {
   })
 }
 
+it.each(["subscription", "Codex", "reset cards"])("opens Coding Plans without a workspace and finds it by %s search", async query => {
+  const bridge = bridgeFor(request => request.kind === "desktop/coding-plans/state" ? { accounts: [], welcomePending: false } : undefined)
+  render(<SettingsPane bridge={bridge} onClose={() => {}} />)
+  fireEvent.change(screen.getByRole("searchbox", { name: "搜尋設定" }), { target: { value: query } })
+  fireEvent.click(screen.getByRole("button", { name: "Coding Plans" }))
+  expect(screen.getByRole("heading", { name: "Coding Plans", level: 1 })).toBeTruthy()
+  await screen.findByRole("button", { name: "使用 ChatGPT 繼續" })
+  expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/coding-plans/state" })
+  expect(screen.queryByText("請先選擇工作區以使用此設定。")).toBeNull()
+})
+
 it("opens local language, theme and font preferences together in General", () => {
   render(<SettingsPane onClose={() => {}} />)
   expect(screen.getByRole("combobox", { name: "語言" })).toBeTruthy()

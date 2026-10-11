@@ -85,6 +85,8 @@ export interface SessionModelBinding {
 }
 
 export interface ProviderRuntimeEntry {
+  oauthAccountId?: string
+  oauthProvider?: "openai-codex"
   videoAudioModel?: string
   id: string
   displayName: string
@@ -149,6 +151,8 @@ export interface ProviderRuntime {
    * `mergeDiscoveredModels` rule, and it is what keeps a probe from clobbering
    * numbers the user set. To change an existing row, use `setModel`. */
   addModels(id: string, rows: readonly SettingsModel[]): Promise<ModelDescriptor[]>
+  /** Account catalogs are authoritative snapshots, including an empty result. */
+  replaceSubscriptionModels(id: string, accountId: string, rows: readonly SettingsModel[]): Promise<void>
   /** Change named fields on ONE existing row. `null` clears a field (the CLI's
    * `auto`); an omitted field is left alone. */
   setModel(id: string, modelId: string, fields: ModelFields): Promise<ModelDescriptor[]>
@@ -174,6 +178,11 @@ export interface CreateProviderRuntimeOptions {
   auth?: ProviderAuthResolver
   registry?: ProviderRegistry
   buildClient?: typeof buildModelClient
+  codex?: {
+    state(): Promise<{ accountId?: string; status: string }>
+    token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string }>
+    models(accountId: string): Promise<ModelDescriptor[]>
+  }
 }
 
 interface ProviderView {
@@ -240,7 +249,19 @@ const PROTOCOL_CHOICES = `<one of: ${PROVIDER_PROTOCOLS.join(" | ")}>`
 
 export function createProviderRuntime(options: CreateProviderRuntimeOptions): ProviderRuntime {
   const registry = options.registry ?? defaultProviderRegistry()
-  const auth = options.auth ?? createProviderAuthResolver(options.credentials)
+  const baseAuth = options.auth ?? createProviderAuthResolver(options.credentials)
+  const auth: ProviderAuthResolver = {
+    async describe(ref) {
+      if (ref.kind !== "oauth-account-ref") return baseAuth.describe(ref)
+      const account = await options.codex?.state()
+      return { configured: account?.accountId === ref.accountId && account?.status === "connected", source: "oauth", writable: false }
+    },
+    async resolve(ref, context) {
+      if (ref.kind !== "oauth-account-ref") return baseAuth.resolve(ref, context)
+      if (!options.codex) return undefined
+      return { kind: "bearer", accessToken: (await options.codex.token(ref.accountId, context.signal)).accessToken }
+    },
+  }
   const buildClient = options.buildClient ?? buildModelClient
   const discovered = new Map<string, ModelDescriptor[]>()
 
@@ -278,6 +299,13 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     const view = provider(id)
     if (view === undefined) throw new Error(`provider "${id}" is not configured`)
+    if (view.user?.oauthAccountId) {
+      validateChatGptRoute(view.user, probeOptions.protocol)
+      if (!options.codex) throw new Error("Codex account service unavailable")
+      const models = await options.codex.models(view.user.oauthAccountId)
+      probeOptions.signal?.throwIfAborted()
+      return models
+    }
     // The ROUTE's protocol, deliberately not the override's: bedrock has no
     // discovery endpoint, and that is a fact about the route — a request
     // parameter cannot conjure one.
@@ -341,6 +369,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     const llm = canonicalLlm(options.settings)
     const current = llm.providers[id]
+    if (current?.oauthAccountId) validateChatGptRoute({ ...current, models: additions })
     const models = mergeDiscoveredModels(current?.models ?? [], additions)
     await persistLlm({
       providers: { ...llm.providers, [id]: { ...(current ?? {}), models } },
@@ -351,6 +380,15 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
   }
 
   return {
+    async replaceSubscriptionModels(id, accountId, rows) {
+      const llm = canonicalLlm(options.settings)
+      const current = llm.providers[id]
+      if (!current || current.oauthAccountId !== accountId || current.oauthProvider !== "openai-codex") throw new Error("Subscription account route did not match")
+      validateChatGptRoute(current)
+      if (rows.some(row => typeof row.id !== "string" || !row.id.trim())) throw new Error("Invalid subscription model catalog")
+      await persistLlm({ ...llm, providers: { ...llm.providers, [id]: { ...current, models: rows.map(row => ({ ...row })) } } })
+      discovered.delete(id)
+    },
     async directory() {
       const rows: ProviderRuntimeEntry[] = []
       const selectedDefault = canonicalLlm(options.settings).defaultModel
@@ -362,6 +400,8 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         rows.push({
           id: view.id,
           displayName: view.displayName,
+          ...(view.user?.oauthAccountId ? { oauthAccountId: view.user.oauthAccountId } : {}),
+          ...(view.user?.oauthProvider ? { oauthProvider: view.user.oauthProvider } : {}),
           ...(view.baseURL !== undefined ? { baseURL: view.baseURL } : {}),
           ...(view.modelsURL !== undefined ? { modelsURL: view.modelsURL } : {}),
           ...(view.apiKeyEnv !== undefined ? { apiKeyEnv: view.apiKeyEnv } : {}),
@@ -372,7 +412,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
           // the directory and model binding describe the same capability.
           models: cloneModels(view.models).map((model) => {
             const modalities = model.inputModalities ?? view.inputModalities
-            return { ...model, ...(modalities ? { inputModalities: [...modalities] } : {}) }
+            return { ...model, ...(modalities ? { inputModalities: [...modalities] } : {}), ...(view.user?.oauthProvider === "openai-codex" ? { protocol: "openai-responses" as const } : {}) }
           }),
           ...(view.defaultModel !== undefined ? { defaultModel: view.defaultModel } : {}),
           ...(options.settings.get().llm.videoAudio?.provider === view.id ? { videoAudioModel: options.settings.get().llm.videoAudio!.model } : {}),
@@ -388,6 +428,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async upsertProvider(id, config) {
       assertProviderId(id)
+      validateChatGptRoute(config)
       validatePromptCacheConfig(config.promptCache)
       const llm = canonicalLlm(options.settings)
       await persistLlm({
@@ -399,6 +440,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async createProvider(id, fields) {
       assertProviderId(id)
+      validateChatGptRoute(fields)
       validatePromptCacheConfig(fields.promptCache)
       if (Object.hasOwn(fields, "inputModalities")) throw new Error("Input modality belongs to a model")
       const llm = canonicalLlm(options.settings)
@@ -436,6 +478,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         if (value === null) delete next[key]
         else (next as unknown as Record<string, unknown>)[key] = value
       }
+      validateChatGptRoute(next)
       // No baseURL suffix-stripping here: `SettingsStore.set` normalizes every
       // write (normalizeSettings → normalizeProviderConfig → stripBaseURLSuffix),
       // so a second implementation in the runtime would be a second place for
@@ -476,6 +519,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async setApiKey(id, value) {
       assertProviderId(id)
+      if (provider(id)?.user?.oauthAccountId) throw new Error("ChatGPT plan routes use account authorization, not API keys")
       const ref = providerApiKeyRef(id)
       await options.credentials.set(ref, value)
       const llm = canonicalLlm(options.settings)
@@ -490,6 +534,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
     },
 
     async clearApiKey(id) {
+      if (provider(id)?.user?.oauthAccountId) throw new Error("Sign out of the ChatGPT account in Coding Plans")
       assertProviderId(id)
       const view = provider(id)
       const ref = view?.apiKeyEnv
@@ -538,6 +583,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         else (next as unknown as Record<string, unknown>)[key] = value
       }
       const merged = models.map((model) => (model.id === modelId ? next : { ...model }))
+      if (current?.oauthAccountId) validateChatGptRoute({ ...current, models: merged })
       await persistLlm({
         providers: { ...llm.providers, [id]: { ...(current ?? {}), models: merged } },
         defaultModel: { ...llm.defaultModel },
@@ -600,6 +646,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
 
     async setVideoAudioModel(selection) {
       if (selection !== null) {
+        if (provider(selection.provider)?.user?.oauthAccountId) throw new Error("ChatGPT plan does not support direct audio input")
         if (!selection.provider.trim() || !selection.model.trim() || selection.model.length > 256) throw new Error("Invalid video audio model")
         const view = provider(selection.provider)
         if (!view || !["openai-completions", "openai-responses"].includes(view.protocol ?? "")) throw new Error("Select an OpenAI Chat-compatible provider for video audio")
@@ -614,6 +661,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const selection = options.settings.get().llm.videoAudio
       if (!selection) return { status: "unconfigured", reason: "Select a video audio model in Settings > Models and providers to analyze speech and sounds." }
       const view = provider(selection.provider)
+      if (view?.user?.oauthAccountId) return { status: "unsupported", reason: "ChatGPT plan does not support direct audio input." }
       if (!view || !["openai-completions", "openai-responses"].includes(view.protocol ?? "")) return { status: "unsupported", reason: "The selected video audio provider must support OpenAI Chat audio input." }
       const ref = authRef(view)
       if (!ref || !view.baseURL) return { status: "unconfigured", reason: "Configure the video audio provider endpoint and API key." }
@@ -671,6 +719,9 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         )
       }
 
+      try { validateChatGptRoute(view.user ?? {}, selection.protocol ?? view.user?.models?.find(model => model.id === modelId)?.protocol) }
+      catch (error) { return invalidState(errorMessage(error), providerId, modelId) }
+      if (view.user?.oauthAccountId && !view.models.some(model => model.id === modelId)) return invalidState("Codex subscription model is not in this account's current catalog. Refresh Coding Plans models.", providerId, modelId)
       const ref = authRef(view)
       if (ref === undefined) {
         return {
@@ -723,6 +774,11 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const profile = runtimeProfile(
         view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol,
       )
+      if (profile && ref.kind === "oauth-account-ref" && options.codex) {
+        profile.codexSubscription = true
+        profile.baseUrl = "https://chatgpt.com/backend-api/codex"
+        profile.resolveCodexAuth = signal => options.codex!.token(ref.accountId, signal)
+      }
       if (profile === undefined) {
         // The chain ran out. Name the ROUTE (not the model): the protocol is
         // the route's declaration, and `provider set` is the verb that owns it.
@@ -902,9 +958,24 @@ function runtimeProfile(
 }
 
 function authRef(view: ProviderView): ProviderAuthRef | undefined {
+  if (view.user?.oauthAccountId) return { kind: "oauth-account-ref", accountId: view.user.oauthAccountId }
   if (view.apiKeyEnv !== undefined) return { kind: "api-key-ref", ref: view.apiKeyEnv }
   if (view.protocol === "bedrock") return { kind: "ambient" }
   return undefined
+}
+
+/** Validate before resolving any bearer credential, including hand-edited settings. */
+function validateChatGptRoute(config: SettingsProviderConfig, protocol?: SettingsProviderProtocol): void {
+  if (!config.oauthAccountId) return
+  if (!/^[a-zA-Z0-9._-]{1,128}$/.test(config.oauthAccountId)
+    || config.protocol !== "openai-responses" || (protocol !== undefined && protocol !== "openai-responses")
+    || config.oauthProvider !== "openai-codex"
+    || (config.baseURL !== undefined && config.baseURL !== "https://chatgpt.com/backend-api/codex")
+    || config.modelsURL !== undefined
+    || config.apiKeyEnv !== undefined || Object.keys(config.headers ?? {}).length > 0
+    || config.models?.some(model => model.protocol !== undefined && model.protocol !== "openai-responses")) {
+    throw new Error("ChatGPT Codex subscription requires its Codex Responses endpoint and account authorization")
+  }
 }
 
 function authValue(auth: ResolvedProviderAuth | undefined): string | undefined {

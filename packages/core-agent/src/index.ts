@@ -216,7 +216,9 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   function buildCompactor(compact: CompactionConfig | undefined, cap: number | undefined) {
     return compact
     ? createCompactionEngine({
-        model: deps.model,
+        model: deps.sessionId === undefined ? deps.model : {
+          stream: request => deps.model.stream({ ...request, sessionId: request.sessionId ?? deps.sessionId }),
+        },
         config: compact,
         ...(deps.telemetry ? { telemetry: deps.telemetry } : {}),
         // M73: compaction builds and sends its OWN model request, so it never
@@ -392,6 +394,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       assertMessagesFromLog(messages, deps.session)
 
       const request: LLMRequest = {
+        ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
         messages,
         tools: deps.modelToolSchemas?.() ?? deps.tools.schemas(),
         systemPrompt: typeof deps.systemPrompt === "function" ? deps.systemPrompt() : deps.systemPrompt,

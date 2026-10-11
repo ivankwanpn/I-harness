@@ -16,6 +16,7 @@ import { createNotificationHistory } from "./notification-history.ts"
 import { AttachmentDraftStore } from "./attachment-draft-store.ts"
 import { closeDesktopProjectContentSearches } from "./project-content-search.ts"
 import { resolveDesktopProfilePath } from "./profile-path.ts"
+import { createUsageWarnings } from "./usage-warnings.ts"
 
 app.setPath("userData", resolveDesktopProfilePath(app.getPath("appData"), app.getPath("userData"), undefined, app.commandLine.hasSwitch("user-data-dir")))
 
@@ -48,10 +49,12 @@ app.whenReady().then(() => {
   })
   catalog = workspaces
   runtimes = manager
-  const globalProviders = createGlobalProviderSettings(async () => (await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" })).client)
+  const usageWarnings = createUsageWarnings(join(app.getPath("userData"), "usage-recording-warnings.json"))
+  const stopUsageWarnings = manager.onEvent(usageWarnings.observe)
+  const globalProviders = createGlobalProviderSettings(async () => (await manager.get({ id: "desktop-configuration", path: app.getPath("userData"), label: "本機設定" })).client, { openExternal: url => shell.openExternal(url), usageWarnings: usageWarnings.read })
   const notifications = createNotificationHistory(join(app.getPath("userData"), "notifications-v1.json"))
   const drafts = new AttachmentDraftStore(join(app.getPath("userData"), "unsent-drafts-v1"))
-  drainNativeSettings = async () => { await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close(); await notifications.flush(); await drafts.flush() }
+  drainNativeSettings = async () => { await closeDesktopProjectContentSearches(); await globalProviders.close(); await manager.close(); stopUsageWarnings(); await usageWarnings.flush(); await notifications.flush(); await drafts.flush() }
   const applicationInfo = () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node, platform: process.platform, arch: process.arch, packaged: app.isPackaged, updateSupported: false })
   let mainWindow: BrowserWindow | undefined
   let tray: Tray | undefined

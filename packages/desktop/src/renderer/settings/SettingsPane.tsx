@@ -12,6 +12,8 @@ import { AutoTitleSettings } from "./AutoTitleSettings.tsx"
 import { CodeModeSettings } from "./CodeModeSettings.tsx"
 import { ContextSubsystemSettings } from "./ContextSubsystemSettings.tsx"
 import { GlobalProviderDirectory } from "./GlobalProviderDirectory.tsx"
+import { CodingPlans } from "./CodingPlans.tsx"
+import { UsageStatistics, type UsageStatisticsRequest } from "./UsageStatistics.tsx"
 import { NotificationsPane } from "./NotificationsPane.tsx"
 import { ApplicationInformation } from "./ApplicationInformation.tsx"
 import { TitleBar } from "../shell/TitleBar.tsx"
@@ -49,6 +51,8 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     return bridge.request(request)
   }, [bridge])
   const globalProviderRequest = useCallback((request: import("../../main/global-provider-settings.ts").GlobalProviderRequest) => authoringRequest(request), [authoringRequest])
+  const codingPlansRequest = useCallback((request: import("../../shared/coding-plans.ts").CodingPlansRequest) => authoringRequest(request) as Promise<import("../../shared/coding-plans.ts").CodingPlansState>, [authoringRequest])
+  const usageRequest = useCallback((request: UsageStatisticsRequest) => authoringRequest(request), [authoringRequest])
   const notificationRequest = useCallback((request: import("../../main/notification-history.ts").NotificationHistoryRequest) => authoringRequest(request) as Promise<import("../../main/notification-history.ts").NotificationHistoryView>, [authoringRequest])
   const notificationSubscribe = useCallback((listener: () => void) => bridge?.onEvent(event => { if (event.kind === "sdk/notification" && (event.method === "desktop/interaction/request" || event.method === "desktop/interaction/closed")) listener() }) ?? (() => {}), [bridge])
   const openNotification = useCallback(async (target: { workspaceId: string; sessionId: string }) => {
@@ -62,6 +66,18 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
   const [executionBindingRevisions, setExecutionBindingRevisions] = useState<Record<string, number>>({})
   const current = settingsDestinations.find(section => section.id === location.section) ?? settingsDestinations[0]!
   const tab = current.id
+  const [usageLabels, setUsageLabels] = useState<{ projects: Record<string, string>; workspaces: Record<string, string> }>({ projects: {}, workspaces: {} })
+  useEffect(() => {
+    if (!active || tab !== "usage" || !bridge) return
+    let stale = false
+    // Catalog labels are optional decoration; persisted IDs still identify deleted scopes.
+    void Promise.allSettled([bridge.request({ kind: "projects/list" }), bridge.request({ kind: "workspace/list" })]).then(([projects, workspaces]) => {
+      if (stale) return
+      const labels = (value: unknown, key: "name" | "label") => Object.fromEntries((Array.isArray(value) ? value : []).filter(row => row && typeof row.id === "string" && typeof row[key] === "string").map(row => [row.id, row[key]]))
+      setUsageLabels({ projects: labels(projects.status === "fulfilled" ? projects.value : undefined, "name"), workspaces: labels(workspaces.status === "fulfilled" ? workspaces.value : undefined, "label") })
+    })
+    return () => { stale = true }
+  }, [active, tab, bridge])
   const capabilityContext = { workspaceId: workspace?.id, connected: !!bridge, capabilities, capabilitiesReady }
   const availability = settingsAvailability(current, capabilityContext)
   const reason = availability === "available" ? undefined : t(({ workspace: "請先選擇工作區以使用此設定。", connection: "等待工作區連線。", pending: "正在讀取工作區功能…", unsupported: "目前工作區後端未提供此功能。" } as const)[availability])
@@ -105,6 +121,8 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     </>
     if (tab === "notifications" && bridge && pageActive) return <><NativeSettings bridge={bridge} section="notifications" /><NotificationsPane request={notificationRequest} subscribe={notificationSubscribe} onOpenTarget={openNotification} /></>
     if (tab === "models" && bridge) return <GlobalProviderDirectory bridge={bridge} request={globalProviderRequest} showHeading={false} active={pageActive} />
+    if (tab === "coding-plans" && bridge) return <CodingPlans request={codingPlansRequest} active={pageActive} onManageModels={() => select("models")} />
+    if (tab === "usage" && bridge) return <UsageStatistics request={usageRequest} active={pageActive} projectLabels={usageLabels.projects} workspaceLabels={usageLabels.workspaces} />
     if (tab === "execution" && workspace && bridge) return <>
       {capabilities["desktop-context-subsystems"]?.includes("1") ? <ContextSubsystemSettings key={`context:${workspace.id}`} bridge={bridge} workspaceId={workspace.id} active={pageActive} /> : null}
       {capabilities["desktop-agent-settings"]?.includes("1") ? <AgentSettings key={workspace.id} bridge={bridge} workspaceId={workspace.id} onSandboxChange={onSandboxChange} onExecutionBindingSaved={() => setExecutionBindingRevisions(previous => ({ ...previous, [workspace.id]: (previous[workspace.id] ?? 0) + 1 }))} /> : null}
@@ -134,7 +152,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
     </nav>
     <main className="settings-main">
       {bridge ? <TitleBar bridge={bridge} title={t("設定")} /> : null}
-      <div className="settings-scroll"><div className="settings-content">
+      <div className="settings-scroll"><div className={`settings-content${tab === "usage" ? " settings-content-usage" : ""}`}>
         <h1>{t(current.label)}</h1>
         <p className="settings-description">{t(current.description)}</p>
         {reason ? <p role="status" className="settings-capability-status muted">{reason}</p> : retainedSections.has(tab) ? null : renderContent(tab, workspace, capabilities, active, sessionId)}

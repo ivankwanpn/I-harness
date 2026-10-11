@@ -4,6 +4,92 @@ import { afterEach, expect, it, vi } from "vitest"
 import { ProviderEditor } from "../src/renderer/settings/ProviderEditor.tsx"
 import { ProviderCard } from "../src/renderer/settings/ProviderCard.tsx"
 afterEach(cleanup)
+const codexRow = {
+  id: "codex-account", displayName: "Codex subscription", configured: true,
+  oauthProvider: "openai-codex" as const, protocol: "openai-responses",
+  baseURL: "https://chatgpt.com/backend-api/codex", catalog: "openai",
+  auth: { source: "oauth", configured: true, writable: false },
+  models: [{ id: "codex-model", contextWindow: 272000, maxTokens: 8192, inputModalities: ["text" as const] }],
+}
+
+it("fixes a Codex model's protocol while allowing metadata edits without rewriting protocol", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderCard row={codexRow} onSave={save} />)
+  fireEvent.click(screen.getByRole("button", { name: "編輯模型" }))
+  const dialog = within(screen.getByRole("dialog", { name: "編輯模型" }))
+  expect(dialog.queryByRole("combobox", { name: "通訊協定" })).toBeNull()
+  const protocol = dialog.getByLabelText("通訊協定") as HTMLInputElement
+  expect(protocol.readOnly).toBe(true)
+  expect(protocol.value).toBe("openai-responses")
+  fireEvent.change(dialog.getByLabelText("顯示名稱"), { target: { value: "My Codex" } })
+  fireEvent.change(dialog.getByLabelText("上下文大小"), { target: { value: "200000" } })
+  fireEvent.change(dialog.getByLabelText("最大輸出 Token"), { target: { value: "4096" } })
+  fireEvent.change(dialog.getByLabelText("輸入類型"), { target: { value: "text,image" } })
+  fireEvent.click(dialog.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/edit", id: codexRow.id, model: "codex-model", fields: { name: "My Codex", contextWindow: 200000, maxTokens: 4096, inputModalities: ["text", "image"] } })
+})
+
+it("automatically assigns Responses when adding a Codex subscription model", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderCard row={codexRow} onSave={save} />)
+  fireEvent.click(screen.getByRole("button", { name: "新增模型" }))
+  const dialog = within(screen.getByRole("dialog", { name: "新增模型" }))
+  expect(dialog.queryByRole("combobox", { name: "通訊協定" })).toBeNull()
+  expect((dialog.getByLabelText("通訊協定") as HTMLInputElement).value).toBe("openai-responses")
+  fireEvent.change(dialog.getByLabelText("模型 ID"), { target: { value: "another-codex-model" } })
+  fireEvent.click(dialog.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/add", id: codexRow.id, model: "another-codex-model", fields: { protocol: "openai-responses" } })
+})
+
+it("keeps Codex connection fields read-only and saves only the editable provider name", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderCard row={codexRow} onSave={save} />)
+  fireEvent.click(screen.getByRole("button", { name: "編輯提供商" }))
+  const dialog = within(screen.getByRole("dialog", { name: "編輯提供商" }))
+  for (const label of ["API 網址", "模型列表網址", "模型規格來源", "API key 環境變數"]) {
+    const input = dialog.getByLabelText(label) as HTMLInputElement
+    expect(input.readOnly).toBe(true)
+    fireEvent.change(input, { target: { value: "ignored-connection-change" } })
+  }
+  fireEvent.change(dialog.getByLabelText("顯示名稱"), { target: { value: "Personal Codex" } })
+  fireEvent.click(dialog.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "provider/edit", id: codexRow.id, fields: { displayName: "Personal Codex" } })
+})
+
+it("keeps protocol selection editable for an ordinary API-key provider", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  render(<ProviderCard row={{ ...codexRow, id: "api-route", oauthProvider: undefined, auth: { source: "file", configured: true }, models: [{ id: "api-model", protocol: "openai-completions" }] }} onSave={save} />)
+  fireEvent.click(screen.getByRole("button", { name: "編輯模型" }))
+  const dialog = within(screen.getByRole("dialog", { name: "編輯模型" }))
+  fireEvent.change(dialog.getByRole("combobox", { name: "通訊協定" }), { target: { value: "anthropic-messages" } })
+  fireEvent.click(dialog.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/edit", id: "api-route", model: "api-model", fields: { protocol: "anthropic-messages" } })
+})
+
+it("drops a stale protocol draft when the model editor becomes subscription-managed", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const props = { id: "route", model: { id: "model", contextWindow: 100000 }, onSave: save, onClose: () => {} }
+  const view = render(<ProviderEditor {...props} />)
+  fireEvent.change(screen.getByRole("combobox", { name: "通訊協定" }), { target: { value: "anthropic-messages" } })
+  fireEvent.change(screen.getByLabelText("上下文大小"), { target: { value: "200000" } })
+  view.rerender(<ProviderEditor {...props} fixedProtocol="openai-responses" />)
+  expect((screen.getByLabelText("通訊協定") as HTMLInputElement).value).toBe("openai-responses")
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "model/edit", id: "route", model: "model", fields: { contextWindow: 200000 } })
+})
+
+it("drops stale connection drafts while retaining the editable name when a provider becomes subscription-managed", () => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const props = { provider: { id: "route", displayName: "Original", baseURL: "https://chatgpt.com/backend-api/codex", configured: true }, onSave: save, onClose: () => {} }
+  const view = render(<ProviderEditor {...props} />)
+  fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://custom.example" } })
+  fireEvent.change(screen.getByLabelText("顯示名稱"), { target: { value: "Personal Codex" } })
+  view.rerender(<ProviderEditor {...props} fixedConnection fixedProtocol="openai-responses" />)
+  expect((screen.getByLabelText("API 網址") as HTMLInputElement).value).toBe(props.provider.baseURL)
+  fireEvent.click(screen.getByRole("button", { name: "儲存" }))
+  expect(save).toHaveBeenCalledWith({ action: "provider/edit", id: "route", fields: { displayName: "Personal Codex" } })
+})
+
 it("requires a second action before removing a model", async () => {
   const save = vi.fn().mockResolvedValue(undefined)
   render(<ProviderCard row={{ id: "r", displayName: "R", configured: true, auth: { configured: false }, models: [{ id: "m" }] }} onSave={save} />)

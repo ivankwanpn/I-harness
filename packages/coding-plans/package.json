@@ -1,0 +1,15 @@
+{
+  "name": "@i-harness/coding-plans",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run", "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@i-harness/http-transport": "workspace:*",
+    "@i-harness/fs": "workspace:*",
+    "@i-harness/fs-lock": "workspace:*",
+    "jose": "6.2.10",
+    "koffi": "3.1.6"
+  }
+}

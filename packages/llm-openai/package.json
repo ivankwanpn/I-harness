@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@i-harness/http-transport": "workspace:*",
     "@i-harness/llm-seam": "workspace:*"
   }
 }

@@ -63,7 +63,7 @@ export async function dispatchDesktopRequest(
 ): Promise<unknown> {
   const value = requireRecord(request)
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
-  if (value.kind.startsWith("desktop/global-provider/") || value.kind.startsWith("desktop/global-preferences/")) {
+  if (value.kind.startsWith("desktop/global-provider/") || value.kind.startsWith("desktop/global-preferences/") || value.kind.startsWith("desktop/coding-plans/") || value.kind.startsWith("desktop/usage/")) {
     if (!dependencies.globalProviders) throw new Error("Global provider settings unavailable")
     return dependencies.globalProviders.request(value)
   }

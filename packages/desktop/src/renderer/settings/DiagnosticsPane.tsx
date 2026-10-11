@@ -1,20 +1,55 @@
-import type { DiagnosticsRequest, EnvironmentDiagnosticsView } from "@i-harness/desktop-gateway/src/environment-diagnostics.ts"
+import { useEffect, useState } from "react"
+import { Activity, Check, ChevronDown, CircleHelp, Code2, Laptop, RefreshCw, Search, ShieldCheck, Terminal, Wrench } from "lucide-react"
+import type { DiagnosticsRequest, EnvironmentDiagnosticsView, ExecutableDiagnostic } from "@i-harness/desktop-gateway/src/environment-diagnostics.ts"
 import { useExecutionSurface } from "../session/execution-surface.ts"
-import { useExecutionText } from "../session/execution-i18n.ts"
+import { useLocale } from "../design/i18n.ts"
+import { Button } from "../vendor/opencode/Button.tsx"
+import "./DiagnosticsPane.css"
+
+type Text = (zh: string, en: string) => string
+const basename = (value: string) => value.split(/[\\/]/).filter(Boolean).at(-1) ?? value
+
+function ExecutableCard({ item, wsl, configurationUnavailable, t }: { item: ExecutableDiagnostic; wsl: boolean; configurationUnavailable: boolean; t: Text }) {
+  const status = configurationUnavailable ? t("設定不可用", "Configuration unavailable") : { unconfigured: t("尚未設定", "Not configured"), "not-installed": t("找不到執行檔", "Executable not found"), unavailable: t("檢查失敗", "Check failed"), available: t("已確認可用", "Confirmed available"), untested: t("尚未檢查", "Not checked") }[item.status]
+  const purpose = item.name === "Agent Shell" ? t("執行 Agent 的命令", "Runs Agent commands") : item.name === "Node.js" ? t("應用程式的 JavaScript 執行環境", "JavaScript runtime used by the app") : item.name === "Git" ? t("版本控制與變更檢視", "Version control and change inspection") : item.name === "ripgrep" ? t("快速搜尋檔案內容", "Fast search within files") : t("環境依賴", "Environment dependency")
+  const wslShell = wsl && item.name === "Agent Shell"
+  return <article className="diagnostics-executable">
+    <div className="diagnostics-executable-top"><div className="diagnostics-executable-name"><span className="diagnostics-app-icon">{item.name === "Node.js" ? <Code2 size={16} /> : item.name === "Agent Shell" ? <Terminal size={16} /> : <Wrench size={15} />}</span><div><h4>{item.name}</h4><p>{purpose}</p></div></div><span className={`diagnostics-badge diagnostics-status-${item.status}`}>{item.status === "available" ? <Check size={11} /> : null}{status}</span></div>
+    {wslShell ? <p className="diagnostics-inline-note">{t("Linux Shell；請到設定 → 執行與權限檢查 WSL。", "Linux shell; inspect WSL in Settings → Execution and permissions.")}</p> : null}
+    {item.name === "Node.js" && item.command && /i-harness\.exe$/i.test(item.command) ? <p className="diagnostics-inline-note">{t("I-harness.exe 提供應用程式內建的 Node.js runtime，這個路徑是正常的。", "I-harness.exe provides the app’s bundled Node.js runtime; this path is expected.")}</p> : null}
+    <details className="diagnostics-executable-details"><summary>{t("路徑與檢查詳情", "Path and check details")}<ChevronDown size={13} /></summary><dl><div><dt>{t("執行檔", "Executable")}</dt><dd><code>{item.command ?? t("尚未提供路徑", "No path available")}</code></dd></div>{item.version ? <div><dt>{t("版本回應", "Version response")}</dt><dd><pre>{item.version}</pre></dd></div> : null}{item.error && !wslShell ? <div><dt>{t("檢查資訊", "Check information")}</dt><dd><pre>{item.error}</pre></dd></div> : null}{item.status === "untested" && !wslShell ? <div><dd>{t("尚未執行版本檢查；這不表示執行檔故障。", "A version check has not run. This does not mean the executable is broken.")}</dd></div> : null}</dl></details>
+  </article>
+}
 
 export function DiagnosticsPane({ bridge, workspaceId, sessionId }: { bridge: { request(request: DiagnosticsRequest): Promise<unknown> }; workspaceId: string; sessionId?: string }) {
-  const t = useExecutionText()
+  const locale = useLocale(state => state.locale)
+  const t: Text = (zh, en) => locale === "en" ? en : zh
   const request = (probe: boolean) => bridge.request({ kind: "desktop/environment/diagnostics", workspaceId, ...(sessionId ? { sessionId } : {}), probe })
   const view = useExecutionSurface<EnvironmentDiagnosticsView>(() => request(false), `${workspaceId}:${sessionId ?? ""}`)
-  return <section className="workflow-section" aria-label={t("工具與環境診斷")}>
-    <div className="workflow-heading"><h2>{t("工具與環境診斷")}</h2><button disabled={view.busy} onClick={() => { void view.act(() => request(true), value => view.replace(value as EnvironmentDiagnosticsView), false) }}>{t("檢測執行檔版本")}</button></div>
-    {view.error ? <div><p role="alert" className="error-text">{view.error}</p><button disabled={view.busy} onClick={() => { void view.refresh() }}>{t("重試")}</button></div> : null}
-    {view.state ? <>
-      <p>{view.state.live ? t("目前活躍環境") : t("目前沒有活躍執行環境；工具及角色清單於執行環境建立後可讀。")}{view.state.effectiveMode ? ` · Code Mode: ${view.state.effectiveMode}` : ""}</p>
-      <h3>{t("實際 Agent Shell")}</h3><p>{view.state.shell?.resolved?.command ?? view.state.shell?.error ?? t("未設定")}</p>
-      <h3>{t("執行檔與版本")}</h3><table><thead><tr><th>{t("名稱")}</th><th>{t("狀態")}</th><th>{t("執行檔／版本")}</th></tr></thead><tbody>{view.state.executables.map(item => <tr key={item.name}><td>{item.name}</td><td>{item.status}</td><td><code>{item.command}</code><pre>{item.version ?? item.error}</pre></td></tr>)}</tbody></table>
-      <h3>{t("工具宣告與目前模型可见範圍")}</h3><table><thead><tr><th>{t("工具")}</th><th>{t("宣告曝光")}</th><th>{t("目前模型可見")}</th></tr></thead><tbody>{view.state.tools.map(tool => <tr key={tool.name}><td><code>{tool.name}</code></td><td>{tool.exposure}</td><td>{tool.modelVisible ? t("是") : t("否")}</td></tr>)}</tbody></table>
-      <h3>{t("角色工具 allowlist")}</h3>{view.state.roles.map(role => <details key={role.name} className="workflow-card"><summary>{role.name}</summary><pre>{role.allowlist.join("\n") || t("空 allowlist")}</pre></details>)}
-    </> : !view.error ? <p role="status">{t("正在讀取…")}</p> : null}
+  const [search, setSearch] = useState("")
+  useEffect(() => setSearch(""), [workspaceId, sessionId])
+  const state = view.state
+  const wsl = state?.shell?.executionTarget === "wsl"
+  const tools = state?.tools.filter(tool => tool.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase())) ?? []
+  const available = state?.executables.filter(item => item.status === "available").length ?? 0
+  const refresh = (probe: boolean) => { void view.act(() => request(probe), value => view.replace(value as EnvironmentDiagnosticsView), false) }
+  const modes = { off: t("直接工具", "Direct tools"), mixed: t("工具 + 程式編排", "Tools + code orchestration"), only: t("透過程式呼叫工具", "Tools through code") }
+  const exposure = { direct: t("直接宣告", "Direct declaration"), deferred: t("按需載入", "On demand"), hidden: t("隱藏宣告", "Hidden declaration") }
+
+  return <section className="diagnostics-pane" aria-label={t("工具與環境診斷", "Tools and environment diagnostics")} aria-busy={view.busy || (!state && !view.error)}>
+    <header className="diagnostics-heading"><div className="diagnostics-title-icon"><Wrench size={19} /></div><div><h2>{t("工具與環境診斷", "Tools and environment diagnostics")}</h2><p>{t("命令或工具無法使用時，從這裡查看環境與工具狀態。", "Check the environment and tool status when a command or tool is unavailable.")}</p></div></header>
+    <div className="diagnostics-actions"><Button variant="secondary" size="small" icon={<ShieldCheck size={15} />} disabled={view.busy || !state} onClick={() => refresh(true)}>{view.busy ? t("正在檢查…", "Checking…") : t("檢查環境", "Check environment")}</Button><Button variant="ghost" size="small" icon={<RefreshCw size={14} />} disabled={view.busy} onClick={() => refresh(false)}>{t("重新整理", "Refresh")}</Button><span>{t("版本檢查需手動啟動", "Version checks run on request")}</span></div>
+    {view.error ? <div role="alert" className="diagnostics-error"><strong>{t("無法完成診斷", "Could not complete diagnostics")}</strong><p>{view.error}</p>{state ? <small>{t("保留上次讀取的資訊；可重新整理或再次檢查。", "Previous information is retained. Refresh or run the check again.")}</small> : <Button size="small" variant="ghost" onClick={() => refresh(false)}>{t("重試", "Retry")}</Button>}</div> : null}
+    {!state && !view.error ? <div className="diagnostics-loading" role="status">{t("正在讀取環境設定…", "Reading environment configuration…")}</div> : null}
+    {state ? <>
+      <section className={`diagnostics-overview${state.live ? " diagnostics-overview-live" : ""}`}><div className="diagnostics-overview-title"><Activity size={16} /><h3>{state.live ? t("執行環境已建立", "Execution environment created") : t("尚無活躍環境", "No live environment")}</h3><span className={`diagnostics-dot${state.live ? " diagnostics-dot-live" : ""}`} /></div>
+        <p>{state.live ? t("以下工具與角色來自此會話已建立的環境；不代表任務正在執行或所有依賴都已通過檢查。", "Tools and roles below belong to this conversation’s established environment. This does not mean a task is running or every dependency has passed a check.") : t("下一次傳送任務並建立執行環境後，這裡才會顯示工具與角色。目前仍可檢查主機上的執行檔。", "Tools and roles appear after the next task creates an execution environment. You can still check host executables now.")}</p>
+        {state.live ? <div className="diagnostics-overview-facts"><span><strong>{state.tools.length}</strong>{t("工具宣告", "tool declarations")}</span><span><strong>{state.roles.length}</strong>{t("角色", "roles")}</span>{state.effectiveMode ? <span className="diagnostics-mode">{modes[state.effectiveMode]}</span> : null}</div> : null}
+      </section>
+      <section className="diagnostics-shell"><div className="diagnostics-section-heading"><h3><Terminal size={14} />{t("設定的 Agent Shell", "Configured Agent Shell")}</h3><span className="diagnostics-badge">{wsl ? t("WSL · Linux", "WSL · Linux") : t("主機", "Host")}</span></div><strong className="diagnostics-shell-name">{state.shell?.resolved?.label ?? (state.shell?.resolved?.command ? basename(state.shell.resolved.command) : t("尚未解析", "Not resolved"))}</strong><p>{t("顯示目前設定，現有會話的執行環境可能保留先前選擇。", "Shows the current configuration; an existing conversation environment may retain an earlier choice.")}</p>{state.shell?.error ? <p className="diagnostics-shell-error">{state.shell.error}</p> : null}</section>
+      <section className="diagnostics-executables"><div className="diagnostics-section-heading"><h3><Laptop size={15} />{t("執行檔檢查", "Executable checks")}</h3><span className="diagnostics-section-meta">{available ? t(`${available} 項已確認可用`, `${available} confirmed available`) : t("依目前取得的資訊", "Based on available information")}</span></div><p className="diagnostics-section-description">{wsl ? t("此處的版本檢查在主機執行；Git、Node.js 與 ripgrep 的結果不代表 WSL Linux 環境。", "Version checks here run on the host. Git, Node.js and ripgrep results do not describe the WSL Linux environment.") : t("「檢查環境」會執行固定的版本命令；「重新整理」只讀取設定與宣告。", "Check environment runs fixed version commands. Refresh only reads configuration and declarations.")}</p><div className="diagnostics-executable-list">{state.executables.map(item => <ExecutableCard key={item.name} item={item} wsl={wsl} configurationUnavailable={item.name === "Agent Shell" && !state.shell?.resolved && !!state.shell?.error} t={t} />)}</div>{!state.executables.length ? <p className="diagnostics-empty">{t("尚無執行檔資訊。", "No executable information yet.")}</p> : null}</section>
+      {state.live ? <details className="diagnostics-advanced"><summary><span><Wrench size={15} />{t("工具與角色", "Tools and roles")}</span><span className="diagnostics-advanced-label">{t("進階", "Advanced")}<ChevronDown size={14} /></span></summary><div className="diagnostics-advanced-content"><p className="diagnostics-visibility-note"><CircleHelp size={14} /><span>{t("工具宣告不等於執行權限。模型可見表示目前模型收到該工具定義；實際執行仍受沙箱與核準規則限制。", "Tool declarations are not execution permissions. Model-visible tools are included in the current model’s definitions; execution still follows sandbox and approval rules.")}</span></p><label className="diagnostics-search"><Search size={14} /><input type="search" aria-label={t("搜尋工具名稱", "Search tool names")} placeholder={t("搜尋工具名稱", "Search tool names")} value={search} onChange={event => setSearch(event.target.value)} /></label><div className="diagnostics-tool-list">{tools.map(tool => <div className="diagnostics-tool" key={tool.name}><code>{tool.name}</code><div><span className="diagnostics-badge">{exposure[tool.exposure]}</span><span className={`diagnostics-visibility${tool.modelVisible ? " diagnostics-visible" : ""}`}>{tool.modelVisible ? t("模型可見", "Model visible") : t("目前模型未見", "Not in current model")}</span></div></div>)}</div>{!tools.length ? <p className="diagnostics-empty">{search ? t("沒有符合的工具。", "No matching tools.") : t("此環境未提供工具宣告。", "No tool declarations in this environment.")}</p> : null}<h4 className="diagnostics-role-heading">{t("角色允許使用的工具", "Tools allowed for each role")}</h4>{state.roles.length ? <div className="diagnostics-roles">{state.roles.map(role => <div className="diagnostics-role" key={role.name}><strong>{role.name}</strong><div>{role.allowlist.length ? role.allowlist.map(name => <code key={name}>{name}</code>) : <span>{t("未宣告允許的工具", "No allowed tools declared")}</span>}</div></div>)}</div> : <p className="diagnostics-empty">{t("此環境尚無角色設定。", "No roles configured in this environment.")}</p>}</div></details> : null}
+      <footer className="diagnostics-footer">{t("需要更改 Shell、WSL、沙箱或核準規則？請前往設定 → 執行與權限。", "To change the shell, WSL, sandbox or approval rules, open Settings → Execution and permissions.")}</footer>
+    </> : null}
   </section>
 }

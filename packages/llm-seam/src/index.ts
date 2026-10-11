@@ -353,6 +353,8 @@ export function validatePromptCacheConfig(value: unknown, path = "promptCache"):
 }
 
 export interface LLMRequest {
+  /** Host-only usage attribution. Protocol adapters never serialize this field. */
+  sessionId?: string
   messages: LLMMessage[]
   tools: ToolSchema[]
   systemPrompt: string

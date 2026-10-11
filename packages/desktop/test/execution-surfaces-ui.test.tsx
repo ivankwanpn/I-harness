@@ -75,9 +75,9 @@ it("keeps diagnostics declarations distinct from actual version probe statuses",
   const request = vi.fn().mockResolvedValue({ live: true, effectiveMode: "only", tools: [{ name: "read", exposure: "direct", modelVisible: false }, { name: "remote", exposure: "deferred", modelVisible: false }], roles: [{ name: "explore", allowlist: ["read"] }], shell: { selected: "cmd", options: [], error: "shell unavailable" }, executables: [{ name: "missing", status: "not-installed" }] })
   render(<DiagnosticsPane bridge={{ request }} workspaceId="w" sessionId="s" />)
   expect(await screen.findByText("remote")).toBeTruthy()
-  expect(screen.getByText("not-installed")).toBeTruthy()
+  expect(screen.getByText("找不到執行檔")).toBeTruthy()
   expect(screen.getByText("explore")).toBeTruthy()
-  fireEvent.click(screen.getByRole("button", { name: "檢測執行檔版本" }))
+  fireEvent.click(screen.getByRole("button", { name: "檢查環境" }))
   await vi.waitFor(() => expect(request).toHaveBeenLastCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "w", sessionId: "s", probe: true }))
 })
 

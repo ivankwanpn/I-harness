@@ -137,6 +137,6 @@ it("keeps defaults and remembered rules in settings and opens operational diagno
   fireEvent.click(screen.getByRole("button", { name: "工作台工具" }))
   fireEvent.click(screen.getByRole("button", { name: "工具與環境診斷" }))
   await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: false }))
-  fireEvent.click(screen.getByRole("button", { name: "檢測執行檔版本" }))
+  fireEvent.click(screen.getByRole("button", { name: "檢查環境" }))
   await waitFor(() => expect(bridge.request).toHaveBeenCalledWith({ kind: "desktop/environment/diagnostics", workspaceId: "source", sessionId: "moved", probe: true }))
 })

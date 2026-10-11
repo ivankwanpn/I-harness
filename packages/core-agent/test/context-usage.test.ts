@@ -89,11 +89,12 @@ it("starts auto compaction from calibrated usage and returns to a fresh estimate
     else yield { type: "text/chunk", text: "continued" }
     yield { type: "end" }
   } }
-  const agent = createAgent(ctx, { session, tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 1000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
+  const agent = createAgent(ctx, { session, sessionId: "child-session", tools, model, systemPrompt: "p", telemetry: { emit: event => { events.push(event) }, close() {} }, compact: { contextWindow: 1000, thresholdRatio: .8, retainTokens: 0, minSummaryChars: 1, prune: false, minTurnsBeforeRecompact: 0 } })
   await agent.run("first")
   await agent.followup("continue")
   expect(session.events.some(event => event.type === "compaction/summary")).toBe(true)
   expect(requests).toHaveLength(3)
+  expect(requests.map(request => request.sessionId)).toEqual(["child-session", "child-session", "child-session"])
   expect(events.filter(event => event.type === "compaction/usage").map(event => event.data)).toEqual([{ inputTokens: 23, outputTokens: 7, inputTokenSemantics: "includes-cache" }])
   expect(events.filter(event => event.type === "provider/usage")).toHaveLength(1)
 })
