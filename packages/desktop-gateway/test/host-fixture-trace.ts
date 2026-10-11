@@ -3,15 +3,26 @@ import type { RpcMessage } from '@i-harness/sdk'
 /** Keep a bounded boundary trace for host fixtures. A Vitest timeout otherwise
  * cannot distinguish initialization, prompt/tool execution, and shutdown. */
 export function createHostFixtureTrace(label: string) {
+  const createdAt = Date.now()
   const stages: Array<{ stage: string; elapsedMs: number; outcome: 'completed'|'failed' }> = []
-  let lastFrame: { method?: string; event?: string; id?: string|number } | undefined
-  const report = (stage: string, startedAt: number, outcome: string) => console.warn(`[host-fixture] ${label}: ${outcome} at ${stage} ${JSON.stringify({elapsedMs:Date.now()-startedAt,lastFrame,stages})}`)
+  type Boundary = { method?: string; event?: string; name?: string; state?: string; id?: string|number }
+  const boundaries: Array<Boundary & { elapsedMs: number; gapMs: number }> = []
+  let lastFrame: Boundary | undefined, lastFrameAt = createdAt
+  const report = (stage: string, startedAt: number, outcome: string) => console.warn(`[host-fixture] ${label}: ${outcome} at ${stage} ${JSON.stringify({elapsedMs:Date.now()-startedAt,lastFrame,lastFrameAgeMs:Date.now()-lastFrameAt,stages,boundaries})}`)
   return {
     observe(frame: RpcMessage) {
       if ('method' in frame) {
-        const params = frame.params as { event?: { type?: unknown } } | undefined
-        lastFrame = { method: frame.method, ...(typeof params?.event?.type === 'string' ? { event: params.event.type } : {}) }
+        const params = frame.params as { event?: { type?: unknown; name?: unknown; state?: unknown } } | undefined
+        const event = params?.event
+        // Timings and owned boundary names only: never prompts, arguments,
+        // model content, credential headers, or tool outputs.
+        lastFrame = { method: frame.method, ...(typeof event?.type === 'string' ? { event: event.type } : {}),
+          ...(typeof event?.name === 'string' ? { name: event.name } : {}), ...(typeof event?.state === 'string' ? { state: event.state } : {}) }
       } else if ('id' in frame && frame.id !== null) lastFrame = { id: frame.id }
+      const now = Date.now()
+      boundaries.push({ ...lastFrame, elapsedMs: now-createdAt, gapMs: now-lastFrameAt })
+      if (boundaries.length>32) boundaries.shift()
+      lastFrameAt = now
     },
     async run<T>(stage: string, operation: () => Promise<T>): Promise<T> {
       const startedAt = Date.now()

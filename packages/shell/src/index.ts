@@ -114,8 +114,10 @@ function probePowerShellAlias(path: string): boolean {
 export function powerShellExecutableAvailable(path: string, exists: (path: string) => boolean = existsSync, probe = exists === existsSync ? probePowerShellAlias : () => false, canonicalize: (path: string) => string = exists === existsSync ? realpathSync.native : path => path): boolean {
   try {
     // Native execution must resolve the executable's identity before launch.
-    // A runnable Store alias is insufficient when its reparse target is unreadable.
-    return (exists(path) || /[\\/]Microsoft[\\/]WindowsApps[\\/]pwsh\.exe$/i.test(path) && probe(path)) && !!canonicalize(path)
+    // An unreadable Store alias can never be launched by our native backend.
+    // Reject it before the synchronous availability probe, which otherwise
+    // launches PowerShell on every prompt and shell discovery boundary.
+    return !!canonicalize(path) && (exists(path) || /[\\/]Microsoft[\\/]WindowsApps[\\/]pwsh\.exe$/i.test(path) && probe(path))
   } catch { return false }
 }
 

@@ -1,0 +1,43 @@
+{
+  "recordVersion": 1,
+  "helperSha256": "e497393df04b923b581ba0c0886aaa9398180b255d6d277b041a98d7a8e51fc2",
+  "protocolSha256": "2024d9bc325df7122415f01efb5a14ee1ff11f64b7e8d9ad177167cd818b3298",
+  "windowsRelease": "10.0.26200",
+  "observationScope": "historical-one-host",
+  "applicabilityInputs": [
+    "windows-release",
+    "helper-sha256",
+    "protocol-sha256"
+  ],
+  "assurance": "experimental",
+  "result": "incomplete",
+  "observed": {
+    "passed": 39,
+    "failed": 0,
+    "unsupported": 4
+  },
+  "sourceFamilies": {
+    "gitMsysBash": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    },
+    "nodeAndTsxPipes": {
+      "psec": "observed-pass",
+      "unrestricted": "observed-pass"
+    },
+    "cmdAndPowerShellPipes": {
+      "psec": "observed-pass",
+      "unrestricted": "observed-pass"
+    },
+    "conPty": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    },
+    "msysPty": {
+      "psec": "unsupported",
+      "unrestricted": "observed-pass"
+    }
+  },
+  "observedAt": "2026-10-11T03:28:51.385Z",
+  "msysPtyTemplateSha256": "6fa3b1f2fc15868cd09e873cef625c6ced400f36c0c67c2c92ce9282231ce186"
+}

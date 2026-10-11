@@ -1,7 +1,7 @@
 import { readFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
-import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
+import { createFileProviderRuntime, type FileProviderRuntimeOptions } from "@i-harness/provider-runtime/file"
 import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
@@ -69,6 +69,8 @@ export interface DesktopHostOptions {
   credentialsPath?: string
   wslSettings?: WslSettingsOptions
   workspaceRuntime?: ReturnType<typeof import("@i-harness/workspace-runtime").createWorkspaceRuntime>
+  /** Trusted host dependency only; never read from saved settings or RPC data. */
+  buildProviderClient?: FileProviderRuntimeOptions["buildClient"]
   onWrite: (frame: RpcMessage) => void
 }
 
@@ -125,7 +127,8 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   let wslExecution = { ...settings.get().wslExecution }
   let webSearchMode = settings.get().webSearchMode
   let approvalMode = settings.get().approvalMode
-  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json") })
+  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"),
+    ...(options.buildProviderClient ? { buildClient: options.buildProviderClient } : {}) })
   await mkdir(options.sessionDir, { recursive: true })
   const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
     lock: { enabled: true, lockRoot: options.sessionDir },

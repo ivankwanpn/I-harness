@@ -35,6 +35,8 @@ function mapUsage(raw: unknown): LLMUsage | undefined {
 
 export interface OpenAICompatibleConfig {
   apiKey: string
+  /** Trusted per-client transport; absent uses the process fetch at call time. */
+  fetch?: typeof globalThis.fetch
   baseUrl?: string
   model: string
   providerId?: string
@@ -196,7 +198,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
       // TCP / TLS / proxy. Surface the cause chain instead.
       let response: Response
       try {
-        response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        response = await (config.fetch ?? globalThis.fetch)(`${baseUrl}/v1/chat/completions`, {
           method: "POST",
           headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${config.apiKey}` }),
           body: JSON.stringify(body),

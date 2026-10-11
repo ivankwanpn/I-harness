@@ -1,7 +1,7 @@
 {
   "recordVersion": 1,
-  "helperSha256": "e497393df04b923b581ba0c0886aaa9398180b255d6d277b041a98d7a8e51fc2",
-  "protocolSha256": "2024d9bc325df7122415f01efb5a14ee1ff11f64b7e8d9ad177167cd818b3298",
+  "helperSha256": "4d4e990b8050628f6004c14fa7632e1f9bd71a3233b237c365ed86590726afb6",
+  "protocolSha256": "6b0d187edb52222b72bbdc5b6aa777113dd9ac19fa2a5cfa5251013f19e35991",
   "windowsRelease": "10.0.26200",
   "observationScope": "historical-one-host",
   "applicabilityInputs": [
@@ -38,6 +38,6 @@
       "unrestricted": "observed-pass"
     }
   },
-  "observedAt": "2026-10-11T03:28:51.385Z",
+  "observedAt": "2026-10-11T05:21:07.417Z",
   "msysPtyTemplateSha256": "6fa3b1f2fc15868cd09e873cef625c6ced400f36c0c67c2c92ce9282231ce186"
 }

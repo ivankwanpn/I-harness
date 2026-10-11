@@ -3,12 +3,13 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { expect, it, vi } from "vitest"
+import { expect, it } from "vitest"
 import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createHookTrustStore, sha256ClaudePluginTreeSync } from "@i-harness/hooks"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
 import { createHostFixtureTrace } from "./host-fixture-trace.ts"
+import { createHostFixtureModel } from "./host-fixture-model.ts"
 
 it("the real Desktop host registers authority for spawned child and teammate ordinary and Code Mode tool dispatch", async () => {
   const trace = createHostFixtureTrace('desktop-child-authority-host')
@@ -38,12 +39,6 @@ it("the real Desktop host registers authority for spawned child and teammate ord
   })
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve))
   const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`
-  const originalFetch = globalThis.fetch
-  const fetchGuard = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url)
-    if (url.origin !== origin) throw new Error("Desktop fixture refused a non-loopback model request")
-    return originalFetch(input, init)
-  })
   const root = await mkdtemp(join(tmpdir(), "ih-desktop-child-authority-host-")), workspace = join(root, "workspace")
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
   try {
@@ -58,7 +53,7 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     agents: { roles: { explore: { provider: "fixture", model: "child" }, teammate: { provider: "fixture", model: "child" } } },
     llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `${origin}/v1`, models: [{ id: "parent", contextWindow: 272000 }, { id: "child", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
-  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
+  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(origin, trace), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
   let id = 0
   async function rpc(method: string, params = {}): Promise<unknown> {
     const requestId = ++id; await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
@@ -81,7 +76,10 @@ it("the real Desktop host registers authority for spawned child and teammate ord
       if (agent.path.startsWith("lead/")) expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("helper-team")
     }
   } finally {
-    await trace.run('host/close', async () => { await host?.close() }); fetchGuard.mockRestore(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    try { await trace.run('host/close', async () => { await host?.close() }) }
+    finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    }
     await rm(root, { recursive: true, force: true })
   }
 }, 20_000)
