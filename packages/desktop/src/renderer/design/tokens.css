@@ -156,11 +156,20 @@ button { font: inherit; color: inherit; }
 .review-pane {
   position: relative;
   min-width: 0;
+  min-height: 0;
+  margin-left: 8px;
   background: var(--ih-bg);
-  border-left: 1px solid var(--ih-divider);
+  border: 1px solid var(--ih-divider);
+  border-radius: 16px;
   padding: 14px 16px;
   overflow-y: auto;
 }
+
+.review-pane::-webkit-scrollbar { width: 8px; height: 8px; }
+.review-pane::-webkit-scrollbar-track { background: transparent; margin-block: 16px; }
+.review-pane::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: color-mix(in srgb, var(--ih-muted) 45%, transparent); background-clip: padding-box; }
+.review-pane::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.review-pane::-webkit-scrollbar-corner { background: transparent; }
 
 .review-title {
   margin: 0 0 10px;
