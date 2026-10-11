@@ -28,3 +28,9 @@ The first full verification overlapped the final wording correction and retained
 - Production Desktop build passed, log `.tmp/diagnostics-merge-build.log`; cached diff whitespace check passed after EOF cleanup.
 - Independent rereview confirmed the shell configuration/probe distinction is resolved and found no important remaining diagnostics issue. A separate offline audit of Coding Plans, subscription routing and transport passed 80 targeted tests and found no important issue.
 - The change includes the preceding approved Coding Plans and usage-statistics work on the same branch. Version remains 0.1.7; no live sign-in or reset card was used.
+
+## Follow-up: shared right sidebar corners
+
+After PR #8 merged, the user clarified that rounding applies to the entire right sidebar, across all tabs. Only the shared `.review-pane` styles change: 16px outer corners, a full 1px border, an 8px gutter from the conversation, and a narrow rounded scrollbar with inset ends. Diagnostic card corners are unchanged.
+
+Production Desktop build and whitespace checks passed. Actual Workbench browser QA used synthetic bridge data at 1440/900px in dark/light themes: 24 screenshots and 28 checks passed, zero runtime exceptions. Diagnostics, Code Mode, Files, Changes and Tasks share the same four rounded corners/borders. Checks verified viewport containment, scrollbar operation, resize-handle hit targets, keyboard resizing and native window controls. Evidence: `.tmp/sidebar-rounded-qa/`. No new unit tests were added for this CSS-only change.
