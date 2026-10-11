@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
-vi.mock("@tanstack/react-virtual",()=>({useVirtualizer:(options:{count:number})=>({getTotalSize:()=>400,getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,start:index*100})),measureElement:()=>{},scrollToIndex:()=>{}})}))
+vi.mock("@tanstack/react-virtual",()=>({elementScroll:()=>{},useVirtualizer:(options:{count:number})=>({getTotalSize:()=>400,getVirtualItems:()=>Array.from({length:options.count},(_,index)=>({index,start:index*100})),measureElement:()=>{},scrollToIndex:()=>{},scrollToOffset:()=>{}})}))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
 afterEach(()=>{cleanup();vi.restoreAllMocks()})
 it("provides source-only copy and wrap for a fenced code block while retaining inline code",async()=>{

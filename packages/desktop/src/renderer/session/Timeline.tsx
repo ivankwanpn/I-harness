@@ -1,6 +1,6 @@
-import { Children, isValidElement, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { Children, isValidElement, memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ArrowDown, Brain } from "lucide-react"
-import { useVirtualizer } from "@tanstack/react-virtual"
+import { elementScroll, useVirtualizer } from "@tanstack/react-virtual"
 import Markdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { activityLabel, outcomeLabel, type TimelineRow } from "./project.ts"
@@ -76,8 +76,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
   const items = useMemo(() => workStages(grouped, open, running), [grouped, open, running])
   const [pages, setPages] = useState(new Map<string, number>())
   const toggle = (id: string) => {
-    following.current = false
-    setShowLatest(true)
+    pauseFollowing()
     setOpen((previous) => {
     const next = new Map(previous)
     const group = items.find((item) => item.id === id)
@@ -89,8 +88,23 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
   }
   const parentRef = useRef<HTMLDivElement>(null)
   const following = useRef(!historical && targetSeq === undefined)
+  const followFrame = useRef<number | undefined>(undefined)
+  const readingDirection = useRef<"up" | "down">("up")
+  const pointerReading = useRef(false)
+  const observedScrollTop = useRef(0)
+  const touchY = useRef<number | undefined>(undefined)
   const located = useRef<number | undefined>(undefined)
   const [showLatest, setShowLatest] = useState(false)
+  const writeScroll = useCallback<typeof elementScroll>((offset, options, instance) => {
+    const element = instance.scrollElement
+    const before = element?.scrollTop
+    elementScroll(offset, options, instance)
+    if (element && before !== undefined) {
+      // Remove only the actual programmatic/clamped movement from the next
+      // scroll delta, preserving any coalesced native thumb movement.
+      observedScrollTop.current += element.scrollTop - before
+    }
+  }, [])
   const virtualizer = useVirtualizer({
     count: items.length,
     getItemKey: (index) => items[index]!.id,
@@ -99,8 +113,28 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
     overscan: 8,
     // Seed the first measurement so rows mount before any observer fires.
     initialRect: { width: 1024, height: 768 },
+    scrollToFn: writeScroll,
   })
   const totalSize = virtualizer.getTotalSize()
+  const followLatest = useCallback(() => {
+    if (!following.current || historical || targetSeq !== undefined) return
+    if (followFrame.current !== undefined) cancelAnimationFrame(followFrame.current)
+    followFrame.current = requestAnimationFrame(() => {
+      followFrame.current = undefined
+      const element = parentRef.current
+      if (element && following.current && !historical && targetSeq === undefined) {
+        // DOM overflow can exceed the virtual row estimate (Markdown margins,
+        // wrapping and delayed media). Pin to the physical scroll extent.
+        virtualizer.scrollToOffset(Math.max(0, element.scrollHeight - element.clientHeight))
+      }
+    })
+  }, [virtualizer, historical, targetSeq])
+  const pauseFollowing = () => {
+    readingDirection.current = "up"
+    observedScrollTop.current = parentRef.current?.scrollTop ?? 0
+    following.current = false
+    setShowLatest(true)
+  }
   const target = rows.find(row => targetSeq !== undefined && row.seqs?.includes(targetSeq))
   const targetGroup = target ? grouped.find(row => row.kind === "activity-group" && row.rows.some(tool => tool.id === target.id)) : undefined
   useEffect(() => {
@@ -125,20 +159,74 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
   }, [items, target?.id, targetSeq, virtualizer, onTargetVisible])
   useEffect(() => {
     if (!following.current || items.length === 0) return
-    const frame = requestAnimationFrame(() => {
-      if (following.current) virtualizer.scrollToIndex(items.length - 1, { align: "end" })
-    })
-    return () => cancelAnimationFrame(frame)
-  }, [items, totalSize, virtualizer])
+    followLatest()
+  }, [items, totalSize, followLatest])
+  useEffect(() => {
+    const element = parentRef.current
+    const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(followLatest)
+    if (element) {
+      observer?.observe(element)
+      if (element.firstElementChild) observer?.observe(element.firstElementChild)
+    }
+    const releasePointer = () => {
+      if (!pointerReading.current) return
+      pointerReading.current = false
+      if (element && element.scrollHeight - element.clientHeight - element.scrollTop <= 1 && !historical && targetSeq === undefined) {
+        following.current = true
+        setShowLatest(false)
+        followLatest()
+      }
+    }
+    const cancelPointer = () => { pointerReading.current = false; readingDirection.current = "up" }
+    window.addEventListener("pointerup", releasePointer, true)
+    window.addEventListener("pointercancel", cancelPointer, true)
+    window.addEventListener("blur", cancelPointer)
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener("pointerup", releasePointer, true)
+      window.removeEventListener("pointercancel", cancelPointer, true)
+      window.removeEventListener("blur", cancelPointer)
+      pointerReading.current = false
+      if (followFrame.current !== undefined) cancelAnimationFrame(followFrame.current)
+      followFrame.current = undefined
+    }
+  }, [followLatest, historical, targetSeq])
   return (
     <div className="timeline-region">
     <div ref={parentRef} className="timeline" data-testid="timeline" tabIndex={0} aria-label={t("會話內容")}
+      onWheel={event => { if (event.deltaY < 0) pauseFollowing(); else if (event.deltaY > 0) readingDirection.current = "down" }}
+      onTouchStart={event => { touchY.current = event.touches[0]?.clientY }}
+      onTouchMove={event => {
+        const current = event.touches[0]?.clientY
+        if (current !== undefined && touchY.current !== undefined && current < touchY.current) readingDirection.current = "down"
+        else pauseFollowing()
+        touchY.current = current
+      }}
+      onPointerDown={event => { if (event.target === event.currentTarget) { pointerReading.current = true; pauseFollowing() } }}
+      onKeyDown={event => {
+        if (["ArrowUp", "PageUp", "Home"].includes(event.key) || event.shiftKey && event.key === " ") pauseFollowing()
+        else if (["ArrowDown", "PageDown", "End"].includes(event.key) || !event.shiftKey && event.key === " ") readingDirection.current = "down"
+      }}
       onScroll={() => {
         const element = parentRef.current
         if (!element) return
-        const atBottom = element.scrollHeight - element.clientHeight - element.scrollTop <= 48
-        following.current = atBottom
-        setShowLatest(!atBottom)
+        const readerDelta = element.scrollTop - observedScrollTop.current
+        observedScrollTop.current = element.scrollTop
+        // Chromium captures native thumb movement without DOM pointermove.
+        // Programmatic virtualizer compensation was removed by writeScroll.
+        if (pointerReading.current && Math.abs(readerDelta) > 1) {
+          if (readerDelta > 0) readingDirection.current = "down"
+          else pauseFollowing()
+        }
+        const atBottom = element.scrollHeight - element.clientHeight - element.scrollTop <= 1
+        // A growing row/viewport resize can fire scroll without reader intent.
+        // Only explicit reading gestures pause; scrolling down to the end resumes.
+        if (following.current) {
+          if (!atBottom) followLatest()
+        } else if (atBottom && readingDirection.current === "down" && !historical && targetSeq === undefined) {
+          following.current = true
+          setShowLatest(false)
+        }
       }}>
       <div className="timeline-inner" style={{ height: `${totalSize}px` }}>
         {virtualizer.getVirtualItems().map((item) => {
@@ -156,7 +244,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
             >
               {row.id === target?.id || (row.kind === "activity-group" && row.rows.some(tool => tool.id === target?.id)) ? <span className="muted">搜尋命中</span> : null}
               <RowView row={row} open={open} toggle={toggle} navigation={navigation} onPreview={setPreview} page={pages.get(row.id) ?? 0} setPage={(page) => {
-                following.current = false; setShowLatest(true)
+                pauseFollowing()
                 setPages((previous) => {
                 const next = new Map(previous); next.set(row.id, page)
                 if (next.size > 2000) next.delete(next.keys().next().value!)
@@ -169,7 +257,7 @@ export function Timeline({ rows, navigation, running = false, targetSeq, histori
       </div>
     </div>
     {!historical && showLatest && rows.length > 0 ? <button type="button" className="timeline-latest" onClick={() => {
-      following.current = true; setShowLatest(false); virtualizer.scrollToIndex(items.length - 1, { align: "end" })
+      following.current = true; setShowLatest(false); followLatest()
     }}><ArrowDown size={14} />{t("回到最新內容")}</button> : null}
     {preview ? <SettingsDialog title={preview.name} closeLabel={t("關閉")} initialFocusSelector=".settings-dialog-close" className="timeline-image-dialog" onClose={() => setPreview(undefined)}>
       <img src={preview.src} alt={preview.name} />

@@ -481,8 +481,10 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     execute: async () => {
       const sub = deps.jobs.list("root").map((j) => {
         const entry = [...deps.table.entries().values()].find(row => row.jobId === j.id)
+        const agentPath = j.agentPath ?? entry?.path
+        const sessionId = j.sessionId ?? entry?.sessionId
         return { id: j.id, kind: j.kind, status: j.status, label: j.label,
-          ...(entry ? { agent_path: entry.path, ...(entry.sessionId ? { session_id: entry.sessionId } : {}) } : {}) }
+          ...(agentPath !== undefined ? { agent_path: agentPath } : {}), ...(sessionId !== undefined ? { session_id: sessionId } : {}) }
       })
       const shell = deps.exec.listJobs().map((v) => ({ id: v.id, kind: "bash", status: v.status, label: v.id }))
       // M24b (spec §3.3): workflow jobs join the index as kind "workflow".

@@ -2,7 +2,7 @@ import { forkSession, type SessionCoordinator, type SessionMeta } from "@i-harne
 import type { SessionService } from "@i-harness/session-executor"
 import { createHash } from "node:crypto"
 import { Inbox } from "@i-harness/core-session"
-import { sessionArtifactManifest } from "./session-artifacts.ts"
+import { recoverColdSessionRewind, sessionArtifactManifest } from "./session-artifacts.ts"
 import { createSessionManagementFence, type SessionManagementFence } from "./session-management-fence.ts"
 
 export type SessionManagementAction = "rename" | "archive" | "restore" | "fork" | "pin" | "unpin" | "read" | "unread" | "delete"
@@ -44,7 +44,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     void job.finally(() => { if (writes.get(id) === job) writes.delete(id) }).catch(() => undefined)
     return job
   }
-  async function assertIdle(id: string): Promise<void> {
+  async function assertIdle(id: string, inspectArtifacts = true): Promise<void> {
     if (await options.activeWork?.(id)) throw new Error("Session has active workflow work")
     const queue = service.queueState(id)
     if (queue.running || queue.queued || service.tasks(id).some(task => ["queued", "running"].includes(task.status))) throw new Error("Session is busy")
@@ -107,7 +107,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
     // turn/end reaches the event log before its rewind journal I/O completes.
     // Join only that live finalizer; cold unresolved recordings remain guarded.
     await assembly?.rewind?.drain?.()
-    if (options.sessionDir && options.workspace) await sessionArtifactManifest(options.sessionDir, options.workspace, id)
+    if (inspectArtifacts && options.sessionDir && options.workspace) await sessionArtifactManifest(options.sessionDir, options.workspace, id)
     // A previously admitted short writer can schedule a turn while the durable
     // inspection awaits. Refuse that new live work before entering the drain.
     const latestQueue = service.queueState(id)
@@ -115,7 +115,7 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
   }
   const manager = {
     fence,
-    assertIdle,
+    assertIdle: (id: string) => assertIdle(id),
     async navigation(): Promise<Record<string, SessionNavigation>> {
       const entries = await Promise.all((await coordinator.list()).map(async (id) => {
         const profile = await coordinator.profile(id)
@@ -173,28 +173,44 @@ export function createSessionManagement(coordinator: SessionCoordinator, service
           return { sessionId }
           })
         }
+        const recoverInterrupted = action === "archive" || action === "delete"
         return fence.exclusive(sessionId, async () => {
-        await assertIdle(sessionId)
-        if (action === "delete") {
-          if (!coordinator.deleteOwnedSession || !options.sessionDir || !options.workspace || !options.pendingInteractions || !options.drainSession) throw new Error("Permanent deletion is unavailable for this backend/runtime")
-          for (const id of await coordinator.list()) if ((await coordinator.profile(id)).meta.parentSession === sessionId) throw new Error("Session has descendants; coordinated deletion is unavailable")
-          await options.drainSession(sessionId)
-          await assertIdle(sessionId)
-          const manifest = await sessionArtifactManifest(options.sessionDir, options.workspace, sessionId)
-          // Keep admission closed even if cleanup partially fails after durable closure.
-          fence.retire(sessionId)
-          await coordinator.deleteOwnedSession(sessionId, manifest)
-          return { sessionId }
-        }
-        if (action === "fork") {
-          await coordinator.flush(sessionId)
-          const child = await forkSession(coordinator, sessionId)
-          await options.onFork?.(sessionId, child.sessionId)
-          return child
-        }
-        await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: action === "archive" })
-        return { sessionId }
-        }, () => assertIdle(sessionId))
+          // Recovery writes filesystem artifacts, so hold the durable lease in
+          // addition to the local fence. Read-only snapshots hold no lease.
+          const borrowed = recoverInterrupted && !coordinator.ownerOf(sessionId)
+          if (recoverInterrupted) await coordinator.adoptOwnership(sessionId)
+          try {
+            if (recoverInterrupted) {
+              // Preflight only inspected work: an already admitted writer may
+              // have changed durable state while the fence drained it. Prove
+              // idle again and never recover a process-local recorder.
+              await assertIdle(sessionId, false)
+              if (!service.liveAssembly?.(sessionId) && options.sessionDir && options.workspace) {
+                await recoverColdSessionRewind(options.sessionDir, options.workspace, sessionId)
+              }
+            }
+            await assertIdle(sessionId)
+            if (action === "delete") {
+              if (!coordinator.deleteOwnedSession || !options.sessionDir || !options.workspace || !options.pendingInteractions || !options.drainSession) throw new Error("Permanent deletion is unavailable for this backend/runtime")
+              for (const id of await coordinator.list()) if ((await coordinator.profile(id)).meta.parentSession === sessionId) throw new Error("Session has descendants; coordinated deletion is unavailable")
+              await options.drainSession(sessionId)
+              await assertIdle(sessionId)
+              const manifest = await sessionArtifactManifest(options.sessionDir, options.workspace, sessionId)
+              // Keep admission closed even if cleanup partially fails after durable closure.
+              fence.retire(sessionId)
+              await coordinator.deleteOwnedSession(sessionId, manifest)
+              return { sessionId }
+            }
+            if (action === "fork") {
+              await coordinator.flush(sessionId)
+              const child = await forkSession(coordinator, sessionId)
+              await options.onFork?.(sessionId, child.sessionId)
+              return child
+            }
+            await coordinator.updateMeta(sessionId, action === "rename" ? { title: title!.trim() } : { archived: action === "archive" })
+            return { sessionId }
+          } finally { if (borrowed) await coordinator.releaseOwnership(sessionId) }
+        }, () => assertIdle(sessionId, !recoverInterrupted))
       })
     },
     async batch(command: SessionBatchCommand): Promise<SessionBatchResult> {

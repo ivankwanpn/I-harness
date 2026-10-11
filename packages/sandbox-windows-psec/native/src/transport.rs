@@ -37,6 +37,7 @@ pub enum Input {
     Bytes(String, Vec<u8>),
     End(String),
     Resize(String, i16, i16),
+    Stop(String),
 }
 struct Frame {
     channel: u8,
@@ -382,9 +383,10 @@ impl PreparedIo {
                 match input_rx.recv_timeout(Duration::from_millis(10)) {
                     Ok(command) if msys => {
                         let id = match &command {
-                            Input::Bytes(id, _) | Input::End(id) | Input::Resize(id, _, _) => {
-                                id.clone()
-                            }
+                            Input::Bytes(id, _)
+                            | Input::End(id)
+                            | Input::Resize(id, _, _)
+                            | Input::Stop(id) => id.clone(),
                         };
                         let result = if input_stop.load(Ordering::Acquire) {
                             Err(Error::state("input cancelled"))
@@ -415,6 +417,9 @@ impl PreparedIo {
                         return;
                     }
                     Ok(Input::Resize(..)) => unreachable!("ConPTY resize never enters input queue"),
+                    Ok(Input::Stop(..)) => {
+                        unreachable!("MSYS cancellation only enters its controller queue")
+                    }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     Err(mpsc::RecvTimeoutError::Timeout) => {
                         if input_stop.load(Ordering::Acquire) {
@@ -472,7 +477,17 @@ impl RunningIo {
         errors
     }
     pub fn send(&mut self, input: Input) -> Result<()> {
-        if self.input_ended && !matches!(input, Input::Resize(..)) {
+        if self.input_ended && !matches!(input, Input::Resize(..) | Input::Stop(..)) {
+            if let Input::End(id) = input
+                && self.stop_input.load(Ordering::Acquire)
+            {
+                // Natural root/tree completion may close stdin before its owner
+                // sends EOF. EOF is an idempotent close, never another delivery.
+                self.events
+                    .send(Event::Input(id, Ok(())))
+                    .map_err(|_| Error::state("input observer disconnected"))?;
+                return Ok(());
+            }
             return Err(Error::state("input already ended"));
         }
         let end = matches!(&input, Input::End(_));
@@ -520,6 +535,11 @@ impl RunningIo {
                 CancelSynchronousIo(thread.as_raw_handle());
             }
         }
+    }
+    pub fn seal_input(&mut self) {
+        // Reject workload data while retaining the private MSYS controller so
+        // its observer can report waitpid after the workload Job is cancelled.
+        self.input_ended = true;
     }
     pub fn cancel_output(&self) {
         self.discard.store(true, Ordering::Release);

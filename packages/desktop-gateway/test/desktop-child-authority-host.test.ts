@@ -8,8 +8,10 @@ import { PluginRegistry } from "@i-harness/plugin-registry"
 import { createHookTrustStore, sha256ClaudePluginTreeSync } from "@i-harness/hooks"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 
 it("the real Desktop host registers authority for spawned child and teammate ordinary and Code Mode tool dispatch", async () => {
+  const trace = createHostFixtureTrace('desktop-child-authority-host')
   let parentRound = 0
   let toolNumber = 0
   const childRounds = new Map<string, number>()
@@ -56,10 +58,10 @@ it("the real Desktop host registers authority for spawned child and teammate ord
     agents: { roles: { explore: { provider: "fixture", model: "child" }, teammate: { provider: "fixture", model: "child" } } },
     llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `${origin}/v1`, models: [{ id: "parent", contextWindow: 272000 }, { id: "child", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
-  host = await createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: frame => frames.push(frame) })
+  host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
   let id = 0
   async function rpc(method: string, params = {}): Promise<unknown> {
-    const requestId = ++id; await host!.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+    const requestId = ++id; await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find(frame => "id" in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
@@ -79,7 +81,7 @@ it("the real Desktop host registers authority for spawned child and teammate ord
       if (agent.path.startsWith("lead/")) expect(JSON.stringify(results.find(event => event.name === "code_exec")?.output)).toContain("helper-team")
     }
   } finally {
-    await host?.close(); fetchGuard.mockRestore(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
+    await trace.run('host/close', async () => { await host?.close() }); fetchGuard.mockRestore(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(root, { recursive: true, force: true })
   }
 }, 20_000)

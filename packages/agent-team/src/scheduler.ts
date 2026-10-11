@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto"
 import { append, type Session } from "@i-harness/core-session"
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { ToolRegistry, ToolExec } from "@i-harness/core-tools"
+import type { Tool, ToolRegistry, ToolExec } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { AgentRegistry } from "@i-harness/core-agent"
@@ -541,7 +541,25 @@ export async function mountAgentTeams(
     // collision REPLACES the existing tool; unmount restores the replaced
     // tools, making unmount a true reverse of mount.
     const replaced = new Map<string, NonNullable<ReturnType<ToolRegistry["get"]>>>()
-    for (const t of teamTools) {
+    const mountedTools: Tool[] = [...teamTools]
+    const closeAgent = tools.get("close_agent")
+    if (closeAgent) mountedTools.push({
+      ...closeAgent,
+      execute: async (args, exec) => {
+        const target = (args as { target: string }).target
+        const historical = [...state.members.values()].find(member => member.sessionId
+          && AgentPath.parse(`lead/${member.name}`).toString() === target)
+        // Older shutdowns removed the runtime table while the durable roster
+        // survived. Closing that exact known member is already complete; never
+        // fabricate a runtime or a live status just to satisfy management.
+        if (historical && !sub.table.get(target) && !sub.agents.get(historical.sessionId!)) {
+          toolDeps.resolveCaller(exec)
+          return { previous_status: "inactive" }
+        }
+        return closeAgent.execute(args, exec)
+      },
+    })
+    for (const t of mountedTools) {
       const existing = tools.get(t.name)
       if (existing) {
         replaced.set(t.name, existing)
@@ -574,7 +592,7 @@ export async function mountAgentTeams(
             // best-effort teardown: one broken child must not block unmount
           }
         }
-        for (const name of teamToolNames) tools.unregister(name)
+        for (const tool of mountedTools) tools.unregister(tool.name)
         // reverse of the collision replacement: restore the pre-mount tool
         for (const tool of replaced.values()) tools.register(tool)
       } finally {

@@ -16,13 +16,21 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   type Operation={controller:AbortController;done:Promise<unknown>;sessionId:string}
   const active=new Set<Operation>(),jobs=new Map<string,Promise<CodeRetrievalStatus>>()
   type JobBinding=ReturnType<NonNullable<CodeRetrievalOptions['registerJob']>>
-  type Indexing={jobId:string;sourceIds?:string[];progress:{files:number;bytes:number};cancel():void;bindings:Map<string,JobBinding>}
+  type Indexing={jobId:string;sourceIds?:string[];progress:{files:number;bytes:number};startedAt:number;phaseStartedAt:number;diagnostics:NonNullable<CodeRetrievalStatus['indexDiagnostics']>;cancel():void;bindings:Map<string,JobBinding>}
   let indexing:Indexing|undefined
   let lastJob:CodeRetrievalStatus['lastJob']
+  let settledDiagnostics:CodeRetrievalStatus['indexDiagnostics']
   let sourceHealth:CodeRetrievalStatus['sourceHealth']
   let controls:Promise<unknown>=Promise.resolve()
   const status=():CodeRetrievalStatus=>({enabled:config.enabled,state:closed||!config.enabled?'disabled':stopping?'stopping':indexing?'indexing':error?'error':store.status().generation?'ready':'unindexed',
-    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(sourceHealth?{sourceHealth:{...sourceHealth,reasons:[...sourceHealth.reasons]}}:{}),...(error?{error}:{})})
+    config:structuredClone(config),...store.status(),metrics:{...metrics},activeJobs:active.size,...(indexing?{jobId:indexing.jobId,progress:{...indexing.progress},indexDiagnostics:diagnostics(indexing)}:settledDiagnostics?{indexDiagnostics:{...settledDiagnostics}}:{}),...(lastJob?{lastJob:{...lastJob}}:{}),...(sourceHealth?{sourceHealth:{...sourceHealth,reasons:[...sourceHealth.reasons]}}:{}),...(error?{error}:{})})
+  function diagnostics(job:Indexing) {
+    const now=Date.now()
+    return {...job.diagnostics,elapsedMs:Math.max(0,now-job.startedAt),phaseElapsedMs:Math.max(0,now-job.phaseStartedAt)}
+  }
+  function phase(job:Indexing,value:NonNullable<CodeRetrievalStatus['indexDiagnostics']>['phase']) {
+    job.diagnostics.phase=value;job.phaseStartedAt=Date.now()
+  }
   function admit(access:CodeAccess,controlOwner=false) {
     identity(access.sessionId,'session ID');access.signal?.throwIfAborted()
     if(closed)throw new Error('Code Context is closed')
@@ -92,12 +100,14 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
   function reserveIndex(access:CodeAccess,input:{sourceIds?:string[];force?:boolean},admittedSources?:string[]) {
     const jobId=`code-context-${randomUUID()}`,captured=structuredClone(config),scope=input.sourceIds?[...new Set(input.sourceIds)]:undefined
     const readScope=scope??admittedSources??options.reader.indexSourceIds?.()
-    const jobController=new AbortController(),reservation:Indexing={jobId,sourceIds:readScope?[...readScope]:undefined,progress:{files:0,bytes:0},cancel:()=>jobController.abort(new Error('Code Context indexing cancelled')),bindings:new Map()}
+    const startedAt=Date.now()
+    const jobController=new AbortController(),reservation:Indexing={jobId,sourceIds:readScope?[...readScope]:undefined,progress:{files:0,bytes:0},startedAt,phaseStartedAt:startedAt,
+      diagnostics:{jobId,phase:'opening',elapsedMs:0,phaseElapsedMs:0,files:0,bytes:0,chunks:0},cancel:()=>jobController.abort(new Error('Code Context indexing cancelled')),bindings:new Map()}
     bindJob(access,reservation)
     let result:NonNullable<CodeRetrievalStatus['lastJob']>
     const finish=(outcome:'completed'|'cancelled'|'failed',reason?:string)=>{
       result={jobId,outcome,generation:store.status().generation,...(reason?{reason}:{})}
-      lastJob=result
+      lastJob=result;settledDiagnostics=diagnostics(reservation)
     }
     indexing=reservation;error=undefined
     const work=operation(access,async (signal,check)=>{
@@ -118,6 +128,7 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
           dimensions??=retainedDimensions
         }
         if(preserved.files&&old.partial)for(const reason of old.reasons)reasons.add(reason)
+        phase(reservation,'reading')
         const iterator=options.reader.snapshots({...access,signal},{sourceIds:reservation.sourceIds,config:captured})
         for await(const file of iterator) {
           check()
@@ -142,7 +153,7 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
           const staged={sourceId:file.sourceId,path:file.path,revision:file.revision,hash:digest,chunks:parts}
           reserve(Buffer.byteLength(JSON.stringify(staged)))
           files.push(staged)
-          if(indexing?.jobId===jobId)indexing.progress={files:files.length,bytes:totalBytes}
+          if(indexing?.jobId===jobId){indexing.progress={files:files.length,bytes:totalBytes};Object.assign(indexing.diagnostics,{files:files.length,bytes:totalBytes,chunks:totalChunks-preserved.chunks})}
           if(reasons.has('max-chunks'))break
         }
         check()
@@ -151,6 +162,7 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
         for(const reason of diagnostic?.reasons??[])reasons.add(reason.slice(0,128))
         if(reasons.size>32){const limited=[...reasons].slice(0,31);reasons.clear();for(const reason of limited)reasons.add(reason);reasons.add('more-source-reasons')}
         if(captured.mode==='hybrid') {
+          phase(reservation,'embedding')
           const missing=new Map<string,string>()
           for(const file of files)for(const chunk of file.chunks) {
             const key=vectorKey(model,chunk.text),cached=old.model===model?store.vector(key):undefined
@@ -166,6 +178,7 @@ export function createCodeRetrievalService(options:CodeRetrievalOptions):CodeRet
           }
         }
         check()
+        phase(reservation,'publishing')
         store.commit(files,scope,[...reasons],model,vectors,captured.maxDiskBytes,check)
         sourceHealth=undefined
         finish('completed')

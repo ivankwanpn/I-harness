@@ -15,6 +15,7 @@ IH_API int ioctl(int, uint64_t, ...);
 IH_API int dup(int);
 IH_API int close(int);
 IH_API int waitpid(int, int *, int);
+IH_API int kill(int, int);
 IH_API int poll(struct ih_pollfd *, unsigned int, int);
 IH_API int _setmode(int, int);
 IH_API int fcntl(int, int, ...);

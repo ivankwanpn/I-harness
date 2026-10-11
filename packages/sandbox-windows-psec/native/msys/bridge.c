@@ -98,12 +98,21 @@ static void *deliver_input(void *context) {
         }
         struct input_frame *frame = &state->frames[state->head];
         LeaveCriticalSection(&state->lock);
-        /* MSYS's blocking master write can hold internal locks despite
-         * O_NONBLOCK. Only this worker waits; controller and reaper stay live. */
+        /* MSYS master write holds input_mutex, which master read/poll also
+         * needs in flush_to_slave. Wait outside write and submit one byte:
+         * POLLOUT promises some pipe space, not space for the entire frame. */
         unsigned int offset = 0;
         int error = 0;
         while (offset < frame->length) {
-            int64_t count = write(state->master, frame->bytes + offset, frame->length - offset);
+            struct ih_pollfd fd = {state->master, 4, 0};
+            int ready = poll(&fd, 1, 100);
+            if (ready < 0 && *__errno() == 4) continue;
+            if (ready < 0) { error = *__errno(); break; }
+            if (!(fd.revents & 4)) {
+                if (fd.revents & (8 | 16 | 32)) { error = 5; break; }
+                continue;
+            }
+            int64_t count = write(state->master, frame->bytes + offset, 1);
             if (count < 0 && *__errno() == 4) continue;
             if (count <= 0) { error = count < 0 ? *__errno() : 5; break; }
             offset += (unsigned int)count;
@@ -170,7 +179,7 @@ int main(int argc, char **argv) {
                 ((unsigned int)header[6] << 16) | ((unsigned int)header[7] << 24);
             unsigned int id_length = header[1];
             if (!id_length || id_length > 128 || header[2] || header[3] || length > 16384 ||
-                header[0] < 1 || header[0] > 3) fail("controller-header");
+                header[0] < 1 || header[0] > 4) fail("controller-header");
             if (read_all(raw[0], id, id_length) < 0 || read_all(raw[0], buffer, length) < 0) fail("controller-frame");
             for (unsigned int i = 0; i < id_length; i++) if (!valid_id(id[i])) fail("controller-id");
             id[id_length] = 0;
@@ -194,12 +203,19 @@ int main(int argc, char **argv) {
                 EnterCriticalSection(&input->lock); input->ended = 1;
                 if (input->count) { for (unsigned int i = 0; i <= id_length; i++) input->end_id[i] = (char)id[i]; LeaveCriticalSection(&input->lock); continue; }
                 LeaveCriticalSection(&input->lock);
-            } else {
+            } else if (header[0] == 3) {
                 if (length != 4) fail("resize-length");
                 size.cols = (uint16_t)(buffer[0] | (buffer[1] << 8));
                 size.rows = (uint16_t)(buffer[2] | (buffer[3] << 8));
                 if (!size.cols || size.cols > 1000 || !size.rows || size.rows > 1000) fail("resize-size");
                 if (ioctl(master, (('T' << 8) | 2), &size) < 0) { ack((char *)id, *__errno()); continue; }
+            } else {
+                if (length) fail("stop-length");
+                /* The native owner requests this only for its forkpty root.
+                 * Let MSYS record SIGKILL before the nested Job terminates any
+                 * remaining descendants; direct Win32 termination can lose
+                 * the runtime's POSIX exit status. */
+                if (!child_exited && kill(child, 9) < 0) { ack((char *)id, *__errno()); continue; }
             }
             ack((char *)id, 0);
         }

@@ -5,6 +5,11 @@ import { createTerminalTools, createProcessTools } from "../src/tool.ts"
 import { basename, delimiter, dirname } from "node:path"
 import { existsSync, mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs"
 import { join, resolve, sep } from "node:path"
+import { fileURLToPath } from "node:url"
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..")
+const fixtureRoot = resolve(packageRoot, "../../.tmp")
+const nativeHelper = resolve(packageRoot, "../sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe")
 
 // 注意：Win32 上 node -e 引數含 `'\n'` 轉義序列會被解析器 reject（本機 node 24.15 實測），
 // 統統改用 String.fromCharCode(10) 產生 LF——零轉義、跨工具鏈穩定。
@@ -96,12 +101,11 @@ it.skipIf(process.platform !== "win32")("real ConPTY INT reaches the interactive
 }, 20_000)
 
 it.skipIf(process.platform !== "win32")("retains a descendant after root exit until native settlement", async () => {
-  const fixtureRoot = resolve(process.cwd(), ".tmp")
   mkdirSync(fixtureRoot, { recursive: true })
   const fixture = mkdtempSync(join(fixtureRoot, "sandbox-redesign-terminal-retain-"))
   const marker = join(fixture, "descendant.txt")
   try {
-    const helper = resolve(process.cwd(), "../sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe")
+    const helper = nativeHelper
     expect(existsSync(helper)).toBe(true)
     const terminal = await svc.open({ command: helper, args: ["--self-child", "spawn-descendant", "750", marker] })
     expect((await svc.waitExited(terminal.id)).exitCode).toBe(17)
@@ -120,12 +124,11 @@ it.skipIf(process.platform !== "win32")("retains a descendant after root exit un
 }, 20_000)
 
 it.skipIf(process.platform !== "win32")("close cancels a retained ConPTY descendant before it writes", async () => {
-  const fixtureRoot = resolve(process.cwd(), ".tmp")
   mkdirSync(fixtureRoot, { recursive: true })
   const fixture = mkdtempSync(join(fixtureRoot, "sandbox-redesign-terminal-cancel-"))
   const marker = join(fixture, "cancelled-descendant.txt")
   try {
-    const helper = resolve(process.cwd(), "../sandbox-windows-psec/artifacts/win32-x64/i-harness-windows-helper.exe")
+    const helper = nativeHelper
     expect(existsSync(helper)).toBe(true)
     const terminal = await svc.open({ command: helper, args: ["--self-child", "spawn-descendant", "5000", marker] })
     expect((await svc.waitExited(terminal.id)).exitCode).toBe(17)

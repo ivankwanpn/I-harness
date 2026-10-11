@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react"
-vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56 })), measureElement: () => {}, scrollToIndex: () => {} }) }))
+vi.mock("@tanstack/react-virtual", () => ({ elementScroll: () => {}, useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => 200, getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56 })), measureElement: () => {}, scrollToIndex: () => {}, scrollToOffset: () => {} }) }))
 import { Timeline } from "../src/renderer/session/Timeline.tsx"
 import { projectHistoryTimeline, projectTimeline, type WireEvent } from "../src/renderer/session/project.ts"
 

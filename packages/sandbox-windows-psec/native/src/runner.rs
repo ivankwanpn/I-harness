@@ -52,6 +52,8 @@ struct Running {
     stop_at: Option<Instant>,
     msys_done: bool,
     msys_root: Option<u32>,
+    msys_stop_at: Option<Instant>,
+    msys_stop_sent: bool,
 }
 enum JobTermination {
     Pending,
@@ -279,6 +281,8 @@ impl Prepared {
             stop_at: None,
             msys_done: false,
             msys_root: None,
+            msys_stop_at: None,
+            msys_stop_sent: false,
         }
     }
 }
@@ -387,13 +391,57 @@ impl Running {
             self.errors.push(error);
         }
     }
-    fn terminate_owned(&mut self) {
+    fn observing_msys_exit(&self) -> bool {
+        self.assigned
+            && self.owner.workload_job.is_some()
+            && !self.msys_done
+            && self
+                .msys_stop_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+            && unsafe { WaitForSingleObject(self.process.0, 0) } != WAIT_OBJECT_0
+    }
+    fn stop_workload_input(&mut self) {
+        if self.observing_msys_exit() {
+            self.io.seal_input();
+        } else {
+            self.io.stop_input();
+        }
+    }
+    fn terminate_owned(&mut self, preserve_observer: bool) {
         // Assignment can fail after process creation. Such a suspended process is
         // not in the Job, so Job termination alone is never treated as rollback.
         if !self.assigned && unsafe { WaitForSingleObject(self.process.0, 0) } != WAIT_OBJECT_0 {
             if unsafe { TerminateProcess(self.process.0, 137) } == 0 {
                 self.remember(Error::native("TerminateProcess(rollback)"));
             }
+        }
+        if preserve_observer && self.observing_msys_exit() {
+            // Keep the trusted relay/reaper alive while killing only admitted
+            // workload processes. Repeat accounting/termination for a child
+            // that joins its Job during an early cancellation. The outer Job
+            // remains the fallback owner if the adapter fails to report/exit.
+            if self.msys_root.is_none() {
+                if !self.msys_stop_sent {
+                    match self.io.send(Input::Stop("_owned-stop".into())) {
+                        Ok(()) => self.msys_stop_sent = true,
+                        Err(error) if error.code == "input-backpressure" => {}
+                        Err(error) => self.remember(error),
+                    }
+                }
+                return;
+            }
+            let workload = self.owner.workload_job.as_ref().unwrap();
+            let result = workload.active().and_then(|active| {
+                if active == 0 {
+                    Ok(())
+                } else {
+                    workload.terminate()
+                }
+            });
+            if let Err(error) = result {
+                self.remember(error);
+            }
+            return;
         }
         if self.tree_reported {
             self.job_termination = JobTermination::Empty;
@@ -411,10 +459,13 @@ impl Running {
     }
     fn stop(&mut self, discard: bool) {
         self.cancelled = true;
+        if self.owner.workload_job.is_some() {
+            self.msys_stop_at.get_or_insert_with(Instant::now);
+        }
         // A prior cancellation request/root exit says nothing about whether a
         // failed Job termination has been retried. Keep that obligation separate.
-        self.terminate_owned();
-        self.io.stop_input();
+        self.terminate_owned(true);
+        self.stop_workload_input();
         if discard {
             self.stop_at.get_or_insert_with(Instant::now);
             self.io.cancel_output();
@@ -425,8 +476,8 @@ impl Running {
             for e in self.io.close_pending_handles() {
                 self.remember(e);
             }
-            self.terminate_owned();
-            self.io.stop_input();
+            self.terminate_owned(true);
+            self.stop_workload_input();
             if self.io.abandoned() {
                 self.io.cancel_output();
             }
@@ -530,7 +581,7 @@ impl Running {
 impl Drop for Running {
     fn drop(&mut self) {
         if !self.tree_reported {
-            self.terminate_owned();
+            self.terminate_owned(false);
         }
         if self.io_reported {
             return;
@@ -575,10 +626,6 @@ fn drain_events(events: &Receiver<Event>, running: &mut Option<Running>) -> Resu
                     r.io.pending_handles.push(handle);
                 }
             }
-            Event::Input(id, result) => match result {
-                Ok(()) => status(&id, "ack", serde_json::json!({}))?,
-                Err(e) => failure(&id, e)?,
-            },
             Event::Reader(result) | Event::Output(result) => {
                 if let Err(e) = result {
                     if let Some(r) = running.as_mut() {
@@ -589,10 +636,23 @@ fn drain_events(events: &Receiver<Event>, running: &mut Option<Running>) -> Resu
             }
             Event::InputClosed | Event::ConsoleClosed => {}
             Event::Bridge(crate::msys::Observation::Ready) => {}
-            Event::Bridge(crate::msys::Observation::Ack(id, result)) => match result {
-                Ok(()) => status(&id, "ack", serde_json::json!({}))?,
-                Err(e) => failure(&id, e)?,
-            },
+            Event::Input(id, result) | Event::Bridge(crate::msys::Observation::Ack(id, result)) => {
+                match result {
+                    _ if id == "_owned-stop" => {
+                        if let Some(r) = running.as_mut() {
+                            if let Err(error) = result {
+                                // ESRCH can race a natural exit already in the
+                                // controller pipe. Other failures remain diagnostic.
+                                if error.native_code != Some(3) {
+                                    r.remember(error);
+                                }
+                            }
+                        }
+                    }
+                    Ok(()) => status(&id, "ack", serde_json::json!({}))?,
+                    Err(e) => failure(&id, e)?,
+                }
+            }
             Event::Bridge(crate::msys::Observation::Root(code)) => {
                 if let Some(r) = running.as_mut() {
                     r.msys_root = Some(code);
@@ -925,6 +985,22 @@ pub fn run() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn private_msys_stop_write_failure_does_not_emit_an_unmatched_public_response() {
+        let (tx, rx) = mpsc::sync_channel(1);
+        tx.send(Event::Input(
+            "_owned-stop".into(),
+            Err(Error::state("controller closed before delivery")),
+        ))
+        .unwrap();
+        // There is no public pending request for the private controller ID.
+        // Routing this to status() would require an unrelated public transport.
+        let result = drain_events(&rx, &mut None);
+        assert!(
+            result.is_ok(),
+            "private controller delivery must stay with its native owner: {result:?}"
+        );
+    }
     fn prepared_fixture(engine: &str) -> (Prepared, std::path::PathBuf) {
         prepared_fixture_with_argv(engine, None)
     }

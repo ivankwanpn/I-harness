@@ -539,7 +539,8 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
       : {}),
   })
   if (sessionId !== undefined) opts.agents.register(sessionId, agent)
-  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName)
+  const { id: jobId } = opts.jobs.registerJob("root", "subagent", opts.taskName, undefined, undefined, undefined,
+    { agentPath: childPath, ...(sessionId !== undefined ? { sessionId } : {}) })
   const initialRun = agent.run(opts.message, controller.signal)
   opts.table.add(childPath, {
     path: childPath,
