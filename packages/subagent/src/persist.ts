@@ -33,6 +33,8 @@ export interface DurableJobRecord {
   status: JobStatus
   output: string
   terminal: boolean
+  agentPath?: string
+  sessionId?: string
   // Task 4.4: wall-clock stamps (Date.now() at registry mutation) so the web
   // jobs surface can show elapsed/duration honestly and the route can answer
   // startedAt/endedAt. Additive to the doc — older docs simply lack them.
@@ -71,6 +73,8 @@ export function snapshotState(state: { jobs: JobRegistry; table: AgentTable; rol
   const jobsOut: DurableJobRecord[] = jobSnaps.map((j) => ({
     id: j.id, owner: "root", kind: j.kind, label: j.label, status: j.status, output: j.output,
     terminal: j.status !== "running",
+    ...(j.agentPath !== undefined ? { agentPath: j.agentPath } : {}),
+    ...(j.sessionId !== undefined ? { sessionId: j.sessionId } : {}),
     // Task 4.4: stamps ride the doc verbatim (restore replays them, they are
     // never re-minted on resume).
     ...(j.startedAt !== undefined ? { startedAt: j.startedAt } : {}),
@@ -140,7 +144,14 @@ export function restoreState(
   // jobId links are advisory.
   for (const rec of snap.jobs) {
     const wasRunning = rec.status === "running"
-    const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label, rec.id, rec.startedAt)
+    // Older documents carried provenance only on the agent entry. Preserve
+    // that exact job-id link before a later close removes the entry; never
+    // infer historical ownership from a reusable task name or job label.
+    const linked = snap.agentTable.find(entry => entry.jobId === rec.id && (rec.agentPath === undefined || rec.agentPath === entry.path))
+    const agentPath = rec.agentPath ?? linked?.path
+    const sessionId = rec.sessionId ?? linked?.sessionId
+    const { id } = state.jobs.registerJob(rec.owner, rec.kind, rec.label, rec.id, rec.startedAt, undefined,
+      agentPath !== undefined ? { agentPath, ...(sessionId !== undefined ? { sessionId } : {}) } : undefined)
     state.jobs.updateJob(id, {
       status: wasRunning ? "error" : rec.status,
       output: wasRunning ? "interrupted by resume" : rec.output,
@@ -188,8 +199,8 @@ export function persistentJobRegistry(
 ): JobRegistry {
   return {
     ...jobs,
-    registerJob(owner, kind, label, id, startedAt, cancel) {
-      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel)
+    registerJob(owner, kind, label, id, startedAt, cancel, identity) {
+      const result = jobs.registerJob(owner, kind, label, id, startedAt, cancel, identity)
       observe?.(jobs.read(result.id))
       void save()
       if(!result.finish)return result

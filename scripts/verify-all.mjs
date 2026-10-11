@@ -103,11 +103,14 @@ if (preparation.code !== 0) {
 }
 
 // ── 1/5 · the recursive suite, captured so its POPULATION can be counted ──────
-rule("1/5 · pnpm -r --no-bail --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
+rule("1/5 · pnpm -r --no-bail --no-sort --stream --workspace-concurrency=1 test --maxWorkers=2 --minWorkers=1")
 const expected = expectedPopulation()
 // Native integration fixtures have finite deadlines. Keep workspace suites
 // serial so another package's process workload cannot consume their budget.
-const suite = await run("pnpm", ["-r", "--no-bail", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1"])
+// pnpm's topological scheduler skips dependents of a failed project even with
+// --no-bail. Tests consume source exports; sorting adds no prerequisite here.
+// Disable that scheduler so a failure cannot hide the remaining test suites.
+const suite = await run("pnpm", ["-r", "--no-bail", "--no-sort", "--stream", "--workspace-concurrency=1", "test", "--maxWorkers=2", "--minWorkers=1"])
 const reportedDirs = [...new Set([...suite.text.matchAll(/^(\S+) test:\s+Test Files /gm)].map((m) => m[1]))].sort()
 const verdicts = [...suite.text.matchAll(/^(\S+) test: (Done|Failed)$/gm)]
 const failedProjects = verdicts.filter((m) => m[2] === "Failed").map((m) => m[1]).sort()

@@ -14,6 +14,10 @@ export interface CodeHit {
   sourceId: string; path: string; revision: string; generation: number; text: string;
   startLine: number; endLine: number; startOffset: number; endOffset: number; score: number;
 }
+export interface CodeIndexDiagnostics {
+  jobId: string; phase: 'opening'|'reading'|'embedding'|'publishing';
+  elapsedMs: number; phaseElapsedMs: number; files: number; bytes: number; chunks: number;
+}
 export interface CodeRetrievalStatus {
   enabled: boolean; state: 'disabled'|'unindexed'|'indexing'|'ready'|'stopping'|'error';
   config: CodeRetrievalConfig; generation: number; files: number; chunks: number;
@@ -22,6 +26,9 @@ export interface CodeRetrievalStatus {
   /** Outcome of an indexing attempt, separate from committed completeness.
    * wait(jobId) retains the outcome of that specific job. */
   lastJob?: { jobId:string; outcome:'completed'|'cancelled'|'failed'; generation:number; reason?:string };
+  /** Current attempt, or frozen diagnostics from the last settled attempt.
+   * Counts describe staging; they do not replace the committed generation. */
+  indexDiagnostics?: CodeIndexDiagnostics;
   /** Measured counters for this service lifetime. Missing provider token usage
    * increments unreportedRequests; it is never presented as zero token use. */
   metrics?: { embeddingRequests:number; embeddingCacheHits:number; reportedInputTokens:number; unreportedRequests:number };

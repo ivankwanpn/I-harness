@@ -7,6 +7,44 @@ import { createFileProviderRuntime } from "@i-harness/provider-runtime/file"
 import { vi } from "vitest"
 
 const roots: string[] = []
+it("refreshes live policy without waiting for execution backend diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-policy-diagnostics-")); roots.push(root)
+  const path = join(root, "settings.json")
+  await writeFile(path, JSON.stringify({ sandboxMode: "read-only", compaction: { auto: false } }))
+  const settings = createAgentSettings(path, { sandboxMode: "read-only", autoCompaction: true, approvalMode: "dangerous" }, {
+    onAutoCompactionChanged() {},
+    async executionStatus() { throw new Error("A policy refresh started an execution backend probe") },
+  })
+  expect(await settings.sync()).toMatchObject({ effective: { autoCompaction: false }, restartRequired: false })
+})
+
+it("releases the settings lease before waiting for execution backend diagnostics", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-policy-probe-lease-")); roots.push(root)
+  const path = join(root, "settings.json")
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>()
+  const settings = createAgentSettings(path, { sandboxMode: "workspace-write", autoCompaction: true, approvalMode: "dangerous" }, {
+    async executionStatus() { entered.resolve(); await release.promise; return [{ sessionId: "fixture", status: "available" }] },
+  })
+  const provider = createFileProviderRuntime({ settingsPath: path, credentialsPath: join(root, "credentials.json") })
+  const reading = settings.state()
+  await entered.promise
+  const mutation = provider.createProvider("fixture", { protocol: "openai-completions" })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const outcome = await Promise.race([
+      mutation.then(() => "saved"),
+      new Promise<string>(resolve => { timer = setTimeout(() => resolve("blocked by diagnostics"), 500) }),
+    ])
+    expect(outcome).toBe("saved")
+  } finally {
+    if (timer) clearTimeout(timer)
+    release.resolve()
+    await Promise.allSettled([reading, mutation])
+  }
+  expect(await reading).toMatchObject({ executions: [{ sessionId: "fixture", status: "available" }] })
+  expect(JSON.parse(await readFile(path, "utf8")).llm.providers.fixture).toBeTruthy()
+})
+
 it("persists explicit experimental backend choice for new assemblies", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-backend-settings-")); roots.push(root)
   const path = join(root, "settings.json")

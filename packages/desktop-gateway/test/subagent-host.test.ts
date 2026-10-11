@@ -5,8 +5,10 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 
 it("uses the changed role model for a new child in the same Desktop session", async () => {
+  const trace = createHostFixtureTrace('subagent-host')
   const models: string[] = []
   let spawn = true
   let childNumber = 0
@@ -37,17 +39,18 @@ it("uses the changed role model for a new child in the same Desktop session", as
   })
   const frames: RpcMessage[] = []
   let approvalId = 1000
-  const host = await createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: (frame) => {
+  const host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), onWrite: (frame) => {
+    trace.observe(frame)
     frames.push(frame)
     if ("method" in frame && frame.method === "desktop/interaction/request") {
       const pending = frame.params as { requestId: string; sessionId: string; payload: { name?: string } }
       queueMicrotask(() => { void host.handleLine(encodeFrame(makeRequest(++approvalId, "desktop/interaction/reply", { requestId: pending.requestId, sessionId: pending.sessionId, decision: { kind: "approval", approved: pending.payload.name === "spawn_agent" } }))) })
     }
-  } })
+  } }))
   let id = 0
   async function call(method: string, params = {}) {
     const requestId = ++id
-    await host.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+    await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find((frame) => "id" in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
@@ -64,7 +67,7 @@ it("uses the changed role model for a new child in the same Desktop session", as
     await call("session/prompt", { sessionId, prompt: "spawn another explorer" })
     expect(models).toContain("small-two")
   } finally {
-    await host.close()
+    await trace.run('host/close', () => host.close())
     fetchGuard.mockRestore()
     server.closeAllConnections(); await new Promise<void>((resolve) => server.close(() => resolve()))
     await rm(root, { recursive: true, force: true })

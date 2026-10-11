@@ -13,6 +13,7 @@ pub fn packet(input: &Input) -> Result<Vec<u8>> {
     let (kind, id, data) = match input {
         Input::Bytes(id, data) => (1, id, data.clone()),
         Input::End(id) => (2, id, Vec::new()),
+        Input::Stop(id) => (4, id, Vec::new()),
         Input::Resize(id, cols, rows) => (
             3,
             id,

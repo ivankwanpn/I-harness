@@ -197,7 +197,7 @@ pub fn parse(bytes: &[u8]) -> Result<Command> {
         .ok_or_else(|| Error::invalid("id required"))?;
     if id.is_empty()
         || id.len() > 128
-        || matches!(id.as_str(), "protocol" | "helper")
+        || matches!(id.as_str(), "protocol" | "helper" | "_owned-stop")
         || !id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"-_.:".contains(&c))
@@ -249,6 +249,20 @@ pub fn size(cols: i16, rows: i16) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_commands_reject_the_private_msys_stop_identifier() {
+        for command in [
+            br#"{"version":1,"id":"_owned-stop","type":"input","data":[]}"#.as_slice(),
+            br#"{"version":1,"id":"_owned-stop","type":"end-input"}"#,
+            br#"{"version":1,"id":"_owned-stop","type":"release"}"#,
+        ] {
+            let Err(error) = parse(command) else {
+                panic!("public request accepted a private controller identifier");
+            };
+            assert_eq!(error.code, "invalid-request");
+            assert!(error.detail.contains("reserved"));
+        }
+    }
     #[test]
     fn protocol_rejects_unknown_and_bad_version() {
         assert!(parse(br#"{"version":2,"id":"a","type":"release"}"#).is_err());

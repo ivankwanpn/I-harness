@@ -12,9 +12,10 @@ import { mkdir } from "node:fs/promises"
 import { readFile, writeFile } from "node:fs/promises"
 import { createFileBackedSessionQuery, closeSessionQueries } from "@i-harness/session-query"
 import { createDurableSessionLoader, createSessionAssembly } from "@i-harness/session-executor"
-import { RewindStore } from "@i-harness/rewind"
+import { RewindRecorder, RewindStore } from "@i-harness/rewind"
 import { sessionOwnedDocuments } from "../src/session-artifacts.ts"
 import { desktopInputReceiptDocumentKey } from "../src/input.ts"
+import { createSessionManagementFence } from "../src/session-management-fence.ts"
 
 const roots: string[] = []
 afterEach(async () => { await Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))) })
@@ -276,16 +277,111 @@ it.each(["inbox", "turn", "mailbox", "cell", "missing"])("keeps reusable-child a
     expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
   } finally { await coordinator.close() }
 })
-it.each([undefined, "Named conversation"])("preserves an unresolved rewind sidecar regardless of title %s", async (title: string | undefined) => {
+it.each([undefined, "Named conversation"])("archives a settled cold recording and retains its recovery evidence regardless of title %s", async (title: string | undefined) => {
   const { root, coordinator, service } = await setup()
+  let reopened: ReturnType<typeof createSessionCoordinator> | undefined
   try {
     await coordinator.create({ sessionId: "rewind-title", ...(title ? { title } : {}) })
+    await coordinator.append("rewind-title", [{ type: "user/message", seq: 0, text: "interrupted recording" }, { type: "turn/start", seq: 1 }, { type: "turn/end", seq: 2 }])
     const store = new RewindStore({ root, workspace: root, sessionId: "rewind-title" })
-    const pending = { version: 1 as const, anchorSeq: 0, promptPreview: "unfinished", startedAt: 1, entries: [] }
-    await store.writePending(pending)
-    await expect(createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("rewind-title", "archive")).rejects.toThrow("Session has a pending rewind recording")
+    const recorder = new RewindRecorder({ store, workspace: root })
+    recorder.begin(0, "interrupted recording")
+    const taken = recorder.take("source.txt", Buffer.from("before"))
+    await writeFile(join(root, "source.txt"), "after")
+    await recorder.flush()
+    const pending = await store.readPending()
+    await coordinator.close()
+    reopened = createSessionCoordinator(createJsonlBackend(root))
+    await createSessionManagement(reopened, service, undefined, { workspace: root, sessionDir: root }).mutate("rewind-title", "archive")
+    expect((await reopened.profile("rewind-title")).meta.archived).toBe(true)
+    expect((await reopened.snapshot!("rewind-title")).session.events).toHaveLength(3)
+    expect(await store.readPending()).toBeNull()
+    expect(await store.readOrphans()).toEqual([{ ...pending, recoveredAt: expect.any(Number) }])
+    expect(Buffer.from(await store.readBlob(taken.blobId!)).toString()).toBe("before")
+    expect(await readFile(join(root, "source.txt"), "utf8")).toBe("after")
+    expect(await store.readPoints()).toEqual([])
+  } finally { await reopened?.close(); await coordinator.close() }
+})
+
+it("keeps an unresolved live recorder guarded even when its runtime queue is idle", async () => {
+  const { root, coordinator, service } = await setup()
+  const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
+  const recorder = new RewindRecorder({ store, workspace: root })
+  recorder.begin(0, "live recording")
+  const taken = recorder.take("source.txt", Buffer.from("before"))
+  await recorder.flush()
+  const pending = await store.readPending()
+  const live = { ...service, liveAssembly: () => ({ liveResources: () => ({ codeCells: [], terminals: [] }), rewind: { store, recorder, drain: async () => {} } }) } as unknown as SessionService
+  try {
+    await expect(createSessionManagement(coordinator, live, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")).rejects.toThrow("Session has a pending rewind recording")
     expect(await store.readPending()).toEqual(pending)
+    expect(await store.readOrphans()).toEqual([])
+    expect(Buffer.from(await store.readBlob(taken.blobId!)).toString()).toBe("before")
+    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
   } finally { await coordinator.close() }
+})
+
+it("refuses recovery while another coordinator owns the cold session", async () => {
+  const { root, coordinator, service } = await setup()
+  const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
+  const pending = { version: 1 as const, anchorSeq: 0, promptPreview: "owned recording", startedAt: 1, entries: [] }
+  await store.writePending(pending)
+  await coordinator.close()
+  const options = { lock: { enabled: true, lockRoot: root } }
+  const owner = createSessionCoordinator(createJsonlBackend(root), options)
+  const managerCoordinator = createSessionCoordinator(createJsonlBackend(root), options)
+  await owner.adoptOwnership("s1")
+  try {
+    await expect(createSessionManagement(managerCoordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")).rejects.toThrow()
+    expect(await store.readPending()).toEqual(pending)
+    expect(await store.readOrphans()).toEqual([])
+    expect((await owner.profile("s1")).meta.archived).not.toBe(true)
+  } finally { await managerCoordinator.close(); await owner.close() }
+})
+
+it.each(["input", "turn"])("preserves a cold recording while durable %s work is unresolved", async (blocker: string) => {
+  const { root, coordinator, service } = await setup()
+  const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
+  const pending = { version: 1 as const, anchorSeq: 0, promptPreview: "unfinished work", startedAt: 1, entries: [] }
+  await store.writePending(pending)
+  await coordinator.append("s1", blocker === "input"
+    ? [{ type: "agent/input/admitted", version: 1, seq: 0, inputId: "unresolved", text: "pending", delivery: "queue", intent: "user" }]
+    : [{ type: "turn/start", seq: 0 }])
+  try {
+    await expect(createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root }).mutate("s1", "archive")).rejects.toThrow(/pending|unfinished/)
+    expect(await store.readPending()).toEqual(pending)
+    expect(await store.readOrphans()).toEqual([])
+    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+  } finally { await coordinator.close() }
+})
+
+it("waits for admitted writers and refuses their newly pending work before recovering a cold recording", async () => {
+  const { root, coordinator, service } = await setup()
+  const fence = createSessionManagementFence()
+  const release = Promise.withResolvers<void>()
+  const entered = Promise.withResolvers<void>()
+  const store = new RewindStore({ root, workspace: root, sessionId: "s1" })
+  const pending = { version: 1 as const, anchorSeq: 0, promptPreview: "cold recording", startedAt: 1, entries: [] }
+  await store.writePending(pending)
+  const writer = fence.run("s1", async () => {
+    entered.resolve()
+    await release.promise
+    await coordinator.append("s1", [{ type: "agent/input/admitted", version: 1, seq: 0, inputId: "late-input", text: "still pending", delivery: "queue", intent: "user" }])
+  })
+  await entered.promise
+  const archive = createSessionManagement(coordinator, service, undefined, { workspace: root, sessionDir: root, fence }).mutate("s1", "archive")
+  void archive.catch(() => {})
+  try {
+    await vi.waitFor(() => expect(() => fence.assertOpen("s1")).toThrow(/management/))
+    expect(await store.readOrphans()).toEqual([])
+    expect(await store.readPending()).toEqual(pending)
+    release.resolve()
+    await writer
+    await expect(archive).rejects.toThrow("pending durable inputs")
+    expect(await store.readPending()).toEqual(pending)
+    expect(await store.readOrphans()).toEqual([])
+    expect((await coordinator.profile("s1")).meta.archived).not.toBe(true)
+  } finally { release.resolve(); await Promise.allSettled([writer, archive]); await coordinator.close() }
 })
 
 it("awaits the live rewind finalizer before judging a settled turn's sidecar", async () => {

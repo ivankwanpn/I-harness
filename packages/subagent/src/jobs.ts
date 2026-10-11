@@ -9,6 +9,9 @@ export interface JobSnapshot {
   label: string
   status: JobStatus
   output: string
+  /** Durable provenance, retained when the child runtime table is removed. */
+  agentPath?: string
+  sessionId?: string
   // Task 4.4: wall-clock stamps (Date.now()) recorded on the live registry so
   // the web jobs surface can show elapsed/duration honestly. Additive —
   // undefined only for jobs created before this change in a restored snapshot
@@ -23,7 +26,7 @@ export interface JobRegistry {
   // verbatim so persisted job ids survive resume; duplicates fail loud.
   // Task 4.4: `startedAt` (optional, restore path) seeds the creation stamp —
   // the live registry mints Date.now() when absent.
-  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void): { id: string; finish?(status:Exclude<JobStatus,"running">,output:string):boolean }
+  registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }): { id: string; finish?(status:Exclude<JobStatus,"running">,output:string):boolean }
   // M24a (G2/Ruling M24a-P4): returns false for an unknown id (observable
   // instead of a silent no-op). Existing callers may ignore the return.
   // Task 4.4: the patch may also carry startedAt/endedAt — the restore path
@@ -49,14 +52,15 @@ export function createJobRegistry(): JobRegistry {
     return `${kind}-${n}`
   }
   return {
-    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void) {
+    registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }) {
       const resolved = id ?? nextId(kind)
       // Fail loud on a persisted-id collision: silent re-count would break
       // post-resume jobId links (agent-table entries + followups).
       if (records.has(resolved)) throw new Error(`duplicate job id: ${resolved}`)
       // Task 4.4: start stamp — explicit (restore path) or minted now. A
       // restored terminal job's endedAt is replayed through updateJob below.
-      records.set(resolved, { id: resolved, kind, label, status: "running", output: "", owner, terminal: false, startedAt: startedAt ?? Date.now() })
+      records.set(resolved, { id: resolved, kind, label, status: "running", output: "", owner, terminal: false, startedAt: startedAt ?? Date.now(),
+        ...(identity ? { agentPath: identity.agentPath, ...(identity.sessionId !== undefined ? { sessionId: identity.sessionId } : {}) } : {}) })
       if (cancel) cancellation.set(resolved, cancel)
       // Ruling M24a-T1a: seed the per-kind counter from an explicitly
       // registered id ("<kind>-<n>"), so the auto generator continues AFTER
@@ -101,6 +105,8 @@ export function createJobRegistry(): JobRegistry {
       if (!rec) throw new Error(`unknown job: ${id}`)
       return {
         id: rec.id, owner: rec.owner, kind: rec.kind, label: rec.label, status: rec.status, output: rec.output,
+        ...(rec.agentPath !== undefined ? { agentPath: rec.agentPath } : {}),
+        ...(rec.sessionId !== undefined ? { sessionId: rec.sessionId } : {}),
         ...(rec.startedAt !== undefined ? { startedAt: rec.startedAt } : {}),
         ...(rec.endedAt !== undefined ? { endedAt: rec.endedAt } : {}),
       }
@@ -109,6 +115,8 @@ export function createJobRegistry(): JobRegistry {
       return [...records.values()].filter((r) => r.owner === owner)
         .map((r) => ({
           id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
+          ...(r.agentPath !== undefined ? { agentPath: r.agentPath } : {}),
+          ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
           ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),
           ...(r.endedAt !== undefined ? { endedAt: r.endedAt } : {}),
         }))
@@ -116,6 +124,8 @@ export function createJobRegistry(): JobRegistry {
     listAll() {
       return [...records.values()].map((r) => ({
         id: r.id, owner: r.owner, kind: r.kind, label: r.label, status: r.status, output: r.output,
+        ...(r.agentPath !== undefined ? { agentPath: r.agentPath } : {}),
+        ...(r.sessionId !== undefined ? { sessionId: r.sessionId } : {}),
         ...(r.startedAt !== undefined ? { startedAt: r.startedAt } : {}),
         ...(r.endedAt !== undefined ? { endedAt: r.endedAt } : {}),
       }))

@@ -31,6 +31,23 @@ async function index(service: CodeRetrievalService, options?: Parameters<CodeRet
 afterEach(async()=> { await Promise.all(services.splice(0).map(s=>s.close())); await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true}))) })
 
 describe('native code index',()=>{
+  it('retains a failed attempt phase and stable elapsed diagnostics without replacing the usable generation',async()=>{
+    const {service,reader}=await fixture();await index(service)
+    reader.snapshots=async function*(){
+      yield {sourceId:'workspace',path:'src/auth/approval.ts',revision:'next',complete:true,text:'new staged content'}
+      throw new Error('controlled capture failure')
+    }
+    const {jobId}=await service.startIndex({sessionId:'s'})
+    const failed=await service.wait(jobId)
+    expect(failed).toMatchObject({state:'error',generation:1,files:2,error:'controlled capture failure',
+      lastJob:{jobId,outcome:'failed',generation:1},indexDiagnostics:{jobId,phase:'reading',files:1,bytes:18,chunks:1,elapsedMs:expect.any(Number),phaseElapsedMs:expect.any(Number)}})
+    const elapsed=failed.indexDiagnostics!.elapsedMs
+    await new Promise(resolve=>setTimeout(resolve,15))
+    expect(service.status().indexDiagnostics!.elapsedMs).toBe(elapsed)
+    expect(await service.search({sessionId:'s'},{query:'approveDeployment'})).toMatchObject({generation:1,hits:expect.arrayContaining([expect.objectContaining({sourceId:'reference'})])})
+    expect(service.status().indexDiagnostics).toEqual(failed.indexDiagnostics)
+  })
+
   it('does not claim current source health when a search checked no source files',async()=>{
     const {service}=await fixture();await index(service)
     expect((await service.search({sessionId:'s'},{query:'absentneedle'})).hits).toEqual([])
@@ -153,6 +170,7 @@ describe('native code index',()=>{
       data[0]={...data[0],revision:'next',text:'export const updatedNeedle = true'}
       const failed=await index(service)
       expect(failed.state).toBe('error');expect(failed.generation).toBe(1);expect(failed.files).toBe(2)
+      expect(failed.indexDiagnostics).toMatchObject({jobId:failed.lastJob!.jobId,phase:'publishing',files:2})
       expect(db.prepare('SELECT text FROM chunks WHERE source=?').get('workspace')).toMatchObject({text:expect.stringContaining('approveDeployment')})
       db.exec('DROP TRIGGER fail_write')
       expect((await index(service)).generation).toBe(2)

@@ -136,6 +136,7 @@ class Session {
   private releaseComplete = false
   private confirmedReleaseStatus?: Status
   private releaseFlight?: Promise<void>
+  private endInputFlight?: Promise<void>
   private ioStatus?: Status
   private binaryEof = false
   private outputQueue: ExecutionOutput[] = []
@@ -330,6 +331,22 @@ class Session {
     this.allowDiscard()
     await this.expect("cancel", { reason }, "ack")
   }
+  async endInput(): Promise<void> {
+    // Confirmed native release includes stdin closure. Late EOF joins that
+    // fact instead of writing to a retired controller and poisoning its output.
+    if (this.releaseComplete) return
+    if (this.releaseFlight) return this.releaseFlight
+    if (this.endInputFlight) return this.endInputFlight
+    const flight = this.expect("end-input", {}, "ack").then(() => {})
+    this.endInputFlight = flight
+    try { await flight }
+    catch (cause) {
+      this.endInputFlight = undefined
+      // EOF may have entered the controller just before release began. Its
+      // missing reply is harmless only after native closure is confirmed.
+      if (!this.releaseComplete) throw cause
+    }
+  }
   async release(): Promise<void> {
     if (this.releaseComplete) return
     if (this.releaseFlight) return this.releaseFlight
@@ -383,7 +400,7 @@ class Session {
         if (data.length > 16384) fail("input exceeds 16384 bytes")
         await this.expect("input", { data: Array.from(data) }, "ack")
       },
-      endInput: async () => { await this.expect("end-input", {}, "ack") },
+      endInput: () => this.endInput(),
       ...(spec.transport === "pty" ? { resize: async (cols: number, rows: number) => {
         await this.expect("resize", { cols, rows }, "ack")
       } } : {}),

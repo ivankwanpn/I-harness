@@ -32,6 +32,11 @@ export class Store {
           CREATE TABLE IF NOT EXISTS vectors (key TEXT PRIMARY KEY,vector TEXT NOT NULL);
         `)
         if((db.prepare('SELECT version FROM meta').get() as {version:number}).version!==1) throw new Error('Unsupported Code Context index schema')
+        // File cache lookups and foreign-key cascades run once per changed
+        // file/chunk. Without these reverse indexes a refresh repeatedly scans
+        // the entire committed generation, including on existing v1 stores.
+        db.exec(`CREATE INDEX IF NOT EXISTS chunks_by_file ON chunks(source,path,startOffset);
+          CREATE INDEX IF NOT EXISTS terms_by_chunk ON terms(chunk);`)
         this.db=db
       } catch(error) {db.close();throw error}
     })().finally(()=>{this.opening=undefined})

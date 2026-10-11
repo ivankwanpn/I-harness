@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest"
 import { cleanup, fireEvent, render, screen } from "@testing-library/react"
 // jsdom has no viewport layout. Replace only the virtualizer's geometry; the
 // actual shell, tool row, route selection and callback remain in this test.
-vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => options.count * 56, getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56, key: index })), measureElement: () => {}, scrollToIndex: () => {} }) }))
+vi.mock("@tanstack/react-virtual", () => ({ elementScroll: () => {}, useVirtualizer: (options: { count: number }) => ({ getTotalSize: () => options.count * 56, getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56, key: index })), measureElement: () => {}, scrollToIndex: () => {}, scrollToOffset: () => {} }) }))
 import { Workbench } from "../src/renderer/shell/Workbench.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 afterEach(() => { cleanup(); useUiStore.setState({ reviewOpen: false, surface: "conversation" }) })

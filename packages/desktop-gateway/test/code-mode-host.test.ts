@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from "@i-harness/sdk"
 import { createDesktopHost } from "../src/host.ts"
+import { createHostFixtureTrace } from "./host-fixture-trace.ts"
 import { createSessionService } from "@i-harness/session-executor"
 import { approvalPolicyIdentity } from "../src/approval-policy-identity.ts"
 import { createApprovalRulesAdapter } from "../src/approval-rules.ts"
@@ -68,6 +69,7 @@ it.each(["mixed", "only"] as const)("takes a coherent approval authority snapsho
 })
 
 it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and normalized limits through the Desktop host", async (mode) => {
+  const trace = createHostFixtureTrace(`code-mode-host:${mode}`)
   const bodies: Array<{ tools?: Array<{ function: { name: string } }> }> = []
   const server = createServer(async (request, response) => {
     const chunks: Buffer[] = []
@@ -99,13 +101,13 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
   let id = 0
   const call = async (method: string, params = {}) => {
     const requestId = ++id
-    await host!.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+    await trace.run(method, () => host!.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find(frame => "id" in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result
   }
   try {
-    host = await createDesktopHost({ workspace, settingsPath, credentialsPath, sessionDir: join(root, "sessions"), onWrite: frame => frames.push(frame) })
+    host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, credentialsPath, sessionDir: join(root, "sessions"), onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
     await call("initialize")
     const { sessionId } = await call("session/create") as { sessionId: string }
     await call("session/prompt", { sessionId, prompt: "run fixture" })
@@ -120,7 +122,7 @@ it.each(["off", "mixed", "only"] as const)("forwards saved %s Code Mode and norm
       expect(events.find(event => event.type === "tool/result")).toMatchObject({ output: { status: "completed", text: "long", truncated: true } })
     } else expect(events.some(event => event.type.startsWith("code/"))).toBe(false)
   } finally {
-    await host?.close()
+    await trace.run('host/close', async () => { await host?.close() })
     fetchGuard.mockRestore()
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(root, { recursive: true, force: true })

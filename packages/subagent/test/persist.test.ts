@@ -19,6 +19,20 @@ function makeState(): { jobs: JobRegistry; table: AgentTable; roles: RoleRegistr
 }
 
 describe("subagent state snapshot", () => {
+  it("retains an older job's identity from its saved agent entry after that entry is closed", () => {
+    const state = makeState()
+    const saved: SubagentStateSnapshot = {
+      formatVersion: 1,
+      jobs: [{ id: "subagent-1", owner: "root", kind: "subagent", label: "env-probe", status: "completed", output: "done", terminal: true }],
+      agentTable: [{ path: "lead/env-probe", sessionId: "old-child", jobId: "subagent-1", status: "waiting", mailbox: [] }],
+      roles: [],
+    }
+    restoreState(state, saved)
+    state.table.remove("lead/env-probe")
+    expect(state.jobs.read("subagent-1")).toMatchObject({ agentPath: "lead/env-probe", sessionId: "old-child", status: "completed", output: "done" })
+    expect(snapshotState(state).jobs[0]).toMatchObject({ agentPath: "lead/env-probe", sessionId: "old-child" })
+  })
+
   it("does not resurrect live plugin roles from a durable snapshot", () => {
     const state = makeState()
     state.roles.register({ name: "plugin-live", description: "plugin", systemPrompt: "plugin", tools: [], ephemeral: true })

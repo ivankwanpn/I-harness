@@ -6,10 +6,10 @@ import type { DesktopBridge, DesktopEvent, DesktopRequest } from "../src/shared/
 import type { DesktopSubagentCatalog, DesktopSubagentRow } from "@i-harness/desktop-gateway/src/session-subagents.ts"
 // JSDOM has no measured viewport. Keep the real Timeline/projection and only
 // replace the upstream virtual viewport adapter so its rows can be inspected.
-vi.mock("@tanstack/react-virtual", () => ({ useVirtualizer: (options: { count: number }) => ({
+vi.mock("@tanstack/react-virtual", () => ({ elementScroll: () => {}, useVirtualizer: (options: { count: number }) => ({
   getTotalSize: () => options.count * 56,
   getVirtualItems: () => Array.from({ length: options.count }, (_, index) => ({ index, start: index * 56 })),
-  measureElement: () => {}, scrollToIndex: () => {},
+  measureElement: () => {}, scrollToIndex: () => {}, scrollToOffset: () => {},
 }) }))
 import { SubagentPane } from "../src/renderer/session/SubagentPane.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"

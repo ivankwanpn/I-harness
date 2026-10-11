@@ -4,7 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { resolve, join, win32 } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { createHash } from "node:crypto"
-import { createExecService, type SupervisedExecution } from "@i-harness/exec"
+import { type SupervisedExecution } from "@i-harness/exec"
+import { createOwnedExec } from "./owned-exec.ts"
 
 const git = win32.join(process.env.ProgramFiles ?? "C:\\Program Files", "Git")
 const bash = win32.join(git, "bin", "bash.exe")
@@ -18,7 +19,7 @@ async function until(check: () => boolean, detail: () => string = () => "", time
 async function fixture() {
   const build = resolve(import.meta.dirname, "../../../build")
   const root = await mkdtemp(join(build, "msys-pty-acceptance-"))
-  const exec = createExecService(), executions: SupervisedExecution[] = [], readers: Promise<void>[] = []
+  const exec = createOwnedExec(root), executions: SupervisedExecution[] = [], readers: Promise<void>[] = []
   async function start(args: string[], lifetime: "retain-tree" | "complete-tree" = "retain-tree", command = bash) {
     const execution = await exec.launchTransport({ argv: [command, ...args], cwd: root,
       env: { ...process.env, TERM: "xterm-256color", PS1: "PTY_ACCEPT_READY> ", HISTFILE: join(root, "history") } as Record<string, string>,
@@ -124,6 +125,17 @@ suite("owned MSYS PTY production acceptance", () => {
       await pause(50)
       await Promise.race([t.execution.handle.io.resize!(123, 31), pause(1500).then(() => { throw Error("closed-stdio resize hung") })])
       await Promise.race([t.execution.handle.io.endInput(), pause(1500).then(() => { throw Error("closed-stdio end-input hung") })])
+    } finally { await f.close() }
+  }, 10_000)
+
+  it("observes the actual child exit when cancelling an interactive MSYS terminal", async () => {
+    const f = await fixture()
+    try {
+      const t = await f.start(["--noprofile", "--norc", "-i"])
+      await until(() => t.text().includes("PTY_ACCEPT_READY>"), t.text)
+      const settled = await t.execution.handle.cancel("cancelled")
+      expect(settled).toMatchObject({ kind: "settled", root: { exitCode: 137 }, treeEmpty: true, ioSettled: true, resourcesReleased: true })
+      expect(await t.execution.handle.rootExited).toEqual({ exitCode: 137 })
     } finally { await f.close() }
   }, 10_000)
 

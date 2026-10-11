@@ -4,8 +4,10 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { encodeFrame, isRpcSuccess, makeRequest, type RpcMessage } from '@i-harness/sdk'
 import { createDesktopHost } from '../src/host.ts'
+import { createHostFixtureTrace } from './host-fixture-trace.ts'
 
 it('registers Desktop code index job IDs in the actual session job tools', async () => {
+  const trace = createHostFixtureTrace('env-report-context-jobs-host')
   const observations = new Map<string, any>()
   let step = 0, jobId = ''
   const server = createServer(async (request, response) => {
@@ -41,10 +43,10 @@ it('registers Desktop code index job IDs in the actual session job tools', async
     return originalFetch(input, init)
   })
   const frames: RpcMessage[] = []
-  const host = await createDesktopHost({ workspace, sessionDir: join(root, 'sessions'), settingsPath, onWrite: frame => frames.push(frame) })
+  const host = await trace.run('host/create', () => createDesktopHost({ workspace, sessionDir: join(root, 'sessions'), settingsPath, onWrite: frame => { trace.observe(frame); frames.push(frame) } }))
   let id = 0
   const call = async (method: string, params = {}) => {
-    const requestId = ++id; await host.handleLine(encodeFrame(makeRequest(requestId, method, params)))
+    const requestId = ++id; await trace.run(method, () => host.handleLine(encodeFrame(makeRequest(requestId, method, params))))
     const reply = frames.find(frame => 'id' in frame && frame.id === requestId)
     if (!isRpcSuccess(reply)) throw new Error(JSON.stringify(reply))
     return reply.result as any
@@ -62,7 +64,7 @@ it('registers Desktop code index job IDs in the actual session job tools', async
     const state = await call('desktop/context-subsystems/state')
     expect(state.code.lastJob).toMatchObject({ jobId, outcome: expect.stringMatching(/^(completed|cancelled)$/) })
   } finally {
-    await host.close(); fetchGuard.mockRestore()
+    await trace.run('host/close', () => host.close()); fetchGuard.mockRestore()
     server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()))
     await rm(root, { recursive: true, force: true })
   }

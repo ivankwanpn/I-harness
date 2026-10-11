@@ -224,6 +224,132 @@ describe("fake protocol ownership", () => {
     await failure
   })
 
+  it("end-input after confirmed settlement preserves a completed command and never reopens the transport", async () => {
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        client.status(command.id, "started", { pid: 1234 })
+        const data = Buffer.from("SUBAGENT_DISPATCH_OK\nMsys\n")
+        const header = Buffer.alloc(5); header.writeUInt32LE(data.length, 1)
+        client.stderr.write(Buffer.concat([header, data]))
+        client.status(command.id, "root-exit", { exitCode: 0, observationError: null })
+        client.status(command.id, "tree-empty", { activeProcesses: 0 })
+        client.frameEnd()
+        client.status(command.id, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+      } else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    expect(await handle.settled).toMatchObject({ kind: "settled", root: { exitCode: 0 } })
+    await expect(handle.io.endInput()).resolves.toBeUndefined()
+    await expect(handle.io.endInput()).resolves.toBeUndefined()
+    const output: Buffer[] = []
+    for await (const frame of handle.io.output) output.push(Buffer.from(frame.data))
+    expect(Buffer.concat(output).toString()).toBe("SUBAGENT_DISPATCH_OK\nMsys\n")
+    expect(child.sent).toEqual(["prepare", "commit", "release"])
+  })
+
+  it("concurrent end-input calls wait for one actual closure acknowledgement", async () => {
+    let commitId = ""
+    const endIds: string[] = []
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        commitId = command.id
+        client.status(command.id, "started", { pid: 1234 })
+      } else if (command.type === "end-input") endIds.push(command.id)
+      else if (command.type === "release") client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+    })
+    state.spawn = () => child
+    const f = input()
+    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    let closed = false
+    const ending = Promise.all([handle.io.endInput(), handle.io.endInput()]).then(() => { closed = true })
+    try {
+      await new Promise(resolve => setImmediate(resolve))
+      expect(endIds).toHaveLength(1)
+      expect(closed).toBe(false)
+    } finally {
+      for (const id of endIds) child.status(id, "ack")
+      await ending
+      child.status(commitId, "root-exit", { exitCode: 0, observationError: null })
+      child.status(commitId, "tree-empty", { activeProcesses: 0 })
+      child.frameEnd()
+      child.status(commitId, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+      await handle.settled
+    }
+  })
+
+  it.each(["before", "during"] as const)("EOF begun %s native release joins confirmed closure and preserves output", async timing => {
+    let commitId = "", releaseId = ""
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        commitId = command.id
+        client.status(command.id, "started", { pid: 1234 })
+        const data = Buffer.from("SUBAGENT_DISPATCH_OK\nMsys\n")
+        const header = Buffer.alloc(5); header.writeUInt32LE(data.length, 1)
+        client.stderr.write(Buffer.concat([header, data]))
+        client.status(command.id, "root-exit", { exitCode: 0, observationError: null })
+      } else if (command.type === "release") releaseId = command.id
+    })
+    state.spawn = () => child
+    const f = input()
+    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    const end = () => handle.io.endInput().then(() => "closed", error => String(error))
+    let ending = timing === "before" ? end() : undefined
+    child.status(commitId, "tree-empty", { activeProcesses: 0 })
+    child.frameEnd()
+    child.status(commitId, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+    await vi.waitFor(() => expect(releaseId).not.toBe(""))
+    ending ??= end()
+    await new Promise(resolve => setImmediate(resolve))
+    // Release confirms that stdin is closed without a separate EOF reply.
+    child.status(releaseId, "released", { resourcesReleased: true, errors: [] })
+    expect(await handle.settled).toMatchObject({ kind: "settled", root: { exitCode: 0 } })
+    expect(await ending).toBe("closed")
+    const output: Buffer[] = []
+    for await (const frame of handle.io.output) output.push(Buffer.from(frame.data))
+    expect(Buffer.concat(output).toString()).toBe("SUBAGENT_DISPATCH_OK\nMsys\n")
+    expect(child.sent).toEqual(timing === "before" ? ["prepare", "commit", "end-input", "release"] : ["prepare", "commit", "release"])
+  })
+
+  it("EOF joining an in-flight incomplete release preserves the native release failure", async () => {
+    let releaseId = "", endId = "", releases = 0
+    const child = new FakeChild((command, client) => {
+      if (command.type === "prepare") client.status(command.id, "ready", {
+        effectivePolicyDigest: "0".repeat(64), policyFingerprint: "fake-fingerprint", helperSha256: hash })
+      else if (command.type === "commit") {
+        client.status(command.id, "started", { pid: 1234 })
+        client.status(command.id, "root-exit", { exitCode: 0, observationError: null })
+        client.status(command.id, "tree-empty", { activeProcesses: 0 })
+        client.frameEnd()
+        client.status(command.id, "io-settled", { outputAbandoned: false, discardedBytes: 0, errors: [] })
+      } else if (command.type === "release") {
+        if (++releases === 1) releaseId = command.id
+        else client.status(command.id, "released", { resourcesReleased: true, errors: [] })
+      } else if (command.type === "end-input") endId = command.id
+    })
+    state.spawn = () => child
+    const f = input()
+    const handle = await launchExecution({ ...f, validateAuthority: () => {} })
+    await vi.waitFor(() => expect(releaseId).not.toBe(""))
+    const ending = handle.io.endInput().then(() => "closed", error => String(error))
+    await new Promise(resolve => setImmediate(resolve))
+    child.status(releaseId, "released", { resourcesReleased: false, errors: [nativeError] })
+    // A separate EOF ACK cannot prove that the failed release succeeded.
+    if (endId) child.status(endId, "ack")
+    try {
+      expect(await handle.settled).toMatchObject({ kind: "incomplete", phase: "release" })
+      expect(await ending).toMatch(/native release incomplete.*environment unavailable/)
+      expect(endId).toBe("")
+    } finally { await f.backend.dispose() }
+  })
+
   it("malformed released status cannot retire cleanup ownership", async () => {
     let releases = 0
     const child = new FakeChild((command, client) => {
