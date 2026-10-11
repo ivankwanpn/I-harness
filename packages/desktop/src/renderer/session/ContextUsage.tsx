@@ -8,9 +8,11 @@ import "./ContextUsage.css"
 
 const refreshDelay = 250
 const refreshInterval = 1000
+const hoverCloseDelay = 120
 const contextEvents = new Set(["user/message", "assistant/message", "tool/call", "tool/result", "turn/end", "step/end", "compaction/start", "compaction/end", "compaction/summary", "compaction/reset", "compaction/prune", "rewind/point"])
 type Estimate = { bridge: DesktopBridge; workspaceId: string; sessionId: string; refreshKey?: string; state?: SessionContextState; error?: string; loading: boolean }
 type RefreshControl = { key?: string; invalidate(key: string | undefined, immediate?: boolean): void }
+type PopupState = { bridge: DesktopBridge; workspaceId: string; sessionId: string; mode: "hover" | "explicit" }
 
 /** Reject unknown or malformed readings instead of presenting fabricated zero usage. */
 function contextState(value: unknown): SessionContextState {
@@ -33,11 +35,41 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const trigger = useRef<HTMLButtonElement>(null)
   const panel = useRef<HTMLDivElement>(null)
   const refresh = useRef<RefreshControl | undefined>(undefined)
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const latestKey = useRef(refreshKey)
   latestKey.current = refreshKey
-  const [open, setOpen] = useState(false)
+  const [popup, setPopup] = useState<PopupState>()
+  const open = popup?.bridge === bridge && popup.workspaceId === workspaceId && popup.sessionId === sessionId
+  const mode = open ? popup.mode : undefined
   const [estimate, setEstimate] = useState<Estimate>()
   const [placement, setPlacement] = useState({ right: 24, bottom: 72 })
+  function cancelClose() { clearTimeout(closeTimer.current); closeTimer.current = undefined }
+  function closePopup(returnFocus = false) {
+    cancelClose()
+    const focused = document.activeElement
+    if (returnFocus && (panel.current?.contains(focused) || mode === "explicit" && focused === document.body)) trigger.current?.focus()
+    setPopup(undefined)
+  }
+  function preview() {
+    cancelClose()
+    setPopup(previous => previous?.bridge === bridge && previous.workspaceId === workspaceId && previous.sessionId === sessionId
+      ? previous : { bridge, workspaceId, sessionId, mode: "hover" })
+  }
+  function scheduleClose() {
+    if (!open) return
+    cancelClose()
+    closeTimer.current = setTimeout(() => closePopup(true), hoverCloseDelay)
+  }
+  function activate() {
+    cancelClose()
+    if (open && mode === "explicit") closePopup(true)
+    else setPopup({ bridge, workspaceId, sessionId, mode: "explicit" })
+  }
+  useLayoutEffect(() => {
+    cancelClose()
+    setPopup(undefined)
+    return cancelClose
+  }, [bridge, workspaceId, sessionId])
   useLayoutEffect(() => {
     if (!open) return
     const position = () => {
@@ -45,13 +77,13 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
       if (rect) setPlacement({ right: Math.max(16, window.innerWidth - rect.right), bottom: Math.max(16, window.innerHeight - rect.top + 10) })
     }
     position()
-    panel.current?.focus()
+    if (mode === "explicit") panel.current?.focus()
     window.addEventListener("resize", position)
-    const dismiss = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) setOpen(false) }
-    const removeEscape = listenForegroundEscape(panel.current, () => { setOpen(false); trigger.current?.focus() })
+    const dismiss = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node) && !trigger.current?.contains(event.target as Node)) closePopup() }
+    const removeEscape = listenForegroundEscape(panel.current, () => { closePopup(true); if (mode === "explicit") trigger.current?.focus() })
     document.addEventListener("pointerdown", dismiss)
     return () => { window.removeEventListener("resize", position); document.removeEventListener("pointerdown", dismiss); removeEscape() }
-  }, [open])
+  }, [open, mode])
   useEffect(() => {
     let active = true
     let running = false
@@ -137,14 +169,16 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
   const reading = percent === undefined ? "—" : ready!.estimatedTokens > 0 && percent < 0.1 ? "<0.1%" : `${percent.toFixed(1)}%`
   const number = (value: number) => new Intl.NumberFormat("en-US").format(value)
   return <>
-    <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-describedby={readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={`${t("估算上下文容量")} · ${reading}`} onClick={() => setOpen((value) => !value)}>
+    <button ref={trigger} type="button" className="icon-button context-usage-trigger" aria-label={t("上下文容量")} aria-describedby={readingId} aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? panelId : undefined} title={open ? undefined : `${t("估算上下文容量")} · ${reading}`} onClick={activate}
+      onMouseEnter={preview} onMouseLeave={scheduleClose} onPointerEnter={event => { if (event.pointerType !== "touch") preview() }} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <svg className="context-usage-gauge" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
         <circle className="context-usage-gauge-track" cx="8" cy="8" r="6" />
         {percent !== undefined && percent > 0 ? <circle className="context-usage-gauge-fill" cx="8" cy="8" r="6" pathLength="100" strokeDasharray={`${Math.min(percent, 100)} 100`} transform="rotate(-90 8 8)" /> : null}
       </svg>
       <span id={readingId} className="context-usage-reading">{reading}</span>
     </button>
-    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover" style={placement} role="dialog" aria-label={t("上下文容量")}>
+    {open ? createPortal(<div id={panelId} ref={panel} tabIndex={-1} className="context-usage-popover" style={placement} role="dialog" aria-label={t("上下文容量")}
+      onMouseEnter={cancelClose} onMouseLeave={scheduleClose} onPointerEnter={cancelClose} onPointerLeave={event => { if (event.pointerType !== "touch") scheduleClose() }}>
       <strong>{t("估算上下文容量")}</strong>
       {error !== undefined || state?.kind === "unavailable" ? <div><p role={error !== undefined ? "alert" : undefined}>{error || state?.kind === "unavailable" && state.reason || t("無法取得上下文容量。")}</p><button type="button" disabled={current?.loading} onClick={() => refresh.current?.invalidate(refreshKey, true)}>{t("重試")}</button></div> : ready ? <>
         <p>{number(ready.estimatedTokens)} / {number(ready.contextWindow)} ({reading})</p>

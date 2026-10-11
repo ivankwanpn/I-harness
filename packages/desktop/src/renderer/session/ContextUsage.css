@@ -2,14 +2,12 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: auto;
-  height: 28px;
+  position: relative;
+  width: 30px;
+  height: 30px;
   flex: none;
-  gap: 6px;
-  padding: 3px 6px;
-  font-size: 11px;
-  line-height: 18px;
-  white-space: nowrap;
+  padding: 0;
+  border-radius: 50%;
 }
 
 .context-usage-trigger:focus-visible {
@@ -25,4 +23,16 @@
 
 .context-usage-gauge-track { stroke: var(--ih-divider); }
 .context-usage-gauge-fill { stroke: currentColor; stroke-linecap: round; }
-.context-usage-reading { font-variant-numeric: tabular-nums; }
+.context-usage-reading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  pointer-events: none;
+}
