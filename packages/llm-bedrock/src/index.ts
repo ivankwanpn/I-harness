@@ -368,14 +368,15 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         const usage = mapUsage(m.metadata?.usage)
         if (usage !== undefined) return [{ type: "usage", usage }]
         const exceptions = [
-          m.internalServerException, m.modelStreamErrorException, m.serviceUnavailableException,
-          m.throttlingException, m.validationException,
-        ]
-        for (const exception of exceptions) {
+          "internalServerException", "modelStreamErrorException", "serviceUnavailableException",
+          "throttlingException", "validationException",
+        ] as const
+        for (const code of exceptions) {
+          const exception = m[code]
           if (exception !== undefined) {
             const raw = exception as { message?: unknown }
             const message = typeof raw.message === "string" ? raw.message : "unknown stream error"
-            return [{ type: "error", error: new Error(`bedrock stream failed: ${message}`) }]
+            return [{ type: "error", error: Object.assign(new Error(`bedrock stream failed: ${message}`), { code }) }]
           }
         }
         return []

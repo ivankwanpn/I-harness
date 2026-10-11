@@ -63,3 +63,28 @@ it.each(["cancel", "exhaust"] as const)("closes %s recovery without a successful
   expect(session.events.filter(event => event.type === "model/retry").map(event => event.retry.phase)).toEqual(mode === "cancel" ? ["waiting"] : ["waiting", "attempting", "recovered"])
   expect(deriveMessages(session)).toEqual([{ role: "user", content: "start" }])
 })
+
+it.each(["zero-retries", "exhaustion", "cancel-first", "cancel-retry"] as const)("journals terminal partial text for %s without model replay or tool side effects", async mode => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), controller = new AbortController()
+  let calls = 0, effects = 0
+  tools.register({ name: "write", description: "in-memory effect", inputSchema: {}, execute: async () => { effects++; return "done" } })
+  const expectedCalls = mode === "exhaustion" || mode === "cancel-retry" ? 2 : 1
+  const base: ModelClient = { async *stream() {
+    calls++
+    yield { type: "text/chunk", text: `partial-${calls}` }
+    yield { type: "reasoning", text: `thought-${calls}` }
+    yield { type: "tool_call", call: { id: `uncommitted-${calls}`, name: "write", args: {} } }
+    if ((mode === "cancel-first" || mode === "cancel-retry") && calls === expectedCalls) controller.abort()
+    throw Object.assign(new Error("fixture failure"), { code: "SERVER" })
+  } }
+  const model = createRetryingClient(base, resolveRetryPolicy({ mode: "normal", maxRetries: mode === "zero-retries" ? 0 : 1, backoff: { initialDelayMs: 1 } }))
+  await expect(createAgent(ctx, { session, tools, model, systemPrompt: "" }).run("start", controller.signal)).rejects.toThrow()
+  expect(calls).toBe(expectedCalls)
+  expect(session.events.filter(event => event.type === "assistant/message").map(event => event.text)).toEqual(expectedCalls === 1 ? ["partial-1"] : ["partial-1", "partial-2"])
+  expect(session.events.filter(event => event.type === "step/failed")).toHaveLength(expectedCalls)
+  expect(session.events.filter(event => event.type === "tool/call")).toHaveLength(expectedCalls)
+  expect(effects).toBe(0)
+  expect(session.events.some(event => event.type === "tool/dispatch" || event.type === "tool/result")).toBe(false)
+  expect(deriveMessages(session)).toEqual([{ role: "user", content: "start" }])
+  expect(session.events.at(-1)?.type).toBe("turn/end")
+})

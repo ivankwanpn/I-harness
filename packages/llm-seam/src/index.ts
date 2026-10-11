@@ -218,6 +218,7 @@ const TERMINAL_CODES = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "
 function normalizedCode(code: string): string {
   if (CONTEXT_OVERFLOW_RE.test(code)) return "CONTEXT_WINDOW_EXCEEDED"
   if (/^(rate_limit_exceeded|rate_limit_error)$/i.test(code)) return "RATE_LIMIT"
+  if (/^(server_error|api_error|overloaded_error)$/i.test(code)) return "SERVER"
   if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
   if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
   if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
@@ -225,8 +226,8 @@ function normalizedCode(code: string): string {
   if (/^(insufficient_quota|billing_hard_limit_reached|quota_exceeded|ServiceQuotaExceededException)$/i.test(code)) return "QUOTA"
   if (/^(invalid_api_key|authentication_error|permission_denied|AccessDeniedException|UnrecognizedClientException)$/i.test(code)) return "AUTH"
   if (/^(invalid_request_error|invalid_argument|ValidationException)$/i.test(code)) return "INVALID_ARGUMENT"
-  if (/^(ThrottlingException|TooManyRequestsException)$/.test(code)) return "RATE_LIMIT"
-  if (/^(ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/.test(code)) return "SERVER"
+  if (/^(ThrottlingException|TooManyRequestsException)$/i.test(code)) return "RATE_LIMIT"
+  if (/^(ServiceUnavailableException|InternalServerException|ModelStreamErrorException)$/i.test(code)) return "SERVER"
   return code
 }
 

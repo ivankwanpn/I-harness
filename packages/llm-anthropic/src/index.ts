@@ -444,7 +444,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // round-trip — the seam's own words: a failure must not read as success.
         if (t === "error") {
           const err = event.error as { type?: string; message?: string } | undefined
-          return [{ type: "error", error: new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`) }]
+          return [{ type: "error", error: Object.assign(new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`), typeof err?.type === "string" ? { code: err.type } : {}) }]
         }
         return []
       }

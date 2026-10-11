@@ -658,6 +658,10 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       } catch (error) {
         contextMeter.invalidate()
         flushReasoning()
+        if (stepText) {
+          append(deps.session, { type: "assistant/message", text: stepText })
+          stepText = ""
+        }
         append(deps.session, { type: "step/failed" })
         lifecycle.stepFailed = true
         throw error
