@@ -22,9 +22,12 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/types").UsageQuery }
+  | { kind: "desktop/usage/pricing"; price: import("@i-harness/usage-stats/types").UsagePrice }
   | import("@i-harness/desktop-gateway").WslSettingsRequest
   | ContextSubsystemRequest
   | ProjectFilesRequest | ResourceAuthoringRequest | HookAuthoringRequest | MemoryAuthoringRequest | GlobalProviderRequest | GlobalPreferencesRequest | NotificationHistoryRequest | DraftRequest | ExecutionRequest | AgentProcessesRequest | DiagnosticsRequest
+  | import("./coding-plans.ts").CodingPlansRequest
   | { kind: "desktop/session/batch"; workspaceId: string; command: import("@i-harness/desktop-gateway").SessionBatchCommand; confirmed?: true }
   | { kind: "desktop/approval-rules/state"; workspaceId: string }
   | { kind: "desktop/approval-rules/revoke"; workspaceId: string; ruleId: string }
@@ -141,7 +144,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed"
+      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/usage/recording-warning"
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string }

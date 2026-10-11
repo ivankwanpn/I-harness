@@ -140,6 +140,9 @@ export function normalizeInputModalities(raw: unknown): SettingsInputModality[] 
  * packages/credentials (Task 2), so this document never holds key material. */
 export interface SettingsProviderConfig {
   apiKeyEnv?: string
+  /** Opaque account reference owned by Coding Plans; never an access token. */
+  oauthAccountId?: string
+  oauthProvider?: "openai-codex"
   /** The model-card FAMILY this route draws its per-model capability metadata
    * from (`model-catalog.json`'s top-level key — `deepseek`, `gemini`, …).
    *
@@ -584,6 +587,8 @@ function normalizeProviderConfig(raw: unknown): SettingsProviderConfig | null {
   if (!isRecord(raw)) return null
   const out: SettingsProviderConfig = {}
   if (isNonEmptyString(raw.apiKeyEnv)) out.apiKeyEnv = raw.apiKeyEnv
+  if (isNonEmptyString(raw.oauthAccountId)) out.oauthAccountId = raw.oauthAccountId
+  if (raw.oauthProvider === "openai-codex") out.oauthProvider = raw.oauthProvider
   if (isNonEmptyString(raw.baseURL)) {
     const baseURL = stripBaseURLSuffix(raw.baseURL)
     if (baseURL !== "") out.baseURL = baseURL

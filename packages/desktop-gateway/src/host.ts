@@ -2,6 +2,9 @@ import { readFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
 import { createFileProviderRuntime, type FileProviderRuntimeOptions } from "@i-harness/provider-runtime/file"
+import { buildModelClient } from "@i-harness/provider"
+import { createUsageStore } from "@i-harness/usage-stats"
+import { createUsageCapture } from "./usage-capture.ts"
 import { deriveSessionTitle, rewindCuts } from "@i-harness/core-session"
 import { foldGoal } from "@i-harness/goal"
 import { createIsolatedReviewerPool } from "@i-harness/guard-approval"
@@ -58,6 +61,8 @@ import { createNativeContextRuntime } from "./context-runtime.ts"
 import { createContextSubsystemSettings } from "./context-subsystems.ts"
 import { createCodeRetrievalTools } from "@i-harness/code-retrieval"
 import { createCredentialStore } from "@i-harness/credentials"
+import { createCodexManagement } from "@i-harness/coding-plans"
+import { createCodingPlans } from "./coding-plans.ts"
 import { openInteractionPersistence } from "./interaction-persistence.ts"
 import { createWorkspaceReview } from "./review.ts"
 import type { DesktopHandlers, SandboxState } from "./types.ts"
@@ -122,13 +127,25 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   await validateSettingsDocument(settingsPath)
   const settings = new SettingsStore({ path: settingsPath })
   await settings.load()
+  const usageStore = createUsageStore(join(dirname(settingsPath), "usage-stats"))
+  const usageCapture = createUsageCapture({ workspace: options.workspace, record: record => usageStore.record(record), projectFor: id => projects.projectFor(id),
+    onWarning: warnings => options.onWrite(makeNotification("desktop/usage/recording-warning", { workspace: options.workspace, warnings })) })
+  const usageStats: NonNullable<DesktopHandlers["usageStats"]> = {
+    async query(query) {
+      const snapshot = await usageStore.query(query)
+      return { ...snapshot, warnings: [...snapshot.warnings, ...usageCapture.warnings()] }
+    },
+    setPricing: price => usageStore.setPricing(price),
+  }
   let mode = settings.get().sandboxMode
   let windowsSandboxBackend = settings.get().windowsSandboxBackend
   let wslExecution = { ...settings.get().wslExecution }
   let webSearchMode = settings.get().webSearchMode
   let approvalMode = settings.get().approvalMode
-  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"),
-    ...(options.buildProviderClient ? { buildClient: options.buildProviderClient } : {}) })
+  const codexAccounts = createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") })
+  const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: options.credentialsPath ?? join(dirname(settingsPath), "credentials.json"), codex: codexAccounts,
+    buildClient: usageCapture.buildClient(options.buildProviderClient ?? buildModelClient) })
+  const codingPlans = createCodingPlans(codexAccounts, runtime)
   await mkdir(options.sessionDir, { recursive: true })
   const coordinator = createSessionCoordinator(createJsonlBackend(options.sessionDir), {
     lock: { enabled: true, lockRoot: options.sessionDir },
@@ -170,7 +187,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
           ? AbortSignal.any([compactSignal, request.signal])
           : compactSignal ?? request.signal
         signal?.throwIfAborted()
-        return client.stream({ ...request, ...(signal ? { signal } : {}) })
+        return client.stream({ ...request, sessionId: request.sessionId ?? sessionId, ...(signal ? { signal } : {}) })
       },
     } } }
   }
@@ -278,7 +295,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         const state = await runtime.resolveModel(chosen ? { sessionSelection: chosen } : {})
         if (state.status !== "ready") throw new Error(state.reason)
         const after = await fingerprint()
-        return { client: state.binding.client, contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens,
+        return { client: usageCapture.bind(state.binding.client, sessionId), contextWindow: state.binding.contextWindow, maxOutputTokens: state.binding.maxOutputTokens,
           reasoningEffort: selection ? state.binding.reasoningEffort : undefined,
           identity: { provider: state.binding.providerId, model: state.binding.modelId, protocol: state.binding.protocol,
             ...(selection?.reasoningEffort ? { reasoningEffort: selection.reasoningEffort } : {}), ...(before === after ? { configurationKey: after } : {}) } }
@@ -368,7 +385,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const agentProcesses = createAgentProcesses(coordinator, service)
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
-    workspace: options.workspace, autoTitle, codeSettings, approvalRules,
+    workspace: options.workspace, autoTitle, codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },
@@ -392,6 +409,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
     sessions: { ...management, batch: async command => { const result = await management.batch(command); if (command.action === "delete") for (const row of result.results) if (row.ok) approvalRules.removeSession(row.sessionId); return result },
       mutate: async (id, action, title) => { const result = await management.mutate(id, action, title); if (action === "delete") approvalRules.removeSession(id); return result } },
     provider: runtime,
+    codingPlans,
     memory,
     compact: (sessionId, instructions, signal) => fence.run(sessionId, async () => {
       signal.throwIfAborted()
@@ -494,6 +512,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
         await once("input", () => input.close())
         await once("project content search", () => projectContentSearch.close())
         await once("router", () => router.close())
+        await once("coding plans", () => codingPlans.close())
         await once("WSL settings", () => wslSettings.close())
         await once("session subagents", () => sessionSubagents.close())
         await once("projects", () => projects.close())

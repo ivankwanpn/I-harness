@@ -18,6 +18,7 @@
     "installer:destination": "node test/installer-destination.mjs"
   },
   "dependencies": {
+    "@i-harness/usage-stats": "workspace:*",
     "@i-harness/desktop-gateway": "workspace:*",
     "@i-harness/fs-search": "workspace:*",
     "@i-harness/sdk": "workspace:*",

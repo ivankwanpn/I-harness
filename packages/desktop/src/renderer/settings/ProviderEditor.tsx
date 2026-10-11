@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { ProviderCommand } from "@i-harness/desktop-gateway/src/provider-wire.ts"
-import { useText, type Message } from "../design/i18n.ts"
+import { useText, useLocale, type Message } from "../design/i18n.ts"
 import { useSettingsDraft } from "./settings-drafts.tsx"
 
 type ModelProtocol = NonNullable<Extract<ProviderCommand, { model: string; fields: unknown }>["fields"]["protocol"]>
@@ -20,12 +20,14 @@ function fieldValue(key: string, value: unknown): string {
 
 /** Local unsaved form state only. Blank edits clear overrides; unchanged fields
  * are omitted so independent changes to another field remain intact. */
-export function ProviderEditor({ id, provider, model, newModel = false, onSave, onClose, onBusyChange, draftIdentity = ["provider-editor"] }: {
+export function ProviderEditor({ id, provider, model, newModel = false, fixedProtocol, fixedConnection = false, onSave, onClose, onBusyChange, draftIdentity = ["provider-editor"] }: {
   id?: string; provider?: EditableProvider; model?: EditableModel; newModel?: boolean
+  fixedProtocol?: ModelProtocol; fixedConnection?: boolean
   onSave(command: ProviderCommand): Promise<void>; onClose(): void; onBusyChange?(busy: boolean): void
   draftIdentity?: readonly string[]
 }) {
   const t = useText()
+  const english = useLocale(state => state.locale) === "en"
   const isModel = model !== undefined || newModel
   const labels: Record<string, Message> = isModel ? modelFields : providerFields
   const [draft, setDraft, clearDraft] = useSettingsDraft<ProviderDraft>(draftIdentity, () => {
@@ -45,6 +47,8 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
   const editingBuiltIn = !isModel && provider !== undefined && !existing
   const renderField = (key: string) => {
     const label = labels[key]!
+    if (key === "protocol" && fixedProtocol) return <label key={key}>{t(label)}<input readOnly value={fixedProtocol} /></label>
+    if (!isModel && fixedConnection && key !== "displayName") return <label key={key}>{t(label)}<input readOnly value={fieldValue(key, provider?.[key as keyof EditableProvider])} /></label>
     return <label key={key}>{t(label)}{key === "protocol"
       ? <select required={newModel} value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option>{protocols.map((protocol) => <option key={protocol}>{protocol}</option>)}</select>
       : key === "inputModalities" ? <select value={values[key]} onChange={(event) => setValues({ ...values, [key]: event.target.value })}><option value="">{t("未指定")}</option><option value="text">{t("僅文字")}</option><option value="text,image">{t("文字與圖片")}</option>{values[key] === "image" ? <option value="image" disabled>{t("僅圖片（舊設定）")}</option> : null}</select>
@@ -55,6 +59,7 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
     if (inFlight.current) return
     const fields: Record<string, string | number | string[] | null> = {}
     for (const [key, value] of Object.entries(values)) {
+      if ((key === "protocol" && fixedProtocol) || (!isModel && fixedConnection && key !== "displayName")) continue
       if (existing && value === fieldValue(key, baseline[key])) continue
       if (value === "") { if (existing) fields[key] = null; continue }
       if (key === "inputModalities") { fields[key] = value.split(","); continue }
@@ -64,6 +69,7 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
         fields[key] = number
       } else fields[key] = value
     }
+    if (isModel && !existing && fixedProtocol) fields.protocol = fixedProtocol
     const command = isModel
       ? { action: existing ? "model/edit" : "model/add", id: id!, model: identity, fields }
       : { action: existing ? "provider/edit" : "provider/create", id: provider?.id ?? identity, fields }
@@ -81,6 +87,8 @@ export function ProviderEditor({ id, provider, model, newModel = false, onSave, 
         {["displayName", "baseURL"].map(renderField)}
         <details className="provider-advanced"><summary>{t("進階設定")}</summary>{["modelsURL", "catalog", "apiKeyEnv"].map(renderField)}</details>
       </> : Object.keys(labels).map(renderField)}
+      {!isModel && fixedProtocol ? <label>{t("通訊協定")}<input readOnly value={fixedProtocol} /></label> : null}
+      {fixedProtocol || fixedConnection ? <p className="muted">{english ? "Codex subscriptions use a fixed Responses connection. Manage account authorization in Coding Plans." : "Codex 訂閱固定使用 Responses 連線；帳號授權請在 Coding Plans 管理。"}</p> : null}
       <p className="muted">{t(editingBuiltIn ? "此內建提供商的第一次儲存會建立自訂設定，之後仍可編輯。" : existing ? "留空以清除覆寫；未更改的欄位不會寫入。" : isModel ? "模型建成後仍可在列表編輯。" : "建立後可新增模型與設定 API key；未填的選填欄位可稍後補上。")}</p>
       {error ? <p role="alert">{error}</p> : null}
       <div className="provider-actions"><button type="submit" className="primary-button">{t(busy ? "儲存中…" : "儲存")}</button><button type="button" onClick={onClose}>{t("取消")}</button></div>

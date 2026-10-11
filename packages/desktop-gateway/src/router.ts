@@ -21,6 +21,7 @@ import { providerCommand } from "./provider-wire.ts"
 import { createProviderProbes } from "./provider-probes.ts"
 import { dispatchGatewayProjectFiles } from "./project-files.ts"
 import { dispatchGatewayContentSearch } from "./project-content-search.ts"
+import { usageRequest } from "./usage-wire.ts"
 
 /** Augment only an initialize reply, without modifying the SDK server's object. */
 export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers, internalIds: Set<string> = new Set()): GatewayWrite {
@@ -62,6 +63,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.rewind) capabilities["desktop-rewind"] = ["1"]
     if (handlers.sessions) capabilities["desktop-sessions"] = ["1"]
     if (handlers.provider !== undefined) capabilities["desktop-provider"] = ["1"]
+    if (handlers.usageStats !== undefined) capabilities["desktop-usage"] = ["1"]
     if (handlers.memory !== undefined) capabilities["desktop-memory"] = ["1"]
     if (handlers.memory?.update) capabilities["desktop-memory-authoring"] = ["1"]
     if (handlers.compact !== undefined) capabilities["desktop-compaction"] = ["1"]
@@ -501,6 +503,16 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }
         try { send(makeSuccess(message.id, message.method.endsWith("/cancel") ? probes.cancel(params.token) : await probes.start(params.id as string, params.token))) }
         catch { send(makeFailure(message.id, INTERNAL_ERROR, "Provider probe failed or was cancelled. Check endpoint, protocol and credentials.")) }
+        return
+      }
+      if (message.method.startsWith("desktop/coding-plans/") && handlers.codingPlans !== undefined) {
+        try { send(makeSuccess(message.id, await handlers.codingPlans.request(message.method, message.params))) }
+        catch { send(makeFailure(message.id, INVALID_PARAMS, "Coding Plans operation failed. Check account authorization or try again.")) }
+        return
+      }
+      if (message.method.startsWith("desktop/usage/") && handlers.usageStats !== undefined) {
+        try { send(makeSuccess(message.id, await usageRequest(handlers.usageStats, message.method, message.params))) }
+        catch { send(makeFailure(message.id, INVALID_PARAMS, "Usage statistics could not be read or saved. Check the filters and local storage.")) }
         return
       }
       if (message.method === "desktop/provider/directory" && handlers.provider !== undefined) {

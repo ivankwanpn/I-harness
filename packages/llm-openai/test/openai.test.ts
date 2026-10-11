@@ -407,6 +407,18 @@ describe("llm-openai protocol", () => {
     // read loop's abort guard turns the rejection above AND this line red.
     expect(events).toEqual([])
   })
+
+  it("rejects an already-aborted API-key request without starting transport", async () => {
+    const fetchMock = vi.fn(async () => new Response('data: {"type":"response.completed"}\n\n'))
+    vi.stubGlobal("fetch", fetchMock)
+    const controller = new AbortController()
+    const reason = new Error("caller cancelled before dispatch")
+    controller.abort(reason)
+    const client = createOpenAIClient({ apiKey: "fixture", model: "fixture" })
+    const stream = client.stream({ messages: [], tools: [], systemPrompt: "", signal: controller.signal })[Symbol.asyncIterator]()
+    await expect(stream.next()).rejects.toBe(reason)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
 })
 
 describe("M14 openai responses wire", () => {

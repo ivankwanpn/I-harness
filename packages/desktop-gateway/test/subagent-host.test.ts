@@ -17,6 +17,7 @@ it("uses the changed role model for a new child in the same Desktop session", as
     const chunks: Buffer[] = []
     for await (const chunk of request) chunks.push(Buffer.from(chunk))
     const body = JSON.parse(Buffer.concat(chunks).toString())
+    expect(body).not.toHaveProperty("sessionId")
     models.push(body.model)
     let delta: unknown = { content: "done" }
     if (body.model === "parent" && spawn) {
@@ -62,6 +63,14 @@ it("uses the changed role model for a new child in the same Desktop session", as
     spawn = true
     await call("session/prompt", { sessionId, prompt: "spawn another explorer" })
     expect(models).toContain("small-two")
+    const usage = await call("desktop/usage/query", { query: { start: Date.now() - 60000, end: Date.now() + 1000, timeZone: "UTC", pageSize: 100 } }) as { records: { sessionId?: string; modelId: string }[]; summary: { requests: number } }
+    expect(usage.summary.requests).toBe(models.length)
+    const firstChild = usage.records.find(row => row.modelId === "small-one")
+    const secondChild = usage.records.find(row => row.modelId === "small-two")
+    expect(firstChild?.sessionId).toBeTruthy()
+    expect(secondChild?.sessionId).toBeTruthy()
+    expect(firstChild?.sessionId).not.toBe(sessionId)
+    expect(secondChild?.sessionId).not.toBe(firstChild?.sessionId)
   } finally {
     try { await trace.run('host/close', async () => { await host?.close() }) }
     finally {

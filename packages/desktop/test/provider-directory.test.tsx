@@ -1,10 +1,53 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 import { ProviderDirectory } from "../src/renderer/settings/ProviderDirectory.tsx"
+import { ProviderCard } from "../src/renderer/settings/ProviderCard.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
 
 afterEach(cleanup)
+it("refreshes a retained directory on reactivation and preserves its unsaved provider draft", async () => {
+  const existing = { id: "api", displayName: "API provider", configured: true, baseURL: "https://api.example", auth: { configured: true }, models: [] }
+  const codex = { id: "codex", displayName: "Codex subscription", configured: true, oauthProvider: "openai-codex", auth: { source: "oauth", configured: true }, models: [] }
+  let connected = false
+  const request = vi.fn(async () => connected ? [existing, codex] : [existing])
+  const bridge = { request, onEvent: () => () => {} }
+  const view = render(<ProviderDirectory workspaceId="retained" bridge={bridge} active />)
+  await screen.findByRole("button", { name: /API provider/ })
+  fireEvent.click(screen.getByRole("button", { name: "編輯提供商" }))
+  fireEvent.change(screen.getByLabelText("API 網址"), { target: { value: "https://unsaved.example" } })
+  view.rerender(<ProviderDirectory workspaceId="retained" bridge={bridge} active={false} />)
+  expect(request).toHaveBeenCalledTimes(1)
+  connected = true
+  view.rerender(<ProviderDirectory workspaceId="retained" bridge={bridge} active />)
+  await screen.findByRole("button", { name: /Codex subscription/ })
+  expect((within(screen.getByRole("dialog")).getByLabelText("API 網址") as HTMLInputElement).value).toBe("https://unsaved.example")
+  expect(request).toHaveBeenCalledTimes(2)
+  expect(request).toHaveBeenLastCalledWith({ kind: "desktop/provider/directory", workspaceId: "retained" })
+})
+
+it("ignores a directory response from before deactivation after the new activation has loaded", async () => {
+  let finishOld!: (rows: unknown[]) => void
+  const old = new Promise<unknown[]>(resolve => { finishOld = resolve })
+  const current = { id: "codex", displayName: "New Codex account", configured: true, oauthProvider: "openai-codex", auth: { source: "oauth", configured: true }, models: [] }
+  const request = vi.fn().mockReturnValueOnce(old).mockResolvedValue([current])
+  const bridge = { request, onEvent: () => () => {} }
+  const view = render(<ProviderDirectory workspaceId="stale" bridge={bridge} active />)
+  view.rerender(<ProviderDirectory workspaceId="stale" bridge={bridge} active={false} />)
+  view.rerender(<ProviderDirectory workspaceId="stale" bridge={bridge} active />)
+  await screen.findByRole("button", { name: /New Codex account/ })
+  await act(async () => finishOld([{ id: "old", displayName: "Stale provider", configured: true, auth: { configured: true }, models: [] }]))
+  expect(screen.queryByRole("button", { name: /Stale provider/ })).toBeNull()
+  expect(screen.getByRole("button", { name: /New Codex account/ })).toBeTruthy()
+  expect(request).toHaveBeenCalledTimes(2)
+})
+
+it("keeps Codex subscription accounts in Coding Plans and hides unsupported API-key/audio controls", () => {
+  render(<ProviderCard row={{ id: "codex-account", displayName: "Codex subscription", oauthProvider: "openai-codex", protocol: "openai-responses", configured: true, auth: { source: "oauth", configured: true, writable: false }, models: [] }} onSave={vi.fn()} />)
+  expect(screen.queryByRole("button", { name: "設定 API key" })).toBeNull()
+  expect(screen.queryByLabelText("影片音訊模型")).toBeNull()
+  expect(screen.getByText("Codex 訂閱 · 請在 Coding Plans 管理帳號")).toBeTruthy()
+})
 it("opens provider creation in a focused dialog and returns to the add button on Escape", async () => {
   const request = vi.fn(async (value: { kind: string }) => value.kind === "desktop/provider/directory" ? [{ id: "deepseek", displayName: "DeepSeek", configured: true, auth: { configured: true }, models: [] }] : {})
   render(<ProviderDirectory workspaceId="w" bridge={{ request, onEvent: () => () => {} }} />)

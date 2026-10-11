@@ -1,5 +1,6 @@
 import { dirname, join } from "node:path"
 import { createCredentialStore, type CredentialStore } from "@i-harness/credentials"
+import { createCodexManagement } from "@i-harness/coding-plans"
 import type { ProviderRegistry } from "@i-harness/provider"
 import {
   createProviderRuntime,
@@ -92,6 +93,7 @@ export async function loadProviderRuntime(options: {
     runtime: createProviderRuntime({
       settings,
       credentials,
+      codex: createCodexManagement({ directory: join(dirname(options.credentialsPath ?? join(dirname(settingsPath), "credentials.json")), "coding-plans", "openai-codex") }),
       ...(options.registry !== undefined ? { registry: options.registry } : {}),
     }),
   }

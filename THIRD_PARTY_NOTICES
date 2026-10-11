@@ -1,5 +1,18 @@
 # Third-Party Notices
 
+## Coding Plans protocol and UI references
+
+The Coding Plans account lifecycle, reset-credit wire contract and Responses
+subscription mode were independently implemented with reference to OpenAI Codex
+Rust v0.160.0 (Apache-2.0) and cc-switch3.20.1 (MIT, Copyright (c) 2025 Jason Young).
+The dedicated settings layout references cc-switch's AuthCenterPanel and account
+quota presentation, using IH's existing controls. Source license texts are retained
+in `packages/coding-plans/licenses/`. Reference use does not imply endorsement or
+an IH-specific OAuth client registration from either project.
+
+- https://github.com/openai/codex
+- https://github.com/farion1231/cc-switch
+
 I-harness 吸收 dsh（deepseek-harness-master）與 OpenAI codex（codex-rust-v0.149.1）之設計/代碼片段。
 來源包含 MIT 與 Apache-2.0 License；各吸收片段保留原版權聲明與來源。
 

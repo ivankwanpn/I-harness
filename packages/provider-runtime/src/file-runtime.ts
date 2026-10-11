@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
-import { resolve } from "node:path"
+import { resolve, dirname, join } from "node:path"
 import { createCredentialStore } from "@i-harness/credentials"
+import { createCodexManagement } from "@i-harness/coding-plans"
 import { acquireSessionLock, type SessionLock } from "@i-harness/fs-lock"
 import { SettingsStore } from "@i-harness/settings"
 import { createProviderRuntime, type CreateProviderRuntimeOptions, type ProviderRuntime } from "./index.ts"
@@ -10,6 +11,7 @@ export interface FileProviderRuntimeOptions {
   credentialsPath: string
   /** Trusted dependency; configuration documents cannot supply executable code. */
   buildClient?: CreateProviderRuntimeOptions["buildClient"]
+  codex?: CreateProviderRuntimeOptions["codex"]
 }
 
 async function validateDocument(path: string): Promise<void> {
@@ -36,7 +38,9 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
     return process.platform === "win32" ? absolute.toLowerCase() : absolute
   }))].sort()
   const settings = new SettingsStore({ path: options.settingsPath })
+  const codex = options.codex ?? createCodexManagement({ directory: join(dirname(options.credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
+    codex,
     ...(options.buildClient ? { buildClient: options.buildClient } : {}) })
   let tail: Promise<unknown> = Promise.resolve()
   const result = {} as ProviderRuntime
@@ -55,6 +59,7 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
             const snapshot = new SettingsStore({ path: options.settingsPath })
             await snapshot.load()
             const probeRuntime = createProviderRuntime({ settings: snapshot, credentials: createCredentialStore(options.credentialsPath),
+              codex,
               ...(options.buildClient ? { buildClient: options.buildClient } : {}) })
             return { invoke: () => (probeRuntime.probeModels as (...values: unknown[]) => Promise<unknown>)(...args) }
           }

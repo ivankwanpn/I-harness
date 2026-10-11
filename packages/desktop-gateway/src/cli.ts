@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url"
 import { DEFAULT_WRITE_BOUND_BYTES, decodeFrame, isRpcRequest } from "@i-harness/sdk"
 import { createDesktopHost } from "./host.ts"
 import { createGatewayOutput } from "./output.ts"
+import { closeSystemFetch } from "@i-harness/http-transport"
 
 export async function main(args: string[]): Promise<number> {
   if (args.length !== 2 || args[0] !== "--session-dir" || !isAbsolute(args[1]!)) {
@@ -43,7 +44,8 @@ export async function main(args: string[]): Promise<number> {
     if (closing !== undefined) return closing
     closing = Promise.resolve().then(async () => {
       rl.close()
-      await host.close()
+      try { await host.close() }
+      finally { await closeSystemFetch() }
       await Promise.allSettled([...active])
       await output.finish()
     })

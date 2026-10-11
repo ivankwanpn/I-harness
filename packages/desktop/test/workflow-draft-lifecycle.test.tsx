@@ -236,7 +236,12 @@ it("rejects fractional reminder minutes even when a form submit bypasses native 
 it("bounds projected job output and exposes shared copy, wrap and expansion actions", async () => {
   const api = gateway(baseView({ jobs: [{ jobId: "job-a", label: "Worker", kind: "shell", status: "completed", outputAvailable: true, live: false, canCancel: false }] }), async () => ({ text: `${"a".repeat(5000)}ACTUAL TAIL`, truncated: true }))
   render(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="jobs" />)
-  fireEvent.click(await screen.findByRole("button", { name: "查看輸出" }))
+  const viewOutput = await screen.findByRole("button", { name: "查看輸出" })
+  // The job list arrives asynchronously. Flush its mount effects before a
+  // synthetic click, so session initialization cannot clear the new output.
+  await act(async () => {})
+  fireEvent.click(viewOutput)
+  expect(api.request).toHaveBeenCalledWith({ kind: "desktop/session/job/output", workspaceId: "w", sessionId: "s", id: "job-a" })
   await screen.findByRole("button", { name: "複製 背景任務輸出" })
   expect(screen.queryByText(/ACTUAL TAIL/)).toBeNull()
   expect(screen.getByRole("button", { name: "自動換行 背景任務輸出" })).toBeTruthy()
@@ -247,7 +252,10 @@ it("bounds projected job output and exposes shared copy, wrap and expansion acti
 it("retains a recorded truncation notice when the returned job text is empty", async () => {
   const api = gateway(baseView({ jobs: [{ jobId: "job-a", label: "Worker", kind: "shell", status: "completed", outputAvailable: true, live: false, canCancel: false }] }), async () => ({ text: "", truncated: true }))
   render(<WorkflowPane bridge={api.bridge} workspaceId="w" sessionId="s" section="jobs" />)
-  fireEvent.click(await screen.findByRole("button", { name: "查看輸出" }))
+  const viewOutput = await screen.findByRole("button", { name: "查看輸出" })
+  await act(async () => {})
+  fireEvent.click(viewOutput)
+  expect(api.request).toHaveBeenCalledWith({ kind: "desktop/session/job/output", workspaceId: "w", sessionId: "s", id: "job-a" })
   expect(await screen.findByText("記錄的輸出已截斷")).toBeTruthy()
 })
 

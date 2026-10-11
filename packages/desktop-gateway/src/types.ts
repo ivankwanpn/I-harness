@@ -28,6 +28,7 @@ export interface SandboxState {
 }
 
 export interface DesktopHandlers {
+  usageStats?: Pick<import("@i-harness/usage-stats").UsageStore, "query" | "setPricing">
   wslSettings?: ReturnType<typeof import("./wsl-settings.ts").createWslSettings>
   contextSubsystems?: ReturnType<typeof import("./context-subsystems.ts").createContextSubsystemSettings>
   autoTitle?: ReturnType<typeof import("./auto-title.ts").createAutoTitleSettings>
@@ -59,6 +60,7 @@ export interface DesktopHandlers {
   rewind?: ReturnType<typeof createDesktopRewind>
   sessions?: ReturnType<typeof createSessionManagement>
   provider?: ProviderRuntime
+  codingPlans?: ReturnType<typeof import("./coding-plans.ts").createCodingPlans>
   memory?: MemoryStore
   compact?: (sessionId: string, instructions: string | undefined, signal: AbortSignal) => Promise<unknown>
   sessionQuery?: SessionQuery

@@ -33,6 +33,9 @@ export interface ProviderProfile {
   protocol: ProviderProtocol
   baseUrl?: string
   apiKey?: string
+  /** Internal account-bound route; never persisted as a bearer credential. */
+  codexSubscription?: boolean
+  resolveCodexAuth?: (signal?: AbortSignal) => Promise<{ accessToken: string; accountId: string }>
   /** Task 3: credential-ref name of the route's default API key env (e.g.
    * `DEEPSEEK_API_KEY`). Surfaces as DirectoryEntry.defaultApiKeyEnv — the
    * runtime directory is the registry, so the profile is the single source. */
@@ -901,11 +904,12 @@ function validateRetryPolicy(policy: RetryPolicyConfig | undefined): void {
 // falling back to "gpt-4o". Unknown protocols error here, and bad models
 // error at the model end.
 function buildClient(profile: ProviderProfile, model: string, extra?: Record<string, unknown>): ModelClient {
+  if (profile.codexSubscription && profile.protocol !== "openai-responses") throw new Error("Codex subscription credentials require the Responses protocol")
   const headers = profile.headers
   validatePromptCacheConfig(profile.promptCache)
   switch (profile.protocol) {
     case "openai-responses":
-      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
+      return createOpenAIClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, ...(profile.codexSubscription !== undefined ? { codexSubscription: profile.codexSubscription } : {}), ...(profile.resolveCodexAuth !== undefined ? { resolveCodexAuth: profile.resolveCodexAuth } : {}), ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "openai-compatible":
       return createOpenAICompatibleClient({ apiKey: profile.apiKey ?? "", baseUrl: profile.baseUrl, model, providerId: profile.name, options: extra, inputModalities: profile.inputModalities, maxTokensField: profile.maxTokensField, usageInStream: profile.usageInStream, ...(profile.promptCache !== undefined ? { promptCache: profile.promptCache } : {}), ...(headers !== undefined ? { headers } : {}) })
     case "anthropic-messages":

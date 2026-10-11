@@ -23,6 +23,21 @@ function fixture(mode: "read-only" | "workspace-write" | "danger-full-access") {
 }
 
 describe("Desktop host sandbox configuration", () => {
+  it("exposes Coding Plans from the real host without a session or credentials and rejects unconfirmed resets", async () => {
+    const f = fixture("read-only")
+    const host = await createDesktopHost({ ...f, onWrite: frame => f.frames.push(frame) })
+    try {
+      await host.handleLine(encodeFrame(makeRequest(800, "initialize", {})))
+      await host.handleLine(encodeFrame(makeRequest(801, "desktop/coding-plans/state", {})))
+      const reply = f.frames.find(frame => "id" in frame && frame.id === 801)
+      expect(isRpcSuccess(reply)).toBe(true)
+      if (!isRpcSuccess(reply)) throw new Error("Coding Plans state missing")
+      expect(reply.result).toMatchObject({ accounts: [], openaiManagement: { status: "disconnected" } })
+      expect(JSON.stringify(reply.result)).not.toMatch(/accessToken|refreshToken|idToken/)
+      await host.handleLine(encodeFrame(makeRequest(802, "desktop/coding-plans/reset-credit", { accountId: "unknown", creditId: "unknown" })))
+      expect(isRpcSuccess(f.frames.find(frame => "id" in frame && frame.id === 802))).toBe(false)
+    } finally { await host.close() }
+  }, 20000)
   it("applies saved agent defaults live and retains them after restarting", async () => {
     const f = fixture("read-only")
     let host = await createDesktopHost({ ...f, onWrite: (frame) => f.frames.push(frame) })

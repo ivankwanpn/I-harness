@@ -38,6 +38,9 @@ importers:
       '@i-harness/attachment':
         specifier: workspace:*
         version: link:../../packages/attachment
+      '@i-harness/coding-plans':
+        specifier: workspace:*
+        version: link:../../packages/coding-plans
       '@i-harness/compaction':
         specifier: workspace:*
         version: link:../../packages/compaction
@@ -298,6 +301,24 @@ importers:
         specifier: workspace:*
         version: link:../core-plugin
 
+  packages/coding-plans:
+    dependencies:
+      '@i-harness/fs':
+        specifier: workspace:*
+        version: link:../fs
+      '@i-harness/fs-lock':
+        specifier: workspace:*
+        version: link:../fs-lock
+      '@i-harness/http-transport':
+        specifier: workspace:*
+        version: link:../http-transport
+      jose:
+        specifier: 6.2.10
+        version: 6.2.10
+      koffi:
+        specifier: 3.1.6
+        version: 3.1.6
+
   packages/compaction:
     dependencies:
       '@i-harness/core-session':
@@ -396,6 +417,9 @@ importers:
       '@i-harness/sdk':
         specifier: workspace:*
         version: link:../sdk
+      '@i-harness/usage-stats':
+        specifier: workspace:*
+        version: link:../usage-stats
       '@tanstack/react-virtual':
         specifier: 3.14.13
         version: 3.14.13(react-dom@19.1.1(react@19.1.1))(react@19.1.1)
@@ -481,6 +505,9 @@ importers:
       '@i-harness/code-retrieval':
         specifier: workspace:*
         version: link:../code-retrieval
+      '@i-harness/coding-plans':
+        specifier: workspace:*
+        version: link:../coding-plans
       '@i-harness/context-output':
         specifier: workspace:*
         version: link:../context-output
@@ -514,12 +541,18 @@ importers:
       '@i-harness/hooks':
         specifier: workspace:*
         version: link:../hooks
+      '@i-harness/http-transport':
+        specifier: workspace:*
+        version: link:../http-transport
       '@i-harness/interaction':
         specifier: workspace:*
         version: link:../interaction
       '@i-harness/jobs':
         specifier: workspace:*
         version: link:../jobs
+      '@i-harness/llm-seam':
+        specifier: workspace:*
+        version: link:../llm-seam
       '@i-harness/mcp-client':
         specifier: workspace:*
         version: link:../mcp-client
@@ -532,6 +565,9 @@ importers:
       '@i-harness/plugin-registry':
         specifier: workspace:*
         version: link:../plugin-registry
+      '@i-harness/provider':
+        specifier: workspace:*
+        version: link:../provider
       '@i-harness/provider-runtime':
         specifier: workspace:*
         version: link:../provider-runtime
@@ -583,6 +619,9 @@ importers:
       '@i-harness/todo':
         specifier: workspace:*
         version: link:../todo
+      '@i-harness/usage-stats':
+        specifier: workspace:*
+        version: link:../usage-stats
       '@i-harness/workspace-runtime':
         specifier: workspace:*
         version: link:../workspace-runtime
@@ -765,6 +804,12 @@ importers:
         specifier: workspace:*
         version: link:../llm-mock
 
+  packages/http-transport:
+    dependencies:
+      undici:
+        specifier: 7.29.1
+        version: 7.29.1
+
   packages/image-validation:
     dependencies:
       sharp:
@@ -817,6 +862,9 @@ importers:
 
   packages/llm-openai:
     dependencies:
+      '@i-harness/http-transport':
+        specifier: workspace:*
+        version: link:../http-transport
       '@i-harness/llm-seam':
         specifier: workspace:*
         version: link:../llm-seam
@@ -984,6 +1032,9 @@ importers:
 
   packages/provider-runtime:
     dependencies:
+      '@i-harness/coding-plans':
+        specifier: workspace:*
+        version: link:../coding-plans
       '@i-harness/credentials':
         specifier: workspace:*
         version: link:../credentials
@@ -1461,6 +1512,8 @@ importers:
       '@i-harness/core-tools':
         specifier: workspace:*
         version: link:../core-tools
+
+  packages/usage-stats: {}
 
   packages/web:
     dependencies:
@@ -7025,8 +7078,7 @@ snapshots:
 
   undici-types@7.8.0: {}
 
-  undici@7.29.1:
-    optional: true
+  undici@7.29.1: {}
 
   undici@8.11.2: {}
 

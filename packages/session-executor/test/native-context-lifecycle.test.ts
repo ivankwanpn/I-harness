@@ -36,7 +36,9 @@ it('replays actual native Agent and Code Mode refs across five protocol framings
     let assembly=await service.assemblyFor('s')
     const refs=assembly.session.events.flatMap(event=>event.type==='context/result-ref'?[event.ref]:[])
     expect(refs).toHaveLength(2)
-    const replay=requests.at(-1)!
+    // structuredClone snapshots message content but turns AbortSignal into a
+    // plain object. These independent wire replays need a fresh live signal.
+    const replay={...requests.at(-1)!,signal:new AbortController().signal}
     const tools=replay.messages.filter(message=>message.role==='tool')
     expect(tools).toHaveLength(2)
     for(const message of tools)expect(JSON.stringify(message)).toContain('contextRef')
