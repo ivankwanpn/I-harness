@@ -24,6 +24,12 @@ errors should leave the composer and appear in independent floating popups.
   proxies them as `desktop/global-retry/state` and `desktop/global-retry/configure`
   without needing a selected workspace. Already-open conversations must observe
   the saved value on their next model request.
+- User capacity-error follow-up: OpenAI `server_is_overloaded` and the exact
+  "Selected model is at capacity" message retry the same model with a fixed
+  10-second minimum, without local jitter; longer valid Retry-After advice wins.
+  Use the same configured retry budget, never auto-switch models, and expose
+  safe retry reason CAPACITY. Policy classification remains SERVER so existing
+  custom SERVER retry policies continue to work. Quota/auth errors stay terminal.
 - Normalize transient HTTP/transport failures; retry server/429/timeout/network
   failures, not auth, billing/quota, bad arguments, malformed tool arguments,
   context limits, TLS configuration failures or cancellation. Honor valid server

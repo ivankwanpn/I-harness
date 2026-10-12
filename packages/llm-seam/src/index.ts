@@ -213,12 +213,14 @@ const QUOTA_RE = /(?:quota|balance|credit|budget|usage[\s_-]limit)[\s_-]?(?:exce
 const RATE_RE = /429|rate[\s_-]limit|too many requests/i
 const TIMEOUT_RE = /timeout|timed?\s?out|ETIMEDOUT/i
 const SERVER_RE = /\b5\d\d\b|internal server|bad gateway|service unavailable/i
+const CAPACITY_RE = /\b(?:selected\s+)?model\s+is\s+at\s+capacity\b/i
+const CAPACITY_CODE_RE = /^server_(?:is_)?overloaded$/i
 const TERMINAL_CODES = new Set(["ABORTED", "AUTH", "INVALID_API_KEY", "QUOTA", "CONTEXT_WINDOW_EXCEEDED", "INVALID_ARGUMENT", "MALFORMED_RESPONSE", "TLS"])
 
 function normalizedCode(code: string): string {
   if (CONTEXT_OVERFLOW_RE.test(code)) return "CONTEXT_WINDOW_EXCEEDED"
   if (/^(rate_limit_exceeded|rate_limit_error)$/i.test(code)) return "RATE_LIMIT"
-  if (/^(server_error|api_error|overloaded_error)$/i.test(code)) return "SERVER"
+  if (/^(server_error|api_error|overloaded_error)$/i.test(code) || CAPACITY_CODE_RE.test(code)) return "SERVER"
   if (/^(ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_SOCKET)$/.test(code)) return "TRANSPORT"
   if (/^(ETIMEDOUT|ESOCKETTIMEDOUT|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|UND_ERR_BODY_TIMEOUT|TimeoutError)$/.test(code)) return "TIMEOUT"
   if (/CERT|TLS|SSL|SELF_SIGNED|UNABLE_TO_VERIFY/.test(code)) return "TLS"
@@ -258,24 +260,37 @@ export function retryErrorCode(err: unknown): string | undefined {
   if (RATE_RE.test(msg)) return "RATE_LIMIT"
   if (TIMEOUT_RE.test(msg)) return "TIMEOUT"
   if (/ECONNRESET|ECONNREFUSED|EPIPE|ENOTFOUND|fetch failed|network error|socket hang up/i.test(msg)) return "TRANSPORT"
-  if (SERVER_RE.test(msg)) return "SERVER"
+  if (SERVER_RE.test(msg) || CAPACITY_RE.test(msg)) return "SERVER"
   return undefined
+}
+
+function isModelCapacityError(error: unknown): boolean {
+  let current = error
+  for (let i = 0; i < 5 && current !== null && typeof current === "object"; i++) {
+    const value = current as { code?: unknown; message?: unknown; capacityLimited?: unknown; cause?: unknown }
+    if (value.capacityLimited === true || typeof value.code === "string" && CAPACITY_CODE_RE.test(value.code)
+      || typeof value.message === "string" && CAPACITY_RE.test(value.message)) return true
+    current = value.cause
+  }
+  return false
 }
 
 /** HTTP status and server delay are structured; response bodies never enter retry diagnostics. */
 export async function describeHttpError(label: string, response: Response): Promise<Error> {
   const body = await response.text()
   let bodyCode: string | undefined
+  let capacityLimited = CAPACITY_RE.test(body.slice(0, 8192))
   try {
     const parsed = JSON.parse(body) as { error?: { code?: unknown; type?: unknown; message?: unknown } }
     const value = parsed.error?.code ?? parsed.error?.type
-    if (typeof value === "string") bodyCode = normalizedCode(value)
+    if (typeof value === "string") { bodyCode = normalizedCode(value); capacityLimited ||= CAPACITY_CODE_RE.test(value) }
   } catch { /* Non-JSON error responses still carry a reliable HTTP status. */ }
   const classified = retryErrorCode(new Error(body.slice(0, 8192)))
   const code = bodyCode && TERMINAL_CODES.has(bodyCode) ? bodyCode
     : classified && TERMINAL_CODES.has(classified) ? classified
     : response.status === 401 || response.status === 403 ? "AUTH"
     : response.status === 402 ? "QUOTA"
+    : capacityLimited ? "SERVER"
     : response.status === 429 ? "RATE_LIMIT"
     : response.status === 408 ? "TIMEOUT"
     : response.status >= 500 ? "SERVER" : "INVALID_ARGUMENT"
@@ -283,8 +298,10 @@ export async function describeHttpError(label: string, response: Response): Prom
   const now = Date.now()
   const parsedDeadline = advice === undefined || advice === "" ? NaN
     : /^\d+(?:\.\d+)?$/.test(advice) ? now + Number(advice) * 1000 : Date.parse(advice)
-  return Object.assign(new Error(`${label} request failed: ${response.status}`), {
+  capacityLimited &&= code === "SERVER"
+  return Object.assign(new Error(`${label} request failed: ${response.status}${capacityLimited ? " (model is at capacity)" : ""}`), {
     code, httpStatus: response.status,
+    ...(capacityLimited ? { capacityLimited: true } : {}),
     ...(Number.isFinite(parsedDeadline) ? { retryAfterAt: Math.max(now, parsedDeadline) } : {}),
   })
 }
@@ -343,11 +360,14 @@ export function createRetryingClient(client: ModelClient, policy: ResolvedRetryP
       const serverWait = typeof detail?.retryAfterAt === "number" && Number.isFinite(detail.retryAfterAt) ? Math.max(0, detail.retryAfterAt - Date.now()) : 0
       if (retryable && (!produced || request.retryOutput === "discard") && !budgetExhausted && serverWait <= 60_000) {
         attemptNo++
-        const delayMs = Math.max(serverWait, backoffDelay(policy, attemptNo))
+        const capacityLimited = isModelCapacityError(failure)
+        // Model capacity is temporary service load, not account quota. Give it
+        // a fixed ten-second minimum while retaining any longer server advice.
+        const delayMs = Math.max(serverWait, capacityLimited ? 10_000 : backoffDelay(policy, attemptNo))
         recovery = {
           requestId, phase: "waiting", attempt: attemptNo,
           ...(policy.mode === "normal" ? { maxRetries: policy.maxRetries } : {}),
-          delayMs, nextAttemptAt: Date.now() + delayMs, code: code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNKNOWN",
+          delayMs, nextAttemptAt: Date.now() + delayMs, code: capacityLimited ? "CAPACITY" : code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? code : "UNKNOWN",
           ...(detail?.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
           ...(metadata?.providerId === undefined ? {} : { providerId: metadata.providerId.slice(0, 256) }),
           ...(metadata?.modelId === undefined ? {} : { modelId: metadata.modelId.slice(0, 256) }),
