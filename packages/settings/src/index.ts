@@ -1629,7 +1629,7 @@ export interface ModelWaitSettings { firstResponseSeconds: number; progressSecon
 export function validModelWaitSeconds(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && (value === 0 || value >= 30 && value <= 3600)
 }
-export function normalizeModelWait(value: unknown): ModelWaitSettings {
+function normalizeModelWait(value: unknown): ModelWaitSettings {
   const data = value !== null && typeof value === "object" ? value as Record<string, unknown> : {}
   return {
     firstResponseSeconds: validModelWaitSeconds(data.firstResponseSeconds) ? data.firstResponseSeconds : 300,

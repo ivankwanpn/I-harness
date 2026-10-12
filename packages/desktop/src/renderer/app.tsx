@@ -11,6 +11,7 @@ import type {
   SessionModelState,
   SessionModelSelection,
   SessionQueueItem,
+  SessionExecutionStateNotification,
 } from "@i-harness/sdk"
 import type { SandboxState } from "../main/sdk-runtime.ts"
 import type { WorkspaceEntry } from "../main/workspaces.ts"
@@ -350,7 +351,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return
       }
       if (event.method === "session/execution-state") {
-        const state = event.params as { sessionId?: unknown; running?: unknown; queued?: unknown; revision?: unknown } | undefined
+        const state = event.params as Partial<Record<keyof SessionExecutionStateNotification, unknown>> | undefined
         if (!state || typeof state.sessionId !== "string" || typeof state.running !== "boolean"
           || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
           || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
