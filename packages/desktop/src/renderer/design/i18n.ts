@@ -2,6 +2,22 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "無法確認會話專案；草稿仍保留。": "Could not verify the conversation project. Your draft is retained.",
+  "無法準備新會話；草稿仍保留。": "Could not prepare the new conversation. Your draft is retained.",
+  "無法套用所選模型；草稿仍保留。": "Could not apply the selected model. Your draft is retained.",
+  "診斷記錄": "Diagnostic Log", "檢視安全的模型重試、錯誤與連線記錄。": "Review safe records of model retries, errors and connections.",
+  "連線與錯誤通知": "Connection and error notifications", "請求未完成": "Request did not complete", "詳細資料": "Details", "關閉錯誤通知": "Dismiss error notification",
+  "{seconds} 秒後重試": "Retrying in {seconds}s", "所選模型暫時已達容量，將重試同一模型。": "The selected model is temporarily at capacity. Retrying the same model.",
+  "模型連線暫時中斷，正在自動重試。": "The model connection was interrupted. Retrying automatically.", "重試第 {attempt} 次": "Retry {attempt}", "重試 {attempt} / {max}": "Retry {attempt} / {max}",
+  "診斷詳細資料": "Diagnostic details", "複製安全詳細資料": "Copy safe details", "已複製安全詳細資料。": "Safe details copied.", "無法複製安全詳細資料。": "Could not copy safe details.",
+  "記錄已不可用，請重新整理診斷記錄。": "The record is no longer available. Refresh the Diagnostic Log.", "無法讀取診斷記錄。": "Could not read the Diagnostic Log.",
+  "最多顯示最近 1,000 筆記錄；搜尋、篩選與匯出只套用於此範圍。": "Shows the latest 1,000 records at most. Search, filters and export apply only within this range.",
+  "搜尋診斷記錄": "Search Diagnostic Log", "嚴重程度": "Severity", "會話 ID": "Conversation ID", "資訊": "Info", "警告": "Warning", "錯誤": "Error", "全部": "All",
+  "匯出記錄": "Export records", "開啟記錄資料夾": "Open log folder", "已匯出 {count} 筆安全記錄。": "Exported {count} safe records.", "已取消匯出。": "Export cancelled.",
+  "已開啟記錄資料夾。": "Log folder opened.", "無法匯出診斷記錄。": "Could not export the Diagnostic Log.", "無法開啟記錄資料夾。": "Could not open the log folder.", "沒有符合的診斷記錄。": "No matching diagnostic records.",
+  "模型自動重試": "Automatic model retries", "模型重試次數": "Model retry count", "儲存重試設定": "Save retry setting", "已儲存重試次數：{count}": "Saved retry count: {count}",
+  "預設 5 次；0 停用。儲存後套用於下一次模型請求，不會改變正在執行的重試。": "Defaults to 5; 0 disables retries. Applies to the next model request after saving, without changing retries already in progress.",
+  "請輸入 0 到 100 的整數；0 停用重試。": "Enter an integer from 0 to 100; 0 disables retries.", "無法讀取重試設定。": "Could not read the retry setting.", "無法儲存重試設定；輸入仍保留。": "Could not save the retry setting. Your input is retained.",
   "用量統計": "Usage statistics",
   "檢視模型請求、Token、快取與預估 API 費用。": "Explore model requests, tokens, cache and estimated API costs.",
   "Coding Plans": "Coding Plans",

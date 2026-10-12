@@ -52,7 +52,7 @@ it("clears persisted payload only after admission and retains it after failed su
   const onPrompt = vi.fn().mockRejectedValueOnce(new Error("offline")).mockResolvedValue(undefined)
   render(<Composer workspaceId="admit-w" sessionId="admit-s" canSend running={false} onPrompt={onPrompt} onCancel={() => {}} draftRequest={draftRequest} />)
   fireEvent.change(screen.getByRole("textbox", { name: "提示" }), { target: { value: "admit me" } }); await waitFor(() => expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)); fireEvent.click(screen.getByRole("button", { name: "送出" }))
-  await screen.findByText("offline"); expect(clears).toBe(0); expect(record.draft?.prompt).toBe("admit me")
+  await waitFor(() => expect((screen.getByRole("button", { name: "送出" }) as HTMLButtonElement).disabled).toBe(false)); expect(screen.queryByText("offline")).toBeNull(); expect(clears).toBe(0); expect(record.draft?.prompt).toBe("admit me")
   fireEvent.click(screen.getByRole("button", { name: "送出" })); await waitFor(() => expect(clears).toBe(1))
   await waitFor(() => expect((screen.getByRole("textbox", { name: "提示" }) as HTMLTextAreaElement).value).toBe(""))
   expect(record.draft?.prompt ?? "").toBe("")
