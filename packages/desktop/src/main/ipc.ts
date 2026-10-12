@@ -76,6 +76,12 @@ export async function dispatchDesktopRequest(
     if (value.kind === "desktop/diagnostics/reveal" && Object.keys(value).length === 1) return dependencies.diagnostics.reveal()
     throw new Error("Invalid diagnostic request")
   }
+  if (value.kind.startsWith("desktop/global-model-wait/")) {
+    if (!dependencies.globalProviders) throw new Error("Global model wait settings unavailable")
+    if (value.kind === "desktop/global-model-wait/state" && Object.keys(value).length !== 1) throw new Error("Invalid model wait request")
+    if (value.kind === "desktop/global-model-wait/configure" && (Object.keys(value).length !== 3 || ![value.firstResponseSeconds, value.progressSeconds].every(seconds => typeof seconds === "number" && Number.isSafeInteger(seconds) && (seconds === 0 || seconds >= 30 && seconds <= 3600)))) throw new Error("Invalid model wait deadlines")
+    return dependencies.globalProviders.request(value)
+  }
   if (value.kind.startsWith("desktop/global-retry/")) {
     if (!dependencies.globalProviders) throw new Error("Global retry settings unavailable")
     if (value.kind === "desktop/global-retry/configure" && (typeof value.maxRetries !== "number" || !Number.isSafeInteger(value.maxRetries) || value.maxRetries < 0 || value.maxRetries > 100)) throw new Error("Invalid model retry limit")
@@ -689,6 +695,7 @@ export function registerDesktopIpc(
   })
   const offEvent = dependencies.runtimes.onEvent((desktopEvent) => {
     if (window.isDestroyed()) return
+    if (desktopEvent.kind === "sdk/notification" && desktopEvent.method === "session/event" && (desktopEvent.params as { event?: { type?: unknown } } | null)?.event?.type === "model/activity") return
     try { dependencies.native?.onEvent(desktopEvent) } catch { /* Notifications cannot interrupt SDK event delivery. */ }
     window.webContents.send(DESKTOP_EVENT_CHANNEL, desktopEvent)
   })
@@ -700,6 +707,10 @@ export function registerDesktopIpc(
     if (removed || window.isDestroyed()) return
     window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "runtime/diagnostic", entry } satisfies DesktopEvent)
   })
+  const offActivity = dependencies.diagnostics?.onActivity(activity => {
+    if (removed || window.isDestroyed()) return
+    window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "runtime/activity", ...activity } satisfies DesktopEvent)
+  })
   return () => {
     if (removed) return
     removed = true
@@ -707,6 +718,7 @@ export function registerDesktopIpc(
     offEvent()
     offWindowState?.()
     offDiagnostics?.()
+    offActivity?.()
     void projectContentSearch.close()
   }
 }

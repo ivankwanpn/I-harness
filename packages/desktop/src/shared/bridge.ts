@@ -24,6 +24,7 @@ export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | 
 export type DesktopRequest =
   | import("./runtime-diagnostics.ts").RuntimeDiagnosticsRequest
   | import("./runtime-diagnostics.ts").GlobalRetryRequest
+  | import("./runtime-diagnostics.ts").GlobalModelWaitRequest
   | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/types").UsageQuery }
   | { kind: "desktop/usage/pricing"; price: import("@i-harness/usage-stats/types").UsagePrice }
   | import("@i-harness/desktop-gateway").WslSettingsRequest
@@ -143,6 +144,7 @@ export type DesktopRequest =
 
 export type DesktopEvent =
   | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
+  | ({ kind: "runtime/activity" } & import("./runtime-diagnostics.ts").RuntimeActivity)
   | { kind: "window/state"; maximized: boolean }
   | {
       kind: "sdk/notification"

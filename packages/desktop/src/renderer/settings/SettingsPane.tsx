@@ -29,6 +29,7 @@ import { findSettingsDestinations, readSettingsLocation, resourceKindForSearch, 
 import { SettingsDraftScope } from "./settings-drafts.tsx"
 import { RuntimeLog } from "./RuntimeLog.tsx"
 import { RetrySettings } from "./RetrySettings.tsx"
+import { ModelWaitSettings } from "./ModelWaitSettings.tsx"
 import { useUiStore } from "../shell/ui-store.ts"
 
 export interface SettingsPaneProps {
@@ -122,7 +123,7 @@ export function SettingsPane({ workspace, sessionId, onClose, bridge, onSandboxC
         <SettingsRow label={t("文字大小")} control={<select aria-label={t("文字大小")} value={preferences.fontSize} onChange={event => preferences.update({ fontSize: Number(event.target.value) })}>{[13, 14, 16, 18].map(size => <option key={size} value={size}>{size}px</option>)}</select>} />
       </SettingsGroup>
       <div className="settings-preference-actions"><p className="muted">{t("外觀偏好只儲存在此電腦。")}</p><Button variant="secondary" size="small" onClick={() => preferences.update({ appearance: "dark", fontSize: 14 })}>{t("重設外觀偏好")}</Button></div>
-      {bridge ? <><RetrySettings bridge={bridge} /><h2>{t("視窗與輸入")}</h2><NativeSettings bridge={bridge} section="window" /><AutoTitleSettings bridge={bridge} /></> : null}
+      {bridge ? <><RetrySettings bridge={bridge} /><ModelWaitSettings bridge={bridge} /><h2>{t("視窗與輸入")}</h2><NativeSettings bridge={bridge} section="window" /><AutoTitleSettings bridge={bridge} /></> : null}
     </>
     if (tab === "log" && bridge && pageActive) return <RuntimeLog bridge={bridge} />
     if (tab === "notifications" && bridge && pageActive) return <><NativeSettings bridge={bridge} section="notifications" /><NotificationsPane request={notificationRequest} subscribe={notificationSubscribe} onOpenTarget={openNotification} /></>

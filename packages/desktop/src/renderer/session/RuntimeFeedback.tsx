@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react"
 import { AlertCircle, LoaderCircle, X } from "lucide-react"
 import type { DesktopBridge } from "../../shared/bridge.ts"
-import type { RuntimeDiagnosticEntry } from "../../shared/runtime-diagnostics.ts"
+import type { RuntimeActivity, RuntimeDiagnosticEntry } from "../../shared/runtime-diagnostics.ts"
 import { useText } from "../design/i18n.ts"
 import { Button } from "../vendor/opencode/Button.tsx"
 import { RuntimeDetails } from "../settings/RuntimeLog.tsx"
 import "./RuntimeFeedback.css"
 import { useUiStore } from "../shell/ui-store.ts"
 
-interface Feedback { retry?: RuntimeDiagnosticEntry; error?: RuntimeDiagnosticEntry }
+interface Feedback { retry?: RuntimeDiagnosticEntry; error?: RuntimeDiagnosticEntry; activity?: RuntimeActivity["activity"] }
 const scopeKey = (workspaceId?: string, sessionId?: string) => JSON.stringify([workspaceId, sessionId])
 
 /** Live feedback only. Historical records remain in the native Log and never
@@ -22,10 +22,39 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const [scopes, setScopes] = useState<Map<string, Feedback>>(() => new Map())
   const [details, setDetails] = useState<RuntimeDiagnosticEntry>()
   const seen = useRef(new Set<string>())
+  const selectedScope = useRef(scopeKey(workspaceId, activeSessionId))
+  selectedScope.current = scopeKey(workspaceId, activeSessionId)
+  const executionRevision = useRef(new Map<string, number>())
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
-    seen.current.clear(); setScopes(new Map()); setDetails(undefined)
+    executionRevision.current.clear()
+    setScopes(previous => new Map([...previous].map(([key, value]) => [key, { ...value, activity: undefined }])))
+  }, [workspaceId, activeSessionId])
+  useEffect(() => {
+    seen.current.clear(); executionRevision.current.clear(); setScopes(new Map()); setDetails(undefined)
     return bridge.onEvent(event => {
+      if (event.kind === "runtime/activity") {
+        if (scopeKey(event.workspaceId, event.sessionId) !== selectedScope.current) return
+        setScopes(previous => {
+          const next = new Map(previous), key = scopeKey(event.workspaceId, event.sessionId)
+          const current = next.get(key) ?? {}
+          const activity = event.activity
+          if (activity.phase === "connecting") next.set(key, { ...current, activity })
+          else if (current.activity?.requestId === activity.requestId) next.set(key, { ...current, activity: activity.phase === "settled" ? undefined : activity })
+          if (next.size > 100) next.delete(next.keys().next().value!)
+          return next
+        })
+        return
+      }
+      if (event.kind === "sdk/disconnected") {
+        executionRevision.current.clear()
+        setScopes(previous => {
+          const next = new Map(previous)
+          for (const [key, current] of next) if (JSON.parse(key)[0] === event.workspaceId) next.set(key, { ...current, activity: undefined, retry: undefined })
+          return next
+        })
+        return
+      }
       if (event.kind === "runtime/diagnostic") {
         const entry = event.entry
         if (seen.current.has(entry.id)) return
@@ -38,13 +67,15 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
           else if (entry.kind === "model/recovered") {
             if (!entry.requestId || current.retry?.requestId === entry.requestId) next.set(key, { ...current, retry: undefined })
           } else if (entry.kind === "session/cancelled") {
-            if (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId) next.set(key, { ...current, retry: undefined })
+            if (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId) next.set(key, { ...current, retry: undefined, activity: undefined })
+          } else if (entry.kind.startsWith("model/")) {
+            // Lifecycle records are history only; live activity arrives separately.
           } else {
             // Admission failures belong to a separate RPC even in the same chat.
             const clearsRetry = entry.kind === "session/error" && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)
-            next.set(key, { retry: clearsRetry ? undefined : current.retry, error: entry })
+            next.set(key, { ...current, retry: clearsRetry ? undefined : current.retry, activity: entry.kind === "session/error" && clearsRetry ? undefined : current.activity, error: entry })
             if (entry.kind === "gateway/disconnected") for (const [otherKey, value] of next) {
-              if (JSON.parse(otherKey)[0] === entry.workspaceId) next.set(otherKey, { ...value, retry: undefined })
+              if (JSON.parse(otherKey)[0] === entry.workspaceId) next.set(otherKey, { ...value, retry: undefined, activity: undefined })
             }
           }
           // UI state is ephemeral and bounded; native records own persistence.
@@ -53,19 +84,29 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         })
         return
       }
-      if (event.kind !== "sdk/notification" || (event.method !== "session/status" && event.method !== "session/event")) return
+      if (event.kind !== "sdk/notification" || (event.method !== "session/status" && event.method !== "session/event" && event.method !== "session/execution-state")) return
       const params = event.params as { sessionId?: unknown; status?: unknown; event?: { type?: unknown; text?: unknown; delta?: unknown } } | null
       if (!params || typeof params.sessionId !== "string") return
       const start = event.method === "session/event" && params.event?.type === "turn/start"
       const done = event.method === "session/status" && ["completed", "cancelled", "canceled"].includes(String(params.status))
+      let settled = false
+      if (event.method === "session/execution-state") {
+        const state = params as { running?: unknown; queued?: unknown; revision?: unknown }
+        if (typeof state.running !== "boolean" || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
+          || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
+        const key = scopeKey(event.workspaceId, params.sessionId)
+        if (state.revision <= (executionRevision.current.get(key) ?? 0)) return
+        executionRevision.current.set(key, state.revision)
+        settled = state.running === false && state.queued === 0
+      }
       // Retried requests emit a native model/recovered entry on actual output.
       // Running/queued status is deliberately not a recovery signal.
-      if (!start && !done) return
+      if (!start && !done && !settled) return
       setScopes(previous => {
         const next = new Map(previous), key = scopeKey(event.workspaceId, params.sessionId as string)
         const current = next.get(key)
         if (start) { next.delete(key); next.delete(scopeKey(event.workspaceId)) }
-        else if (current) next.set(key, { ...current, retry: undefined })
+        else if (current) next.set(key, { ...current, retry: undefined, activity: undefined })
         return next
       })
     })
@@ -74,21 +115,29 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const global = scopes.get(scopeKey(workspaceId))
   const failure = selected?.error ?? global?.error
   const retry = selected?.retry?.retry
+  const activity = selected?.activity
+  const quiet = activity?.phase === "quiet" && !retry
   useEffect(() => {
-    if (!retry) return
+    if (!retry && !quiet) return
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 250)
     return () => window.clearInterval(timer)
-  }, [retry])
+  }, [retry, quiet])
   const seconds = retry?.nextAttemptAt ? Math.max(0, Math.ceil((retry.nextAttemptAt - now) / 1000)) : 0
   const waiting = retry?.phase === "waiting" && seconds > 0
   return <>
-    {retry || failure ? <aside className="runtime-feedback" aria-label={t("連線與錯誤通知")}>
+    {retry || quiet || failure ? <aside className="runtime-feedback" aria-label={t("連線與錯誤通知")}>
       {retry ? <div className="runtime-feedback-card runtime-feedback-retry" role="status" aria-live="polite">
         <LoaderCircle size={18} aria-hidden="true" />
         <div><strong>{t(waiting ? "{seconds} 秒後重試" : "重新連線中…", { seconds })}</strong>
           <p>{retry.code === "CAPACITY" ? t("所選模型暫時已達容量，將重試同一模型。") : t("模型連線暫時中斷，正在自動重試。")}</p>
           <small>{retry.maxRetries === undefined ? t("重試第 {attempt} 次", { attempt: retry.attempt }) : t("重試 {attempt} / {max}", { attempt: retry.attempt, max: retry.maxRetries })}</small>
+        </div>
+      </div> : null}
+      {quiet && activity ? <div className="runtime-feedback-card runtime-feedback-wait" role="status" aria-live="polite">
+        <LoaderCircle size={18} aria-hidden="true" />
+        <div><strong>{t(activity.waitingFor === "first-response" ? "等待模型回應…" : "等待模型繼續輸出…")}</strong>
+          <p>{t("請求已進行 {seconds} 秒。", { seconds: Math.max(0, Math.floor((now - activity.startedAt) / 1000)) })}</p>
         </div>
       </div> : null}
       {failure ? <div className="runtime-feedback-card runtime-feedback-error" role="alert">

@@ -76,7 +76,7 @@ export function ProjectSessions(props: ProjectSessionsProps) {
       : Object.fromEntries(Object.entries(current).filter(([id]) => ids.has(id))))
     const refreshers = new Map(workspaces.map(workspace => [workspace.id, createRefreshScheduler(() => read(workspace.id))]))
     const unsubscribe = bridge.onEvent(event => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || !ids.has(event.workspaceId)) return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity" || !ids.has(event.workspaceId)) return
       if (event.kind === "sdk/disconnected") {
         tickets.current[event.workspaceId] = (tickets.current[event.workspaceId] ?? 0) + 1
         setSnapshots(current => ({ ...current, [event.workspaceId]: { ...current[event.workspaceId], navigation: undefined, error: event.message } }))

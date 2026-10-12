@@ -13,6 +13,7 @@ export interface ConfigurationClient { request(method: string, params: Record<st
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value)
 const id = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(value) && !["constructor", "prototype"].includes(value)
 const token = (value: unknown): value is string => typeof value === "string" && value.length > 0 && value.length <= 128 && !/[\u0000-\u001f\u007f]/.test(value)
+const waitSeconds = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && (value === 0 || value >= 30 && value <= 3600)
 
 /** A configuration-only gateway has no catalog workspace or conversation. Its
  * provider runtime uses the same settings/credentials as later workspace hosts.
@@ -50,6 +51,10 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
           method = input.kind; params = { accountId: input.accountId }; break
         case "desktop/global-preferences/state": method = "desktop/auto-title/state"; params = {}; break
         case "desktop/global-retry/state": method = "desktop/model-retry/state"; params = {}; break
+        case "desktop/global-model-wait/state": method = "desktop/model-wait/state"; params = {}; break
+        case "desktop/global-model-wait/configure":
+          if (!waitSeconds(input.firstResponseSeconds) || !waitSeconds(input.progressSeconds)) throw new Error("Invalid model wait deadlines")
+          method = "desktop/model-wait/configure"; params = { firstResponseSeconds: input.firstResponseSeconds, progressSeconds: input.progressSeconds }; break
         case "desktop/global-retry/configure":
           if (typeof input.maxRetries !== "number" || !Number.isSafeInteger(input.maxRetries) || input.maxRetries < 0 || input.maxRetries > 100) throw new Error("Invalid model retry limit")
           method = "desktop/model-retry/configure"; params = { maxRetries: input.maxRetries }; break
@@ -88,6 +93,10 @@ export function createGlobalProviderSettings(client: () => Promise<Configuration
           return target.request("desktop/coding-plans/state", {})
         }
         const result = await target.request(method, params)
+        if (method === "desktop/model-wait/state" || method === "desktop/model-wait/configure") {
+          if (!record(result) || !waitSeconds(result.firstResponseSeconds) || !waitSeconds(result.progressSeconds)) throw new Error("Invalid model wait state")
+          return { firstResponseSeconds: result.firstResponseSeconds, progressSeconds: result.progressSeconds }
+        }
         if (method === "desktop/usage/query" && record(result) && options.usageWarnings) {
           const warnings = await options.usageWarnings()
           return { ...result, warnings: [...new Set([...(Array.isArray(result.warnings) ? result.warnings : []), ...warnings])] }

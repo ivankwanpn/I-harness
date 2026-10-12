@@ -341,7 +341,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
     ]))
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic") return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
         executionRevision.current = undefined

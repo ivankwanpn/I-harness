@@ -6,8 +6,19 @@ import type { RuntimeDiagnosticEntry } from "../src/shared/runtime-diagnostics.t
 import { RuntimeFeedback } from "../src/renderer/session/RuntimeFeedback.tsx"
 import { NewTaskComposer } from "../src/renderer/session/Composer.tsx"
 import { useUiStore } from "../src/renderer/shell/ui-store.ts"
+import { classifyNotification } from "../src/renderer/session/notifications.ts"
+import { applyHistory, applyNotification, emptyEventWindow, historyViewport, pageHistoryViewport } from "../src/renderer/session/event-window.ts"
 
 afterEach(() => { cleanup(); vi.useRealTimers(); localStorage.clear(); useUiStore.setState({ surface: "conversation", settingsLogRevision: 0 }) })
+it("keeps transient activity out of durable notification and replay windows", () => {
+  const event = { type: "model/activity", version: 1, activity: { requestId: "physical", phase: "quiet", startedAt: 1000, waitingFor: "progress" } }
+  expect(classifyNotification("session/event", { sessionId: "a", event })).toEqual({ kind: "ignore" })
+  expect(applyNotification(emptyEventWindow(), event as never)).toEqual(emptyEventWindow())
+  expect(applyHistory(emptyEventWindow(), { events: [event], nextSeq: 0 } as never).events).toEqual([])
+  expect(pageHistoryViewport({ events: [], startSeq: 0, endSeq: 0, hasBefore: false, hasAfter: false }, { events: [event], nextSeq: 0 } as never, 0, "after").events).toEqual([])
+  expect(historyViewport({ events: [event], nextSeq: 0 } as never, 0).events).toEqual([])
+  expect(applyHistory(emptyEventWindow(), { events: [{ ...event, seq: 1 }], nextSeq: 2 } as never).events).toEqual([])
+})
 function fixture() {
   const listeners = new Set<(event: DesktopEvent) => void>()
   const bridge: DesktopBridge = { request: vi.fn(async () => ({ entries: [] })), onEvent(listener) { listeners.add(listener); return () => { listeners.delete(listener) } } }
@@ -114,4 +125,57 @@ it("renders the App feedback surface safely before workspace or session selectio
   const f = fixture()
   render(<RuntimeFeedback bridge={f.bridge} onOpenLog={() => {}} />)
   expect(screen.queryByRole("alert")).toBeNull(); expect(screen.queryByRole("status")).toBeNull()
+})
+
+it("shows quiet physical attempt elapsed time, retains logical retry until recovered, and ignores stale settlement", () => {
+  vi.useFakeTimers(); vi.setSystemTime(20_000)
+  const f = fixture(); render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  const activity = (phase: "connecting" | "streaming" | "quiet" | "settled", requestId: string, patch: Partial<import("../../core-session/src/index.ts").ModelActivityInfo> = {}) => f.emit({ kind: "runtime/activity", workspaceId: "w", sessionId: "a", activity: { requestId, phase, startedAt: 1_000, waitingFor: "first-response", ...patch } })
+  activity("connecting", "physical-1")
+  activity("streaming", "physical-1", { waitingFor: "progress" })
+  expect(screen.queryByRole("status")).toBeNull()
+  activity("quiet", "physical-1", { waitingFor: "progress" })
+  expect(screen.getByRole("status").textContent).toContain("19")
+  f.entry(); activity("connecting", "physical-2"); activity("quiet", "physical-2")
+  activity("settled", "physical-1")
+  expect(screen.getByRole("status").textContent).toContain("容量")
+  activity("streaming", "physical-2", { waitingFor: "progress", lastProgressAt: 19_000 })
+  expect(screen.getByRole("status").textContent).toContain("容量")
+  f.entry({ id: "recovered", kind: "model/recovered", level: "info", retry: undefined })
+  expect(screen.queryByRole("status")).toBeNull()
+})
+it("clears quiet feedback on progress, matching settlement, Stop, disconnect and authoritative idle", () => {
+  vi.useFakeTimers(); vi.setSystemTime(20_000)
+  const f = fixture(); render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  const activity = (phase: "connecting" | "streaming" | "quiet" | "settled", requestId: string) => f.emit({ kind: "runtime/activity", workspaceId: "w", sessionId: "a", activity: { requestId, phase, startedAt: 1_000, waitingFor: "progress" } })
+  activity("connecting", "p1"); activity("quiet", "p1"); expect(screen.getByRole("status")).toBeTruthy()
+  activity("streaming", "p1"); expect(screen.queryByRole("status")).toBeNull()
+  activity("quiet", "p1"); activity("settled", "p1"); expect(screen.queryByRole("status")).toBeNull()
+  activity("connecting", "p2"); activity("quiet", "p2"); f.status("cancelled"); expect(screen.queryByRole("status")).toBeNull()
+  activity("connecting", "p3"); activity("quiet", "p3"); f.emit({ kind: "sdk/disconnected", workspaceId: "w", message: "private" }); expect(screen.queryByRole("status")).toBeNull()
+  activity("connecting", "p4"); activity("quiet", "p4"); f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running: false, queued: 1, revision: 1 } }); expect(screen.getByRole("status")).toBeTruthy()
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running: false, queued: 0, revision: 2 } }); expect(screen.queryByRole("status")).toBeNull()
+})
+it("does not revive a quiet card after selection changes or an older execution revision", () => {
+  const f = fixture(); const props = { bridge: f.bridge, workspaceId: "w", sessionId: "a", onOpenLog() {} }
+  const view = render(<RuntimeFeedback {...props} />)
+  const quiet = (sessionId: string, requestId: string) => {
+    f.emit({ kind: "runtime/activity", workspaceId: "w", sessionId, activity: { requestId, phase: "connecting", startedAt: Date.now() - 20_000, waitingFor: "progress" } })
+    f.emit({ kind: "runtime/activity", workspaceId: "w", sessionId, activity: { requestId, phase: "quiet", startedAt: Date.now() - 20_000, waitingFor: "progress" } })
+  }
+  quiet("a", "p1"); expect(screen.getByRole("status")).toBeTruthy()
+  view.rerender(<RuntimeFeedback {...props} sessionId="b" />); expect(screen.queryByRole("status")).toBeNull()
+  view.rerender(<RuntimeFeedback {...props} />); expect(screen.queryByRole("status")).toBeNull()
+  quiet("a", "p2"); expect(screen.getByRole("status")).toBeTruthy()
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running: true, queued: 0, revision: 5 } })
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running: false, queued: 0, revision: 4 } })
+  expect(screen.getByRole("status")).toBeTruthy()
+  f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running: false, queued: 0, revision: 6 } })
+  expect(screen.queryByRole("status")).toBeNull()
+})
+it("does not clear a replacement retry from an older logical recovery", () => {
+  const f = fixture(); render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  f.entry({ id: "new-retry", requestId: "new-logical", retry: { requestId: "new-logical", phase: "attempting", attempt: 2, delayMs: 0, code: "TIMEOUT" } })
+  f.entry({ id: "old-recovery", kind: "model/recovered", level: "info", requestId: "old-logical", retry: undefined })
+  expect(screen.getByRole("status").textContent).toContain("重新連線中")
 })
