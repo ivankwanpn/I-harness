@@ -126,7 +126,7 @@ describe("the record joins the live JSONL (spec §1.3)", () => {
     expect(records[0]!.runId).toBe(first.run)
   })
 
-  it("a registered secret in the provider's error never reaches the record", async () => {
+  it("omits a secret-bearing HTTP response body from the record", async () => {
     process.env.CORP_TOKEN = "corp-abc123"
     envSet.push("CORP_TOKEN")
     vi.stubGlobal("fetch", (async () => new Response("unauthorized: Authorization: Bearer corp-abc123", { status: 401 })) as unknown as typeof fetch)
@@ -134,6 +134,19 @@ describe("the record joins the live JSONL (spec §1.3)", () => {
     const records = await runEndRecords()
     expect(records[0]!.error).toBeDefined()
     expect(records[0]!.error).not.toContain("corp-abc123")
+    expect(records[0]!.error).toContain("401")
+    expect(records[0]!.error).not.toContain("unauthorized: Authorization")
+  })
+
+  it("redacts a registered secret when a transport error actually contains it", async () => {
+    process.env.CORP_TOKEN = "corp-abc123"
+    envSet.push("CORP_TOKEN")
+    const request = vi.fn(async () => { throw Object.assign(new Error("authentication failed for corp-abc123"), { code: "AUTH" }) })
+    vi.stubGlobal("fetch", request)
+    expect(await main(runArgs())).toBe(1)
+    expect(request).toHaveBeenCalledOnce()
+    const records = await runEndRecords()
     expect(records[0]!.error).toContain("[REDACTED]")
+    expect(records[0]!.error).not.toContain("corp-abc123")
   })
 })

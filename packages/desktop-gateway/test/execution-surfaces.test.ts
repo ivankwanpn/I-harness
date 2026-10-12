@@ -217,7 +217,13 @@ it("shows and cancels actual background shell jobs through the current execution
   const processes = createAgentProcesses(coordinator, service)
   try {
     const assembly = await service.assemblyFor("s")
-    const command = process.platform === "win32" ? `& '${process.execPath.replaceAll("'", "''")}' -e 'console.log("fixture-output");setTimeout(()=>{},5000)'` : `'${process.execPath}' -e 'console.log("fixture-output");setTimeout(()=>{},5000)'`
+    // Windows PowerShell strips nested quotes from native -e arguments. A
+    // source file keeps this an actual live-job test on both PS5 and PS7.
+    // Stay alive for owner cancellation, with a fail-safe if cleanup fails.
+    const script = join(root, "cancel-fixture.cjs")
+    await writeFile(script, 'console.log("fixture-output");setInterval(()=>{},1000);setTimeout(()=>process.exit(99),30000)')
+    const quote = (value: string) => process.platform === "win32" ? `'${value.replaceAll("'", "''")}'` : `'${value.replaceAll("'", "'\\''")}'`
+    const command = `${process.platform === "win32" ? "& " : ""}${quote(process.execPath)} ${quote(script)}`
     const result = await assembly.tools.execute({ name: process.platform === "win32" ? "pwsh" : "bash", args: { command, background: true } })
     const id = (result.output as { job_id: string }).job_id
     expect(id).toBeTruthy()
@@ -226,6 +232,8 @@ it("shows and cancels actual background shell jobs through the current execution
     expect((await processes.read("s")).jobs).toContainEqual(expect.objectContaining({ jobId: id, ownerSessionId: "s", live: true, canCancel: true }))
     await vi.waitFor(async () => expect(await processes.jobOutput("s", id)).toMatchObject({ text: expect.stringContaining("fixture-output") }), { timeout: 5000, interval: 50 })
     const captured = await processes.jobOutput("s", id)
+    expect(captured.text).not.toMatch(/ReferenceError|SyntaxError/)
+    expect((await processes.read("s")).jobs).toContainEqual(expect.objectContaining({ jobId: id, live: true, canCancel: true }))
     append(assembly.session, { type: "tool/call", callId: "job-output-fixture", name: "job_output", args: { job_id: id } })
     append(assembly.session, { type: "tool/result", callId: "job-output-fixture", name: "job_output", output: { stdout: captured.text, stderr: "", status: "running" } })
     await expect(processes.control("other", { action: "job/cancel", id })).rejects.toThrow(/live|owner/i)
