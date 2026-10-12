@@ -1,0 +1,17 @@
+.runtime-log { min-width: 0; }
+.runtime-log-bound { font-size: 12px; line-height: 1.6; }
+.runtime-log-filters { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 10px; margin: 18px 0 12px; }
+.runtime-log-filters label { display: flex; flex: 1 1 140px; flex-direction: column; gap: 6px; font-size: 12px; min-width: 0; }
+.runtime-log-filters label:first-child { flex: 2 1 200px; }
+.runtime-log-filters input, .runtime-log-filters select { width: 100%; min-width: 0; }
+.runtime-log-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+.runtime-log-entries { padding: 0; margin: 16px 0; list-style: none; display: grid; gap: 8px; }
+.runtime-log-entry { min-width: 0; padding: 12px; border: 1px solid var(--ih-divider); border-radius: 10px; background: var(--ih-panel); }
+.runtime-log-entry-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 11px; color: var(--ih-muted); }
+.runtime-log-entry p { margin: 8px 0; font-size: 13px; overflow-wrap: anywhere; }
+.runtime-log-entry-footer { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+.runtime-log-entry-footer small { min-width: 0; overflow-wrap: anywhere; color: var(--ih-muted); }
+.runtime-log-warning { font-size: 12px; }
+.runtime-details-json { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow-y: auto; font-size: 12px; background: var(--ih-panel); border: 1px solid var(--ih-divider); padding: 12px; border-radius: 8px; }
+.retry-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.retry-settings-count { width: 84px; }

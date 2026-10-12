@@ -26,7 +26,8 @@ it("sends a selected image as model input and retains it after a failed send", a
   const sendButton = screen.getByRole("button", { name: "送出" }) as HTMLButtonElement
   await waitFor(() => expect(sendButton.disabled).toBe(false))
   fireEvent.click(sendButton)
-  await screen.findByText("offline")
+  await waitFor(() => expect(sendButton.disabled).toBe(false))
+  expect(screen.queryByText("offline")).toBeNull()
   expect(screen.getByText("sample.png")).toBeTruthy()
   expect(onPrompt).toHaveBeenCalledWith("請查看附加的圖片。", undefined, [{ mediaType: "image/png", dataBase64: "AQID", name: "sample.png" }], expect.any(Function))
   await waitFor(() => expect(sendButton.disabled).toBe(false))

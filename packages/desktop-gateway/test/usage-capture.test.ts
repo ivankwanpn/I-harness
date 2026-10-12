@@ -35,10 +35,13 @@ describe("usage capture", () => {
     const client = f.capture.buildClient(() => ({ async *stream() {
       if (++attempts === 1) {
         yield { type: "usage", usage: { inputTokens: 7 } }
+        yield { type: "text/chunk", text: "uncommitted response" }
         yield { type: "error", error: Object.assign(new Error("private error"), { code: "SERVER" }) }
       } else { yield { type: "usage", usage: { inputTokens: 10, outputTokens: 2 } }; yield { type: "text/chunk", text: "ok" }; yield { type: "end" } }
     } }))({ ...profile, retryPolicy: { mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1, maxDelayMs: 1, jitterRatio: 0 } } }, "model-a")
-    await consume(client)
+    const retries = []
+    for await (const event of client.stream({ ...request, retryOutput: "discard" })) if (event.type === "retry") retries.push(event.retry)
+    expect(retries.map(event => [event.phase, event.providerId, event.modelId])).toEqual([["waiting", "route-a", "model-a"], ["attempting", "route-a", "model-a"], ["recovered", "route-a", "model-a"]])
     expect(f.records.map(row => [row.status, row.inputTokens, row.outputTokens])).toEqual([["failed", 7, undefined], ["completed", 10, 2]])
     expect(new Set(f.records.map(row => row.id)).size).toBe(2)
   })

@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { systemFetch } from "@i-harness/http-transport"
 
 export interface OpenAIConfig {
@@ -236,7 +236,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: new Error(`openai request failed: ${response.status} ${await response.text()}`) }
+        yield { type: "error", error: await describeHttpError("openai", response) }
         return
       }
       const reader = response.body.getReader()
@@ -411,18 +411,15 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         // while the canonical bare `error` event is FLAT on the wire —
         // `{type:"error",code,message,param,sequence_number}` — with an older
         // nested `error.message` still seen in the wild (tracked as a fallback).
-        // Reading only `event.error?.message` sent the flat shape to the generic
-        // fallback and dropped `code`, which the seam's retry classifier reads
-        // off the message (rate_limit_exceeded → RATE_LIMIT), so the code is
-        // composed into the message (`${code}: ${text}`), mirroring the
-        // anthropic arm's `${type}: ${message}`.
+        // Retain the structured identity separately: provider message wording
+        // cannot determine whether a failure is transient or terminal.
         if (t === "response.failed" || t === "error") {
           const r = event.response as { error?: { message?: string; code?: string } } | undefined
           const flat = event as { code?: unknown; message?: unknown }
-          const nested = event.error as { message?: string } | undefined
-          const code = r?.error?.code ?? flat.code
+          const nested = event.error as { code?: unknown; message?: string } | undefined
+          const code = r?.error?.code ?? flat.code ?? nested?.code
           const text = r?.error?.message ?? (typeof flat.message === "string" ? flat.message : undefined) ?? nested?.message ?? "the provider reported a failed response"
-          return [{ type: "error", error: new Error(typeof code === "string" ? `${code}: ${text}` : text) }]
+          return [{ type: "error", error: Object.assign(new Error(typeof code === "string" ? `${code}: ${text}` : text), typeof code === "string" ? { code } : {}) }]
         }
         return []
       }

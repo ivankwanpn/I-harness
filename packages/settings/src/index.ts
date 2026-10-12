@@ -311,6 +311,8 @@ export interface Settings {
   codeMode: SettingsCodeMode
   /** Automatic conversation titles. Absent documents retain the existing enabled default. */
   autoTitle?: boolean
+  /** Additional model attempts after a transient failure; zero disables retry. */
+  modelRetryLimit: number
   sandboxMode: SettingsSandboxMode
   windowsSandboxBackend: SettingsWindowsSandboxBackend
   wslExecution: SettingsWslExecution
@@ -386,6 +388,7 @@ const SETTINGS_DEFAULTS: Settings = {
   contextSubsystems: normalizeContextSubsystems(undefined),
   codeMode: { mode: "off" },
   autoTitle: true,
+  modelRetryLimit: 5,
   sandboxMode: "workspace-write",
   windowsSandboxBackend: "legacy",
   wslExecution: normalizeWslExecution(undefined),
@@ -775,6 +778,7 @@ export function normalizeSettings(raw: unknown): Settings {
     contextSubsystems: normalizeContextSubsystems(raw.contextSubsystems),
     codeMode: normalizeCodeMode(raw.codeMode),
     autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,
+    modelRetryLimit: typeof raw.modelRetryLimit === "number" && Number.isSafeInteger(raw.modelRetryLimit) && raw.modelRetryLimit >= 0 && raw.modelRetryLimit <= 100 ? raw.modelRetryLimit : 5,
     agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),
     approvalMode: oneOf(raw.approvalMode, APPROVAL_MODES, base.approvalMode),
     model: typeof raw.model === "string" && raw.model !== "" ? raw.model : base.model,

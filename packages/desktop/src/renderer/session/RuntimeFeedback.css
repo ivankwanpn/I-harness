@@ -1,0 +1,32 @@
+.runtime-feedback {
+  position: fixed;
+  z-index: 75;
+  top: 54px;
+  right: 18px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(36vh, 320px);
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+.runtime-feedback-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--ih-divider);
+  border-radius: 12px;
+  background: var(--ih-panel);
+  color: var(--ih-text);
+  box-shadow: 0 6px 24px #0003;
+  pointer-events: auto;
+}
+.runtime-feedback-card > svg { flex: none; margin-top: 2px; color: var(--ih-muted); }
+.runtime-feedback-card > div { min-width: 0; flex: 1; }
+.runtime-feedback-card strong { font-size: 13px; }
+.runtime-feedback-card p { margin: 5px 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.runtime-feedback-card small { color: var(--ih-muted); font-size: 11px; }
+.runtime-feedback-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.runtime-feedback .runtime-feedback-close { flex: none; padding: 4px; }
+@media (max-width: 600px) { .runtime-feedback { right: 12px; top: 52px; width: min(328px, calc(100vw - 24px)); } }

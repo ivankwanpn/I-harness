@@ -29,6 +29,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it.each([undefined, 0] as const)("runtime-created profiles activate recovery and preserve explicit retry budget %s", async maxRetries => {
+  const f = await fixture({ providers: { route: { protocol: "openai-completions", apiKeyEnv: "SYNTHETIC", models: [{ id: "m" }] } }, credentials: { SYNTHETIC: "fixture-key" }, registry(registry) {
+    if (maxRetries !== undefined) registry.register({ name: "route", displayName: "route", protocol: "openai-compatible", retryPolicy: { mode: "normal", maxRetries } })
+  } })
+  await f.runtime.resolveModel({ sessionSelection: { provider: "route", model: "m" } })
+  const profile = f.builds[0]!.profile
+  expect(profile.retryPolicy).toEqual({ mode: "normal", maxRetries: maxRetries ?? 5 })
+})
+
 describe("explicit route prompt cache configuration", () => {
   it.each(["upsert", "create", "patch"] as const)("rejects malformed cache configuration at %s before a settings write", async (operation) => {
     const f = await fixture({ providers: { existing: { protocol: "openai-responses", models: [{ id: "m" }] } } })
@@ -267,12 +276,11 @@ describe("provider directory", () => {
 
 describe("model resolution", () => {
   it("uses override then session selection then default selection", async () => {
-    const { runtime, client, builds } = await readyFixture()
+    const { runtime, builds } = await readyFixture()
 
     await expect(runtime.resolveModel({ override: "deepseek:override-model" })).resolves.toMatchObject({
       status: "ready",
       binding: {
-        client,
         providerId: "deepseek",
         modelId: "override-model",
         // M59 grok parity: the label is the HUMAN form (provider displayName ·

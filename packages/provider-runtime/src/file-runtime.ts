@@ -3,7 +3,7 @@ import { resolve, dirname, join } from "node:path"
 import { createCredentialStore } from "@i-harness/credentials"
 import { createCodexManagement } from "@i-harness/coding-plans"
 import { acquireSessionLock, type SessionLock } from "@i-harness/fs-lock"
-import { SettingsStore } from "@i-harness/settings"
+import { normalizeSettings, SettingsStore } from "@i-harness/settings"
 import { createProviderRuntime, type CreateProviderRuntimeOptions, type ProviderRuntime } from "./index.ts"
 
 export interface FileProviderRuntimeOptions {
@@ -41,6 +41,19 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
   const codex = options.codex ?? createCodexManagement({ directory: join(dirname(options.credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
     codex,
+    readModelRetryLimit: async () => {
+      let raw: string
+      try { raw = await readFile(options.settingsPath, "utf8") }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return 5
+        throw new Error("Cannot read provider configuration document")
+      }
+      let value: unknown
+      try { value = JSON.parse(raw) }
+      catch { throw new Error("Invalid provider configuration document") }
+      if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid provider configuration document")
+      return normalizeSettings(value).modelRetryLimit
+    },
     ...(options.buildClient ? { buildClient: options.buildClient } : {}) })
   let tail: Promise<unknown> = Promise.resolve()
   const result = {} as ProviderRuntime

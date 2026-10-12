@@ -178,6 +178,8 @@ export interface CreateProviderRuntimeOptions {
   auth?: ProviderAuthResolver
   registry?: ProviderRegistry
   buildClient?: typeof buildModelClient
+  /** File hosts provide a fresh snapshot without mutating the operation store. */
+  readModelRetryLimit?: () => Promise<number>
   codex?: {
     state(): Promise<{ accountId?: string; status: string }>
     token(accountId: string, signal?: AbortSignal): Promise<{ accessToken: string; accountId: string }>
@@ -772,7 +774,7 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
       const listedModel = view.models.find((model) => model.id === modelId)
       const modelModalities = userModel?.inputModalities ?? listedModel?.inputModalities ?? (listedModel ? view.inputModalities : undefined)
       const profile = runtimeProfile(
-        view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol,
+        view, apiKey, modelModalities, selection.protocol ?? userModel?.protocol, options.settings.get().modelRetryLimit,
       )
       if (profile && ref.kind === "oauth-account-ref" && options.codex) {
         profile.codexSubscription = true
@@ -811,7 +813,21 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
 
       try {
-        const client = buildClient(profile, modelId)
+        let activeClient = buildClient(profile, modelId)
+        let activeLimit = options.settings.get().modelRetryLimit
+        const client: ModelClient = view.template?.retryPolicy !== undefined ? activeClient : {
+          async *stream(request) {
+            request.signal?.throwIfAborted()
+            const limit = options.readModelRetryLimit ? await options.readModelRetryLimit() : options.settings.get().modelRetryLimit
+            request.signal?.throwIfAborted()
+            if (limit !== activeLimit) {
+              activeClient = buildClient({ ...profile, retryPolicy: { mode: "normal", maxRetries: limit } }, modelId)
+              activeLimit = limit
+            }
+            const current = activeClient
+            yield* current.stream(request)
+          },
+        }
         return {
           status: "ready",
           binding: {
@@ -916,6 +932,7 @@ function runtimeProfile(
   apiKey: string | undefined,
   modelModalities?: SettingsInputModality[],
   selectionProtocol?: SettingsProviderProtocol,
+  modelRetryLimit = 5,
 ): ProviderProfile | undefined {
   // SELECTION-or-row, computed by the caller: a session's/role's selection
   // beats the model row, and both beat the route's default. NOBODY INVENTS
@@ -932,6 +949,7 @@ function runtimeProfile(
   const modalities = modelModalities
   return {
     ...template,
+    retryPolicy: template.retryPolicy ?? { mode: "normal", maxRetries: modelRetryLimit },
     name: view.id,
     // Declared family, else the route name. Set here so the resolution chain
     // never has to look at `name` for a purpose it was not given.

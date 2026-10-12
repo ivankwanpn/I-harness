@@ -22,6 +22,8 @@ export const DESKTOP_EVENT_CHANNEL = "ih-desktop:event"
 export type TerminalShellChoice = "auto" | "git-bash" | "pwsh" | "powershell" | "cmd" | "bash" | "zsh" | "sh"
 
 export type DesktopRequest =
+  | import("./runtime-diagnostics.ts").RuntimeDiagnosticsRequest
+  | import("./runtime-diagnostics.ts").GlobalRetryRequest
   | { kind: "desktop/usage/query"; query: import("@i-harness/usage-stats/types").UsageQuery }
   | { kind: "desktop/usage/pricing"; price: import("@i-harness/usage-stats/types").UsagePrice }
   | import("@i-harness/desktop-gateway").WslSettingsRequest
@@ -140,6 +142,7 @@ export type DesktopRequest =
   | { kind: "desktop/review/commit"; workspaceId: string; message: string }
 
 export type DesktopEvent =
+  | { kind: "runtime/diagnostic"; entry: import("./runtime-diagnostics.ts").RuntimeDiagnosticEntry }
   | { kind: "window/state"; maximized: boolean }
   | {
       kind: "sdk/notification"

@@ -86,7 +86,7 @@ export function createUsageCapture(options: {
             }
           },
         }
-        return profile.retryPolicy === undefined ? capture : createRetryingClient(capture, resolveRetryPolicy(profile.retryPolicy))
+        return profile.retryPolicy === undefined ? capture : createRetryingClient(capture, resolveRetryPolicy(profile.retryPolicy), { providerId: profile.name, modelId: model ?? profile.defaultModel })
       }
     },
   }

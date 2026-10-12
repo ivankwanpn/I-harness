@@ -139,7 +139,7 @@ export function ContextUsage({ bridge, workspaceId, sessionId, refreshKey }: { b
     refresh.current = control
     const mountRevision = revision
     const unsubscribe = bridge.onEvent(message => {
-      if (!active || message.kind === "window/state" || message.workspaceId !== workspaceId) return
+      if (!active || message.kind === "window/state" || message.kind === "runtime/diagnostic" || message.workspaceId !== workspaceId) return
       if (message.kind === "sdk/disconnected") {
         disconnected = { message: message.message }
         revision++; dirty = false; immediate = false

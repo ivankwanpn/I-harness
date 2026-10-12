@@ -1,8 +1,8 @@
-import { BarChart3, Bell, BookOpen, Brain, Info, Puzzle, Server, Settings, Shield, Sparkles, type LucideIcon } from "lucide-react"
+import { BarChart3, Bell, BookOpen, Brain, Info, Puzzle, Server, Settings, Shield, Sparkles, ScrollText, type LucideIcon } from "lucide-react"
 import type { ResourceKind } from "@i-harness/desktop-gateway/src/resources.ts"
 import type { Message } from "../design/i18n.ts"
 
-export type SettingsSection = "general" | "notifications" | "models" | "coding-plans" | "usage" | "execution" | "subagents" | "hooks" | "mcp" | "resources" | "memory" | "plugins" | "about"
+export type SettingsSection = "general" | "notifications" | "models" | "coding-plans" | "usage" | "execution" | "subagents" | "hooks" | "mcp" | "resources" | "memory" | "plugins" | "about" | "log"
 export interface SettingsLocation { section: SettingsSection; resourceKind: ResourceKind }
 export interface SettingsDestination {
   id: SettingsSection
@@ -16,6 +16,7 @@ export interface SettingsDestination {
 }
 
 export const settingsDestinations: readonly SettingsDestination[] = [
+  { id: "log", label: "診斷記錄", group: "本機資料", icon: ScrollText, scope: "desktop", description: "檢視安全的模型重試、錯誤與連線記錄。", keywords: ["log", "diagnostics", "error", "retry", "reconnect", "記錄", "日誌", "診斷", "重試", "錯誤", "重新連線"] },
   { id: "usage", label: "用量統計", group: "本機資料", icon: BarChart3, scope: "desktop", description: "檢視模型請求、Token、快取與預估 API 費用。", keywords: ["usage", "statistics", "analytics", "tokens", "cost", "cache", "用量", "統計", "費用", "快取", "請求"] },
   { id: "coding-plans", label: "Coding Plans", group: "Agent 設定", icon: Sparkles, scope: "desktop", description: "連接訂閱帳號，管理授權與可用模型。", keywords: ["coding plans", "subscription", "Codex", "ChatGPT", "OpenAI", "OAuth", "訂閱", "帳號", "登入", "用量", "額度", "重置卡", "reset cards", "usage", "sign in", "plan"] },
   { id: "general", label: "一般", group: "基本設定", icon: Settings, scope: "local", description: "設定此電腦的語言、外觀、視窗與整合終端。", keywords: ["general", "appearance", "外觀", "theme", "主題", "深色", "淺色", "文字大小", "font size", "界面語言", "language", "locale", "視窗位置與大小", "window", "整合終端 Shell", "terminal shell", "終端字體", "terminal font", "自動產生會話標題", "Automatic conversation titles", "auto title", "後續訊息處理方式", "queue", "steer"] },
@@ -32,7 +33,7 @@ export const settingsDestinations: readonly SettingsDestination[] = [
 ]
 
 const searchableFields: Partial<Record<SettingsSection, readonly Message[]>> = {
-  general: ["界面語言", "外觀", "文字大小", "視窗位置與大小", "整合終端 Shell", "終端字體", "後續訊息處理方式"],
+  general: ["界面語言", "外觀", "文字大小", "視窗位置與大小", "整合終端 Shell", "終端字體", "後續訊息處理方式", "模型自動重試", "模型重試次數"],
   notifications: ["背景待處理通知"],
   models: ["模型與提供商"],
   execution: ["Windows 執行後端", "WSL 發行版", "命令網路存取", "Agent Shell", "沙箱", "核準模式", "網頁存取", "自動壓縮上下文", "啟用 Context Mode", "啟用 Code Context"],

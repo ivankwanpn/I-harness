@@ -36,6 +36,10 @@ export const useUiStore = create<Preferences & {
   reset(): void
   surface: Surface
   setSurface(surface: Surface): void
+  settingsLogRevision: number
+  openRuntimeLog(): void
+  draftSubmissionScope?: { workspaceId: string; sessionId: string }
+  setDraftSubmissionScope(scope: { workspaceId: string; sessionId: string } | undefined): void
   reviewOpen: boolean
   reviewWidth: number
   setSidebarWidth(width: number): void
@@ -67,6 +71,9 @@ export const useUiStore = create<Preferences & {
   surface: "conversation",
   providerRevision: 0,
   setSurface: (surface) => set({ surface }),
+  settingsLogRevision: 0,
+  openRuntimeLog: () => set(state => ({ surface: "settings", settingsLogRevision: state.settingsLogRevision + 1 })),
+  setDraftSubmissionScope: (draftSubmissionScope) => set({ draftSubmissionScope }),
   reviewOpen: false,
   setSidebarWidth: (sidebarWidth) => get().update({ sidebarWidth }),
   setReviewWidth: (reviewWidth) => get().update({ reviewWidth }),

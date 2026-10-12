@@ -3,11 +3,26 @@
 export { Inbox, SYSTEM_INPUT_PLUGIN } from "./inbox.ts"
 export type { AdmittedInput, PendingInput, InputDelivery, InputIntent, InputSynthetic, InputDisplay, UserMessageInput } from "./inbox.ts"
 import type { InputDisplay, InputSynthetic, UserMessageInput } from "./inbox.ts"
+export interface ModelRetryInfo {
+  requestId: string
+  phase: "waiting" | "attempting" | "recovered"
+  attempt: number
+  maxRetries?: number
+  delayMs: number
+  nextAttemptAt?: number
+  code: string
+  httpStatus?: number
+  providerId?: string
+  modelId?: string
+  discardOutput?: true
+}
+
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
     | { type: "step/failed"; seq?: number }
+    | { type: "model/retry"; version: 1; ts: number; retry: ModelRetryInfo; seq?: number }
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.

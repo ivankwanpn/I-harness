@@ -48,7 +48,8 @@ export function useSessionOperation(bridge: DesktopBridge, durableInputs = false
       setStates((old) => ({ ...old, [key]: { kind, busy: false, result } }))
       return result
     } catch (reason) {
-      setStates((old) => ({ ...old, [key]: { kind, busy: false, error: reason instanceof Error ? reason.message : String(reason) } }))
+      // Native diagnostics own model/transport failure content.
+      setStates((old) => ({ ...old, [key]: { kind, busy: false } }))
       throw reason
     } finally { unsubscribe?.(); locks.current.delete(key) }
   }

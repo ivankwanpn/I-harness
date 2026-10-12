@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
   return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
@@ -294,7 +294,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: new Error(`anthropic request failed: ${response.status} ${await response.text()}`) }
+        yield { type: "error", error: await describeHttpError("anthropic", response) }
         return
       }
       const reader = response.body.getReader()
@@ -444,7 +444,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         // round-trip — the seam's own words: a failure must not read as success.
         if (t === "error") {
           const err = event.error as { type?: string; message?: string } | undefined
-          return [{ type: "error", error: new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`) }]
+          return [{ type: "error", error: Object.assign(new Error(`${err?.type ?? "error"}: ${err?.message ?? "provider reported an error"}`), typeof err?.type === "string" ? { code: err.type } : {}) }]
         }
         return []
       }

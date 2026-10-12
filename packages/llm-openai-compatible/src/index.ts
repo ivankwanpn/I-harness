@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForProvider, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
+import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M72 Ⅲ: the wire's usage, under the seam's names.
@@ -211,7 +211,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: new Error(`openai-compatible request failed: ${response.status} ${await response.text()}`) }
+        yield { type: "error", error: await describeHttpError("openai-compatible", response) }
         return
       }
       const reader = response.body.getReader()
@@ -380,7 +380,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
               if (yield* emit([{ type: "tool_call", call: { ...(pending.id ? { id: pending.id } : {}), name: pending.name, args } }])) return
             }
           } catch {
-            if (yield* emit([{ type: "error", error: new Error(`openai-compatible malformed tool args: ${pending.argsBuffer}`) }])) return
+            if (yield* emit([{ type: "error", error: Object.assign(new Error("openai-compatible malformed tool args"), { code: "MALFORMED_RESPONSE" }) }])) return
           }
         }
       } catch (err) {

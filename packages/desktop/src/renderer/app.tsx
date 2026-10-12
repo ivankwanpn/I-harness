@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { retireSessionDraft } from "./session/Composer.tsx"
+import { ComposerPreparationError, retireSessionDraft } from "./session/Composer.tsx"
 import type { HistorySelection } from "./session/SessionSearch.tsx"
 import type { HistoryRequest } from "./session/SessionHistoryView.tsx"
 import type { ProjectFilesRequest } from "@i-harness/desktop-gateway/src/project-files.ts"
@@ -40,6 +40,7 @@ import { operationKey, useSessionOperation } from "./session/use-session-operati
 import { useLocale, useText } from "./design/i18n.ts"
 import { useUiStore } from "./shell/ui-store.ts"
 import { createRefreshScheduler } from "./session/refresh-scheduler.ts"
+import { RuntimeFeedback } from "./session/RuntimeFeedback.tsx"
 
 const HISTORY_LIMIT = 500
 const HISTORY_MAX_PAGES = 40
@@ -87,7 +88,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [workStateFailure, setWorkStateFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [running, setRunning] = useState(false)
   const runningRevision = useRef(0)
-  const [executionError, setExecutionError] = useState<string>()
   const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true && operation.kind !== "model"
@@ -339,12 +339,11 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
     ]))
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state") return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
         setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
-        setError(textRef.current("SDK 連線中斷：{message}", { message: event.message }))
         return
       }
       if (event.method === "desktop/interaction/request") {
@@ -393,9 +392,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       }
       runningRevision.current++
       setRunning(info.status === "queued")
-      const statusError = (event.params as { error?: unknown })?.error
-      if (info.status === "failed" && typeof statusError === "string") setExecutionError(statusError)
-      else if (info.status === "queued") setExecutionError(undefined)
       refresh.schedule()
     })
     return () => { unsubscribe(); refresh.dispose() }
@@ -451,7 +447,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
     setHistoryCount(undefined)
     setRunning(false)
     runningRevision.current++
-    setExecutionError(undefined)
     setQueueResumable(false)
     chunkBuffer.current.length = 0
     void (async () => {
@@ -516,7 +511,6 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         canSend: gate.canSend && projectReady && !(operation?.busy && operation.kind !== "prompt"),
         projectReady,
         sendReason: !projectReady ? projectBinding?.error ?? t("正在套用專案資料夾…") : operation?.kind === "compact" && operation.busy ? t("正在壓縮上下文") : gate.reason,
-        executionError,
         running: running || sending,
         modelLabel: model?.status === "ready" ? model.label : undefined,
         modelState: model,
@@ -547,7 +541,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
           }
         },
         onSteer: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void) => {
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted, "steer")
           void refreshTasks(selectedWorkspaceId, selectedSessionId)
         },
@@ -568,7 +562,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         pending: pendingForSession(pending, selectedSessionId),
         onPrompt: async (text: string, context?: string, images?: import("@i-harness/sdk").ImageInput[], onAdmitted?: () => void): Promise<void> => {
           const scope = selection.current
-          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId })
+          if (capabilities["desktop-project-scope"]?.includes("1")) await bridge.request({ kind: "desktop/session/project/state", workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }).catch(() => { throw new ComposerPreparationError(t("無法確認會話專案；草稿仍保留。")) })
           await operations.run(selectedWorkspaceId, selectedSessionId, "prompt", text, context, images, onAdmitted)
           if (selection.current !== scope) return
           if (connection === "online") {
@@ -613,7 +607,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         },
       }
 
-  return (
+  return (<>
     <Workbench
       onSandboxChange={(mode) => { if (selectedWorkspaceId === workspaceSelection.current.workspaceId) setSandbox({ mode, source: "settings", wired: true }) }}
       bridge={bridge}
@@ -784,5 +778,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         if (selectedWorkspaceId !== undefined) void refreshDashboard(selectedWorkspaceId)
       }}
     />
+    <RuntimeFeedback bridge={bridge} workspaceId={selectedWorkspaceId} sessionId={selectedSessionId} onOpenLog={useUiStore.getState().openRuntimeLog} />
+    </>
   )
 }

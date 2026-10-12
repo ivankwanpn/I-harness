@@ -934,7 +934,7 @@ export function buildModelClient(profile: ProviderProfile, model?: string, extra
   const resolved = model ?? profile.defaultModel ?? "gpt-4o"
   const client = buildClient(profile, resolved, extra)
   if (profile.retryPolicy === undefined) return client
-  return createRetryingClient(client, resolveRetryPolicy(profile.retryPolicy))
+  return createRetryingClient(client, resolveRetryPolicy(profile.retryPolicy), { providerId: profile.name, modelId: resolved })
 }
 
 /** The adapter inputs, protocol-independent — the shared shape of all three

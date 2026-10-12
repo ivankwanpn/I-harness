@@ -47,11 +47,12 @@ it("owns pending operations by session and rejects a second operation in that se
   expect(request).toHaveBeenCalledWith({ kind: "desktop/session/compact", workspaceId: "w", sessionId: "a", instructions: "保留結論" })
 })
 
-it("records a failure and releases the session for retry", async () => {
+it("releases the session for retry without storing raw remote failure text", async () => {
   const request = vi.fn().mockRejectedValueOnce(new Error("cancelled")).mockResolvedValueOnce({ compacted: false, shadowedSeqs: [] })
   const view = renderHook(() => useSessionOperation({ request, onEvent: () => () => {} }))
   await act(async () => { await expect(view.result.current.run("w", "a", "compact")).rejects.toThrow("cancelled") })
-  expect(view.result.current.states[operationKey("w", "a")]).toMatchObject({ busy: false, error: "cancelled" })
+  expect(view.result.current.states[operationKey("w", "a")]).toMatchObject({ busy: false })
+  expect(view.result.current.states[operationKey("w", "a")]?.error).toBeUndefined()
   await act(async () => { await view.result.current.run("w", "a", "compact", "  ") })
   expect(request).toHaveBeenLastCalledWith({ kind: "desktop/session/compact", workspaceId: "w", sessionId: "a" })
 })
