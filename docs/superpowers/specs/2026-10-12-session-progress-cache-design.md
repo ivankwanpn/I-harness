@@ -52,6 +52,12 @@ Adapters may publish a bounded neutral activity event for partial tool arguments
 without leaking payload or changing tool execution. Public request JSON must not
 contain host-only policy/context fields. Abort stops parked reads and backoff;
 timeouts become structured TIMEOUT failures handled by the existing budget.
+If an HTTP response has already established a terminal status and its error body
+stalls, retain a bounded internal terminal-status hint: a body-read deadline must
+not convert known authentication/quota/invalid requests into retryable TIMEOUT.
+Keep normal full-body classification (including HTTP400 context overflow) intact;
+the hint is only a fallback when that read cannot finish. User cancellation wins
+over the hint, and HTTP408/429 do not receive terminal fallback hints.
 Iterator cleanup must not await a permanently parked noncooperative generator;
 observe late settlements and avoid unhandled rejections or overlapping effects.
 
