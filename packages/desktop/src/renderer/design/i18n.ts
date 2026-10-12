@@ -2,6 +2,7 @@ import { useUiStore } from "../shell/ui-store.ts"
 import { useCallback } from "react"
 
 const english = {
+  "引用內容合計過長，請移除部分引用或附件；草稿仍保留。": "The combined reference content is too long. Remove some references or attachments; your draft is retained.",
   "無法確認會話專案；草稿仍保留。": "Could not verify the conversation project. Your draft is retained.",
   "無法準備新會話；草稿仍保留。": "Could not prepare the new conversation. Your draft is retained.",
   "無法套用所選模型；草稿仍保留。": "Could not apply the selected model. Your draft is retained.",
