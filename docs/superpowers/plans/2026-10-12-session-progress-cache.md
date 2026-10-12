@@ -66,7 +66,19 @@
 - [ ] Remove revision-only Todo context churn while preserving list semantics, clearing, compaction and real updates; add regression tests.
 - [ ] Run six-protocol payload/cache semantics regressions and relevant core/runtime/usage tests; commit/report. No live cache-hit claims.
 
-### Task 5: Integration and v0.1.11 delivery
+### Task 5: Discoverable role selection
+
+**Files:** subagent tool metadata/role registry wiring/tests, preset delegation guidance if needed; tool-search/Code Mode integration tests and narrowly necessary metadata refresh paths.
+
+**Interfaces:** Consume live RoleRegistry definitions (not settings-only model keys). Preserve existing runtime omitted agent_type -> general compatibility. Model-facing guidance explicitly requests a role choice; do not introduce a separate generic schema/validation subsystem to force the field.
+
+- [ ] Read role-dispatch-audit.md and exact fork sources cited there. Materialize actual parent requests in direct and Code Mode paths; write failing discovery/refresh tests.
+- [ ] Add deterministic live role names/descriptions and practical built-in selection guidance to spawn_agent metadata, with clear approval-reviewer distinction.
+- [ ] Refresh metadata/indexes on actual registry change; unchanged catalogs remain byte-stable. Preserve user/plugin roles, permissions and model binding.
+- [ ] Test explicit explore/worker model dispatch, role add/remove/restore, direct/search/Code Mode visibility, and legacy omitted-role behavior. No forced distribution or live model requests.
+- [ ] Run affected suites/typechecks; commit/report. Parent reviews before integration.
+
+### Task 6: Integration and v0.1.11 delivery
 
 - [ ] Independently review complete branch and address evidenced findings.
 - [ ] Reproduce and correct the stale CLI redaction expectation and Windows quoting-sensitive cancellation fixture; retain meaningful behavioral assertions.

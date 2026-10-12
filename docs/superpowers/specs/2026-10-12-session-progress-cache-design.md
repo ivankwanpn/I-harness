@@ -85,6 +85,28 @@ survival across compaction, instruction role and real updates intact. Do not mov
 dynamic content between instruction priority levels in this release. Keep retained
 output references correct; do not strip useful context merely to inflate cache hits.
 
+## 4. Follow-up: discoverable role selection
+
+The user additionally requested comparison with the private OpenCode fork because
+IH repeatedly chooses general. The audit confirms IH omits available role names
+and selection examples from model-facing spawn metadata; omitted agent_type falls
+back to general. The fork exposes current identifiers and selection guidance.
+
+Expose a deterministic live RoleRegistry catalog at the spawn tool-definition
+boundary, with practical guidance: explore for bounded read-only code lookup,
+research for cross-source analysis, worker for implementation/testing, general for
+mixed work not matching a narrower capability. Describe actual registered roles,
+not settings-only model keys; identify the approval guardian reviewer distinctly.
+Prompt new model calls to choose agent_type explicitly. Preserve existing omitted
+role -> general compatibility instead of adding an unrelated validation framework
+or breaking saved Code Mode callers. Runtime role/tool/model restrictions remain
+authoritative. No forced round-robin selection or user model-setting changes.
+
+Verify actual model-facing direct, tool-search and Code Mode metadata, refresh
+after role registry changes, stable output for unchanged roles, and explicit role
+dispatch to configured models. Synthetic contract tests establish discoverability,
+not a promise that live models always select the ideal role.
+
 ## Acceptance and delivery
 
 Reproduce the stale-running probe before fixing it; cover delayed stop hook/flush,
