@@ -147,7 +147,7 @@ export type DesktopEvent =
   | {
       kind: "sdk/notification"
       workspaceId: string
-      method: "session/event" | "session/status" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/usage/recording-warning"
+      method: "session/event" | "session/status" | "session/execution-state" | "desktop/interaction/request" | "desktop/interaction/closed" | "desktop/workflow/changed" | "desktop/session/navigation/changed" | "desktop/usage/recording-warning"
       params: unknown
     }
   | { kind: "sdk/disconnected"; workspaceId: string; message: string }

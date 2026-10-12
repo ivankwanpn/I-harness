@@ -21,7 +21,7 @@
 // exit-code contract) — this service REJECTS submit with that error so the
 // web-host opener maps the rejection to an `{status:"error"}` frame.
 import { createHash, randomUUID } from "node:crypto"
-import { append, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
+import { append, subscribe, validateImages, type ImageInput, type Session } from "@i-harness/core-session"
 import type { SandboxMode } from "@i-harness/sandbox"
 import { createSessionExecutor, type SessionExecutor as SessionTurnLane, type ReasoningEffort } from "@i-harness/core-agent"
 import type { ModelClient } from "@i-harness/llm-seam"
@@ -85,6 +85,15 @@ export interface SessionQueueItem {
   intent: "user" | "system"
   state: "queued" | "running"
   order: number
+}
+
+/** Ephemeral service queue truth, including post-turn settlement work.
+ * revision increases across all sessions for this service instance. */
+export interface SessionExecutionState {
+  sessionId: string
+  running: boolean
+  queued: number
+  revision: number
 }
 
 type SessionModelState =
@@ -196,10 +205,13 @@ export interface SessionService {
   /** Synchronous observation only; never resolves a model or constructs an Agent. */
   liveAssembly(sessionId: string): SessionAssembly | undefined
   hasAssembly(sessionId: string): boolean
-  /** Per-session lane observation for the jobs/queue surface:
-   * running = a turn is executing; queued = registered submit turns not yet
-   * started (the service pacing chain, in front of the lane). */
+  /** Service queue truth, including lane execution and post-turn settlement.
+   * queued counts paced submits and pending inbox inputs from queue(). */
   queueState(sessionId: string): { running: boolean; queued: number }
+  /** Future changes only, no replay. Emitted after queue bookkeeping, including
+   * internal submits; final idle follows lane hooks/flush and host completion.
+   * Optional for legacy embedders. Unsubscribe and close stop delivery. */
+  onExecutionState?(listener: (state: SessionExecutionState) => void): () => void
   /** M49 Task 11 (spec §8.1): the REAL per-session queue projection —
    * service-front (pacing chain) rows merged with lane rows by public id;
    * the running row is first, the rest FIFO. Never fabricated: {} here means
@@ -252,6 +264,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   const extensionRefreshes = new Map<string, Promise<void>>()
   const extensionCleanups = new Map<string, () => void | Promise<void>>()
   const hooks = new Set<(assembly: SessionAssembly) => void>()
+  const executionListeners = new Set<(state: SessionExecutionState) => void>()
+  const executionSubscriptions = new Map<string, () => void>()
+  let executionRevision = 0
   const chains = new Map<string, Promise<void>>()
   const active = new Set<Promise<void>>()
   const closing = new Map<string, Promise<void>>()
@@ -353,6 +368,19 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     adoptCount: number
   }
   const queues = new Map<string, SessionQueueState>()
+
+  function queueState(sessionId: string): { running: boolean; queued: number } {
+    const items = queue(sessionId)
+    return { running: items.some(item => item.state === "running"), queued: items.filter(item => item.state === "queued").length }
+  }
+
+  function notifyExecutionState(sessionId: string): void {
+    const state = Object.freeze({ sessionId, ...queueState(sessionId), revision: ++executionRevision })
+    for (const listener of [...executionListeners]) {
+      try { listener(state) }
+      catch { d.warn("[i-harness] execution-state listener failed") }
+    }
+  }
 
   function sessionQueueState(sessionId: string): SessionQueueState {
     let st = queues.get(sessionId)
@@ -636,6 +664,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
           agent: assembly.agent,
           inbox: assembly.inbox,
         }))
+        executionSubscriptions.get(sessionId)?.()
+        executionSubscriptions.set(sessionId, subscribe(assembly.session, event => {
+          if (event.type === "agent/input/admitted" || event.type === "agent/input/promoted" || event.type === "agent/input/cancelled") {
+            notifyExecutionState(sessionId)
+          }
+        }))
         // Hooks fire ONCE per assembly, after registration, inside the shared
         // pending — concurrent racers never double-attach (ApprovalMuxBridge
         // registers its answerer per ctx; a double attach would register twice).
@@ -700,6 +734,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       // row also flips to cancelled so the projection hides it immediately.
       if (record.state === "wait") record.state = "cancelled"
       controller.abort()
+      notifyExecutionState(sessionId)
     }
     signal.addEventListener("abort", markFromCaller)
     if (signal.aborted) markFromCaller()
@@ -711,16 +746,22 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     chains.set(sessionId, turn)
     active.add(turn)
     const cleanup = (): void => {
+      signal.removeEventListener("abort", markFromCaller)
       // Exactly-once removal for service rows (settle/error/cancel path); the
       // queue() finished-purge is the read-side twin — both delete idempotently.
       st.byId.delete(id)
       if (chains.get(sessionId) === turn) chains.delete(sessionId)
       active.delete(turn)
+      // The lane promise includes stop hooks and its persistence barrier; the
+      // service promise also includes post-turn host work. Publish only after
+      // removing this row, leaving any following submission visible.
+      notifyExecutionState(sessionId)
     }
     // Rejections stay owned: the submit caller gets the rejection in its own
     // handler — the cleanup promise must never surface one (a bare
     // `turn.finally` would propagate it).
     void turn.then(cleanup, cleanup)
+    notifyExecutionState(sessionId)
     telemetry?.emit({ type: "session/request", ts: Date.now(), data: { sessionId } })
     if (hasQueued) {
       telemetry?.emit({ type: "session/queued", ts: Date.now(), data: { sessionId } })
@@ -811,10 +852,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
   // ── M49 Task 11: the real queue projection ────────────────────────────────
   // Single read (no UI-derived truth — the projection is the service records +
   // the lane's own truth). Merges service-front and lane rows BY PUBLIC ID;
-  // state is "running" only for the lane's current turn; the running row is
-  // first, the rest FIFO. Records whose turn already finished are purged here
-  // (their submit cleanup may still be waiting on the chain — exactly-once
-  // removal on the read side too).
+  // state is "running" through lane execution and service-owned settlement;
+  // the running row is first, the rest FIFO. Finished lane-only records are
+  // purged here; scheduled submissions remain until their promise cleanup.
 
   function queue(sessionId: string): SessionQueueItem[] {
     const lane = lanes.get(sessionId)
@@ -874,6 +914,12 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
         continue
       }
+      if (rec.scheduled && rec.state === "running") {
+        // Lane execution finished, but this service submission still owns
+        // post-turn settlement work. Its cleanup removes the row.
+        out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "running", order: rec.order })
+        continue
+      }
       if (rec.state === "wait") {
         // service-front: admitted to the chain, not yet to the lane — queued.
         out.push({ id: rec.id, text: rec.text, delivery: rec.delivery, intent: rec.intent, state: "queued", order: rec.order })
@@ -904,6 +950,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     rec.controller.abort()
     rec.state = "cancelled"
     lanes.get(sessionId)?.cancel(id)
+    notifyExecutionState(sessionId)
     return { cancelled: true }
   }
 
@@ -912,6 +959,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     if (current !== undefined && lanes.get(sessionId)?.cancelCurrent !== undefined) {
       const result = lanes.get(sessionId)!.cancelCurrent!()
       if (result.cancelled) stopNotifications(sessionId)
+      if (result.cancelled) notifyExecutionState(sessionId)
       return result
     }
     const records = queues.get(sessionId)?.byId
@@ -922,6 +970,7 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     record.controller.abort()
     stopNotifications(sessionId)
     if (current === undefined) record.state = "cancelled"
+    notifyExecutionState(sessionId)
     return { cancelled: true }
   }
 
@@ -948,6 +997,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       ...notificationAdmissions.values(),
       ...notificationStops,
     ])
+    executionListeners.clear()
+    for (const off of executionSubscriptions.values()) off()
+    executionSubscriptions.clear()
     let failure: unknown
     try { await opts.beforeDispose?.() } catch (error) { failure = error }
     const failures: unknown[] = []
@@ -987,6 +1039,9 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       modelBindings.delete(sessionId)
       chains.delete(sessionId)
       queues.delete(sessionId)
+      executionSubscriptions.get(sessionId)?.()
+      executionSubscriptions.delete(sessionId)
+      notifyExecutionState(sessionId)
     })().finally(() => {
       if (closing.get(sessionId) === pending) closing.delete(sessionId)
     })
@@ -1032,16 +1087,11 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
     writableSessionFor,
     liveAssembly,
     hasAssembly: (sessionId) => assemblies.has(sessionId),
-    queueState: (sessionId) => {
-      // Count-only compatibility surface (session/status) — derived from the
-      // SAME projection, so the counts and the rows never disagree.
-      let running = false
-      let queued = 0
-      for (const item of queue(sessionId)) {
-        if (item.state === "running") running = true
-        else queued++
-      }
-      return { running, queued }
+    queueState,
+    onExecutionState: listener => {
+      if (closed) return () => {}
+      executionListeners.add(listener)
+      return () => { executionListeners.delete(listener) }
     },
     queue: (sessionId) => queue(sessionId),
     cancelQueued: (sessionId, id) => cancelQueued(sessionId, id),

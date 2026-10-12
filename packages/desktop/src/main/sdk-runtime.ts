@@ -167,6 +167,7 @@ export function createWorkspaceRuntimeManager(options: {
       launched.client.onNotification((frame) => {
         if (frame.method !== "session/event"
           && frame.method !== "session/status"
+          && frame.method !== "session/execution-state"
           && frame.method !== "desktop/interaction/request"
           && frame.method !== "desktop/interaction/closed"
           && frame.method !== "desktop/workflow/changed"

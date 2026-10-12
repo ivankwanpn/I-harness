@@ -11,6 +11,7 @@ export {
   createSessionService,
   type SessionModelBindingResult,
   type SessionQueueItem,
+  type SessionExecutionState,
   type SessionService,
   type SessionServiceOptions,
 } from "./service.ts"

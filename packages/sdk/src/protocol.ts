@@ -288,6 +288,15 @@ import type { SessionEvent } from "@i-harness/core-session"
 
 export const PROTOCOL_VERSION = 3
 
+/** Additive session/execution-state notification params. Future changes only;
+ * revision is monotonic within a service lifetime, never a durable event seq. */
+export interface SessionExecutionStateNotification {
+  sessionId: string
+  running: boolean
+  queued: number
+  revision: number
+}
+
 export const PARSE_ERROR = -32700
 export const INVALID_REQUEST = -32600
 export const METHOD_NOT_FOUND = -32601

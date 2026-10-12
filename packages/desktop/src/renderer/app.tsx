@@ -88,6 +88,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const [workStateFailure, setWorkStateFailure] = useState<{ scope: { workspaceId?: string; sessionId?: string }; message: string }>()
   const [running, setRunning] = useState(false)
   const runningRevision = useRef(0)
+  const executionRevision = useRef<number | undefined>(undefined)
   const operations = useSessionOperation(bridge, durableInputSupported.current)
   const operation = selectedWorkspaceId && selectedSessionId ? operations.states[operationKey(selectedWorkspaceId, selectedSessionId)] : undefined
   const sending = operation?.busy === true && operation.kind !== "model"
@@ -116,6 +117,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
   const restoredSelections = useRef(new Map<string, { workspaceId: string | undefined; sessionId: string | undefined }>())
   if (selection.current.workspaceId !== selectedWorkspaceId || selection.current.sessionId !== selectedSessionId) {
     selection.current = { workspaceId: selectedWorkspaceId, sessionId: selectedSessionId }
+    executionRevision.current = undefined
   }
   const reviewRequest = useRef(0)
   const navigationVersion = useRef(0)
@@ -342,8 +344,24 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
+        executionRevision.current = undefined
         setConnection("offline")
         setEventWindow((current) => markDisconnected(current))
+        return
+      }
+      if (event.method === "session/execution-state") {
+        const state = event.params as { sessionId?: unknown; running?: unknown; queued?: unknown; revision?: unknown } | undefined
+        if (!state || typeof state.sessionId !== "string" || typeof state.running !== "boolean"
+          || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
+          || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
+        if (state.sessionId !== selectedSessionId) { refresh.schedule(); return }
+        if (executionRevision.current !== undefined && state.revision <= executionRevision.current) return
+        executionRevision.current = state.revision
+        runningRevision.current++
+        // Invalidate queue/task reads started before the authoritative event.
+        tasksRequest.current++
+        setRunning(state.running)
+        refresh.schedule()
         return
       }
       if (event.method === "desktop/interaction/request") {
@@ -391,7 +409,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
         return
       }
       runningRevision.current++
-      setRunning(info.status === "queued")
+      // Legacy transport status describes one request; service state describes
+      // every submission, including a following turn already running.
+      if (executionRevision.current === undefined) setRunning(info.status === "queued")
       refresh.schedule()
     })
     return () => { unsubscribe(); refresh.dispose() }

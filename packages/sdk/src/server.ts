@@ -282,6 +282,9 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
   const statusNotify = (sessionId: string, status: string, error?: string): void => {
     emitMessage(makeNotification("session/status", { sessionId, status, ...(error !== undefined ? { error } : {}) }))
   }
+  const offExecutionState = service.onExecutionState?.(state => {
+    if (!closed) emitMessage(makeNotification("session/execution-state", state))
+  })
 
   /** M41b v1.1: resolve the host's rewind surface per request, or null when
    * the seam is absent (never cached — the host may have (re)wired it). */
@@ -875,6 +878,7 @@ export function createSdkServer(service: SessionService, opts: SdkServerOptions 
     async close() {
       if (closed) return
       closed = true
+      offExecutionState?.()
       for (const submissions of inflight.values()) for (const submission of submissions) submission.controller.abort()
       await Promise.allSettled([...preparingSessions.values(), ...preparingHistorySessions.values()])
       offAssembly()
