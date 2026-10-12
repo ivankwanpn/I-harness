@@ -137,7 +137,9 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     // Owned agent cancellation is forwarded as the exact message by status,
     // and as Error/RpcError/SdkRunError by request/run rejection. Anchor the
     // entire phrase so an upstream response containing it remains a failure.
-    const agentAborted = /^(?:(?:Error|RpcError|SdkRunError):\s*)?agent aborted$/.test(text)
+    // AbortSignal.throwIfAborted and node:timers/promises use these default
+    // messages; the gateway sends only .message, losing their AbortError name.
+    const agentAborted = /^(?:(?:Error|RpcError|SdkRunError):\s*)?(?:agent aborted|This operation was aborted|The operation was aborted)$/.test(text)
     const cancelled = agentAborted || facts.name === "AbortError" || facts.code === "ABORTED" || facts.code === "ABORT_ERR" || /^(?:Error:\s*)?(?:AbortError\b|aborted$|cancelled$|canceled$|operation (?:was )?aborted$|[a-zA-Z -]*request aborted by (?:the )?caller\b)/i.test(text)
     const status = integer(facts.httpStatus, 100, 599) ? facts.httpStatus : Number(/(?:\bHTTP\s+|\brequest failed:\s*)(\d{3})\b/i.exec(text)?.[1])
     const capacity = /\brequest failed:\s*\d{3} \(model is at capacity\)\s*$/.test(text)

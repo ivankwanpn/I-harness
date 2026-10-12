@@ -110,6 +110,19 @@ describe("native runtime diagnostics", () => {
 })
 
 describe("diagnostic request identity and metadata", () => {
+  it.each(["status-first", "rejection-first"])("recognizes default platform abort messages after SDK transport (%s)", async order => {
+    const controller = new AbortController()
+    controller.abort()
+    const timerError = await import("node:timers/promises").then(({ setTimeout }) => setTimeout(1000, undefined, { signal: controller.signal }).catch(error => error))
+    for (const error of [controller.signal.reason, timerError]) {
+      const service = createRuntimeDiagnostics(await root())
+      const statusDelivery = () => service.observe(status("failed", error.message))
+      const rejection = () => service.recordRequestFailure("ws", "s", new RpcError(-32603, error.message))
+      if (order === "status-first") { statusDelivery(); rejection() } else { rejection(); statusDelivery() }
+      expect((await service.list()).entries).toMatchObject([{ kind: "session/cancelled", level: "info" }])
+      expect((await service.list({ level: "error" })).entries).toEqual([])
+    }
+  })
   it.each(["failed", "error"])("treats the agent's actual cancellation through %s status and SDK wrappers as one informational outcome", async state => {
     const service = createRuntimeDiagnostics(await root())
     service.beginRequest("ws", "s", "token-cancel")
