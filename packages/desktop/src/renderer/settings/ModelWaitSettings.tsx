@@ -47,8 +47,8 @@ export function ModelWaitSettings({ bridge }: { bridge: Pick<DesktopBridge, "req
     <h2>{t("模型等待期限")}</h2>
     <p className="muted">{t("每項預設 300 秒；0 停用。儲存後套用於下一次模型請求。")}</p>
     <SettingsGroup>
-      <SettingsRow label={t("首次回應期限（秒）")} control={<input type="number" min={0} max={3600} step={1} aria-label={t("首次回應期限（秒）")} value={first} disabled={disabled} onChange={event => setFirst(event.target.value)} />} />
-      <SettingsRow label={t("進度期限（秒）")} control={<input type="number" min={0} max={3600} step={1} aria-label={t("進度期限（秒）")} value={progress} disabled={disabled} onChange={event => setProgress(event.target.value)} />} />
+      <SettingsRow label={t("首次回應期限（秒）")} description={t("等候服務端開始回應的上限。")} control={<input type="number" min={0} max={3600} step={1} aria-label={t("首次回應期限（秒）")} value={first} disabled={disabled} onChange={event => setFirst(event.target.value)} />} />
+      <SettingsRow label={t("進度期限（秒）")} description={t("收到文字、推理或工具參數時重新計時。長時間沒有可見輸出的模型，可調高或設為 0。")} control={<input type="number" min={0} max={3600} step={1} aria-label={t("進度期限（秒）")} value={progress} disabled={disabled} onChange={event => setProgress(event.target.value)} />} />
     </SettingsGroup>
     <div className="retry-settings-actions"><Button variant="secondary" disabled={disabled} onClick={() => { void save() }}>{t("儲存等待設定")}</Button>
       {saved ? <small className="muted">{t("已儲存：{first} / {progress} 秒", { first: saved.firstResponseSeconds, progress: saved.progressSeconds })}</small> : null}

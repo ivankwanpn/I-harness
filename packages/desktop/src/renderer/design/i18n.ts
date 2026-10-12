@@ -6,6 +6,8 @@ const english = {
   "等待模型回應…": "Waiting for the model to respond…", "等待模型繼續輸出…": "Waiting for more model output…", "請求已進行 {seconds} 秒。": "Request elapsed: {seconds}s.",
   "模型等待期限": "Model wait deadlines", "首次回應期限（秒）": "First response deadline (seconds)", "進度期限（秒）": "Progress deadline (seconds)", "儲存等待設定": "Save wait settings",
   "每項預設 300 秒；0 停用。儲存後套用於下一次模型請求。": "Each defaults to 300 seconds; 0 disables it. Saved changes apply to the next model request.",
+  "等候服務端開始回應的上限。": "Maximum wait for the server to begin responding.",
+  "收到文字、推理或工具參數時重新計時。長時間沒有可見輸出的模型，可調高或設為 0。": "Resets when text, reasoning or tool arguments arrive. Increase this limit or use 0 for models with long periods without visible output.",
   "請輸入 0 或 30 到 3600 的整數秒數；0 停用該期限。": "Enter 0 or an integer from 30 to 3600 seconds; 0 disables that deadline.",
   "無法讀取等待設定。": "Could not read model wait settings.", "無法儲存等待設定；輸入仍保留。": "Could not save model wait settings. Your input is retained.",
   "已儲存：{first} / {progress} 秒": "Saved: {first} / {progress}s",
