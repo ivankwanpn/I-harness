@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
+import { RpcError, SdkRunError } from "@i-harness/sdk"
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -109,6 +110,29 @@ describe("native runtime diagnostics", () => {
 })
 
 describe("diagnostic request identity and metadata", () => {
+  it.each(["failed", "error"])("treats the agent's actual cancellation through %s status and SDK wrappers as one informational outcome", async state => {
+    const service = createRuntimeDiagnostics(await root())
+    service.beginRequest("ws", "s", "token-cancel")
+    // The agent throws Error('agent aborted'); gateway and SDK status forward
+    // its message, while SDK request/run rejection wraps the same message.
+    service.observe(status(state, "agent aborted"))
+    service.recordRequestFailure("ws", "s", new RpcError(-32603, "agent aborted"))
+    service.recordRequestFailure("ws", "s", new SdkRunError("agent aborted", -32603, undefined, []))
+    expect((await service.list()).entries).toMatchObject([{ kind: "session/cancelled", level: "info", code: "cancelled" }])
+    expect((await service.list({ level: "error" })).entries).toEqual([])
+  })
+  it.each([new Error("agent aborted"), new RpcError(-32603, "agent aborted"), new SdkRunError("agent aborted", -32603, undefined, [])])("recognizes the agent cancellation when request rejection arrives first: %s", async error => {
+    const service = createRuntimeDiagnostics(await root())
+    service.recordRequestFailure("ws", "s", error)
+    service.observe(status("error", "agent aborted"))
+    expect((await service.list()).entries).toMatchObject([{ kind: "session/cancelled", level: "info" }])
+    expect((await service.list({ level: "error" })).entries).toEqual([])
+  })
+  it("does not suppress a provider body containing the exact agent cancellation phrase", async () => {
+    const service = createRuntimeDiagnostics(await root())
+    service.observe(status("failed", "OpenAI HTTP 500: {message: 'agent aborted'}"))
+    expect((await service.list()).entries).toMatchObject([{ kind: "session/error", httpStatus: 500 }])
+  })
   it("gives early request failures fresh identities and deduplicates status plus rejection by request", async () => {
     const service = createRuntimeDiagnostics(await root())
     service.beginRequest("ws", "s", "token-0001")

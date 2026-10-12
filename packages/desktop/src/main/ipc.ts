@@ -422,8 +422,13 @@ export async function dispatchDesktopRequest(
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
       if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
       if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
-      // Durable input submission only admits work. Execution failures arrive via
-      // session/status; admission validation must keep its inline feedback.
+      // Durable input can fail constructing the assembly before status begins.
+      // The gateway uses the same RPC code for construction and validation, so
+      // submitted backend rejections get a safe generic admission diagnostic.
+      // Native validation above remains inline; active turn state is untouched.
+      const recordAdmissionFailure = value.kind === "desktop/session/input/submit"
+        ? dependencies.diagnostics?.createAdmissionFailureRecorder(workspaceId, sessionId, typeof value.clientToken === "string" ? value.clientToken : undefined)
+        : undefined
       if (value.kind === "session/prompt") dependencies.diagnostics?.beginRequest(workspaceId, sessionId, typeof value.clientToken === "string" ? value.clientToken : undefined)
       return await runtime.client.request(value.kind === "session/prompt" ? "session/prompt" : "desktop/session/input/submit", {
         sessionId,
@@ -432,7 +437,10 @@ export async function dispatchDesktopRequest(
         ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
         ...(value.images?.length ? { images: value.images } : {}),
       }, 24 * 60 * 60 * 1000).catch(error => {
-        try { if (value.kind === "session/prompt") dependencies.diagnostics?.recordRequestFailure(workspaceId, sessionId, error) } catch { /* Preserve the original request rejection. */ }
+        try {
+          if (value.kind === "session/prompt") dependencies.diagnostics?.recordRequestFailure(workspaceId, sessionId, error)
+          else recordAdmissionFailure?.(error)
+        } catch { /* Preserve the original request rejection. */ }
         throw error
       })
     }

@@ -120,8 +120,10 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     for (const listener of [...listeners]) { try { listener(structuredClone(entry)) } catch { /* UI errors cannot interrupt the model. */ } }
     pending = pending.then(() => persist(entry)).catch(() => { storageError = storageFailure })
   }
-  function failure(workspaceId: string, sessionId: string | undefined, error: unknown, kind: "session/error" | "runtime/error" = "session/error") {
-    const state = scope(workspaceId, sessionId)
+  function failure(workspaceId: string, sessionId: string | undefined, error: unknown, kind: "session/error" | "runtime/error" = "session/error", admissionId?: string) {
+    // Rejected admission belongs to its RPC, independently of any running
+    // turn. A queued submission must never replace the active model identity.
+    const state: ReturnType<typeof scope> = admissionId === undefined ? scope(workspaceId, sessionId) : { turn: admissionId, requestId: admissionId }
     if (kind === "runtime/error" && sessionId === undefined) {
       if (error !== null && typeof error === "object") {
         let identity = startupFailures.get(error)
@@ -132,14 +134,22 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     // Only inspect facts; the original string never enters an entry.
     const text = error instanceof Error ? `${error.name}: ${error.message}` : typeof error === "string" ? error : ""
     const facts = error !== null && typeof error === "object" ? error as { code?: unknown; httpStatus?: unknown; name?: unknown } : {}
-    const cancelled = facts.name === "AbortError" || facts.code === "ABORTED" || facts.code === "ABORT_ERR" || /^(?:Error:\s*)?(?:AbortError\b|aborted$|cancelled$|canceled$|operation (?:was )?aborted$|[a-zA-Z -]*request aborted by (?:the )?caller\b)/i.test(text)
+    // Owned agent cancellation is forwarded as the exact message by status,
+    // and as Error/RpcError/SdkRunError by request/run rejection. Anchor the
+    // entire phrase so an upstream response containing it remains a failure.
+    const agentAborted = /^(?:(?:Error|RpcError|SdkRunError):\s*)?agent aborted$/.test(text)
+    const cancelled = agentAborted || facts.name === "AbortError" || facts.code === "ABORTED" || facts.code === "ABORT_ERR" || /^(?:Error:\s*)?(?:AbortError\b|aborted$|cancelled$|canceled$|operation (?:was )?aborted$|[a-zA-Z -]*request aborted by (?:the )?caller\b)/i.test(text)
     const status = integer(facts.httpStatus, 100, 599) ? facts.httpStatus : Number(/(?:\bHTTP\s+|\brequest failed:\s*)(\d{3})\b/i.exec(text)?.[1])
     const capacity = /\brequest failed:\s*\d{3} \(model is at capacity\)\s*$/.test(text)
     const code = cancelled ? "cancelled" : typeof facts.code === "string" && codes.has(facts.code) ? facts.code : capacity ? "CAPACITY" : integer(status, 100, 599) ? (codes.has(`http_${status}`) ? `http_${status}` : "model_error") : "model_error"
-    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, "terminal"]))
+    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId === undefined ? "terminal" : "admission"]))
     state.status = cancelled ? "cancelled" : "failed"
   }
   const service = {
+    createAdmissionFailureRecorder(workspaceId: string, sessionId: string, clientToken?: string) {
+      const identity = clientToken ?? randomUUID()
+      return (error: unknown) => { failure(workspaceId, sessionId, error, "runtime/error", identity) }
+    },
     beginRequest(workspaceId: string, sessionId: string, clientToken?: string) {
       const state = scope(workspaceId, sessionId)
       const identity = safeId(clientToken) ?? randomUUID()

@@ -7,6 +7,13 @@ import { createRuntimeDiagnostics } from "../src/main/runtime-diagnostics.ts"
 import { createGlobalProviderSettings } from "../src/main/global-provider-settings.ts"
 import { dispatchDesktopRequest, registerDesktopIpc, type DesktopIpcDependencies, type IpcMainLike } from "../src/main/ipc.ts"
 import type { DesktopEvent } from "../src/shared/bridge.ts"
+import { createSessionCoordinator } from "../../session-persistence/src/index.ts"
+import { createJsonlBackend } from "../../session-persistence-jsonl/src/index.ts"
+import { createSessionService } from "../../session-executor/src/index.ts"
+import { createDesktopInput } from "../../desktop-gateway/src/input.ts"
+import { createDesktopRouter } from "../../desktop-gateway/src/router.ts"
+import { createSdkServer } from "@i-harness/sdk/server"
+import { RpcError, encodeFrame, makeRequest, isRpcFailure, type RpcMessage } from "@i-harness/sdk"
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
 async function fixture() {
@@ -66,10 +73,57 @@ describe("native diagnostic IPC", () => {
    for (const clientToken of ["token-0001", "token-0001", "token-0002"]) await expect(dispatchDesktopRequest({ kind: "session/prompt", workspaceId: "ws", sessionId: "s", prompt: "hello", clientToken }, f.dependencies)).rejects.toThrow("request failed")
    expect((await f.diagnostics.list()).entries).toMatchObject([{ kind: "session/error", requestId: "token-0002" }, { kind: "session/error", requestId: "token-0001" }])
  })
- it("keeps an admission validation rejection from becoming a model error popup", async () => {
+ it("keeps local malformed admission validation inline before submitting any backend request", async () => {
    const f = await fixture()
-   f.dependencies.runtimes.get = async () => ({ sandbox: { wired: true }, info: { capabilities: {} }, client: { request: async () => { throw new Error("invalid admission token") } } }) as never
-   await expect(dispatchDesktopRequest({ kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue" }, f.dependencies)).rejects.toThrow("invalid admission")
+   const request = vi.fn(async () => { throw new Error("invalid admission token") })
+   f.dependencies.runtimes.get = async () => ({ sandbox: { wired: true }, info: { capabilities: {} }, client: { request } }) as never
+   const valid = { kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue" }
+   for (const patch of [{ text: "" }, { delivery: "bad" }, { clientToken: "tiny" }, { context: 123 }]) await expect(dispatchDesktopRequest({ ...valid, ...patch }, f.dependencies)).rejects.toThrow()
    expect((await f.diagnostics.list()).entries).toEqual([])
+   expect(request).not.toHaveBeenCalled()
+ })
+ it("records actual assemblyFor rejection before onStatus with fresh admission identity and repeated-token dedupe", async () => {
+   const f = await fixture()
+   const root = await mkdtemp(join(tmpdir(), "ih-admission-startup-")); roots.push(root)
+   const coordinator = createSessionCoordinator(createJsonlBackend(root))
+   await coordinator.create({ sessionId: "s" })
+   const service = createSessionService({ workspace: root, coordinator, modelBindingFor: async () => ({ status: "invalid", reason: "model binding unavailable: private startup payload" }) })
+   const statuses: unknown[] = []
+   const input = createDesktopInput(coordinator, service, { onStatus: (...args) => statuses.push(args) })
+   const frames: RpcMessage[] = []
+   const sdk = createSdkServer(service, { onWrite: frame => frames.push(frame) })
+   const router = createDesktopRouter(sdk, frame => frames.push(frame), { input })
+   let requestId = 1
+   const live: unknown[] = []
+   f.diagnostics.onEntry(entry => live.push(entry))
+   f.dependencies.runtimes.get = async () => ({ sandbox: { wired: true }, info: { capabilities: {} }, client: { request: async (method: string, params: object) => {
+     const id = requestId++
+     await router.handleLine(encodeFrame(makeRequest(id, method, params)))
+     const frame = frames.find(row => "id" in row && row.id === id)
+     if (isRpcFailure(frame)) throw new RpcError(frame.error.code, frame.error.message, frame.error.data)
+     if (frame && "result" in frame) return frame.result
+     throw new Error("Missing gateway response")
+   } } }) as never
+   try {
+     await router.handleLine(encodeFrame(makeRequest(0, "initialize", {})))
+     for (const clientToken of ["token-0001", "token-0001", "token-0002"]) await expect(dispatchDesktopRequest({ kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue", clientToken }, f.dependencies)).rejects.toThrow("model binding unavailable")
+     expect(statuses).toEqual([])
+     const result = await f.diagnostics.list()
+     expect(result.entries).toMatchObject([{ kind: "runtime/error", level: "error", workspaceId: "ws", sessionId: "s", requestId: "token-0002" }, { kind: "runtime/error", requestId: "token-0001" }])
+     expect(live).toHaveLength(2)
+     expect(JSON.stringify(result)).not.toContain("private startup payload")
+     expect(JSON.stringify(live)).not.toContain("private startup payload")
+   } finally { await router.close(); await input.close(); await service.close(); await coordinator.close() }
+ })
+ it("records submitted backend admission rejection without changing the running turn's failure attribution", async () => {
+   const f = await fixture()
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "turn/start", seq: 1 } } })
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/retry", version: 1, retry: { requestId: "active-model", phase: "waiting", attempt: 1, delayMs: 500, code: "SERVER" } } } })
+   f.dependencies.runtimes.get = async () => ({ sandbox: { wired: true }, info: { capabilities: {} }, client: { request: async () => { throw new RpcError(-32602, "invalid admission token") } } }) as never
+   await expect(dispatchDesktopRequest({ kind: "desktop/session/input/submit", workspaceId: "ws", sessionId: "s", text: "hello", delivery: "queue", clientToken: "queued-token" }, f.dependencies)).rejects.toThrow("invalid admission token")
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: "HTTP 401" } })
+   const result = await f.diagnostics.list()
+   expect(result.entries).toMatchObject([{ kind: "session/error", requestId: "active-model" }, { kind: "runtime/error", requestId: "queued-token" }, { kind: "model/retry", requestId: "active-model" }])
+   expect(JSON.stringify(result)).not.toContain("invalid admission token")
  })
 })
