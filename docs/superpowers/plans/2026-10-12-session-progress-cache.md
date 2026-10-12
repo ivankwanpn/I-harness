@@ -30,23 +30,35 @@
 - [ ] Cover queued follow-on work, direct/internal submit, failure, Stop/cancellation, late snapshot ordering and subscription cleanup.
 - [ ] Run affected executor/SDK/Desktop tests and typechecks; commit and write task-1-report.md with red/green evidence and interface contract.
 
-### Task 2: Model waiting guard, safe activity and settings
+### Task 2: Model waiting guard and backend settings
 
-**Files:** llm-seam stream helper/types/tests; provider and provider-runtime wiring; necessary adapter progress/read cleanup sites; core-agent/core-session event handling; settings; desktop-gateway global settings proxy; desktop native/shared diagnostics and renderer RuntimeFeedback/RetrySettings with tests.
+**Files:** llm-seam stream helper/types/tests; provider and provider-runtime wiring; necessary adapter progress/read cleanup sites; core-agent/core-session event handling; settings; desktop-gateway settings routes/tests. Desktop production files are owned by Task3.
 
-**Interfaces:** Preserve Task1 execution settlement; introduce bounded neutral stream activity and host-only deadline policy. New model wait settings routes return {firstResponseSeconds,progressSeconds}; distinct from existing retry-count routes. Defaults300/300; zero disables individually; otherwise integer30..3600. Native proxy works without selected workspace.
+**Interfaces:** Preserve Task1 execution settlement; introduce bounded neutral stream activity and host-only deadline policy. New desktop/model-wait/state/configure routes return {firstResponseSeconds,progressSeconds}; distinct from existing retry-count routes. Defaults300/300; zero disables individually; otherwise integer30..3600. Core model/activity events and exported metadata are the Task3 producer contract; document exact fields, phases, timing and clearing rules in report.
 
 - [ ] Write fake-clock tests for no headers/body, heartbeats, real reasoning/tool-fragment progress, Stop, late iterator cleanup, retry/exhaustion and zero/custom settings.
 - [ ] Implement per-physical-attempt guard below one retry layer; refresh settings next request and preserve usage/failed-tool safety.
-- [ ] Forward safe phase/progress metadata and show quiet waiting after15seconds, with correct retry/cancel/terminal precedence and session isolation.
-- [ ] Add General settings with validation, saved-state/error retention; no provider payload/opaque values in diagnostics.
-- [ ] Test actual local HTTP cancellation/timeout; compare other protocol request payloads; run affected suites/typechecks and UI QA. Commit/report.
+- [ ] Produce safe bounded phase/progress metadata including quiet-wait activity after15seconds. No payloads, per-token persistence or heartbeat deadline resets.
+- [ ] Add backend settings persistence/routes with validation and next-request refresh independent of explicit retry policies.
+- [ ] Test actual local HTTP cancellation/timeout; compare other protocol request payloads; run affected backend suites/typechecks. Commit/report including exact consumer contract.
 
-### Task 3: Codex affinity and stable Todo context
+### Task 3: Waiting feedback, native diagnostics and General settings
+
+**Files:** desktop native/shared diagnostics/bridge/global-provider-settings/IPC, renderer RuntimeFeedback and General settings, localization and focused tests.
+
+**Interfaces:** Consume reviewed Task2 model/activity contract and desktop/model-wait/state/configure. Native no-workspace proxies desktop/global-model-wait/state/configure return the same seconds fields. Consume Task1 session/execution-state; running:false with queued>0 is a valid handoff, not necessarily the end of pending user work.
+
+- [ ] Write failing tests for quiet waiting after15seconds, genuine progress, retry precedence, cancellation/settlement, stale event/session isolation and settings bounds/persistence/error retention.
+- [ ] Sanitize activity once in native. Persist bounded lifecycle/quiet/timeout facts, never every chunk; do not classify informational activity as final errors.
+- [ ] Display truthful quiet phase/elapsed progress in independent feedback without focus stealing or composer movement. Preserve existing error/retry/details behavior and new-task draft ownership.
+- [ ] Add configurable first-response/progress seconds in General: defaults300/300,0off,otherwiseinteger30..3600. Saved values apply next request; keep draft on save error.
+- [ ] Run Desktop affected/full suites, typecheck/build and actual-component420/1280px dark/light QA; commit/report.
+
+### Task 4: Codex affinity and stable Todo context
 
 **Files:** core-agent request turn scope and llm-seam host-only types, llm-openai subscription branch/tests, usage-capture metadata stripping as required, todo context renderer/tests and assembly integration tests.
 
-**Interfaces:** Preserve Task2 activity/deadline metadata and Task1 lifecycle. Stable session+turn scope across steps/retries, independent across turns/children. Subscription-only state; no new on-wire fields in other protocols.
+**Interfaces:** Preserve Task2 activity/deadline metadata, Task3 diagnostic boundary and Task1 lifecycle. Stable session+turn scope across steps/retries, independent across turns/children. Subscription-only state; no new on-wire fields in other protocols.
 
 - [ ] Read .tmp/investigate-openai-cache.md and native reference source before implementation.
 - [ ] Write failing captured-request tests for same-turn affinity/sticky replay, new-turn/account/child isolation, bounded invalid token handling and no public/other-protocol header changes.
@@ -54,7 +66,7 @@
 - [ ] Remove revision-only Todo context churn while preserving list semantics, clearing, compaction and real updates; add regression tests.
 - [ ] Run six-protocol payload/cache semantics regressions and relevant core/runtime/usage tests; commit/report. No live cache-hit claims.
 
-### Task 4: Integration and v0.1.11 delivery
+### Task 5: Integration and v0.1.11 delivery
 
 - [ ] Independently review complete branch and address evidenced findings.
 - [ ] Reproduce and correct the stale CLI redaction expectation and Windows quoting-sensitive cancellation fixture; retain meaningful behavioral assertions.
