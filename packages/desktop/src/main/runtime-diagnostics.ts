@@ -142,7 +142,14 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     const agentAborted = /^(?:(?:Error|RpcError|SdkRunError):\s*)?(?:agent aborted|This operation was aborted|The operation was aborted)$/.test(text)
     const cancelled = agentAborted || facts.name === "AbortError" || facts.code === "ABORTED" || facts.code === "ABORT_ERR" || /^(?:Error:\s*)?(?:AbortError\b|aborted$|cancelled$|canceled$|operation (?:was )?aborted$|[a-zA-Z -]*request aborted by (?:the )?caller\b)/i.test(text)
     const status = integer(facts.httpStatus, 100, 599) ? facts.httpStatus : Number(/(?:\bHTTP\s+|\brequest failed:\s*)(\d{3})\b/i.exec(text)?.[1])
+    // The Responses adapter prefixes its structured error code. SDK status
+    // forwarding keeps that prefix but drops the separate code property.
+    // Match only the leading identity or the exact known message-only form;
+    // a capacity phrase embedded in another error must not change its reason.
+    const streamMessage = text.replace(/^(?:Error|RpcError|SdkRunError):\s*/, "").replace(/^model stream error: /, "")
     const capacity = /\brequest failed:\s*\d{3} \(model is at capacity\)\s*$/.test(text)
+      || /^(?:server_is_overloaded|server_overloaded): /.test(streamMessage)
+      || /^Selected model is at capacity\.(?: Please try a different model\.)?$/.test(streamMessage)
     const code = cancelled ? "cancelled" : typeof facts.code === "string" && codes.has(facts.code) ? facts.code : capacity ? "CAPACITY" : integer(status, 100, 599) ? (codes.has(`http_${status}`) ? `http_${status}` : "model_error") : "model_error"
     add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId === undefined ? "terminal" : "admission"]))
     state.status = cancelled ? "cancelled" : "failed"
