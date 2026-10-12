@@ -290,6 +290,7 @@ export async function describeHttpError(label: string, response: Response): Prom
     : classified && TERMINAL_CODES.has(classified) ? classified
     : response.status === 401 || response.status === 403 ? "AUTH"
     : response.status === 402 ? "QUOTA"
+    : response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429 ? "INVALID_ARGUMENT"
     : capacityLimited ? "SERVER"
     : response.status === 429 ? "RATE_LIMIT"
     : response.status === 408 ? "TIMEOUT"

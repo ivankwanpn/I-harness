@@ -77,3 +77,15 @@ it("keeps quota exhaustion terminal even if its message mentions capacity", asyn
   expect(events.map(e => e.type)).toEqual(["error"])
   expect(fetch).toHaveBeenCalledTimes(1)
 })
+
+it.each([400, 404, 413, 422].flatMap(status => ["normal", "always"].map(mode => ({ status, mode }))))("keeps HTTP $status terminal under $mode despite the capacity phrase", async ({ status, mode }) => {
+  vi.useFakeTimers()
+  const fetch = vi.fn().mockImplementationOnce(() => new Response(capacity, { status })).mockImplementation(success)
+  vi.stubGlobal("fetch", fetch)
+  const client = createOpenAIClient({ apiKey: "fixture", model: "gpt-6.1-sol", baseUrl: "https://api.test" })
+  const policy = resolveRetryPolicy(mode === "always" ? { mode: "always" } : { mode: "normal", maxRetries: 1 })
+  const result = collect(createRetryingClient(client, policy))
+  await vi.runAllTimersAsync()
+  expect((await result).map(event => event.type)).toEqual(["error"])
+  expect(fetch).toHaveBeenCalledTimes(1)
+})
