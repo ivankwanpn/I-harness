@@ -69,6 +69,7 @@ export interface LLMUsage {
  *    the other's `else`.
  */
 export type LLMStreamEvent =
+  | { type: "activity"; activity: import("@i-harness/core-session").ModelActivityInfo }
   | { type: "retry"; retry: ModelRetryInfo }
   | { type: "text/chunk"; text: string }
   | { type: "reasoning"; text: string; blockId?: string }
@@ -79,7 +80,7 @@ export type LLMStreamEvent =
 
 // LLMMessage is owned by core-session (it is the audit seam for the session
 // log); llm-seam re-exports it rather than re-declaring a duplicate type.
-export type { LLMMessage, LLMContentPart, ModelRetryInfo, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
+export type { LLMMessage, LLMContentPart, ModelRetryInfo, ModelActivityInfo, ImageInput, ImageMediaType, ProviderThinkingBlock, ProviderContinuation, ProviderBlockOrderEntry } from "@i-harness/core-session"
 
 /** Native replay metadata belongs to the route that produced it. Older logs
  * without provenance remain readable; new records reject a different model or
@@ -276,7 +277,13 @@ function isModelCapacityError(error: unknown): boolean {
 }
 
 /** HTTP status and server delay are structured; response bodies never enter retry diagnostics. */
-export async function describeHttpError(label: string, response: Response): Promise<Error> {
+export async function describeHttpError(label: string, response: Response, request?: Pick<LLMRequest, "onTerminalResponse">): Promise<Error> {
+  // Preserve body-based classification (notably 400 context overflow), but let
+  // a guarded host retain known terminal status if this error body's read parks.
+  if (response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429) {
+    const code = response.status === 401 || response.status === 403 ? "AUTH" : response.status === 402 ? "QUOTA" : "INVALID_ARGUMENT"
+    try { request?.onTerminalResponse?.({ code, httpStatus: response.status }) } catch { /* diagnostic observer */ }
+  }
   const body = await response.text()
   let bodyCode: string | undefined
   let capacityLimited = CAPACITY_RE.test(body.slice(0, 8192))
@@ -421,6 +428,10 @@ export function validatePromptCacheConfig(value: unknown, path = "promptCache"):
 }
 
 export interface LLMRequest {
+  /** Host-only fallback for an error body that outlives a guard deadline. */
+  onTerminalResponse?: (hint: import("./waiting-guard.ts").TerminalResponseHint) => void
+  /** Host-only transport milestones; never serialize into protocol input. */
+  onStreamActivity?: (kind: import("./waiting-guard.ts").StreamActivity) => void
   /** Host-only: the consumer can discard an uncommitted failed attempt. */
   retryOutput?: "discard"
   /** Host-only usage attribution. Protocol adapters never serialize this field. */
@@ -459,6 +470,8 @@ export function resolvePromptCacheMode(config: PromptCacheConfig | undefined, in
 export interface ModelClient {
   stream(request: LLMRequest): AsyncIterable<LLMStreamEvent>
 }
+
+export { createWaitingGuard, reportStreamActivity, type ModelWaitPolicy, type StreamActivity, type TerminalResponseHint } from "./waiting-guard.ts"
 
 export function assertMessagesFromLog(messages: LLMMessage[], session: Session): void {
   const logged = deriveMessages(session)

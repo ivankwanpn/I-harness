@@ -17,12 +17,23 @@ export interface ModelRetryInfo {
   discardOutput?: true
 }
 
+/** Ephemeral per-physical-attempt state. No model text or transport data. */
+export interface ModelActivityInfo {
+  requestId: string
+  phase: "connecting" | "streaming" | "quiet" | "settled"
+  startedAt: number
+  lastProgressAt?: number
+  waitingFor: "first-response" | "progress"
+  outcome?: "completed" | "failed" | "cancelled"
+}
+
 export type SessionEvent =
   | (
     | { type: "turn/start"; seq?: number }
     | { type: "step/start"; seq?: number }
     | { type: "step/failed"; seq?: number }
     | { type: "model/retry"; version: 1; ts: number; retry: ModelRetryInfo; seq?: number }
+    | { type: "model/activity"; version: 1; ts: number; activity: ModelActivityInfo; seq?: number }
     // `internal: true` = model-visible but NOT a user-facing turn (runtime-
     // context snapshots, guard nudges): the projection keeps it, the TUI
     // scrollback skips it. Additive — old logs simply never carry it.
@@ -387,7 +398,7 @@ export function subscribe(session: Session, listener: (ev: SessionEvent) => void
 
 /** Notify live consumers without invoking the durable append/persistence hook.
  * A caller-supplied seq is stripped so a chunk can never move a replay cursor. */
-export function publishTransient(session: Session, event: Extract<SessionEvent, { type: "assistant/chunk" | "reasoning/chunk" }>): void {
+export function publishTransient(session: Session, event: Extract<SessionEvent, { type: "assistant/chunk" | "reasoning/chunk" | "model/activity" }>): void {
   const { seq: _seq, ...live } = event
   subscribers.get(session)?.forEach((listener) => listener(live))
 }
@@ -399,6 +410,7 @@ export function createSession(onAppend?: (ev: SessionEvent) => void): Session {
 }
 
 export function append(session: Session, event: SessionEvent): void {
+  if (event.type === "model/activity") throw new Error("model/activity must be published as a transient event")
   if (event.type === "reasoning/chunk") throw new Error("reasoning/chunk must be published as a transient event")
   if (event.type === "assistant/message" && (event as { source?: string }).source !== undefined) {
     throw new Error("assistant/message must originate from the log, not an external source")

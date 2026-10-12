@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { reportStreamActivity, canReplayContinuation, describeTransportError, projectImagesForProvider, replayBlockOrder, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { BedrockRuntimeClient, ConverseStreamCommand } from "@aws-sdk/client-bedrock-runtime"
 import type { BedrockRuntimeClient as BedrockRuntimeClientClass, ConverseStreamCommandInput, ConverseStreamCommandOutput } from "@aws-sdk/client-bedrock-runtime"
 
@@ -232,6 +232,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
         yield { type: "error", error: await describeTransportError("bedrock", resolveBedrockRegion(config.region, process.env), err, { remediation: "none" }) }
         return
       }
+      reportStreamActivity(request, "response-start")
       // Tool-use accumulation per content block (the ConverseStream wire):
       // a toolUse delta carries the args as one JSON string split across
       // deltas; the stop event completes the block, and the args are parsed
@@ -296,6 +297,7 @@ export function createBedrockClient(config: BedrockConfig, runtime?: BedrockRunt
               const pending = pendingToolUses.get(m.contentBlockDelta.contentBlockIndex ?? 0)
               if (pending !== undefined && typeof delta.toolUse.input === "string") {
                 pending.buffer += delta.toolUse.input
+                if (delta.toolUse.input.length > 0) reportStreamActivity(request, "tool-arguments")
               }
               return []
             }

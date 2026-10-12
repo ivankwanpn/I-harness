@@ -61,6 +61,15 @@ over the hint, and HTTP408/429 do not receive terminal fallback hints.
 Iterator cleanup must not await a permanently parked noncooperative generator;
 observe late settlements and avoid unhandled rejections or overlapping effects.
 
+Preserve existing full error-body classification, including HTTP 400 context
+overflow. A shared helper may emit a host-only terminal-status hint before reading
+that body: 401/403 map to AUTH, 402 to QUOTA, and other terminal 4xx to
+INVALID_ARGUMENT; 408/429 are excluded. If a deadline wins while the error body
+is parked, use that safe terminal fallback and HTTP status instead of retryable
+TIMEOUT. Completed body parsing remains authoritative; explicit user cancellation
+always wins. Hints contain only a bounded neutral code and numeric status, remain
+per-attempt, and never enter wire requests, session metadata, or durable logs.
+
 Expose sanitized phase, request identity and progress timing through core session
 events/native diagnostics. A quiet request can show a small waiting state after
 15 seconds, without stealing focus or moving the composer. Keep retry status

@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { reportStreamActivity, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { systemFetch } from "@i-harness/http-transport"
 
 export interface OpenAIConfig {
@@ -236,9 +236,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: await describeHttpError("openai", response) }
+        yield { type: "error", error: await describeHttpError("openai", response, request) }
         return
       }
+      reportStreamActivity(request, "response-start")
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -340,7 +341,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (t === "response.function_call_arguments.delta") {
           const ev = event as { item_id: string; delta: string }
           const pending = pendingCalls.get(ev.item_id)
-          if (pending) pending.argsBuffer += ev.delta
+          if (pending) { pending.argsBuffer += ev.delta; if (typeof ev.delta === "string" && ev.delta.length > 0) reportStreamActivity(request, "tool-arguments") }
           return []
         }
         if (t === "response.function_call_arguments.done") {

@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
+import { reportStreamActivity, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderContinuation, type ReasoningEffort } from "@i-harness/llm-seam"
 
 export interface GeminiConfig {
   apiKey: string
@@ -286,9 +286,10 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: await describeHttpError("gemini", response) }
+        yield { type: "error", error: await describeHttpError("gemini", response, request) }
         return
       }
+      reportStreamActivity(request, "response-start")
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -329,6 +330,7 @@ export function createGeminiClient(config: GeminiConfig): ModelClient {
       const emptyTextSignatures: string[] = []
       const accumulateArgs = (call: PendingCall, args: unknown): void => {
         if (typeof args === "object" && args !== null) {
+          if (Object.keys(args).length > 0) reportStreamActivity(request, "tool-arguments")
           call.rawArgs.push(args as Record<string, unknown>)
           call.argsJson += JSON.stringify(args)
         }

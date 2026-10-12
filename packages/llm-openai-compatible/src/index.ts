@@ -1,4 +1,4 @@
-import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
+import { reportStreamActivity, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ReasoningEffort } from "@i-harness/llm-seam"
 
 /**
  * M72 Ⅲ: the wire's usage, under the seam's names.
@@ -211,9 +211,10 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: await describeHttpError("openai-compatible", response) }
+        yield { type: "error", error: await describeHttpError("openai-compatible", response, request) }
         return
       }
+      reportStreamActivity(request, "response-start")
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -323,7 +324,7 @@ export function createOpenAICompatibleClient(config: OpenAICompatibleConfig): Mo
               }
               if (tc.id) pending.id = tc.id
               if (tc.function?.name) pending.name = tc.function.name
-              if (tc.function?.arguments) pending.argsBuffer += tc.function.arguments
+              if (tc.function?.arguments) { pending.argsBuffer += tc.function.arguments; reportStreamActivity(request, "tool-arguments") }
             }
           }
         }

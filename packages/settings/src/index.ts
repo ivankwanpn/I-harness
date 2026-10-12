@@ -311,6 +311,8 @@ export interface Settings {
   codeMode: SettingsCodeMode
   /** Automatic conversation titles. Absent documents retain the existing enabled default. */
   autoTitle?: boolean
+  /** Host deadlines in seconds; zero disables each deadline independently. */
+  modelWait: ModelWaitSettings
   /** Additional model attempts after a transient failure; zero disables retry. */
   modelRetryLimit: number
   sandboxMode: SettingsSandboxMode
@@ -388,6 +390,7 @@ const SETTINGS_DEFAULTS: Settings = {
   contextSubsystems: normalizeContextSubsystems(undefined),
   codeMode: { mode: "off" },
   autoTitle: true,
+  modelWait: { firstResponseSeconds: 300, progressSeconds: 300 },
   modelRetryLimit: 5,
   sandboxMode: "workspace-write",
   windowsSandboxBackend: "legacy",
@@ -778,6 +781,7 @@ export function normalizeSettings(raw: unknown): Settings {
     contextSubsystems: normalizeContextSubsystems(raw.contextSubsystems),
     codeMode: normalizeCodeMode(raw.codeMode),
     autoTitle: typeof raw.autoTitle === "boolean" ? raw.autoTitle : true,
+    modelWait: normalizeModelWait(raw.modelWait),
     modelRetryLimit: typeof raw.modelRetryLimit === "number" && Number.isSafeInteger(raw.modelRetryLimit) && raw.modelRetryLimit >= 0 && raw.modelRetryLimit <= 100 ? raw.modelRetryLimit : 5,
     agentShell: oneOf(raw.agentShell, AGENT_SHELL_CHOICES, base.agentShell),
     approvalMode: oneOf(raw.approvalMode, APPROVAL_MODES, base.approvalMode),
@@ -1620,3 +1624,15 @@ export function watchSettings(
 // describe views, validated mutate ops and the revision-guard errors. Built on
 // this package's store — the section module itself stays dependency-free.
 export * from "./sections.ts"
+
+export interface ModelWaitSettings { firstResponseSeconds: number; progressSeconds: number }
+export function validModelWaitSeconds(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && (value === 0 || value >= 30 && value <= 3600)
+}
+export function normalizeModelWait(value: unknown): ModelWaitSettings {
+  const data = value !== null && typeof value === "object" ? value as Record<string, unknown> : {}
+  return {
+    firstResponseSeconds: validModelWaitSeconds(data.firstResponseSeconds) ? data.firstResponseSeconds : 300,
+    progressSeconds: validModelWaitSeconds(data.progressSeconds) ? data.progressSeconds : 300,
+  }
+}

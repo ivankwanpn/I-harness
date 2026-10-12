@@ -2,9 +2,28 @@ import { expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, deriveMessages, deriveSearchText, subscribe, toJSONL, fromJSONL } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { createRetryingClient, resolveRetryPolicy, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
+import { createWaitingGuard, createRetryingClient, resolveRetryPolicy, type LLMRequest, type ModelClient } from "@i-harness/llm-seam"
 import { createAgent } from "../src/index.ts"
 import type { TelemetryEvent } from "@i-harness/telemetry"
+
+it("timeout recovery discards pending tool effects without repeating accepted steps", async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx), effects: string[] = []
+  tools.register({ name: "write", description: "in-memory", inputSchema: {}, execute: async ({ value }: { value: string }) => { effects.push(value); return value } })
+  let attempt = 0
+  const base: ModelClient = { async *stream() {
+    const n = ++attempt
+    if (n < 4) yield { type: "tool_call", call: { id: `call-${n}`, name: "write", args: { value: n === 2 ? "discard" : `accepted-${n}` } } }
+    if (n === 2) { await new Promise(() => {}) }
+    else { if (n === 4) yield { type: "text/chunk", text: "done" }; yield { type: "end" } }
+  } }
+  const model = createRetryingClient(createWaitingGuard(base, { firstResponseMs: 50, progressMs: 10 }), resolveRetryPolicy({ mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1 } }))
+  const result = await createAgent(ctx, { session, tools, model, systemPrompt: "" }).run("start")
+  expect(result.finalText).toBe("done")
+  expect(effects).toEqual(["accepted-1", "accepted-3"])
+  expect(attempt).toBe(4)
+  expect(session.events.filter(e => e.type === "step/failed")).toHaveLength(1)
+  expect(JSON.stringify(deriveMessages(session))).not.toContain("discard")
+})
 
 it("discards only the failed attempt, preserves audit and earlier effects, and retries the safe history", async () => {
   const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)

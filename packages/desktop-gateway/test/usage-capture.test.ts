@@ -129,3 +129,19 @@ describe("usage capture", () => {
     expect(f.capture.warnings()).toEqual(["Invalid provider usage was omitted for 1 request(s); token statistics may be incomplete."])
   })
 })
+
+it("guard timeout records one failed attempt inside recovery, discards its usage and retains cancellation status", async () => {
+ const { createWaitingGuard } = await import("@i-harness/llm-seam")
+ const f = fixture(); let attempts = 0
+ const base: ModelClient = { async *stream() { attempts++; yield { type: "usage", usage: { inputTokens: attempts } }; if (attempts === 1) { await new Promise(() => {}) } else { yield { type: "text/chunk", text: "ok" }; yield { type: "end" } } } }
+ const client = f.capture.buildClient(() => createWaitingGuard(base, { firstResponseMs: 5, progressMs: 5 }))({ ...profile, retryPolicy: { mode: "normal", maxRetries: 1, backoff: { initialDelayMs: 1 } } })
+ const visible: unknown[] = []
+ for await (const e of client.stream(request)) if (e.type === "usage") visible.push(e.usage)
+ expect(attempts).toBe(2)
+ expect(f.records.map(r => [r.status, r.inputTokens])).toEqual([["failed", 1], ["completed", 2]])
+ expect(visible).toEqual([{ inputTokens: 2 }])
+ const controller = new AbortController()
+ const cancelled = f.capture.buildClient(() => createWaitingGuard({ async *stream() { controller.abort(); await new Promise(() => {}) } }, { firstResponseMs: 0, progressMs: 0 }))(profile)
+ await expect(consume(cancelled, { ...request, signal: controller.signal })).rejects.toThrow()
+ expect(f.records.at(-1)?.status).toBe("cancelled")
+})
