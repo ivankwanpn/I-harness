@@ -194,6 +194,11 @@ export async function dispatchDesktopRequest(
       if (!navigation || typeof navigation !== "object" || !Object.hasOwn(navigation, String(contextParams.sessionId))) throw new Error("Approval conversation unavailable")
     }
     const longOperation = ["desktop/session/compact", "desktop/mcp/mutate", "desktop/mcp/refresh", "desktop/hooks/mutate", "desktop/hooks/refresh", "desktop/wsl/repair", "desktop/wsl/diagnose"].includes(value.kind)
+    if (value.kind === "desktop/session/compact") {
+      const recordFailure = dependencies.diagnostics?.createAdmissionFailureRecorder(String(value.workspaceId), String(contextParams.sessionId))
+      try { return await runtime.client.request(value.kind, contextParams, 600000) }
+      catch (error) { try { recordFailure?.(error) } catch { /* Preserve compaction rejection. */ } throw error }
+    }
     return runtime.client.request(value.kind, contextParams, longOperation ? 600000 : 30000)
   }
 
@@ -419,9 +424,6 @@ export async function dispatchDesktopRequest(
       if (value.clientToken !== undefined && (typeof value.clientToken !== "string" || value.clientToken.length < 8 || value.clientToken.length > 128)) throw new Error("Invalid prompt client token")
       if (value.images !== undefined && (!Array.isArray(value.images) || value.images.length > 10)) throw new Error("Invalid prompt images")
       const runtime = await runtimeForKnownWorkspace(workspaceId, dependencies)
-      if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
-      if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
-      if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
       // Durable input can fail constructing the assembly before status begins.
       // The gateway uses the same RPC code for construction and validation, so
       // submitted backend rejections get a safe generic admission diagnostic.
@@ -430,19 +432,26 @@ export async function dispatchDesktopRequest(
         ? dependencies.diagnostics?.createAdmissionFailureRecorder(workspaceId, sessionId, typeof value.clientToken === "string" ? value.clientToken : undefined)
         : undefined
       if (value.kind === "session/prompt") dependencies.diagnostics?.beginRequest(workspaceId, sessionId, typeof value.clientToken === "string" ? value.clientToken : undefined)
-      return await runtime.client.request(value.kind === "session/prompt" ? "session/prompt" : "desktop/session/input/submit", {
-        sessionId,
-        ...(value.kind === "session/prompt" ? { prompt } : { text: prompt, delivery: value.delivery }),
-        ...(value.context !== undefined ? { context: value.context } : {}),
-        ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
-        ...(value.images?.length ? { images: value.images } : {}),
-      }, 24 * 60 * 60 * 1000).catch(error => {
+      try {
+        // Readiness can change after the renderer prepared the input. Those
+        // rejected operations need the same independent diagnostic as dispatch.
+        if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
+        if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
+        if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
+        return await runtime.client.request(value.kind === "session/prompt" ? "session/prompt" : "desktop/session/input/submit", {
+          sessionId,
+          ...(value.kind === "session/prompt" ? { prompt } : { text: prompt, delivery: value.delivery }),
+          ...(value.context !== undefined ? { context: value.context } : {}),
+          ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
+          ...(value.images?.length ? { images: value.images } : {}),
+        }, 24 * 60 * 60 * 1000)
+      } catch (error) {
         try {
           if (value.kind === "session/prompt") dependencies.diagnostics?.recordRequestFailure(workspaceId, sessionId, error)
           else recordAdmissionFailure?.(error)
         } catch { /* Preserve the original request rejection. */ }
         throw error
-      })
+      }
     }
     case "desktop/session/input/state":
     case "desktop/session/input/resume":

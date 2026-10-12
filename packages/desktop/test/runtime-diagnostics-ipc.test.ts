@@ -25,6 +25,30 @@ async function fixture() {
  return { dependencies, diagnostics, request }
 }
 describe("native diagnostic IPC", () => {
+ it.each(["session/prompt", "desktop/session/input/submit"])("records runtime readiness rejection for %s before provider dispatch", async kind => {
+   for (const sandbox of [false, true]) {
+     const f = await fixture(), request = vi.fn()
+     f.dependencies.runtimes.get = async () => ({ sandbox: { wired: sandbox }, info: { capabilities: {} }, client: { request } }) as never
+     const input = { kind, workspaceId: "ws", sessionId: "s", prompt: "hello", text: "hello", delivery: "queue", context: "PRIVATE_CONTEXT" }
+     await expect(dispatchDesktopRequest(input, f.dependencies)).rejects.toThrow(sandbox ? "Prompt context is not supported" : "sandbox-not-enabled")
+     expect(request).not.toHaveBeenCalled()
+     const { entries } = await f.diagnostics.list()
+     expect(entries).toHaveLength(1)
+     expect(entries[0]).toMatchObject({ level: "error", workspaceId: "ws", sessionId: "s" })
+     expect(JSON.stringify(entries)).not.toContain("PRIVATE_CONTEXT")
+   }
+ })
+ it("records manual compaction failure without replacing an active retry identity", async () => {
+   const f = await fixture()
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/retry", version: 1, retry: { requestId: "active-model", phase: "waiting", attempt: 1, delayMs: 500, code: "SERVER" } } } })
+   f.dependencies.runtimes.get = async () => ({ info: { capabilities: {} }, client: { request: async () => { throw new Error("HTTP 503 PRIVATE_BODY") } } }) as never
+   await expect(dispatchDesktopRequest({ kind: "desktop/session/compact", workspaceId: "ws", sessionId: "s" }, f.dependencies)).rejects.toThrow("HTTP 503")
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: "HTTP 401" } })
+   const { entries } = await f.diagnostics.list()
+   expect(entries).toMatchObject([{ kind: "session/error", requestId: "active-model" }, { kind: "runtime/error", httpStatus: 503 }, { kind: "model/retry", requestId: "active-model" }])
+   expect(entries[1]?.requestId).not.toBe("active-model")
+   expect(JSON.stringify(entries)).not.toContain("PRIVATE_BODY")
+ })
  it("routes bounded diagnostic actions and rejects paths, unsupported keys, malformed filters and IDs before callbacks", async () => {
    const f = await fixture()
    f.diagnostics.observe({ kind: "sdk/disconnected", workspaceId: "ws", message: "raw private stderr" })
