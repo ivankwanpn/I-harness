@@ -28,6 +28,38 @@ function fixture() {
   return { bridge, emit, entry, status }
 }
 
+it.each(["failed", "cancelled", "completed"])("retains current quiet and retry feedback after an uncorrelated old %s status", terminal => {
+  const f = fixture(); const props = { bridge: f.bridge, workspaceId: "w", sessionId: "a", onOpenLog() {} }
+  const view = render(<RuntimeFeedback {...props} />)
+  const execution = (running: boolean, queued: number, revision: number) => f.emit({ kind: "sdk/notification", workspaceId: "w", method: "session/execution-state", params: { sessionId: "a", running, queued, revision } })
+  execution(true, 0, 7)
+  view.rerender(<RuntimeFeedback {...props} sessionId="b" />)
+  view.rerender(<RuntimeFeedback {...props} />)
+  for (const phase of ["connecting", "quiet"] as const) f.emit({ kind: "runtime/activity", workspaceId: "w", sessionId: "a", activity: { requestId: "physical-new", phase, startedAt: Date.now(), waitingFor: "progress" } })
+  f.entry()
+  execution(false, 0, 6)
+  if (terminal !== "completed") f.entry({ id: "old-terminal", requestId: undefined, kind: terminal === "failed" ? "session/error" : "session/cancelled", level: terminal === "failed" ? "error" : "info", retry: undefined })
+  f.status(terminal)
+  expect(screen.getByRole("status").textContent).toContain("容量")
+  if (terminal === "failed") expect(screen.getByRole("alert")).toBeTruthy()
+  f.entry({ id: "recovered", kind: "model/recovered", level: "info", retry: undefined })
+  expect(screen.getByRole("status").textContent).toContain("等待模型繼續")
+  execution(false, 1, 8); f.status(terminal)
+  expect(screen.getByRole("status")).toBeTruthy()
+  execution(false, 0, 9)
+  expect(screen.queryByRole("status")).toBeNull()
+})
+
+it("honors native uncorrelated errors even when the renderer missed earlier execution state", () => {
+  const f = fixture(); render(<RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} />)
+  f.entry()
+  f.entry({ id: "old-error", kind: "session/error", level: "error", requestId: undefined, retry: undefined, executionUncorrelated: true })
+  expect(screen.getByRole("status").textContent).toContain("容量")
+  expect(screen.getByRole("alert")).toBeTruthy()
+  f.entry({ id: "old-cancellation", kind: "session/cancelled", level: "info", requestId: undefined, retry: undefined, executionUncorrelated: true })
+  expect(screen.getByRole("status").textContent).toContain("容量")
+})
+
 it("keeps capacity countdown through the next attempt until real progress, without focus stealing", () => {
   vi.useFakeTimers(); const f = fixture()
   render(<><textarea aria-label="draft" /><RuntimeFeedback bridge={f.bridge} workspaceId="w" sessionId="a" onOpenLog={() => {}} /></>)

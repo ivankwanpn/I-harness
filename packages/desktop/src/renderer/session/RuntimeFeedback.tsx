@@ -24,14 +24,13 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
   const seen = useRef(new Set<string>())
   const selectedScope = useRef(scopeKey(workspaceId, activeSessionId))
   selectedScope.current = scopeKey(workspaceId, activeSessionId)
-  const executionRevision = useRef(new Map<string, number>())
+  const executionStates = useRef(new Map<string, { revision: number; busy: boolean }>())
   const [now, setNow] = useState(Date.now)
   useEffect(() => {
-    executionRevision.current.clear()
     setScopes(previous => new Map([...previous].map(([key, value]) => [key, { ...value, activity: undefined }])))
   }, [workspaceId, activeSessionId])
   useEffect(() => {
-    seen.current.clear(); executionRevision.current.clear(); setScopes(new Map()); setDetails(undefined)
+    seen.current.clear(); executionStates.current.clear(); setScopes(new Map()); setDetails(undefined)
     return bridge.onEvent(event => {
       if (event.kind === "runtime/activity") {
         if (scopeKey(event.workspaceId, event.sessionId) !== selectedScope.current) return
@@ -47,7 +46,7 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         return
       }
       if (event.kind === "sdk/disconnected") {
-        executionRevision.current.clear()
+        for (const key of executionStates.current.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.current.delete(key)
         setScopes(previous => {
           const next = new Map(previous)
           for (const [key, current] of next) if (JSON.parse(key)[0] === event.workspaceId) next.set(key, { ...current, activity: undefined, retry: undefined })
@@ -60,6 +59,10 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
         if (seen.current.has(entry.id)) return
         seen.current.add(entry.id)
         if (seen.current.size > 1000) seen.current.delete(seen.current.values().next().value!)
+        // Capture authority at delivery time, before React can defer this
+        // update past a later execution-state notification. Uncorrelated old
+        // workflow failures remain visible without settling current feedback.
+        const busy = entry.executionUncorrelated === true || executionStates.current.get(scopeKey(entry.workspaceId, entry.sessionId))?.busy === true
         setScopes(previous => {
           const next = new Map(previous), key = scopeKey(entry.workspaceId, entry.sessionId)
           const current = next.get(key) ?? {}
@@ -67,12 +70,12 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
           else if (entry.kind === "model/recovered") {
             if (!entry.requestId || current.retry?.requestId === entry.requestId) next.set(key, { ...current, retry: undefined })
           } else if (entry.kind === "session/cancelled") {
-            if (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId) next.set(key, { ...current, retry: undefined, activity: undefined })
+            if (!busy && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)) next.set(key, { ...current, retry: undefined, activity: undefined })
           } else if (entry.kind.startsWith("model/")) {
             // Lifecycle records are history only; live activity arrives separately.
           } else {
             // Admission failures belong to a separate RPC even in the same chat.
-            const clearsRetry = entry.kind === "session/error" && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)
+            const clearsRetry = !busy && entry.kind === "session/error" && (!entry.requestId || !current.retry || current.retry.requestId === entry.requestId)
             next.set(key, { ...current, retry: clearsRetry ? undefined : current.retry, activity: entry.kind === "session/error" && clearsRetry ? undefined : current.activity, error: entry })
             if (entry.kind === "gateway/disconnected") for (const [otherKey, value] of next) {
               if (JSON.parse(otherKey)[0] === entry.workspaceId) next.set(otherKey, { ...value, retry: undefined, activity: undefined })
@@ -88,15 +91,16 @@ export function RuntimeFeedback({ bridge, workspaceId, sessionId, onOpenLog }: {
       const params = event.params as { sessionId?: unknown; status?: unknown; event?: { type?: unknown; text?: unknown; delta?: unknown } } | null
       if (!params || typeof params.sessionId !== "string") return
       const start = event.method === "session/event" && params.event?.type === "turn/start"
-      const done = event.method === "session/status" && ["completed", "cancelled", "canceled"].includes(String(params.status))
+      const key = scopeKey(event.workspaceId, params.sessionId)
+      const done = event.method === "session/status" && !executionStates.current.get(key)?.busy && ["completed", "cancelled", "canceled"].includes(String(params.status))
       let settled = false
       if (event.method === "session/execution-state") {
         const state = params as { running?: unknown; queued?: unknown; revision?: unknown }
         if (typeof state.running !== "boolean" || typeof state.queued !== "number" || !Number.isSafeInteger(state.queued) || state.queued < 0
           || typeof state.revision !== "number" || !Number.isSafeInteger(state.revision) || state.revision < 1) return
-        const key = scopeKey(event.workspaceId, params.sessionId)
-        if (state.revision <= (executionRevision.current.get(key) ?? 0)) return
-        executionRevision.current.set(key, state.revision)
+        if (state.revision <= (executionStates.current.get(key)?.revision ?? 0)) return
+        executionStates.current.set(key, { revision: state.revision, busy: state.running || state.queued > 0 })
+        if (executionStates.current.size > 2000) executionStates.current.delete(executionStates.current.keys().next().value!)
         settled = state.running === false && state.queued === 0
       }
       // Retried requests emit a native model/recovered entry on actual output.

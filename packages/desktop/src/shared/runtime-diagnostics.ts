@@ -13,6 +13,9 @@ export interface RuntimeDiagnosticEntry {
   workspaceId?: string
   sessionId?: string
   requestId?: string
+  /** A legacy terminal notification arrived while execution was still busy;
+   * retain the diagnostic without settling or attributing current feedback. */
+  executionUncorrelated?: true
   code?: string
   httpStatus?: number
   retry?: ModelRetryInfo

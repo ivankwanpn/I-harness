@@ -32,7 +32,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
   const activityListeners = new Set<(activity: RuntimeActivity) => void>()
   const activeAttempts = new Map<string, string>()
   const closedAttempts = new Set<string>()
-  const executionRevisions = new Map<string, number>()
+  const executionStates = new Map<string, { revision: number; busy: boolean }>()
   const memory: RuntimeDiagnosticEntry[] = []
   const seen = new Set<string>()
   const startupFailures = new WeakMap<object, string>()
@@ -42,6 +42,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
   let nextMaintenance = 0
   const files = [0, 1, 2].map(i => join(directory, `runtime-diagnostics.${i}.jsonl`))
   const safeId = (value: unknown) => identifier(value) ? String(redactor.redact(value)) : undefined
+  const executionBusy = (workspaceId: string, sessionId?: string) => executionStates.get(JSON.stringify([workspaceId, sessionId]))?.busy === true
   function closeAttempt(key: string) {
     const requestId = activeAttempts.get(key)
     if (!requestId) return
@@ -100,6 +101,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     return { id: safeId(value.id)!, timestamp: value.timestamp, kind, level: kind === "model/retry" ? "warning" : kind === "session/cancelled" || kind === "model/recovered" || kind.startsWith("model/") ? "info" : "error", message,
       ...(safeId(value.workspaceId) ? { workspaceId: safeId(value.workspaceId) } : {}), ...(safeId(value.sessionId) ? { sessionId: safeId(value.sessionId) } : {}),
       ...(safeId(value.requestId) ? { requestId: safeId(value.requestId) } : {}), ...(code ? { code } : {}), ...(httpStatus ? { httpStatus } : {}), ...(retry ? { retry } : {}),
+      ...((kind === "session/error" || kind === "session/cancelled") && value.executionUncorrelated === true ? { executionUncorrelated: true as const } : {}),
       ...(waitingFor ? { waitingFor } : {}), ...(outcome ? { outcome } : {}) }
   }
   async function statOwned(path: string) {
@@ -150,7 +152,12 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
   function failure(workspaceId: string, sessionId: string | undefined, error: unknown, kind: "session/error" | "runtime/error" = "session/error", admissionId?: string) {
     // Rejected admission belongs to its RPC, independently of any running
     // turn. A queued submission must never replace the active model identity.
-    const state: ReturnType<typeof scope> = admissionId === undefined ? scope(workspaceId, sessionId) : { turn: admissionId, requestId: admissionId }
+    // Legacy status/rejection notifications carry no execution identity. An
+    // older workflow can finish recovery after another turn starts. Keep its
+    // failure, but never borrow the busy execution's retry or terminal slot.
+    const uncorrelated = admissionId === undefined && kind === "session/error" && executionBusy(workspaceId, sessionId)
+    const state: ReturnType<typeof scope> = admissionId !== undefined ? { turn: admissionId, requestId: admissionId }
+      : uncorrelated ? { turn: scope(workspaceId, sessionId).turn } : scope(workspaceId, sessionId)
     if (kind === "runtime/error" && sessionId === undefined) {
       if (error !== null && typeof error === "object") {
         let identity = startupFailures.get(error)
@@ -179,9 +186,9 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
       || /^Selected model is at capacity\.(?: Please try a different model\.)?$/.test(streamMessage)
     const ownedTimeout = /^(?:(?:Error|RpcError|SdkRunError):\s*)?Model request timed out waiting for (?:first response|progress)$/.test(text)
     const code = cancelled ? "cancelled" : typeof facts.code === "string" && codes.has(facts.code) ? facts.code : ownedTimeout ? "TIMEOUT" : capacity ? "CAPACITY" : integer(status, 100, 599) ? (codes.has(`http_${status}`) ? `http_${status}` : "model_error") : "model_error"
-    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId === undefined ? "terminal" : "admission"]))
+    add({ workspaceId, ...(sessionId ? { sessionId } : {}), ...(state.requestId ? { requestId: state.requestId } : {}), ...(uncorrelated ? { executionUncorrelated: true as const } : {}), kind: cancelled ? "session/cancelled" : kind, code, ...(integer(status, 100, 599) ? { httpStatus: status } : {}) }, JSON.stringify([workspaceId, sessionId, state.turn, admissionId !== undefined ? "admission" : uncorrelated ? "uncorrelated" : "terminal"]))
     state.status = cancelled ? "cancelled" : "failed"
-    if (admissionId === undefined && sessionId && kind === "session/error") closeAttempt(JSON.stringify([workspaceId, sessionId]))
+    if (admissionId === undefined && !uncorrelated && sessionId && kind === "session/error") closeAttempt(JSON.stringify([workspaceId, sessionId]))
   }
   const service = {
     createAdmissionFailureRecorder(workspaceId: string, sessionId: string, clientToken?: string) {
@@ -197,7 +204,7 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
     observe(event: DesktopEvent) {
       if (event.kind === "sdk/disconnected") {
         for (const key of activeAttempts.keys()) if (JSON.parse(key)[0] === event.workspaceId) closeAttempt(key)
-        for (const key of executionRevisions.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionRevisions.delete(key)
+        for (const key of executionStates.keys()) if (JSON.parse(key)[0] === event.workspaceId) executionStates.delete(key)
         const state = scope(event.workspaceId)
         add({ kind: "gateway/disconnected", workspaceId: event.workspaceId, code: "gateway_disconnected" }, JSON.stringify([event.workspaceId, state.turn, "disconnect"]))
         return
@@ -242,13 +249,14 @@ export function createRuntimeDiagnostics(directory: string, options: RuntimeDiag
           const workspace = scope(event.workspaceId); workspace.turn = state.turn
         } else if (status === "failed" || status === "error") failure(event.workspaceId, sessionId, event.params.error)
         else if (status === "cancelled" || status === "canceled") failure(event.workspaceId, sessionId, "cancelled")
-        else if (status === "completed") { state.status = status; closeAttempt(JSON.stringify([event.workspaceId, sessionId])) }
+        else if (status === "completed" && !executionBusy(event.workspaceId, sessionId)) { state.status = status; closeAttempt(JSON.stringify([event.workspaceId, sessionId])) }
       } else if (event.method === "session/execution-state") {
         const key = JSON.stringify([event.workspaceId, sessionId])
         const revision = event.params.revision
-        if (!integer(revision, 1, Number.MAX_SAFE_INTEGER) || revision <= (executionRevisions.get(key) ?? 0)) return
-        executionRevisions.set(key, revision)
-        if (executionRevisions.size > 2000) executionRevisions.delete(executionRevisions.keys().next().value!)
+        if (!integer(revision, 1, Number.MAX_SAFE_INTEGER) || revision <= (executionStates.get(key)?.revision ?? 0)
+          || typeof event.params.running !== "boolean" || !integer(event.params.queued, 0, Number.MAX_SAFE_INTEGER)) return
+        executionStates.set(key, { revision, busy: event.params.running || event.params.queued > 0 })
+        if (executionStates.size > 2000) executionStates.delete(executionStates.keys().next().value!)
         if (event.params.running === false && event.params.queued === 0) closeAttempt(key)
       }
     },
