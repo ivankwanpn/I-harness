@@ -181,6 +181,13 @@ describe("explicit Responses prompt cache route", () => {
 })
 
 describe("unsupported cache protocols", () => {
+  it.each(["openai-responses", "openai-compatible", "anthropic-messages", "gemini"] as const)("keeps %s wire payload unchanged by host turn scope", async protocol => {
+    const route = profile(protocol, { mode: "automatic" })
+    const plain = await capture(route)
+    const scoped = await capture(route, { ...request, requestScope: Object.freeze({ sessionId: "session", turnId: "turn", isSubagent: true }) })
+    expect(scoped).toEqual(plain)
+    expect(scoped).not.toHaveProperty("requestScope")
+  })
   it.each(["openai-compatible", "gemini"] as const)("leaves %s payload byte-equivalent with opt-in metadata", async (protocol) => {
     const plain = await capture(profile(protocol), { ...request, promptCache: undefined })
     const optedIn = await capture(profile(protocol, { mode: "automatic", retention: "1h" }))

@@ -1,5 +1,5 @@
 import { createCompactionEngine, type CompactionConfig, type CompactionResult } from "@i-harness/compaction"
-import { createHash } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ImageInput, Session, ModelActivityInfo } from "@i-harness/core-session"
 import { append, deriveMessages, deriveProjectionRewrite, publishTransient, SYSTEM_INPUT_PLUGIN } from "@i-harness/core-session"
@@ -70,6 +70,8 @@ export interface AgentDeps {
   // team-tool callers from it). Additive: absent → ToolExec.sessionId stays
   // undefined (pre-M19 behavior).
   sessionId?: string
+  /** Explicit child origin; independent of inherited clients or role names. */
+  isSubagent?: boolean
   // M25 (Ruling M25-P3): optional independent host telemetry stream — SEPARATE
   // from the session log (events here are never appended to it; the agent and
   // its tools cannot see them). Absent = no events at all (backward compat:
@@ -173,6 +175,8 @@ function validateBudget(budget: AgentBudgetConfig | undefined): void {
 }
 
 export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): Agent {
+  // Standalone agents without persisted IDs still own separate conversations.
+  const requestSessionId = deps.sessionId ?? randomUUID()
   let activeOperations = 0
   async function track<T>(operation: () => Promise<T>): Promise<T> {
     activeOperations++
@@ -332,6 +336,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
   }
 
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
+    const requestScope = Object.freeze({ sessionId: requestSessionId, turnId: randomUUID(), ...(deps.isSubagent ? { isSubagent: true } : {}) })
     const abort = signal ?? deps.signal
     append(deps.session, { type: "turn/start" })
     lifecycle.turnOpen = true
@@ -394,6 +399,7 @@ export function createAgent(ctx: PluginContext, deps: AgentDeps & AgentConfig): 
       assertMessagesFromLog(messages, deps.session)
 
       const request: LLMRequest = {
+        requestScope,
         retryOutput: "discard",
         ...(deps.sessionId === undefined ? {} : { sessionId: deps.sessionId }),
         messages,

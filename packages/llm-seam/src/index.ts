@@ -427,7 +427,18 @@ export function validatePromptCacheConfig(value: unknown, path = "promptCache"):
   if (Object.keys(config).some((key) => key !== "mode" && key !== "retention")) throw new Error(`${path} contains an unknown field`)
 }
 
+/** Host-only identity for one user turn. Reuse the SAME immutable object across
+ * steps and retries; create a fresh object for each new turn or independent call.
+ * Adapters may weakly attach ephemeral routing state. Never persist that state. */
+export interface LLMRequestScope {
+  readonly sessionId: string
+  readonly turnId: string
+  readonly isSubagent?: boolean
+}
+
 export interface LLMRequest {
+  /** Host-only conversation scope; never serialize into a provider body. */
+  requestScope?: LLMRequestScope
   /** Host-only fallback for an error body that outlives a guard deadline. */
   onTerminalResponse?: (hint: import("./waiting-guard.ts").TerminalResponseHint) => void
   /** Host-only transport milestones; never serialize into protocol input. */

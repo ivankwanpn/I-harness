@@ -38,7 +38,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const request: LLMRequest = { systemPrompt: "stable", tools: [], messages: [{ role: "user", content: "hi" }] }
     for await (const _event of client.stream(request)) {}
     const plain = (await lastCommandSent(fake)).input
-    for await (const _event of client.stream({ ...request, promptCache: { mode: "default", key: "opaque" } })) {}
+    for await (const _event of client.stream({ ...request, requestScope: Object.freeze({ sessionId: "child", turnId: "turn", isSubagent: true }), promptCache: { mode: "default", key: "opaque" } })) {}
     const opted = (await lastCommandSent(fake)).input
     expect(opted).toEqual(plain)
     for await (const _event of client.stream({ ...request, promptCache: { mode: "off" } })) {}

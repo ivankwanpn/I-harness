@@ -34,6 +34,10 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
     await service.submit("s", "continue after compression", new AbortController().signal)
     expect(requests.at(-1)!.systemPrompt).toContain('"content":"Finish durable Todo editor","status":"in_progress"')
     expect(requests.at(-1)!.systemPrompt).toContain('"content":"Verify saved state","status":"pending"')
+    const unchangedInstructions = requests.at(-1)!.systemPrompt
+    append(session, { type: "todo/write", version: 1, items: [{ content: "Finish durable Todo editor", status: "in_progress" }, { content: "Verify saved state", status: "pending" }] })
+    await service.submit("s", "continue with the identical plan", new AbortController().signal)
+    expect(requests.at(-1)!.systemPrompt).toBe(unchangedInstructions)
 
     // A human edit writes the same durable event as the desktop CAS path.
     append(session, { type: "todo/write", version: 1, items: [{ content: "Human corrected next step", status: "pending" }] })
@@ -60,6 +64,6 @@ it("sends the durable Todo after summary compaction, human edits, reset, clearin
     await service.submit("s", "continue after restart", new AbortController().signal)
     expect(requests.at(-1)!.systemPrompt).toContain('"todos":[]')
     expect(requests.at(-1)!.systemPrompt).not.toContain("Human corrected next step")
-    expect((await coordinator.snapshot!("s")).session.events.filter((event) => event.type === "todo/write")).toHaveLength(3)
+    expect((await coordinator.snapshot!("s")).session.events.filter((event) => event.type === "todo/write")).toHaveLength(4)
   } finally { await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
 })

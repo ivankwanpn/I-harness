@@ -87,14 +87,21 @@ describe("usage capture", () => {
   it("snapshots project ownership before the request and strips internal identity at the adapter boundary", async () => {
     const records: UsageRecord[] = []
     let projectId = "project-a"
+    const requestScope = Object.freeze({ sessionId: "child", turnId: "turn" })
+    const onStreamActivity = () => {}
+    const onTerminalResponse = () => {}
     const capture = createUsageCapture({ workspace: "workspace", projectFor: async id => id === "child" ? projectId : undefined, record: async value => { records.push(value) } })
     const client = capture.buildClient(() => ({ async *stream(input) {
       expect(input).not.toHaveProperty("sessionId")
+      expect(input.requestScope).toBe(requestScope)
+      expect(input.onStreamActivity).toBe(onStreamActivity)
+      expect(input.onTerminalResponse).toBe(onTerminalResponse)
       projectId = "project-b"
       yield { type: "end" }
     } }))(profile, "model-a")
-    await consume(client, { ...request, sessionId: "child" })
+    await consume(client, { ...request, sessionId: "child", requestScope, onStreamActivity, onTerminalResponse })
     expect(records).toMatchObject([{ projectId: "project-a", sessionId: "child" }])
+    expect(records[0]).not.toHaveProperty("requestScope")
   })
 
   it("keeps inference available and attribution visibly incomplete when project lookup fails", async () => {

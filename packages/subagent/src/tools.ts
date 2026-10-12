@@ -703,6 +703,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    isSubagent: true,
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
     modelToolSchemas,
