@@ -14,6 +14,8 @@ import { dispatchProjectFilesRequest } from "./project-files.ts"
 import { createDesktopProjectContentSearch, notifyDesktopProjectContentScopesChanged } from "./project-content-search.ts"
 import type { createGlobalProviderSettings } from "./global-provider-settings.ts"
 import type { createNotificationHistory } from "./notification-history.ts"
+import type { createRuntimeDiagnostics } from "./runtime-diagnostics.ts"
+import type { RuntimeDiagnosticFilter } from "../shared/runtime-diagnostics.ts"
 import type { AttachmentDraftStore } from "./attachment-draft-store.ts"
 // This native helper must be bundled into Electron main. An externalized
 // workspace-package import would require raw gateway TypeScript at app boot.
@@ -32,6 +34,7 @@ export interface DesktopIpcDependencies {
   pickSkill?: () => Promise<string | undefined>
   globalProviders?: ReturnType<typeof createGlobalProviderSettings>
   notifications?: ReturnType<typeof createNotificationHistory>
+  diagnostics?: ReturnType<typeof createRuntimeDiagnostics>
   drafts?: AttachmentDraftStore
   about?: { info(): unknown; copy(): unknown }
   native?: ReturnType<typeof attachNativeWindow>
@@ -63,6 +66,21 @@ export async function dispatchDesktopRequest(
 ): Promise<unknown> {
   const value = requireRecord(request)
   if (typeof value.kind !== "string" || value.kind === "") throw new Error("unknown Desktop request")
+  if (value.kind.startsWith("desktop/diagnostics/")) {
+    if (!dependencies.diagnostics) throw new Error("Runtime diagnostics unavailable")
+    if (value.kind === "desktop/diagnostics/list" || value.kind === "desktop/diagnostics/export") {
+      const filter = diagnosticFilter(value)
+      return value.kind.endsWith("/list") ? dependencies.diagnostics.list(filter) : dependencies.diagnostics.export(filter)
+    }
+    if (value.kind === "desktop/diagnostics/copy" && Object.keys(value).every(key => ["kind", "id"].includes(key)) && typeof value.id === "string" && /^[a-f0-9-]{36}$/.test(value.id)) return dependencies.diagnostics.copy(value.id)
+    if (value.kind === "desktop/diagnostics/reveal" && Object.keys(value).length === 1) return dependencies.diagnostics.reveal()
+    throw new Error("Invalid diagnostic request")
+  }
+  if (value.kind.startsWith("desktop/global-retry/")) {
+    if (!dependencies.globalProviders) throw new Error("Global retry settings unavailable")
+    if (value.kind === "desktop/global-retry/configure" && (typeof value.maxRetries !== "number" || !Number.isSafeInteger(value.maxRetries) || value.maxRetries < 0 || value.maxRetries > 100)) throw new Error("Invalid model retry limit")
+    return dependencies.globalProviders.request(value)
+  }
   if (value.kind.startsWith("desktop/global-provider/") || value.kind.startsWith("desktop/global-preferences/") || value.kind.startsWith("desktop/coding-plans/") || value.kind.startsWith("desktop/usage/")) {
     if (!dependencies.globalProviders) throw new Error("Global provider settings unavailable")
     return dependencies.globalProviders.request(value)
@@ -404,13 +422,19 @@ export async function dispatchDesktopRequest(
       if (runtime.sandbox?.wired !== true) throw new Error("sandbox-not-enabled")
       if (value.context !== undefined && !runtime.info.capabilities["prompt-context"]?.includes("1")) throw new Error("Prompt context is not supported by this gateway")
       if (value.images?.length && !runtime.info.capabilities["prompt-images"]?.includes("1")) throw new Error("Prompt images are not supported by this gateway")
+      // Durable input submission only admits work. Execution failures arrive via
+      // session/status; admission validation must keep its inline feedback.
+      if (value.kind === "session/prompt") dependencies.diagnostics?.beginRequest(workspaceId, sessionId, typeof value.clientToken === "string" ? value.clientToken : undefined)
       return await runtime.client.request(value.kind === "session/prompt" ? "session/prompt" : "desktop/session/input/submit", {
         sessionId,
         ...(value.kind === "session/prompt" ? { prompt } : { text: prompt, delivery: value.delivery }),
         ...(value.context !== undefined ? { context: value.context } : {}),
         ...(value.clientToken !== undefined ? { clientToken: value.clientToken } : {}),
         ...(value.images?.length ? { images: value.images } : {}),
-      }, 24 * 60 * 60 * 1000)
+      }, 24 * 60 * 60 * 1000).catch(error => {
+        try { if (value.kind === "session/prompt") dependencies.diagnostics?.recordRequestFailure(workspaceId, sessionId, error) } catch { /* Preserve the original request rejection. */ }
+        throw error
+      })
     }
     case "desktop/session/input/state":
     case "desktop/session/input/resume":
@@ -655,12 +679,17 @@ export function registerDesktopIpc(
     if (removed || window.isDestroyed()) return
     window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "window/state", maximized: state.maximized } satisfies DesktopEvent)
   })
+  const offDiagnostics = dependencies.diagnostics?.onEntry(entry => {
+    if (removed || window.isDestroyed()) return
+    window.webContents.send(DESKTOP_EVENT_CHANNEL, { kind: "runtime/diagnostic", entry } satisfies DesktopEvent)
+  })
   return () => {
     if (removed) return
     removed = true
     ipc.removeHandler(DESKTOP_REQUEST_CHANNEL)
     offEvent()
     offWindowState?.()
+    offDiagnostics?.()
     void projectContentSearch.close()
   }
 }
@@ -671,7 +700,31 @@ async function runtimeForKnownWorkspace(
 ): Promise<WorkspaceRuntime> {
   const workspace = dependencies.catalog.get(workspaceId)
   if (workspace === undefined) throw new Error(`unknown workspace id: ${workspaceId}`)
-  return await dependencies.runtimes.get(workspace)
+  try { return await dependencies.runtimes.get(workspace) }
+  catch (error) {
+    try { dependencies.diagnostics?.recordRequestFailure(workspaceId, undefined, error, "runtime/error") } catch { /* Diagnostics must preserve the runtime rejection. */ }
+    throw error
+  }
+}
+
+function diagnosticFilter(value: Record<string, unknown>): RuntimeDiagnosticFilter {
+  if (!Object.keys(value).every(key => ["kind", "workspaceId", "sessionId", "level", "query"].includes(key))) throw new Error("Invalid diagnostic filter")
+  const filter: RuntimeDiagnosticFilter = {}
+  for (const field of ["workspaceId", "sessionId"] as const) {
+    if (value[field] !== undefined) {
+      if (typeof value[field] !== "string" || !/^[a-zA-Z0-9._:/-]{1,128}$/.test(value[field])) throw new Error("Invalid diagnostic scope")
+      filter[field] = value[field]
+    }
+  }
+  if (value.level !== undefined) {
+    if (!["info", "warning", "error"].includes(String(value.level))) throw new Error("Invalid diagnostic level")
+    filter.level = value.level as RuntimeDiagnosticFilter["level"]
+  }
+  if (value.query !== undefined) {
+    if (typeof value.query !== "string" || value.query.length > 256 || /[\u0000-\u001f\u007f]/.test(value.query)) throw new Error("Invalid diagnostic query")
+    filter.query = value.query
+  }
+  return filter
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

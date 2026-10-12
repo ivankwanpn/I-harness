@@ -339,7 +339,7 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
       ...(selectedSessionId ? [refreshTasks(selectedWorkspaceId, selectedSessionId)] : []),
     ]))
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state") return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic") return
       if (event.workspaceId !== selectedWorkspaceId) return
       if (event.kind === "sdk/disconnected") {
         setConnection("offline")
