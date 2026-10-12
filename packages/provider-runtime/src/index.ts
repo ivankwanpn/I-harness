@@ -179,6 +179,7 @@ export interface CreateProviderRuntimeOptions {
   registry?: ProviderRegistry
   buildClient?: typeof buildModelClient
   /** File hosts provide a fresh snapshot without mutating the operation store. */
+  readModelWait?: () => Promise<import("@i-harness/settings").ModelWaitSettings>
   readModelRetryLimit?: () => Promise<number>
   codex?: {
     state(): Promise<{ accountId?: string; status: string }>
@@ -813,15 +814,20 @@ export function createProviderRuntime(options: CreateProviderRuntimeOptions): Pr
         ?? (profile.protocol === "anthropic-messages" ? ANTHROPIC_MAX_TOKENS_FALLBACK : undefined)
 
       try {
+        const initialWait = options.settings.get().modelWait
+        profile.modelWait = { firstResponseMs: initialWait.firstResponseSeconds * 1000, progressMs: initialWait.progressSeconds * 1000 }
+        let activeWait = initialWait
         let activeClient = buildClient(profile, modelId)
         let activeLimit = options.settings.get().modelRetryLimit
-        const client: ModelClient = view.template?.retryPolicy !== undefined ? activeClient : {
+        const client: ModelClient = {
           async *stream(request) {
             request.signal?.throwIfAborted()
-            const limit = options.readModelRetryLimit ? await options.readModelRetryLimit() : options.settings.get().modelRetryLimit
+            const wait = options.readModelWait ? await options.readModelWait() : options.settings.get().modelWait
+            const limit = view.template?.retryPolicy !== undefined ? activeLimit : options.readModelRetryLimit ? await options.readModelRetryLimit() : options.settings.get().modelRetryLimit
             request.signal?.throwIfAborted()
-            if (limit !== activeLimit) {
-              activeClient = buildClient({ ...profile, retryPolicy: { mode: "normal", maxRetries: limit } }, modelId)
+            if (limit !== activeLimit || wait.firstResponseSeconds !== activeWait.firstResponseSeconds || wait.progressSeconds !== activeWait.progressSeconds) {
+              activeClient = buildClient({ ...profile, modelWait: { firstResponseMs: wait.firstResponseSeconds * 1000, progressMs: wait.progressSeconds * 1000 }, retryPolicy: view.template?.retryPolicy ?? { mode: "normal", maxRetries: limit } }, modelId)
+              activeWait = wait
               activeLimit = limit
             }
             const current = activeClient

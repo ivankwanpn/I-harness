@@ -14,6 +14,35 @@ const status = (state: string, error?: string, sessionId = "s"): DesktopEvent =>
 const retry = { requestId: "req-1", phase: "waiting", attempt: 1, maxRetries: 5, delayMs: 500, code: "http_503", httpStatus: 503, providerId: "local", modelId: "model" }
 
 describe("native runtime diagnostics", () => {
+  it.each(["failed", "cancelled", "completed"])("does not attribute delayed %s status to a busy replacement retry", async terminal => {
+    const service = createRuntimeDiagnostics(await root())
+    const phases: string[] = []
+    service.onActivity(value => phases.push(value.activity.phase))
+    const execution = (running: boolean, queued: number, revision: number) => service.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/execution-state", params: { sessionId: "s", running, queued, revision } })
+    execution(true, 0, 7)
+    service.observe(event("turn/start", { seq: 20 }))
+    service.observe(event("model/retry", { version: 1, retry }))
+    const activity = (phase: string) => service.observe(event("model/activity", { version: 1, activity: { requestId: "physical-new", phase, startedAt: 1000, waitingFor: "progress" } }))
+    activity("connecting")
+    execution(false, 0, 6) // An older idle notification cannot override busy truth.
+    service.observe(status(terminal, "HTTP 401"))
+    activity("quiet")
+    expect(phases).toEqual(["connecting", "quiet"])
+    const older = (await service.list()).entries.filter(entry => entry.kind === "session/error" || entry.kind === "session/cancelled")
+    expect(older).toHaveLength(terminal === "completed" ? 0 : 1)
+    expect(older.every(entry => entry.requestId === undefined)).toBe(true)
+    expect(older.every(entry => entry.executionUncorrelated === true)).toBe(true)
+    execution(false, 1, 8)
+    service.observe(status(terminal, "HTTP 401"))
+    activity("quiet")
+    expect(phases).toEqual(["connecting", "quiet", "quiet"])
+    execution(false, 0, 9)
+    service.observe(status("failed", "HTTP 503"))
+    expect((await service.list()).entries.find(entry => entry.code === "http_503")).toMatchObject({ requestId: "req-1" })
+    activity("quiet")
+    expect(phases).toHaveLength(3)
+  })
+
   it("attributes retries, recovery and new failures while deduplicating delivery and suppressing cancellation errors", async () => {
     const service = createRuntimeDiagnostics(await root())
     service.observe(event("turn/start", { seq: 1 }))

@@ -263,6 +263,7 @@ describe("spawnChild durable child sessions (M8)", () => {
     parentSession.events.push({ type: "turn/start" }, { type: "user/message", text: "a" }, { type: "assistant/message", text: "b" }, { type: "turn/end" })
     const mock = createMockClient([{ role: "assistant", text: "ok" }])
     const agents = createAgentRegistry()
+    const requests: import("@i-harness/llm-seam").LLMRequest[] = []
 
     const { path, sessionId } = await spawnChild({
       taskName: "helper",
@@ -272,7 +273,7 @@ describe("spawnChild durable child sessions (M8)", () => {
       parentSession,
       parentCtx: ctx,
       role: roles.get("general")!,
-      parentModel: mock,
+      parentModel: { stream(request) { requests.push(request); return mock.stream(request) } },
       resolveModel: noRoleModel,
       jobs,
       table,
@@ -297,6 +298,8 @@ describe("spawnChild durable child sessions (M8)", () => {
     expect(entry?.sessionId).toBe(sessionId)
     expect(entry?.session.header).toMatchObject({ parentSession: "sess-main", origin: "subagent", delegationDepth: 1, seedLength: 4 })
     expect(agents.get(sessionId!)).toBeDefined() // agent retained in the registry
+    await vi.waitFor(() => expect(requests).toHaveLength(1))
+    expect(requests[0]!.requestScope).toMatchObject({ sessionId, isSubagent: true, turnId: expect.any(String) })
   })
 
   // M70: the child's OWN dispatch boundary is checkpointed, through the same

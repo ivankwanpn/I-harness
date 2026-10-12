@@ -463,6 +463,7 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
 
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    isSubagent: true,
     ...(opts.autoCompactionEnabled ? { autoCompactionEnabled: opts.autoCompactionEnabled } : {}),
     session: childSession,
     tools: childReg,

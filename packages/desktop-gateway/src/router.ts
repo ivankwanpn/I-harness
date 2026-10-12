@@ -36,6 +36,7 @@ export function createGatewayWrite(send: GatewayWrite, handlers: DesktopHandlers
     if (handlers.projectFiles) capabilities["desktop-project-files"] = ["1"]
     if (handlers.projectContentSearch) capabilities["desktop-project-content-search"] = ["1"]
     if (handlers.autoTitle) capabilities["desktop-auto-title"] = ["1"]
+    if (handlers.modelWait) capabilities["desktop-model-wait-settings"] = ["1"]
     if (handlers.modelRetry) capabilities["desktop-model-retry-settings"] = ["1"]
     if (handlers.codeSettings) capabilities["desktop-code-mode-settings"] = ["1"]
     if (handlers.contextSubsystems) capabilities["desktop-context-subsystems"] = ["1"]
@@ -188,7 +189,7 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
         }catch(error){send(makeFailure(message.id,INVALID_PARAMS,error instanceof Error?error.message:String(error)))}
         return
       }
-      if (["desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch"].includes(message.method)) {
+      if (["desktop/model-wait/state", "desktop/model-wait/configure", "desktop/model-retry/state", "desktop/model-retry/configure", "desktop/auto-title/state", "desktop/auto-title/configure", "desktop/code-mode/state", "desktop/code-mode/configure", "desktop/environment/diagnostics", "desktop/session/execution/read", "desktop/session/execution/stop", "desktop/session/processes/read", "desktop/session/processes/control", "desktop/session/processes/job-output", "desktop/session/processes/terminal-output", "desktop/approval-rules/state", "desktop/approval-rules/add", "desktop/approval-rules/revoke", "desktop/session/batch"].includes(message.method)) {
         const params = asRecord(message.params)
         try {
           if (!params) throw new Error("Invalid Desktop parameters")
@@ -199,6 +200,8 @@ export function createDesktopRouter(base: SdkServer, send: GatewayWrite, handler
           const sessionId = params.sessionId as string
           let result: unknown
           switch (message.method) {
+            case "desktop/model-wait/state": if (!handlers.modelWait) throw new Error("Model wait settings unavailable"); result = await handlers.modelWait.state(); break
+            case "desktop/model-wait/configure": if (!handlers.modelWait) throw new Error("Model wait settings unavailable"); result = await handlers.modelWait.configure(params.firstResponseSeconds, params.progressSeconds); break
             case "desktop/model-retry/state": if (!handlers.modelRetry) throw new Error("Model retry settings unavailable"); result = await handlers.modelRetry.state(); break
             case "desktop/model-retry/configure": if (!handlers.modelRetry) throw new Error("Model retry settings unavailable"); result = await handlers.modelRetry.configure(params.maxRetries); break
             case "desktop/auto-title/state": if (!handlers.autoTitle) throw new Error("Auto-title preferences unavailable"); result = handlers.autoTitle.state(); break

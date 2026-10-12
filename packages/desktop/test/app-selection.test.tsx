@@ -12,6 +12,49 @@ import { writeDraft, readDraft } from "../src/renderer/session/Composer.tsx"
 afterEach(() => { cleanup(); useUiStore.setState({ selectedWorkspaceId: undefined, selectedSessionId: undefined, providerRevision: 0, surface: "conversation" }) })
 
 function defer() { let resolve!: (value: unknown) => void; const promise = new Promise<unknown>((done) => { resolve = done }); return { promise, resolve } }
+it("keeps newer service state over reordered notifications and legacy completion of a preceding prompt", async () => {
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(() => undefined, listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(captured.props!.conversation!.queue).toEqual([]))
+  const state = (running: boolean, revision: number, sessionId = "a") => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state", params: { sessionId, running, queued: 0, revision } })
+  act(() => state(true, 3))
+  expect(captured.props!.conversation!.running).toBe(true)
+  act(() => {
+    state(false, 2)
+    state(false, 3)
+    state(false, 4, "other")
+    emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/status", params: { sessionId: "a", status: "completed" } })
+  })
+  expect(captured.props!.conversation!.running).toBe(true)
+  act(() => state(false, 4))
+  expect(captured.props!.conversation!.running).toBe(false)
+  act(() => {
+    emit({ kind: "sdk/disconnected", workspaceId: "w1", message: "fixture disconnect" })
+    state(true, 1)
+  })
+  expect(captured.props!.conversation!.running).toBe(true)
+  act(() => captured.props!.onSelectSession("b"))
+  act(() => state(true, 1, "b"))
+  expect(captured.props!.conversation!.running).toBe(true)
+})
+
+it("refreshes internal execution settlement and rejects an earlier running queue snapshot", async () => {
+  const stale = defer()
+  let reads = 0
+  let emit!: Parameters<DesktopBridge["onEvent"]>[0]
+  fixture(request => request.kind === "session/queue" ? (++reads === 1 ? stale.promise : Promise.resolve([])) : undefined,
+    listener => { emit = listener; return () => {} })
+  await waitFor(() => expect(captured.props?.selectedWorkspaceId).toBe("w1"))
+  act(() => captured.props!.onSelectSession("a"))
+  await waitFor(() => expect(reads).toBe(1))
+  act(() => emit({ kind: "sdk/notification", workspaceId: "w1", method: "session/execution-state", params: { sessionId: "a", running: false, queued: 0, revision: 2 } }))
+  await act(async () => { stale.resolve([{ id: "old", state: "running" }]); await stale.promise })
+  expect(captured.props!.conversation!.running).toBe(false)
+  await waitFor(() => expect(reads).toBeGreaterThan(1))
+  expect(captured.props!.conversation!.queue).toEqual([])
+})
 it("restores running from the authoritative queue on selection and retains it until cancellation settles", async () => {
   fixture(request => request.kind === "session/cancel" ? Promise.resolve({ cancelled: true })
     : request.kind === "session/queue" ? Promise.resolve([{ id: "active", text: "active", delivery: "queue", intent: "user", state: "running", order: 1 }]) : undefined)

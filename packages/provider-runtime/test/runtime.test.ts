@@ -1720,3 +1720,16 @@ describe("a selection may carry its own protocol", () => {
     expect(route).toMatchObject({ status: "ready", binding: { protocol: "openai-compatible" } })
   })
 })
+
+it("refreshes wait settings on existing binding independently of explicit retry policy", async () => {
+ const f = await fixture({ providers: { route: { protocol: "openai-completions", apiKeyEnv: "KEY", models: [{ id: "m" }] } }, credentials: { KEY: "fixture" }, registry(registry) {
+  registry.register({ name: "route", displayName: "route", protocol: "openai-compatible", retryPolicy: { mode: "normal", maxRetries: 0 } })
+ } })
+ const ready = await f.runtime.resolveModel({ sessionSelection: { provider: "route", model: "m" } })
+ if (ready.status !== "ready") throw new Error("unavailable")
+ expect(f.builds.at(-1)?.profile.modelWait).toEqual({ firstResponseMs: 300000, progressMs: 300000 })
+ await f.settings.set({ modelWait: { firstResponseSeconds: 0, progressSeconds: 30 } })
+ for await (const _ of ready.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {}
+ expect(f.builds.at(-1)?.profile.modelWait).toEqual({ firstResponseMs: 0, progressMs: 30000 })
+ expect(f.builds.at(-1)?.profile.retryPolicy).toEqual({ mode: "normal", maxRetries: 0 })
+})

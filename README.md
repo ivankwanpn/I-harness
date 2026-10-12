@@ -4,16 +4,16 @@
 
 I-harness 是開源的 AI 程式開發工作區。連接你選擇的模型服務，開啟本機專案，讓 Agent 搜尋程式碼、讀取檔案、執行命令與完成修改；你可以隨時查看工作過程、核準操作、檢查差異或停止執行。
 
-[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.10) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
+[下載 Windows 版](https://github.com/ivankwanpn/I-harness/releases/tag/v0.1.11) · [快速開始](#快速開始) · [功能](#在同一個工作區完成開發) · [English](README.en.md)
 
 ## 下載
 
-目前提供 **Windows x64 · v0.1.10**，包含 Desktop 與它需要的執行環境。詳見 [0.1.10 更新紀錄](docs/releases/v0.1.10.md)。
+目前提供 **Windows x64 · v0.1.11**，包含 Desktop 與它需要的執行環境。詳見 [0.1.11 更新紀錄](docs/releases/v0.1.11.md)。
 
 | 版本 | 適合你，如果… | 下載 |
 | --- | --- | --- |
-| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.10/I-harness-Setup-0.1.10.exe) |
-| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.10/I-harness-0.1.10.zip) |
+| **安裝版** | 想要一般 Windows 安裝流程、開始功能表捷徑和解除安裝入口 | [I-harness Desktop Setup](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.11/I-harness-Setup-0.1.11.exe) |
+| **Portable 版** | 想解壓後直接執行，或自行選擇放置位置 | [I-harness Desktop ZIP](https://github.com/ivankwanpn/I-harness/releases/download/v0.1.11/I-harness-0.1.11.zip) |
 
 Portable 版解壓到獨立資料夾後，執行 `I-harness.exe`。讓程式與相鄰的 `resources` 資料夾保持一起。
 

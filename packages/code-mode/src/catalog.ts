@@ -26,10 +26,13 @@ Helpers: text(value), image(dataURL or image item), audio(dataURL or audio item)
 Example: text(await Promise.all([tools.read({path:"README.md"}),tools.read({path:"package.json"})]));
 Optional first line: // @exec: {"yield_time_ms":10000,"max_output_tokens":4096}`
 export function codeModeDescription(registry: ToolRegistry, mode: "mixed" | "only" = "mixed"): string {
-  if (mode === "mixed") return GUIDE
+  const guide = registry.get("spawn_agent")
+    ? `${GUIDE}\nFor delegation, call describeTool("spawn_agent") to see live available roles, then pass an intentional exact role name as agent_type.`
+    : GUIDE
+  if (mode === "mixed") return guide
   const declarations: string[] = []
   const heading = "\nSelected direct tool schemas (use describeTool for others):\n"
-  let bytes = Buffer.byteLength(GUIDE + heading)
+  let bytes = Buffer.byteLength(guide + heading)
   const captured = captureCodeModeTools(registry)
   for (const schema of registry.schemas()) {
     const t = captured.get(schema.name)
@@ -39,5 +42,5 @@ export function codeModeDescription(registry: ToolRegistry, mode: "mixed" | "onl
     if (bytes + rowBytes > 24_000) continue
     bytes += rowBytes; declarations.push(row)
   }
-  return declarations.length ? `${GUIDE}${heading}${declarations.join("\n\n")}` : GUIDE
+  return declarations.length ? `${guide}${heading}${declarations.join("\n\n")}` : guide
 }

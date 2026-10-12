@@ -120,7 +120,7 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
       await Promise.allSettled([readCatalog(), ...(selectedRef.current ? [readHistory(selectedRef.current)] : [])])
     })
     const unsubscribe = bridge.onEvent((event) => {
-      if (event.kind === "window/state" || event.kind === "runtime/diagnostic") return
+      if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (event.workspaceId !== workspaceId) return
       if (event.kind === "sdk/disconnected") { setCatalogError(event.message); return }
       const params = event.params as { sessionId?: unknown } | undefined

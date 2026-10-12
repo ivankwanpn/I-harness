@@ -54,13 +54,14 @@ export function timelineEvents(state: EventWindow): WireEvent[] {
 export function applyHistory(state: EventWindow, page: HistoryRange): EventWindow {
   return {
     cursor: Math.max(state.cursor, page.nextSeq),
-    events: capEvents(mergeBySeq(state.events, page.events.map(retainEvent))),
+    events: capEvents(mergeBySeq(state.events, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))),
     live: settleLive(state.live, page.events),
     connection: "online",
   }
 }
 
 export function applyNotification(state: EventWindow, event: WireEvent): EventWindow {
+  if ((event as { type: string }).type === "model/activity") return state
   event = retainEvent(event)
   if (event.type === "reasoning/chunk") {
     // The canonical notification may reach React before its buffered chunks.
@@ -99,10 +100,10 @@ export interface HistoryViewport { events: WireEvent[]; startSeq: number; endSeq
 export const HISTORY_PAGE_SIZE = 200
 export const MAX_HISTORY_VIEW_EVENTS = 2000
 export function historyViewport(page: HistoryRange, startSeq: number): HistoryViewport {
-  return { events: page.events.map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
+  return { events: page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent), startSeq, endSeq: page.nextSeq, hasBefore: startSeq > 0, hasAfter: page.events.length === HISTORY_PAGE_SIZE }
 }
 export function pageHistoryViewport(state: HistoryViewport, page: HistoryRange, startSeq: number, direction: "before" | "after"): HistoryViewport {
-  const merged = mergeBySeq(state.events, page.events.map(retainEvent))
+  const merged = mergeBySeq(state.events, page.events.filter(event => (event as { type: string }).type !== "model/activity").map(retainEvent))
   const events = direction === "before" ? merged.slice(0, MAX_HISTORY_VIEW_EVENTS) : merged.slice(-MAX_HISTORY_VIEW_EVENTS)
   const first = events[0]?.seq ?? startSeq
   const last = events.at(-1)?.seq

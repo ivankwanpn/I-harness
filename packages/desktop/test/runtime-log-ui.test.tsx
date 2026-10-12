@@ -3,9 +3,33 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, expect, it, vi } from "vitest"
 import { RuntimeLog } from "../src/renderer/settings/RuntimeLog.tsx"
 import { RetrySettings } from "../src/renderer/settings/RetrySettings.tsx"
+import { ModelWaitSettings } from "../src/renderer/settings/ModelWaitSettings.tsx"
 import { SettingsPane } from "../src/renderer/settings/SettingsPane.tsx"
 
 afterEach(() => { cleanup(); localStorage.clear() })
+it("retains wait deadline drafts on failed save and confirms only persisted values", async () => {
+  let fail = true
+  const request = vi.fn(async action => {
+    if (action.kind === "desktop/global-model-wait/state") return { firstResponseSeconds: 300, progressSeconds: 300 }
+    if (fail) throw Error("private backend detail")
+    return { firstResponseSeconds: action.firstResponseSeconds, progressSeconds: action.progressSeconds }
+  })
+  render(<ModelWaitSettings bridge={{ request }} />)
+  const first = await screen.findByRole("spinbutton", { name: "首次回應期限（秒）" }) as HTMLInputElement
+  const progress = screen.getByRole("spinbutton", { name: "進度期限（秒）" }) as HTMLInputElement
+  await waitFor(() => expect(first.value).toBe("300"))
+  fireEvent.change(first, { target: { value: "29" } }); fireEvent.click(screen.getByRole("button", { name: "儲存等待設定" }))
+  expect(screen.getByRole("alert").textContent).toContain("30 到 3600")
+  expect(request).toHaveBeenCalledTimes(1)
+  fireEvent.change(first, { target: { value: "0" } }); fireEvent.change(progress, { target: { value: "3600" } })
+  fireEvent.click(screen.getByRole("button", { name: "儲存等待設定" }))
+  await screen.findByText("無法儲存等待設定；輸入仍保留。")
+  expect(first.value).toBe("0"); expect(progress.value).toBe("3600")
+  expect(screen.getByText("已儲存：300 / 300 秒")).toBeTruthy()
+  fail = false; fireEvent.click(screen.getByRole("button", { name: "儲存等待設定" }))
+  await screen.findByText("已儲存：0 / 3600 秒")
+  expect(request).toHaveBeenLastCalledWith({ kind: "desktop/global-model-wait/configure", firstResponseSeconds: 0, progressSeconds: 3600 })
+})
 it("loads persistent native records, passes bounded filters and exports through the picker", async () => {
   const request = vi.fn(async action => action.kind === "desktop/diagnostics/list" ? { entries: [{ id: "final", timestamp: 1, level: "error", kind: "session/error", message: "Safe final failure", sessionId: "chat-a" }], storageError: "Safe storage warning" } : action.kind === "desktop/diagnostics/export" ? { exported: false, count: 0 } : { revealed: true })
   render(<RuntimeLog bridge={{ request }} />)

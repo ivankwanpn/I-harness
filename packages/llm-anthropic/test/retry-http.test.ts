@@ -2,11 +2,13 @@ import { afterEach, expect, it, vi } from "vitest"
 import { createAnthropicClient } from "../src/index.ts"
 import { retryErrorCode } from "@i-harness/llm-seam"
 afterEach(() => vi.unstubAllGlobals())
-it.each([[503, "private body", "SERVER"], [429, '{"error":{"code":"insufficient_quota","message":"private billing"}}', "QUOTA"], [401, "private token", "AUTH"]] as const)("HTTP %s retains safe metadata and Retry-After without response body", async (status, body, code) => {
+it.each([[400, '{"error":{"code":"context_length_exceeded","message":"private context"}}', "CONTEXT_WINDOW_EXCEEDED"], [503, "private body", "SERVER"], [429, '{"error":{"code":"insufficient_quota","message":"private billing"}}', "QUOTA"], [401, "private token", "AUTH"]] as const)("HTTP %s retains safe metadata and Retry-After without response body", async (status, body, code) => {
   vi.stubGlobal("fetch", async () => new Response(body, { status, headers: { "retry-after": "2" } }))
   const start = Date.now()
+  const hints: unknown[] = []
   const events = []
-  for await (const event of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "", retryOutput: "discard" })) events.push(event)
+  for await (const event of createAnthropicClient({ apiKey: "k", model: "m" }).stream({ messages: [], tools: [], systemPrompt: "", retryOutput: "discard", onTerminalResponse: hint => { hints.push(hint); throw new Error("observer failure") } })) events.push(event)
+  expect(hints).toEqual(status === 400 ? [{ code: "INVALID_ARGUMENT", httpStatus: 400 }] : status === 401 ? [{ code: "AUTH", httpStatus: 401 }] : [])
   expect(events).toHaveLength(1)
   const event = events[0]!
   expect(event.type).toBe("error")

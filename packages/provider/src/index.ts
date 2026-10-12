@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs"
-import { createRetryingClient, describeTransportError, resolveRetryPolicy, validatePromptCacheConfig, type ModelClient, type PromptCacheConfig, type RetryPolicyConfig } from "@i-harness/llm-seam"
+import { createWaitingGuard, type ModelWaitPolicy, createRetryingClient, describeTransportError, resolveRetryPolicy, validatePromptCacheConfig, type ModelClient, type PromptCacheConfig, type RetryPolicyConfig } from "@i-harness/llm-seam"
 import { createOpenAIClient } from "@i-harness/llm-openai"
 import { createOpenAICompatibleClient } from "@i-harness/llm-openai-compatible"
 import { createAnthropicClient } from "@i-harness/llm-anthropic"
@@ -66,6 +66,7 @@ export interface ProviderProfile {
    * e.g. OpenCode Zen's `x-opencode-session`). Merged into every adapter's
    * request headers; secrets belong in apiKey/apiKeyEnv, not here. */
   headers?: Record<string, string>
+  modelWait?: ModelWaitPolicy // Host-only, opt-in for standalone builders.
   retryPolicy?: RetryPolicyConfig       // M20: retry settings; absent = no retries (validated at registration)
 }
 
@@ -932,7 +933,8 @@ function buildClient(profile: ProviderProfile, model: string, extra?: Record<str
 // the unwrapped protocol client is returned as before.
 export function buildModelClient(profile: ProviderProfile, model?: string, extra?: Record<string, unknown>): ModelClient {
   const resolved = model ?? profile.defaultModel ?? "gpt-4o"
-  const client = buildClient(profile, resolved, extra)
+  const raw = buildClient(profile, resolved, extra)
+  const client = profile.modelWait ? createWaitingGuard(raw, profile.modelWait) : raw
   if (profile.retryPolicy === undefined) return client
   return createRetryingClient(client, resolveRetryPolicy(profile.retryPolicy), { providerId: profile.name, modelId: resolved })
 }

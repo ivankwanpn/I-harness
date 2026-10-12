@@ -186,6 +186,7 @@ describe("Desktop SDK runtime manager", () => {
     }
     notify("session/event")
     notify("session/status")
+    notify("session/execution-state")
     notify("session/queue")
     notify("desktop/interaction/request")
     notify("desktop/interaction/closed")
@@ -194,6 +195,7 @@ describe("Desktop SDK runtime manager", () => {
     expect(events).toEqual([
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/event", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/status", params: { seq: 0 } },
+      { kind: "sdk/notification", workspaceId: "ws-notes", method: "session/execution-state", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/request", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/interaction/closed", params: { seq: 0 } },
       { kind: "sdk/notification", workspaceId: "ws-notes", method: "desktop/usage/recording-warning", params: { seq: 0 } },

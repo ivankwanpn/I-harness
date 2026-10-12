@@ -93,3 +93,17 @@ it("refuses corrupt settings before replacing them with defaults", async () => {
   expect(await readFile(options.settingsPath, "utf8")).toBe("{broken")
 })
 
+
+it("refreshes wait deadlines from disk for the next request of an existing binding", async () => {
+ const root = await mkdtemp(join(tmpdir(), "ih-wait-refresh-")); roots.push(root)
+ const settingsPath = join(root, "settings.json"), policies: unknown[] = []
+ const runtime = createFileProviderRuntime({ settingsPath, credentialsPath: join(root, "credentials.json"), buildClient(profile) {
+  policies.push(profile.modelWait); return { async *stream() { yield { type: "end" } } }
+ } })
+ await runtime.createProvider("fixture", { protocol: "openai-completions" }); await runtime.setApiKey("fixture", "fixture")
+ const ready = await runtime.resolveModel({ sessionSelection: { provider: "fixture", model: "m" } }); if (ready.status !== "ready") throw new Error("unavailable")
+ expect(policies.at(-1)).toEqual({ firstResponseMs: 300000, progressMs: 300000 })
+ const store = new SettingsStore({ path: settingsPath }); await store.load(); await store.set({ modelWait: { firstResponseSeconds: 30, progressSeconds: 0 } })
+ for await (const _ of ready.binding.client.stream({ messages: [], tools: [], systemPrompt: "" })) {}
+ expect(policies.at(-1)).toEqual({ firstResponseMs: 30000, progressMs: 0 })
+})

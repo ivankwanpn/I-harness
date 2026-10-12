@@ -41,6 +41,18 @@ export function createFileProviderRuntime(options: FileProviderRuntimeOptions): 
   const codex = options.codex ?? createCodexManagement({ directory: join(dirname(options.credentialsPath), "coding-plans", "openai-codex") })
   const runtime = createProviderRuntime({ settings, credentials: createCredentialStore(options.credentialsPath),
     codex,
+    readModelWait: async () => {
+      let raw: string
+      try { raw = await readFile(options.settingsPath, "utf8") }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") return normalizeSettings(undefined).modelWait
+        throw new Error("Cannot read provider configuration document")
+      }
+      let value: unknown
+      try { value = JSON.parse(raw) } catch { throw new Error("Invalid provider configuration document") }
+      if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid provider configuration document")
+      return normalizeSettings(value).modelWait
+    },
     readModelRetryLimit: async () => {
       let raw: string
       try { raw = await readFile(options.settingsPath, "utf8") }

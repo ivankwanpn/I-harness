@@ -38,7 +38,7 @@ describe("llm-bedrock protocol (Converse wire)", () => {
     const request: LLMRequest = { systemPrompt: "stable", tools: [], messages: [{ role: "user", content: "hi" }] }
     for await (const _event of client.stream(request)) {}
     const plain = (await lastCommandSent(fake)).input
-    for await (const _event of client.stream({ ...request, promptCache: { mode: "default", key: "opaque" } })) {}
+    for await (const _event of client.stream({ ...request, requestScope: Object.freeze({ sessionId: "child", turnId: "turn", isSubagent: true }), promptCache: { mode: "default", key: "opaque" } })) {}
     const opted = (await lastCommandSent(fake)).input
     expect(opted).toEqual(plain)
     for await (const _event of client.stream({ ...request, promptCache: { mode: "off" } })) {}
@@ -748,4 +748,21 @@ describe("M77: the refusal bit (bedrock)", () => {
     for await (const ev of client.stream({ messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "s" } as LLMRequest)) events.push(ev)
     expect(events.at(-1)).toEqual({ type: "end", refused: true })
   })
+})
+
+it("reports safe milestones without changing Converse input or stream events", async () => {
+ const { fake } = fakeRuntime([
+  { contentBlockStart: { contentBlockIndex: 0, start: { toolUse: { toolUseId: "c", name: "read" } } } },
+  { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: "" } } } },
+  { contentBlockDelta: { contentBlockIndex: 0, delta: { toolUse: { input: '{"x":1}' } } } },
+  { contentBlockStop: { contentBlockIndex: 0 } }, { messageStop: { stopReason: "tool_use" } },
+ ])
+ const client = createBedrockClient({ model: "fixture" }, fake)
+ const request: LLMRequest = { messages: [{ role: "user", content: "hi" }], tools: [], systemPrompt: "stable" }
+ const run = async (r: LLMRequest) => { const events: LLMStreamEvent[] = []; for await (const e of client.stream(r)) events.push(e); return events }
+ const plain = await run(request), body = (await lastCommandSent(fake)).input, activities: string[] = []
+ expect(await run({ ...request, onStreamActivity: kind => { activities.push(kind) } })).toEqual(plain)
+ expect((await lastCommandSent(fake)).input).toEqual(body)
+ expect(activities).toEqual(["response-start", "tool-arguments"])
+ expect(await run({ ...request, onStreamActivity: () => { throw new Error("observer") } })).toEqual(plain)
 })

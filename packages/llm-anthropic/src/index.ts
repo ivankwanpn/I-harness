@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
+import { reportStreamActivity, ANTHROPIC_MAX_TOKENS_FALLBACK, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ProviderThinkingBlock, type ReasoningEffort, type RetryableErrorCode } from "@i-harness/llm-seam"
 
 function fingerprintPrefix(system: unknown, tools: unknown, messages: unknown): string {
   return createHash("sha256").update(JSON.stringify({ system, tools, messages })).digest("hex")
@@ -294,9 +294,10 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: await describeHttpError("anthropic", response) }
+        yield { type: "error", error: await describeHttpError("anthropic", response, request) }
         return
       }
+      reportStreamActivity(request, "response-start")
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -397,7 +398,7 @@ export function createAnthropicClient(config: AnthropicConfig): ModelClient {
           }
           if (delta?.type === "input_json_delta") {
             const pending = pendingToolUses.get(index)
-            if (pending) pending.argsBuffer += delta.partial_json ?? ""
+            if (pending) { pending.argsBuffer += delta.partial_json ?? ""; if (delta.partial_json) reportStreamActivity(request, "tool-arguments") }
             return []
           }
           if (delta?.type === "thinking_delta") {

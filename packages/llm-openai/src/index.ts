@@ -1,5 +1,6 @@
-import { canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
+import { reportStreamActivity, canReplayContinuation, describeHttpError, describeTransportError, projectImagesForProvider, replayBlockOrder, resolvePromptCacheMode, SSEParseError, type LLMContentPart, type LLMRequest, type LLMStreamEvent, type LLMUsage, type ModelClient, type PromptCacheConfig, type ProviderBlockOrderEntry, type ReasoningEffort } from "@i-harness/llm-seam"
 import { systemFetch } from "@i-harness/http-transport"
+import { createSubscriptionAffinity } from "./affinity.ts"
 
 export interface OpenAIConfig {
   apiKey: string
@@ -121,8 +122,13 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
     throw new Error("Codex subscription requests do not support configurable headers")
   }
   const endpoint = codexSubscription ? "https://chatgpt.com/backend-api/codex/responses" : `${config.baseUrl ?? "https://api.openai.com"}/v1/responses`
+  const affinity = codexSubscription ? createSubscriptionAffinity() : undefined
   return {
     async *stream(request: LLMRequest): AsyncIterable<LLMStreamEvent> {
+      const scope = request.requestScope
+      // A raw JS caller can mutate despite readonly types. Keep this attempt's
+      // identity consistent across image projection and asynchronous auth.
+      const scopeIdentity = scope === undefined ? undefined : { ...scope }
       // M14 negative capability: text-only routes never see image bytes.
       const vision = config.inputModalities?.includes("image") ?? false
       const messages = await projectImagesForProvider(request.messages, vision, request.signal)
@@ -183,6 +189,10 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       } else if (cacheMode === "automatic" && body.prompt_cache_key === undefined && request.promptCache?.key !== undefined) {
         body.prompt_cache_key = request.promptCache.key
       }
+      // Native subscription parity; public/API-key route defaults stay intact.
+      if (affinity && scopeIdentity && cacheMode !== "off" && body.prompt_cache_key === undefined) {
+        body.prompt_cache_key = request.promptCache?.key ?? affinity.cacheKey(scopeIdentity)
+      }
       if (codexSubscription) {
         // Match Codex 0.160.0 codex-api/src/common.rs ResponsesApiRequest;
         // HTTP carries the full input rather than a previous_response_id.
@@ -221,10 +231,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
       // to escape as Node's bare "fetch failed", which cannot distinguish DNS /
       // TCP / TLS / proxy. Surface the cause chain instead.
       let response: Response
+      const routing = affinity?.prepare(scope, accountId!, body.prompt_cache_key, cacheMode === "off", scopeIdentity)
       try {
         response = await (codexSubscription ? systemFetch : fetch)(endpoint, {
           method: "POST",
-          headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream" } : {}) }),
+          headers: mergeConfiguredHeaders(config.headers, { "Content-Type": "application/json", Authorization: `Bearer ${accessToken}`, ...(codexSubscription ? { "ChatGPT-Account-Id": accountId!, originator: "i-harness", "User-Agent": "I-harness", Accept: "text/event-stream", ...routing!.headers } : {}) }),
           ...(codexSubscription ? { redirect: "error" as const } : {}),
           body: JSON.stringify(body),
           // M61: the caller's abort signal reaches the transport — cancel must
@@ -236,9 +247,11 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         return
       }
       if (!response.ok || !response.body) {
-        yield { type: "error", error: await describeHttpError("openai", response) }
+        yield { type: "error", error: await describeHttpError("openai", response, request) }
         return
       }
+      routing?.capture(response, request.signal)
+      reportStreamActivity(request, "response-start")
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ""
@@ -340,7 +353,7 @@ export function createOpenAIClient(config: OpenAIConfig): ModelClient {
         if (t === "response.function_call_arguments.delta") {
           const ev = event as { item_id: string; delta: string }
           const pending = pendingCalls.get(ev.item_id)
-          if (pending) pending.argsBuffer += ev.delta
+          if (pending) { pending.argsBuffer += ev.delta; if (typeof ev.delta === "string" && ev.delta.length > 0) reportStreamActivity(request, "tool-arguments") }
           return []
         }
         if (t === "response.function_call_arguments.done") {

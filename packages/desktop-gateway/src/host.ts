@@ -1,3 +1,4 @@
+import { createModelWaitSettings } from "./model-wait-settings.ts"
 import { readFile, mkdir } from "node:fs/promises"
 import { createHash } from "node:crypto"
 import { dirname, join, isAbsolute } from "node:path"
@@ -386,7 +387,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const agentProcesses = createAgentProcesses(coordinator, service)
   const resources = createDesktopResources(options.workspace, () => plugins.inputs(), { configDir: dirname(settingsPath), refresh: () => service.refreshExtensions() })
   const handlers: DesktopHandlers = {
-    workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), codeSettings, approvalRules, usageStats,
+    workspace: options.workspace, autoTitle, modelRetry: createModelRetrySettings(settingsPath), modelWait: createModelWaitSettings(settingsPath), codeSettings, approvalRules, usageStats,
     assertSession: async id => { const { meta } = await coordinator.profile(id); if (!await isConversation(id, meta)) throw new Error("Conversation unavailable") },
     execution: { ...execution, stop: (id, cellId) => fence.run(id, () => execution.stop(id, cellId)) },
     agentProcesses: { ...agentProcesses, control: (id, command) => fence.run(id, () => agentProcesses.control(id, command)) },

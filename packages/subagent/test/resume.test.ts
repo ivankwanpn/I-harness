@@ -65,6 +65,9 @@ describe("ensureResidentAgent", () => {
   it("rebuilds a non-resident entry from the restored session + role and registers the agent", async () => {
     const { deps, table, agents } = setup()
     const entry = restoredEntry("child-1", "general")
+    const requests: LLMRequest[] = []
+    const inherited = deps.parentModel
+    deps.parentModel = { stream(request) { requests.push(request); return inherited.stream(request) } }
     const oldController = entry.controller
     table.add(entry.path, entry)
     expect(agents.get("child-1")).toBeUndefined() // fresh registry (post-resume)
@@ -79,6 +82,8 @@ describe("ensureResidentAgent", () => {
     expect(entry.status).toBe("waiting")
     expect(entry.controller).not.toBe(oldController)
     expect(typeof entry.unmount).toBe("function")
+    await rebuilt!.followup("continue restored work")
+    expect(requests[0]!.requestScope).toMatchObject({ sessionId: "child-1", isSubagent: true, turnId: expect.any(String) })
   }, 10_000)
 
   it("returns true without rebuilding when the agent is already resident", async () => {

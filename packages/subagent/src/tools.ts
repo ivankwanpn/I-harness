@@ -71,23 +71,56 @@ export interface SubagentToolDeps extends RoleModelHost {
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
+  const spawnDescription = "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary; if it has not settled by the bound it returns timed_out: true instead — the task is still running."
+  const builtinGuidance = new Map([
+    ["explore", "fast read-only code navigation"],
+    ["research", "deep evidence-based analysis"],
+    ["worker", "code changes, tests, and verification"],
+    ["general", "broad mixed-scope work"],
+  ])
+  const baseSpawnSchema = {
+    type: "object" as const,
+    properties: {
+      message: { type: "string", description: "Initial task for the subagent." },
+      task_name: { type: "string", description: "Short name used in the agent path." },
+      agent_type: { type: "string", description: "Choose an exact available role name for this task. If omitted, legacy calls use general." },
+      fork_turns: { type: ["string", "number"], description: "Parent history to inherit: none (default), all, or a positive number of turns. Inherited history is parent context; the child's role still restricts its tools." },
+      background: { type: "boolean", description: "false = block until the task settles (escape hatch); default true = return immediately and notify the parent on completion." },
+    },
+    required: ["message", "task_name"],
+  }
+  let metadataRevision = -1
+  let roleDescription = ""
+  let roleInputSchema: typeof baseSpawnSchema = baseSpawnSchema
+  const roleMetadata = () => {
+    const revision = deps.roles.revision()
+    if (revision !== metadataRevision) {
+      const roles = deps.roles.list().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
+      const choices = roles.filter(role => builtinGuidance.has(role.name)).map(role => `${role.name} for ${builtinGuidance.get(role.name)}`)
+      const roleGuidance = `Choose agent_type intentionally${choices.length ? `: ${choices.join("; ")}` : ""}. A role selects capabilities; its configured model is resolved separately.`
+      const catalog = roles.map(role => {
+        const description = role.description.trim().replace(/\s+/g, " ")
+        return `${role.name}: ${description}${role.name === "reviewer" ? " (approval guardian for pending tool actions, not a routine code-review worker)" : ""}`
+      }).join("; ")
+      roleDescription = `${spawnDescription}\n\n${roleGuidance}\nAvailable roles (use exact names): ${catalog || "none"}.`
+      roleInputSchema = {
+        ...baseSpawnSchema,
+        properties: {
+          ...baseSpawnSchema.properties,
+          agent_type: { ...baseSpawnSchema.properties.agent_type, description: `${baseSpawnSchema.properties.agent_type.description} Available roles (exact names): ${roles.map(role => role.name).join(", ") || "none"}.` },
+        },
+      }
+      metadataRevision = revision
+    }
+    return { description: roleDescription, inputSchema: roleInputSchema }
+  }
   const spawnTool: Tool<
     { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
     { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean }
   > = {
     name: "spawn_agent",
-    description: "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary; if it has not settled by the bound it returns timed_out: true instead — the task is still running.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        message: { type: "string", description: "Initial task for the subagent." },
-        task_name: { type: "string", description: "Short name used in the agent path." },
-        agent_type: { type: "string", description: "Role name (default general)." },
-        fork_turns: { type: ["string", "number"], description: "Parent history to inherit: none (default), all, or a positive number of turns. Inherited history is parent context; the child's role still restricts its tools." },
-        background: { type: "boolean", description: "false = block until the task settles (escape hatch); default true = return immediately and notify the parent on completion." },
-      },
-      required: ["message", "task_name"],
-    },
+    get description() { return roleMetadata().description },
+    get inputSchema() { return roleMetadata().inputSchema },
     isReadOnly: false,
     execute: async (args, exec) => {
       const role = deps.roles.get(args.agent_type ?? "general")
@@ -703,6 +736,7 @@ export async function ensureResidentAgent(deps: SubagentToolDeps, entry: ChildAg
   const modelOverheadTokens = () => estimateChildOverhead(typeof systemPrompt === "function" ? systemPrompt() : systemPrompt, modelToolSchemas())
   const controller = new AbortController()
   const agent = createAgent(childCtx, {
+    isSubagent: true,
     ...(deps.autoCompactionEnabled ? { autoCompactionEnabled: deps.autoCompactionEnabled } : {}),
     session: entry.session, tools: childReg, model,
     modelToolSchemas,

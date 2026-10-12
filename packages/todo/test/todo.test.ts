@@ -47,6 +47,18 @@ describe("deriveTodoList", () => {
 })
 
 describe("authoritative Todo model context", () => {
+  it("keeps identical snapshots byte-stable while retaining every durable write and real list changes", () => {
+    const session = createSession()
+    const items = [{ content: "implement", status: "pending" as const }]
+    append(session, { type: "todo/write", version: 1, items })
+    const first = renderTodoContext(session)
+    append(session, { type: "todo/write", version: 1, items: structuredClone(items) })
+    expect(renderTodoContext(session)).toBe(first)
+    expect(session.events.filter(event => event.type === "todo/write")).toHaveLength(2)
+    append(session, { type: "todo/write", version: 1, items: [{ content: "implement", status: "completed" }] })
+    expect(renderTodoContext(session)).not.toBe(first)
+    expect(renderTodoContext(session)).toContain('"status":"completed"')
+  })
   it("keeps the latest snapshot even when compaction shadows and resets its event", () => {
     const session = createSession()
     append(session, { type: "todo/write", version: 1, items: [{ content: "obsolete plan", status: "pending" }] })

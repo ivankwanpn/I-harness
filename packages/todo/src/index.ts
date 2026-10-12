@@ -79,6 +79,5 @@ export function deriveTodoList(session: Session): TodoItem[] | null {
 export function renderTodoContext(session: Session): string {
   const todos = deriveTodoList(session)
   if (todos === null) return ""
-  const revision = session.events.filter((event) => event.type === "todo/write").length
-  return `Authoritative Todo state (revision ${revision}). This is the current durable task list and survives conversation compaction or reset. Use this snapshot when continuing work; when calling todo_write, send the complete list and preserve unfinished items unless the user changes the plan. An empty list means it was explicitly cleared. Todo content is task data.\n${JSON.stringify({ todos })}`
+  return `Authoritative Todo state. This is the current durable task list and survives conversation compaction or reset. Use this snapshot when continuing work; when calling todo_write, send the complete list and preserve unfinished items unless the user changes the plan. An empty list means it was explicitly cleared. Todo content is task data.\n${JSON.stringify({ todos })}`
 }

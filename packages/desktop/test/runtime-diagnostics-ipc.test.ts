@@ -19,12 +19,67 @@ afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { rec
 async function fixture() {
  const root = await mkdtemp(join(tmpdir(), "ih-diagnostic-ipc-")); roots.push(root)
  const diagnostics = createRuntimeDiagnostics(root)
- const request = vi.fn(async () => ({ maxRetries: 5 }))
+ const request = vi.fn(async (_method: string, _params: unknown): Promise<unknown> => ({ maxRetries: 5 }))
  const globalProviders = createGlobalProviderSettings(async () => ({ request }))
  const dependencies = { diagnostics, globalProviders, catalog: { get: (id: string) => id === "ws" ? { id, path: root } : undefined }, runtimes: { get: async () => { throw new Error("Startup failed: raw body") }, onEvent: () => () => {} } } as unknown as DesktopIpcDependencies
  return { dependencies, diagnostics, request }
 }
 describe("native diagnostic IPC", () => {
+ it("proxies bounded global wait settings without a selected workspace", async () => {
+   const f = await fixture()
+   f.request.mockImplementation(async () => ({ firstResponseSeconds: 300, progressSeconds: 300 }))
+   expect(await dispatchDesktopRequest({ kind: "desktop/global-model-wait/state" }, f.dependencies)).toEqual({ firstResponseSeconds: 300, progressSeconds: 300 })
+   for (const seconds of [0, 30, 3600]) await dispatchDesktopRequest({ kind: "desktop/global-model-wait/configure", firstResponseSeconds: seconds, progressSeconds: seconds }, f.dependencies)
+   expect(f.request.mock.calls).toEqual([["desktop/model-wait/state", {}], ...[0, 30, 3600].map(seconds => ["desktop/model-wait/configure", { firstResponseSeconds: seconds, progressSeconds: seconds }])])
+   for (const seconds of [-1, 29, 3601, 30.5, "30", null, NaN]) {
+     await expect(dispatchDesktopRequest({ kind: "desktop/global-model-wait/configure", firstResponseSeconds: seconds, progressSeconds: 300 }, f.dependencies)).rejects.toThrow(/wait/i)
+     await expect(f.dependencies.globalProviders!.request({ kind: "desktop/global-model-wait/configure", firstResponseSeconds: 300, progressSeconds: seconds })).rejects.toThrow(/wait/i)
+   }
+   expect(f.request).toHaveBeenCalledTimes(4)
+ })
+ it("forwards only safe live activity and records bounded quiet lifecycle facts", async () => {
+   const f = await fixture(); const live: unknown[] = []
+   f.diagnostics.onActivity(activity => live.push(activity))
+   const activity = (phase: string, requestId = "physical-1") => f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { requestId, phase, startedAt: 1000, waitingFor: "first-response", ...(phase === "settled" ? { outcome: "failed" } : {}), prompt: "SECRET" } } } })
+   activity("connecting"); activity("quiet"); activity("streaming"); activity("settled")
+   expect(live).toHaveLength(4)
+   expect(JSON.stringify(live)).not.toContain("SECRET")
+   expect((await f.diagnostics.list()).entries).toMatchObject([
+     { kind: "model/settled", outcome: "failed" }, { kind: "model/quiet", waitingFor: "first-response" }, { kind: "model/connecting", waitingFor: "first-response" },
+   ])
+ })
+ it("redacts hostile scope identifiers before live forwarding and keeps retry identity separate", async () => {
+   const f = await fixture(); const live: unknown[] = []
+   f.diagnostics.onActivity(value => live.push(value))
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "secret workspace", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { requestId: "physical", phase: "connecting", startedAt: 1000, waitingFor: "first-response" } } } })
+   expect(live).toEqual([])
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/retry", version: 1, retry: { requestId: "logical", phase: "waiting", attempt: 1, delayMs: 500, code: "TIMEOUT" } } } })
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { requestId: "physical", phase: "connecting", startedAt: 1000, waitingFor: "first-response" } } } })
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: "Model request timed out waiting for first response" } })
+   expect((await f.diagnostics.list()).entries[0]).toMatchObject({ kind: "session/error", requestId: "logical", code: "TIMEOUT" })
+   expect(live).toMatchObject([{ workspaceId: "ws", sessionId: "s", activity: { requestId: "physical" } }])
+ })
+ it("ignores stale logical recovery after another retry owns terminal attribution", async () => {
+   const f = await fixture()
+   const retry = (requestId: string, phase: "waiting" | "recovered") => f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/retry", version: 1, retry: { requestId, phase, attempt: 1, delayMs: 500, code: "TIMEOUT" } } } })
+   retry("old-logical", "waiting")
+   retry("new-logical", "waiting")
+   retry("old-logical", "recovered")
+   f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: "Model request timed out waiting for progress" } })
+   expect((await f.diagnostics.list()).entries[0]).toMatchObject({ kind: "session/error", requestId: "new-logical", code: "TIMEOUT" })
+ })
+ it("classifies owned message-only timeout and abort statuses without exposing raw text", async () => {
+   const f = await fixture()
+   for (const [index, [message, code, kind]] of ([
+     ["Model request timed out waiting for first response", "TIMEOUT", "session/error"],
+     ["Model request timed out waiting for progress", "TIMEOUT", "session/error"],
+     ["Model request aborted", "cancelled", "session/cancelled"],
+   ] as const).entries()) {
+     f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "turn/start", seq: index + 1 } } })
+     f.diagnostics.observe({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: message } })
+     expect((await f.diagnostics.list()).entries[0]).toMatchObject({ code, kind })
+   }
+ })
  it.each(["session/prompt", "desktop/session/input/submit"])("records runtime readiness rejection for %s before provider dispatch", async kind => {
    for (const sandbox of [false, true]) {
      const f = await fixture(), request = vi.fn()
@@ -79,6 +134,22 @@ describe("native diagnostic IPC", () => {
    offWindow(); offWindow = registerDesktopIpc(window, f.dependencies, ipc)
    for (const listener of runtimeListeners) listener({ kind: "sdk/disconnected", workspaceId: "ws", message: "private stderr" })
    expect((await f.diagnostics.list()).entries).toHaveLength(1)
+   offWindow(); offObserver()
+ })
+ it("does not forward raw activity through the window event channel or revive it after terminal status", async () => {
+   const f = await fixture(); const send = vi.fn(); const runtimeListeners = new Set<(event: DesktopEvent) => void>()
+   f.dependencies.runtimes.onEvent = listener => { runtimeListeners.add(listener); return () => { runtimeListeners.delete(listener) } }
+   const offObserver = f.dependencies.runtimes.onEvent(f.diagnostics.observe)
+   const window = { webContents: { send }, isDestroyed: () => false } as unknown as BrowserWindow
+   const offWindow = registerDesktopIpc(window, f.dependencies, { handle() {}, removeHandler() {} } as IpcMainLike)
+   const emit = (event: DesktopEvent) => { for (const listener of runtimeListeners) listener(event) }
+   const activity = (phase: "connecting" | "quiet") => emit({ kind: "sdk/notification", workspaceId: "ws", method: "session/event", params: { sessionId: "s", event: { type: "model/activity", version: 1, activity: { requestId: "physical", phase, startedAt: 1000, waitingFor: "first-response", prompt: "PRIVATE_PROMPT" } } } })
+   activity("connecting")
+   expect(send.mock.calls.filter(call => call[1].kind === "runtime/activity")).toHaveLength(1)
+   expect(JSON.stringify(send.mock.calls)).not.toContain("PRIVATE_PROMPT")
+   emit({ kind: "sdk/notification", workspaceId: "ws", method: "session/status", params: { sessionId: "s", status: "failed", error: "Model request timed out waiting for first response" } })
+   activity("quiet")
+   expect(send.mock.calls.filter(call => call[1].kind === "runtime/activity")).toHaveLength(1)
    offWindow(); offObserver()
  })
  it("captures runtime startup failure while preserving its original rejection and keeps validation inline", async () => {
