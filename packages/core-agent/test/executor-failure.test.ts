@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { createSession, Inbox } from "@i-harness/core-session"
-import { createSessionExecutor, type SessionExecutorFailure } from "../src/index.ts"
+import { createSessionExecutor, type SessionExecutorFailure } from "../src/executor.ts"
 
 function failingLane(failure: unknown = new Error("turn failed")) {
   const session = createSession(), inbox = new Inbox(session), tasks: string[] = []
