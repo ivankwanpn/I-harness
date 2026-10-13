@@ -1,6 +1,4 @@
 import { spawn } from "node:child_process"
-import { createHash } from "node:crypto"
-import { readFileSync } from "node:fs"
 import { dirname } from "node:path"
 import type { HookContext, HookHandlerSpec, HookOutput } from "./types.ts"
 import {
@@ -12,8 +10,8 @@ import {
   HookOwnerAbortError,
   HookTrustError,
 } from "./types.ts"
-import { trustScriptPath, verifyHandlerTrust } from "./trust.ts"
-import { claudeHookPayload, claudeShellEnvironment, normalizeClaudeHookOutput, resolveClaudeShell, sha256ClaudePluginTreeSync, type ClaudeRuntimeInput } from "./claude.ts"
+import { trustedHookCommand, trustScriptPath, verifyHandlerTrust, verifyHandlerTrustSync } from "./trust.ts"
+import { claudeHookPayload, claudeShellEnvironment, normalizeClaudeHookOutput, resolveClaudeShell, type ClaudeRuntimeInput } from "./claude.ts"
 import type { ClaudeSessionSource } from "./types.ts"
 import { runWindowsHook } from "./windows-process.ts"
 
@@ -110,9 +108,17 @@ export async function runHookHandler(
   opts: RunHookOptions = {},
 ): Promise<HookOutput> {
   if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
+  // Keep the verified declaration stable across asynchronous file reads.
+  spec = structuredClone(spec)
   const handlerFile = trustScriptPath(spec, configDir)
+  const cwd = spec.command.cwd ?? opts.cwd ?? (spec.claude ? process.cwd() : dirname(handlerFile))
+  let env: NodeJS.ProcessEnv = { ...process.env, ...opts.env, IH_HOOK_EVENT: context.event, IH_HOOK_ID: spec.id }
   try {
-    await verifyHandlerTrust(spec, configDir)
+    if (spec.claude === undefined) {
+      const command = trustedHookCommand(spec, configDir, { cwd, env })
+      spec.command = { ...spec.command, cmd: command.cmd, args: command.args }
+    }
+    await verifyHandlerTrust(spec, configDir, { cwd, env })
   } catch (err) {
     if (err instanceof HookTrustError) throw err
     throw new HookConfigError(
@@ -122,12 +128,15 @@ export async function runHookHandler(
 
   const timeoutMs = spec.timeoutMs ?? opts.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS
   if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
-  const cwd = spec.command.cwd ?? opts.cwd ?? (spec.claude ? process.cwd() : dirname(handlerFile))
   let executable = spec.command.cmd
-  let env: NodeJS.ProcessEnv = { ...process.env, ...opts.env, IH_HOOK_EVENT: context.event, IH_HOOK_ID: spec.id }
   if (spec.claude !== undefined) {
     executable = resolveClaudeShell(spec.claude.shell, env)
     env = claudeShellEnvironment(spec, cwd, env, executable)
+  }
+  const validate = (): void => {
+    if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
+    if (opts.validateCurrent?.() === false) throw new HookTrustError(spec.id, spec.trust.sha256, "handler grant changed before dispatch")
+    verifyHandlerTrustSync(spec, configDir, { cwd, env })
   }
   if (process.platform === "win32") {
     let serialized: string
@@ -135,16 +144,11 @@ export async function runHookHandler(
     catch (error) { throw new HookOutputError(`hook ${spec.id}: cannot serialize/send context: ${error instanceof Error ? error.message : String(error)}`) }
     const captured = await runWindowsHook({ id: spec.id, argv: [executable, ...(spec.command.args ?? [])], cwd, env,
       input: Buffer.from(serialized), timeoutMs, signal: opts.signal,
-      validate: () => {
-        if (opts.signal?.aborted) throw new HookOwnerAbortError(spec.id)
-        if (opts.validateCurrent?.() === false) throw new HookTrustError(spec.id, spec.trust.sha256, "handler grant changed before dispatch")
-        const actual = spec.claude !== undefined ? sha256ClaudePluginTreeSync(spec.claude.pluginRoot)
-          : createHash("sha256").update(readFileSync(handlerFile)).digest("hex")
-        if (actual !== spec.trust.sha256) throw new HookTrustError(spec.id, spec.trust.sha256, actual)
-      },
+      validate,
     })
     return decodeHookOutput(spec, captured.stdout.toString("utf8"), captured.stderr, captured.exitCode)
   }
+  validate()
   return new Promise<HookOutput>((resolvePromise, rejectPromise) => {
     let stdout = ""
     let stderr = ""

@@ -1,12 +1,13 @@
 import { createHash } from "node:crypto"
-import { readFileSync, writeFileSync } from "node:fs"
+import { accessSync, constants, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { isAbsolute, join, resolve } from "node:path"
+import { dirname, isAbsolute, join, resolve } from "node:path"
 import { resolveHarnessHome } from "@i-harness/harness-home"
 import { diagnosticsFor } from "@i-harness/diagnostics"
 import type { HookHandlerSpec } from "./types.ts"
 import { HookTrustError } from "./types.ts"
-import { sha256ClaudePluginTree } from "./claude.ts"
+import { resolveClaudeShell, sha256ClaudePluginTree, sha256ClaudePluginTreeSync } from "./claude.ts"
+import { resolveWindowsHookExecutable } from "./windows-process.ts"
 
 // W6 T6: ONE module-scope handle for this file's one report. The phase is
 // `config`: the trust store IS configuration (which handlers the user has
@@ -27,20 +28,78 @@ export function trustScriptPath(spec: HookHandlerSpec, configDir: string): strin
   return isAbsolute(raw) ? raw : resolve(configDir, raw)
 }
 
-/**
- * Per-handler hash trust: recompute the artifact's sha256 and compare with
- * the recorded trust value. Throws HookTrustError on mismatch (fail-closed),
- * READONLY on ENOENT (unreadable artifact — caller wraps as a config error).
- */
-export async function verifyHandlerTrust(
-  spec: HookHandlerSpec,
-  configDir: string,
-): Promise<void> {
-  const file = trustScriptPath(spec, configDir)
-  const actual = spec.claude === undefined ? await sha256File(file) : await sha256ClaudePluginTree(spec.claude.pluginRoot)
-  if (actual !== spec.trust.sha256) {
-    throw new HookTrustError(spec.id, spec.trust.sha256, actual)
+interface HookCommandOptions {
+  cwd?: string
+  env?: NodeJS.ProcessEnv
+}
+
+function sameFile(left: string, right: string): boolean {
+  return left === right
+}
+
+function regularFile(path: string): string {
+  const file = realpathSync.native(path)
+  if (!statSync(file).isFile()) throw new Error("trust artifact or executable is not a regular file")
+  return file
+}
+
+function nativeExecutable(command: string, cwd: string, env: NodeJS.ProcessEnv): string {
+  if (process.platform === "win32") return resolveWindowsHookExecutable(command, cwd, env)
+  if (isAbsolute(command) || command.includes("/")) return resolve(cwd, command)
+  for (const directory of (env.PATH ?? "").split(":")) {
+    const candidate = resolve(cwd, directory, command)
+    try {
+      if (!statSync(candidate).isFile()) continue
+      accessSync(candidate, constants.X_OK)
+      return candidate
+    } catch { /* next executable PATH entry */ }
   }
+  throw new Error("executable was not found on PATH")
+}
+
+function hostScriptRuntime(executable: string, env: NodeJS.ProcessEnv): boolean {
+  if (sameFile(executable, regularFile(process.execPath))) return true
+  for (const shell of ["bash", "sh"] as const) {
+    try { if (sameFile(executable, regularFile(resolveClaudeShell(shell, env)))) return true }
+    catch { /* An unavailable optional host shell grants no script execution. */ }
+  }
+  return false
+}
+
+/** Pin the native argv whose executable content the file grant actually covers. */
+export function trustedHookCommand(spec: HookHandlerSpec, configDir: string, options: HookCommandOptions = {}): { cmd: string; args: string[]; artifact: string } {
+  const artifact = regularFile(trustScriptPath(spec, configDir))
+  const cwd = resolve(spec.command.cwd ?? options.cwd ?? dirname(trustScriptPath(spec, configDir)))
+  const env = options.env ?? process.env
+  try {
+    const executable = regularFile(nativeExecutable(spec.command.cmd, cwd, env)), args = spec.command.args ?? []
+    if (sameFile(executable, artifact) && args.length === 0) return { cmd: executable, args: [], artifact }
+    // Only fixed host file-launch forms preserve a script-content grant. Extra
+    // arguments can be inline code, preloads or another artifact; put them in
+    // a reviewed wrapper instead of borrowing this file's approval.
+    if (args.length === 1 && hostScriptRuntime(executable, env) && sameFile(regularFile(resolve(cwd, args[0]!)), artifact)) {
+      return { cmd: executable, args: [artifact], artifact }
+    }
+  } catch (error) {
+    throw new HookTrustError(spec.id, spec.trust.sha256, "command.cmd/args are not bound to the trusted artifact: " + (error instanceof Error ? error.message : String(error)))
+  }
+  throw new HookTrustError(spec.id, spec.trust.sha256, "command.cmd/args are not bound to the trusted artifact")
+}
+
+/** Verify both the executable binding and the unchanged approved content. */
+export async function verifyHandlerTrust(spec: HookHandlerSpec, configDir: string, options: HookCommandOptions = {}): Promise<void> {
+  const actual = spec.claude === undefined
+    ? await sha256File(trustedHookCommand(spec, configDir, options).artifact)
+    : await sha256ClaudePluginTree(spec.claude.pluginRoot)
+  if (actual !== spec.trust.sha256) throw new HookTrustError(spec.id, spec.trust.sha256, actual)
+}
+
+/** The same binding/content check at the last synchronous dispatch boundary. */
+export function verifyHandlerTrustSync(spec: HookHandlerSpec, configDir: string, options: HookCommandOptions = {}): void {
+  const actual = spec.claude === undefined
+    ? createHash("sha256").update(readFileSync(trustedHookCommand(spec, configDir, options).artifact)).digest("hex")
+    : sha256ClaudePluginTreeSync(spec.claude.pluginRoot)
+  if (actual !== spec.trust.sha256) throw new HookTrustError(spec.id, spec.trust.sha256, actual)
 }
 
 /** One user-approved artifact. The KEY is the hash: approval is of CONTENT. */
