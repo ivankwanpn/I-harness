@@ -18,7 +18,10 @@ the pre-existing `src/types.ts` remains the hook wire/output/error type owner.
 | `lifecycle/mount.ts` | Runtime-stop registration and tool/permission/prompt/native-stop listener registration |
 
 The registry creates one transcript projection and obtains the existing Claude
-runtime service. Stop registration precedes plugin mount. The mounted cascade
+runtime service. Report/env option getters run before initial config loading;
+active approvals are read after the awaited load and mount-name creation, so a
+caller replacing the store during loading supplies the ongoing authority.
+Stop registration precedes plugin mount. The mounted cascade
 runs one pre/post pair per logical tool call and skips marked redispatch frames.
 Permission listeners, prompt waterfalls, native stop and Claude runtime stop
 retain their distinct control paths. A completed tool body keeps its result when
@@ -45,6 +48,8 @@ cover native config/trust/gates/reporting; `claude-plugin.test.ts` and
 `hooks.test.ts` cover runtime payloads/transcripts, child identities,
 cancellation and pre/post order; `command-binding.test.ts`, `hook-trust.test.ts`
 and `plugin-tree-authority.test.ts` cover exact command/artifact authority.
+`registry-initialization.test.ts` covers option getter order, explicit missing
+config precedence and approval-store replacement during a held config read.
 `registry-lifetime.test.ts` characterizes mount
 and disposal order, including stop-remover/unmount failures, on original and split
 sources. Run `pnpm --filter @i-harness/hooks exec vitest run --maxWorkers=2 --minWorkers=1`

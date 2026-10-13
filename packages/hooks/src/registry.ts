@@ -42,9 +42,6 @@ export async function createHookRegistry(ctx: PluginContext, opts: HookRegistryO
   const configDir = opts.configDir ?? dirname(configPath)
   const projection = createClaudeTranscriptProjection()
   const runtimeService = claudeRuntimeService(ctx)
-  let disposed = false
-  let trustRevision = 0
-  let activeApprovals: Pick<HookTrustStore, "isApproved"> | undefined = opts.approvals
   const registry: InternalRegistry = {
     loaded: [],
     reportedUnapproved: new Set<string>(),
@@ -64,6 +61,9 @@ export async function createHookRegistry(ctx: PluginContext, opts: HookRegistryO
   }
 
   const mountName = `hooks:${randomUUID()}`
+  let disposed = false
+  let trustRevision = 0
+  let activeApprovals: Pick<HookTrustStore, "isApproved"> | undefined = opts.approvals
   const lifecycle = createSessionLifecycle(registry, () => disposed, () => trustRevision,
     sha256 => activeApprovals?.isApproved(sha256) === true)
   const removeStop = registerRuntimeStop(registry, runtimeService, () => disposed)
