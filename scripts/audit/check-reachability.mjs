@@ -536,11 +536,26 @@ const PROVIDER_RUNTIME_SOURCE_UNIT = new Set([
   "packages/provider-runtime/src/runtime/create-runtime.ts",
 ])
 
+// S4a relocates only the original Responses entry. The pre-existing affinity.ts
+// owns its own declarations; future modules and other adapters stay consumers.
+const OPENAI_RESPONSES_SOURCE_UNIT = new Set([
+  "packages/llm-openai/src/index.ts",
+  "packages/llm-openai/src/types.ts",
+  "packages/llm-openai/src/client.ts",
+  "packages/llm-openai/src/request/messages.ts",
+  "packages/llm-openai/src/request/body.ts",
+  "packages/llm-openai/src/request/headers.ts",
+  "packages/llm-openai/src/stream/decode.ts",
+  "packages/llm-openai/src/stream/fold.ts",
+  "packages/llm-openai/src/stream/usage.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
   if (PROVIDER_SOURCE_UNIT.has(rel)) return "packages/provider/src/index.ts"
   if (PROVIDER_RUNTIME_SOURCE_UNIT.has(rel)) return "packages/provider-runtime/src/index.ts"
+  if (OPENAI_RESPONSES_SOURCE_UNIT.has(rel)) return "packages/llm-openai/src/index.ts"
   return rel
 }
 
@@ -1261,6 +1276,50 @@ SELF_TEST_CASES.push({
     ].map(([label, target, rel, names]) => {
       const files = providerRelocationFixtureFiles(true).filter(file => file.rel.startsWith(`packages/${target}/`))
       files.push({ rel, test: false, text: `import type { ${names} } from "@i-harness/${target}"` })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function openaiResponsesRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-openai/src/index.ts", [
+    "export interface OpenAIConfig { model: string }",
+    "const createClient = (config: OpenAIConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-openai/src/index.ts", 'export type { OpenAIConfig } from "./types.ts"'),
+    file("packages/llm-openai/src/types.ts", "export interface OpenAIConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-openai/src/${path}`, 'import type { OpenAIConfig } from "@i-harness/llm-openai"\nconst read = (config: OpenAIConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4a: Responses config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-openai#OpenAIConfig\tpackages/llm-openai/src/index.ts",
+    "split:unused-export\t@i-harness/llm-openai#OpenAIConfig\tpackages/llm-openai/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(openaiResponsesRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4a: affinity, unmapped modules, other protocols and outside readers remain independent",
+  expect: ["affinity=0", "unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["affinity", "packages/llm-openai/src/affinity.ts"],
+      ["unmapped", "packages/llm-openai/src/future.ts"],
+      ["other-protocol", "packages/llm-openai-compatible/src/index.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...openaiResponsesRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { OpenAIConfig } from "@i-harness/llm-openai"\nconst read = (config: OpenAIConfig) => config',
+      }]
       return `${label}=${scanUnusedExports(files).length}`
     })
   },

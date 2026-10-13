@@ -1,0 +1,202 @@
+import type { LLMStreamEvent, ProviderBlockOrderEntry } from "@i-harness/llm-seam"
+import type { OpenAIConfig } from "../types.ts"
+import { mapUsage } from "./usage.ts"
+
+/** One response owns all terminal, continuation, and partial function-call state. */
+export function createResponseFold(config: Pick<OpenAIConfig, "model" | "providerId">, codexSubscription: boolean, onToolArguments: () => void) {
+  let receivedDone = false
+  let receivedCompleted = false
+  // M72 Ⅱ: the Responses wire's own truncation literal lives in
+  // `response.incomplete.incomplete_details.reason` — set in `handleEvent`
+  // below, read once at the ending. Absent stays absent: only `true` writes
+  // the field.
+  let truncated = false
+  // M77: the SAME field carries this wire's refusal literal,
+  // `content_filter`. Before M77 that reason was recognised by nothing: the
+  // stream ended HTTP 200 with no content, the seam reported an empty
+  // SUCCESS, and core-agent logged an empty assistant message for a turn
+  // the model had actually refused. Two variables rather than one: a
+  // response can be both truncated and refused, so neither bit may be
+  // produced as the other's `else`. Only `true` is ever written.
+  let refused = false
+  const reasoningItems = new Map<string, Record<string, unknown>>()
+  const outputItems = new Map<number, ProviderBlockOrderEntry>()
+  let outputOrderValid = true
+  let hasAssistantPhase = false
+  let toolCount = 0
+  const recordOutput = (index: unknown, entry: ProviderBlockOrderEntry): void => {
+    if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0 || outputItems.has(index)) { outputOrderValid = false; return }
+    outputItems.set(index, entry)
+  }
+  const pendingCalls = new Map<string, { name: string; argsBuffer: string; callId?: string; outputIndex?: number }>()
+  const yieldedInline = new Set<string>()
+  // M77 (fix wave): the Responses wire's OTHER refusal shape — a refusal
+  // CONTENT PART (`ResponseOutputRefusal`, `{ type: "refusal", refusal:
+  // string }`) rather than a stop reason, so `response.incomplete` never
+  // fires and the stream ends `response.completed` with no text at all.
+  // Three carriers are read, because at this layer none implies another:
+  // the part's own events (`response.refusal.delta`/`.done`), the part
+  // under `part` (`response.content_part.added`/`.done`) and the part in a
+  // finished item's `content` (`response.output_item.added`/`.done` — the
+  // same inline-item shape the function-call arm below already guards for).
+  // The check keys on the part's `type`, never on a part being present:
+  // EVERY streamed part arrives through these events, `output_text`
+  // included, so "a part is here" would mark every ordinary turn refused.
+  // The refusal's TEXT is deliberately NOT promoted into assistant text (a
+  // parked product decision); only the bit is set.
+  const refusalParts = (parts: unknown): boolean =>
+    Array.isArray(parts) && parts.some((p) => (p as { type?: string } | undefined)?.type === "refusal")
+  const handleEvent = (event: Record<string, unknown>): LLMStreamEvent[] => {
+    const t = event.type as string
+    if (
+      t === "response.refusal.delta" ||
+      t === "response.refusal.done" ||
+      (event.part as { type?: string } | undefined)?.type === "refusal" ||
+      refusalParts((event.item as { content?: unknown } | undefined)?.content)
+    ) {
+      refused = true
+    }
+    if (t === "response.output_text.delta") {
+      return [{ type: "text/chunk", text: (event as { delta: string }).delta }]
+    }
+    if (t === "response.output_item.done") {
+      const item = event.item as Record<string, unknown> | undefined
+      if (item?.type === "reasoning" && typeof item.id === "string") {
+        const index = reasoningItems.has(item.id) ? [...reasoningItems.keys()].indexOf(item.id) : reasoningItems.size
+        reasoningItems.set(item.id, item)
+        recordOutput(event.output_index, { kind: "reasoning", index })
+      } else if (item?.type === "message" && item.role === "assistant") {
+        const parts = item.content
+        if (!Array.isArray(parts) || parts.some((part) => (part as { type?: unknown })?.type !== "output_text" || typeof (part as { text?: unknown }).text !== "string")) outputOrderValid = false
+        else {
+          const phase = typeof item.phase === "string" || item.phase === null ? item.phase as string | null : undefined
+          if (phase !== undefined) hasAssistantPhase = true
+          recordOutput(event.output_index, { kind: "text", text: parts.map((part) => (part as { text: string }).text).join(""), ...(phase !== undefined ? { phase } : {}) })
+        }
+      } else if (item?.type === "function_call") {
+        if (!outputItems.has(event.output_index as number)) outputOrderValid = false
+      } else if (item !== undefined) outputOrderValid = false
+      return []
+    }
+    if (t === "response.output_item.added") {
+      const item = event.item as { type: string; id?: string; call_id?: string; name?: string; namespace?: string; arguments?: string }
+      if (item?.type === "function_call") {
+        if (codexSubscription && item.namespace !== undefined && item.namespace !== "ih") {
+          return [{ type: "error", error: new Error("Codex subscription returned an undeclared tool namespace") }]
+        }
+        // Some Responses streams send the full arguments inline on the item.
+        if (item.arguments && item.arguments.trim() !== "") {
+          try {
+            const args = JSON.parse(item.arguments) as unknown
+            if (item.id) yieldedInline.add(item.id)
+            recordOutput(event.output_index, { kind: "tool", index: toolCount++ })
+            return [{ type: "tool_call", call: { ...(item.call_id ? { id: item.call_id } : {}), name: item.name!, args } }]
+          } catch {
+            return [{ type: "error", error: new Error("openai malformed inline function_call arguments") }]
+          }
+        }
+        if (item.id) pendingCalls.set(item.id, { name: item.name ?? "", argsBuffer: "", ...(item.call_id ? { callId: item.call_id } : {}), ...(typeof event.output_index === "number" ? { outputIndex: event.output_index } : {}) })
+      }
+      return []
+    }
+    if (t === "response.function_call_arguments.delta") {
+      const ev = event as { item_id: string; delta: string }
+      const pending = pendingCalls.get(ev.item_id)
+      if (pending) { pending.argsBuffer += ev.delta; if (typeof ev.delta === "string" && ev.delta.length > 0) onToolArguments() }
+      return []
+    }
+    if (t === "response.function_call_arguments.done") {
+      const ev = event as { item_id: string; arguments?: unknown }
+      const pending = pendingCalls.get(ev.item_id)
+      if (pending) {
+        pendingCalls.delete(ev.item_id)
+        if (!yieldedInline.has(ev.item_id)) {
+          try {
+            // The done event contains the final argument snapshot. Deltas
+            // are only a fallback for compatible endpoints that omit it.
+            // Never execute a stale delta when a supplied final value is invalid.
+            const serialized = ev.arguments === undefined ? pending.argsBuffer : ev.arguments
+            if (typeof serialized !== "string") throw new Error("Invalid final arguments")
+            const args = JSON.parse(serialized) as unknown
+            recordOutput(pending.outputIndex, { kind: "tool", index: toolCount++ })
+            return [{ type: "tool_call", call: { ...(pending.callId ? { id: pending.callId } : {}), name: pending.name, args } }]
+          } catch {
+            return [{ type: "error", error: new Error("openai malformed function_call arguments") }]
+          }
+        }
+      }
+      return []
+    }
+    if (t === "response.reasoning_summary_text.delta" || t === "response.reasoning_text.delta") {
+      const itemId = typeof event.item_id === "string" ? event.item_id : undefined
+      const index = t === "response.reasoning_summary_text.delta" ? event.summary_index : event.content_index
+      const blockId = itemId === undefined ? undefined : `${itemId}:${t === "response.reasoning_text.delta" ? "text:" : ""}${typeof index === "number" ? index : 0}`
+      return [{ type: "reasoning", ...(blockId === undefined ? {} : { blockId }), text: typeof event.delta === "string" ? event.delta : "" }]
+    }
+    // M72 Ⅱ: the Responses stream's truncation ending. `response.incomplete`
+    // also fires for `content_filter` — a REFUSAL, not a truncation — so the
+    // bit keys on the REASON, never on the event name. M77: the refusal
+    // reason now sets its own bit, the sibling of the truncation above.
+    if (t === "response.incomplete") {
+      const reason = (event.response as { incomplete_details?: { reason?: string } } | undefined)?.incomplete_details?.reason
+      if (codexSubscription) return [{ type: "error", error: new Error(`Codex subscription response incomplete: ${reason ?? "unknown reason"}`) }]
+      if (reason === "max_output_tokens") truncated = true
+      if (reason === "content_filter") refused = true
+      return []
+    }
+    if (t === "response.completed") {
+      receivedCompleted = true
+      if (codexSubscription) receivedDone = true
+      // M72 Ⅲ: the Responses API reports this round-trip's usage HERE and
+      // nowhere else — the arm used to drop the payload on the floor. The
+      // rules are llm-anthropic's `mapUsage`: finite numbers only, and no
+      // recognisable number at all means NO event (a fabricated 0 would read
+      // as a measurement nobody made).
+      const usage = mapUsage((event.response as { usage?: unknown } | undefined)?.usage)
+      return usage !== undefined ? [{ type: "usage", usage }] : []
+    }
+    if (t === "[DONE]") {
+      receivedDone = true
+      return []
+    }
+    // M72 Ⅰ: the Responses API signals failure on the stream (`response.failed`)
+    // and can also send a bare `error` event. Both used to fall through to the
+    // empty default, so a failed response was indistinguishable from an empty
+    // one. `response.incomplete` is NOT handled here and is NOT a failure:
+    // it has its own arm above, which now carries BOTH bits (M72 Ⅱ's
+    // truncation bit and M77's refusal bit), and M77's content-part refusal
+    // is read at the top of this handler — so no refusal shape lands in this
+    // arm.
+    //
+    // The two shapes carry their fields differently, so this arm reads both:
+    // `response.failed` nests them under `response.error.{code,message}`,
+    // while the canonical bare `error` event is FLAT on the wire —
+    // `{type:"error",code,message,param,sequence_number}` — with an older
+    // nested `error.message` still seen in the wild (tracked as a fallback).
+    // Retain the structured identity separately: provider message wording
+    // cannot determine whether a failure is transient or terminal.
+    if (t === "response.failed" || t === "error") {
+      const r = event.response as { error?: { message?: string; code?: string } } | undefined
+      const flat = event as { code?: unknown; message?: unknown }
+      const nested = event.error as { code?: unknown; message?: string } | undefined
+      const code = r?.error?.code ?? flat.code ?? nested?.code
+      const text = r?.error?.message ?? (typeof flat.message === "string" ? flat.message : undefined) ?? nested?.message ?? "the provider reported a failed response"
+      return [{ type: "error", error: Object.assign(new Error(typeof code === "string" ? `${code}: ${text}` : text), typeof code === "string" ? { code } : {}) }]
+    }
+    return []
+  }
+  const finish = (): LLMStreamEvent => {
+    if (codexSubscription && !receivedCompleted) {
+      return { type: "error", error: new Error("Codex subscription stream ended without response.completed") }
+    }
+    // M77: the two bits are independent — each is written on its own, so a
+    // response that was both truncated and refused carries both. Both absent
+    // ⇒ the byte-exact `{ type: "end" }` every clean ending returned before.
+    const indexedOutput = [...outputItems.entries()].sort(([a], [b]) => a - b)
+    const outputOrder = outputOrderValid && indexedOutput.length > 0 && indexedOutput.every(([index], position) => index === position) && (reasoningItems.size > 0 || hasAssistantPhase)
+      ? indexedOutput.map(([, entry]) => entry)
+      : undefined
+    return { type: "end", ...(truncated ? { truncated: true } : {}), ...(refused ? { refused: true } : {}), ...(reasoningItems.size || outputOrder ? { providerContinuation: { kind: "openai-responses", model: config.model, ...(config.providerId ? { providerId: config.providerId } : {}), reasoningItems: [...reasoningItems.values()], ...(outputOrder ? { outputOrder } : {}) } as const } : {}) }
+  }
+  return { handleEvent, finish, get receivedDone() { return receivedDone } }
+}
