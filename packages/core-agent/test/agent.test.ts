@@ -4,7 +4,7 @@ import { createSession, append, deriveMessages } from "@i-harness/core-session"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 import { createMockClient } from "@i-harness/llm-mock"
 import type { Telemetry, TelemetryEvent } from "@i-harness/telemetry"
-import { createAgent, createAgentRegistry, type Agent } from "../src/index.ts"
+import { createAgent, createAgentRegistry, type Agent, type AgentDeps, type AgentConfig } from "../src/index.ts"
 
 function makeDeps(ctx: PluginContext) {
   const session = createSession()
@@ -25,6 +25,47 @@ function makeDeps(ctx: PluginContext) {
   tools.register(editTool)
   return { session, tools, model: undefined as unknown as ReturnType<typeof createMockClient> }
 }
+
+it("keeps initialization getter order and resolves live step callbacks with their receivers", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  const reads: string[] = []
+  const receivers: unknown[] = []
+  const requests: { systemPrompt: string; tools: { name: string }[] }[] = []
+  let prompt = "initial"
+  const initialModel = { async *stream() { throw new Error("stale model"); yield { type: "end" as const } } }
+  const currentModel = { async *stream(request: Parameters<AgentDeps["model"]["stream"]>[0]) {
+    receivers.push(this)
+    requests.push(request)
+    yield { type: "text/chunk" as const, text: "done" }
+    yield { type: "end" as const }
+  } }
+  const stepInputs = { claimAtStepBoundary() { receivers.push(this) } }
+  const deps: AgentDeps & AgentConfig = {
+    get sessionId() { reads.push("sessionId"); return undefined },
+    get maxTurns() { reads.push("maxTurns"); return undefined },
+    get maxParallelToolCalls() { reads.push("parallel"); return undefined },
+    get budget() { reads.push("budget"); return undefined },
+    get compact() { reads.push("compact"); return undefined },
+    get maxOutputTokens() { reads.push("output"); return undefined },
+    get session() { reads.push("session"); return session },
+    tools, model: initialModel, stepInputs,
+    systemPrompt() { receivers.push(this); return prompt },
+    modelToolSchemas() { receivers.push(this); return [{ name: prompt, description: "", inputSchema: {} }] },
+  }
+  const agent = createAgent(ctx, deps)
+  expect(reads).toEqual(["sessionId", "maxTurns", "parallel", "budget", "compact", "output", "output", "compact", "budget", "session"])
+  ctx.on("agent/pre-step", async () => {
+    await Promise.resolve()
+    prompt = "current"
+    deps.model = currentModel
+  })
+  await agent.run("task")
+  await agent.followup("again")
+  expect(requests.map(request => [request.systemPrompt, request.tools[0]?.name])).toEqual([["current", "current"], ["current", "current"]])
+  expect(receivers).toEqual([stepInputs, deps, deps, currentModel, stepInputs, deps, deps, currentModel])
+})
 
 describe("agent loop", () => {
   it("runs a read → edit → report sequence", async () => {

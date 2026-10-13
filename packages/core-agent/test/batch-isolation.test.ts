@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, type Session } from "@i-harness/core-session"
 import { createToolRegistry, TOOL_FAILED } from "@i-harness/core-tools"
-import { executeToolCalls } from "../src/execute-tool-calls.ts"
+import { executeToolCalls, type ExecuteToolCallsOptions } from "../src/execute-tool-calls.ts"
 
 function deferred() {
   let resolve!: () => void
@@ -13,6 +13,33 @@ function deferred() {
 function results(session: Session) {
   return session.events.filter((event) => event.type === "tool/result")
 }
+
+it("uses current dispatch after the checkpoint await and preserves registry and checkpoint receivers", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  const order: string[] = []
+  const receivers: unknown[] = []
+  tools.register({ name: "read", description: "", inputSchema: {}, execute: async () => { order.push("body"); return "answer" } })
+  const prepare = tools.prepare
+  const dispatch = tools.dispatch
+  const finalize = tools.finalize
+  tools.prepare = async function (...args) { receivers.push(this); order.push("prepare"); return prepare.apply(this, args) }
+  tools.dispatch = async () => { throw new Error("stale dispatch") }
+  tools.finalize = async function (...args) { receivers.push(this); order.push("finalize"); return finalize.apply(this, args) }
+  const opts: ExecuteToolCallsOptions = { maxParallel: 1, async flush() {
+    receivers.push(this)
+    expect(session.events.at(-1)).toMatchObject({ type: "tool/dispatch", callId: "live" })
+    order.push("checkpoint")
+    await Promise.resolve()
+    tools.dispatch = function (...args) { receivers.push(this); order.push("dispatch"); return dispatch.apply(this, args) }
+  } }
+  ctx.on("agent/post-tool", () => { order.push("post") })
+  await executeToolCalls(ctx, session, tools, [{ callId: "live", name: "read", args: {} }], opts)
+  expect(order).toEqual(["prepare", "checkpoint", "dispatch", "body", "finalize", "post"])
+  expect(receivers).toEqual([tools, opts, tools, tools])
+  expect(results(session)).toMatchObject([{ callId: "live", output: "answer" }])
+})
 
 describe("ordinary tool failures are isolated to their call", () => {
   it("does not abort a running sibling when a body fails", async () => {

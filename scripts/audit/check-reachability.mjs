@@ -755,6 +755,32 @@ const EXEC_SUPERVISOR_SOURCE_UNIT = new Set([
   "packages/exec/src/supervision/reconciliation.ts",
 ])
 
+// S17 keeps the original agent entry and batch implementation as two owners.
+// Only their exact descendants share those boundaries. The existing executor,
+// other original owner, outside readers and future modules remain independent.
+const CORE_AGENT_SOURCE_UNIT = new Set([
+  "packages/core-agent/src/index.ts",
+  "packages/core-agent/src/agent/types.ts",
+  "packages/core-agent/src/agent/create.ts",
+  "packages/core-agent/src/agent/registry.ts",
+  "packages/core-agent/src/agent/context.ts",
+  "packages/core-agent/src/agent/turn.ts",
+  "packages/core-agent/src/agent/step-input.ts",
+  "packages/core-agent/src/agent/model-loop.ts",
+  "packages/core-agent/src/agent/model-step.ts",
+  "packages/core-agent/src/agent/reasoning.ts",
+  "packages/core-agent/src/agent/finalization.ts",
+])
+const CORE_AGENT_BATCH_SOURCE_UNIT = new Set([
+  "packages/core-agent/src/execute-tool-calls.ts",
+  "packages/core-agent/src/tool-batch/types.ts",
+  "packages/core-agent/src/tool-batch/prepare.ts",
+  "packages/core-agent/src/tool-batch/dispatch.ts",
+  "packages/core-agent/src/tool-batch/join.ts",
+  "packages/core-agent/src/tool-batch/record.ts",
+  "packages/core-agent/src/tool-batch/cancel.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -775,6 +801,8 @@ function declarationOwner(rel) {
   if (SHELL_SOURCE_UNIT.has(rel)) return "packages/shell/src/index.ts"
   if (EXEC_SERVICE_SOURCE_UNIT.has(rel)) return "packages/exec/src/service.ts"
   if (EXEC_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/exec/src/execution-supervisor.ts"
+  if (CORE_AGENT_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/index.ts"
+  if (CORE_AGENT_BATCH_SOURCE_UNIT.has(rel)) return "packages/core-agent/src/execute-tool-calls.ts"
   return rel
 }
 
@@ -2139,6 +2167,66 @@ SELF_TEST_CASES.push({
         if (existing) existing.text += "\n" + text
         else files.push({ rel, test, text })
         return `${service ? "service" : "supervisor"}:${label}=` + scanUnusedExports(files).length
+      })
+    })
+  },
+})
+
+function coreAgentRelocationFixtureFiles(split, unit) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const agent = unit === CORE_AGENT_SOURCE_UNIT
+  const owner = agent ? "index" : "execute-tool-calls"
+  const contract = agent ? "agent/types" : "tool-batch/types"
+  const name = agent ? "AgentOwnedValue" : "BatchOwnedValue"
+  const declaration = `export interface ${name} { value: string }`
+  const reads = `const read = (value: ${name}) => value`
+  const entry = file("packages/core-agent/src/index.ts", `export type { ${name} } from "./${agent ? contract : owner}.ts"`)
+  if (!split) return agent ? [file(entry.rel, declaration + "\n" + reads)] : [entry, file(`packages/core-agent/src/${owner}.ts`, declaration + "\n" + reads)]
+  return [entry,
+    ...(!agent ? [file(`packages/core-agent/src/${owner}.ts`, `export type { ${name} } from "./${contract}.ts"`)] : []),
+    file(`packages/core-agent/src/${contract}.ts`, declaration),
+    ...[...unit].filter(rel => rel !== `packages/core-agent/src/${owner}.ts` && rel !== `packages/core-agent/src/${contract}.ts`)
+      .map(rel => file(rel, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S17: agent and batch findings retain complete original evidence before and after extraction",
+  expect: ["AgentOwnedValue", "BatchOwnedValue"].flatMap(name => [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/core-agent#${name}`, evidence: "packages/core-agent/src/index.ts",
+  } }))),
+  run() {
+    return [CORE_AGENT_SOURCE_UNIT, CORE_AGENT_BATCH_SOURCE_UNIT].flatMap(unit => [false, true]
+      .flatMap(split => scanUnusedExports(coreAgentRelocationFixtureFiles(split, unit)).map(finding => JSON.stringify({ split, finding }))))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S17: each extracted descendant belongs to exactly its original source owner",
+  expect: ["agent:unique", "batch:unique"],
+  run() {
+    return [["agent", CORE_AGENT_SOURCE_UNIT, "packages/core-agent/src/index.ts"], ["batch", CORE_AGENT_BATCH_SOURCE_UNIT, "packages/core-agent/src/execute-tool-calls.ts"]]
+      .map(([label, unit, owner]) => `${label}:` + ([...unit].every(rel => declarationOwner(rel) === owner && !(unit === CORE_AGENT_SOURCE_UNIT ? CORE_AGENT_BATCH_SOURCE_UNIT : CORE_AGENT_SOURCE_UNIT).has(rel)) ? "unique" : "wrong"))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S17: other original owner, executor and outside readers stay independent; test-only reads do not wire exports",
+  expect: ["agent", "batch"].flatMap(unit => ["other-owner=0", "executor=0", "future=0", "outside=0", "test-only=1"].map(result => `${unit}:${result}`)),
+  run() {
+    return [CORE_AGENT_SOURCE_UNIT, CORE_AGENT_BATCH_SOURCE_UNIT].flatMap(unit => {
+      const agent = unit === CORE_AGENT_SOURCE_UNIT
+      const name = agent ? "AgentOwnedValue" : "BatchOwnedValue"
+      return [
+        ["other-owner", agent ? "packages/core-agent/src/tool-batch/dispatch.ts" : "packages/core-agent/src/agent/turn.ts", false],
+        ["executor", "packages/core-agent/src/executor.ts", false],
+        ["future", agent ? "packages/core-agent/src/agent/future.ts" : "packages/core-agent/src/tool-batch/future.ts", false],
+        ["outside", "packages/session-executor/src/service.ts", false],
+        ["test-only", "packages/core-agent/test/consumer.test.ts", true],
+      ].map(([label, rel, test]) => {
+        const files = coreAgentRelocationFixtureFiles(true, unit)
+        files.push({ rel, test, text: `const read = (value: ${name}) => value` })
+        return `${agent ? "agent" : "batch"}:${label}=` + scanUnusedExports(files).length
       })
     })
   },
