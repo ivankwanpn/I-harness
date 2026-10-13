@@ -67,6 +67,68 @@ it("keeps initialization getter order and resolves live step callbacks with thei
   expect(receivers).toEqual([stepInputs, deps, deps, currentModel, stepInputs, deps, deps, currentModel])
 })
 
+it.each(["truncated", "refused", "error"] as const)("reads the live shared step count for concurrent provider %s reports", async (ending) => {
+  const ctx = createContext()
+  const entered = [Promise.withResolvers<void>(), Promise.withResolvers<void>()]
+  const release = Promise.withResolvers<void>()
+  const emitted: TelemetryEvent[] = []
+  let streams = 0
+  const agent = createAgent(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    telemetry: { emit: event => { emitted.push(event) }, close() {} },
+    model: { async *stream() {
+      const index = streams++
+      entered[index]!.resolve()
+      await release.promise
+      if (ending === "error") yield { type: "error" as const, error: new Error(`provider ${index} failed`) }
+      else {
+        yield { type: "text/chunk" as const, text: `answer ${index}` }
+        yield { type: "end" as const, ...(ending === "truncated" ? { truncated: true } : { refused: true }) }
+      }
+    } },
+  })
+  const first = agent.run("first")
+  await entered[0]!.promise
+  const second = agent.followup("second")
+  const settled = Promise.allSettled([first, second])
+  try {
+    await entered[1]!.promise
+    expect(streams).toBe(2)
+  } finally { release.resolve() }
+  const outcomes = await settled
+  expect(emitted.filter(event => event.type === `provider/${ending}`).map(event => event.data.step)).toEqual([2, 2])
+  expect(outcomes.map(outcome => outcome.status)).toEqual(ending === "error" ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"])
+})
+
+it.each(["stop", "flush"] as const)("reads the live shared step count after a held final %s and overlapping followup", async (boundary) => {
+  const ctx = createContext()
+  const entered = Promise.withResolvers<void>()
+  const release = Promise.withResolvers<void>()
+  const stopCounts: number[] = []
+  const turnCounts: unknown[] = []
+  let stops = 0
+  let saves = 0
+  ctx.on("agent/stop", async payload => {
+    stopCounts.push((payload as { turns: number }).turns)
+    if (++stops === 1 && boundary === "stop") { entered.resolve(); await release.promise }
+  })
+  const agent = createAgent(ctx, {
+    session: createSession(), tools: createToolRegistry(ctx), systemPrompt: "p",
+    model: createMockClient([{ role: "assistant", text: "first answer" }, { role: "assistant", text: "second answer" }]),
+    telemetry: { emit: event => { if (event.type === "turn/end") turnCounts.push(event.data.turns) }, close() {} },
+    flush: async () => { if (++saves === 1 && boundary === "flush") { entered.resolve(); await release.promise } },
+  })
+  const first = agent.run("first")
+  await entered.promise
+  let second: Awaited<ReturnType<Agent["followup"]>>
+  try { second = await agent.followup("second") }
+  finally { release.resolve() }
+  const completedFirst = await first
+  expect(stopCounts).toEqual([1, 2])
+  expect(turnCounts).toEqual([1, 2])
+  expect([completedFirst.turns, second.turns]).toEqual([2, 2])
+})
+
 describe("agent loop", () => {
   it("runs a read → edit → report sequence", async () => {
     const ctx = createContext()

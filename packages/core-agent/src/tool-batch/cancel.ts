@@ -72,9 +72,9 @@ export function createBatchCancellation(opts: ExecuteToolCallsOptions) {
       stopped = true
       batchAbort.abort()
     },
-    failureMessage(index: number, fallback: string): string {
+    failureMessage(index: number, fallback: () => string): string {
       const own = failures.get(index)
-      return failures.has(index) ? (own instanceof Error ? own.message : String(own)) : fallback
+      return failures.has(index) ? (own instanceof Error ? own.message : String(own)) : fallback()
     },
   }
 }
@@ -89,7 +89,7 @@ export async function finishCancelledBatch(session: Session, batch: BatchCall[],
   for (let i = records.committed; i < records.startedUpTo; i += 1) {
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
-    const message = cancellation.failureMessage(i, fallbackMessage)
+    const message = cancellation.failureMessage(i, () => fallbackMessage)
     records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_ABORTED_MID_FLIGHT } })
   }
   try { await records.commitReady() } catch { /* abort dominates */ }
@@ -104,11 +104,10 @@ export async function finishCancelledBatch(session: Session, batch: BatchCall[],
 }
 
 export async function finishCheckpointFailure(session: Session, batch: BatchCall[], records: BatchRecords, cancellation: BatchCancellation): Promise<void> {
-  const fallback = cancellation.firstError instanceof Error ? cancellation.firstError.message : String(cancellation.firstError)
   for (let i = records.committed; i < records.startedUpTo; i += 1) {
     if (records.getSlot(i) !== undefined) continue
     const call = batch[i]!
-    const message = cancellation.failureMessage(i, fallback)
+    const message = cancellation.failureMessage(i, () => cancellation.firstError instanceof Error ? cancellation.firstError.message : String(cancellation.firstError))
     records.setSlot(i, { name: call.name, callId: call.callId, synthetic: true, output: { error: message, code: TOOL_FAILED } })
   }
   // Record a commit failure without suppressing never-started fills. The

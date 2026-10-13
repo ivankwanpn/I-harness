@@ -5,7 +5,7 @@ import type { AgentDeps, TurnLifecycle } from "./types.ts"
 import type { AgentContext } from "./context.ts"
 import { createStepReasoning } from "./reasoning.ts"
 
-export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, steps: number) {
+export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, context: Pick<AgentContext, "contextMeter">, reasoning: string[], recordCall: (ev: Extract<LLMStreamEvent, { type: "tool_call" }>) => BatchCall, lifecycle: TurnLifecycle, initialStartSeq: number, abort: AbortSignal | undefined, getSteps: () => number) {
   let stepStartSeq = initialStartSeq
   let stepText = ""
   let toolCallsThisStep = 0
@@ -82,7 +82,7 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           if (ev.usage.inputTokenSemantics === "includes-cache" || ev.usage.inputTokenSemantics === "excludes-cache") stepUsage.inputTokenSemantics = ev.usage.inputTokenSemantics
           break
         case "error":
-          deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: steps, error: ev.error.message } })
+          deps.telemetry?.emit({ type: "provider/error", ts: Date.now(), data: { step: getSteps(), error: ev.error.message } })
           throw Object.assign(new Error(`model stream error: ${ev.error.message}`, { cause: ev.error }), {
             code: (ev.error as Error & { code?: string }).code,
             httpStatus: (ev.error as Error & { httpStatus?: number }).httpStatus,
@@ -94,11 +94,11 @@ export function createModelStep(deps: Pick<AgentDeps, "session" | "telemetry">, 
           // later. Absent stays absent; neither bit is written as false.
           if (ev.truncated === true) {
             truncatedThisStep = true
-            deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: steps } })
+            deps.telemetry?.emit({ type: "provider/truncated", ts: Date.now(), data: { step: getSteps() } })
           }
           if (ev.refused === true) {
             refusedThisStep = true
-            deps.telemetry?.emit({ type: "provider/refused", ts: Date.now(), data: { step: steps } })
+            deps.telemetry?.emit({ type: "provider/refused", ts: Date.now(), data: { step: getSteps() } })
           }
           break
       }

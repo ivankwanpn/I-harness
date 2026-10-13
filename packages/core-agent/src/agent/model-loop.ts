@@ -25,8 +25,8 @@ export function createModelLoop(deps: Pick<AgentDeps, "session" | "telemetry">, 
     return { callId, name: ev.call.name, args: ev.call.args, eventSeq }
   }
   return {
-    start: (lifecycle: TurnLifecycle, startSeq: number, abort: AbortSignal | undefined, steps: number) =>
-      createModelStep(deps, context, reasoning, recordCall, lifecycle, startSeq, abort, steps),
+    start: (lifecycle: TurnLifecycle, startSeq: number, abort: AbortSignal | undefined, getSteps: () => number) =>
+      createModelStep(deps, context, reasoning, recordCall, lifecycle, startSeq, abort, getSteps),
     reasoning,
   }
 }

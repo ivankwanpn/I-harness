@@ -81,7 +81,7 @@ export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentCon
   let prevFingerprints: string[] | undefined
 
 
-  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], steps: number) {
+  return function prepareRequest(abort: AbortSignal | undefined, requestScope: LLMRequest["requestScope"], getSteps: () => number) {
     const messages = deriveMessages(deps.session)
     // Invariant at the seam (audit F01-3): the model may only ever see
     // messages that come from the session log. This passes trivially here
@@ -151,7 +151,7 @@ export function createStepInput(deps: AgentDeps & AgentConfig, context: AgentCon
       type: "provider/call",
       ts: Date.now(),
       data: {
-        step: steps,
+        step: getSteps(),
         messages: messages.length,
         tools: request.tools.length,
         ...(prefixRewritten

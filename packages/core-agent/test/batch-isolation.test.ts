@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createSession, type Session } from "@i-harness/core-session"
-import { createToolRegistry, TOOL_FAILED } from "@i-harness/core-tools"
+import { createToolRegistry, TOOL_FAILED, TOOL_ABORTED_BEFORE_DISPATCH, TOOL_CANCELLED_BY_SIBLING } from "@i-harness/core-tools"
 import { executeToolCalls, type ExecuteToolCallsOptions } from "../src/execute-tool-calls.ts"
 
 function deferred() {
@@ -39,6 +39,31 @@ it("uses current dispatch after the checkpoint await and preserves registry and 
   expect(order).toEqual(["prepare", "checkpoint", "dispatch", "body", "finalize", "post"])
   expect(receivers).toEqual([tools, opts, tools, tools])
   expect(results(session)).toMatchObject([{ callId: "live", output: "answer" }])
+})
+
+it("keeps checkpoint fallback coercion lazy and preserves failure identity and never-started results", async () => {
+  const ctx = createContext()
+  const session = createSession()
+  const tools = createToolRegistry(ctx)
+  let coercions = 0
+  let bodies = 0
+  const reason = { toString() {
+    if (++coercions > 1) throw new Error("unexpected second coercion")
+    return "original reason"
+  } }
+  tools.register({ name: "read", description: "", inputSchema: {}, execute: async () => { bodies++; return "answer" } })
+  const failure = await executeToolCalls(ctx, session, tools, [
+    { callId: "first", name: "read", args: {} },
+    { callId: "second", name: "read", args: {} },
+  ], { maxParallel: 1, flush: async () => { throw reason } }).then(() => undefined, error => error)
+  expect(coercions).toBe(1)
+  expect(failure).toBe(reason)
+  expect(bodies).toBe(0)
+  expect(results(session)).toMatchObject([
+    { callId: "first", isError: true, output: { error: "tool call aborted before dispatch: original reason", code: TOOL_ABORTED_BEFORE_DISPATCH } },
+    { callId: "second", isError: true, output: { error: "tool call cancelled: the batch checkpoint failed", code: TOOL_CANCELLED_BY_SIBLING } },
+  ])
+  expect(session.events.filter(event => event.type === "tool/dispatch").map(event => event.callId)).toEqual(["first"])
 })
 
 describe("ordinary tool failures are isolated to their call", () => {

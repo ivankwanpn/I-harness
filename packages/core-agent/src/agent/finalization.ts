@@ -56,7 +56,7 @@ export function completeModelStep(deps: Pick<AgentDeps, "session" | "telemetry">
 
 }
 
-export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecycle: TurnLifecycle, steps: number, step: ModelStep) {
+export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecycle: TurnLifecycle, getSteps: () => number, step: ModelStep) {
   const { stepText, toolCallsThisStep, truncatedThisStep, refusedThisStep } = step
   // M77: a REFUSED step still appends this message, and its text stays `""`.
   // The choice is deliberate and is the spec's (§1.3): the log must carry
@@ -76,7 +76,7 @@ export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecy
   // holds on this side). A step whose only output was a tool call is NOT
   // empty: the call is content, and the loop continues on it.
   const emptyThisStep = stepText === "" && toolCallsThisStep === 0 && !truncatedThisStep && !refusedThisStep
-  if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: steps } })
+  if (emptyThisStep) deps.telemetry?.emit({ type: "provider/empty", ts: Date.now(), data: { step: getSteps() } })
 
   append(deps.session, { type: "step/end", ...(truncatedThisStep ? { truncated: true } : {}), ...(refusedThisStep ? { refused: true } : {}), ...(emptyThisStep ? { empty: true } : {}) })
   lifecycle.stepOpen = false
@@ -84,14 +84,14 @@ export function closeStep(deps: Pick<AgentDeps, "session" | "telemetry">, lifecy
   return emptyThisStep
 }
 
-export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, steps: number, reasoning: string[]): Promise<AgentResult> {
+export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps, lifecycle: TurnLifecycle, getSteps: () => number, reasoning: string[]): Promise<AgentResult> {
   append(deps.session, { type: "turn/end" })
   lifecycle.turnOpen = false
   // M25: turn/end + token/usage at the turn boundary. The token count is the
   // SAME estimate the M20 budget check uses (activeTokens over the derived
   // surface); guarded so an absent telemetry never pays for it.
   if (deps.telemetry) {
-    deps.telemetry.emit({ type: "turn/end", ts: Date.now(), data: { turns: steps } })
+    deps.telemetry.emit({ type: "turn/end", ts: Date.now(), data: { turns: getSteps() } })
     deps.telemetry.emit({ type: "token/usage", ts: Date.now(), data: { tokens: activeTokens(deps.session) } })
   }
   // M14: content may be a parts array (image-bearing); extract text parts
@@ -106,10 +106,10 @@ export async function finishTurn(ctx: PluginContext, deps: TurnFinalizationDeps,
   // the final text and can refuse it (a listener throw propagates as the
   // turn's failure). No handlers → emit returns the payload unchanged
   // (zero behavior change; additive event, no session-log write).
-  await ctx.emit("agent/stop", { session: deps.session, turns: steps, finalText })
+  await ctx.emit("agent/stop", { session: deps.session, turns: getSteps(), finalText })
   // Execution may already have external effects. A save failure is reported
   // separately and must never be presented as a successful durable turn.
   try { await deps.flush?.() }
   catch (cause) { throw new Error("Execution completed, but session saving failed", { cause }) }
-  return { finalText, turns: steps, reasoning }
+  return { finalText, turns: getSteps(), reasoning }
 }

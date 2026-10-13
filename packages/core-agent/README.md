@@ -37,6 +37,9 @@ synchronously before the original `for await` over the current model.
 The step owner processes events synchronously; no extra await separates request
 assembly, provider startup, usage attribution or batch startup. Live dependency
 getters, methods and callback receivers use the original dependency objects.
+Extracted count readers receive a live getter backed by the sole cumulative
+counter, including provider telemetry and the result after stop/save awaits.
+Overlapping run/followup operations retain the original shared-count behavior.
 
 Signed provider continuation is appended before any tool policy/cancellation
 can refuse the batch. Clean, capped, refused and empty step endings keep their
@@ -76,6 +79,9 @@ dominates coincident refusal/checkpoint/commit failure. Each failed slot uses it
 own rejection identity, including `undefined`; never-started synthesis skips
 slots already filled by typed preparation failure. Started work never outlives
 the batch invocation.
+Checkpoint fallback formatting remains lazy behind the slot and own-failure
+checks, including rejection values with observable or throwing coercion. The
+abort branch retains its original eager fallback formatting.
 
 ## Verification and preserved limits
 
@@ -86,6 +92,9 @@ characterizations in the existing `agent.test.ts` and `batch-isolation.test.ts`
 verify initial getter order and live step/model callbacks, plus current dispatch
 after checkpoint and registry/checkpoint receivers. Both pass on the original
 and decomposed implementation. Existing tests were not split or weakened.
+Six review regressions also pass on the original and corrected split: concurrent
+provider error/refused/truncated reports, result counts after held stop/save,
+and lazy checkpoint coercion with exact failure identity/never-started results.
 Consumer gates are subagent child/tools/task-notification and session-executor
 service/event-driven-steering/admitted-input, with all three package typechecks.
 

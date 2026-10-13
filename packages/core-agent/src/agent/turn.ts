@@ -11,6 +11,7 @@ import { failTurn, completeModelStep, closeStep, finishTurn } from "./finalizati
 export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConfig, context: AgentContext, requestSessionId: string, maxTurns: number | undefined, maxParallel: number) {
   // This budget and both subordinate owners persist across run/followup calls.
   let steps = 0
+  const getSteps = () => steps
   const modelLoop = createModelLoop(deps, context)
   const prepareRequest = createStepInput(deps, context)
   async function executeTurn(lifecycle: TurnLifecycle, message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
@@ -45,8 +46,8 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       promptSubmitted = true
       const hookContext = drainHookContext(ctx, deps)
       if (deps.modelOverheadTokens || hookContext.length > 0) await context.enforceBudget()
-      const { request, requestRevision } = prepareRequest(abort, requestScope, steps)
-      const streamStep = modelLoop.start(lifecycle, stepStartSeq, abort, steps)
+      const { request, requestRevision } = prepareRequest(abort, requestScope, getSteps)
+      const streamStep = modelLoop.start(lifecycle, stepStartSeq, abort, getSteps)
       try { for await (const ev of deps.model.stream(request)) streamStep.accept(ev) }
       catch (error) { streamStep.fail(error) }
       finally { streamStep.settle() }
@@ -61,7 +62,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
           ...(deps.flush ? { flush: deps.flush } : {}),
         })
       }
-      const emptyThisStep = closeStep(deps, lifecycle, steps, step)
+      const emptyThisStep = closeStep(deps, lifecycle, getSteps, step)
       // Continuation: after a step with tool calls, run another step so the
       // model can produce its final message. A step without tool calls is a
       // final answer → loop ends (per-turn mock semantics).
@@ -92,7 +93,7 @@ export function createTurnRunner(ctx: PluginContext, deps: AgentDeps & AgentConf
       }
     }
 
-    return finishTurn(ctx, deps, lifecycle, steps, modelLoop.reasoning)
+    return finishTurn(ctx, deps, lifecycle, getSteps, modelLoop.reasoning)
   }
   return async function runTurn(message: string, signal?: AbortSignal, images?: ImageInput[], inputId?: string): Promise<AgentResult> {
     const lifecycle: TurnLifecycle = { turnOpen: false, stepOpen: false, providerCompleted: false, stepFailed: false }
