@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 
 const unusedTransport = {
+  subscribeJob: () => () => {},
   launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
   cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
   dispose: async (): Promise<void> => {},

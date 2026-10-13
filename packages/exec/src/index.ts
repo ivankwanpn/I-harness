@@ -46,10 +46,15 @@ export interface ExecResult {
 export interface ExecStreamRunOptions {
   stream: { maxBytes: number; onStdout(chunk: Buffer): void | "stop" }
   backgroundAfterMs?: never
+  promotionWake?: never
 }
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
-export interface ExecRunOptions { backgroundAfterMs?: number }
-export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: number }
+interface ExecPromotionWake {
+  pending(): boolean
+  subscribe(listener: () => void): () => void
+}
+export interface ExecRunOptions { backgroundAfterMs?: number; promotionWake?: ExecPromotionWake }
+export interface PromotedRun { jobId: string; promoted: true; ranForegroundMs: number; promotionReason?: "deadline" | "user-steer" }
 /** Running also covers a retained handle whose cleanup is incomplete; inspect settlement. */
 export type BackgroundJobStatus = "running" | "completed" | "killed" | "error"
 export interface BackgroundJobView {
@@ -106,6 +111,7 @@ export interface ExecService {
   run(cmd: ExecCommand, opts: ExecRunOptions): Promise<ExecResult | PromotedRun>
   runBackground(cmd: ExecCommand): Promise<{ jobId: string }>
   getOutput(jobId: string): BackgroundJobView
+  subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   killJob(jobId: string): Promise<"cancellation-requested" | "already-finished">
   launchTransport(request: ExecTransportRequest): Promise<SupervisedExecution>

@@ -9,7 +9,62 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createDesktopSubagents } from "../src/session-subagents.ts"
-import { createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
+import { createAgentTable, createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
+import { createChildObservation } from "../../session-executor/src/child-observation.ts"
+
+it("real service pushes a child's actual unflushed tool result while the parent waits, with lineage checked before live access", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ih-child-push-assembly-"))
+  const coordinator = createSessionCoordinator(createJsonlBackend(root), { maxDelayMs: 60_000 })
+  for (const sessionId of ["parent", "other"]) await coordinator.create({ sessionId })
+  let release!: () => void, entered!: () => void
+  const hold = new Promise<void>(resolve => { release = resolve }), childSecondRequest = new Promise<void>(resolve => { entered = resolve })
+  let childRequests = 0, parentRequests = 0
+  const child: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
+    if (++childRequests === 1) yield { type: "tool_call", call: { id: "child-list", name: "list_dir", args: { path: "." } } }
+    else { entered(); await hold; yield { type: "text/chunk", text: "original child final" } }
+    yield { type: "end" }
+  } }
+  const parent: NonNullable<SessionServiceOptions["model"]> = { async *stream() {
+    if (++parentRequests === 1) yield { type: "tool_call", call: { name: "wait_agent", args: { target: "root/actual", timeout_ms: 300_000 } } }
+    else yield { type: "text/chunk", text: "parent finished" }
+    yield { type: "end" }
+  } }
+  const service = createSessionService({ workspace: root, coordinator, sessionFor: createDurableSessionLoader(coordinator), model: parent, approveAll: true, sandbox: "danger-full-access",
+    allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "fixture", model: "child" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: child } }),
+  })
+  const assembly = await service.assemblyFor("parent")
+  const changed = vi.fn(), catalog = createDesktopSubagents(coordinator, service, { onChanged: changed })
+  let turn: Promise<unknown> | undefined
+  try {
+    await assembly.tools.get("spawn_agent")!.execute({ task_name: "actual", agent_type: "explore", message: "read the workspace", background: true }, { sessionId: "parent" })
+    let enteredSecond = false
+    void childSecondRequest.then(() => { enteredSecond = true })
+    await vi.waitFor(() => expect(enteredSecond).toBe(true), { timeout: 5000 })
+    const row = assembly.subagentState().agentTable.find(row => row.path === "root/actual")!, childId = row.sessionId!
+    turn = service.submit("parent", "observe actual child", new AbortController().signal)
+    await vi.waitFor(() => expect(assembly.session.events.some(event => event.type === "tool/dispatch")).toBe(true))
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith("parent"))
+    expect(service.queueState("parent").running).toBe(true)
+    expect(assembly.session.events.filter(event => event.type === "tool/result" && event.name === "wait_agent")).toHaveLength(0)
+    const saved = (await coordinator.snapshot!(childId)).session
+    expect(saved.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(false)
+    const flush = vi.spyOn(coordinator, "flush"), originalAccess = assembly.liveChildSession!, access = vi.fn(originalAccess)
+    assembly.liveChildSession = access
+    const history = await catalog.history("parent", childId)
+    const live = assembly.liveChildSession!(childId)!
+    expect(history.events).toEqual(live.events)
+    expect(history.events.some(event => event.type === "tool/result" && event.callId === "child-list")).toBe(true)
+    expect((await catalog.list("parent")).agents.find(row => row.sessionId === childId)).toMatchObject({ live: true, status: "running", path: "root/actual" })
+    access.mockClear()
+    await expect(catalog.history("other", childId)).rejects.toThrow(/scope/)
+    expect(access).not.toHaveBeenCalled(); expect(flush).not.toHaveBeenCalled()
+    expect(service.liveSession(childId)).toBeUndefined(); expect(service.liveAssembly(childId)).toBeUndefined()
+    flush.mockRestore(); assembly.liveChildSession = originalAccess
+    release(); await turn
+    expect(childRequests).toBe(2)
+    expect((await catalog.history("parent", childId)).events.some(event => event.type === "assistant/message" && event.text === "original child final")).toBe(true)
+  } finally { release(); await turn?.catch(() => {}); await catalog.close(); await service.close(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+}, 15_000)
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "desktop-subagent-catalog-"))
@@ -31,9 +86,206 @@ async function fixture() {
     { path: "lead/teammate", sessionId: "team", roleName: "teammate", status: "waiting", mailbox: [], jobId: "subagent-2" },
   ] })
   const assemble = vi.fn(async () => { throw new Error("read must not activate a parent") })
-  const service = { liveAssembly: () => undefined, liveSession: () => undefined, assemblyFor: assemble } as unknown as SessionService
+  const service = { liveAssembly: () => undefined, liveSession: () => undefined, assemblyFor: assemble, onAssembly: () => () => {} } as unknown as SessionService
   return { root, coordinator, service, assemble, close: async () => { await coordinator.close(); await rm(root, { recursive: true, force: true }) } }
 }
+
+function observedRuntime(f: Awaited<ReturnType<typeof fixture>>) {
+  const assemblies = new Map<string, SessionAssembly>()
+  const hooks = new Set<(assembly: SessionAssembly) => void>()
+  f.service.liveAssembly = id => assemblies.get(id)
+  f.service.onAssembly = (hook, options) => { hooks.add(hook); if (options?.includeExisting) for (const assembly of assemblies.values()) hook(assembly); return () => { hooks.delete(hook) } }
+  function mount(sessionId: string) {
+    const table = createAgentTable(), monitor = createChildObservation(table)
+    const assembly = { sessionId, session: createSession(), tools: createToolRegistry(createContext()), subagentState: () => ({ formatVersion: 1, jobs: [], roles: [], agentTable: [...table.entries().values()] }), liveChildSession: monitor.liveSession, onSubagentsChanged: monitor.subscribe } as unknown as SessionAssembly
+    assemblies.set(sessionId, assembly)
+    for (const hook of hooks) hook(assembly)
+    return { assembly, table, monitor }
+  }
+  return { mount, hooks }
+}
+
+it("reads actual unflushed durable child history and catalog without any parent event or widened root authority", async () => {
+  const f = await fixture(), runtime = observedRuntime(f), owner = runtime.mount("parent")
+  const session = (await f.coordinator.snapshot!("normal")).session
+  owner.table.add("root/helper", { path: "root/helper", sessionId: "normal", session, status: "running", controller: new AbortController(), mailbox: [] })
+  const catalog = createDesktopSubagents(f.coordinator, f.service)
+  const flush = vi.spyOn(f.coordinator, "flush"), access = vi.fn(owner.assembly.liveChildSession!)
+  owner.assembly.liveChildSession = access
+  try {
+    append(session, { type: "tool/result", name: "controlled", callId: "unflushed", output: "live result before turn end" })
+    append(session, { type: "assistant/message", text: "live final before flush" })
+    expect((await f.coordinator.snapshot!("normal")).session.events).toHaveLength(4)
+    expect((await catalog.history("parent", "normal")).events.at(-2)).toMatchObject({ type: "tool/result", output: "live result before turn end", seq: 4 })
+    expect((await catalog.list("parent")).agents.find(row => row.sessionId === "normal")).toMatchObject({ finalText: "live final before flush", status: "running", live: true })
+    expect(owner.assembly.session.events).toHaveLength(0)
+    access.mockClear()
+    await expect(catalog.history("other", "normal")).rejects.toThrow(/scope/)
+    expect(access).not.toHaveBeenCalled()
+    expect(flush).not.toHaveBeenCalled()
+    expect(f.service.liveSession("normal")).toBeUndefined()
+    expect(f.assemble).not.toHaveBeenCalled()
+  } finally { await catalog.close(); owner.monitor.dispose(); await f.close() }
+})
+
+it("reads restored Session replacements and validates sequence invariants on the selected live Session", async () => {
+  const f = await fixture(), owner = observedRuntime(f).mount("parent")
+  const stub = createSession(), row = { path: "root/helper", sessionId: "normal", session: stub, status: "waiting" as const, controller: new AbortController(), mailbox: [] }
+  owner.table.add(row.path, row)
+  const catalog = createDesktopSubagents(f.coordinator, f.service)
+  try {
+    expect((await catalog.history("parent", "normal")).events).toEqual([])
+    const restored = (await f.coordinator.snapshot!("normal")).session
+    owner.table.update(row.path, row, { session: restored })
+    append(restored, { type: "tool/result", name: "controlled", callId: "restored", output: "restored live result" })
+    expect((await catalog.history("parent", "normal")).events.at(-1)).toMatchObject({ output: "restored live result" })
+    restored.events[0]!.seq = 9
+    await expect(catalog.history("parent", "normal")).rejects.toThrow(/sequence/)
+    expect((await catalog.list("parent")).agents.find(row => row.sessionId === "normal")).toMatchObject({ live: false, status: "unavailable", error: expect.stringContaining("sequence") })
+  } finally { await catalog.close(); owner.monitor.dispose(); await f.close() }
+})
+
+it("reads lineage-validated intermediate owner history from its root registry", async () => {
+  const f = await fixture(), owner = observedRuntime(f).mount("parent")
+  const session = (await f.coordinator.snapshot!("normal")).session
+  owner.table.add("root/helper", { path: "root/helper", sessionId: "normal", session, status: "waiting", controller: new AbortController(), mailbox: [] })
+  const member = { id: "live-member", name: "Live nested member", description: "live", provider: "spawn", context: "fresh" as const, sessionId: "nested" }
+  append(session, { type: "team/member", version: 1, teamId: "live-team", member: { ...member, phase: "provisioning" } })
+  append(session, { type: "team/member", version: 1, teamId: "live-team", member: { ...member, phase: "active" } })
+  const catalog = createDesktopSubagents(f.coordinator, f.service)
+  try {
+    expect((await catalog.list("parent")).agents.find(row => row.sessionId === "nested")).toMatchObject({ label: "Live nested member", roleName: "teammate" })
+  } finally { await catalog.close(); owner.monitor.dispose(); await f.close() }
+})
+
+it("coalesces 100 child changes into one root invalidation and has no idle timer", async () => {
+  const f = await fixture(), runtime = observedRuntime(f), owner = runtime.mount("parent")
+  vi.useFakeTimers()
+  const changed = vi.fn(), catalog = createDesktopSubagents(f.coordinator, f.service, { onChanged: changed })
+  try {
+    vi.advanceTimersByTime(50); changed.mockClear()
+    expect(vi.getTimerCount()).toBe(0)
+    const session = createSession()
+    owner.table.add("root/new", { path: "root/new", sessionId: "new", session, status: "running", controller: new AbortController(), mailbox: [] })
+    for (let i = 0; i < 100; i++) append(session, { type: "user/message", text: `durable-${i}` })
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(49); expect(changed).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1); expect(changed).toHaveBeenCalledExactlyOnceWith("parent")
+    expect(vi.getTimerCount()).toBe(0)
+    vi.advanceTimersByTime(10000); expect(changed).toHaveBeenCalledOnce()
+  } finally { await catalog.close(); owner.monitor.dispose(); vi.useRealTimers(); await f.close() }
+})
+
+it("replaces root subscriptions, invalidates a closing root once, and disconnects pending gateway work", async () => {
+  const f = await fixture(), runtime = observedRuntime(f)
+  vi.useFakeTimers()
+  const changed = vi.fn(), catalog = createDesktopSubagents(f.coordinator, f.service, { onChanged: changed })
+  const first = runtime.mount("parent"), unrelated = runtime.mount("other")
+  try {
+    vi.advanceTimersByTime(50); changed.mockClear()
+    const firstSession = createSession()
+    first.table.add("root/old", { path: "root/old", sessionId: "old", session: firstSession, status: "running", controller: new AbortController(), mailbox: [] })
+    const next = runtime.mount("parent")
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(50); changed.mockClear()
+    append(firstSession, { type: "user/message", text: "stale parent" })
+    first.monitor.dispose()
+    expect(vi.getTimerCount()).toBe(0)
+    next.monitor.dispose(); next.monitor.dispose()
+    expect(vi.getTimerCount()).toBe(1)
+    vi.advanceTimersByTime(50)
+    expect(changed).toHaveBeenCalledExactlyOnceWith("parent")
+    changed.mockClear()
+    unrelated.table.add("other/child", { path: "other/child", sessionId: "unrelated", session: createSession(), status: "running", controller: new AbortController(), mailbox: [] })
+    vi.advanceTimersByTime(50)
+    expect(changed).toHaveBeenCalledExactlyOnceWith("other")
+    changed.mockClear()
+    unrelated.table.update("other/child", unrelated.table.get("other/child")!, { status: "waiting" })
+    await catalog.close()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(runtime.hooks.size).toBe(0)
+    unrelated.monitor.dispose()
+    vi.advanceTimersByTime(1000)
+    expect(changed).not.toHaveBeenCalled()
+  } finally { await catalog.close(); first.monitor.dispose(); unrelated.monitor.dispose(); vi.useRealTimers(); await f.close() }
+})
+
+it("coalesces control and child lifecycle invalidations and isolates failed notification consumers", async () => {
+  const f = await fixture(), owner = observedRuntime(f).mount("parent")
+  const row = { path: "root/helper", sessionId: "normal", session: createSession(), status: "waiting" as const, controller: new AbortController(), mailbox: [] }
+  owner.table.add(row.path, row)
+  owner.assembly.tools.register({ name: "followup_task", description: "controlled", inputSchema: {}, execute: async () => { owner.table.update(row.path, row, { status: "waiting" }); return { accepted: true } } })
+  vi.useFakeTimers()
+  const changed = vi.fn(() => { throw new Error("detached Desktop") })
+  const catalog = createDesktopSubagents(f.coordinator, f.service, { onChanged: changed })
+  try {
+    expect(() => vi.advanceTimersByTime(50)).not.toThrow(); changed.mockClear()
+    await expect(catalog.control("parent", "normal", { action: "followup", text: "next" })).resolves.toMatchObject({ result: { accepted: true } })
+    expect(vi.getTimerCount()).toBe(1)
+    expect(() => vi.advanceTimersByTime(50)).not.toThrow()
+    expect(changed).toHaveBeenCalledExactlyOnceWith("parent")
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { await catalog.close(); owner.monitor.dispose(); vi.useRealTimers(); await f.close() }
+})
+
+it("unsubscribes already attached assemblies and clears timers when initial hook setup fails", async () => {
+  const f = await fixture(), runtime = observedRuntime(f), first = runtime.mount("parent"), second = runtime.mount("other")
+  const off = vi.fn()
+  first.assembly.onSubagentsChanged = () => off
+  second.assembly.onSubagentsChanged = () => { throw new Error("attach failed") }
+  vi.useFakeTimers()
+  try {
+    expect(() => createDesktopSubagents(f.coordinator, f.service)).toThrow("attach failed")
+    expect(off).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { first.monitor.dispose(); second.monitor.dispose(); vi.useRealTimers(); await f.close() }
+})
+
+it("closes observations immediately while draining an already executing control write", async () => {
+  const f = await fixture(), owner = observedRuntime(f).mount("parent")
+  let release!: () => void, entered!: () => void
+  const gate = new Promise<void>(resolve => { release = resolve }), started = new Promise<void>(resolve => { entered = resolve })
+  owner.table.add("root/helper", { path: "root/helper", sessionId: "normal", session: createSession(), status: "waiting", controller: new AbortController(), mailbox: [] })
+  owner.assembly.tools.register({ name: "followup_task", description: "controlled", inputSchema: {}, execute: async () => { entered(); await gate; return { completed: true } } })
+  const changed = vi.fn(), catalog = createDesktopSubagents(f.coordinator, f.service, { onChanged: changed })
+  try {
+    const write = catalog.control("parent", "normal", { action: "followup", text: "controlled write" })
+    await started
+    let drained = false
+    const close = catalog.close().then(() => { drained = true })
+    changed.mockClear()
+    await Promise.resolve()
+    expect(drained).toBe(false)
+    await expect(catalog.history("parent", "normal")).rejects.toThrow(/closed/)
+    release()
+    await expect(write).resolves.toMatchObject({ result: { completed: true } })
+    await close
+    expect(drained).toBe(true)
+    expect(changed).not.toHaveBeenCalled()
+  } finally { release(); await catalog.close(); owner.monitor.dispose(); await f.close() }
+})
+
+it("detaches an old observer when its root is replaced by a host without the optional child observation seam", async () => {
+  const f = await fixture(), runtime = observedRuntime(f), old = runtime.mount("parent")
+  const subscribe = old.assembly.onSubagentsChanged!, off = vi.fn()
+  old.assembly.onSubagentsChanged = listener => { const unsubscribe = subscribe(listener); return () => { off(); unsubscribe() } }
+  vi.useFakeTimers()
+  const changed = vi.fn(), catalog = createDesktopSubagents(f.coordinator, f.service, { onChanged: changed })
+  try {
+    vi.advanceTimersByTime(50); changed.mockClear()
+    old.table.add("root/child", { path: "root/child", sessionId: "normal", session: createSession(), status: "running", controller: new AbortController(), mailbox: [] })
+    const replacement = { sessionId: "parent" } as SessionAssembly
+    f.service.liveAssembly = () => replacement
+    for (const hook of runtime.hooks) hook(replacement)
+    expect(off).toHaveBeenCalledOnce()
+    old.monitor.dispose()
+    vi.advanceTimersByTime(50)
+    expect(changed).toHaveBeenCalledExactlyOnceWith("parent")
+    changed.mockClear()
+    old.table.add("root/stale", { path: "root/stale", sessionId: "stale", session: createSession(), status: "running", controller: new AbortController(), mailbox: [] })
+    expect(vi.getTimerCount()).toBe(0)
+  } finally { await catalog.close(); old.monitor.dispose(); vi.useRealTimers(); await f.close() }
+})
 
 it("reads normal/team descendants and durable results after restart without activating an Agent, and hides reviewers/fork branches", async () => {
   const f = await fixture()

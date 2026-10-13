@@ -5,6 +5,42 @@ import { tmpdir } from "node:os"
 import { createSpillStore } from "@i-harness/output-retention"
 import { createCodeModeRuntime } from "../src/runtime.ts"
 import type { CodeModeRuntimeOptions } from "../src/types.ts"
+import { createSession, Inbox } from "@i-harness/core-session"
+import { userSteerForTool } from "@i-harness/core-tools"
+
+it("steer waits for detached retention while later output and store commit remain ordered", async () => {
+  const session = createSession(), inbox = new Inbox(session), source = userSteerForTool({ session })
+  const started = Promise.withResolvers<void>(), tool = Promise.withResolvers<unknown>(), spill = Promise.withResolvers<string>(), spilling = Promise.withResolvers<void>(), closed = Promise.withResolvers<void>()
+  const retained: string[] = [], order: string[] = []
+  const r = createCodeModeRuntime({
+    tools: () => [{ name: "held", description: "fixture", inputSchema: {} }],
+    invoke: async () => { started.resolve(); return tool.promise },
+    spillStore: { async saveText(text) { retained.push(text); spilling.resolve(); return spill.promise } },
+    commitStore: async () => { order.push("commit") },
+    onEvent: event => { if (event.type === "closed") { order.push("closed"); closed.resolve() } },
+  })
+  try {
+    let settled = false
+    const observing = r.exec({ code: 'text("first".repeat(4000)); await tools.held({}); text("second"); store("memo","committed")', yield_time_ms: 60_000 }, {}, { userSteer: source }).then(out => { settled = true; return out })
+    await started.promise
+    inbox.admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+    await spilling.promise
+    expect(settled).toBe(false)
+    tool.resolve(null); await closed.promise; await Promise.resolve()
+    expect(order).toEqual(["commit", "closed"])
+    expect(settled).toBe(false)
+    spill.resolve("retained-first-window")
+    const first = await observing
+    expect(first.status).toBe("running") // later output still needs its own cursor
+    expect(first).not.toHaveProperty("yielded") // actual completion won during retention
+    expect(retained).toEqual(["first".repeat(4000)])
+    inbox.claimAtStepBoundary()
+    const second = await r.wait({ cell_id: first.cellId })
+    expect(second).toMatchObject({ status: "completed", text: "second" })
+    expect((await r.exec({ code: 'text(load("memo"))' })).text).toBe("committed")
+    expect(retained).toHaveLength(1)
+  } finally { tool.resolve(null); spill.resolve("cleanup"); await r.dispose() }
+})
 
 it("retains full admitted Unicode text behind the bounded model preview and an owner-scoped reference", async () => {
   const root = await mkdtemp(join(tmpdir(), "ih-code-retention-"))

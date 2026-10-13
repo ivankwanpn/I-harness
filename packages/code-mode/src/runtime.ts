@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { Worker } from 'node:worker_threads'
 import { createUnifiedSpillStore } from '@i-harness/output-retention'
 import { validateImage } from '@i-harness/image-validation'
-import type { CodeModeConfig, CodeModeItem, CodeModeObservation, CodeModeOrigin, CodeModeRuntime, CodeModeRuntimeOptions, CodeModeStatus, CodeModeStoreEntries, CodeModeTextRetention } from './types.js'
+import { waitForObservation } from '@i-harness/core-tools'
+import type { CodeModeConfig, CodeModeItem, CodeModeObservation, CodeModeObserveOptions, CodeModeOrigin, CodeModeRuntime, CodeModeRuntimeOptions, CodeModeStatus, CodeModeStoreEntries, CodeModeTextRetention } from './types.js'
 
 const TEXT_CAP = 16 * 1024
 const ITEM_CAP = 256
@@ -293,24 +294,26 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       }
     } catch (error) { close(cell,'failed',message(error)) }
   }
-  async function observe(cell: Cell, duration: number, tokens: number, signal?: AbortSignal, terminate = false): Promise<CodeModeObservation> {
+  async function observe(cell: Cell, duration: number, tokens: number, signal?: AbortSignal, terminate = false, observation?: CodeModeObserveOptions): Promise<CodeModeObservation> {
     if (cell.observer) throw new Error('Cell already has an active observer')
     cell.observer = true
     let removeAbort: (() => void) | undefined
+    let steered = false
     try {
       if (terminate && cell.status === 'running') close(cell,'terminated','Cell terminated by observer')
       if (signal?.aborted) close(cell,'terminated',message(signal.reason ?? 'Observer aborted'))
       if (cell.status === 'running' && !cell.yielded) {
-        await new Promise<void>(resolve => {
-          const timer = setTimeout(done,duration)
-          function done() { clearTimeout(timer); cell.wake = undefined; resolve() }
-          cell.wake = done
-          if (signal) {
-            const abort = () => close(cell,'terminated',message(signal.reason ?? 'Observer aborted'))
-            signal.addEventListener('abort',abort,{once:true})
-            removeAbort = () => signal.removeEventListener('abort',abort)
-          }
+        if (signal) {
+          const abort = () => close(cell,'terminated',message(signal.reason ?? 'Observer aborted'))
+          signal.addEventListener('abort',abort,{once:true})
+          removeAbort = () => signal.removeEventListener('abort',abort)
+        }
+        const reason = await waitForObservation({
+          ready: () => cell.status !== 'running' || cell.yielded,
+          changes: { subscribe: wake => { cell.wake = wake; return () => { if (cell.wake === wake) cell.wake = undefined } } },
+          timeoutMs: duration, abortSignal: signal, userSteer: observation?.userSteer,
         })
+        steered = reason === 'user-steer'
       }
       const admitted = cell.items
       const incomplete = cell.textIncomplete
@@ -376,6 +379,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
       // observation cursor available until that later window is consumed.
       const status = cell.items.length || cell.truncated || cell.textIncomplete || cell.status === 'running' && cell.pendingItems ? 'running' : cell.status
       const out: CodeModeObservation = {cellId:cell.id,status,items,text,truncated,
+        ...(steered && cell.status === 'running' && !signal?.aborted ? {yielded:true as const,yieldReason:'user-steer' as const} : {}),
         ...(textRetention ? {textRetention} : {}),
         ...(error === undefined ? {} : {error}), ...(cell.policyRefusal ? {policyRefusal:true} : {})}
       if (out.status !== 'running') cells.delete(cell.id)
@@ -384,7 +388,7 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
     } finally { removeAbort?.(); cell.observer = false }
   }
   const runtime: CodeModeRuntime = {
-    async exec(input,providedOrigin = {}) {
+    async exec(input,providedOrigin = {},observation) {
       // Cell authority belongs to the metadata admitted here, even if a caller
       // reuses or later mutates its own origin object. Only the signal is shared.
       const origin: CodeModeOrigin = Object.freeze({
@@ -460,12 +464,12 @@ export function createCodeModeRuntime(options: CodeModeRuntimeOptions): CodeMode
         cell.removeOwner = () => origin.abortSignal?.removeEventListener('abort',abort)
         if (origin.abortSignal.aborted) abort()
       }
-      return observe(cell,yieldMs,maxTokens)
+      return observe(cell,yieldMs,maxTokens,undefined,false,observation)
     },
-    async wait(input,signal) {
+    async wait(input,signal,options) {
       const cell = cells.get(input.cell_id)
       if (!cell) throw new Error('Cell unavailable: unknown, retired, or interrupted by runtime restart')
-      const observation = await observe(cell,limit(input.yield_time_ms,config.defaultYieldTimeMs,0,60_000,'yield_time_ms'),limit(input.max_tokens,config.defaultOutputTokens,0,4096,'max_tokens'),signal,input.terminate === true)
+      const observation = await observe(cell,limit(input.yield_time_ms,config.defaultYieldTimeMs,0,60_000,'yield_time_ms'),limit(input.max_tokens,config.defaultOutputTokens,0,4096,'max_tokens'),signal,input.terminate === true,options)
       // The cancelling observer owns this cell's tool cleanup. An observer
       // of a separate human stop remains independent of that owner's drain.
       if (input.terminate === true || signal?.aborted) await Promise.allSettled([cell.stop, ...cell.producers])

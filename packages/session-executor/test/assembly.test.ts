@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
+import { mkdtemp, rm } from "node:fs/promises"
+import { createSessionCoordinator } from "@i-harness/session-persistence"
+import { createJsonlBackend } from "@i-harness/session-persistence-jsonl"
 
 /** Poll `cond` (the projection settles asynchronously — the child's abort
  * path lands after the gate release). */
@@ -68,6 +71,33 @@ vi.mock("@i-harness/mcp-client", async (importOriginal) => {
 })
 
 describe("createSessionAssembly", () => {
+  it("owns live child observation and closes it once before discarding children", async () => {
+    const root = await mkdtemp(join(tmpdir(), "assembly-child-observation-"))
+    const coordinator = createSessionCoordinator(createJsonlBackend(root))
+    await coordinator.create({ sessionId: "observed-root" })
+    const assembly = await createSessionAssembly({ workspace: root, coordinator, sessionId: "observed-root", modelPolicy: "test-mock" })
+    const changes: string[] = []
+    try {
+      expect(assembly.onSubagentsChanged).toBeTypeOf("function")
+      assembly.onSubagentsChanged!(change => { changes.push(change.kind) })
+      await assembly.tools.get("spawn_agent")!.execute({ message: "done", task_name: "observed", agent_type: "explore", background: false }, { sessionId: "observed-root" })
+      const row = assembly.subagentState().agentTable[0]!
+      const live = assembly.liveChildSession!(row.sessionId!)!
+      expect(live).toBeDefined()
+      const before = changes.length
+      append(live, { type: "tool/result", name: "controlled", callId: "controlled-result", output: "unflushed" })
+      expect(changes.length).toBe(before + 1)
+      expect(changes.at(-1)).toBe("changed")
+      await assembly.dispose()
+      expect(assembly.liveChildSession!(row.sessionId!)).toBeUndefined()
+      expect(changes.at(-1)).toBe("closed")
+      append(live, { type: "user/message", text: "after disposal" })
+      expect(changes.filter(kind => kind === "closed")).toHaveLength(1)
+      expect(changes.at(-1)).toBe("closed")
+    } finally { await assembly.dispose(); await coordinator.close(); await rm(root, { recursive: true, force: true }) }
+    expect(changes.filter(kind => kind === "closed")).toHaveLength(1)
+  }, 30000)
+
   it("omitted model policy refuses an assembly without a client", async () => {
     await expect(createSessionAssembly({
       workspace: process.cwd(),

@@ -62,6 +62,27 @@ function restoredEntry(sessionId: string, roleName: string | undefined): ChildAg
 }
 
 describe("ensureResidentAgent", () => {
+  it("rejects a stale rebuild after model resolution without publishing or registering it", async () => {
+    const { deps, table, agents } = setup(), original = restoredEntry("old-child", "general")
+    const replacement = restoredEntry("new-child", "general")
+    const release = Promise.withResolvers<void>()
+    deps.allowSubagentModelSelection = true
+    deps.roleSelectionFor = () => ({ provider: "test", model: "test" })
+    deps.resolveModel = async () => { await release.promise; return { status: "ready", binding: { client: deps.parentModel } } }
+    table.add(original.path, original)
+    const changes: unknown[] = []
+    table.subscribe(change => changes.push(change.kind))
+    const rebuilding = ensureResidentAgent(deps, original)
+    try {
+      table.add(original.path, replacement)
+      release.resolve()
+      expect(await rebuilding).toBe(false)
+      expect(agents.get("old-child")).toBeUndefined()
+      expect(table.get(original.path)).toBe(replacement)
+      expect(original.modelLabel).toBeUndefined()
+      expect(changes).toEqual(["add"])
+    } finally { release.resolve(); await rebuilding }
+  })
   it("rebuilds a non-resident entry from the restored session + role and registers the agent", async () => {
     const { deps, table, agents } = setup()
     const entry = restoredEntry("child-1", "general")
@@ -558,6 +579,8 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
       loadOwned: vi.fn(async () => {
         throw new Error("missing log")
       }),
+      putDocument: vi.fn(async () => {}),
+      getDocument: vi.fn(async () => undefined),
       enqueue: vi.fn(),
       flush: vi.fn(async () => {}),
       ...over,
@@ -589,6 +612,9 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     })
     const subagent = registerWith(coordinator, restoreFixture())
     // The async mirror rebuild is IN FLIGHT: owned load was called, `ready` pending.
+    const originalSession = subagent.table.get("root/helper")!.session
+    const changes: { status: string; session: unknown; closing?: boolean }[] = []
+    subagent.table.subscribe(change => changes.push({ status: change.entry.status, session: change.entry.session, closing: change.entry.closing }))
     expect(coordinator.loadOwned).toHaveBeenCalledWith("child-abc")
     let readyResolved = false
     void subagent.ready.then(() => { readyResolved = true })
@@ -603,23 +629,30 @@ describe("M24a G1a async mirror + G4 pending-inbox sweep + ready", () => {
     expect(entry.status).toBe("waiting") // load succeeded → not failed-visible
     expect(entry.session.events.some((e) => e.type === "user/message" && e.text === "old")).toBe(true)
     expect(entry.session.header).toEqual({ origin: "subagent", parentSession: "main" })
+    expect(changes).toEqual([{ status: "waiting", session: entry.session, closing: undefined }])
+    expect(entry.session).not.toBe(originalSession)
     // The mirror is HOOKED: appends flow into the durable write-behind ...
     append(entry.session, { type: "subagent/inbox", messageId: "m1", message: "hi" })
     expect(coordinator.enqueue).toHaveBeenCalledWith("child-abc", [expect.objectContaining({ type: "subagent/inbox", message: "hi" })])
     // ... and a turn/end triggers the flush hook
     append(entry.session, { type: "turn/end" })
     expect(coordinator.flush).toHaveBeenCalledWith("child-abc")
+    await subagent.dispose()
+    expect(changes.at(-1)).toMatchObject({ closing: true, session: entry.session })
   }, 10_000)
 
   it("fails visible when a child log is unavailable after resume (G1a)", async () => {
     const coordinator = mockCoordinator() // owned load rejects by default
     const subagent = registerWith(coordinator, restoreFixture())
+    const changes: unknown[] = []
+    subagent.table.subscribe(change => changes.push({ status: change.entry.status, error: change.entry.error }))
     await subagent.ready
     const entry = subagent.table.get("root/helper")!
     // NOT a silent empty stub anymore: the entry fails visible so the caller
     // (wait_agent / list_agents) sees why the child is unusable.
     expect(entry.status).toBe("error")
     expect(entry.error).toBe("child log unavailable after resume")
+    expect(changes).toEqual([{ status: "error", error: "child log unavailable after resume" }])
   }, 10_000)
 
   it("ready resolves immediately when there is no restored state (no-op)", async () => {

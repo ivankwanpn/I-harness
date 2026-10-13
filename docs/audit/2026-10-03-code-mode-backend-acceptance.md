@@ -51,6 +51,14 @@ code_exec({
 
 若回傳 running，使用 `code_wait({cell_id: "回傳的 ID", yield_time_ms: 1000})`，直到 terminal。觀察期限不是完成保證；worker 冷啟動亦可先 yield。
 
+### 2026-10-13：人類 steer 與既有 cell 的後續讀取
+
+`code_exec`／`code_wait` 現在訂閱 cell lifecycle／output 與該 live Session 的 pending human steer，不以 sleep loop 輪詢完成。等待中的人類 steer 可返回 `{cell_id: "原 ID", status: "running", yield_reason: "user-steer", …}`；工具只交付此輪新的 output window。guest 程式、巢狀工具及 store commit 留在同一 owner，parent turn 可自然結束，之後另一個 turn 用原 ID 執行 `code_wait`。不重跑 code，不重派巢狀工具，也不重播已消耗輸出。
+
+steer 只釋放 outer observer。巢狀 `tools.spawn_agent({background:false,…})`、`tools.job_output({wait:true,…})`、shell 或任意工具的 Promise 繼續等待其真實結果；不把外層 running marker 注入 guest 的結果。queue／system／已取消的 input 不會釋放觀察者。`yield_time_ms` 仍限 0..60,000；required retention／spill I/O 可能延遲觀察返回，worker 初始化／CPU watchdog 仍使用 timer。Stop、terminate、close／dispose 會 cancel 並等待 worker 和巢狀 producer drain。
+
+來源整合回歸在 `packages/session-executor/test/event-driven-steering.test.ts` 與 `packages/desktop-gateway/test/input.test.ts` 使用真正 QuickJS worker、assembly、service、controlled ModelClient 和 held tool，檢查 steering 之後原 invocation 仍 held、沒有 active-producer abort、parent turn 已結束，以及後續同 cell ID 的 completed observation。更完整的直接等待、shell lifetime、batch sibling 與 child durable push 邊界見 [併發與喚醒契約 §2–6](../concurrency-and-wake.md)。本節是後續來源行為更新；以下 2026-10-03 的測試數字與 packaged QA 保留為當時版本紀錄。
+
 ## 審查修復與驗證依據
 
 實際 red→green 修復包括：guest／host 超長錯誤在 IPC 前有界、JSON helper intrinsic 捕獲、origin admission snapshot、checkpoint 後再次驗證撤銷的 binding、串行 post hooks、避免同一次呼叫寫入兩個結果、finalize／post-hook 拒絕不能被 guest catch 轉為成功、子代理 interrupt 後可再次續派，以及即時目錄的輸出／壓縮價格。

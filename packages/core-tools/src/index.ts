@@ -2,6 +2,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import type { Session } from '@i-harness/core-session'
 import { assertSupportedJsonSchema, validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
 export { validateJsonSchemaValue, type JsonSchemaNode } from "./json-schema.ts"
+export { waitForObservation, userSteerForTool, type UserSteerSource } from "./observation.ts"
 
 // M27-R-A8: get_context_remaining — registered only when a contextWindow is
 // known (fail-closed); see context-remaining.ts.

@@ -8,6 +8,7 @@
 import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import { createPluginCapabilities, type PluginCapabilities } from "./plugin-capabilities.ts"
 import { createScopedExec } from "./scoped-exec.ts"
+import { createChildObservation } from "./child-observation.ts"
 import { createAssemblyExecutionRuntime } from "./execution-runtime.ts"
 import { inspectWslRuntime } from "@i-harness/sandbox-local"
 import { append, createSession, derivePlanMode, Inbox, subscribe, type Session } from "@i-harness/core-session"
@@ -394,6 +395,10 @@ export interface SessionAssembly {
   tasks(): AgentTaskView[]
   /** Synchronous copied metadata from this assembly's owning child registry. */
   subagentState(): SubagentStateSnapshot
+  /** Exact current child Session owned by this assembly; never mounts or restores it. */
+  liveChildSession?(childSessionId: string): Session | undefined
+  /** Durable child events and registry lifecycle invalidations, local to this assembly. */
+  onSubagentsChanged?(listener: (change: { kind: "changed" | "closed" }) => void): () => void
   /** Host-only read seam over an exact live child caller; no registry escapes. */
   ownedToolCaller?(input: PreparedApprovalInput): { sessionId: string; role: string; snapshot: string; validate(): boolean } | undefined
   /** M49 Task 12: cancel ONE task by its stable id THROUGH THE OWNING
@@ -1119,6 +1124,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
   const teamHandles: TeamMountHandle[] = []
   let flushSubagentPersistence: (() => Promise<void>) | undefined
   let disposeSubagents: (() => Promise<void>) | undefined
+  let childObservation: ReturnType<typeof createChildObservation> | undefined
   let disposing = false
   const backgroundJobs = new Map<string, { kind:string; label:string; requestCancel():void; cancel():void; done:Promise<void>; finish(status:"completed"|"killed"|"error",output:string):void }>()
   let codeModeMount: CodeModeMount | undefined
@@ -1235,6 +1241,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
       ...(opts.restoredState !== undefined ? { restoredState: opts.restoredState } : {}),
       ...(opts.parentNotify !== undefined ? { parentNotify: opts.parentNotify } : {}),
     })
+    childObservation = createChildObservation(subagent.table)
     const ownedToolCaller: NonNullable<SessionAssembly["ownedToolCaller"]> = (input) => {
         const entry = [...subagent.table.entries().values()].find((row) => row.sessionId === input.sessionId)
         const registry = entry?.toolRegistry
@@ -1620,6 +1627,8 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
         return {finish}
       },
       subagentState: () => snapshotState({ jobs: subagent.jobs, table: subagent.table, roles: subagent.roles }),
+      liveChildSession: childObservation.liveSession,
+      onSubagentsChanged: childObservation.subscribe,
       ownedToolCaller,
       liveResources: (terminalOwnerSessionId = opts.sessionId) => {
         if (codeModeMount && !codeModeMount.liveCells) throw new Error("Live Code Mode resource inspection is unavailable")
@@ -1687,6 +1696,7 @@ export async function createSessionAssembly(opts: AssemblyOptions): Promise<Sess
 
   async function dispose(): Promise<void> {
     disposing = true
+    childObservation?.dispose()
     const processCleanupFailures: unknown[] = []
     const draining:Promise<void>[]=[]
     for (const job of backgroundJobs.values()) {

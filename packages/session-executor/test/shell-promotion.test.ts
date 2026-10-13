@@ -26,14 +26,16 @@
 // wins the race, nothing is promoted, and the command dies exactly as it did
 // before W10 — which is the misconfiguration the comment beside the two
 // defaults warns about.
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { spawnSync } from "node:child_process"
 import { describe, expect, it, vi } from "vitest"
 import { createMockClient, type MockStep } from "@i-harness/llm-mock"
 import { append, createSession } from "@i-harness/core-session"
 import { createSessionExecutor } from "@i-harness/core-agent"
-import { resolveShell } from "@i-harness/shell"
+import { resolveShell, resolvePwshExe, bashAvailable } from "@i-harness/shell"
+import type { LLMRequest, ModelClient } from "@i-harness/llm-seam"
 import type { ExecService } from "@i-harness/exec"
 import { createSessionAssembly, type SessionAssembly } from "../src/assembly.ts"
 import { rmWorkspaceSync } from "./helpers.ts"
@@ -70,6 +72,53 @@ function heldOpenCommand(shell: "bash" | "pwsh", release: string, donePath: stri
 const quickCommand = (shell: "bash" | "pwsh"): string => (shell === "bash" ? "echo hi" : "Write-Output hi")
 
 type ToolResultOutput = Record<string, unknown>
+
+const shellAvailable = (shell: "bash" | "pwsh") => shell === "bash" ? bashAvailable()
+  : spawnSync(resolvePwshExe(), ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "exit 0"], { windowsHide: true }).status === 0
+
+describe("human steering of the real foreground shell capture", () => {
+  for (const tool of ["bash", "pwsh", "shell"] as const) {
+    const shell = tool === "shell" ? resolveShell().name : tool
+    it.skipIf(!shellAvailable(shell))(`${tool} promotes before its high threshold; the same process survives a naturally ended parent turn`, async () => {
+      const base = mkdtempSync(join(tmpdir(), "ih-shell-steer-")), workspace = join(base, "ws")
+      mkdirSync(workspace)
+      const release = join(base, "release"), done = join(base, "done"), starts = join(base, "starts")
+      const prefix = shell === "bash" ? `echo launch >> "${fwd(starts)}"; ` : `Add-Content -Path '${fwd(starts)}' -Value launch; `
+      const script: MockStep[] = [{ role: "assistant", toolCalls: [{ name: tool, args: { command: prefix + heldOpenCommand(shell, release, done) } }] }, { role: "assistant", text: "parent turn complete" }]
+      const requests: LLMRequest[] = [], mock = createMockClient(script)
+      const model: ModelClient = { async *stream(request) { requests.push(request); yield* mock.stream(request) } }
+      const assembly = await createSessionAssembly({ workspace, model, sandbox: "danger-full-access", approveAll: true, shellTimeoutMs: 120_000, shellBackgroundAfterMs: 90_000,
+        ...(tool === "shell" ? { agentShell: () => ({ id: "fixture", label: "Selected fixture shell", command: resolveShell().argv[0]!, dialect: shell === "bash" ? "posix" as const : "powershell" as const }) } : {}),
+      })
+      const executor = createSessionExecutor({ session: assembly.session, agent: assembly.agent, inbox: assembly.inbox })
+      const exec = assembly.ctx.services.get<ExecService>("exec/service"), kill = vi.spyOn(exec, "killJob")
+      try {
+        executor.submit({ tier: "send", text: "start held shell" })
+        await vi.waitFor(() => expect(existsSync(starts)).toBe(true), { timeout: 10_000 })
+        const steer = executor.submit({ tier: "steer", text: "new shell direction" })
+        await vi.waitFor(() => expect(requests).toHaveLength(2), { timeout: 5000 }); await executor.drain()
+        const output = toolResult(assembly.session, tool), id = output.job_id as string
+        expect(output).toMatchObject({ promoted: true, stdout: expect.stringContaining("Yielded to new user input; command continues as job") })
+        expect(output.ran_foreground_ms).toBeLessThan(90_000)
+        expect(exec.getOutput(id).status).toBe("running"); expect(existsSync(release)).toBe(false); expect(existsSync(done)).toBe(false)
+        expect(kill).not.toHaveBeenCalled(); expect(executor.isRunning()).toBe(false)
+        expect(assembly.session.events.filter(event => event.type === "agent/input/promoted" && event.inputId === steer.inputId)).toHaveLength(1)
+        expect(requests[1]!.messages.filter(message => message.role === "user" && message.content === "new shell direction")).toHaveLength(1)
+        const original = assembly.session.events.find(event => event.type === "tool/result" && event.name === tool) as { callId: string }
+        writeFileSync(release, "go")
+        script.push({ role: "assistant", toolCalls: [{ name: "job_output", args: { job_id: id, wait: true, timeout_ms: 10_000 } }] }, { role: "assistant", text: "retrieved" })
+        executor.submit({ tier: "send", text: "retrieve the same shell" }); await executor.drain()
+        expect(toolResult(assembly.session, "job_output")).toMatchObject({ status: "completed", text: expect.stringContaining("started") })
+        expect(exec.getOutput(id).exitCode).toBe(0); expect(existsSync(done)).toBe(true)
+        expect(exec.listJobs()).toHaveLength(1)
+        expect(readFileSync(starts, "utf8").trim().split(/\r?\n/)).toEqual(["launch"])
+        expect(assembly.session.events.filter(event => event.type === "tool/result" && event.callId === original.callId)).toHaveLength(1)
+        expect(assembly.session.events.filter(event => event.type === "tool/dispatch" && event.callId === original.callId)).toHaveLength(1)
+        expect(assembly.liveResources!().backgroundJobs).toEqual([])
+      } finally { writeFileSync(release, "cleanup"); executor.dispose(); await assembly.dispose(); rmWorkspaceSync(base) }
+    }, 20_000)
+  }
+})
 
 function toolResult(session: SessionAssembly["session"], name: string): ToolResultOutput {
   const event = session.events.filter((e) => e.type === "tool/result" && e.name === name).at(-1)

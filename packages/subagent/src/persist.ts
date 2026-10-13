@@ -276,6 +276,11 @@ export function persistentAgentTable(
 ): AgentTable {
   return {
     ...table,
+    update(path, expected, patch) {
+      const updated = table.update(path, expected, patch)
+      if (updated) void save()
+      return updated
+    },
     add(path, entry) {
       table.add(path, entry)
       void save()

@@ -1,5 +1,5 @@
 import type { ImageInput, Session } from "@i-harness/core-session"
-import type { ToolExec, ToolRegistry } from "@i-harness/core-tools"
+import type { ToolExec, ToolRegistry, UserSteerSource } from "@i-harness/core-tools"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { ToolSchema } from "@i-harness/llm-seam"
 import type { SpillStore } from "@i-harness/output-retention"
@@ -26,7 +26,8 @@ export type CodeModeJsonValue = null | boolean | number | string | CodeModeJsonV
 export type CodeModeStoreEntries = Array<[string, CodeModeJsonValue]>
 export interface CodeModeStoreCommit { cellId: string; origin: CodeModeOrigin; writes: CodeModeStoreEntries; signal: AbortSignal }
 export interface CodeModeTextRetention { stored: boolean; path?: string; contextRef?: ContextResultRef; cellId: string; sessionId?: string; admittedBytes: number; omittedBytes: number; complete: boolean; truncated: boolean }
-export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true }
+export interface CodeModeObservation { cellId: string; status: CodeModeStatus; items: CodeModeItem[]; text: string; truncated: boolean; textRetention?: CodeModeTextRetention; error?: string; policyRefusal?: true; yielded?: true; yieldReason?: "user-steer" }
+export interface CodeModeObserveOptions { userSteer?: UserSteerSource }
 export type CodeModeRuntimeEvent =
   | { type: "started"; cellId: string; source: string; origin: CodeModeOrigin }
   | { type: "output"; cellId: string; item: CodeModeItem; origin: CodeModeOrigin }
@@ -48,8 +49,8 @@ export interface CodeModeRuntimeOptions {
 export interface CodeModeExecInput { code: string; yield_time_ms?: number; max_output_tokens?: number }
 export interface CodeModeWaitInput { cell_id: string; yield_time_ms?: number; max_tokens?: number; terminate?: boolean }
 export interface CodeModeRuntime {
-  exec(input: CodeModeExecInput, origin?: CodeModeOrigin): Promise<CodeModeObservation>
-  wait(input: CodeModeWaitInput, signal?: AbortSignal): Promise<CodeModeObservation>
+  exec(input: CodeModeExecInput, origin?: CodeModeOrigin, observation?: CodeModeObserveOptions): Promise<CodeModeObservation>
+  wait(input: CodeModeWaitInput, signal?: AbortSignal, observation?: CodeModeObserveOptions): Promise<CodeModeObservation>
   /** Owner cancellation does not acquire or consume the output observer. */
   terminate(cellId: string, reason?: string): Promise<void>
   cancel(reason?: string): Promise<void>

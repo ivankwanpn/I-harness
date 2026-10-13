@@ -239,7 +239,7 @@ export function registerSubagent(ctx: PluginContext, parentRegistry: ToolRegistr
     async dispose() {
       await ready
       const entries = [...table.entries().values()]
-      for (const entry of entries) { entry.closing = true; entry.controller.abort() }
+      for (const entry of entries) { table.update(entry.path, entry, { closing: true }); entry.controller.abort() }
       await Promise.allSettled(entries.map(async entry => {
         if (entry.dispose) await entry.dispose()
         else { await entry.followupChain?.catch(() => {}); entry.unmount?.() }
@@ -313,11 +313,10 @@ async function restoreMirrorsAndSweep(deps: SubagentToolDeps, table: AgentTable)
       resumed.events.push(...loaded.session.events)
       resumed.formatVersion = loaded.session.formatVersion
       resumed.header = loaded.session.header
-      entry.session = resumed
+      table.update(entry.path, entry, { session: resumed })
     } catch {
       // G1a fail-visible: no silent empty-stub downgrade.
-      entry.status = "error"
-      entry.error = "child log unavailable after resume"
+      table.update(entry.path, entry, { status: "error", error: "child log unavailable after resume" })
     }
   }
   await sweepPendingInbox(deps, table)

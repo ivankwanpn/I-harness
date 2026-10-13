@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, Inbox } from "@i-harness/core-session"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { createAgentRegistry } from "@i-harness/core-agent"
 import { createMockClient } from "@i-harness/llm-mock"
@@ -31,6 +31,40 @@ function fixture() {
   const deps = { parentCtx, parentRegistry, parentSession, parentModel, resolveModel: async () => ({ status: "unconfigured" as const, reason: "unused" }), exec: registerExec(parentCtx), tasks: createTaskRegistry({}), jobs: createJobRegistry(), table: createAgentTable(), agents: createAgentRegistry(), codeModeFactory: registerCodeMode, codeMode: { mode: "only" as const }, contextWindow: 10_000, maxOutputTokens: 123 }
   return { deps, role, parentMount, requests }
 }
+
+it.each(["spawn", "job"] as const)("outer steer leaves nested %s awaiting the original producer and preserves result pairing", async kind => {
+  const f = fixture(), held = Promise.withResolvers<void>(), started = Promise.withResolvers<void>()
+  let launches = 0
+  const roles = createRoleRegistry(); roles.register({ ...f.role, name: "general" })
+  const model: ModelClient = { async *stream() { launches++; started.resolve(); await held.promise; yield { type: "text/chunk", text: "actual child" }; yield { type: "end" } } }
+  const deps = { ...f.deps, roles, parentModel: model }
+  for (const tool of createSubagentTools(deps)) deps.parentRegistry.register(tool)
+  const job = deps.jobs.registerJob("root", "subagent", "held")
+  const call = deps.parentRegistry.get("code_exec")!, wait = deps.parentRegistry.get("code_wait")!
+  const session = deps.parentSession, inbox = new Inbox(session)
+  const observed = Promise.withResolvers<void>()
+  const subscribe = deps.jobs.subscribe.bind(deps.jobs)
+  vi.spyOn(deps.jobs, "subscribe").mockImplementation((id, listener) => { const off = subscribe(id, listener); observed.resolve(); return off })
+  try {
+    const observation = call.execute({ code: kind === "spawn" ? 'text(await tools.spawn_agent({message:"go",task_name:"held",background:false}))' : `text(await tools.job_output({job_id:${JSON.stringify(job.id)},wait:true}))`, yield_time_ms: 60_000 }, { session })
+    await (kind === "spawn" ? started.promise : observed.promise)
+    inbox.admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+    const first = await observation as { cell_id: string }
+    expect(first).toMatchObject({ status: "running", yielded: true, yield_reason: "user-steer", text: "" })
+    expect(session.events.filter(e => e.type === "code/result")).toHaveLength(0)
+    const calls = session.events.filter(e => e.type === "code/call")
+    expect(calls).toHaveLength(1)
+    inbox.claimAtStepBoundary()
+    const final = wait.execute({ cell_id: first.cell_id, yield_time_ms: 60_000 }, { session })
+    held.resolve(); deps.jobs.updateJob(job.id, { status: "completed", output: "actual job" })
+    expect(await final).toMatchObject({ cell_id: first.cell_id, status: "completed", text: expect.stringContaining(kind === "spawn" ? "actual child" : "actual job") })
+    const results = session.events.filter(e => e.type === "code/result")
+    expect(results).toHaveLength(1)
+    expect(results[0]!.callId).toBe(calls[0]!.callId)
+    expect(launches).toBe(kind === "spawn" ? 1 : 0)
+    if (kind === "spawn") expect(deps.tasks.notifications()).toEqual([])
+  } finally { held.resolve(); for (const entry of deps.table.entries().values()) await entry.dispose?.(); await f.parentMount.dispose() }
+})
 
 it("ordinary children mount their own role-scoped Code Mode and never copy parent wrappers", async () => {
   const f = fixture()

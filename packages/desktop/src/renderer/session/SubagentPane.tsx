@@ -116,15 +116,29 @@ function SubagentSession({ bridge, workspaceId, sessionId, parentTitle }: Subage
     lock.current = false
     setBusy(undefined)
     setReadbackRequired(true)
-    const refresh = createRefreshScheduler(async () => {
+    const refreshReads = async () => {
       await Promise.allSettled([readCatalog(), ...(selectedRef.current ? [readHistory(selectedRef.current)] : [])])
-    })
+    }
+    let refresh = createRefreshScheduler(refreshReads)
     const unsubscribe = bridge.onEvent((event) => {
       if (event.kind === "window/state" || event.kind === "runtime/diagnostic" || event.kind === "runtime/activity") return
       if (event.workspaceId !== workspaceId) return
-      if (event.kind === "sdk/disconnected") { setCatalogError(event.message); return }
+      if (event.kind === "sdk/disconnected") {
+        epoch.current++; catalogTicket.current++; historyTicket.current++
+        refresh.dispose()
+        // A later notification or explicit refresh can read the reconnected runtime.
+        refresh = createRefreshScheduler(refreshReads)
+        lock.current = false
+        setBusy(undefined); setReading(false); setReadbackRequired(true)
+        setCatalogError(event.message)
+        return
+      }
       const params = event.params as { sessionId?: unknown } | undefined
       if (typeof params?.sessionId !== "string" || params.sessionId !== sessionId && !catalogRef.current?.agents.some((row) => row.sessionId === params.sessionId)) return
+      if (event.method === "desktop/session/subagents/changed") {
+        if (params.sessionId === sessionId) refresh.schedule()
+        return
+      }
       const kind = classifyNotification(event.method, event.params).kind
       if (kind === "durable" || kind === "status" || event.method === "desktop/workflow/changed") refresh.schedule()
     })

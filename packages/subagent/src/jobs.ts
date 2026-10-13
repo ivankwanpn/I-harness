@@ -1,3 +1,5 @@
+import { waitForObservation } from "@i-harness/core-tools"
+
 export type JobStatus = "running" | "completed" | "killed" | "error"
 export interface JobSnapshot {
   id: string
@@ -38,11 +40,26 @@ export interface JobRegistry {
   // reads ALL jobs (a job row links to its owner agent through `owner`).
   listAll(): JobSnapshot[]
   wait(id: string, timeoutMs: number): Promise<void>
+  subscribe(id: string, listener: (snapshot: JobSnapshot) => void): () => void
   kill(id: string): "cancellation-requested" | "already-finished"
 }
 
 export function createJobRegistry(): JobRegistry {
   const records = new Map<string, JobRecord>()
+  const listeners = new Map<string, Set<(snapshot: JobSnapshot) => void>>()
+  function subscribe(id: string, listener: (snapshot: JobSnapshot) => void): () => void {
+    if (!records.has(id)) throw new Error(`unknown job: ${id}`)
+    let set = listeners.get(id)
+    if (!set) { set = new Set(); listeners.set(id, set) }
+    set.add(listener)
+    return () => { set.delete(listener); if (!set.size && listeners.get(id) === set) listeners.delete(id) }
+  }
+  function publish(record: JobRecord): void {
+    const { terminal: _terminal, ...snapshot } = record
+    for (const listener of [...(listeners.get(record.id) ?? [])]) {
+      try { listener({ ...snapshot }) } catch { /* Observers never interrupt producers. */ }
+    }
+  }
   // Live cancellation authority is process-local and never part of snapshots.
   const cancellation = new Map<string, () => void>()
   const counters = new Map<string, number>()
@@ -52,6 +69,7 @@ export function createJobRegistry(): JobRegistry {
     return `${kind}-${n}`
   }
   return {
+    subscribe,
     registerJob(owner: string, kind: string, label: string, id?: string, startedAt?: number, cancel?: () => void, identity?: { agentPath: string; sessionId?: string }) {
       const resolved = id ?? nextId(kind)
       // Fail loud on a persisted-id collision: silent re-count would break
@@ -73,6 +91,7 @@ export function createJobRegistry(): JobRegistry {
       // check above runs first), and is O(1) instead of scan-per-spawn.
       const m = id !== undefined ? new RegExp(`^${kind}-(\\d+)$`).exec(id) : null
       if (m) counters.set(kind, Math.max(counters.get(kind) ?? 0, Number(m[1])))
+      publish(records.get(resolved)!)
       let settled=false
       return { id:resolved,...(cancel ? { finish(status:Exclude<JobStatus,"running">,output:string) {
         const rec=records.get(resolved)
@@ -82,6 +101,7 @@ export function createJobRegistry(): JobRegistry {
         if(settled || rec.terminal&&rec.status!==status)return true
         rec.status=status;rec.output=output;rec.terminal=true;rec.endedAt??=Date.now()
         cancellation.delete(resolved);settled=true
+        publish(rec)
         return true
       } } : {}) }
     },
@@ -98,6 +118,7 @@ export function createJobRegistry(): JobRegistry {
       if (patch.status !== undefined) rec.status = patch.status
       if (patch.output !== undefined) rec.output = patch.output
       if (rec.status !== "running") { rec.terminal = true; rec.endedAt = rec.endedAt ?? Date.now(); cancellation.delete(id) }
+      publish(rec)
       return true
     },
     read(id: string) {
@@ -131,13 +152,14 @@ export function createJobRegistry(): JobRegistry {
       }))
     },
     async wait(id: string, timeoutMs: number) {
-      const deadline = Date.now() + timeoutMs
-      while (true) {
-        const rec = records.get(id)
-        if (!rec || rec.terminal) return
-        if (Date.now() >= deadline) return
-        await new Promise((r) => setTimeout(r, 10))
-      }
+      if (!records.has(id) || records.get(id)!.terminal) return
+      let terminal = false
+      await waitForObservation({
+        ready: () => terminal || records.get(id)!.terminal,
+        changes: { subscribe: listener => subscribe(id, snapshot => { terminal ||= snapshot.status !== "running"; listener() }) },
+        // Legacy non-finite positive/NaN deadlines never expired; negatives expired immediately.
+        timeoutMs: timeoutMs === -Infinity ? 0 : Number.isFinite(timeoutMs) ? Math.max(0, timeoutMs) : undefined,
+      })
     },
     kill(id: string) {
       const rec = records.get(id)
@@ -150,6 +172,7 @@ export function createJobRegistry(): JobRegistry {
       rec.status = "killed"
       rec.terminal = true
       rec.endedAt = rec.endedAt ?? Date.now()
+      publish(rec)
       return "cancellation-requested"
     },
   }

@@ -6,6 +6,7 @@ import type { Tool } from "@i-harness/core-tools"
 import { bashAvailable, createShellTools } from "../src/index.ts"
 
 const unusedTransport = {
+  subscribeJob: () => () => {},
   launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
   cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
   dispose: async (): Promise<void> => {},

@@ -74,3 +74,14 @@ it("reports the captured root-bound lifetime when the caller mutates its command
   expect(prepared[0]!.env).toEqual({ PATH: "/usr/bin:/bin", LANG: "C" })
   await service.dispose()
 })
+
+it("does not widen WSL lifetime or replay admission for a pending promotion wake", async () => {
+  const { service, prepared } = fixture()
+  let subscriptions = 0
+  const promotionWake = { pending: () => true, subscribe() { subscriptions++; return () => {} } }
+  await expect(service.run({ argv: ["/bin/bash", "-c", "true"], executionTarget: "wsl" }, { promotionWake })).rejects.toThrow("prepared fixture")
+  expect(prepared).toHaveLength(1)
+  expect(prepared[0]!.lifetime).toBe("complete-tree")
+  expect(subscriptions).toBe(0)
+  await service.dispose()
+})

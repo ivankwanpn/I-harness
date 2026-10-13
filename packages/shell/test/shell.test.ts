@@ -9,6 +9,7 @@ import { createContext, type PluginContext } from "@i-harness/core-plugin"
 import type { SandboxExecutionPolicy } from "@i-harness/sandbox"
 
 const unusedTransport = {
+  subscribeJob: () => () => {},
   launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
   cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
   dispose: async (): Promise<void> => {},

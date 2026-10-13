@@ -19,6 +19,40 @@ function collectEvents(): { events: unknown[]; sink: TelemetrySink } {
 }
 
 describe("createSessionService", () => {
+  it("optionally attaches existing assemblies, keeps default future-only, and detaches after unsubscribe", async () => {
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
+    try {
+      const first = await service.assemblyFor("existing")
+      const defaults = vi.fn(), observed = vi.fn()
+      const offDefault = service.onAssembly(defaults)
+      const offObserved = service.onAssembly(observed, { includeExisting: true })
+      expect(defaults).not.toHaveBeenCalled()
+      expect(observed).toHaveBeenCalledExactlyOnceWith(first)
+      const future = await service.assemblyFor("future")
+      expect(observed.mock.calls.map(([assembly]) => assembly)).toEqual([first, future])
+      expect(defaults).toHaveBeenCalledExactlyOnceWith(future)
+      await service.closeSession("existing")
+      const replacement = await service.assemblyFor("existing")
+      expect(replacement).not.toBe(first)
+      expect(observed.mock.calls.map(([assembly]) => assembly)).toEqual([first, future, replacement])
+      offDefault(); offObserved()
+      await service.assemblyFor("after-unsubscribe")
+      expect(observed).toHaveBeenCalledTimes(3)
+      expect(defaults).toHaveBeenCalledTimes(2)
+    } finally { await service.close() }
+  })
+
+  it("removes the newly registered assembly hook when existing-assembly attachment throws", async () => {
+    const service = createSessionService({ workspace: process.cwd(), modelPolicy: "test-mock" })
+    try {
+      await service.assemblyFor("existing")
+      const hook = vi.fn(() => { throw new Error("attach failed") })
+      expect(() => service.onAssembly(hook, { includeExisting: true })).toThrow("attach failed")
+      await expect(service.assemblyFor("future")).resolves.toMatchObject({ sessionId: "future" })
+      expect(hook).toHaveBeenCalledOnce()
+    } finally { await service.close() }
+  })
+
   it("peeks only published live assemblies without resolving a model or rebuilding disposed sessions", async () => {
     const resolve = vi.fn(async () => ({ status: "ready" as const, binding: { model: createMockClient([]), providerId: "local", modelId: "fixture", label: "local:fixture" } }))
     const service = createSessionService({ workspace: process.cwd(), modelBindingFor: resolve })

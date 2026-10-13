@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
-import { append, createSession, type Session } from "@i-harness/core-session"
-import { createToolRegistry, TOOL_ABORTED_MID_FLIGHT, type Tool } from "@i-harness/core-tools"
+import { append, createSession, Inbox, type Session } from "@i-harness/core-session"
+import { createToolRegistry, TOOL_ABORTED_MID_FLIGHT, userSteerForTool, waitForObservation, type Tool } from "@i-harness/core-tools"
 import {
   executeToolCalls,
   TOOL_ABORTED_BEFORE_DISPATCH,
@@ -39,6 +39,45 @@ function resultsOf(session: Session): { name: string; callId: string }[] {
     .filter((e) => e.type === "tool/result")
     .map((e) => ({ name: (e as { name: string }).name, callId: (e as { callId: string }).callId }))
 }
+
+it("steer settles an eligible observer but the batch still joins an already dispatched arbitrary sibling", async () => {
+  const ctx = createContext(), session = createSession(), tools = createToolRegistry(ctx)
+  let enter!: () => void, release!: () => void, yielded!: () => void
+  const started = new Promise<void>(resolve => { enter = resolve }), held = new Promise<void>(resolve => { release = resolve }), observationReturned = new Promise<void>(resolve => { yielded = resolve })
+  let entered = 0, observations = 0, siblingCalls = 0, activeAborts = 0, siblingFinished = false, joined = false
+  const began = () => { if (++entered === 2) enter() }
+  tools.register({ name: "eligible", description: "Owned observation fixture", inputSchema: {}, isConcurrencySafe: true,
+    execute: async (_args, exec) => {
+      observations++; began()
+      const reason = await waitForObservation({ ready: () => false, changes: { subscribe: () => () => {} }, userSteer: userSteerForTool(exec), abortSignal: exec.abortSignal })
+      yielded(); return { status: "running", yield_reason: reason }
+    },
+  })
+  tools.register({ name: "arbitrary", description: "Already dispatched sibling", inputSchema: {}, isConcurrencySafe: true,
+    execute: async (_args, exec) => { siblingCalls++; began(); exec.abortSignal?.addEventListener("abort", () => { activeAborts++ }, { once: true }); await held; siblingFinished = true; return "original sibling result" },
+  })
+  const batch = executeToolCalls(ctx, session, tools, [{ callId: "wait-original", name: "eligible", args: {} }, { callId: "sibling-original", name: "arbitrary", args: {} }], { maxParallel: 2 }).then(() => { joined = true })
+  try {
+    let bothStarted = false
+    void started.then(() => { bothStarted = true })
+    await vi.waitFor(() => expect(bothStarted).toBe(true))
+    new Inbox(session).admit({ inputId: "steer-one", text: "new direction", delivery: "steer", intent: "user" })
+    let returned = false
+    void observationReturned.then(() => { returned = true })
+    await vi.waitFor(() => expect(returned).toBe(true))
+    expect(joined).toBe(false); expect(siblingFinished).toBe(false); expect(activeAborts).toBe(0)
+    expect(observations).toBe(1); expect(siblingCalls).toBe(1)
+    release(); await batch
+    expect(joined).toBe(true); expect(siblingFinished).toBe(true); expect(activeAborts).toBe(0)
+    expect(resultsOf(session)).toEqual([{ name: "eligible", callId: "wait-original" }, { name: "arbitrary", callId: "sibling-original" }])
+    expect(session.events.filter(event => event.type === "tool/dispatch").map(event => event.callId)).toEqual(["wait-original", "sibling-original"])
+    expect(session.events.find(event => event.type === "tool/result" && event.callId === "wait-original")).toMatchObject({ output: { status: "running", yield_reason: "user-steer" } })
+    // The batch does not claim or duplicate input; only the next model step's
+    // real inbox boundary may promote it.
+    expect(new Inbox(session).pending().map(input => input.inputId)).toEqual(["steer-one"])
+    expect(observations).toBe(1); expect(siblingCalls).toBe(1)
+  } finally { release(); await batch }
+})
 
 // M4: the dispatch boundary is made DURABLE.
 //
