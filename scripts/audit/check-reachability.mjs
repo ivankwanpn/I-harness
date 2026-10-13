@@ -642,6 +642,23 @@ const CORE_TOOLS_SOURCE_UNIT = new Set([
   "packages/core-tools/src/approval/decision.ts",
 ])
 
+// S7 moves the original Hooks entry's registry contracts and implementation.
+// Existing types/trust/runner/Claude modules keep their separate source owners.
+// Only the listed extraction paths share the original entry's logical owner.
+const HOOKS_SOURCE_UNIT = new Set([
+  "packages/hooks/src/index.ts",
+  "packages/hooks/src/registry-types.ts",
+  "packages/hooks/src/registry.ts",
+  "packages/hooks/src/configuration/load.ts",
+  "packages/hooks/src/configuration/validation.ts",
+  "packages/hooks/src/configuration/matchers.ts",
+  "packages/hooks/src/execution/handlers.ts",
+  "packages/hooks/src/execution/permissions.ts",
+  "packages/hooks/src/execution/runtime.ts",
+  "packages/hooks/src/lifecycle/session.ts",
+  "packages/hooks/src/lifecycle/mount.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -654,6 +671,7 @@ function declarationOwner(rel) {
   if (BEDROCK_SOURCE_UNIT.has(rel)) return "packages/llm-bedrock/src/index.ts"
   if (CORE_PLUGIN_SOURCE_UNIT.has(rel)) return "packages/core-plugin/src/index.ts"
   if (CORE_TOOLS_SOURCE_UNIT.has(rel)) return "packages/core-tools/src/index.ts"
+  if (HOOKS_SOURCE_UNIT.has(rel)) return "packages/hooks/src/index.ts"
   return rel
 }
 
@@ -1678,6 +1696,52 @@ SELF_TEST_CASES.push({
       ["test-only", "packages/core-tools/test/consumer.test.ts", true],
     ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...toolsRelocationFixtureFiles(true), {
       rel, test, text: "const use = (a: ToolResult, b: SearchableTool) => [a, b]",
+    }]).length}`)
+  },
+})
+
+function hooksRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface HookRegistryOptions { configPath?: string }"
+  const reads = "const use = (options: HookRegistryOptions) => options"
+  if (!split) return [file("packages/hooks/src/index.ts", `${declaration}\n${reads}`)]
+  return [
+    file("packages/hooks/src/index.ts", 'export type { HookRegistryOptions } from "./registry-types.ts"'),
+    file("packages/hooks/src/registry-types.ts", `${declaration}\n${reads}`),
+    ...["registry.ts", "configuration/load.ts", "configuration/validation.ts", "configuration/matchers.ts",
+      "execution/handlers.ts", "execution/permissions.ts", "execution/runtime.ts", "lifecycle/session.ts", "lifecycle/mount.ts"]
+      .map(path => file(`packages/hooks/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S7: moved registry contracts retain complete original findings across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/hooks#HookRegistryOptions", evidence: "packages/hooks/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(hooksRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S7: pre-existing Hooks owners and outside readers still count; test readers do not",
+  expect: ["types=0", "trust=0", "runner=0", "claude=0", "runtime=0", "transcript=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["types", "packages/hooks/src/types.ts", false],
+      ["trust", "packages/hooks/src/trust.ts", false],
+      ["runner", "packages/hooks/src/runner.ts", false],
+      ["claude", "packages/hooks/src/claude.ts", false],
+      ["runtime", "packages/hooks/src/claude-runtime.ts", false],
+      ["transcript", "packages/hooks/src/claude-transcript.ts", false],
+      ["future", "packages/hooks/src/lifecycle/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/hooks/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...hooksRelocationFixtureFiles(true), {
+      rel, test, text: "const use = (options: HookRegistryOptions) => options",
     }]).length}`)
   },
 })
