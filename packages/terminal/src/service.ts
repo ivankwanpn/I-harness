@@ -49,6 +49,11 @@ export interface TerminalService {
   read(id: string, opts?: { offset?: number; maxBytes?: number; sessionId?: string }): TerminalReadResult
   signal(id: string, signal: TerminalSignalName, opts?: { sessionId?: string }): Promise<TerminalView>
   close(id: string, opts?: { sessionId?: string }): Promise<TerminalView>
+  /**
+   * Await backend resize delivery, not a lossless-input acknowledgement.
+   * WHY: Windows ConPTY can lose leading bytes of the next write even after
+   * redraw or delay (packages/sandbox-local/README.md:83).
+   */
   resize(id: string, cols: number, rows: number, opts?: { sessionId?: string }): Promise<TerminalView>
   list(opts?: { sessionId?: string }): TerminalView[]
   waitExited(id: string): Promise<{ exitCode?: number }>

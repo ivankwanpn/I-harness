@@ -70,3 +70,96 @@ Equivalent `IH_WINDOWS_SANDBOX`, `IH_WSL_DISTRIBUTION`, `IH_WSL_NETWORK` and
 New assemblies capture changed configuration; running executions retain their
 backend and environment. Managed runtime paths are supplied by trusted host
 composition, never by a model permission parameter.
+
+## Windows ConPTY resize/input limitation
+
+**Known third-party input-integrity defect; not fixed by awaiting resize.**
+On 2026-10-13, an independent raw `node-pty@1.1.0` probe (no IH code) on
+Windows 11 build 26200, Node v22.23.2, and Git for Windows Bash 5.3.15
+(`C:\Program Files\Git\bin\bash.exe`, Git 2.55.0.windows.5) reproduced loss of
+the leading byte of the first write after resizing. `printf` reached Bash as
+`rintf`; exact file contents, not terminal echo, determined success.
+The no-resize control was 24/24 for both writes. The first input after resize
+is vulnerable even after 500 ms or observed redraw: the failure window is not
+a time-bounded IH promise race. In these samples a subsequent write, without
+another intervening resize, was intact. This is an observation on this host,
+not a lossless-input guarantee for other programs, versions, or hosts.
+
+The probe used eight mixed sizes, an initial ready prompt and warm-up for
+running-terminal cases, and split output acknowledgements to ensure each shell
+line completed before checking its file or sending the second line. All rows
+have 24 samples; the second payload has no resize between it and the first.
+The startup row calls resize immediately after spawn, before the first output;
+"before any input" instead waits for the initial prompt without writing first.
+Raw source and per-sample transcripts/file effects remain in gitignored
+`packages/sandbox-local/.tmp/raw-conpty-resize.mjs` and its timestamped JSONs.
+These are empirical success fractions, not estimates of a universal flake rate.
+
+| Raw call-site candidate | First payload intact | Second payload intact |
+| --- | --- | --- |
+| No resize (control) | 24/24 (100%) | 24/24 (100%) |
+| No resize, bundled ConPTY DLL (control) | 24/24 (100%) | 24/24 (100%) |
+| No resize, legacy WinPTY (control) | 24/24 (100%) | 24/24 (100%) |
+| Resize, write immediately | 15/24 (62.5%) | 24/24 (100%) |
+| Resize twice to the same size | 20/24 (83.3%) | 24/24 (100%) |
+| Resize to another size, then target | 16/24 (66.7%) | 24/24 (100%) |
+| Resize, wait `setImmediate` | 20/24 (83.3%) | 24/24 (100%) |
+| Resize, wait 20 ms | 22/24 (91.7%) | 24/24 (100%) |
+| Resize, wait 500 ms | 21/24 (87.5%) | 24/24 (100%) |
+| Resize, observe post-resize output | 16/24 (66.7%) | 24/24 (100%) |
+| Output quiet for 250 ms, resize, observe output | 17/24 (70.8%) | 24/24 (100%) |
+| Resize before any input, after initial prompt | 7/24 (29.2%) | 24/24 (100%) |
+| Resize immediately on a just-spawned terminal | 24/24 (100%) | 24/24 (100%) |
+| Resize, inject a sacrificial space, then payload | 24/24 (100%) | 24/24 (100%) |
+| Resize, inject a sacrificial NUL, then payload | 24/24 (100%) | 24/24 (100%) |
+| Resize, inject a sacrificial CR, then payload | 24/24 (100%) | 24/24 (100%) |
+| Bundled ConPTY DLL (`useConptyDll: true`), resize | 20/24 (83.3%) | 24/24 (100%) |
+| Legacy WinPTY (`useConpty: false`), resize | 19/24 (79.2%) | 24/24 (100%) |
+
+An earlier file-only control also had 24/24 intact first and second writes;
+its immediate-resize probe had 18/24 (75%) intact first payloads and 24/24
+second writes. Preliminary timing-only candidate samples with incomplete
+command acknowledgements were discarded, then rerun with the completion
+checks above; only completed samples appear in the table.
+
+The startup and each sacrificial-input row were repeated with another 24
+samples: all four again had 24/24 intact payloads and second writes (48/48
+across the two runs). That does not make them a running-terminal repair.
+
+No tested, byte-transparent workaround repairs resize on a running terminal.
+Startup success does not repair later resizes, and respawning would discard the
+child's state. Sacrificial input is **not generalisable**: even NUL, space or CR
+can change an arbitrary child's stdin. The test fixture can send an empty Bash
+line explicitly; the service must not secretly send it on behalf of a caller.
+
+IH does **not** add sleeps, an output-quiet queue, a redraw barrier, or injected
+input. The audit's earlier raw sample improved from 14/24 to 19/24 after redraw
+(58% to 79%); the independent sample above improved only from 15/24 to 16/24,
+and the strict quiet-plus-redraw sample was still 17/24. An earlier
+quiet-plus-redraw sample was 15/24; the stricter rerun resets its output
+observation baseline after becoming quiet. None eliminated the loss.
+Gating on child output would add latency and can stall indefinitely when the
+child does not redraw. A timeout would reintroduce an unqualified sleep-based
+promise. The implementation remains byte-transparent rather than advertising
+that partial measure as a fix (see `docs/audit/2026-10-13-external-install-and-verification.md:196`).
+
+The POSIX `node-pty` adapter is not selected on Windows
+(`packages/sandbox-local/src/execution-backends.ts:47`). The current Windows
+unrestricted backend uses native ConPTY and acknowledges resize delivery;
+that acknowledgement also does not establish input integrity. The raw probe
+places the defect below IH, but does not isolate node-pty, conhost, and MSYS
+internals from one another. Linux/macOS behavior has not been qualified by this
+Windows-hosted measurement.
+
+`packages/terminal/test/resize-input.test.ts` now separates IH's guarantees:
+a deterministic fake-backend test pins awaited delivery, view updates, and
+unchanged payload forwarding; a real-host test checks mixed sizes with
+`tput cols/lines` and complete commands after a separate post-resize input.
+The **original first-command assertion is retained unchanged**, clearly named
+`KNOWN THIRD-PARTY LIMITATION` and skipped by default, not converted into a
+false green or an expected failure that randomly passes. To run that diagnostic
+on Windows with Git Bash (a failure remains expected on affected hosts):
+
+```sh
+IH_RUN_CONPTY_RESIZE_LIMITATION=1 pnpm --filter @i-harness/terminal test test/resize-input.test.ts --maxWorkers=2 --minWorkers=1
+```

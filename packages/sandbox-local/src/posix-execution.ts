@@ -162,6 +162,13 @@ class PosixSession {
         await new Promise<void>((resolve, reject) => this.child!.stdin.write(data, error => error ? reject(error) : resolve()))
       },
       endInput: async () => { if (this.child) await new Promise<void>(resolve => this.child!.stdin.end(resolve)) },
+      // WHY: raw node-pty@1.1.0 on Windows ConPTY can drop the leading bytes
+      // of the immediately following write; this is a third-party path defect,
+      // not a time-bounded IH await race (500 ms still lost 3/24 first writes;
+      // subsequent writes were 24/24). See packages/sandbox-local/README.md:83.
+      // Redraw is not an integrity ack and injected bytes change child stdin.
+      // This adapter is POSIX-only (execution-backends.ts:47); the Windows
+      // measurements do not qualify the same node-pty API on Linux/macOS.
       ...(this.terminal ? { resize: async (cols: number, rows: number) => { this.terminal!.resize(cols, rows) } } : {}),
       signal: async (signal: "INT" | "TERM" | "KILL") => {
         if (signal === "INT" && this.terminal) { this.terminal.write("\x03"); return }
