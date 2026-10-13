@@ -6,6 +6,7 @@ import type { PluginContext } from "@i-harness/core-plugin"
 import { createShellTools, registerShell } from "../src/index.ts"
 
 const unusedTransport = {
+  subscribeJob: () => () => {},
   launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
   cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
   dispose: async (): Promise<void> => {},

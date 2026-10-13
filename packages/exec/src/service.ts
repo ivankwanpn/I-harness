@@ -29,6 +29,7 @@ type Capture = {
 }
 type Job = {
   id: string; capture: Capture; status: BackgroundJobStatus; owner: Readonly<ExecutionOwner>
+  listeners: Set<(view: BackgroundJobView) => void>
   exitCode?: number; root?: RootExit; settlement?: ExecutionSettlement; failure?: string; cleanupDetail?: string
 }
 
@@ -398,16 +399,18 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
 
   function view(job: Job): BackgroundJobView {
     const { stdout, stderr } = job.capture.output()
+    const receipt = job.capture.execution.handle.receipt
     const result: BackgroundJobView = {
       id: job.id, status: job.status, stdout: clean(stdout.text), stderr: clean(job.failure ?? stderr.text),
       ...(job.capture.lifetime === undefined ? {} : { lifetime: job.capture.lifetime }),
       ...(stdout.truncated || stderr.truncated ? { stdoutSpillPath: stdout.spillPath, stderrSpillPath: stderr.spillPath,
         truncated: { stdout: stdout.truncated, stderr: stderr.truncated } } : {}),
       owner: job.owner.sessionId, ...(job.owner.parentSessionId === undefined ? {} : { parentSessionId: job.owner.parentSessionId }),
-      receipt: job.capture.execution.handle.receipt,
+      receipt: { ...receipt, owner: { ...receipt.owner } },
       ...(job.exitCode === undefined ? {} : { exitCode: job.exitCode }),
-      ...(job.root === undefined ? {} : { root: job.root }),
-      ...(job.settlement === undefined ? {} : { settlement: job.settlement }),
+      ...(job.root === undefined ? {} : { root: { ...job.root } }),
+      ...(job.settlement === undefined ? {} : { settlement: job.settlement.kind === "settled"
+        ? { ...job.settlement, root: { ...job.settlement.root } } : { ...job.settlement } }),
       ...(job.cleanupDetail === undefined ? {} : { cleanupDetail: job.cleanupDetail }),
       ...(job.capture.diagnostics() === undefined ? {} : { outputDiagnostics: job.capture.diagnostics() }),
     }
@@ -417,21 +420,23 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
 
   function registerJob(capture: Capture): string {
     const id = `bash-${++nextJob}`
-    const job: Job = { id, capture, status: "running", owner: capture.execution.policy.owner }
+    const job: Job = { id, capture, status: "running", owner: capture.execution.policy.owner, listeners: new Set() }
     jobs.set(id, job)
-    void capture.execution.handle.rootExited.then(root => { job.root = root }, cause => { job.failure = String(cause) })
+    void capture.execution.handle.rootExited.then(root => { job.root = root; publish(job) }, cause => { job.failure = String(cause); publish(job) })
     void capture.execution.handle.settled.then(settlement => {
       job.settlement = settlement
       if (settlement.kind === "incomplete") {
         job.status = "running"
         job.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
       }
-    }, cause => { job.status = "running"; job.cleanupDetail = String(cause) })
+      publish(job)
+    }, cause => { job.status = "running"; job.cleanupDetail = String(cause); publish(job) })
     void capture.complete.then(result => {
       job.exitCode = result.exitCode
       job.failure = undefined
       job.cleanupDetail = undefined
       job.status = result.timedOut ? "killed" : result.exitCode === 0 ? "completed" : "error"
+      publish(job)
     }, cause => {
       if (job.settlement?.kind === "incomplete" || job.cleanupDetail !== undefined) {
         job.status = "running"
@@ -440,8 +445,16 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         job.failure = cause instanceof Error ? cause.message : String(cause)
         job.status = "error"
       }
+      publish(job)
     })
     return id
+  }
+
+  function publish(job: Job): void {
+    // Observers receive independent views and cannot interrupt owner transitions.
+    for (const listener of [...job.listeners]) {
+      try { listener(view(job)) } catch { /* The producer retains ownership. */ }
+    }
   }
 
   async function settledAfterRetirement(job: Job): Promise<boolean> {
@@ -464,7 +477,7 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
 
   async function run(command: ExecCommand, runOptions?: ExecRunOptions | ExecStreamRunOptions): Promise<ExecResult | PromotedRun> {
     validateInput(command)
-    if (runOptions && "stream" in runOptions && runOptions.backgroundAfterMs !== undefined) throw new Error("stream cannot be combined with promotion")
+    if (runOptions && "stream" in runOptions && (runOptions.backgroundAfterMs !== undefined || runOptions.promotionWake !== undefined)) throw new Error("stream cannot be combined with promotion")
     if (runOptions && "stream" in runOptions) {
       if (!Number.isSafeInteger(runOptions.stream.maxBytes) || runOptions.stream.maxBytes <= 0) throw new Error("stream maxBytes must be a positive safe integer")
       if (typeof runOptions.stream.onStdout !== "function") throw new Error("stream onStdout must be a function")
@@ -476,14 +489,46 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
     }
     const streaming = runOptions && "stream" in runOptions ? runOptions : undefined
     const threshold = runOptions && "backgroundAfterMs" in runOptions ? runOptions.backgroundAfterMs : undefined
+    const wake = runOptions?.promotionWake
     const capture = await makeCapture(command, streaming, false, threshold !== undefined)
-    if (threshold === undefined) return capture.complete
+    if (threshold === undefined && wake === undefined) return capture.complete
     const started = Date.now()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const promoted = new Promise<PromotedRun>(resolve => {
-      timer = setTimeout(() => resolve({ jobId: registerJob(capture), promoted: true, ranForegroundMs: Date.now() - started }), threshold)
+    return new Promise<ExecResult | PromotedRun>((resolve, reject) => {
+      let finished = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let unsubscribe: (() => void) | undefined
+      const finish = (outcome: { result: ExecResult } | { reason: "deadline" | "user-steer" } | { error: unknown }) => {
+        if (finished) return
+        // Stop/dispose still owns cancellation and capture settlement. A steer
+        // queued in the same stack must not report that cancelled work continues.
+        if ("reason" in outcome && (command.abortSignal?.aborted || disposed)) return
+        finished = true
+        const errors: unknown[] = "error" in outcome ? [outcome.error] : []
+        if (timer !== undefined) clearTimeout(timer)
+        try { unsubscribe?.() } catch (error) { errors.push(error) }
+        unsubscribe = undefined
+        if (errors.length) { reject(errors.length === 1 ? errors[0] : new AggregateError(errors, "Execution observation failed")); return }
+        if ("result" in outcome) resolve(outcome.result)
+        else if ("reason" in outcome) resolve({ jobId: registerJob(capture), promoted: true, ranForegroundMs: Date.now() - started, promotionReason: outcome.reason })
+      }
+      // Register capture settlement first. Deferring promotion one microtask
+      // gives an already-published completion precedence and lets synchronous
+      // subscribe callbacks return their disposer before observation cleanup.
+      void capture.complete.then(result => finish({ result }), error => finish({ error }))
+      const checkWake = () => {
+        if (finished) return
+        try { if (wake?.pending()) queueMicrotask(() => finish({ reason: "user-steer" })) }
+        catch (error) { queueMicrotask(() => finish({ error })) }
+      }
+      try {
+        if (wake) unsubscribe = wake.subscribe(checkWake)
+        if (threshold !== undefined) timer = setTimeout(() => {
+          try { finish({ reason: wake?.pending() ? "user-steer" : "deadline" }) }
+          catch (error) { finish({ error }) }
+        }, threshold)
+        checkWake()
+      } catch (error) { finish({ error }) }
     })
-    return Promise.race([capture.complete, promoted]).finally(() => { if (timer !== undefined) clearTimeout(timer) })
   }
 
   return {
@@ -493,6 +538,12 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       const job = jobs.get(jobId)
       if (!job || !canAccess(job.owner)) throw new Error(`unknown job: ${jobId}`)
       return view(job)
+    },
+    subscribeJob(jobId, listener) {
+      const job = jobs.get(jobId)
+      if (!job || !canAccess(job.owner)) throw new Error(`unknown job: ${jobId}`)
+      job.listeners.add(listener)
+      return () => { job.listeners.delete(listener) }
     },
     listJobs() {
       return [...jobs.values()].filter(job => canAccess(job.owner)).map(view)
@@ -508,12 +559,14 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
         if (await settledAfterRetirement(job)) return "already-finished"
         job.status = "running"
         job.cleanupDetail = cause instanceof Error ? cause.message : String(cause)
+        publish(job)
         throw cause
       }
       job.settlement = settlement
       if (settlement.kind !== "settled") {
         job.status = "running"
         job.cleanupDetail = `${settlement.phase}: ${settlement.detail}`
+        publish(job)
         throw new Error(`Execution cancellation incomplete: ${settlement.detail}`)
       }
       await job.capture.complete.catch(() => {})
@@ -522,9 +575,14 @@ export function createExecService(options: ExecServiceOptions = {}): ExecService
       job.failure = undefined
       job.cleanupDetail = undefined
       job.status = "killed"
+      publish(job)
       return "cancellation-requested"
     },
     launchTransport, cancelExecution,
-    async dispose() { disposed = true; await supervisor.dispose(); await host.dispose?.() },
+    async dispose() {
+      disposed = true
+      try { await supervisor.dispose(); await host.dispose?.() }
+      finally { for (const job of jobs.values()) job.listeners.clear() }
+    },
   }
 }

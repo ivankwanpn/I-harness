@@ -393,3 +393,61 @@ describe("tools (workflow_run / workflow_list)", () => {
     } finally { cleanup() }
   })
 })
+
+it("publishes coherent copied workflow updates and isolates failing subscribers", () => {
+  const jobs = createWorkflowJobStore(), job = jobs.createJob("owner")
+  const views: import("@i-harness/exec").BackgroundJobView[] = []
+  jobs.subscribeJob(job.id, () => { throw new Error("listener failed") })
+  const off = jobs.subscribeJob(job.id, view => { views.push(view) })
+  expect(() => jobs.subscribeJob("missing", () => {})).toThrow("unknown job: missing")
+  jobs.update(job.id, { status: "completed", stdout: "whole output", stderr: "", exitCode: 0 })
+  expect(views).toEqual([{ id: job.id, owner: "owner", status: "completed", stdout: "whole output", stderr: "", exitCode: 0 }])
+  jobs.update(job.id, { stdout: "later" })
+  expect(views[0]!.stdout).toBe("whole output")
+  off(); off()
+  jobs.update(job.id, { stdout: "unobserved" })
+  expect(views).toHaveLength(2)
+})
+
+it("publishes workflow kill before abort listeners run and protects it from late updates", () => {
+  const jobs = createWorkflowJobStore(), job = jobs.createJob()
+  const statuses: string[] = []
+  let aborts = 0
+  jobs.subscribeJob(job.id, view => { statuses.push(view.status) })
+  job.controller.signal.addEventListener("abort", () => {
+    aborts++
+    expect(jobs.view(job.id).status).toBe("killed")
+    jobs.update(job.id, { status: "completed", exitCode: 0 })
+  })
+  expect(jobs.kill(job.id)).toBe("cancellation-requested")
+  expect(jobs.kill(job.id)).toBe("already-finished")
+  expect(aborts).toBe(1)
+  expect(statuses).toEqual(["killed"])
+  expect(jobs.view(job.id)).toMatchObject({ status: "killed" })
+  expect(jobs.view(job.id).exitCode).toBeUndefined()
+})
+
+it("forwards executor subscriptions through step boundaries to a coherent final output", async () => {
+  const jobs = createWorkflowJobStore()
+  let finish!: (result: ExecResult) => void
+  const exec = mockExec().exec
+  exec.run = (() => new Promise<ExecResult>(resolve => { finish = resolve })) as ExecService["run"]
+  const executor = createWorkflowExecutor({ exec, jobs })
+  const { jobId } = executor.runWorkflow(def({ steps: [{ name: "one", command: "echo one" }] }))
+  const views: import("@i-harness/exec").BackgroundJobView[] = []
+  executor.subscribeJob(jobId, view => { views.push(view) })
+  finish({ ...OK, stdout: "step output" })
+  await vi.waitFor(() => expect(views.at(-1)).toMatchObject({ status: "completed", exitCode: 0, stdout: expect.stringContaining("step output") }))
+  expect(views.filter(view => view.status === "completed")).toHaveLength(1)
+})
+
+it("keeps new workflow subscriptions when an older disposer is called twice", () => {
+  const jobs = createWorkflowJobStore(), job = jobs.createJob()
+  const oldOff = jobs.subscribeJob(job.id, () => {})
+  oldOff()
+  const views: string[] = []
+  jobs.subscribeJob(job.id, view => { views.push(view.stdout) })
+  oldOff()
+  jobs.update(job.id, { stdout: "new observer" })
+  expect(views).toEqual(["new observer"])
+})

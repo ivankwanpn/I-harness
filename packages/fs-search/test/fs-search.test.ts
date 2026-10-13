@@ -15,6 +15,7 @@ function recordingExec(calls: ExecCommand[]): ExecService {
     },
     runBackground: async () => ({ jobId: "none" }),
     getOutput: () => ({ id: "none", status: "completed", stdout: "", stderr: "", exitCode: 0 }),
+    subscribeJob: () => () => {},
     killJob: async () => "already-finished",
     listJobs: () => [],
     launchTransport: async () => { throw new Error("unused transport") },

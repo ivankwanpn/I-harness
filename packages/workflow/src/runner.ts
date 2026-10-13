@@ -61,6 +61,8 @@ export interface WorkflowJobStore {
   get(jobId: string): WorkflowJobEntry | undefined
   // Copy of the public BackgroundJobView shape (never the internal entry).
   view(jobId: string): BackgroundJobView
+  subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
+  update(jobId: string, patch: Partial<Pick<WorkflowJobEntry, "status" | "stdout" | "stderr" | "exitCode">>): void
   list(): BackgroundJobView[]
   kill(jobId: string): "cancellation-requested" | "already-finished"
 }
@@ -68,6 +70,13 @@ export interface WorkflowJobStore {
 export function createWorkflowJobStore(): WorkflowJobStore {
   let counter = 0
   const jobs = new Map<string, WorkflowJobEntry>()
+  const listeners = new Map<string, Set<(view: BackgroundJobView) => void>>()
+
+  function publish(job: WorkflowJobEntry): void {
+    for (const listener of [...listeners.get(job.id) ?? []]) {
+      try { listener(toView(job)) } catch { /* Observers cannot interrupt the runner. */ }
+    }
+  }
 
   function toView(job: WorkflowJobEntry): BackgroundJobView {
     return {
@@ -95,6 +104,23 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       if (!job) throw new Error(`unknown job: ${jobId}`)
       return toView(job)
     },
+    subscribeJob(jobId, listener) {
+      if (!jobs.has(jobId)) throw new Error(`unknown job: ${jobId}`)
+      let group = listeners.get(jobId)
+      if (!group) listeners.set(jobId, group = new Set())
+      group.add(listener)
+      return () => { group.delete(listener); if (group.size === 0 && listeners.get(jobId) === group) listeners.delete(jobId) }
+    },
+    update(jobId, patch) {
+      const job = jobs.get(jobId)
+      if (!job) throw new Error(`unknown job: ${jobId}`)
+      const { status, exitCode, ...output } = patch
+      if (job.status === "killed" && Object.keys(output).length === 0) return
+      Object.assign(job, output, job.status === "killed" ? {} : {
+        ...(status === undefined ? {} : { status }), ...(exitCode === undefined ? {} : { exitCode }),
+      })
+      publish(job)
+    },
     list(): BackgroundJobView[] {
       return [...jobs.values()].map(toView)
     },
@@ -102,8 +128,9 @@ export function createWorkflowJobStore(): WorkflowJobStore {
       const job = jobs.get(jobId)
       if (!job) throw new Error(`unknown job: ${jobId}`)
       if (job.status !== "running") return "already-finished"
-      job.controller.abort()
       job.status = "killed" // immediate, like ExecService; late loop writes are guarded no-ops
+      publish(job)
+      job.controller.abort()
       return "cancellation-requested"
     },
   }
@@ -192,12 +219,12 @@ export function runWorkflowIn(
 
   function setStatus(status: BackgroundJobStatus, exitCode: number): void {
     if (job.status !== "running") return // killed runs stay killed
-    job.status = status
-    job.exitCode = exitCode
+    store.update(job.id, { status, exitCode })
   }
 
   function skipRest(from: number): void {
     for (let i = from; i < total; i++) appendLine(job, `[step ${i + 1}/${total} ${steps[i]!.name}] skipped`)
+    store.update(job.id, { stdout: job.stdout })
   }
 
   void (async () => {
@@ -212,6 +239,7 @@ export function runWorkflowIn(
       let result: ExecResult | undefined
       for (let attempt = 1; attempt <= attempts; attempt++) {
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] started`)
+        store.update(job.id, { stdout: job.stdout })
         try {
           const cmd = stepCommand(step, values, defaultCwd)
           cmd.abortSignal = controller.signal
@@ -227,6 +255,7 @@ export function runWorkflowIn(
         }
         if (result.exitCode === 0) break
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] failed(exit=${result.exitCode})`)
+        store.update(job.id, { stdout: job.stdout })
         if (attempt < attempts) {
           const backoff = step.retry?.backoff_ms ?? 0
           if (backoff > 0) await new Promise((r) => setTimeout(r, backoff))
@@ -240,9 +269,11 @@ export function runWorkflowIn(
       if (final.stdout.length > 0) appendRaw(job, final.stdout)
       if (final.exitCode === 0) {
         appendLine(job, `[step ${i + 1}/${total} ${step.name}] ok`)
+        store.update(job.id, { stdout: job.stdout })
         continue
       }
       if (final.stderr.length > 0) job.stderr += final.stderr
+      store.update(job.id, { stdout: job.stdout, stderr: job.stderr })
       firstFailedExit ??= final.exitCode
       if ((step.on_failure ?? "stop") === "stop") {
         skipRest(i + 1)
@@ -277,6 +308,7 @@ export function runWorkflow(def: WorkflowDefinition, params: Record<string, stri
 export interface WorkflowExecutor {
   runWorkflow(def: WorkflowDefinition, params?: Record<string, string>, owner?: string): WorkflowRunHandle
   getOutput(jobId: string): BackgroundJobView
+  subscribeJob(jobId: string, listener: (view: BackgroundJobView) => void): () => void
   listJobs(): BackgroundJobView[]
   killJob(jobId: string): "cancellation-requested" | "already-finished"
 }
@@ -298,6 +330,7 @@ export function createWorkflowExecutor(deps: WorkflowExecutorDeps): WorkflowExec
     getOutput(jobId: string): BackgroundJobView {
       return jobs.view(jobId)
     },
+    subscribeJob(jobId, listener) { return jobs.subscribeJob(jobId, listener) },
     listJobs(): BackgroundJobView[] {
       return jobs.list()
     },

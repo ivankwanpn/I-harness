@@ -2,11 +2,13 @@ import { expect, it } from "vitest"
 import { createShellTools, registerShell, resolveWslAgentShell, agentShellPrompt, type ResolvedAgentShell } from "../src/index.ts"
 import { createContext } from "@i-harness/core-plugin"
 import { registerExec } from "@i-harness/exec"
-import type { ExecCommand, ExecService } from "@i-harness/exec"
+import type { ExecCommand, ExecService, ExecRunOptions } from "@i-harness/exec"
+import { createSession, Inbox } from "../../core-session/src/index.ts"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { createToolRegistry, type Tool } from "@i-harness/core-tools"
 
 const unusedTransport = {
+  subscribeJob: () => () => {},
   launchTransport: async (): Promise<never> => { throw new Error('unused transport') },
   cancelExecution: async (): Promise<never> => { throw new Error('unused transport') },
   dispose: async (): Promise<void> => {},
@@ -127,4 +129,29 @@ it.skipIf(process.platform !== "win32")("executes a quoted CMD command against t
   const result = await tool.execute({ command: `"${process.execPath}" -e "process.stdout.write('agent-shell-ok')"` }, {}) as { stdout: string; stderr: string; exitCode: number }
   expect(result.exitCode, result.stderr).toBe(0)
   expect(result.stdout.trim()).toBe("agent-shell-ok")
+})
+
+it.each(["bash", "pwsh", "shell"])("wires direct %s steering without changing nested or explicit background execution", async name => {
+  const session = createSession(), inbox = new Inbox(session)
+  const seen: Array<ExecRunOptions | undefined> = []
+  let backgrounds = 0
+  const { exec } = recorder()
+  exec.run = (async (_command: ExecCommand, options?: ExecRunOptions) => {
+    seen.push(options)
+    return { jobId: "bash-original", promoted: true, promotionReason: "user-steer", ranForegroundMs: 17 }
+  }) as ExecService["run"]
+  exec.runBackground = async () => { backgrounds++; return { jobId: "background" } }
+  const tools = createShellTools({ exec, agentShell: () => pwsh })
+  const tool = tools.find(tool => tool.name === name)!
+  const result = await tool.execute({ command: "echo test" }, { session }) as { stdout: string; job_id: string }
+  expect(seen[0]?.promotionWake?.pending()).toBe(false)
+  inbox.admit({ inputId: "steer", text: "change focus", intent: "user", delivery: "steer" })
+  expect(seen[0]?.promotionWake?.pending()).toBe(true)
+  expect(result).toMatchObject({ job_id: "bash-original", stdout: expect.stringMatching(/new user input.*bash-original/i) })
+  expect(result.stdout).not.toContain("after 17ms")
+  await tool.execute({ command: "echo nested" }, { session, resultConsumer: "code" })
+  expect(seen[1]?.promotionWake).toBeUndefined()
+  await tool.execute({ command: "echo background", background: true }, { session })
+  expect(backgrounds).toBe(1)
+  expect(seen).toHaveLength(2)
 })

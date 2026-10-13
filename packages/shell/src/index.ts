@@ -4,6 +4,7 @@ import { delimiter, isAbsolute, join, win32 } from "node:path"
 import { spawnSync } from "node:child_process"
 import type { PluginContext } from "@i-harness/core-plugin"
 import type { Tool, ToolExec, PreparedToolIdentity } from "@i-harness/core-tools"
+import { userSteerForTool } from "@i-harness/core-tools"
 import type { ExecService, PromotedRun } from "@i-harness/exec"
 import { registerExec, registerRetainedOutput, retainedOutputReader } from "@i-harness/exec"
 import type { SandboxDenial, SandboxExecutionPolicy, SandboxSurface } from "@i-harness/sandbox"
@@ -485,6 +486,9 @@ function promotedResult(
     promoted: true,
     ran_foreground_ms: promoted.ranForegroundMs,
     stdout:
+      promoted.promotionReason === "user-steer"
+      ? `Yielded to new user input; command continues as job ${promoted.jobId}. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`
+      :
       `[i-harness] the ${tool} command was still running after ${promoted.ranForegroundMs}ms, so the harness promoted it to background job ` +
       `${promoted.jobId} and returned this id instead of waiting. You did NOT ask for background — the harness did.${why} ` +
       `The command is STILL RUNNING. Read its output with job_output({ job_id: "${promoted.jobId}" }); job_list lists it, job_kill stops it.`,
@@ -642,15 +646,16 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           const { jobId } = await deps.exec.runBackground({ argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
-        // W10: the command spec is built ONCE — the promotion overload takes
-        // the very same ExecCommand, so the two calls below differ in nothing
-        // but the threshold. The overload (not a second code path) is what
-        // keeps a non-promoting call's result shape untouched.
+        // A deadline or direct user steer changes observation of this one
+        // command; execution and policy admission are never replayed.
         const cmd = { argv, ...(deps.wslShell ? boundShellEnvironment(deps.wslShell) : shellCommandEnvironment(argv[0]!)), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
-        const result = deps.backgroundAfterMs === undefined
-          ? await deps.exec.run(cmd)
-          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
-        // The threshold is the trigger; ONLY a run that outlived it lands here.
+        const backgroundAfterMs = deps.backgroundAfterMs
+        const promotionWake = userSteerForTool(exec)
+        const runOptions = {
+          ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
+          ...(promotionWake === undefined ? {} : { promotionWake }),
+        }
+        const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "bash", deps.timeoutMs)
         return retainedRunResult(result, "bash-stdout")
       } catch (err) {
@@ -693,11 +698,15 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
           const { jobId } = await deps.exec.runBackground({ argv, ...shellCommandEnvironment(argv[0]!), ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) })
           return { job_id: jobId }
         }
-        // W10 — same two calls as the bash tool above; see the note there.
+        // Observe the same capture through the deadline and direct steer source.
         const cmd = { argv, ...shellCommandEnvironment(argv[0]!), abortSignal: exec.abortSignal, ...(deps.cwd !== undefined ? { cwd: deps.cwd } : {}), ...(sandboxResolved !== undefined ? { sandbox: sandboxResolved } : {}) }
-        const result = deps.backgroundAfterMs === undefined
-          ? await deps.exec.run(cmd)
-          : await deps.exec.run(cmd, { backgroundAfterMs: deps.backgroundAfterMs })
+        const backgroundAfterMs = deps.backgroundAfterMs
+        const promotionWake = userSteerForTool(exec)
+        const runOptions = {
+          ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
+          ...(promotionWake === undefined ? {} : { promotionWake }),
+        }
+        const result = await deps.exec.run(cmd, runOptions)
         if ("promoted" in result) return promotedResult(result, "pwsh", deps.timeoutMs)
         return retainedRunResult(result, "pwsh-stdout")
       } catch (err) {
@@ -756,7 +765,13 @@ export function createShellTools(deps: ShellToolDeps): Tool[] {
       try {
         if (args.background === true) return { job_id: (await deps.exec.runBackground(spec)).jobId }
         const command = { ...spec, abortSignal: exec.abortSignal }
-        const result = deps.backgroundAfterMs === undefined ? await deps.exec.run(command) : await deps.exec.run(command, { backgroundAfterMs: deps.backgroundAfterMs })
+        const backgroundAfterMs = deps.backgroundAfterMs
+        const promotionWake = userSteerForTool(exec)
+        const runOptions = {
+          ...(backgroundAfterMs === undefined ? {} : { backgroundAfterMs }),
+          ...(promotionWake === undefined ? {} : { promotionWake }),
+        }
+        const result = await deps.exec.run(command, runOptions)
         return "promoted" in result ? promotedResult(result, "shell", deps.timeoutMs) : retainedRunResult(result, "shell-stdout")
       } catch (error) {
         if (error instanceof SandboxUnavailableError) return sandboxUnavailableFailure("shell", "shell", sandbox, error.kind, error.detail ?? error.message)
