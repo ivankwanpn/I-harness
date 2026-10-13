@@ -49,7 +49,7 @@ export interface ExecStreamRunOptions {
   promotionWake?: never
 }
 export interface ExecSpillOptions { maxOutputBytes?: number; maxSpillBytes?: number; spillRoot?: string }
-export interface ExecPromotionWake {
+interface ExecPromotionWake {
   pending(): boolean
   subscribe(listener: () => void): () => void
 }
