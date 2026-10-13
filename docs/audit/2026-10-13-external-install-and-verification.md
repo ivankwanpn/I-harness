@@ -288,23 +288,75 @@ node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/typings/node-pty.d.ts:16
 
 ---
 
-## 6. 第五個：`packages/sandbox-windows-psec`（5 失敗）——已標示的實驗性
+## 6. 第五個：`packages/sandbox-windows-psec`（5 失敗）——**實驗性套件，且探針會過度回報**
+
+> **⚠️ 本節已於 2026-10-13 更正。** 原文說「在主機與 qualification 記錄不匹配時必然失敗」，並建議「依 `applicability` 決定 run/skip」。**該前提經實測為假**，建議因此無效且具誤導性。以下為更正後的版本。
 
 2 個檔案失敗：`test/msys-pty.test.ts`（3）、`test/real-driver.test.ts`（2）。
 
-* `msys-pty.test.ts`：與 §5 同類的位元組傳輸問題（`expected '...' to contain '__REAL_WINCH__\r\n'`、argv 不相等、drain 位元組數 2348783 ≠ 2097163）。
-* `real-driver.test.ts`：原生 `CreateProcessSecurityEnvironment` 回 **`0x8007000F`（ERROR_INVALID_DRIVE）**，而測試期望錯誤碼 **203**。
+### 6.1 已標示的實驗性 `[讀碼]`
 
 **這些都在你們自己的 README 裡公開標示過**（`packages/sandbox-windows-psec/README.md`）：套件描述即 `Experimental direct Windows PSEC and explicit unrestricted native execution owner`；
 明文寫「PSEC remains **experimental**」、「PSEC currently supports **pipes only**」、`pty:false`、
 出貨 qualification 記錄標記 **`incomplete`**，甚至自己記錄了「**Git/MSYS Bash failed under PSEC during MSYS initialization**（`NtCreateDirectoryObject(\BaseNamedObjects\msys-...): 0xC0000022`）」。
 
 **我要特別肯定這段文件**：`readWindowsQualification` 的說明誠實到指出「a match does not establish machine identity…」、
-「The accessor is informational and never changes the backend probe」、以及「Fixtures are retained for review」。這是本報告看過最好的誠實度範例之一。
+「The accessor is informational and never changes the backend probe」、以及「Fixtures are retained for review」。
 
-> **唯一的建議**：`pnpm -r test` 會跑這些測試並**必然失敗**（在未達 qualification 的機器上）。
-> 既然資格狀態是已知且可查的（`qualification.json` + `applicability`），建議讓這些測試依 `applicability` 決定 run/skip，
-> 使 `pnpm -r test` 的紅燈清單**只反映真正的回歸**。否則每個人都得學會「這 5 個紅是正常的」——那是一種會傳染的盲視。
+### 6.2 ★ 更正：`applicability` 在本機是 **`matching-os-artifacts`** `[實測]`
+
+我實際呼叫 `readWindowsQualification()`：
+
+```
+applicability : matching-os-artifacts
+record release: 10.0.26200
+host release  : win32 10.0.26200
+```
+
+→ **主機與記錄的 OS 版本一致、helper 與 protocol 的 sha256 也一致。** 所以：
+
+- 原文「主機不匹配」**是錯的**；
+- 依 `applicability` 加 skip **不會觸發** —— 那些測試仍會跑並失敗。**那個建議不但無用，還會讓人以為問題已被處理。**
+
+### 6.3 真正的成因：`probe()` 回報 `available`，但啟動失敗 `[實測]`
+
+```
+psec          probe: {"id":"windows-psec","availability":"available","assurance":"experimental",...}
+unrestricted  probe: {"id":"windows-unrestricted","availability":"available",...}
+```
+
+但實際啟動（`test/real-driver.test.ts` 的 `it.each(["unrestricted","psec"])`）**只有 psec 失敗**：
+
+```
+native-failure at CreateProcessSecurityEnvironment (2147942415):
+  CreateProcessSecurityEnvironment failed (0x8007000f)
+```
+
+`0x8007000f` = **`ERROR_INVALID_DRIVE`**（Win32 15）。而 `it.each(["unrestricted", "psec"])` 中 **unrestricted 通過** —— 所以不是主機整體不支援原生執行，是 **PSEC 這條路徑**在此主機上不成立。
+
+第二個失敗是同一件事的另一面：`missing LOCALAPPDATA preserves native PSEC error 203` 期望錯誤碼 **203**，實際拿到 `0x8007000f`。
+
+**探針為何說謊 `[讀碼]`**：`packages/sandbox-windows-psec/src/index.ts:424-438` 的 `probe()` 執行 `helper --probe`，再讀 helper **自我回報**的 `e.available`：
+
+```ts
+const { stdout } = await execFileAsync(helper.helperPath, ["--probe"], { ... })
+const e = probe.engines[engine]
+return { ..., availability: e.available ? "available" : "unavailable", ... }
+```
+
+它**沒有真的啟動一次**。這正是 README 自己警告的那一類 ——「**API support discovery is not confinement proof**」；探針做的是 API 支援探測，卻把它當成了可用性結論。
+
+→ 所以在本機，**`applicability` 與 `probe()` 兩者都無法誠實地拿來 gate 這些測試**：前者說匹配、後者說可用，而實際啟動失敗。
+
+### 6.4 建議（修正後）
+
+| | 做法 | 說明 |
+|---|---|---|
+| **主要** | **讓 `probe()` 誠實**：可用性應來自一次**真實的最小啟動**，而非 helper 的 API 自我回報 | 這才是 README 那句警告要求的行為；修好之後「依 probe 決定 skip」才**同時**成立且誠實 |
+| 次要 | 在那之前，**不要**用 `applicability` 加 skip | 它在本機不觸發，徒增誤解 |
+| 文件 | 在 README 記錄本機觀察：probe `available` 但啟動 `0x8007000f`，以及 unrestricted 可用而 psec 不可用 | 這是**新的事實**，不在既有記錄中 |
+
+> **`[未驗證]`**：我**沒有**追出 `ERROR_INVALID_DRIVE` 的確切來源（是驅動器佈局、缺 PSEC 前置、還是 helper 對本機環境的假設）。上述每一步都可獨立複查，但成因只到「PSEC 在此主機無法啟動」為止，沒有再往下。
 
 ---
 
@@ -321,8 +373,8 @@ node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/typings/node-pty.d.ts:16
 | 2 | 🟠 中 | `packages/exec` 的 Git Bash shim 白名單改為資料驅動 + 以 hash 命中決定 skip，並考慮 miss 時 loud | 測試守衛 | §4.3 |
 | 3 | 🟠 中 | desktop 的 attachment-reader worker 缺前置建置 → 加可操作的錯誤訊息或自動前置 | 開發者體驗 | §4.1 |
 | 4 | 🟠 中 | gateway 的 symlink 測試加環境探測後 skip | 測試守衛 | §4.2 |
-| 5 | 🟠 中 | PSEC 測試依 `applicability` 決定 run/skip，讓 `pnpm -r test` 可信 | 測試守衛 | §6 |
-| 6 | 🟡 低 | `pnpm-workspace.yaml` 的 `allowBuilds` 改用官方 `onlyBuiltDependencies` | 依賴穩健性 | §1 |
+| 5 | 🟠 中 | PSEC：**讓 `probe()` 誠實**（可用性應來自真實最小啟動，非 helper 的 API 自我回報——本機 probe 說 `available` 但啟動 `0x8007000f`）。**不要**用 `applicability` gate（本機為 `matching-os-artifacts`，不會觸發；原建議已撤回） | 產品缺陷＋測試守衛 | §6 |
+| 6 | 🟡 低 | ~~`allowBuilds` 改用官方 `onlyBuiltDependencies`~~ **已撤回：`allowBuilds` 是 pnpm 10.26+ 的官方鍵**（`pnpm.cjs` 映射 + 官方文件雙重確認）。**不要改。** | — | §1 |
 | 7 | 🟡 低 | 修 `docs/CAPABILITIES.md:3` 的包數（66 → 80）與 `packages/desktop/README.md` 的版本（0.1.4 → 0.1.11） | 文件漂移 | §9 |
 | 8 | 🟡 低 | 見 §9 的四個 `[讀碼]` 靜態發現（`modelPolicies` 未接線、hooks 信任綁定、AGENTS.md 快取、`fs-watch`） | 待確認 | §9 |
 
@@ -334,6 +386,8 @@ node_modules/.pnpm/node-pty@1.1.0/node_modules/node-pty/typings/node-pty.d.ts:16
 | 10 | 🟠 中 | 「喚醒模型」收斂成一份權威文件（現散在三處，其中兩處是不受閘門保護的註解） | 文件／單一真相 | §12.2 |
 | 11 | 🟠 中 | `pump()` 失敗後收件箱停滯：確認是否刻意，並讓停滯可見 + 補測試釘住 | 設計確認 | §12.3 |
 | 12 | 🟡 低 | `ParentInputAdmission.wake` 是 no-op，在成員 JSDoc 寫明 | 術語對齊 | §12.4 |
+| 13 | 🟠 中 | **子代理面板缺推送刷新**：主代理等待時面板凍結（子會話用裸 `createAgent`，永不進入 `service.onAssembly`，故子事件從不推送，只有拉取）。依 `desktop/workflow/changed` 先例加 `desktop/subagents/changed` | 產品缺陷 | §9 A.6 |
+| 14 | 🟠 中 | 完成的子代理顯示錯誤模型（「繼承主會話模型」）：task 記錄缺 `modelLabel` + fallback 對內建角色永不觸發，把「未記錄」斷言成「繼承」 | 產品缺陷 | §9 A.5 |
 
 **關於 #1 的流程建議**：這是唯一一個會影響使用者的項目，且**紅燈已經存在**。
 依你們自己的 TDD 紀律，正確順序是：用它當 red → 找真正的順序/確認機制 →
@@ -490,6 +544,47 @@ grep '"chokidar"' --include=package.json → 只有 fs-watch 宣告
 **建議 A + B**：A 保留事實，B 保證真的沒資料時不亂斷言。**注意**：`packages/desktop/src/renderer/session/SubagentPane.tsx:198` 還有**自己的一層** fallback（`agent.modelLabel ?? t("繼承主會話模型")`），所以「字串」與「projection 的值」兩處都要一起改，否則會出現兩套不一致的措辭。
 
 > **我沒有動它**：它需要先定語意、且涉及 task doc 格式與 UI 字串。寧可留成有完整證據的條目，也不在半驗證狀態下改動使用者可見行為。
+
+### A.6 子代理面板在主代理等待時不會刷新（子代理由於只支援「拉取」而失去推送）
+
+> **使用者在實際安裝後回報並在程式碼中查證**（2026-10-13）。這是本審計反覆出現的**同一缺陷類別**：UI 把**過期狀態當作現狀**呈現，且不標示它已過期。
+
+**症狀**：主代理處於等待時（例如卡在長工具呼叫 `wait_agent`），子代理面板停止更新 —— 使用者看到「執行中」但內容不變，因而誤判子代理已停止。**我本人在本次作業中就因此誤判過一次**（以為 worker 掛了，其實它在跑）。
+
+**根因鏈 `[讀碼，逐條查證]`**：
+
+| 環節 | 事實 | 出處 |
+|---|---|---|
+| 子會話**如何建立** | 用**裸 `createAgent`**，**不是** `createSessionAssembly` | `packages/subagent/src/child.ts:465` |
+| 子會話**只註冊到** | coordinator（JSONL 持久化） | `child.ts:343-362` |
+| SDK server 的**推送來源** | `service.onAssembly(assembly => subscribe(assembly.session, …))` —— **只涵蓋 assembly** | `packages/sdk/src/server.ts:254-279` |
+| ⇒ 結果 | **子會話永不進入該橋接 ⇒ 子事件從不推送** | 由上述三條推出 |
+| 子代理對桌面**只有拉取** | `desktop/session/subagents/list` / `.../history`（後者用 `transportSessionEvents`，是 pull 不是 push） | `packages/desktop-gateway/src/session-subagents.ts:180,224` |
+| gateway 能發的通知**共 5 種，無一涉及子代理** | `desktop/interaction/request`、`desktop/interaction/closed`、`desktop/usage/recording-warning`、**`desktop/workflow/changed`**、`session/status` | `grep makeNotification("` 於 `packages/desktop-gateway/src/*.ts` |
+
+**面板的刷新觸發條件 `[讀碼]`**（`packages/desktop/src/renderer/session/SubagentPane.tsx:120-130`）：
+
+```ts
+if (typeof params?.sessionId !== "string"
+    || params.sessionId !== sessionId && !catalogRef.current?.agents.some((row) => row.sessionId === params.sessionId)) return
+const kind = classifyNotification(event.method, event.params).kind
+if (kind === "durable" || kind === "status" || event.method === "desktop/workflow/changed") refresh.schedule()
+```
+
+它**願意**接受子會話 id 作為觸發源 —— 但那永遠不會發生，因為子會話事件從不推送。因此實際可用的觸發只有：**主會話**的 `session/event` / `session/status`、`desktop/workflow/changed`、以及**手動**「重新整理」按鈕。
+
+→ **主代理沉默時，沒有任何人喚醒面板。** 子代理的 turn/step/工具進度全部不可見，直到別的事件恰好驚動父代理。
+
+**類別意義**：`desktop/workflow/changed` 證明**這個修法模式在自家的程式碼裡已經存在** —— workflow 有自己的「變了」推送，**子代理從來沒有被賦予一個**。所以這不是架構缺限，是**同一個機制漏接了一個消費者**。
+
+**建議修法（依既有先例）**：給子代理一個自己的輕量推送，比照 `desktop/workflow/changed`：
+1. task 協定本來就記錄狀態轉移（accepted → running → terminal），在該轉移點發一個 `desktop/subagents/changed`；
+2. renderer 在 `SubagentPane` 的既有條件中加入該方法（或讓既有條件涵蓋它）；
+3. **不要**改為把完整子會話事件推給 UI —— assistant chunk 等級的流量只為了更新一行狀態，且會牽動 wire 契約。輕量「變了」訊號才是既有先例。
+
+> **未實作**：本案與另一項進行中的工作（A.5）**同時修改 `session-subagents.ts` 與 `SubagentPane.tsx`**，兩者併行會衝突。因此先記錄於此，待 A.5 落地後再做。
+>
+> **`[未驗證]`**：我**沒有**用執行證明「面板真的凍結」——上述是逐條讀碼的推論，且每一條都可獨立查證。要在執行期證實，需要一個「主代理等待中、子代理仍在活動」的現場並觀察通知流；本次未做。
 
 ---
 
