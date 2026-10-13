@@ -610,6 +610,23 @@ const BEDROCK_SOURCE_UNIT = new Set([
   "packages/llm-bedrock/src/stream/usage.ts",
 ])
 
+// S5 splits the original Plugin scope only. Its internal registration/dispatch
+// types are not new external consumers; keep their original exclusion boundary.
+// Pre-existing and future unmapped files remain independent source owners.
+const CORE_PLUGIN_SOURCE_UNIT = new Set([
+  "packages/core-plugin/src/index.ts",
+  "packages/core-plugin/src/types.ts",
+  "packages/core-plugin/src/redispatch.ts",
+  "packages/core-plugin/src/scope/types.ts",
+  "packages/core-plugin/src/scope/promise.ts",
+  "packages/core-plugin/src/scope/services.ts",
+  "packages/core-plugin/src/scope/listeners.ts",
+  "packages/core-plugin/src/scope/waterfall.ts",
+  "packages/core-plugin/src/scope/cascade.ts",
+  "packages/core-plugin/src/scope/dispose.ts",
+  "packages/core-plugin/src/scope/create-scope.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -620,6 +637,7 @@ function declarationOwner(rel) {
   if (ANTHROPIC_SOURCE_UNIT.has(rel)) return "packages/llm-anthropic/src/index.ts"
   if (GEMINI_SOURCE_UNIT.has(rel)) return "packages/llm-gemini/src/index.ts"
   if (BEDROCK_SOURCE_UNIT.has(rel)) return "packages/llm-bedrock/src/index.ts"
+  if (CORE_PLUGIN_SOURCE_UNIT.has(rel)) return "packages/core-plugin/src/index.ts"
   return rel
 }
 
@@ -1555,6 +1573,50 @@ SELF_TEST_CASES.push({
     ].map(([label, rel]) => {
       const files = [...bedrockRelocationFixtureFiles(true), {
         rel, test: false, text: 'import type { BedrockConfig } from "@i-harness/llm-bedrock"\nconst read = (config: BedrockConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function pluginRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const names = ["CascadeHandler", "GuardFn", "Listener", "WaterfallHandler"]
+  const declarations = names.map(name => `export interface ${name} { value: unknown }`).join("\n")
+  const reads = names.map(name => `const read${name} = (handler: ${name}) => handler`).join("\n")
+  if (!split) return [file("packages/core-plugin/src/index.ts", `${declarations}\n${reads}`)]
+  return [
+    file("packages/core-plugin/src/index.ts", `export type { ${names.join(", ")} } from "./types.ts"`),
+    file("packages/core-plugin/src/types.ts", declarations),
+    ...["redispatch.ts", "scope/types.ts", "scope/promise.ts", "scope/services.ts", "scope/listeners.ts",
+      "scope/waterfall.ts", "scope/cascade.ts", "scope/dispose.ts", "scope/create-scope.ts"].map(path =>
+      file(`packages/core-plugin/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S5: Plugin dispatch types retain the original owner boundary across every extracted module",
+  expect: [false, true].flatMap(split => ["CascadeHandler", "GuardFn", "Listener", "WaterfallHandler"]
+    .map(name => `${split ? "split" : "before"}:unused-export\t@i-harness/core-plugin#${name}\tpackages/core-plugin/src/index.ts`)),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(pluginRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S5: unmapped Plugin sources and external consumers stay independent; test-only reads do not wire exports",
+  expect: ["pre-existing=0", "future=0", "other-package=0", "outside=0", "test-only=4"],
+  run() {
+    return [
+      ["pre-existing", "packages/core-plugin/src/existing.ts", false],
+      ["future", "packages/core-plugin/src/scope/future.ts", false],
+      ["other-package", "packages/hooks/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/core-plugin/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = [...pluginRelocationFixtureFiles(true), {
+        rel, test, text: "const read = (a: CascadeHandler, b: GuardFn, c: Listener, d: WaterfallHandler) => [a, b, c, d]",
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
