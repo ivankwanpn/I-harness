@@ -45,10 +45,10 @@ export interface SessionExecutor {
   dispose(): void
 }
 
-// R-A1 four-tier → durable admission mapping. The durable ladder has no "wake"
-// field (opencode Delivery = "steer" | "queue" only); the executor is
-// event-driven, so ANY admission while idle starts the idle drain and a queue
-// admission while a turn is active waits for the next turn boundary.
+// R-A1 four-tier → durable admission mapping.
+// Authoritative delivery / wake contract: docs/concurrency-and-wake.md (§1–2).
+// This helper constructs an admission; submit() below owns the push.
+// Keep cross-tier/idle/boundary semantics in that document.
 export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   switch (input.tier) {
     case "send":
@@ -67,14 +67,14 @@ export function mapSubmitToAdmission(input: InputSubmit): AdmittedInput {
   }
 }
 
-// R-A2: the per-session serial lane. Per-session serial: every submit appends
-// a pump onto ONE promise chain (driveFollowups precedent) — one turn at a time
-// per executor, no two turns on the same session ever overlap. Cross-session
-// parallel: nothing is shared between executors; the registry (below) is a
-// plain map, so N sessions run concurrently in one process. Each pump drains
-// the pending FIFO to empty, so a submission arriving mid-turn is picked up
-// either by the running pump's next loop iteration (queue tier, after the
-// current turn) or by the step-boundary seam (steer tier, Task 3).
+// R-A2: the per-executor serial lane (promise chain below).
+// Authoritative concurrency, wake and failure semantics:
+// docs/concurrency-and-wake.md (§2–3).
+// Hosts register one executor per session; the registry rejects duplicate
+// registrations but cannot police ad-hoc duplicate executors.
+// Local implementation: append drain work to chain, not a background re-pump.
+// Observer/error reporting does not change this lane's restart policy;
+// consult the contract before altering it.
 export function createSessionExecutor(deps: SessionExecutorDeps): SessionExecutor {
   let chain: Promise<void> = Promise.resolve()
   let running = false
