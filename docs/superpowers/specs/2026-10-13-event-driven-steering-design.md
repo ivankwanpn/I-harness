@@ -13,7 +13,7 @@ The scheduler still drains its dispatched batch. An arbitrary already-dispatched
 ## Binding constraints
 
 - Implementation starts on `codex/event-driven-steering` only after the external remediation source is merged and checked out on main.
-- No release bump, new package, global event bus, runtime dependency, profile/model/protocol selection change, or retry policy change.
+- Implementation tasks add no package, global event bus, runtime dependency, profile/model/protocol selection change, or retry policy change. Versioning and release artifacts belong only to final delivery.
 - Steer never aborts a job, child, cell, guest invocation, execution capture, or owner signal; stop/close/dispose retain cancellation and drain ownership.
 - Never launch, submit, admit, resolve policy, request approval, or publish a final tool result twice to resume work after steer.
 - Direct tools use trusted `ToolExec.session`; callbacks and wake sources never enter model JSON or durable events.
@@ -184,3 +184,5 @@ Implement sequentially: (1) observation helper and registry lifecycle seams, (2)
 Controlled tests prove release before work is permitted to finish, same IDs and one launch/invocation, no abort on steer, exactly one dispatch/result, one step-boundary input promotion, later completion retrieval, and stop/close/dispose drain. Race tests cover preexisting steer, registration-time completion, synchronous terminal/reopen, completion/steer/deadline, invalid IDs, followups, cancelTree, restoration Session replacement, multiple observers, listeners/timers cleanup, and pending output retention. Desktop tests prove child durable output appears before flush and with no parent events, root/workspace isolation, new child discovery, restore/close/disconnect cleanup, and bounded coalescing.
 
 Focused test suites and typechecks run per task. Whole-branch review, then a single frozen-head `pnpm verify:all`, provide integration evidence. Fixes require the covering checks again and fresh aggregate evidence if source changed. Source PR describes actual supported paths and the arbitrary sibling/retention latency boundary; it does not promise universal interruption.
+
+Final delivery follows the user's standing instruction in this conversation to submit, merge and release completed IH work. Parent owns v0.1.12 versioning after implementation, matching-head merge, verified Windows artifacts, isolated shipped-runtime smoke tests and GitHub draft/published asset checks. This extends the initial source-only planning assumption; it does not permit live profile mutation or replacing the running installed app. Preserve the user's external remediation branch.
