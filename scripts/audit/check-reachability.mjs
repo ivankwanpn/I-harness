@@ -659,6 +659,19 @@ const HOOKS_SOURCE_UNIT = new Set([
   "packages/hooks/src/lifecycle/mount.ts",
 ])
 
+// S8 moves a NON-entry source owner. Only the original supervisor and these
+// exact private modules share its boundary. The package entry, scheduler,
+// client, bridge and OAuth files remain independent production consumers.
+const MCP_SUPERVISOR_SOURCE_UNIT = new Set([
+  "packages/mcp-client/src/supervisor.ts",
+  "packages/mcp-client/src/supervisor/types.ts",
+  "packages/mcp-client/src/supervisor/status.ts",
+  "packages/mcp-client/src/supervisor/generation.ts",
+  "packages/mcp-client/src/supervisor/catalogue.ts",
+  "packages/mcp-client/src/supervisor/recovery.ts",
+  "packages/mcp-client/src/supervisor/disposal.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -672,6 +685,7 @@ function declarationOwner(rel) {
   if (CORE_PLUGIN_SOURCE_UNIT.has(rel)) return "packages/core-plugin/src/index.ts"
   if (CORE_TOOLS_SOURCE_UNIT.has(rel)) return "packages/core-tools/src/index.ts"
   if (HOOKS_SOURCE_UNIT.has(rel)) return "packages/hooks/src/index.ts"
+  if (MCP_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/mcp-client/src/supervisor.ts"
   return rel
 }
 
@@ -1743,6 +1757,59 @@ SELF_TEST_CASES.push({
     ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...hooksRelocationFixtureFiles(true), {
       rel, test, text: "const use = (options: HookRegistryOptions) => options",
     }]).length}`)
+  },
+})
+
+function supervisorRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface SupervisorDeps { connect(): void }"
+  const reads = "const use = (deps: SupervisorDeps) => deps"
+  const entry = file("packages/mcp-client/src/index.ts", 'export type { SupervisorDeps } from "./supervisor.ts"')
+  if (!split) return [entry, file("packages/mcp-client/src/supervisor.ts", `${declaration}\n${reads}`)]
+  return [
+    entry,
+    file("packages/mcp-client/src/supervisor.ts", `export type { SupervisorDeps } from "./supervisor/types.ts"\n${reads}`),
+    file("packages/mcp-client/src/supervisor/types.ts", `${declaration}\n${reads}`),
+    ...["status", "generation", "catalogue", "recovery", "disposal"]
+      .map(name => file(`packages/mcp-client/src/supervisor/${name}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S8: non-entry supervisor retains complete original findings across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/mcp-client#SupervisorDeps", evidence: "packages/mcp-client/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(supervisorRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S8: package entry and existing MCP owners remain independent; test readers do not wire exports",
+  expect: ["entry=0", "scheduler=0", "client=0", "bridge=0", "oauth=0", "oauth-callback=0", "resources=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["entry", "packages/mcp-client/src/index.ts", false],
+      ["scheduler", "packages/mcp-client/src/scheduler.ts", false],
+      ["client", "packages/mcp-client/src/client.ts", false],
+      ["bridge", "packages/mcp-client/src/bridge.ts", false],
+      ["oauth", "packages/mcp-client/src/oauth.ts", false],
+      ["oauth-callback", "packages/mcp-client/src/oauth-callback.ts", false],
+      ["resources", "packages/mcp-client/src/resources.ts", false],
+      ["future", "packages/mcp-client/src/supervisor/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/mcp-client/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = supervisorRelocationFixtureFiles(true)
+      const reads = "const use = (deps: SupervisorDeps) => deps"
+      const existing = files.find(file => file.rel === rel)
+      if (existing) existing.text += `\n${reads}`
+      else files.push({ rel, test, text: reads })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
   },
 })
 
