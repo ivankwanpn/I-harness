@@ -23,7 +23,18 @@ import type { Telemetry } from "@i-harness/telemetry"
 import { resolveHarnessHome } from "@i-harness/harness-home"
 // WHY: reuse the existing chokidar-backed watcher without adding dependencies
 // (packages/fs-watch/src/index.ts:1); its explicit roots select settings files.
-import { createFsWatcher, DEFAULT_IGNORE, type FsWatcher } from "../../fs-watch/src/index.ts"
+// Declared as a real dependency and imported by PACKAGE NAME, not by a relative
+// sibling path. WHY this matters for packaging, not just style: the shipped
+// gateway is assembled by copying each package's declared `dependencies`
+// (packages/desktop/scripts/build-gateway.mjs), so a relative import into a
+// package that is NOT declared is invisible to that copier — the monorepo
+// resolves it through the workspace link and every test passes, while the
+// packaged layout has no such directory and the import fails at load. Measured:
+// with a sibling import, `@i-harness/fs-watch` was absent from the gateway
+// payload entirely (no `node_modules/@i-harness/fs-watch`, no chokidar) and
+// `node_modules/@i-harness/settings/src/index.ts` resolved `../../fs-watch`
+// to a non-existent `node_modules/fs-watch`.
+import { createFsWatcher, DEFAULT_IGNORE, type FsWatcher } from "@i-harness/fs-watch"
 import { normalizeContextSubsystems, type SettingsContextSubsystems } from './context-subsystems.ts'
 export * from './context-subsystems.ts'
 
