@@ -8,13 +8,14 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
+import { createSession, Inbox } from "../../core-session/src/index.ts"
 import type { ExecCommand, ExecResult, ExecService } from "@i-harness/exec"
 import { parseWorkflowYaml } from "../src/definition.ts"
 import type { WorkflowDefinition } from "../src/definition.ts"
 import type { WorkflowExecutor } from "../src/runner.ts"
 import { createWorkflowExecutor, createWorkflowJobStore, runWorkflow } from "../src/runner.ts"
 import { createWorkflowRegistry } from "../src/registry.ts"
-import { registerWorkflow, workflowListName, workflowRunName } from "../src/tool.ts"
+import { createWorkflowRunTool, registerWorkflow, workflowListName, workflowRunName } from "../src/tool.ts"
 
 const YAML = `name: release-check
 description: Run build + tests
@@ -333,6 +334,37 @@ describe("single-job executor (job_* third-layer contract)", () => {
 })
 
 describe("tools (workflow_run / workflow_list)", () => {
+  it.each(["steer", "abort", "code", "completion"] as const)("workflow observation %s keeps one owned run and has no internal timer", async mode => {
+    vi.useFakeTimers()
+    const { ws, cleanup } = setupWorkspace({ "held.yml": "description: held\nsteps:\n  - name: a\n    command: echo a\n" })
+    const held = Promise.withResolvers<ExecResult>(), started = Promise.withResolvers<void>()
+    const calls: ExecCommand[] = []
+    const exec = { run: vi.fn((cmd: ExecCommand) => { calls.push(cmd); started.resolve(); return held.promise }) } as unknown as ExecService
+    const executor = createWorkflowExecutor({ exec, jobs: createWorkflowJobStore() })
+    const tool = createWorkflowRunTool({ executor, registry: createWorkflowRegistry({ workspace: ws }) })
+    const session = createSession(), inbox = new Inbox(session), abort = new AbortController()
+    try {
+      let settled = false
+      const observing = tool.execute({ name: "held", wait: true }, { session, abortSignal: abort.signal, ...(mode === "code" ? { resultConsumer: "code" as const } : {}) }).then(out => { settled = true; return out })
+      await started.promise
+      expect(vi.getTimerCount()).toBe(0)
+      if (mode !== "completion") inbox.admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+      if (mode === "abort") abort.abort(new Error("stop observing"))
+      if (mode === "code" || mode === "completion") {
+        await Promise.resolve(); expect(settled).toBe(false); held.resolve({ ...OK, stdout: "actual" })
+      }
+      const out = await observing
+      expect(out).toMatchObject({ run_id: expect.any(String), job_id: expect.stringMatching(/^workflow-/), status: mode === "code" || mode === "completion" ? "completed" : "running" })
+      if (mode === "steer") expect(out).toMatchObject({ yielded: true, yield_reason: "user-steer" })
+      else expect(out).not.toHaveProperty("yielded")
+      expect(calls[0]!.abortSignal?.aborted).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+      held.resolve({ ...OK, stdout: "actual" })
+      for (let i = 0; i < 10; i++) await Promise.resolve()
+      expect(executor.getOutput(out.job_id)).toMatchObject({ status: "completed", stdout: expect.stringContaining("actual") })
+      expect(calls).toHaveLength(1)
+    } finally { held.resolve(OK); vi.useRealTimers(); cleanup() }
+  })
   it("workflow_run returns {run_id, job_id} immediately; wait=true blocks and returns the final view", async () => {
     const { ws, cleanup } = setupWorkspace({ "quick.yml": "description: quick\nsteps:\n  - name: a\n    command: echo a\n" })
     const { exec, calls } = mockExec((cmd) => ({ stdout: `ran:${cmd.argv[0]}\n`, stderr: "", exitCode: 0, timedOut: false }))

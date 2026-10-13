@@ -1,9 +1,62 @@
-import { expect, it } from "vitest"
+import { expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { append, createSession, deriveMessages } from "@i-harness/core-session"
+import { append, createSession, deriveMessages, Inbox } from "@i-harness/core-session"
 import { registerCodeMode } from "../src/register.ts"
 import { PNG } from '../../image-validation/test/fixtures.ts'
+import { createShellTools } from '../../shell/src/index.ts'
+import type { ExecCommand, ExecRunOptions, ExecService } from '../../exec/src/index.ts'
+
+it("nested shell receives no steer promotion source and completes one original invocation", async () => {
+  const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession(), inbox = new Inbox(session)
+  const held = Promise.withResolvers<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }>(), started = Promise.withResolvers<void>()
+  let command: ExecCommand | undefined, options: ExecRunOptions | undefined
+  const run = vi.fn((cmd: ExecCommand, opts?: ExecRunOptions) => { command = cmd; options = opts; started.resolve(); return held.promise })
+  const exec = { run } as unknown as ExecService
+  for (const tool of createShellTools({ exec })) tools.register(tool)
+  const mount = registerCodeMode(ctx, tools, { session, config: { mode: "mixed" } })
+  try {
+    const observing = tools.get("code_exec")!.execute({ code: 'text(await tools.pwsh({command:"echo fixture"}))', yield_time_ms: 60_000 }, { session })
+    await started.promise
+    expect(options?.promotionWake).toBeUndefined()
+    inbox.admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+    const first = await observing as { cell_id: string }
+    expect(first).toMatchObject({ status: "running", yielded: true, yield_reason: "user-steer", text: "" })
+    expect(command!.abortSignal?.aborted).toBe(false)
+    expect(session.events.filter(e => e.type === "code/result")).toHaveLength(0)
+    inbox.claimAtStepBoundary()
+    held.resolve({ stdout: "actual shell", stderr: "", exitCode: 0, timedOut: false })
+    expect(await tools.get("code_wait")!.execute({ cell_id: first.cell_id }, { session })).toMatchObject({ status: "completed", text: expect.stringContaining("actual shell") })
+    expect(run).toHaveBeenCalledOnce()
+    const calls = session.events.filter(e => e.type === "code/call"), results = session.events.filter(e => e.type === "code/result")
+    expect(calls).toHaveLength(1); expect(results).toHaveLength(1); expect(results[0]!.callId).toBe(calls[0]!.callId)
+  } finally { held.resolve({ stdout: "cleanup", stderr: "", exitCode: 0, timedOut: false }); await mount.dispose() }
+})
+
+it("registered observers release repeatedly while an arbitrary nested tool retains its original result", async () => {
+  const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession(), inbox = new Inbox(session)
+  const held = Promise.withResolvers<string>(), started = Promise.withResolvers<void>()
+  const body = vi.fn(async (_args, exec) => { expect(exec.resultConsumer).toBe("code"); expect(exec.session).toBe(session); started.resolve(); return held.promise })
+  tools.register({ name: "held", description: "fixture", inputSchema: {}, execute: body })
+  const mount = registerCodeMode(ctx, tools, { session, config: { mode: "mixed" } })
+  try {
+    const observation = tools.get("code_exec")!.execute({ code: 'text(await tools.held({}))', yield_time_ms: 60_000 }, { session })
+    await started.promise
+    inbox.admit({ inputId: "first", text: "refocus", intent: "user", delivery: "steer" })
+    const first = await observation as { cell_id: string }
+    expect(first).toMatchObject({ status: "running", yielded: true, yield_reason: "user-steer" })
+    inbox.claimAtStepBoundary()
+    const observing = tools.get("code_wait")!.execute({ cell_id: first.cell_id, yield_time_ms: 60_000 }, { session })
+    inbox.admit({ inputId: "second", text: "refocus again", intent: "user", delivery: "steer" })
+    expect(await observing).toMatchObject({ cell_id: first.cell_id, status: "running", yielded: true, yield_reason: "user-steer" })
+    expect(session.events.filter(e => e.type === "code/result")).toHaveLength(0)
+    inbox.claimAtStepBoundary(); held.resolve("real value")
+    expect(await tools.get("code_wait")!.execute({ cell_id: first.cell_id, yield_time_ms: 60_000 }, { session })).toMatchObject({ status: "completed", text: "real value" })
+    expect(body).toHaveBeenCalledOnce()
+    const calls = session.events.filter(e => e.type === "code/call"), results = session.events.filter(e => e.type === "code/result")
+    expect(calls).toHaveLength(1); expect(results).toHaveLength(1); expect(results[0]!.callId).toBe(calls[0]!.callId)
+  } finally { held.resolve("cleanup"); await mount.dispose() }
+})
 
 it("uses the real registry policy even when guest code catches a refused write", async () => {
   const ctx = createContext(), tools = createToolRegistry(ctx), session = createSession(); let writes = 0

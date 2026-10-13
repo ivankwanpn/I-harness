@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append } from "@i-harness/core-session"
-import type { Tool, ToolRegistry } from "@i-harness/core-tools"
+import { userSteerForTool, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { CodeModeExecInput, CodeModeMount, CodeModeMountOptions, CodeModeObservation, CodeModeWaitInput } from "./types.ts"
 import { createCodeModeRuntime } from "./runtime.ts"
 import { createCodeModeBroker } from "./broker.ts"
@@ -13,6 +13,7 @@ function observationOutput(out: CodeModeObservation) {
   const images = out.items.flatMap(item => item.type === "image" ? [item.image] : [])
   return {
     cellId: out.cellId, cell_id: out.cellId, status: out.status, text: out.text, truncated: out.truncated,
+    ...(out.yielded ? { yielded: true as const, yield_reason: out.yieldReason } : {}),
     ...(out.textRetention ? { textRetention: out.textRetention } : {}),
     ...(out.error ? { error: out.error } : {}),
     items: out.items.map(item => item.type === "text" ? { type: "text", length: item.text.length }
@@ -69,7 +70,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     inputSchema: { type: "object", properties: { code: { type: "string" }, yield_time_ms: { type: "integer", minimum: 0, maximum: 60_000 }, max_output_tokens: { type: "integer", minimum: 0, maximum: 4096 } }, required: ["code"], additionalProperties: false },
     async execute(args, exec) {
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
-      const out = await runtime.exec(args as CodeModeExecInput, { ...exec, sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID() })
+      const out = await runtime.exec(args as CodeModeExecInput, { ...exec, sessionId: options.sessionId ?? exec.sessionId, callId: exec.callId ?? randomUUID() }, { userSteer: userSteerForTool(exec) })
       return observationOutput(out)
     },
   }
@@ -78,7 +79,7 @@ export function registerCodeMode(ctx: PluginContext, tools: ToolRegistry, option
     inputSchema: { type: "object", properties: { cell_id: { type: "string" }, yield_time_ms: { type: "integer", minimum: 0, maximum: 60_000 }, max_tokens: { type: "integer", minimum: 0, maximum: 4096 }, terminate: { type: "boolean" } }, required: ["cell_id"], additionalProperties: false },
     async execute(args, exec) {
       if (disposed || mode === "off") throw new Error("Code Mode unavailable")
-      return observationOutput(await runtime.wait(args as CodeModeWaitInput, exec.abortSignal))
+      return observationOutput(await runtime.wait(args as CodeModeWaitInput, exec.abortSignal, { userSteer: userSteerForTool(exec) }))
     },
   }
   const statusTool: Tool = {

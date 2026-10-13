@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { createSession, Inbox } from '@i-harness/core-session'
+import { userSteerForTool } from '@i-harness/core-tools'
 import { createCodeModeRuntime } from '../src/runtime.js'
 import type { CodeModeOrigin, CodeModeRuntimeOptions } from '../src/types.js'
 import { PNG } from '../../image-validation/test/fixtures.ts'
@@ -8,6 +10,88 @@ const make = (options: Partial<CodeModeRuntimeOptions> = {}) => createCodeModeRu
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 describe('isolated Code Mode runtime', () => {
+  it('repeated steer observations release subscriptions and preserve observer exclusion', async () => {
+    const session = createSession(), inbox = new Inbox(session), actual = userSteerForTool({ session })!
+    let active = 0
+    const source = { pending: () => actual.pending(), subscribe(wake: () => void) { active++; const off = actual.subscribe(wake); return () => { active--; off() } } }
+    const r = make()
+    try {
+      const first = await r.exec({ code: 'await new Promise(() => {})', yield_time_ms: 0 })
+      for (let i = 0; i < 3; i++) {
+        const observing = r.wait({ cell_id: first.cellId, yield_time_ms: 60_000 }, undefined, { userSteer: source })
+        expect(active).toBe(1)
+        await expect(r.wait({ cell_id: first.cellId })).rejects.toThrow('active observer')
+        inbox.admit({ inputId: `steer-${i}`, text: 'refocus', intent: 'user', delivery: 'steer' })
+        expect(await observing).toMatchObject({ cellId: first.cellId, status: 'running', yielded: true })
+        expect(active).toBe(0)
+        inbox.claimAtStepBoundary()
+      }
+      expect(await r.wait({ cell_id: first.cellId, terminate: true })).toMatchObject({ status: 'terminated' })
+      expect(active).toBe(0)
+    } finally { await r.dispose() }
+  })
+
+  it.each(['owner', 'observer', 'terminate'] as const)('explicit %s cancellation wins steer and retains nested producer drain', async mode => {
+    const session = createSession(), inbox = new Inbox(session), owner = new AbortController(), observer = new AbortController()
+    const started = Promise.withResolvers<void>(), held = Promise.withResolvers<string>()
+    let signal: AbortSignal | undefined
+    const r = make({ invoke: call => { signal = call.signal; started.resolve(); return held.promise } })
+    try {
+      const first = await r.exec({ code: 'text(await tools.read({}))', yield_time_ms: 0 }, { abortSignal: owner.signal })
+      await started.promise
+      let settled = false
+      const observing = r.wait({ cell_id: first.cellId, yield_time_ms: 60_000, terminate: mode === 'terminate' }, observer.signal, { userSteer: userSteerForTool({ session }) }).then(out => { settled = true; return out })
+      inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer' })
+      if (mode === 'owner') owner.abort('owner stop')
+      if (mode === 'observer') observer.abort('observer stop')
+      await Promise.resolve()
+      expect(signal!.aborted).toBe(true)
+      if (mode !== 'owner') expect(settled).toBe(false)
+      held.resolve('actual')
+      const out = await observing
+      expect(out.status).toBe('terminated'); expect(out).not.toHaveProperty('yielded')
+    } finally { held.resolve('cleanup'); await r.dispose() }
+  })
+
+  it('a completed cell wins already-pending steer at the next observation', async () => {
+    const session = createSession(), inbox = new Inbox(session), closed = Promise.withResolvers<void>()
+    const r = make({ onEvent: event => { if (event.type === 'closed') closed.resolve() } })
+    try {
+      const first = await r.exec({ code: 'text("actual")', yield_time_ms: 0 })
+      await closed.promise
+      // Completion status is published after the close event's promise boundary.
+      await Promise.resolve()
+      inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer' })
+      const out = await r.wait({ cell_id: first.cellId }, undefined, { userSteer: userSteerForTool({ session }) })
+      expect(out).toMatchObject({ status: 'completed', text: 'actual' }); expect(out).not.toHaveProperty('yielded')
+    } finally { await r.dispose() }
+  })
+  it.each(['exec', 'wait', 'pending'] as const)('user steer yields only the %s observer while one guest invocation stays pending', async mode => {
+    const session = createSession(), inbox = new Inbox(session)
+    const started = Promise.withResolvers<void>(), held = Promise.withResolvers<unknown>()
+    const invoke = vi.fn<CodeModeRuntimeOptions['invoke']>(() => { started.resolve(); return held.promise })
+    const r = make({ invoke }), source = userSteerForTool({ session })!
+    const subscribe = vi.spyOn(source, 'subscribe')
+    try {
+      if (mode === 'pending') inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer' })
+      let observing = r.exec({ code: 'text(await tools.read({}))', yield_time_ms: mode === 'wait' ? 0 : 60_000 }, {}, { userSteer: source })
+      if (mode === 'wait') {
+        const initial = await observing
+        observing = r.wait({ cell_id: initial.cellId, yield_time_ms: 60_000 }, undefined, { userSteer: source })
+      }
+      await started.promise
+      if (mode !== 'pending') inbox.admit({ inputId: 'steer', text: 'refocus', intent: 'user', delivery: 'steer' })
+      const yielded = await observing
+      expect(yielded).toMatchObject({ status: 'running', yielded: true, yieldReason: 'user-steer', text: '' })
+      expect(invoke.mock.calls[0]![0].signal.aborted).toBe(false)
+      inbox.claimAtStepBoundary()
+      const later = r.wait({ cell_id: yielded.cellId, yield_time_ms: 60_000 })
+      held.resolve('actual result')
+      expect(await later).toMatchObject({ cellId: yielded.cellId, status: 'completed', text: 'actual result' })
+      expect(invoke).toHaveBeenCalledTimes(1)
+      expect(subscribe).toHaveBeenCalled()
+    } finally { held.resolve('cleanup'); await r.dispose() }
+  })
   it('bounds discovery metadata and complete definitions in the captured catalog', async () => {
     const definitions = Array.from({length:25},(_,i)=>({name:`lookup.${i}`,description:'Find documents '+ 'x'.repeat(2000),inputSchema:{type:'object'}}))
     definitions.push({name:'huge',description:'oversized schema',inputSchema:{type:'object',properties:{body:{description:'s'.repeat(18000)}}}} as typeof definitions[number])

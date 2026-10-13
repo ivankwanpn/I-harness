@@ -6,7 +6,7 @@
 // subagent job_* third layer) can consume getOutput/listJobs/killJob without
 // reaching into the tool layer.
 import type { PluginContext } from "@i-harness/core-plugin"
-import type { Tool, ToolRegistry } from "@i-harness/core-tools"
+import { userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ExecService } from "@i-harness/exec"
 import type { WorkflowDefinition, WorkflowParamSpec } from "./definition.ts"
 import type { WorkflowExecutor } from "./runner.ts"
@@ -29,12 +29,14 @@ interface WorkflowRunOutput {
   job_id: string
   // Background path (wait default false): "running" — the model collects with
   // the existing job_output(job_id, wait: true) and cancels with job_kill.
-  // wait: true: the final status of the run (never "running" unless the tool's
-  // own abort fired first — the job keeps running in that case).
+  // wait: true: final status, or the current running view when observation
+  // ends on user steer/abort. The original job keeps running in either case.
   status: string
   // Present once waited: the job output stream (progress lines + step stdout).
   output?: string
   exit_code?: number
+  yielded?: true
+  yield_reason?: "user-steer"
 }
 
 interface WorkflowListEntry {
@@ -48,8 +50,6 @@ interface WorkflowListEntry {
 export interface WorkflowListOutput {
   workflows: WorkflowListEntry[]
 }
-
-const WAIT_POLL_MS = 20
 
 function toListEntry(def: WorkflowDefinition): WorkflowListEntry {
   return {
@@ -92,20 +92,22 @@ export function createWorkflowRunTool(deps: { registry: WorkflowRegistry; execut
       if (args.wait !== true) {
         return { run_id: runId, job_id: jobId, status: "running" }
       }
-      // wait=true: poll the workflow job store until the run settles. The
+      // Observe the workflow job store until the run settles. The
       // tool's own abort (guard-timeout/session abort) stops WAITING — the
       // job itself keeps running and stays reachable via job_output/job_kill.
-      const signal = exec.abortSignal
-      let view = deps.executor.getOutput(jobId)
-      while (view.status === "running" && !signal?.aborted) {
-        await new Promise((r) => setTimeout(r, WAIT_POLL_MS))
-        view = deps.executor.getOutput(jobId)
-      }
+      let terminalSeen = deps.executor.getOutput(jobId).status !== "running"
+      const reason = await waitForObservation({
+        ready: () => terminalSeen || deps.executor.getOutput(jobId).status !== "running",
+        changes: { subscribe: wake => deps.executor.subscribeJob(jobId, view => { terminalSeen ||= view.status !== "running"; wake() }) },
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+      })
+      const view = deps.executor.getOutput(jobId)
       return {
         run_id: runId,
         job_id: jobId,
         status: view.status,
         output: view.stdout,
+        ...(reason === "user-steer" && !exec.abortSignal?.aborted && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}),
         ...(view.exitCode !== undefined ? { exit_code: view.exitCode } : {}),
       }
     },

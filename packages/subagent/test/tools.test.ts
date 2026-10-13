@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
-import { append, createSession } from "@i-harness/core-session"
+import { append, createSession, Inbox } from "@i-harness/core-session"
 import { createMockClient } from "@i-harness/llm-mock"
 import { createAgentRegistry, type Agent } from "@i-harness/core-agent"
 import type { LLMRequest, LLMStreamEvent, ModelClient } from "@i-harness/llm-seam"
@@ -32,11 +32,200 @@ function setup() {
   const resolveModel = noRoleModel
   const exec = registerExec(createContext())
   const model = createMockClient([{ role: "assistant", text: "child done" }])
-  const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks: createTaskRegistry() })
-  return { ctx, parentReg, session, jobs, table, roles, resolveModel, model, exec, tools }
+  const tasks = createTaskRegistry()
+  const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
+  return { ctx, parentReg, session, jobs, table, roles, resolveModel, model, exec, tools, tasks }
 }
 
 describe("subagent tools", () => {
+  it.each(["wait_agent", "get_task_output", "job_output"])("%s abort removes only the observation and code consumers keep awaiting real settlement", async name => {
+    vi.useFakeTimers()
+    const { tools, table, jobs, tasks, session } = setup()
+    const entry = { path: "root/held", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [] }
+    table.add(entry.path, entry)
+    const task = tasks.submit({ identity: { parentSessionId: "p" }, agentPath: entry.path, description: "held", prompt: "go", agent: "general", delivery: "tool" })
+    const job = jobs.registerJob("root", "subagent", "held")
+    const args = name === "wait_agent" ? { target: entry.path } : name === "get_task_output" ? { task_ids: [task.id], wait: true } : { job_id: job.id, wait: true }
+    const tool = tools.find(t => t.name === name)!, controller = new AbortController()
+    try {
+      const observing = tool.execute(args, { session, abortSignal: controller.signal })
+      const rejection = expect(observing).rejects.toThrow("observer stopped")
+      controller.abort(new Error("observer stopped"))
+      await rejection
+      expect(vi.getTimerCount()).toBe(0)
+      expect(entry.controller.signal.aborted).toBe(false)
+      expect(jobs.read(job.id).status).toBe("running")
+      expect(tasks.get(task.id)!.outcome).toBeUndefined()
+      let settled = false
+      const nested = tool.execute(args, { session, resultConsumer: "code" }).then(out => { settled = true; return out })
+      new Inbox(session).admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+      await Promise.resolve(); expect(settled).toBe(false)
+      table.update(entry.path, entry, { status: "waiting", finalText: "actual" })
+      tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: "actual" })
+      jobs.updateJob(job.id, { status: "completed", output: "actual" })
+      expect(await nested).not.toHaveProperty("yielded")
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("multi-task observation uses one overall deadline and cleans partial subscription failure", async () => {
+    vi.useFakeTimers()
+    const { tools, tasks, session } = setup()
+    const ids = [1, 2].map(n => tasks.submit({ identity: { parentSessionId: "p", callEventSeq: n }, agentPath: `root/${n}`, description: "held", prompt: "go", agent: "general", delivery: "tool" }).id)
+    const tool = tools.find(t => t.name === "get_task_output")!
+    try {
+      const observing = tool.execute({ task_ids: ids, wait: true, timeout_ms: 1000 }, { session })
+      expect(vi.getTimerCount()).toBe(1)
+      await vi.advanceTimersByTimeAsync(900)
+      tasks.terminalize({ taskId: ids[0]!, outcome: "completed" })
+      await vi.advanceTimersByTimeAsync(100)
+      const out = await observing as { tasks: { task_id: string; outcome?: string }[] }
+      expect(out.tasks.map(t => t.task_id)).toEqual(ids)
+      expect(out.tasks[1]!.outcome).toBeUndefined()
+      expect(vi.getTimerCount()).toBe(0)
+      const off = vi.fn(), original = tasks.subscribe.bind(tasks)
+      vi.spyOn(tasks, "subscribe").mockImplementation((id, listener) => {
+        if (id === ids[1]) throw new Error("subscription failure")
+        const unsubscribe = original(id, listener)
+        return () => { unsubscribe(); off() }
+      })
+      await expect(tool.execute({ task_ids: ids, wait: true }, { session })).rejects.toThrow("subscription failure")
+      expect(off).toHaveBeenCalledOnce()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("all-agent wait includes children added while waiting and target wait observes followup lifecycle", async () => {
+    const { tools, table, tasks, session } = setup(), wait = tools.find(t => t.name === "wait_agent")!
+    const entry = { path: "root/held", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [] }
+    const task = tasks.submit({ identity: { parentSessionId: "p" }, agentPath: entry.path, description: "old", prompt: "go", agent: "general", delivery: "tool" })
+    tasks.terminalize({ taskId: task.id, outcome: "completed", resultText: "initial" })
+    table.add(entry.path, entry)
+    let settled = false
+    const all = wait.execute({}, { session }).then(out => { settled = true; return out })
+    const target = wait.execute({ target: entry.path }, { session })
+    const newer = { ...entry, path: "root/new" }; table.add(newer.path, newer)
+    table.update(entry.path, entry, { status: "waiting", finalText: "followup" })
+    expect(await target).toMatchObject({ finalText: "followup", timed_out: false })
+    expect(settled).toBe(false)
+    table.update(newer.path, newer, { status: "waiting" })
+    expect(await all).toMatchObject({ timed_out: false })
+  })
+
+  it("job observation latches completion even if the job reopens before rendering", async () => {
+    const { tools, jobs, session } = setup(), job = jobs.registerJob("root", "subagent", "held")
+    const observing = tools.find(t => t.name === "job_output")!.execute({ job_id: job.id, wait: true }, { session })
+    jobs.updateJob(job.id, { status: "completed", output: "first" })
+    jobs.updateJob(job.id, { status: "running", output: "second" })
+    expect(await observing).toEqual({ status: "running", text: "second\n[status: running]" })
+  })
+
+  it.each([true, false])("wait_agent target=%s renders a reopened lifecycle without inventing a timeout", async target => {
+    const { tools, table, session } = setup()
+    const entry = { path: "root/held", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [] }
+    table.add(entry.path, entry)
+    const observing = tools.find(t => t.name === "wait_agent")!.execute(target ? { target: entry.path } : {}, { session })
+    table.update(entry.path, entry, { status: "waiting", finalText: "initial" })
+    table.update(entry.path, entry, { status: "running", finalText: undefined })
+    const out = await observing as { message: string }
+    expect(out).toMatchObject({ timed_out: false })
+    expect(out).not.toHaveProperty("yielded")
+    expect(out.message).not.toMatch(/timed out|settled/)
+    expect(out.message).toMatch(/running/)
+  })
+  it.each([true, false])("user steer releases wait_agent target=%s without aborting its child", async target => {
+    const { tools, table, session } = setup()
+    const entry = { path: "root/held", status: "running" as const, session: createSession(), sessionId: "original-session", jobId: "original-job", controller: new AbortController(), mailbox: [] }
+    table.add(entry.path, entry)
+    const wait = tools.find(t => t.name === "wait_agent")!
+    const observation = wait.execute({ ...(target ? { target: entry.path } : {}), timeout_ms: 100 }, { session })
+    new Inbox(session).admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+    expect(await observation).toMatchObject({ yielded: true, yield_reason: "user-steer", timed_out: false })
+    expect(entry.controller.signal.aborted).toBe(false)
+    new Inbox(session).claimAtStepBoundary()
+    table.update(entry.path, entry, { status: "waiting", finalText: "real result" })
+    expect(await wait.execute({ target: entry.path }, { session })).toMatchObject({ status: "waiting", finalText: "real result", timed_out: false })
+  })
+
+  it("target replacement yields the original identity instead of a false timeout", async () => {
+    const { tools, table, session } = setup()
+    const entry = { path: "root/held", status: "running" as const, session: createSession(), sessionId: "original-session", jobId: "original-job", controller: new AbortController(), mailbox: [] }
+    table.add(entry.path, entry)
+    const observation = tools.find(t => t.name === "wait_agent")!.execute({ target: entry.path, timeout_ms: 100 }, { session })
+    table.add(entry.path, { ...entry, sessionId: "replacement-session" })
+    expect(await observation).toMatchObject({ path: entry.path, session_id: "original-session", job_id: "original-job", yielded: true, yield_reason: "target-changed", timed_out: false })
+  })
+
+  it.each(["steer", "abort"])("foreground spawn %s releases observation and keeps tool delivery through actual completion", async mode => {
+    const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec } = setup()
+    const tasks = createTaskRegistry(), held = Promise.withResolvers<void>(), started = Promise.withResolvers<void>()
+    const model: ModelClient = { async *stream() { started.resolve(); await held.promise; yield { type: "text/chunk", text: "actual" }; yield { type: "end" } } }
+    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks, foregroundWaitMs: 100 })
+    try {
+      const controller = new AbortController()
+      const observation = tools.find(t => t.name === "spawn_agent")!.execute({ message: "go", task_name: "held", background: false }, { session, abortSignal: controller.signal })
+      await started.promise
+      let out: { task_id: string }
+      if (mode === "abort") {
+        const rejection = expect(observation).rejects.toThrow("stop observing")
+        controller.abort(new Error("stop observing")); await rejection
+        out = { task_id: tasks.list()[0]!.id }
+      } else {
+        new Inbox(session).admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+        out = await observation as { task_id: string }
+        expect(out).toMatchObject({ agent_path: "root/held", yielded: true, yield_reason: "user-steer", timed_out: false })
+      }
+      expect(tasks.get(out.task_id)).toMatchObject({ delivery: "tool" })
+      expect(tasks.get(out.task_id)!.outcome).toBeUndefined()
+      expect(table.get("root/held")!.controller.signal.aborted).toBe(false)
+      held.resolve(); await table.get("root/held")!.followupChain
+      expect(tasks.get(out.task_id)).toMatchObject({ outcome: "completed", resultText: "actual", delivery: "tool" })
+      expect(tasks.notifications()).toEqual([])
+    } finally { held.resolve() }
+  })
+
+  it("multi-task steer returns all current snapshots in input order with no continuing wait", async () => {
+    const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec, model } = setup(), tasks = createTaskRegistry()
+    const ids = [1, 2].map(n => tasks.submit({ identity: { parentSessionId: "p", callEventSeq: n }, agentPath: `root/${n}`, description: `${n}`, prompt: "go", agent: "general", delivery: "tool" }).id)
+    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec, agents: createAgentRegistry(), tasks })
+    const tool = tools.find(t => t.name === "get_task_output")!
+    const observation = tool.execute({ task_ids: ids, wait: true, timeout_ms: 100 }, { session })
+    new Inbox(session).admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+    const out = await observation as { tasks: { task_id: string }[] }
+    expect(out).toMatchObject({ yielded: true, yield_reason: "user-steer" })
+    expect(out.tasks.map(t => t.task_id)).toEqual(ids)
+    const subscribe = vi.spyOn(tasks, "subscribe")
+    await expect(tool.execute({ task_ids: [...ids, "missing"], wait: true }, { session })).rejects.toThrow("unknown task")
+    expect(subscribe).not.toHaveBeenCalled()
+    for (const taskId of ids) tasks.terminalize({ taskId, outcome: "completed", resultText: "actual" })
+    expect(await tool.execute({ task_ids: ids }, { session })).not.toHaveProperty("yielded")
+  })
+
+  it.each(["subagent", "exec", "workflow"].flatMap(backend => ["steer", "abort"].map(mode => ({ backend, mode }))))("job_output $mode observes $backend without canceling it", async ({ backend, mode }) => {
+    const { ctx, table, jobs, roles, parentReg, session, resolveModel, exec, model } = setup()
+    const listeners = new Set<(view: { status: "running" | "completed"; stdout: string; stderr: string; id: string }) => void>()
+    const id = backend === "workflow" ? "workflow-held" : backend === "exec" ? "bash-held" : jobs.registerJob("root", "subagent", "held").id
+    const view = { id, status: "running" as "running" | "completed", stdout: "", stderr: "" }
+    const read = () => ({ ...view })
+    const subscribe = (jobId: string, listener: (v: typeof view) => void) => { expect(jobId).toBe(id); listeners.add(listener); return () => { listeners.delete(listener) } }
+    const workflow = { getOutput: read, subscribeJob: subscribe, runWorkflow: vi.fn(), listJobs: () => [], killJob: vi.fn() }
+    const tools = createSubagentTools({ table, jobs, roles, parentRegistry: parentReg, parentSession: session, parentCtx: ctx, parentModel: model, resolveModel, exec: { ...exec, getOutput: read, subscribeJob: subscribe }, workflow, agents: createAgentRegistry(), tasks: createTaskRegistry() })
+    const tool = tools.find(t => t.name === "job_output")!
+    const controller = new AbortController()
+    const observation = tool.execute({ job_id: id, wait: true, timeout_ms: 100 }, { session, abortSignal: controller.signal })
+    if (mode === "abort") {
+      const rejection = expect(observation).rejects.toThrow("stop observing")
+      controller.abort(new Error("stop observing")); await rejection
+    } else {
+      new Inbox(session).admit({ inputId: "steer", text: "refocus", intent: "user", delivery: "steer" })
+      expect(await observation).toMatchObject({ status: "running", text: "(no output)\n[status: running]", yielded: true, yield_reason: "user-steer" })
+    }
+    expect(listeners.size).toBe(0)
+    expect(workflow.killJob).not.toHaveBeenCalled()
+    view.status = "completed"; view.stdout = "actual"
+    if (backend === "subagent") jobs.updateJob(id, { status: "completed", output: "actual" })
+    expect(await tool.execute({ job_id: id }, { session })).toMatchObject({ status: "completed", text: "actual\n[status: completed]" })
+  })
   it("close publishes admission barrier and preserves an entry replaced during drain", async () => {
     const { tools, table } = setup(), release = Promise.withResolvers<void>()
     const original = { path: "root/c", status: "running" as const, session: createSession(), controller: new AbortController(), mailbox: [], dispose: () => release.promise }
@@ -754,7 +943,7 @@ describe("M24a nested delegation and wait/list extensions", () => {
     // The child settles shortly after the wait starts.
     setTimeout(() => {
       const e = table.get("root/helper")
-      if (e) { e.status = "waiting"; e.finalText = "done!" }
+      if (e) table.update(e.path, e, { status: "waiting", finalText: "done!" })
     }, 60)
     const out = await wait.execute({ target: "root/helper", timeout_ms: 5000 }, {}) as { path: string; status: string; finalText?: string; timed_out: boolean }
     expect(out.path).toBe("root/helper")
@@ -800,7 +989,7 @@ describe("M24a nested delegation and wait/list extensions", () => {
     const start = Date.now()
     const out = await wait.execute({ target: "root/worker", timeout_ms: 30_000 }, {}) as { path: string; status: string; timed_out: boolean }
     const elapsed = Date.now() - start
-    expect(out.timed_out).toBe(true) // never settled — surfaced, not hung
+    expect(out).toMatchObject({ timed_out: false, yielded: true, yield_reason: "target-changed" })
     expect(elapsed).toBeLessThan(5_000) // hardened: broke out at ~60ms, not 30s
   }, 10_000)
 

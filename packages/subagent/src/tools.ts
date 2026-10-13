@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto"
 import type { PluginContext } from "@i-harness/core-plugin"
 import { append, createSession, type SessionEvent } from "@i-harness/core-session"
-import { createToolRegistry, type Tool, type ToolRegistry } from "@i-harness/core-tools"
+import { createToolRegistry, userSteerForTool, waitForObservation, type Tool, type ToolRegistry } from "@i-harness/core-tools"
 import type { ModelClient } from "@i-harness/llm-seam"
 import type { SessionCoordinator } from "@i-harness/session-persistence"
 import type { ExecService } from "@i-harness/exec"
@@ -64,14 +64,14 @@ export interface SubagentToolDeps extends RoleModelHost {
   // through it (identity-keyed submit/claim/terminalize; cancelTree/wait read it).
   tasks: TaskRegistry
   // W12: the bound on the `background: false` settle-wait. Absent = 300_000 (the
-  // shipped behavior; no host passes it). The wait is a REAL poll to this
+  // shipped behavior; no host passes it). The wait observes settlement up to this
   // deadline, so this is what lets a test drive a genuine timeout through the
   // real registry instead of pinning the timeout arm's shape with a mock.
   foregroundWaitMs?: number
 }
 
 export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
-  const spawnDescription = "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call blocks until the task settles (escape hatch) and returns its summary; if it has not settled by the bound it returns timed_out: true instead — the task is still running."
+  const spawnDescription = "Launch a subagent. Returns an agent path, job id, and durable task id immediately (background: true, default). With background: false the call waits for the task's summary; new user input can yield the wait while the same task continues. A deadline returns timed_out: true while the task is still running."
   const builtinGuidance = new Map([
     ["explore", "fast read-only code navigation"],
     ["research", "deep evidence-based analysis"],
@@ -116,7 +116,7 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
   }
   const spawnTool: Tool<
     { message: string; task_name: string; agent_type?: string; fork_turns?: string | number; background?: boolean },
-    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean }
+    { agent_path: string; job_id: string; task_id: string; status?: string; outcome?: string; resultText?: string; error?: string; message?: string; timed_out?: boolean; yielded?: true; yield_reason?: "user-steer" }
   > = {
     name: "spawn_agent",
     get description() { return roleMetadata().description },
@@ -241,17 +241,19 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
       deps.tasks.claim(task.id, executed.sessionId, executed.modelLabel)
       const base = { agent_path: executed.path, job_id: executed.jobId, task_id: task.id }
       if (args.background === false) {
-        const settled = await deps.tasks.wait(task.id, deps.foregroundWaitMs ?? 300_000)
-        // W12: a wait that returns without a terminal outcome means it TIMED OUT
-        // (createTaskRegistry returns the still-non-terminal record; the
-        // TaskRegistry contract also admits `undefined`). The task is still
-        // running then — this used to fall through to the settle line below and
-        // report "settled: <status>", a message-shaped lie about something that
-        // did not happen. Same shape as wait_agent's timeout arm below:
-        // `timed_out` + "(still running)".
-        if (settled === undefined || settled.outcome === undefined) {
-          const latest = settled ?? deps.tasks.get(task.id)
-          return { ...base, status: latest?.status ?? "unknown", message: `wait timed out for ${executed.path} (still running)`, timed_out: true }
+        const reason = await waitForObservation({
+          ready: () => deps.tasks.get(task.id)?.outcome !== undefined,
+          changes: { subscribe: wake => deps.tasks.subscribe(task.id, wake) },
+          timeoutMs: deps.foregroundWaitMs ?? 300_000,
+          abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+        })
+        exec.abortSignal?.throwIfAborted()
+        const settled = deps.tasks.get(task.id)
+        if (settled?.outcome === undefined) {
+          const steered = reason === "user-steer"
+          return { ...base, status: settled?.status ?? "unknown",
+            message: steered ? `wait yielded to new user input for ${executed.path} (still running)` : `wait timed out for ${executed.path} (still running)`,
+            timed_out: reason === "deadline", ...(steered ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
         }
         return { ...base, status: settled?.status ?? "unknown", ...(settled?.outcome !== undefined ? { outcome: settled.outcome } : {}), ...(settled?.resultText !== undefined ? { resultText: settled.resultText } : {}), ...(settled?.error !== undefined ? { error: settled.error } : {}), message: `subagent ${executed.path} settled: ${settled?.status ?? "unknown"}` }
       }
@@ -259,46 +261,46 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const waitTool: Tool<{ timeout_ms?: number; target?: string }, { message: string; timed_out: boolean; path?: string; status?: string; finalText?: string; error?: string }> = {
+  const waitTool: Tool<{ timeout_ms?: number; target?: string }, { message: string; timed_out: boolean; path?: string; status?: string; finalText?: string; error?: string; session_id?: string; job_id?: string; yielded?: true; yield_reason?: "user-steer" | "target-changed" }> = {
     name: "wait_agent",
-    description: "Wait for subagents to reach a terminal status. With target, waits for THAT subagent and returns its summary (path, status, finalText?, error?); otherwise waits for all live subagents to settle. Returns whether it timed out.",
+    description: "Wait for subagents to settle. With target, observes that exact child and returns its summary; otherwise observes all live subagents. New user input yields the wait while work continues; removal or replacement returns target-changed. Only a deadline reports timed_out.",
     inputSchema: { type: "object", properties: { timeout_ms: { type: "number", description: "Max wait in ms (default 30000, clamped to 100..300000)." }, target: { type: "string", description: "Optional agent path — wait for this specific subagent instead of all." } } },
     isReadOnly: true,
-    execute: async (args) => {
-      // M24a (B4): clamp the wait to [100ms, 300s] for both modes.
+    execute: async (args, exec) => {
       const timeoutMs = Math.min(300_000, Math.max(100, args.timeout_ms ?? 30_000))
-      const deadline = Date.now() + timeoutMs
+      const observe = (ready: () => boolean) => waitForObservation({
+        ready, changes: { subscribe: wake => deps.table.subscribe(wake) }, timeoutMs,
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+      })
       if (args.target !== undefined) {
-        // M24a (B4): wait for THAT child's terminal status (not-running) and
-        // return its summary.
-        const entry = deps.table.get(args.target)
-        if (!entry) throw new Error(`unknown subagent: ${args.target}`)
-        while (Date.now() < deadline && entry.status === "running") {
-          // M24a (minor hardening): the target can be closed mid-wait
-          // (close_agent removes it from the table while its status object is
-          // still "running") — stop polling instead of spinning to the deadline.
-          if (deps.table.get(args.target) !== entry) break
-          await new Promise((r) => setTimeout(r, 20))
-        }
+        const target = args.target, entry = deps.table.get(target)
+        if (!entry) throw new Error(`unknown subagent: ${target}`)
+        const reason = await observe(() => deps.table.get(target) !== entry || entry.status !== "running")
+        exec.abortSignal?.throwIfAborted()
+        const changed = deps.table.get(target) !== entry
         const settled = entry.status !== "running"
+        const yieldReason = changed ? "target-changed" as const : !settled && reason === "user-steer" ? "user-steer" as const : undefined
+        const message = changed ? `wait yielded: target ${entry.path} was removed or replaced`
+          : settled ? `subagent ${entry.path} settled: ${entry.status}`
+          : yieldReason ? `wait yielded to new user input for ${entry.path} (still running)`
+          : reason === "deadline" ? `wait timed out for ${entry.path} (still running)`
+          : `subagent ${entry.path} changed state and is currently running`
         return {
-          path: entry.path,
-          status: entry.status,
+          path: entry.path, status: entry.status,
+          ...(entry.sessionId ? { session_id: entry.sessionId } : {}), ...(entry.jobId ? { job_id: entry.jobId } : {}),
           ...(entry.finalText !== undefined ? { finalText: entry.finalText } : {}),
           ...(entry.error !== undefined ? { error: entry.error } : {}),
-          message: settled ? `subagent ${entry.path} settled: ${entry.status}` : `wait timed out for ${entry.path} (still running)`,
-          timed_out: !settled,
+          ...(yieldReason ? { yielded: true as const, yield_reason: yieldReason } : {}),
+          message,
+          timed_out: !changed && !settled && reason === "deadline",
         }
       }
-      while (Date.now() < deadline) {
-        const running = [...deps.table.entries().values()].some((e) => e.status === "running")
-        if (!running) {
-          const done = [...deps.table.entries().values()].map((e) => e.path)
-          return { message: `All subagents settled: ${done.join(", ") || "(none)"}`, timed_out: false }
-        }
-        await new Promise((r) => setTimeout(r, 20))
-      }
-      return { message: "wait timed out with subagents still running", timed_out: true }
+      const running = () => [...deps.table.entries().values()].some(entry => entry.status === "running")
+      const reason = await observe(() => !running())
+      exec.abortSignal?.throwIfAborted()
+      if (!running()) return { message: `All subagents settled: ${[...deps.table.entries().keys()].join(", ") || "(none)"}`, timed_out: false }
+      if (reason === "user-steer") return { message: "wait yielded to new user input; subagents continue running", timed_out: false, yielded: true as const, yield_reason: "user-steer" as const }
+      return { message: reason === "deadline" ? "wait timed out with subagents still running" : "Subagent state changed; some subagents are currently running", timed_out: reason === "deadline" }
     },
   }
 
@@ -466,45 +468,39 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
     },
   }
 
-  const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string }> = {
+  const jobOutputTool: Tool<{ job_id: string; wait?: boolean; timeout_ms?: number }, { text: string; status: string; yielded?: true; yield_reason?: "user-steer" }> = {
     name: "job_output",
-    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true. Every response ends with [status: ...].",
+    description: "Read a background job (subagent, shell, or workflow). Non-blocking unless wait: true; new user input can yield the wait while the same job continues. Every response ends with [status: ...].",
     inputSchema: { type: "object", properties: { job_id: { type: "string" }, wait: { type: "boolean" }, timeout_ms: { type: "number" } }, required: ["job_id"] },
     isReadOnly: true,
-    execute: async (args) => {
-      // M24b (spec §3.3) third layer: a `workflow-` id belongs to the workflow
-      // job store — route there directly, no fall-through (exec never owns
-      // this prefix; an unknown workflow- id fails visibly as unknown job).
-      // The wait/poll and rendering mirror the exec bridge exactly.
+    execute: async (args, exec) => {
+      // Resolve and authorize the backend before installing any observation.
+      let read: () => { status: string; output: string }
+      let subscribe: (wake: (view: { status: string }) => void) => () => void
       if (deps.workflow && args.job_id.startsWith("workflow-")) {
-        if (args.wait === true) {
-          const deadline = Date.now() + (args.timeout_ms ?? 30_000)
-          while (Date.now() < deadline && deps.workflow.getOutput(args.job_id).status === "running") {
-            await new Promise((r) => setTimeout(r, 20))
-          }
+        const workflow = deps.workflow
+        read = () => { const v = workflow.getOutput(args.job_id); return { status: v.status, output: v.stdout } }
+        subscribe = wake => workflow.subscribeJob(args.job_id, wake)
+      } else {
+        let subagent = true
+        try { deps.jobs.read(args.job_id) } catch (error) {
+          if (!(error instanceof Error) || !/unknown job/i.test(error.message)) throw error
+          subagent = false
         }
-        const view = deps.workflow.getOutput(args.job_id)
-        const body = view.stdout.length > 0 ? view.stdout : "(no output)"
-        return { text: `${body}\n[status: ${view.status}]`, status: view.status }
+        read = subagent ? () => deps.jobs.read(args.job_id) : () => { const v = deps.exec.getOutput(args.job_id); return { status: v.status, output: v.stdout } }
+        subscribe = subagent ? wake => deps.jobs.subscribe(args.job_id, wake) : wake => deps.exec.subscribeJob(args.job_id, wake)
       }
-      // Prefer the subagent JobRegistry; fall back to the exec service (bash/pwsh jobs).
-      try {
-        if (args.wait === true) await deps.jobs.wait(args.job_id, args.timeout_ms ?? 30_000)
-        const snapshot = deps.jobs.read(args.job_id)
-        const body = snapshot.output.length > 0 ? snapshot.output : "(no output)"
-        return { text: `${body}\n[status: ${snapshot.status}]`, status: snapshot.status }
-      } catch (e) {
-        if (!(e instanceof Error) || !/unknown job/i.test(e.message)) throw e
-      }
-      if (args.wait === true) {
-        const deadline = Date.now() + (args.timeout_ms ?? 30_000)
-        while (Date.now() < deadline && deps.exec.getOutput(args.job_id).status === "running") {
-          await new Promise((r) => setTimeout(r, 20))
-        }
-      }
-      const view = deps.exec.getOutput(args.job_id)
-      const body = view.stdout.length > 0 ? view.stdout : "(no output)"
-      return { text: `${body}\n[status: ${view.status}]`, status: view.status }
+      let terminalSeen = read().status !== "running"
+      const reason = args.wait === true ? await waitForObservation({
+        ready: () => terminalSeen || read().status !== "running",
+        changes: { subscribe: wake => subscribe(view => { terminalSeen ||= view.status !== "running"; wake() }) },
+        timeoutMs: args.timeout_ms === Infinity || Number.isNaN(args.timeout_ms) ? undefined : Math.max(0, args.timeout_ms ?? 30_000),
+        abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+      }) : undefined
+      exec.abortSignal?.throwIfAborted()
+      const view = read()
+      return { text: `${view.output || "(no output)"}\n[status: ${view.status}]`, status: view.status,
+        ...(reason === "user-steer" && view.status === "running" ? { yielded: true as const, yield_reason: "user-steer" as const } : {}) }
     },
   }
 
@@ -552,21 +548,21 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
 
   const getTaskOutputTool: Tool<
     { task_ids: string[]; wait?: boolean; timeout_ms?: number },
-    { tasks: { task_id: string; status: string; outcome?: string; agent_path: string; description: string; resultText?: string; error?: string; time_created: number }[] }
+    { tasks: { task_id: string; status: string; outcome?: string; agent_path: string; description: string; resultText?: string; error?: string; time_created: number }[]; yielded?: true; yield_reason?: "user-steer" }
   > = {
     name: "get_task_output",
-    description: "Read the durable output of 1..20 subagent tasks (task ids). wait: true polls each until terminal (timeout_ms clamped 100..600000). An id this session does not own fails identically to an unknown id (task or otherwise).",
+    description: "Read the durable output of 1..20 subagent tasks (task ids). wait: true observes all until terminal or new user input (timeout_ms clamped 100..600000). An id this session does not own fails identically to an unknown id (task or otherwise).",
     inputSchema: {
       type: "object",
       properties: {
         task_ids: { type: "array", items: { type: "string" }, description: "1..20 task ids." },
-        wait: { type: "boolean", description: "Poll until every task is terminal (default false = snapshot only)." },
+        wait: { type: "boolean", description: "Wait until every task is terminal (default false = snapshot only)." },
         timeout_ms: { type: "number", description: "Max wait in ms (default 30000, clamped 100..600000)." },
       },
       required: ["task_ids"],
     },
     isReadOnly: true,
-    execute: async (args) => {
+    execute: async (args, exec) => {
       if (!Array.isArray(args.task_ids) || args.task_ids.length < 1 || args.task_ids.length > 20) {
         throw new Error("get_task_output expects between 1 and 20 task ids")
       }
@@ -577,13 +573,27 @@ export function createSubagentTools(deps: SubagentToolDeps): Tool[] {
         if (!deps.tasks.get(taskId)) throw new Error(`unknown task: ${taskId}`)
       }
       const timeoutMs = Math.min(600_000, Math.max(100, args.timeout_ms ?? 30_000))
-      if (args.wait === true) {
-        const deadline = Date.now() + timeoutMs
-        for (const taskId of args.task_ids) {
-          await deps.tasks.wait(taskId, Math.max(0, deadline - Date.now()))
-        }
-      }
+      const ready = () => args.task_ids.every(id => deps.tasks.get(id)!.outcome !== undefined)
+      const reason = args.wait === true ? await waitForObservation({
+        ready, timeoutMs, abortSignal: exec.abortSignal, userSteer: userSteerForTool(exec),
+        changes: { subscribe: wake => {
+          const offs: (() => void)[] = []
+          const cleanup = () => {
+            const errors: unknown[] = []
+            for (const off of offs.splice(0)) { try { off() } catch (error) { errors.push(error) } }
+            if (errors.length) throw new AggregateError(errors, "Task observation cleanup failed")
+          }
+          try { for (const id of args.task_ids) offs.push(deps.tasks.subscribe(id, wake)) }
+          catch (error) {
+            try { cleanup() } catch (cleanupError) { throw new AggregateError([error, cleanupError], "Task observation setup failed") }
+            throw error
+          }
+          return cleanup
+        } },
+      }) : undefined
+      exec.abortSignal?.throwIfAborted()
       return {
+        ...(reason === "user-steer" && !ready() ? { yielded: true as const, yield_reason: "user-steer" as const } : {}),
         tasks: args.task_ids.map((taskId) => {
           const t = deps.tasks.get(taskId)!
           return {
