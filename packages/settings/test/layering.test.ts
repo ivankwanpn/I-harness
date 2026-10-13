@@ -47,26 +47,6 @@ async function replaceFile(target: string, text: string): Promise<void> {
   await rename(tmp, target)
 }
 
-/** W1 rig for the QUEUE DRAIN: the reload reads (and its window opens), and the
- * SECOND attempt then throws — so the entry the throwing cycle drains can only
- * be recovered if the queue kept the detections behind it. */
-class DrainRigStore extends LayeredSettingsStore {
-  readonly reads: number[] = []
-  readonly attempts: number[] = []
-  override async reloadFromDisk(): Promise<Settings> {
-    const attempt = this.attempts.length
-    this.attempts.push(Date.now())
-    if (attempt === 1) {
-      await new Promise((r) => setTimeout(r, 50))
-      throw new Error("reload failed (W1 pin: the drained queue)")
-    }
-    const settings = await super.reloadFromDisk()
-    this.reads.push(Date.now())
-    await new Promise((r) => setTimeout(r, 250))
-    return settings
-  }
-}
-
 /** W1 rig: the store with the reload latency a loaded machine produces BY LUCK
  * injected deterministically — the in-flight window the conflate has to
  * survive. `reads` is pushed the instant the reload's file read finished,
@@ -493,43 +473,4 @@ describe("W1: the hot-reload conflate compares state, not time", () => {
     }
   })
 
-  it("a queue with more than one entry drains one cycle at a time — no entry is lost when the cycle between them fails", async () => {
-    const root = await tmpRoot()
-    try {
-      const a = join(root, "a.json")
-      const b = join(root, "b.json")
-      const c = join(root, "c.json")
-      await replaceFile(a, JSON.stringify({ fontSize: 14 }))
-      await replaceFile(b, JSON.stringify({ model: "b0" }))
-      await replaceFile(c, JSON.stringify({ searchBackend: "jsonl" }))
-      const events: TelemetryEvent[] = []
-      const telemetry: Telemetry = { emit: (ev) => events.push(ev), close: () => {} }
-      const store = track(new DrainRigStore({ files: [a, b, c], watchIntervalMs: 10, telemetry }))
-      await store.load()
-      const changed = () => events.filter((e) => e.type === "settings/changed")
-      // WHY: the initial fs-watch baseline must emit nothing (packages/fs-watch/src/index.ts:162).
-      await new Promise((r) => setTimeout(r, 300))
-      expect(changed()).toHaveLength(0)
-      await replaceFile(a, JSON.stringify({ fontSize: 15 }))
-      await waitFor(() => store.reads.length >= 1) // cycle 1 has read (14, b0, jsonl)
-      // TWO detections land inside cycle 1's window: they queue behind it, and
-      // the cycle that drains the first of them throws.
-      await replaceFile(b, JSON.stringify({ model: "b1" }))
-      await replaceFile(c, JSON.stringify({ searchBackend: "sqlite" }))
-      await waitFor(() => changed().length >= 2)
-      await new Promise((r) => setTimeout(r, 300))
-      // Cycle 1 reports a. Cycle 2 (draining b) fails. Cycle 3 drains c, and its
-      // reload reads b's and c's settled state — one report, named c. It exists
-      // only because c's entry outlived the failed cycle; a queue consumed
-      // whole would have dropped it, and the watcher had already advanced its
-      // snapshot for c, so nothing would ever report it again.
-      expect(changed().map((e) => e.data.path)).toEqual([a, c])
-      expect(store.get().fontSize).toBe(15)
-      expect(store.get().model).toBe("b1")
-      expect(store.get().searchBackend).toBe("sqlite")
-    } finally {
-      disposeTracked()
-      await rm(root, { recursive: true, force: true })
-    }
-  })
 })

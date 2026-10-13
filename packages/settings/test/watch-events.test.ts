@@ -89,6 +89,19 @@ class GatedFailingReloadStore extends LayeredSettingsStore {
   }
 }
 
+/** Hold each reload explicitly; only the second attempt fails. */
+class GatedDrainStore extends LayeredSettingsStore {
+  readonly releases: Array<() => void> = []
+  private attempts = 0
+  override async reloadFromDisk(): Promise<Settings> {
+    const attempt = this.attempts++
+    const settings = attempt === 1 ? undefined : await super.reloadFromDisk()
+    await new Promise<void>(resolve => { this.releases.push(resolve) })
+    if (attempt === 1) throw new Error("held queue-drain reload failed")
+    return settings!
+  }
+}
+
 class DeferredReadStore extends LayeredSettingsStore {
   started = false
   release = (): void => {}
@@ -112,6 +125,54 @@ beforeEach(() => {
 })
 
 describe("settings push adapter", () => {
+  it.each([
+    { first: "b", second: "c" },
+    { first: "c", second: "b" },
+  ] as const)("a queue drains one cycle at a time after a failed reload ($first then $second)", async ({ first, second }) => {
+    const root = await mkdtemp(join(tmpdir(), "ih-settings-queue-"))
+    const a = join(root, "a.json"), b = join(root, "b.json"), c = join(root, "c.json")
+    await writeFile(a, '{"fontSize":14}')
+    await writeFile(b, '{"model":"b0"}')
+    await writeFile(c, '{"searchBackend":"jsonl"}')
+    const changed: string[] = []
+    const emitted: Array<{ type: string; data: Record<string, unknown> }> = []
+    const store = new GatedDrainStore({ files: [a, b, c],
+      telemetry: { emit: event => emitted.push(event), close: () => {} } })
+    store.onChange(path => changed.push(path))
+    try {
+      await store.load()
+      expect(changed).toEqual([])
+      await writeFile(a, '{"fontSize":15}')
+      streams[0]!.emit({ path: a, kind: "change" })
+      await waitFor(() => store.releases.length === 1)
+      // Both writes follow the first read. Filesystem notifications across
+      // files need not follow write order: exercise either arrival order.
+      await writeFile(b, '{"model":"b1"}')
+      await writeFile(c, '{"searchBackend":"sqlite"}')
+      const paths = { b, c }
+      streams[0]!.emit({ path: paths[first], kind: "change" })
+      streams[0]!.emit({ path: paths[second], kind: "change" })
+      await waitFor(() => streams[0]!.delivered === 3)
+      expect(changed).toEqual([])
+      store.releases[0]!()
+      await waitFor(() => store.releases.length === 2)
+      expect(changed).toEqual([a])
+      store.releases[1]!() // the first queued detection fails; keep the second
+      await waitFor(() => store.releases.length === 3)
+      expect(changed).toEqual([a])
+      store.releases[2]!()
+      await waitFor(() => changed.length === 2)
+      expect(changed).toEqual([a, paths[second]])
+      expect(emitted.filter(event => event.type === "settings/changed").map(event => event.data.path)).toEqual([a, paths[second]])
+      expect(store.get()).toMatchObject({ fontSize: 15, model: "b1", searchBackend: "sqlite" })
+      expect(store.releases).toHaveLength(3)
+    } finally {
+      store.dispose()
+      for (const release of store.releases) release()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it.each(["change", "creation", "deletion"])("reconciles a missed %s during watcher recovery without reporting unchanged paths", async mode => {
     const root = await mkdtemp(join(tmpdir(), "ih-settings-recovery-"))
     const file = join(root, "settings.json"), unchanged = join(root, "unchanged.json")
