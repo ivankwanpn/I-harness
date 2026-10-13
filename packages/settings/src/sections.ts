@@ -15,7 +15,8 @@
  * @module @i-harness/settings/sections
  */
 
-import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig, SettingsStoreSurface } from "./index.ts"
+import type { SettingsLlm, SettingsOnboarding, SettingsProviderConfig } from "./schema/types.ts"
+import type { SettingsStoreSurface } from "./storage/contracts.ts"
 
 /** The top-level section keys the section protocol knows about. */
 export type SectionName = "llm" | "onboarding"
