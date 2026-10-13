@@ -34,12 +34,15 @@ it("uses the changed role model for a new child in the same Desktop session", as
   const settingsPath = join(root, "settings.json")
   await writeFile(settingsPath, JSON.stringify({ plugins: { subagentModel: true }, sandboxMode: "read-only", llm: { providers: { fixture: { protocol: "openai-completions", baseURL: `http://127.0.0.1:${address.port}/v1`, models: [{ id: "parent", contextWindow: 272000 }] } }, defaultModel: { provider: "fixture", model: "parent" } } }))
   const frames: RpcMessage[] = []
+  let push!: (params: unknown) => void
+  const childChanged = new Promise<unknown>(resolve => { push = resolve })
   let approvalId = 1000
   let host: Awaited<ReturnType<typeof createDesktopHost>> | undefined
   try {
   host = await trace.run('host/create', () => createDesktopHost({ workspace, settingsPath, sessionDir: join(root, "sessions"), buildProviderClient: createHostFixtureModel(`http://127.0.0.1:${address.port}`, trace), onWrite: (frame) => {
     trace.observe(frame)
     frames.push(frame)
+    if ("method" in frame && frame.method === "desktop/session/subagents/changed") push(frame.params)
     if ("method" in frame && frame.method === "desktop/interaction/request") {
       const pending = frame.params as { requestId: string; sessionId: string; payload: { name?: string } }
       queueMicrotask(() => { void host!.handleLine(encodeFrame(makeRequest(++approvalId, "desktop/interaction/reply", { requestId: pending.requestId, sessionId: pending.sessionId, decision: { kind: "approval", approved: pending.payload.name === "spawn_agent" } }))) })
@@ -59,6 +62,7 @@ it("uses the changed role model for a new child in the same Desktop session", as
     await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-one" } })
     await call("session/prompt", { sessionId, prompt: "spawn an explorer" })
     expect(models).toContain("small-one")
+    expect(await childChanged).toEqual({ sessionId })
     await call("desktop/subagents/mutate", { action: "role/set", role: "explore", selection: { provider: "fixture", model: "small-two" } })
     spawn = true
     await call("session/prompt", { sessionId, prompt: "spawn another explorer" })

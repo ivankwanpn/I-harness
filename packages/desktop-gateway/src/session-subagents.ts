@@ -61,7 +61,45 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
   const visible = createConversationVisibility(coordinator)
   const childVisible = createSubagentVisibility(coordinator)
   const writes = new Map<string, Promise<unknown>>()
+  const bindings = new Map<string, { assembly: SessionAssembly; off: () => void }>()
+  const timers = new Map<string, ReturnType<typeof setTimeout>>()
   let closed = false
+  function cancelChanged(parentId: string) {
+    clearTimeout(timers.get(parentId)); timers.delete(parentId)
+  }
+  function changed(parentId: string) {
+    if (closed || timers.has(parentId)) return
+    timers.set(parentId, setTimeout(() => {
+      timers.delete(parentId)
+      if (!closed) { try { options.onChanged?.(parentId) } catch { /* A disconnected UI cannot fail child execution or controls. */ } }
+    }, 50))
+  }
+  function detach() {
+    for (const parentId of timers.keys()) cancelChanged(parentId)
+    for (const binding of bindings.values()) binding.off()
+    bindings.clear()
+  }
+  function attach(assembly: SessionAssembly) {
+    const parentId = assembly.sessionId
+    if (closed || !parentId) return
+    const previous = bindings.get(parentId)
+    if (previous?.assembly === assembly) return
+    bindings.delete(parentId); previous?.off(); cancelChanged(parentId)
+    if (!assembly.onSubagentsChanged) { changed(parentId); return }
+    const binding = { assembly, off: () => {} }
+    bindings.set(parentId, binding)
+    binding.off = assembly.onSubagentsChanged(change => {
+      if (closed || bindings.get(parentId) !== binding) return
+      if (change.kind === "closed") {
+        bindings.delete(parentId); binding.off(); cancelChanged(parentId)
+        changed(parentId)
+      } else if (service.liveAssembly(parentId) === assembly) changed(parentId)
+    })
+    changed(parentId)
+  }
+  let offAssembly: () => void
+  try { offAssembly = service.onAssembly(attach, { includeExisting: true }) }
+  catch (error) { closed = true; detach(); throw error }
   function open(): void { if (closed) throw new Error("Subagent catalog closed") }
   async function parent(parentId: string): Promise<SessionMeta> {
     open(); id(parentId)
@@ -84,8 +122,8 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
     }
     throw new Error("Subagent is outside this parent scope")
   }
-  async function snapshot(sessionId: string): Promise<Session> {
-    const live = service.liveSession(sessionId)
+  async function snapshot(sessionId: string, child?: Session): Promise<Session> {
+    const live = child ?? service.liveSession(sessionId)
     if (!live && !coordinator.snapshot) throw new Error("Read-only session snapshots are unavailable")
     const session = live ?? (await coordinator.snapshot!(sessionId)).session
     for (let index = 0; index < session.events.length; index++) {
@@ -109,6 +147,9 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
       if (runtime && entry) return { ownerId, assembly: runtime.assembly, entry }
     }
     return undefined
+  }
+  function liveChild(childId: string, owned?: Authority): Session | undefined {
+    return owned && service.liveAssembly(owned.ownerId) === owned.assembly ? owned.assembly.liveChildSession?.(childId) : undefined
   }
   async function list(parentId: string): Promise<DesktopSubagentCatalog> {
     const parentMeta = await parent(parentId)
@@ -158,7 +199,9 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
           if (typeof task?.childSessionId !== "string" || typeof task.agentPath !== "string") continue
           hints.set(task.childSessionId, { sessionId: task.childSessionId, path: task.agentPath, status: typeof task.outcome === "string" ? task.outcome : typeof task.status === "string" ? task.status : "unavailable", ...(typeof task.agent === "string" ? { roleName: task.agent } : {}), ...(typeof task.modelLabel === "string" ? { modelLabel: task.modelLabel } : {}), ...(typeof task.description === "string" ? { label: task.description } : {}), ...(typeof task.resultText === "string" ? { finalText: task.resultText } : {}), ...(typeof task.error === "string" ? { error: task.error } : {}) })
         }
-        const ownerSession = await snapshot(ownerId)
+        const scopedOwner = scoped.find(row => row.sessionId === ownerId)
+        const ownerAuthority = scopedOwner ? authority(parentId, ownerId, [scopedOwner.meta, ...scopedOwner.chain.slice(1).map(id => metas.get(id)!)]) : undefined
+        const ownerSession = await snapshot(ownerId, liveChild(ownerId, ownerAuthority))
         ownerSessions.set(ownerId, ownerSession)
         const team = foldTeam(teamLedger(ownerSession)).state
         for (const member of team.members.values()) if (member.sessionId) hints.set(member.sessionId, { sessionId: member.sessionId, path: `lead/${member.name}`, roleName: "teammate", label: member.name, status: member.phase === "failed" ? "error" : "unavailable", ...(member.error ? { error: member.error } : {}) })
@@ -178,10 +221,11 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
       // saved entry or the initial task's outcome after a successful retry.
       const currentError = (liveEntry ?? saved ?? hint)?.error
       let events: SessionEvent[] = [], unavailable: string | undefined
-      try { events = (await snapshot(sessionId)).events.slice(meta.seedLength ?? 0) }
+      const childAuthority = runtime?.runtime && liveEntry ? { ownerId: runtime.ownerId, assembly: runtime.runtime.assembly, entry: liveEntry } : undefined
+      try { events = (await snapshot(sessionId, liveChild(sessionId, childAuthority))).events.slice(meta.seedLength ?? 0) }
       catch (error) { unavailable = errorText(error); errors.push({ sessionId, message: unavailable }) }
       const final = events.findLast((event) => event.type === "assistant/message")
-      const finalText = liveEntry?.finalText ?? saved?.finalText ?? (final?.type === "assistant/message" ? final.text : undefined) ?? hint?.finalText
+      const finalText = liveEntry?.finalText ?? (liveEntry ? undefined : saved?.finalText) ?? (final?.type === "assistant/message" ? final.text : undefined) ?? hint?.finalText
       const ended = events.findLastIndex((event) => event.type === "turn/end")
       const started = events.findLastIndex((event) => event.type === "turn/start")
       let state = status(entry?.status)
@@ -216,10 +260,10 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
     return { parentSessionId: parentId, agents, ...(errors.length ? { errors } : {}) }
   }
   async function history(parentId: string, childId: string, paging: { afterSeq?: number; limit?: number } = {}): Promise<HistoryRange> {
-    await parent(parentId); await lineage(parentId, childId); open()
+    await parent(parentId); const chain = await lineage(parentId, childId); open()
     const afterSeq = paging.afterSeq ?? 0, limit = paging.limit ?? 200
     if (!Number.isSafeInteger(afterSeq) || afterSeq < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000) throw new Error("Invalid history page")
-    const session = await snapshot(childId)
+    const session = await snapshot(childId, liveChild(childId, authority(parentId, childId, chain)))
     const start = Math.min(afterSeq, session.events.length), end = Math.min(start + limit, session.events.length)
     return { events: transportSessionEvents(session, session.events.slice(start, end)), nextSeq: end }
   }
@@ -256,12 +300,17 @@ export function createDesktopSubagents(coordinator: SessionCoordinator, service:
       const target = team && command.action !== "close" ? owned.entry.path.slice("lead/".length) : owned.entry.path
       const result = await tool.execute({ target, ...(command.text !== undefined ? { message: command.text } : {}) }, { sessionId: owned.ownerId })
       await coordinator.flush(childId); await coordinator.flush(owned.ownerId)
-      options.onChanged?.(parentId)
+      changed(parentId)
       return { parentSessionId: parentId, childSessionId: childId, action: command.action, result }
     })
     writes.set(key, job)
     void job.finally(() => { if (writes.get(key) === job) writes.delete(key) }).catch(() => {})
     return job
   }
-  return { list, history, control, async close() { closed = true; await Promise.allSettled([...writes.values()]) } }
+  return { list, history, control, async close() {
+    closed = true
+    offAssembly()
+    detach()
+    await Promise.allSettled([...writes.values()])
+  } }
 }

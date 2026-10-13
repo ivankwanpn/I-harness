@@ -236,9 +236,9 @@ export interface SessionService {
    * hold the authority). An id with no owner (unknown session/unknown id)
    * throws the registry's not-found error — never a silent success. */
   cancelTask(sessionId: string, id: string): "cancellation-requested" | "already-finished"
-  /** Fires once per created assembly — the bridge attach point
-   * (approval/question bridges). */
-  onAssembly(hook: (assembly: SessionAssembly) => void): () => void
+  /** Fires once per future assembly. Opt in to synchronous attachment of
+   * currently published assemblies; registration precedes that snapshot. */
+  onAssembly(hook: (assembly: SessionAssembly) => void, options?: { includeExisting?: boolean }): () => void
   /** Changes the standing sandbox on existing and future assemblies. */
   updateSandboxMode(mode: SandboxMode): Promise<void>
   reconcileExecutionAuthority(sessionIds?: readonly string[]): Promise<void>
@@ -1105,8 +1105,13 @@ export function createSessionService(opts: SessionServiceOptions): SessionServic
       if (assembly === undefined) throw new Error(`unknown task: ${id}`)
       return assembly.cancelTask(id)
     },
-    onAssembly: (hook) => {
+    onAssembly: (hook, options) => {
       hooks.add(hook)
+      try {
+        if (options?.includeExisting) {
+          for (const [id, assembly] of [...assemblies]) if (assemblies.get(id) === assembly) hook(assembly)
+        }
+      } catch (error) { hooks.delete(hook); throw error }
       return () => { hooks.delete(hook) }
     },
     reconcileExecutionAuthority: async (ids) => {

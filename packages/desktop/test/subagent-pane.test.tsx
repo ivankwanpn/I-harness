@@ -71,6 +71,69 @@ it("preserves unknown control guidance verbatim across locales", async () => {
 })
 
 describe("dedicated subagent pane", () => {
+  it("discovers a new child and refreshes selected durable history from a root push while the parent is silent", async () => {
+    let events = history("Reader transcript")
+    const f = fixture(request => {
+      if (request.kind !== "desktop/session/subagents/history") return
+      const start = Math.min(request.afterSeq ?? 0, events.length), end = Math.min(start + (request.limit ?? 200), events.length)
+      return { events: events.slice(start, end), nextSeq: end }
+    }, { parentSessionId: "parent", agents: [child] })
+    const view = render(<SubagentPane bridge={f.bridge} workspaceId="w" sessionId="parent" />)
+    await open(); await screen.findByText("Reader transcript")
+    events = [...events, { type: "tool/call", name: "read", callId: "live", args: { path: "controlled.txt" }, seq: 2 }, { type: "tool/result", name: "read", callId: "live", output: "Child durable result before turn end", seq: 3 }]
+    f.setCatalog({ parentSessionId: "parent", agents: [child, second] })
+    await act(async () => { f.emit({ kind: "sdk/notification", workspaceId: "w", method: "desktop/session/subagents/changed", params: { sessionId: "parent" } }) })
+    fireEvent.click(await screen.findByRole("button", { name: "工具詳情 read" }))
+    expect(await screen.findByText("Child durable result before turn end")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "返回子代理列表" }))
+    expect(await screen.findByRole("button", { name: "查看子代理 Checker" })).toBeTruthy()
+    view.unmount()
+  })
+
+  it("filters subagent root pushes by workspace and parent before scheduling reads", async () => {
+    const f = fixture()
+    render(<SubagentPane bridge={f.bridge} workspaceId="w" sessionId="parent" />)
+    await screen.findByRole("button", { name: "查看子代理 Reader" })
+    vi.useFakeTimers()
+    try {
+      const before = (f.bridge.request as ReturnType<typeof vi.fn>).mock.calls.length
+      for (const [workspaceId, sessionId] of [["wrong", "parent"], ["w", "unrelated"], ["w", "child-a"]]) f.emit({ kind: "sdk/notification", workspaceId, method: "desktop/session/subagents/changed", params: { sessionId } })
+      await act(async () => { await vi.advanceTimersByTimeAsync(500) })
+      expect((f.bridge.request as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(["disconnect", "unmount"])("cancels queued subagent refreshes on %s", async action => {
+    const f = fixture()
+    const view = render(<SubagentPane bridge={f.bridge} workspaceId="w" sessionId="parent" />)
+    await screen.findByRole("button", { name: "查看子代理 Reader" })
+    vi.useFakeTimers()
+    try {
+      const before = (f.bridge.request as ReturnType<typeof vi.fn>).mock.calls.length
+      await act(async () => {
+        f.emit({ kind: "sdk/notification", workspaceId: "w", method: "desktop/session/subagents/changed", params: { sessionId: "parent" } })
+        if (action === "disconnect") f.emit({ kind: "sdk/disconnected", workspaceId: "w", message: "Disconnected" })
+        else view.unmount()
+        await vi.advanceTimersByTimeAsync(500)
+      })
+      expect((f.bridge.request as ReturnType<typeof vi.fn>).mock.calls.length).toBe(before)
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(["disconnect", "unmount"])("drops pending history replies after %s", async action => {
+    let finish!: (range: HistoryRange) => void
+    const f = fixture(request => request.kind === "desktop/session/subagents/history" && request.afterSeq === 0 ? new Promise<HistoryRange>(resolve => { finish = resolve }) : undefined)
+    const view = render(<SubagentPane bridge={f.bridge} workspaceId="w" sessionId="parent" />)
+    await open(); await waitFor(() => expect(finish).toBeTypeOf("function"))
+    await act(async () => {
+      if (action === "disconnect") f.emit({ kind: "sdk/disconnected", workspaceId: "w", message: "Disconnected" })
+      else view.unmount()
+      finish({ events: history("stale after disconnect"), nextSeq: 2 })
+    })
+    expect(screen.queryByText("stale after disconnect")).toBeNull()
+    if (action === "disconnect") expect(screen.getByText("Disconnected")).toBeTruthy()
+  })
+
   it.each(["zh-TW", "en"] as const)("uses the localized honest fallback in both catalog and detail in %s", async locale => {
     useUiStore.getState().setLocale(locale)
     const { bridge } = fixture(undefined, { parentSessionId: "parent", agents: [{ ...child, live: false }] })

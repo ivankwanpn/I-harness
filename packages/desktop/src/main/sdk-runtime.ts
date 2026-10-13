@@ -171,6 +171,7 @@ export function createWorkspaceRuntimeManager(options: {
           && frame.method !== "desktop/interaction/request"
           && frame.method !== "desktop/interaction/closed"
           && frame.method !== "desktop/workflow/changed"
+          && frame.method !== "desktop/session/subagents/changed"
           && frame.method !== "desktop/usage/recording-warning"
           && frame.method !== "desktop/session/navigation/changed") return
         emit({ kind: "sdk/notification", workspaceId: workspace.id, method: frame.method, params: frame.params })

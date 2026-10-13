@@ -363,7 +363,7 @@ export async function createDesktopHost(options: DesktopHostOptions): Promise<De
   const stopPluginObserver = plugins.bindRefresh(() => service.refreshExtensions())
   mcp.bindRefresh(() => plugins.refresh())
   const offInteraction = service.onAssembly((assembly) => { interaction.attach(assembly);liveIndexJobOwners();if(assembly.sessionId)indexJobOwners.set(assembly.sessionId,new WeakRef(assembly)) })
-  const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: notifyWorkflow })
+  const sessionSubagents = createDesktopSubagents(coordinator, service, { onChanged: sessionId => options.onWrite(makeNotification("desktop/session/subagents/changed", { sessionId })) })
   const review = createWorkspaceReview(options.workspace)
   const projectContentSearch = createProjectContentSearch(options.workspace)
   const rawWorkflow = createDesktopWorkflow(coordinator, service, { teamEnabled: true, reviews: approvals.read, onChanged: notifyWorkflow,
