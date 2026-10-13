@@ -36,4 +36,3 @@ export function translateReasoning(model: string, effort: ReasoningEffort | unde
   }
   throw new Error(`Bedrock model does not have a known reasoning wire: ${model}`)
 }
-

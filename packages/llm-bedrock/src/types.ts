@@ -27,4 +27,3 @@ export interface BedrockReasoningFields {
   thinking?: { type: "adaptive" } | { type: "enabled"; budget_tokens: number }
   output_config?: { effort: string }
 }
-

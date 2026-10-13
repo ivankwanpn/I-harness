@@ -5,4 +5,3 @@ export function resolveBedrockRegion(
 ): string {
   return region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1"
 }
-

@@ -29,4 +29,3 @@ export function mapUsage(raw: unknown): LLMUsage | undefined {
   if (out.inputTokens !== undefined && Number.isSafeInteger(out.inputTokens) && out.inputTokens >= 0) out.inputTokenSemantics = "excludes-cache"
   return Object.keys(out).length > 0 ? out : undefined
 }
-
