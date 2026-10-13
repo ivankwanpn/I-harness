@@ -47,7 +47,7 @@ Paths below are proposed relative to each current package `src/` unless a comple
 | **Tool registry** — `core-tools/src/index.ts` | `registry/{catalog,prepare,dispatch,finalize}.ts`, `approval/{identity,arguments,decision}.ts`, `types.ts`; `index.ts` facade. Keep prepared-call authority in a single closure/state owner. | Assembly, subagent tools, core-agent, shell. Gate `core-tools/test/{tools,dispatch-authority,dispatch-command-metadata,guardian-seam,observation}.test.ts`; preserve role/plan/approval authority and exactly-once finalization. |
 | **Hook registry** — `hooks/src/index.ts` | `configuration/{load,validation,matchers}.ts`, `execution/{handlers,permissions}.ts`, `registry.ts`; `index.ts` facade. Reuse existing runner/trust modules rather than duplicate them. | CLI run/hooks, gateway host/resources/plugin-mount. Gate `hooks/test/{hooks,claude-plugin,claude-protocol,command-binding,hook-trust}.test.ts`; preserve plugin root trust and hook output parsing. |
 | **Shell tools/discovery** — `shell/src/index.ts` | `discovery/{windows,posix,environment}.ts`, `command/{resolve,argv}.ts`, `tools/{foreground,background,retention,registration}.ts`; `index.ts` facade. Pure discovery/argv moves before admitted-execution behavior. | Assembly, CLI headless, workflow runner, gateway agent-shell/terminal-shells. Gate `shell/test/{shell,windows-discovery,agent-shell,sandbox-per-call,sandbox-refusal,spill-notice,remembered-identity}.test.ts`. |
-| **Execution service/supervisor** — `exec/src/service.ts`, `exec/src/execution-supervisor.ts` | `capture/{output,retention,completion}.ts`, `jobs/{records,observation}.ts`, `supervision/{admission,ownership,retirement,reconciliation}.ts`; existing `index.ts` is sole public facade, `service.ts`/`execution-supervisor.ts` retain narrow internal factory entrypoints. First move pure views/validation; retain one map owner and explicit close order. | `exec/src/index.ts` exports to shell/terminal/workflow/session assembly. Gate `exec/test/{execution-supervisor,capture-lifecycle,execution-contract-consumer,exec,stream}.test.ts`; preserve root exit vs settlement and retryable cleanup identity. Event behavior changes follow in separate commits. |
+| **Execution service/supervisor — S13 implemented** — `exec/src/service.ts`, `exec/src/execution-supervisor.ts` | Factories now 11/8 physical lines. Service modules: `capture/{contracts,input,output,retention,completion}.ts`, `jobs/{contracts,records,views,observation}.ts`, `execution-host.ts`, `transport-launch.ts`. Supervisor modules: `supervision/{contracts,admission,ownership,retirement,reconciliation}.ts`. Existing `index.ts` remains sole public facade; one job owner, one capture lifetime and one supervisor registry. Actual sizes and factory exceptions are recorded below. | Exec 247/247 in 16 files, types exit 0; Shell requested consumer/native gates 39/39 in 3 files, types exit 0; session-executor scoped/steering 19/19 in 2 files, types exit 0. Audit: identical actual 419-row set/digest, 73/73 self-tests and gate exit 0; separate original service/supervisor audit owners. Full evidence: `.superpowers/sdd/2026-10-13-v0.1.13-product-decomposition/task-S13-report.md`. |
 | **Native PSEC runner** — `sandbox-windows-psec/native/src/runner.rs` | Keep `runner.rs` as the public `run/fatal` facade with its existing embedded tests in place; extract private product modules `runner/{prepared,running,control,status,event-drain,dispatch}.rs`. Move product status/control serialization first, prepared owner next; state machine/unsafe handle ownership last. Do not extract or restructure the embedded test module; only adapt imports if necessary. | `native/src/main.rs` calls `runner::run/fatal`; external protocol consumed by TS native session. Gates `test:native`/`smoke:native`, TS `fake-session`/`real-driver` and qualification tests under existing platform prerequisites. Preserve protocol frames, OS handle RAII, denied-process cleanup and retained-tree behavior. The 252 embedded test lines are excluded from decomposition; the file still contains 994 product lines and a 307-line `run`. |
 | **Code Mode runtime** — `code-mode/src/runtime.ts` | `runtime/{limits,cell-state,output,worker-events,admission,retirement}.ts`; `runtime.ts` factory facade, package `index.ts` public entrypoint. Keep one cell registry and worker lifetime owner. | `code-mode/src/{register,index}.ts`. Gate `code-mode/test/{runtime,store,register,text-retention,cpu-budget,human-stop,image-admission}.test.ts`. |
 | **Code Retrieval** — `code-retrieval/src/service.ts` | `service/{configuration,index-job,search,revalidation,status}.ts`; `service.ts` factory facade. Existing store/embedding/reader modules remain owners. First extract search filters/results and status formatting, then job staging; avoid splitting commit/cancel into races. | `code-retrieval/src/index.ts`, gateway context runtime. Gate `code-retrieval/test/{service,review,embedding,store-plan}.test.ts`; preserve transactional index generation, source authority and cancellation. |
@@ -160,7 +160,7 @@ The complete static consumer set is stored per file in `census.json`; this table
 | `packages/core-tools/src/index.ts` | 632 | `createToolRegistry` 288-632 (345 lines) | `packages/session-executor/src/assembly.ts`; `packages/subagent/src/tools.ts`; `packages/core-agent/src/index.ts` |
 | `packages/desktop/src/renderer/session/Composer.tsx` | 604 | `SessionComposer` 260-604 (345 lines) | `packages/desktop/src/renderer/app.tsx`; `packages/desktop/src/renderer/shell/Workbench.tsx`; `packages/desktop/src/renderer/permission-preview.tsx` |
 | `packages/subagent/src/child.ts` | 601 | `spawnChild` 274-601 (328 lines) | `packages/subagent/src/tools.ts`; `packages/subagent/src/index.ts`; `packages/subagent/src/projection.ts` |
-| `packages/exec/src/service.ts` | 588 | `createExecService` 109-588 (480 lines) | `packages/exec/src/index.ts` |
+| `packages/exec/src/service.ts` | 588 → 11 (S13) | Original `createExecService` 109-588 (480 lines); now 7-11 (5 lines). Cohesive capture/job/host modules 8-174 lines; see S13 inventory below. Gates: 247 Exec / 39 Shell / 19 session-executor tests, all package types exit 0; actual audit unchanged. | `packages/exec/src/index.ts` |
 | `packages/core-agent/src/execute-tool-calls.ts` | 584 | `executeToolCalls` 79-584 (506 lines) | `packages/core-agent/src/index.ts` |
 | `packages/session-query/src/file-backed.ts` | 558 | `createFileBackedSessionQuery` 236-558 (323 lines) | `packages/session-query/src/index.ts` |
 | `packages/desktop/src/renderer/shell/Workbench.tsx` | 547 | `Workbench` 138-547 (410 lines) | `packages/desktop/src/renderer/app.tsx` |
@@ -175,11 +175,51 @@ The complete static consumer set is stored per file in `census.json`; this table
 | `packages/llm-bedrock/src/index.ts` | 419 | `createBedrockClient` 153-419 (267 lines); `stream` 161-417 (257 lines) | `packages/provider/src/index.ts` |
 | `packages/llm-openai-compatible/src/index.ts` | 401 | `createOpenAICompatibleClient` 149-401 (253 lines) | `packages/provider/src/index.ts` |
 | `packages/desktop-gateway/src/project-scope.ts` | 397 | `createProjectScopeBroker` 30-397 (368 lines) | `packages/desktop-gateway/src/host.ts`; `packages/desktop-gateway/src/types.ts` |
-| `packages/exec/src/execution-supervisor.ts` | 368 | `createExecutionSupervisor` 89-368 (280 lines) | `packages/exec/src/service.ts`; `packages/exec/src/index.ts` |
+| `packages/exec/src/execution-supervisor.ts` | 368 → 8 (S13) | Original `createExecutionSupervisor` 89-368 (280 lines); now 6-8 (3 lines). `supervision/{contracts,admission,ownership,retirement,reconciliation}.ts` are 62/153/82/85/51 lines. Same gates and separate original audit-owner mapping as the service row. | `packages/exec/src/service.ts`; `packages/exec/src/index.ts` |
 | `packages/desktop/src/main/runtime-diagnostics.ts` | 319 | `createRuntimeDiagnostics` 29-319 (291 lines) | `packages/desktop/src/main/ipc.ts`; `packages/desktop/src/main/index.ts` |
 | `packages/desktop-gateway/src/session-subagents.ts` | 316 | `createDesktopSubagents` 60-316 (257 lines) | `packages/desktop-gateway/src/host.ts`; `packages/desktop-gateway/src/types.ts` |
 | `packages/code-retrieval/src/service.ts` | 309 | `createCodeRetrievalService` 10-309 (300 lines) | `packages/code-retrieval/src/index.ts` |
 | `packages/desktop/src/renderer/session/SessionManager.tsx` | 210 | `SessionManager` 26-210 (185 lines, 20560 chars) | `packages/desktop/src/renderer/shell/Workbench.tsx` |
+
+### S13 actual module inventory and function review triggers
+
+The original research measurements above remain before values; S13 arrows
+record the current physical lines. The saved TypeScript AST inventory is
+`task-S13-sizes.json` beside its report. Current modules have these physical
+sizes, including comments and blank lines:
+
+| Exec source module | Physical lines | Largest function AST span |
+|---|---:|---:|
+| `service.ts` | 11 | 5 |
+| `execution-supervisor.ts` | 8 | 3 |
+| `execution-host.ts` | 27 | 22 |
+| `transport-launch.ts` | 96 | 47 |
+| `capture/contracts.ts` | 14 | Types only |
+| `capture/input.ts` | 8 | 6 |
+| `capture/output.ts` | 174 | 164 |
+| `capture/retention.ts` | 33 | 28 |
+| `capture/completion.ts` | 98 | 67 |
+| `jobs/contracts.ts` | 9 | Types only |
+| `jobs/records.ts` | 138 | 127 |
+| `jobs/views.ts` | 25 | 20 |
+| `jobs/observation.ts` | 70 | 59 |
+| `supervision/contracts.ts` | 62 | Types only |
+| `supervision/ownership.ts` | 82 | 75 |
+| `supervision/admission.ts` | 153 | 124 |
+| `supervision/retirement.ts` | 85 | 65 |
+| `supervision/reconciliation.ts` | 51 | 40 |
+
+The three nested factory spans over the proposed 120-line review trigger are
+explicit cohesive exceptions: capture/output retains synchronous capture
+initialization, the sole output/input consumers and cancellation/iterator
+state, with retention and completion extracted; jobs/records retains one
+registry and its transition operations; supervision/admission retains the
+preparation/commit fence around the same entry. These files are below the
+400-line file budget and no function is 250 lines. Their shared scalars and
+maps are not copied into a mutable context object. Capabilities query the
+original owner after waits, and command/host/backend/handle getters and method
+receivers remain at their original boundaries. E3/E6/E8 remain separate
+behavioral work.
 
 ### Measurement-only excluded test AST spans and compressed test containers
 

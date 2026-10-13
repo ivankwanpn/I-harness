@@ -729,6 +729,32 @@ const SHELL_SOURCE_UNIT = new Set([
   "packages/shell/src/tools/registration.ts",
 ])
 
+// S13 has TWO original non-entry owners. Only their exact extracted paths
+// share each boundary; the public entry, admission, spill, retained-output,
+// caller scope, backends and every unmapped future module remain independent.
+const EXEC_SERVICE_SOURCE_UNIT = new Set([
+  "packages/exec/src/service.ts",
+  "packages/exec/src/execution-host.ts",
+  "packages/exec/src/transport-launch.ts",
+  "packages/exec/src/capture/contracts.ts",
+  "packages/exec/src/capture/input.ts",
+  "packages/exec/src/capture/output.ts",
+  "packages/exec/src/capture/retention.ts",
+  "packages/exec/src/capture/completion.ts",
+  "packages/exec/src/jobs/contracts.ts",
+  "packages/exec/src/jobs/records.ts",
+  "packages/exec/src/jobs/observation.ts",
+  "packages/exec/src/jobs/views.ts",
+])
+const EXEC_SUPERVISOR_SOURCE_UNIT = new Set([
+  "packages/exec/src/execution-supervisor.ts",
+  "packages/exec/src/supervision/contracts.ts",
+  "packages/exec/src/supervision/ownership.ts",
+  "packages/exec/src/supervision/admission.ts",
+  "packages/exec/src/supervision/retirement.ts",
+  "packages/exec/src/supervision/reconciliation.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -747,6 +773,8 @@ function declarationOwner(rel) {
   if (FILE_BACKED_QUERY_SOURCE_UNIT.has(rel)) return "packages/session-query/src/file-backed.ts"
   if (COMPACTION_SOURCE_UNIT.has(rel)) return "packages/compaction/src/index.ts"
   if (SHELL_SOURCE_UNIT.has(rel)) return "packages/shell/src/index.ts"
+  if (EXEC_SERVICE_SOURCE_UNIT.has(rel)) return "packages/exec/src/service.ts"
+  if (EXEC_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/exec/src/execution-supervisor.ts"
   return rel
 }
 
@@ -2053,6 +2081,65 @@ SELF_TEST_CASES.push({
       const files = shellRelocationFixtureFiles(true)
       files.push({ rel, test, text: "const read = (deps: ShellToolDeps) => deps" })
       return label + "=" + scanUnusedExports(files).length
+    })
+  },
+})
+
+function execRelocationFixtureFiles(split, unit) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const service = unit === EXEC_SERVICE_SOURCE_UNIT
+  const original = service ? "service" : "execution-supervisor"
+  const contract = service ? "capture/contracts" : "supervision/contracts"
+  const name = service ? "ServiceOwnedValue" : "SupervisorOwnedValue"
+  const declaration = `export interface ${name} { value: string }`
+  const reads = `const read = (value: ${name}) => value`
+  const entry = file("packages/exec/src/index.ts", `export type { ${name} } from "./${original}.ts"`)
+  if (!split) return [entry, file(`packages/exec/src/${original}.ts`, declaration + "\n" + reads)]
+  return [entry,
+    file(`packages/exec/src/${original}.ts`, `export type { ${name} } from "./${contract}.ts"`),
+    file(`packages/exec/src/${contract}.ts`, declaration),
+    ...[...unit].filter(rel => rel !== `packages/exec/src/${original}.ts` && rel !== `packages/exec/src/${contract}.ts`)
+      .map(rel => file(rel, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S13: service and supervisor findings survive source-only extraction with complete original evidence",
+  expect: ["ServiceOwnedValue", "SupervisorOwnedValue"].flatMap(name => [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: `@i-harness/exec#${name}`, evidence: "packages/exec/src/index.ts",
+  } }))),
+  run() {
+    return [EXEC_SERVICE_SOURCE_UNIT, EXEC_SUPERVISOR_SOURCE_UNIT].flatMap(unit => [false, true]
+      .flatMap(split => scanUnusedExports(execRelocationFixtureFiles(split, unit)).map(finding => JSON.stringify({ split, finding }))))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S13: original Exec owners, public entry and external readers remain independent; test-only reads do not wire exports",
+  expect: ["service", "supervisor"].flatMap(unit => ["other-owner=0", "entry=0", "admission=0", "spill=0", "retained=0", "caller=0", "backend=0", "future=0", "outside=0", "test-only=1"].map(result => `${unit}:${result}`)),
+  run() {
+    return [EXEC_SERVICE_SOURCE_UNIT, EXEC_SUPERVISOR_SOURCE_UNIT].flatMap(unit => {
+      const service = unit === EXEC_SERVICE_SOURCE_UNIT
+      const name = service ? "ServiceOwnedValue" : "SupervisorOwnedValue"
+      return [
+        ["other-owner", service ? "packages/exec/src/supervision/retirement.ts" : "packages/exec/src/capture/output.ts", false],
+        ["entry", "packages/exec/src/index.ts", false],
+        ["admission", "packages/exec/src/execution-admission.ts", false],
+        ["spill", "packages/exec/src/spill.ts", false],
+        ["retained", "packages/exec/src/retained-output.ts", false],
+        ["caller", "packages/exec/src/caller-scope.ts", false],
+        ["backend", "packages/exec/src/backends/fake.ts", false],
+        ["future", "packages/exec/src/supervision/future.ts", false],
+        ["outside", "apps/consumer/src/index.ts", false],
+        ["test-only", "packages/exec/test/consumer.test.ts", true],
+      ].map(([label, rel, test]) => {
+        const files = execRelocationFixtureFiles(true, unit)
+        const text = `const read = (value: ${name}) => value`
+        const existing = files.find(file => file.rel === rel)
+        if (existing) existing.text += "\n" + text
+        else files.push({ rel, test, text })
+        return `${service ? "service" : "supervisor"}:${label}=` + scanUnusedExports(files).length
+      })
     })
   },
 })
