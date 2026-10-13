@@ -565,6 +565,21 @@ const OPENAI_COMPATIBLE_SOURCE_UNIT = new Set([
   "packages/llm-openai-compatible/src/stream/usage.ts",
 ])
 
+// S4c relocates only the original Anthropic Messages entry. Its internal reads
+// retain the original declaration boundary; future modules remain consumers.
+const ANTHROPIC_SOURCE_UNIT = new Set([
+  "packages/llm-anthropic/src/index.ts",
+  "packages/llm-anthropic/src/types.ts",
+  "packages/llm-anthropic/src/client.ts",
+  "packages/llm-anthropic/src/request/messages.ts",
+  "packages/llm-anthropic/src/request/reasoning.ts",
+  "packages/llm-anthropic/src/request/body.ts",
+  "packages/llm-anthropic/src/request/headers.ts",
+  "packages/llm-anthropic/src/stream/decode.ts",
+  "packages/llm-anthropic/src/stream/fold.ts",
+  "packages/llm-anthropic/src/stream/usage.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -572,6 +587,7 @@ function declarationOwner(rel) {
   if (PROVIDER_RUNTIME_SOURCE_UNIT.has(rel)) return "packages/provider-runtime/src/index.ts"
   if (OPENAI_RESPONSES_SOURCE_UNIT.has(rel)) return "packages/llm-openai/src/index.ts"
   if (OPENAI_COMPATIBLE_SOURCE_UNIT.has(rel)) return "packages/llm-openai-compatible/src/index.ts"
+  if (ANTHROPIC_SOURCE_UNIT.has(rel)) return "packages/llm-anthropic/src/index.ts"
   return rel
 }
 
@@ -1378,6 +1394,49 @@ SELF_TEST_CASES.push({
     ].map(([label, rel]) => {
       const files = [...openaiCompatibleRelocationFixtureFiles(true), {
         rel, test: false, text: 'import type { OpenAICompatibleConfig } from "@i-harness/llm-openai-compatible"\nconst read = (config: OpenAICompatibleConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function anthropicRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-anthropic/src/index.ts", [
+    "export interface AnthropicConfig { model: string }",
+    "const createClient = (config: AnthropicConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-anthropic/src/index.ts", 'export type { AnthropicConfig } from "./types.ts"'),
+    file("packages/llm-anthropic/src/types.ts", "export interface AnthropicConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-anthropic/src/${path}`, 'import type { AnthropicConfig } from "@i-harness/llm-anthropic"\nconst read = (config: AnthropicConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4c: Anthropic config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-anthropic#AnthropicConfig\tpackages/llm-anthropic/src/index.ts",
+    "split:unused-export\t@i-harness/llm-anthropic#AnthropicConfig\tpackages/llm-anthropic/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(anthropicRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4c: future Anthropic modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-anthropic/src/future.ts"],
+      ["other-protocol", "packages/llm-openai/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...anthropicRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { AnthropicConfig } from "@i-harness/llm-anthropic"\nconst read = (config: AnthropicConfig) => config',
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
