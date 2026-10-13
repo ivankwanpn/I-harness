@@ -474,8 +474,32 @@ const SETTINGS_SOURCE_UNIT = new Set([
   "packages/settings/src/observation/watch-settings.ts",
 ])
 
+// S2 similarly relocates declarations and their internal reads out of the
+// original core-session entry. Inbox was already a separate source owner and
+// remains a real consumer; only these exact extracted modules share the entry's
+// former exclusion boundary. Do not treat an internal import as newly wired use.
+const CORE_SESSION_SOURCE_UNIT = new Set([
+  "packages/core-session/src/index.ts",
+  "packages/core-session/src/events/types.ts",
+  "packages/core-session/src/events/state.ts",
+  "packages/core-session/src/events/append.ts",
+  "packages/core-session/src/events/subscription.ts",
+  "packages/core-session/src/images.ts",
+  "packages/core-session/src/projection/types.ts",
+  "packages/core-session/src/projection/pruning.ts",
+  "packages/core-session/src/projection/rewind.ts",
+  "packages/core-session/src/projection/rewrite.ts",
+  "packages/core-session/src/projection/messages.ts",
+  "packages/core-session/src/projection/search.ts",
+  "packages/core-session/src/projection/plan.ts",
+  "packages/core-session/src/projection/title.ts",
+  "packages/core-session/src/serialization/jsonl.ts",
+])
+
 function declarationOwner(rel) {
-  return SETTINGS_SOURCE_UNIT.has(rel) ? "packages/settings/src/index.ts" : rel
+  if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
+  if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
+  return rel
 }
 
 function scanUnusedExports(files) {
@@ -1063,6 +1087,60 @@ SELF_TEST_CASES.push({
         text: 'import { UnusedSettingExport } from "@i-harness/settings"\nconst read = settings => settings.fontSize + UnusedSettingExport',
       }]
       return `${label}=${scanUnusedExports(files).length + scanUnconsultedSettings(files).length}`
+    })
+  },
+})
+
+function coreSessionRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/core-session/src/index.ts", [
+    "export interface RewindCut { cutFrom: number; markerSeq: number }",
+    "export function derivePruneSubstitutes(session) { return new Map() }",
+    "const deriveMessages = session => { const cuts: RewindCut[] = []; return derivePruneSubstitutes(session) }",
+  ].join("\n"))]
+  return [
+    file("packages/core-session/src/index.ts", [
+      'export type { RewindCut } from "./projection/rewind.ts"',
+      'export { derivePruneSubstitutes } from "./projection/pruning.ts"',
+    ].join("\n")),
+    file("packages/core-session/src/projection/rewind.ts", "export interface RewindCut { cutFrom: number; markerSeq: number }"),
+    file("packages/core-session/src/projection/pruning.ts", "export function derivePruneSubstitutes(session) { return new Map() }"),
+    file("packages/core-session/src/projection/messages.ts", [
+      'import type { RewindCut } from "./rewind.ts"',
+      'import { derivePruneSubstitutes } from "./pruning.ts"',
+      "const deriveMessages = session => { const cuts: RewindCut[] = []; return derivePruneSubstitutes(session) }",
+    ].join("\n")),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S2: original unused-export findings survive internal projection imports with original evidence",
+  expect: [
+    "before:unused-export\t@i-harness/core-session#RewindCut\tpackages/core-session/src/index.ts",
+    "before:unused-export\t@i-harness/core-session#derivePruneSubstitutes\tpackages/core-session/src/index.ts",
+    "split:unused-export\t@i-harness/core-session#RewindCut\tpackages/core-session/src/index.ts",
+    "split:unused-export\t@i-harness/core-session#derivePruneSubstitutes\tpackages/core-session/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(coreSessionRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S2: pre-existing Inbox and other unmapped modules remain real consumers",
+  expect: ["inbox=0", "other=0", "outside=0"],
+  run() {
+    return [
+      ["inbox", "packages/core-session/src/inbox.ts"],
+      ["other", "packages/core-session/src/other.ts"],
+      ["outside", "packages/core-session-consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...coreSessionRelocationFixtureFiles(true), {
+        rel, test: false,
+        text: 'import { derivePruneSubstitutes, type RewindCut } from "@i-harness/core-session"\nconst read = (session, cut: RewindCut) => derivePruneSubstitutes(session)',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
     })
   },
 })
