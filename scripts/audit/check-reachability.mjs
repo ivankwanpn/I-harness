@@ -672,6 +672,20 @@ const MCP_SUPERVISOR_SOURCE_UNIT = new Set([
   "packages/mcp-client/src/supervisor/disposal.ts",
 ])
 
+// S9 relocates only the original coordinator/format owner. Existing repair,
+// write-behind, fork and store-root files still count as independent readers.
+const PERSISTENCE_COORDINATOR_SOURCE_UNIT = new Set([
+  "packages/session-persistence/src/index.ts",
+  "packages/session-persistence/src/coordinator/types.ts",
+  "packages/session-persistence/src/coordinator/load.ts",
+  "packages/session-persistence/src/coordinator/ownership.ts",
+  "packages/session-persistence/src/coordinator/documents.ts",
+  "packages/session-persistence/src/coordinator/mutations.ts",
+  "packages/session-persistence/src/coordinator/lifecycle.ts",
+  "packages/session-persistence/src/format/registry.ts",
+  "packages/session-persistence/src/format/validation.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -686,6 +700,7 @@ function declarationOwner(rel) {
   if (CORE_TOOLS_SOURCE_UNIT.has(rel)) return "packages/core-tools/src/index.ts"
   if (HOOKS_SOURCE_UNIT.has(rel)) return "packages/hooks/src/index.ts"
   if (MCP_SUPERVISOR_SOURCE_UNIT.has(rel)) return "packages/mcp-client/src/supervisor.ts"
+  if (PERSISTENCE_COORDINATOR_SOURCE_UNIT.has(rel)) return "packages/session-persistence/src/index.ts"
   return rel
 }
 
@@ -1808,6 +1823,51 @@ SELF_TEST_CASES.push({
       const existing = files.find(file => file.rel === rel)
       if (existing) existing.text += `\n${reads}`
       else files.push({ rel, test, text: reads })
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function persistenceCoordinatorRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declaration = "export interface CoordinatorOptions { maxDelayMs?: number }"
+  const reads = "const use = (options: CoordinatorOptions) => options"
+  if (!split) return [file("packages/session-persistence/src/index.ts", `${declaration}\n${reads}`)]
+  return [
+    file("packages/session-persistence/src/index.ts", 'export type { CoordinatorOptions } from "./coordinator/types.ts"'),
+    file("packages/session-persistence/src/coordinator/types.ts", `${declaration}\n${reads}`),
+    ...["coordinator/load", "coordinator/ownership", "coordinator/documents", "coordinator/mutations", "coordinator/lifecycle", "format/registry", "format/validation"]
+      .map(path => file(`packages/session-persistence/src/${path}.ts`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S9: coordinator retains complete original finding across every extracted module",
+  expect: [false, true].map(split => JSON.stringify({ split, finding: {
+    kind: "unused-export", subject: "@i-harness/session-persistence#CoordinatorOptions", evidence: "packages/session-persistence/src/index.ts",
+  } })),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(persistenceCoordinatorRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S9: existing persistence owners remain independent; test readers do not wire exports",
+  expect: ["write-behind=0", "repair=0", "fork=0", "store-root=0", "future=0", "other-package=0", "outside=0", "test-only=1"],
+  run() {
+    return [
+      ["write-behind", "packages/session-persistence/src/write-behind.ts", false],
+      ["repair", "packages/session-persistence/src/repair.ts", false],
+      ["fork", "packages/session-persistence/src/fork.ts", false],
+      ["store-root", "packages/session-persistence/src/store-root.ts", false],
+      ["future", "packages/session-persistence/src/coordinator/future.ts", false],
+      ["other-package", "packages/session-executor/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/session-persistence/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => {
+      const files = persistenceCoordinatorRelocationFixtureFiles(true)
+      files.push({ rel, test, text: "const use = (options: CoordinatorOptions) => options" })
       return `${label}=${scanUnusedExports(files).length}`
     })
   },

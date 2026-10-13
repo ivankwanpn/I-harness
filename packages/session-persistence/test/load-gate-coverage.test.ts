@@ -1,7 +1,7 @@
 // THE LOAD-GATE COVERAGE GUARD — catches the NEXT unregistered durable event
 // type before it can make any session unloadable.
 //
-// WHY THIS EXISTS: `guardIgnorable` (src/index.ts) refuses any event type
+// WHY THIS EXISTS: `guardIgnorable` (src/format/validation.ts) refuses any event type
 // outside KNOWN_EVENT_TYPES ∪ registered with
 //   SessionFormatUnsupportedError: unknown event type '<type>' without ignorable marker
 // so a durable event type with a producer but no registration makes every
@@ -44,7 +44,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 /** packages/session-persistence/test → repository root. */
 const ROOT = join(HERE, "..", "..", "..")
 const PACKAGES = join(ROOT, "packages")
-const PERSISTENCE_SRC = join(PACKAGES, "session-persistence", "src", "index.ts")
+const PERSISTENCE_SRC = join(PACKAGES, "session-persistence", "src", "format", "registry.ts")
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -102,7 +102,7 @@ describe("load-gate coverage: no durable producer may be unloadable", () => {
       "session-persistence's load gate, so any session log carrying one cannot be",
       "loaded (SessionFormatUnsupportedError: unknown event type ... without",
       "ignorable marker). Register each with `registerEventType(...)` in",
-      "packages/session-persistence/src/index.ts — or, if it must not be durable,",
+      "packages/session-persistence/src/format/registry.ts — or, if it must not be durable,",
       "stop appending it (see `publishTransient` for the transient path).",
       "",
       `unadmitted: ${unadmitted.join(", ")}`,
