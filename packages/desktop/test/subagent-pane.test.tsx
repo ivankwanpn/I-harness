@@ -71,6 +71,29 @@ it("preserves unknown control guidance verbatim across locales", async () => {
 })
 
 describe("dedicated subagent pane", () => {
+  it.each(["zh-TW", "en"] as const)("uses the localized honest fallback in both catalog and detail in %s", async locale => {
+    useUiStore.getState().setLocale(locale)
+    const { bridge } = fixture(undefined, { parentSessionId: "parent", agents: [{ ...child, live: false }] })
+    const view = render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" />)
+    const card = await screen.findByRole("button", { name: locale === "en" ? "View subagent Reader" : "查看子代理 Reader" })
+    const expected = locale === "en" ? "Model not recorded" : "模型未記錄"
+    expect(card.querySelector("small")?.textContent).toBe(expected)
+    expect(card.textContent).not.toContain(locale === "en" ? "Inherits the parent conversation model" : "繼承主會話模型")
+    fireEvent.click(card)
+    await waitFor(() => expect(view.container.querySelector(".subagent-detail-model")?.textContent).toBe(expected))
+  })
+
+  it.each(["zh-TW", "en"] as const)("preserves a recorded label in both catalog and detail in %s", async locale => {
+    useUiStore.getState().setLocale(locale)
+    const modelLabel = "deepseek:deepseek-flash"
+    const { bridge } = fixture(undefined, { parentSessionId: "parent", agents: [{ ...child, live: false, modelLabel }] })
+    const view = render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" />)
+    const card = await screen.findByRole("button", { name: locale === "en" ? "View subagent Reader" : "查看子代理 Reader" })
+    expect(card.querySelector("small")?.textContent).toBe(modelLabel)
+    fireEvent.click(card)
+    await waitFor(() => expect(view.container.querySelector(".subagent-detail-model")?.textContent).toBe(modelLabel))
+  })
+
   it("shows the catalog and source errors without starting child work or loading every transcript", async () => {
     const { bridge } = fixture(undefined, { parentSessionId: "parent", agents: [child, second], errors: [{ sessionId: "broken", message: "Saved child record unreadable" }] })
     render(<SubagentPane bridge={bridge} workspaceId="w" sessionId="parent" parentTitle="Main task" />)
@@ -104,7 +127,7 @@ describe("dedicated subagent pane", () => {
     await screen.findByText("Reader transcript")
     expect(screen.queryByRole("button", { name: "傳送訊息" })).toBeNull()
     expect(screen.queryByRole("button", { name: "中斷子代理" })).toBeNull()
-    expect(screen.getByText("繼承主會話模型")).toBeTruthy()
+    expect(screen.getByText("模型未記錄")).toBeTruthy()
     fireEvent.change(screen.getByRole("textbox", { name: "子代理輸入" }), { target: { value: "Inspect another file" } })
     fireEvent.click(screen.getByRole("button", { name: "派發後續任務" }))
     await screen.findByText("The child is busy")

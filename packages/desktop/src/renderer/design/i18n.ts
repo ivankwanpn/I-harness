@@ -361,7 +361,7 @@ const english = {
   "依模型的上下文大小自動整理內容；關閉後仍可手動壓縮。": "Automatically condenses context based on the model's context window. Manual compaction remains available when disabled.",
   "重啟 Desktop 後套用；目前執行中的 Agent 保持原設定。": "Restart Desktop to apply. Running Agents keep their current settings.",
   "記憶": "Memory", "插件": "Plugins",
-  "子代理": "Subagents", "角色模型": "Role models", "角色名稱": "Role name", "設定角色模型": "Set role model", "恢復繼承": "Inherit parent", "繼承主會話模型": "Inherits the parent conversation model", "新增角色配置": "Add role mapping",
+  "子代理": "Subagents", "角色模型": "Role models", "角色名稱": "Role name", "設定角色模型": "Set role model", "恢復繼承": "Inherit parent", "繼承主會話模型": "Inherits the parent conversation model", "模型未記錄": "Model not recorded", "新增角色配置": "Add role mapping",
   "已不在提供商目錄": "Missing from provider directory", "已不在模型目錄": "Missing from model directory",
   "此提供商尚未設定憑證，無法供子代理使用。": "This provider has no configured credentials and cannot be used by a subagent.",
   "請先在模型與提供商設定通訊協定。": "Set a protocol for this model or provider first.",

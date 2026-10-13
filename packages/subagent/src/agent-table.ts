@@ -44,10 +44,10 @@ export interface ChildAgentEntry {
    * restored as `error`), so an unstamped entry has nothing to measure and
    * every reader must say so rather than guess. */
   startedAt?: number
-  /** The model this child actually ran on, as `provider:model`, RECORDED at
-   * spawn. Absent = it inherited the parent's client. Never re-derived at read
-   * time: a running child's settings can change under it, and the row must say
-   * what IS, not what today's configuration would say. */
+  /** WHY: child.ts:340 records the spawn model as `provider:model`, but
+   * persist.ts:136 also restores older entries without a label; absence is not
+   * proof of inheritance. Keep this spawn fact rather than re-deriving it from
+   * today's settings, which can change under a running child. */
   modelLabel?: string
   followupChain?: Promise<void>
   lastInboxSeq?: number

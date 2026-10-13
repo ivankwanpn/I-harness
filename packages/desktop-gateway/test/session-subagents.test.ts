@@ -9,6 +9,7 @@ import { createContext } from "@i-harness/core-plugin"
 import { createToolRegistry } from "@i-harness/core-tools"
 import { append, createSession } from "@i-harness/core-session"
 import { createDesktopSubagents } from "../src/session-subagents.ts"
+import { createTaskRegistry, taskDocKey, type TaskProtocolDocument } from "@i-harness/subagent"
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "desktop-subagent-catalog-"))
@@ -82,11 +83,11 @@ it("retains named normal/team catalog rows after their live entries have been cl
   const f = await fixture()
   try {
     await f.coordinator.putDocument("parent", { formatVersion: 1, roles: [], jobs: [], agentTable: [] })
-    await f.coordinator.putDocument("task-parent", { formatVersion: 1, tasks: [{ childSessionId: "normal", agentPath: "root/named-helper", description: "Named helper", agent: "explore", status: "completed", resultText: "normal result" }], notifications: [] })
+    await f.coordinator.putDocument("task-parent", { formatVersion: 1, tasks: [{ childSessionId: "normal", agentPath: "root/named-helper", description: "Named helper", agent: "explore", modelLabel: "deepseek:deepseek-flash", status: "completed", resultText: "normal result" }], notifications: [] })
     const member = { id: "member-team", name: "named-teammate", description: "saved member", provider: "spawn", context: "fresh" as const, sessionId: "team" }
     await f.coordinator.append("parent", [{ type: "team/member", version: 1, seq: 0, teamId: "saved-team", member: { ...member, phase: "provisioning" } }, { type: "team/member", version: 1, seq: 1, teamId: "saved-team", member: { ...member, phase: "active" } }])
     const result = await createDesktopSubagents(f.coordinator, f.service).list("parent")
-    expect(result.agents.find((row) => row.sessionId === "normal")).toMatchObject({ label: "Named helper", roleName: "explore", status: "completed", live: false, canFollowup: false })
+    expect(result.agents.find((row) => row.sessionId === "normal")).toMatchObject({ label: "Named helper", roleName: "explore", modelLabel: "deepseek:deepseek-flash", status: "completed", live: false, canFollowup: false })
     expect(result.agents.find((row) => row.sessionId === "team")).toMatchObject({ label: "named-teammate", roleName: "teammate", status: "completed", live: false, canFollowup: false })
   } finally { await f.close() }
 })
@@ -251,4 +252,29 @@ it("drives normal and teammate followups through their real owning tools without
     const history = await catalog.history("parent", teamRow.sessionId)
     await vi.waitFor(() => expect(JSON.stringify(history.events)).toContain("team followup"))
   } finally { await catalog.close(); await service.close(); await f.close() }
+}, 15000)
+
+it("restores a completed closed child's actual model from its JSONL task document and exposes it in the cold catalog", async () => {
+  const f = await fixture()
+  const model: NonNullable<SessionServiceOptions["model"]> = { async *stream() { yield { type: "text/chunk", text: "done" }; yield { type: "end" } } }
+  const service = createSessionService({ workspace: f.root, coordinator: f.coordinator, sessionFor: createDurableSessionLoader(f.coordinator), model, allowSubagentModelSelection: true, roleSelectionFor: () => ({ provider: "deepseek", model: "deepseek-flash" }), resolveRoleModel: async () => ({ status: "ready", binding: { client: model } }) })
+  let reader: ReturnType<typeof createSessionCoordinator> | undefined
+  try {
+    const assembly = await service.assemblyFor("parent")
+    const spawned = await assembly.tools.get("spawn_agent")!.execute({ message: "inspect", task_name: "model-proof", agent_type: "explore", background: false }, { sessionId: "parent" }) as { task_id: string; agent_path: string }
+    const owned = assembly.subagentState().agentTable.find(row => row.path === spawned.agent_path)!
+    expect(owned.modelLabel).toBe("deepseek:deepseek-flash")
+    await assembly.tools.get("close_agent")!.execute({ target: spawned.agent_path }, { sessionId: "parent" })
+    expect(assembly.subagentState().agentTable.some(row => row.path === spawned.agent_path)).toBe(false)
+    await service.close()
+    await f.coordinator.flush(owned.sessionId!)
+    reader = createSessionCoordinator(createJsonlBackend(f.root))
+    const doc = await reader.getDocument(taskDocKey("parent")) as TaskProtocolDocument
+    const restored = createTaskRegistry()
+    restored.restore(doc)
+    expect(restored.get(spawned.task_id)).toMatchObject({ status: "completed", modelLabel: "deepseek:deepseek-flash" })
+    const catalog = await createDesktopSubagents(reader, f.service).list("parent")
+    expect(catalog.agents.find(row => row.sessionId === owned.sessionId)).toMatchObject({ status: "completed", live: false, roleName: "explore", modelLabel: "deepseek:deepseek-flash" })
+    expect(f.assemble).not.toHaveBeenCalled()
+  } finally { await reader?.close(); await service.close(); await f.close() }
 }, 15000)

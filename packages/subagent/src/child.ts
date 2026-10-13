@@ -271,7 +271,7 @@ export interface SpawnOptions extends RoleModelHost {
   onSettled?: (info: { finalText?: string; error?: string; aborted: boolean }) => void
 }
 
-export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string }> {
+export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jobId: string; sessionId?: string; modelLabel?: string }> {
   // The model is decided, gated AND RESOLVED before anything is created: both
   // refusals — the gate here, the resolver in the block below — sit above every
   // durable write, so a refused spawn leaves no child session, no table entry
@@ -601,5 +601,5 @@ export async function spawnChild(opts: SpawnOptions): Promise<{ path: string; jo
     },
   )
 
-  return { path: childPath, jobId, sessionId }
+  return { path: childPath, jobId, sessionId, ...(modelLabel !== undefined ? { modelLabel } : {}) }
 }

@@ -15,9 +15,9 @@ export interface DurableAgentEntry {
   // M9: the role name the child was spawned with — needed to rebuild the
   // agent (systemPrompt/tools/model) on cold resume.
   roleName?: string
-  // Task 6: the model the child RAN on, as `provider:model`, recorded at spawn.
-  // Persisted so a restored entry still says what IS (the projection reads it);
-  // absent = the child inherited the parent's client.
+  // WHY: child.ts:340 records the resolved `provider:model`; persist.ts:136 also
+  // restores older entries without it, so absence is not proof of inheritance.
+  // Keep this spawn fact rather than re-deriving it from today's settings.
   modelLabel?: string
   // M9: the durable inbox consumption cursor. Persisted so a cold-resumed
   // child does NOT re-process inbox events that were already consumed into
