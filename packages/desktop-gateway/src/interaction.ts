@@ -116,12 +116,14 @@ export function createInteractionBridge(emit: (frame: RpcNotification) => void, 
    * `{ deferred: true }` — no answer is invented on the user's behalf. */
   function defer(row: WaitingRequest): void {
     if (waiting.get(row.view.requestId) !== row) return
-    clearTimeout(row.timer)
     const view: PendingInteraction = { ...structuredClone(row.view), state: "interrupted" }
+    // Keep the live resolver and its expiry timer owned until the transition is
+    // durable. A failed write must leave this question answerable/cancellable.
+    options.persistence?.write(snapshot().map(saved => saved.requestId === view.requestId ? view : saved))
+    clearTimeout(row.timer)
     const carried: WaitingRequest = { view, timer: undefined as unknown as ReturnType<typeof setTimeout> }
     waiting.set(view.requestId, carried)
     carried.timer = expiryTimer(carried)
-    options.persistence?.write(snapshot())
     row.settle?.({ kind: "question", deferred: true }, "reply")
     try {
       emit(makeNotification("desktop/interaction/request", structuredClone(view)))

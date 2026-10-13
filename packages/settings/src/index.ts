@@ -11,7 +11,7 @@
  * @module @i-harness/settings
  */
 
-import { existsSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { dirname, join, resolve, sep } from "node:path"
 // Runtime import of the protocol constants (the enum's single source). Safe:
@@ -1579,6 +1579,16 @@ export function watchSettings(
 ): { dispose: () => void } {
   const files = Array.isArray(paths) ? paths : [paths]
   const byAbsolutePath = new Map(files.map((file) => [resolve(file), file]))
+  // Retain detections across watcher replacement. A new fs-watch baseline
+  // suppresses initial adds, including files changed while the stream was down.
+  // Read metadata only on startup, an event, or recovery; never on a poll.
+  const fingerprint = (file: string): string => {
+    try {
+      const info = statSync(file, { bigint: true })
+      return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`
+    } catch { return "missing" }
+  }
+  const observed = new Map([...byAbsolutePath.keys()].map(file => [file, fingerprint(file)]))
   const retryMs = Math.max(10, opts?.intervalMs ?? 500)
   let disposed = false
   let watcher: FsWatcher | undefined
@@ -1588,12 +1598,12 @@ export function watchSettings(
     if (disposed) return
     retryTimer = setTimeout(() => {
       retryTimer = undefined
-      start()
+      start(true)
     }, retryMs)
     retryTimer.unref?.()
   }
 
-  const start = (): void => {
+  const start = (recovering = false): void => {
     if (disposed || byAbsolutePath.size === 0) return
     let active: FsWatcher
     try {
@@ -1614,7 +1624,9 @@ export function watchSettings(
           parent = next
         }
       }
-      active = createFsWatcher({ roots: [...roots] })
+      // Settings are ancillary to their host, as the previous unref'd watcher
+      // was; loading settings alone must not keep a finished process alive.
+      active = createFsWatcher({ roots: [...roots], persistent: false })
       watcher = active
     } catch {
       retry()
@@ -1623,10 +1635,23 @@ export function watchSettings(
     void (async () => {
       let failed = false
       try {
+        if (recovering) {
+          for (const [absolute, file] of byAbsolutePath) {
+            if (disposed) break
+            const current = fingerprint(absolute)
+            if (observed.get(absolute) === current) continue
+            observed.set(absolute, current)
+            onChange(file)
+          }
+        }
         for await (const event of active.events) {
           if (disposed) break
-          const file = byAbsolutePath.get(resolve(event.path))
-          if (file !== undefined) onChange(file)
+          const absolute = resolve(event.path)
+          const file = byAbsolutePath.get(absolute)
+          if (file !== undefined) {
+            observed.set(absolute, fingerprint(absolute))
+            onChange(file)
+          }
         }
       } catch {
         // WHY: fs-watch ends its stream after surfacing a latched error

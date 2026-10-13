@@ -28,6 +28,50 @@ function persistence() {
 afterEach(() => { vi.useRealTimers() })
 
 describe("deferring a question keeps it answerable", () => {
+  it.each(["retry", "answer", "cancel", "close", "expire"] as const)("retains the live resolver after a failed defer write, then %s settles it", async (next) => {
+    vi.useFakeTimers()
+    const backing = persistence()
+    let fail = false
+    const bridge = createInteractionBridge(() => {}, { persistence: {
+      read: backing.read,
+      write: rows => { if (fail) throw new Error("disk full"); backing.write(rows) },
+    } })
+    const owner = assembly()
+    bridge.attach(owner)
+    let settlements = 0
+    const outcome = question(owner.ctx).ask({ id: "q1", prompt: "Choose" }).then(
+      answer => { settlements++; return answer },
+      error => { settlements++; return error.message as string },
+    )
+    const original = bridge.pending()[0]!
+    const input = { requestId: original.requestId, sessionId: "s1", decision: { kind: "question" as const, deferred: true as const } }
+    try {
+      fail = true
+      expect(() => bridge.reply(input)).toThrow("disk full")
+      fail = false
+      expect(bridge.pending()).toEqual([original])
+      expect(backing.snapshot()).toEqual([original])
+      expect(settlements).toBe(0)
+      if (next === "retry") {
+        bridge.reply(input)
+        bridge.reply(input)
+        expect(await outcome).toBe(USER_DEFERRED_QUESTION)
+        expect(backing.snapshot()[0]?.state).toBe("interrupted")
+        bridge.cancelSession("s1")
+      } else if (next === "answer") {
+        bridge.reply({ ...input, decision: { kind: "question", answer: "A" } })
+        expect(await outcome).toBe("A")
+      } else {
+        if (next === "cancel") bridge.cancelSession("s1")
+        else if (next === "close") bridge.close()
+        else await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000)
+        expect(await outcome).toMatch(/question (cancelled|closed|expired)/)
+      }
+      expect(settlements).toBe(1)
+      expect(bridge.pending()).toEqual([])
+    } finally { fail = false; bridge.close() }
+  })
+
   it("releases the waiting agent and keeps the card, without inventing an answer", async () => {
     const store = persistence()
     const emit = vi.fn()

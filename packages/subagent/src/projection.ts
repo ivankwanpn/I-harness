@@ -158,8 +158,17 @@ export function projectAgentTaskDetail(state: SubagentTaskSource, row: AgentTask
   switch (row.group) {
     case "subagent": {
       const entry = state.table.get(row.id)
-      const record = state.tasks.list().find((r) => r.agentPath === row.id)
-      const pool = record ?? state.tasks.get(row.id)
+      // Paths can be reused after close. A current child must only borrow
+      // evidence from its own session; historical rows retain their task IDs.
+      let pool = state.tasks.get(row.id)
+      if (pool === undefined) {
+        if (entry?.sessionId !== undefined) {
+          pool = state.tasks.getByChildSession(entry.sessionId)
+        } else {
+          const matches = state.tasks.list().filter((task) => task.agentPath === row.id)
+          if (matches.length === 1 && (entry === undefined || matches[0]!.childSessionId === undefined)) pool = matches[0]
+        }
+      }
       const roleName = entry?.roleName ?? pool?.agent
       const modelLabel = entry?.modelLabel ?? pool?.modelLabel
       const role = roleName !== undefined ? state.roles.get(roleName) : undefined

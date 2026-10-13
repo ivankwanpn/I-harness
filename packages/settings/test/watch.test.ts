@@ -1,6 +1,7 @@
 // WHY: an event-driven settings watcher must not wait for the legacy polling
 // interval, even for the workspace's ignored-segment root (src/index.ts:1544).
 import { describe, expect, it } from "vitest"
+import { spawn } from "node:child_process"
 import { mkdir, mkdtemp, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -24,6 +25,31 @@ async function workspaceLayer(): Promise<{ root: string; file: string }> {
 }
 
 describe("fs-watch settings hot reload", () => {
+  it("loading settings does not keep an otherwise finished process alive", async () => {
+    const { root, file } = await workspaceLayer()
+    const source = new URL("../src/index.ts", import.meta.url).href
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e",
+      `import { createLayeredStore } from ${JSON.stringify(source)}; await createLayeredStore({ files: [${JSON.stringify(file)}] }).load(); console.log('loaded');`,
+    ], { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] })
+    let output = "", timedOut = false
+    child.stdout.on("data", chunk => { output += chunk })
+    child.stderr.on("data", chunk => { output += chunk })
+    const timeout = setTimeout(() => { timedOut = true; child.kill() }, 3000)
+    try {
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject)
+        child.once("close", resolve)
+      })
+      expect(output).toContain("loaded")
+      expect(timedOut, output).toBe(false)
+      expect(code, output).toBe(0)
+    } finally {
+      clearTimeout(timeout)
+      child.kill()
+      await rm(root, { recursive: true, force: true })
+    }
+  }, 8000)
+
   it("an external truncate→write to the WORKSPACE layer fires exactly one onChange with the changed path", async () => {
     const { root, file } = await workspaceLayer()
     const changed: string[] = []

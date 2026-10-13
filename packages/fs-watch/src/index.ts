@@ -34,6 +34,8 @@ export interface FsWatcherOptions {
   roots: string[]
   /** Extra path segments to ignore (in addition to the defaults). */
   ignore?: string[]
+  /** Keep the host process alive while watching (default true). */
+  persistent?: boolean
 }
 
 /** Default ignore list for discovered dependency/SCM/harness/build paths. */
@@ -139,6 +141,7 @@ export function createFsWatcher(opts: FsWatcherOptions): FsWatcher {
   }
 
   const watcher: FSWatcher = watch(opts.roots, {
+    persistent: opts.persistent ?? true,
     // ignoreInitial:false + baseline filter (see header comment) — closing the
     // create-before-scan race that would otherwise swallow early writes.
     ignoreInitial: false,

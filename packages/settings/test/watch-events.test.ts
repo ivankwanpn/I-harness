@@ -2,7 +2,7 @@
 // inside a held reload to prove the unchanged state conflate alone suffices
 // (src/index.ts:1446), and force stream errors without relying on OS timing.
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import type { FsWatcher, FsWatchEvent } from "../../fs-watch/src/index.ts"
@@ -112,6 +112,31 @@ beforeEach(() => {
 })
 
 describe("settings push adapter", () => {
+  it.each(["change", "creation", "deletion"])("reconciles a missed %s during watcher recovery without reporting unchanged paths", async mode => {
+    const root = await mkdtemp(join(tmpdir(), "ih-settings-recovery-"))
+    const file = join(root, "settings.json"), unchanged = join(root, "unchanged.json")
+    if (mode !== "creation") await writeFile(file, '{"fontSize":14}')
+    await writeFile(unchanged, "{}")
+    const changed: string[] = []
+    const watcher = watchSettings([file, unchanged], path => changed.push(path), { intervalMs: 100 })
+    try {
+      expect(changed).toEqual([])
+      streams[0]!.fail(new Error("watch stream failed"))
+      await waitFor(() => streams[0]!.close.mock.calls.length > 0)
+      if (mode === "deletion") await unlink(file)
+      else await writeFile(file, '{"fontSize":15}')
+      await waitFor(() => streams.length === 2)
+      await waitFor(() => changed.length > 0)
+      expect(changed).toEqual([file])
+      streams[1]!.fail(new Error("another watch stream failure"))
+      await waitFor(() => streams.length === 3)
+      expect(changed).toEqual([file])
+    } finally {
+      watcher.dispose()
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
   it("duplicates inside an in-flight reload emit once; a different state behind that reload still emits", async () => {
     const root = await mkdtemp(join(tmpdir(), "ih-settings-push-"))
     const file = join(root, "settings.json")
@@ -126,7 +151,7 @@ describe("settings push adapter", () => {
     store.onChange((path) => changed.push(path))
     try {
       await store.load()
-      expect(mock.create).toHaveBeenCalledWith({ roots: [file] })
+      expect(mock.create).toHaveBeenCalledWith({ roots: [file], persistent: false })
       expect(changed).toEqual([])
       await writeFile(file, '{"fontSize":15}')
       streams[0]!.emit({ path: file, kind: "change" })
@@ -284,7 +309,7 @@ describe("settings push adapter", () => {
     const changed: string[] = []
     const watcher = watchSettings(file, (path) => changed.push(path))
     try {
-      expect(mock.create).toHaveBeenCalledWith({ roots: [file, parent] })
+      expect(mock.create).toHaveBeenCalledWith({ roots: [file, parent], persistent: false })
       streams[0]!.emit({ path: parent, kind: "add" })
       streams[0]!.emit({ path: join(parent, "session.json"), kind: "change" })
       streams[0]!.emit({ path: file, kind: "add" })

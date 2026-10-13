@@ -623,7 +623,9 @@ export function App({ bridge }: { bridge: DesktopBridge }) {
             sessionId,
             decision,
           })
-          interactions.update(requestId)
+          // Deferral keeps the gateway's interrupted card. Only a final answer
+          // closes it; a later cancel/expiry notification still owns removal.
+          if (!(decision.kind === "question" && "deferred" in decision)) interactions.update(requestId)
           void refreshTasks(selectedWorkspaceId, sessionId)
         },
       }
