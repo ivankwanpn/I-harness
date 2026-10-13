@@ -595,6 +595,21 @@ const GEMINI_SOURCE_UNIT = new Set([
   "packages/llm-gemini/src/stream/usage.ts",
 ])
 
+// S4e relocates only the original Converse entry. SDK iteration and request
+// mapping share that former owner; future modules and other protocols do not.
+const BEDROCK_SOURCE_UNIT = new Set([
+  "packages/llm-bedrock/src/index.ts",
+  "packages/llm-bedrock/src/types.ts",
+  "packages/llm-bedrock/src/region.ts",
+  "packages/llm-bedrock/src/client.ts",
+  "packages/llm-bedrock/src/request/messages.ts",
+  "packages/llm-bedrock/src/request/reasoning.ts",
+  "packages/llm-bedrock/src/request/body.ts",
+  "packages/llm-bedrock/src/stream/iterate.ts",
+  "packages/llm-bedrock/src/stream/fold.ts",
+  "packages/llm-bedrock/src/stream/usage.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -604,6 +619,7 @@ function declarationOwner(rel) {
   if (OPENAI_COMPATIBLE_SOURCE_UNIT.has(rel)) return "packages/llm-openai-compatible/src/index.ts"
   if (ANTHROPIC_SOURCE_UNIT.has(rel)) return "packages/llm-anthropic/src/index.ts"
   if (GEMINI_SOURCE_UNIT.has(rel)) return "packages/llm-gemini/src/index.ts"
+  if (BEDROCK_SOURCE_UNIT.has(rel)) return "packages/llm-bedrock/src/index.ts"
   return rel
 }
 
@@ -1496,6 +1512,49 @@ SELF_TEST_CASES.push({
     ].map(([label, rel]) => {
       const files = [...geminiRelocationFixtureFiles(true), {
         rel, test: false, text: 'import type { GeminiConfig } from "@i-harness/llm-gemini"\nconst read = (config: GeminiConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function bedrockRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-bedrock/src/index.ts", [
+    "export interface BedrockConfig { model: string }",
+    "const createClient = (config: BedrockConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-bedrock/src/index.ts", 'export type { BedrockConfig } from "./types.ts"'),
+    file("packages/llm-bedrock/src/types.ts", "export interface BedrockConfig { model: string }"),
+    ...["region.ts", "client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "stream/iterate.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-bedrock/src/${path}`, 'import type { BedrockConfig } from "@i-harness/llm-bedrock"\nconst read = (config: BedrockConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4e: Converse config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-bedrock#BedrockConfig\tpackages/llm-bedrock/src/index.ts",
+    "split:unused-export\t@i-harness/llm-bedrock#BedrockConfig\tpackages/llm-bedrock/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(bedrockRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4e: future Converse modules, other protocols and outside readers stay independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-bedrock/src/future.ts"],
+      ["other-protocol", "packages/llm-anthropic/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...bedrockRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { BedrockConfig } from "@i-harness/llm-bedrock"\nconst read = (config: BedrockConfig) => config',
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
