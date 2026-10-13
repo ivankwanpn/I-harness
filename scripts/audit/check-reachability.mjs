@@ -550,12 +550,28 @@ const OPENAI_RESPONSES_SOURCE_UNIT = new Set([
   "packages/llm-openai/src/stream/usage.ts",
 ])
 
+// S4b relocates only the original Chat Completions entry. Its new internal
+// reads retain the former declaration boundary; no other protocol shares it.
+const OPENAI_COMPATIBLE_SOURCE_UNIT = new Set([
+  "packages/llm-openai-compatible/src/index.ts",
+  "packages/llm-openai-compatible/src/types.ts",
+  "packages/llm-openai-compatible/src/client.ts",
+  "packages/llm-openai-compatible/src/request/messages.ts",
+  "packages/llm-openai-compatible/src/request/reasoning.ts",
+  "packages/llm-openai-compatible/src/request/body.ts",
+  "packages/llm-openai-compatible/src/request/headers.ts",
+  "packages/llm-openai-compatible/src/stream/decode.ts",
+  "packages/llm-openai-compatible/src/stream/fold.ts",
+  "packages/llm-openai-compatible/src/stream/usage.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
   if (PROVIDER_SOURCE_UNIT.has(rel)) return "packages/provider/src/index.ts"
   if (PROVIDER_RUNTIME_SOURCE_UNIT.has(rel)) return "packages/provider-runtime/src/index.ts"
   if (OPENAI_RESPONSES_SOURCE_UNIT.has(rel)) return "packages/llm-openai/src/index.ts"
+  if (OPENAI_COMPATIBLE_SOURCE_UNIT.has(rel)) return "packages/llm-openai-compatible/src/index.ts"
   return rel
 }
 
@@ -1319,6 +1335,49 @@ SELF_TEST_CASES.push({
     ].map(([label, rel]) => {
       const files = [...openaiResponsesRelocationFixtureFiles(true), {
         rel, test: false, text: 'import type { OpenAIConfig } from "@i-harness/llm-openai"\nconst read = (config: OpenAIConfig) => config',
+      }]
+      return `${label}=${scanUnusedExports(files).length}`
+    })
+  },
+})
+
+function openaiCompatibleRelocationFixtureFiles(split) {
+  const file = (rel, text) => ({ rel, text, test: false })
+  if (!split) return [file("packages/llm-openai-compatible/src/index.ts", [
+    "export interface OpenAICompatibleConfig { model: string }",
+    "const createClient = (config: OpenAICompatibleConfig) => config",
+  ].join("\n"))]
+  return [
+    file("packages/llm-openai-compatible/src/index.ts", 'export type { OpenAICompatibleConfig } from "./types.ts"'),
+    file("packages/llm-openai-compatible/src/types.ts", "export interface OpenAICompatibleConfig { model: string }"),
+    ...["client.ts", "request/messages.ts", "request/reasoning.ts", "request/body.ts", "request/headers.ts", "stream/decode.ts", "stream/fold.ts", "stream/usage.ts"].map(path =>
+      file(`packages/llm-openai-compatible/src/${path}`, 'import type { OpenAICompatibleConfig } from "@i-harness/llm-openai-compatible"\nconst read = (config: OpenAICompatibleConfig) => config')),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S4b: Chat config retains its original unused-export evidence after relocation",
+  expect: [
+    "before:unused-export\t@i-harness/llm-openai-compatible#OpenAICompatibleConfig\tpackages/llm-openai-compatible/src/index.ts",
+    "split:unused-export\t@i-harness/llm-openai-compatible#OpenAICompatibleConfig\tpackages/llm-openai-compatible/src/index.ts",
+  ],
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(openaiCompatibleRelocationFixtureFiles(split))
+      .map(finding => `${split ? "split" : "before"}:${rowKey(finding)}`))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S4b: unmapped modules, other protocols and outside readers remain independent",
+  expect: ["unmapped=0", "other-protocol=0", "outside=0"],
+  run() {
+    return [
+      ["unmapped", "packages/llm-openai-compatible/src/future.ts"],
+      ["other-protocol", "packages/llm-openai/src/client.ts"],
+      ["outside", "apps/consumer/src/index.ts"],
+    ].map(([label, rel]) => {
+      const files = [...openaiCompatibleRelocationFixtureFiles(true), {
+        rel, test: false, text: 'import type { OpenAICompatibleConfig } from "@i-harness/llm-openai-compatible"\nconst read = (config: OpenAICompatibleConfig) => config',
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
