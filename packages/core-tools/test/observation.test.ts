@@ -133,3 +133,66 @@ it.each([-1, NaN, Infinity])("rejects invalid timeout %s without resources", asy
   await expect(waitForObservation({ ready: () => false, changes, timeoutMs })).rejects.toThrow()
   expect(changes.listeners.size).toBe(0)
 })
+
+it("rejects a throwing disposer after attempting every other cleanup without escaping into publication", async () => {
+  vi.useFakeTimers()
+  const owner = source(), steer = source(), controller = new AbortController()
+  const remove = vi.spyOn(controller.signal, "removeEventListener")
+  let ready = false, attempts = 0
+  const cleanupError = new Error("owner cleanup failed")
+  const waiting = waitForObservation({ ready: () => ready, timeoutMs: 30_000, abortSignal: controller.signal,
+    changes: { subscribe(listener) { const off = owner.subscribe(listener); return () => { attempts++; off(); throw cleanupError } } },
+    userSteer: { pending: () => false, subscribe: steer.subscribe },
+  })
+  const outcome = waiting.then(reason => ({ reason }), error => ({ error }))
+  ready = true
+  expect(() => owner.emit()).not.toThrow()
+  expect(attempts).toBe(1)
+  expect(owner.listeners.size + steer.listeners.size).toBe(0)
+  expect(remove).toHaveBeenCalledTimes(1)
+  expect(vi.getTimerCount()).toBe(0)
+  expect(await outcome).toEqual({ error: cleanupError })
+  owner.emit(); steer.emit(); controller.abort()
+  expect(attempts).toBe(1)
+})
+
+it("rejects a late-returned throwing disposer after synchronous subscription readiness", async () => {
+  vi.useFakeTimers()
+  const cleanupError = new Error("late cleanup failed")
+  let attempts = 0
+  const waiting = waitForObservation({ ready: () => true, timeoutMs: 100,
+    changes: { subscribe(listener) { listener(); return () => { attempts++; throw cleanupError } } },
+  })
+  await expect(waiting).rejects.toBe(cleanupError)
+  expect(attempts).toBe(1)
+  expect(vi.getTimerCount()).toBe(0)
+})
+
+it("retains predicate and cleanup failures while cleaning later resources and shielding owner callbacks", async () => {
+  vi.useFakeTimers()
+  const owner = source(), steer = source()
+  const predicateError = new Error("predicate failed"), cleanupError = new Error("cleanup failed")
+  let fail = false
+  const waiting = waitForObservation({ ready: () => { if (fail) throw predicateError; return false }, timeoutMs: 100,
+    changes: { subscribe(listener) { const off = owner.subscribe(listener); return () => { off(); throw cleanupError } } },
+    userSteer: { pending: () => false, subscribe: steer.subscribe },
+  })
+  const outcome = waiting.catch(error => error)
+  fail = true
+  expect(() => owner.emit()).not.toThrow()
+  expect(owner.listeners.size + steer.listeners.size).toBe(0)
+  expect(vi.getTimerCount()).toBe(0)
+  const error = await outcome
+  expect(error).toBeInstanceOf(AggregateError)
+  expect(error.errors).toEqual([predicateError, cleanupError])
+})
+
+it("rejects setup failure after a synchronous callback and cleans the previously registered source", async () => {
+  const owner = source(), setupError = new Error("setup failed")
+  let ready = false
+  const waiting = waitForObservation({ ready: () => ready, changes: owner,
+    userSteer: { pending: () => false, subscribe(listener) { ready = true; listener(); throw setupError } },
+  })
+  await expect(waiting).rejects.toBe(setupError)
+  expect(owner.listeners.size).toBe(0)
+})

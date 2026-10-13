@@ -21,19 +21,36 @@ export function waitForObservation(options: ObservationOptions): Promise<Observa
     }
     const deadline = options.timeoutMs === undefined ? Infinity : Date.now() + options.timeoutMs
     const cleanups: (() => void)[] = []
-    let settled = false
-    const own = (off: () => void) => { if (settled) off(); else cleanups.push(off) }
-    const clear = () => { for (const off of cleanups.splice(0)) off() }
-    const fail = (error: unknown) => {
-      if (settled) return
-      settled = true; clear(); reject(error)
+    const errors: unknown[] = []
+    let decided = false, setupComplete = false, settled = false
+    let reason: ObservationReason | undefined
+    const own = (off: () => void) => { cleanups.push(off) }
+    const complete = () => {
+      // A source can synchronously decide the observation before returning its
+      // disposer. Keep that decision latched, but include all setup/cleanup
+      // failures before publishing the promise's result.
+      if (!decided || !setupComplete || settled) return
+      settled = true
+      for (const off of cleanups.splice(0)) {
+        try { off() } catch (error) { errors.push(error) }
+      }
+      if (errors.length === 1) reject(errors[0])
+      else if (errors.length > 1) reject(new AggregateError(errors, "Observation failed during setup, check, or cleanup"))
+      else resolve(reason!)
     }
-    const finish = (reason: ObservationReason) => {
-      if (settled) return
-      settled = true; clear(); resolve(reason)
+    const fail = (error: unknown) => {
+      errors.push(error)
+      decided = true
+      complete()
+    }
+    const finish = (value: ObservationReason) => {
+      if (decided) return
+      reason = value
+      decided = true
+      complete()
     }
     const check = () => {
-      if (settled) return
+      if (decided) return
       try {
         if (options.abortSignal?.aborted) finish("aborted")
         else if (options.ready()) finish("ready")
@@ -43,20 +60,20 @@ export function waitForObservation(options: ObservationOptions): Promise<Observa
     }
     try {
       own(options.changes.subscribe(check))
-      if (!settled && options.userSteer) own(options.userSteer.subscribe(check))
-      if (!settled && options.abortSignal) {
+      if (!decided && options.userSteer) own(options.userSteer.subscribe(check))
+      if (!decided && options.abortSignal) {
         const signal = options.abortSignal
         signal.addEventListener("abort", check, { once: true })
         own(() => signal.removeEventListener("abort", check))
       }
-      if (!settled && deadline !== Infinity) {
+      if (!decided && deadline !== Infinity) {
         let timer: ReturnType<typeof setTimeout>
         const armDeadline = () => {
           // Node clamps larger delays to 1ms. Segment only the deadline,
           // retaining one active timer even after a backward wall-clock step.
           timer = setTimeout(() => {
             check()
-            if (!settled) armDeadline()
+            if (!decided) armDeadline()
           }, Math.min(2 ** 31 - 1, Math.max(0, deadline - Date.now())))
         }
         armDeadline()
@@ -64,6 +81,7 @@ export function waitForObservation(options: ObservationOptions): Promise<Observa
       }
       check()
     } catch (error) { fail(error) }
+    finally { setupComplete = true; complete() }
   })
 }
 
