@@ -627,6 +627,21 @@ const CORE_PLUGIN_SOURCE_UNIT = new Set([
   "packages/core-plugin/src/scope/create-scope.ts",
 ])
 
+// S6 extracts only the original tool-registry entry. Internal imports keep that
+// owner's original reachability evidence; its existing separate entrypoints and
+// all future unmapped files still count as independent production consumers.
+const CORE_TOOLS_SOURCE_UNIT = new Set([
+  "packages/core-tools/src/index.ts",
+  "packages/core-tools/src/types.ts",
+  "packages/core-tools/src/registry/catalog.ts",
+  "packages/core-tools/src/registry/prepare.ts",
+  "packages/core-tools/src/registry/dispatch.ts",
+  "packages/core-tools/src/registry/finalize.ts",
+  "packages/core-tools/src/approval/identity.ts",
+  "packages/core-tools/src/approval/arguments.ts",
+  "packages/core-tools/src/approval/decision.ts",
+])
+
 function declarationOwner(rel) {
   if (SETTINGS_SOURCE_UNIT.has(rel)) return "packages/settings/src/index.ts"
   if (CORE_SESSION_SOURCE_UNIT.has(rel)) return "packages/core-session/src/index.ts"
@@ -638,6 +653,7 @@ function declarationOwner(rel) {
   if (GEMINI_SOURCE_UNIT.has(rel)) return "packages/llm-gemini/src/index.ts"
   if (BEDROCK_SOURCE_UNIT.has(rel)) return "packages/llm-bedrock/src/index.ts"
   if (CORE_PLUGIN_SOURCE_UNIT.has(rel)) return "packages/core-plugin/src/index.ts"
+  if (CORE_TOOLS_SOURCE_UNIT.has(rel)) return "packages/core-tools/src/index.ts"
   return rel
 }
 
@@ -1620,6 +1636,49 @@ SELF_TEST_CASES.push({
       }]
       return `${label}=${scanUnusedExports(files).length}`
     })
+  },
+})
+
+function toolsRelocationFixtureFiles(split) {
+  const file = (rel, text, test = false) => ({ rel, text, test })
+  const declarations = "export interface ToolResult { output: unknown }\nexport interface SearchableTool { name: string }"
+  const reads = "const result = (a: ToolResult, b: SearchableTool) => [a, b]"
+  if (!split) return [file("packages/core-tools/src/index.ts", `${declarations}\n${reads}`)]
+  return [
+    file("packages/core-tools/src/index.ts", 'export type { ToolResult, SearchableTool } from "./types.ts"'),
+    file("packages/core-tools/src/types.ts", `${declarations}\n${reads}`),
+    ...["registry/catalog.ts", "registry/prepare.ts", "registry/dispatch.ts", "registry/finalize.ts",
+      "approval/identity.ts", "approval/arguments.ts", "approval/decision.ts"].map(path =>
+      file(`packages/core-tools/src/${path}`, reads)),
+  ]
+}
+
+SELF_TEST_CASES.push({
+  name: "S6: registry types retain complete original findings across every extracted module",
+  expect: [false, true].flatMap(split => ["ToolResult", "SearchableTool"].map(name => JSON.stringify({
+    split, finding: { kind: "unused-export", subject: `@i-harness/core-tools#${name}`, evidence: "packages/core-tools/src/index.ts" },
+  }))),
+  run() {
+    return [false, true].flatMap(split => scanUnusedExports(toolsRelocationFixtureFiles(split))
+      .map(finding => JSON.stringify({ split, finding })))
+  },
+})
+
+SELF_TEST_CASES.push({
+  name: "S6: pre-existing tools modules and outside readers remain independent; tests do not wire exports",
+  expect: ["schema=0", "observation=0", "context=0", "future=0", "other-package=0", "outside=0", "test-only=2"],
+  run() {
+    return [
+      ["schema", "packages/core-tools/src/json-schema.ts", false],
+      ["observation", "packages/core-tools/src/observation.ts", false],
+      ["context", "packages/core-tools/src/context-remaining.ts", false],
+      ["future", "packages/core-tools/src/registry/future.ts", false],
+      ["other-package", "packages/core-agent/src/index.ts", false],
+      ["outside", "apps/consumer/src/index.ts", false],
+      ["test-only", "packages/core-tools/test/consumer.test.ts", true],
+    ].map(([label, rel, test]) => `${label}=${scanUnusedExports([...toolsRelocationFixtureFiles(true), {
+      rel, test, text: "const use = (a: ToolResult, b: SearchableTool) => [a, b]",
+    }]).length}`)
   },
 })
 
